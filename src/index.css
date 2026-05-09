@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-white text-j2s-ink font-nunito;
+    margin: 0;
+  }
+  /* Brand scope helpers */
+  .brand-j2s {
+    @apply font-nunito text-j2s-ink;
+  }
+  .brand-enrops {
+    @apply font-grotesk text-enrops-ink;
+  }
+}
+
+@layer components {
+  /* J2S buttons */
+  .btn-j2s-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-j2s-purple px-6 py-3 font-bold text-white shadow-pop transition hover:bg-j2s-purple-dark active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-j2s-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border-2 border-j2s-purple bg-white px-6 py-3 font-bold text-j2s-purple transition hover:bg-j2s-purple-soft disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-j2s-orange {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-j2s-orange px-6 py-3 font-bold text-white shadow-pop transition hover:bg-j2s-orange-dark active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  /* Enrops buttons */
+  .btn-enrops-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-md bg-enrops-plum px-6 py-3 font-medium text-white transition hover:bg-enrops-plum-dark active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  /* Shared inputs */
+  .input-field {
+    @apply w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-base text-j2s-ink placeholder:text-gray-400 focus:border-j2s-purple focus:outline-none focus:ring-4 focus:ring-j2s-purple/15;
+  }
+  .input-field-error {
+    @apply border-j2s-orange-dark focus:border-j2s-orange-dark focus:ring-j2s-orange-dark/15;
+  }
+  .label-field {
+    @apply mb-1.5 block text-sm font-semibold text-j2s-ink;
+  }
+  .help-text {
+    @apply mt-1 text-xs text-gray-500;
+  }
+  .error-text {
+    @apply mt-1 text-xs font-semibold text-j2s-orange-dark;
+  }
+}

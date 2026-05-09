@@ -1,0 +1,557 @@
+import React, { useEffect, useState, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { supabase, API_BASE } from '../../lib/supabase.js';
+import { VIP_PRICE_PER_TERM_CENTS } from '../../lib/pricing.js';
+import { useCart } from '../../context/CartContext.jsx';
+import StepIndicator from '../../components/StepIndicator.jsx';
+import StepSchool from './register-steps/StepSchool.jsx';
+import StepProgram from './register-steps/StepProgram.jsx';
+import StepStudent from './register-steps/StepStudent.jsx';
+import StepParent from './register-steps/StepParent.jsx';
+import StepWaivers from './register-steps/StepWaivers.jsx';
+import StepReview from './register-steps/StepReview.jsx';
+import StepPay from './register-steps/StepPay.jsx';
+
+const ORG_SLUG = 'j2s';
+// Hardcoded J2S org ID — single-tenant for now but read from URL for future operators.
+const J2S_ORG_ID = '1adf10ad-d091-4aa0-82e3-af331468ea2b';
+
+export default function Register() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const {
+    cart,
+    activeChild,
+    pricing,
+    setActiveChildSchool,
+    setActiveChildItem,
+    updateActiveStudent,
+    updateParent,
+    setActiveChildWaiver,
+    setPromo,
+    setPromoInput,
+    setPromoError,
+    togglePaymentPlan,
+    addAnotherChild,
+  } = useCart();
+
+  const [step, setStep] = useState(0);
+  const [schools, setSchools] = useState([]);
+  const [programs, setPrograms] = useState([]);
+  const [waivers, setWaivers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  // Compute installment schedule for cart total split 3 ways.
+  // - Standard term: charge 1 today, charge 2 = first_session + 28 days, charge 3 = first_session + 56 days.
+  // - VIP year: charge 1 today (Fall start), charge 2 = Winter first_session, charge 3 = Spring first_session.
+  // Returns null if any program is missing the required dates (toggle won't show).
+  const installmentSchedule = useMemo(() => {
+    if (!pricing || !pricing.lines.length) return null;
+
+    // VIP cart: 3 lines (Fall, Winter, Spring) all with is_vip=true.
+    // Detect VIP-only cart (all lines are VIP and they share the same VIP bundle).
+    const vipLines = pricing.lines.filter((l) => l.is_vip);
+    const isVipOnlyCart = vipLines.length === pricing.lines.length && vipLines.length === 3;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const fmt = (d) => d.toISOString().slice(0, 10);
+
+    let charge2Date, charge3Date;
+
+    if (isVipOnlyCart) {
+      // Find the Fall line (the anchor for date estimates).
+      // Fall line is the one with first_session_date set (Winter/Spring may be null).
+      const fallLine = vipLines.find((l) => l.term_label === 'Fall') || vipLines[0];
+      const winterLine = vipLines.find((l) => l.term_label === 'Winter');
+      const springLine = vipLines.find((l) => l.term_label === 'Spring');
+
+      if (!fallLine?.first_session_date) return null;
+      const fall = new Date(fallLine.first_session_date + 'T00:00:00');
+
+      // Use real Winter/Spring dates if set; otherwise use fixed fallback dates.
+      // Fallbacks chosen because Winter terms typically start early January and
+      // Spring terms typically start early April. Jessica updates real dates via
+      // SQL when terms are confirmed, which auto-overrides the fallback.
+      const fallYear = fall.getFullYear();
+      // If Fall is in 2026, Winter/Spring are 2027. Generally next calendar year.
+      const nextYear = fallYear + 1;
+
+      if (winterLine?.first_session_date) {
+        charge2Date = new Date(winterLine.first_session_date + 'T00:00:00');
+      } else {
+        // Fixed fallback: January 5 of the year after Fall
+        charge2Date = new Date(`${nextYear}-01-05T00:00:00`);
+      }
+      if (springLine?.first_session_date) {
+        charge3Date = new Date(springLine.first_session_date + 'T00:00:00');
+      } else {
+        // Fixed fallback: April 1 of the year after Fall
+        charge3Date = new Date(`${nextYear}-04-01T00:00:00`);
+      }
+    } else {
+      // Standard term: every line must have first_session_date
+      const fsdLines = pricing.lines.filter((l) => l.first_session_date);
+      if (fsdLines.length !== pricing.lines.length) return null;
+      const earliestIso = fsdLines.map((l) => l.first_session_date).sort()[0];
+      const fsd = new Date(earliestIso + 'T00:00:00');
+      // Bug B fix (2026-05-01): final installment must land BEFORE term ends.
+      // charge3 = first_session + (sessions - 2) × 7 days, where `sessions` is the
+      // MAX session count across all programs in the cart.
+      // charge2 = anchored inside the program window at the session midpoint.
+      const maxSessions = Math.max(...fsdLines.map((l) => l.sessions || 8));
+      const safeSessions = Math.max(maxSessions, 3);
+      const programWindowDays = (safeSessions - 2) * 7;
+      charge2Date = new Date(fsd);
+      charge2Date.setDate(charge2Date.getDate() + Math.floor(programWindowDays / 2));
+      charge3Date = new Date(fsd);
+      charge3Date.setDate(charge3Date.getDate() + programWindowDays);
+    }
+
+    // Charges 2 and 3 must be in the future
+    if (charge2Date <= today || charge3Date <= today) return null;
+
+    // Bug A fix (2026-05-01): per-child installment attribution.
+    // Each cart line gets its own 3-installment split so the backend can attribute
+    // each installment row to the correct registration_id (and therefore the correct
+    // child + program). VIP lines map 1:1 to charges (Fall→c1, Winter→c2, Spring→c3).
+    const perLineSplits = [];
+
+    if (isVipOnlyCart) {
+      const fallIdx = pricing.lines.findIndex((l) => l.term_label === 'Fall');
+      const winterIdx = pricing.lines.findIndex((l) => l.term_label === 'Winter');
+      const springIdx = pricing.lines.findIndex((l) => l.term_label === 'Spring');
+      pricing.lines.forEach((l, idx) => {
+        if (idx === fallIdx) perLineSplits.push({ line_index: idx, splits: [l.subtotal_cents, 0, 0] });
+        else if (idx === winterIdx) perLineSplits.push({ line_index: idx, splits: [0, l.subtotal_cents, 0] });
+        else if (idx === springIdx) perLineSplits.push({ line_index: idx, splits: [0, 0, l.subtotal_cents] });
+      });
+    } else {
+      pricing.lines.forEach((l, idx) => {
+        const sub = l.subtotal_cents;
+        const base = Math.floor(sub / 3);
+        const remainder = sub - base * 3;
+        perLineSplits.push({
+          line_index: idx,
+          splits: [base + remainder, base, base],
+        });
+      });
+    }
+
+    const i1 = perLineSplits.reduce((s, p) => s + p.splits[0], 0);
+    const i2 = perLineSplits.reduce((s, p) => s + p.splits[1], 0);
+    const i3 = perLineSplits.reduce((s, p) => s + p.splits[2], 0);
+
+    return {
+      display: [
+        { number: 1, amount_cents: i1, due_date: fmt(today) },
+        { number: 2, amount_cents: i2, due_date: fmt(charge2Date) },
+        { number: 3, amount_cents: i3, due_date: fmt(charge3Date) },
+      ],
+      perLineSplits,
+      dueDates: {
+        charge1: fmt(today),
+        charge2: fmt(charge2Date),
+        charge3: fmt(charge3Date),
+      },
+    };
+  }, [pricing]);
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  // If parent reaches /register without school+program params (including
+  // browser-back from Stripe which strips the query string), redirect home.
+  // Dependency on searchParams ensures this fires on every URL change, not
+  // just on initial mount.
+  useEffect(() => {
+    if (!searchParams.get('school') && !searchParams.get('program')) {
+      navigate(`/${ORG_SLUG}`, { replace: true });
+    }
+  }, [searchParams, navigate]);
+
+  // Scroll to top whenever the step changes — fixes pages loading mid-page
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [step]);
+
+  // If school= query param, preload the school
+  useEffect(() => {
+    const schoolFromUrl = searchParams.get('school');
+    if (schoolFromUrl && schools.length && !activeChild.program_location_id) {
+      const s = schools.find((x) => x.id === schoolFromUrl);
+      if (s) {
+        setActiveChildSchool(s);
+        setStep(1);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schools]);
+
+  // Pre-select program + VIP from URL params (Home.jsx passes ?program=X&vip=1)
+  useEffect(() => {
+    const programFromUrl = searchParams.get('program');
+    const vipFromUrl = searchParams.get('vip') === '1';
+    if (!programFromUrl || !programs.length || activeChild.items.length) return;
+
+    const program = programs.find((x) => x.id === programFromUrl);
+    if (!program) return;
+
+    if (!vipFromUrl) {
+      setActiveChildItem({ program, isVip: false });
+      setStep(2);
+      return;
+    }
+
+    // VIP path needs Winter and Spring program rows for the bundle
+    (async () => {
+      const { data: matches } = await supabase
+        .from('programs')
+        .select('*')
+        .eq('program_location_id', program.program_location_id)
+        .eq('day_of_week', program.day_of_week)
+        .in('term', ['WI27', 'SP27']);
+      const winter = matches?.find((p) => p.term === 'WI27');
+      const spring = matches?.find((p) => p.term === 'SP27');
+      if (winter && spring) {
+        setActiveChildItem({
+          program,
+          isVip: true,
+          vipBundle: { fall: program, winter, spring },
+        });
+        setStep(2);
+      } else {
+        // VIP eligibility broke between Home and here — fall back to standard
+        setActiveChildItem({ program, isVip: false });
+        setStep(2);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [programs]);
+
+  async function load() {
+    const [schoolsRes, programsRes, waiversRes] = await Promise.all([
+      supabase
+        .from('program_locations')
+        .select('id, name, district, address')
+        .eq('organization_id', J2S_ORG_ID)
+        .order('name'),
+      supabase
+        .from('programs')
+        .select('*')
+        .eq('organization_id', J2S_ORG_ID)
+        .eq('status', 'open')
+        .order('day_of_week'),
+      supabase
+        .from('waivers')
+        .select('*')
+        .eq('organization_id', J2S_ORG_ID)
+        .eq('active', true),
+    ]);
+
+    setSchools(schoolsRes.data || []);
+    setPrograms(programsRes.data || []);
+    setWaivers(waiversRes.data || []);
+    setLoading(false);
+  }
+
+  const schoolsByDistrict = useMemo(() => {
+    const withPrograms = new Set(programs.map((p) => p.program_location_id));
+    const map = {};
+    schools
+      .filter((s) => withPrograms.has(s.id))
+      .forEach((s) => {
+        const key = s.district || 'Other';
+        (map[key] ||= []).push(s);
+      });
+    return map;
+  }, [schools, programs]);
+
+  const programsAtActiveSchool = useMemo(() => {
+    if (!activeChild.program_location_id) return [];
+    return programs.filter((p) => p.program_location_id === activeChild.program_location_id);
+  }, [activeChild.program_location_id, programs]);
+
+  // Navigation guards
+  function canAdvance() {
+    switch (step) {
+      case 0:
+        return !!activeChild.program_location_id;
+      case 1:
+        return activeChild.items.length > 0;
+      case 2: {
+        const s = activeChild.student;
+        return (
+          !!s.first_name &&
+          !!s.last_name &&
+          s.grade !== '' &&
+          !!s.birthdate &&
+          !!s.homeroom_teacher &&
+          !!s.emergency_contact_name &&
+          !!s.emergency_contact_phone
+        );
+      }
+      case 3:
+        return (
+          !!cart.parent.first_name &&
+          !!cart.parent.last_name &&
+          !!cart.parent.email &&
+          !!cart.parent.phone
+        );
+      case 4: {
+        const requiredWaivers = waivers.filter((w) => w.required);
+        return requiredWaivers.every(
+          (w) => activeChild.waivers[w.id]?.agreed === true,
+        );
+      }
+      case 5:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  function next() {
+    if (!canAdvance()) return;
+    setError('');
+    setStep((s) => Math.min(6, s + 1));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function back() {
+    setError('');
+    setStep((s) => Math.max(0, s - 1));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function handleAddAnotherChild() {
+    addAnotherChild();
+    setStep(0);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  async function handleCheckout() {
+    setSubmitting(true);
+    setError('');
+    try {
+      // 1. Call create-registration edge function (bypasses RLS via service role)
+      const regResp = await fetch(`${API_BASE}/create-registration`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          organization_slug: ORG_SLUG,
+          parent: cart.parent,
+          children: cart.children,
+          promo_code: cart.promo?.code || null,
+          payment_plan: cart.payment_plan,
+          pricing_snapshot: pricing,
+        }),
+      });
+      const regData = await regResp.json();
+      if (!regResp.ok || regData.error) {
+        throw new Error(regData.error || 'Could not save registration.');
+      }
+
+      // 2. Call create-checkout with registration IDs
+      const useInstallments = !!(cart.payment_plan && installmentSchedule);
+      const checkoutPayload = {
+        registration_ids: regData.registration_ids,
+        parent_email: cart.parent.email,
+        parent_name: `${cart.parent.first_name} ${cart.parent.last_name}`,
+        line_items: pricing.lines.map((l) => ({
+          program_id: l.program_id,
+          program_name: l.program_name,
+          school_name: l.school_name,
+          day_of_week: l.day_of_week,
+          start_time: l.start_time,
+          amount_cents: l.subtotal_cents,
+          child_label: `Child ${l.child_index + 1}`,
+        })),
+        total_cents: pricing.total_cents,
+        origin: window.location.origin,
+        success_path: `/${ORG_SLUG}/register/success`,
+        cancel_path: `/${ORG_SLUG}/register`,
+      };
+      if (useInstallments) {
+        checkoutPayload.use_installments = true;
+        // Bug A fix (2026-05-01): per-line schedule with correct registration_id mapping.
+        const dueDates = installmentSchedule.dueDates;
+        const perLineEntries = [];
+        installmentSchedule.perLineSplits.forEach(({ line_index, splits }) => {
+          const regId = regData.registration_ids[line_index];
+          if (!regId) {
+            console.error(`Missing registration_id for line ${line_index}`);
+            return;
+          }
+          if (splits[0] > 0) {
+            perLineEntries.push({ installment_number: 1, registration_id: regId, amount_cents: splits[0], due_date: dueDates.charge1 });
+          }
+          if (splits[1] > 0) {
+            perLineEntries.push({ installment_number: 2, registration_id: regId, amount_cents: splits[1], due_date: dueDates.charge2 });
+          }
+          if (splits[2] > 0) {
+            perLineEntries.push({ installment_number: 3, registration_id: regId, amount_cents: splits[2], due_date: dueDates.charge3 });
+          }
+        });
+        checkoutPayload.installment_schedule = {
+          aggregated: installmentSchedule.display.map((i) => ({
+            installment_number: i.number,
+            amount_cents: i.amount_cents,
+            due_date: i.due_date,
+          })),
+          per_line: perLineEntries,
+        };
+      }
+      const coResp = await fetch(`${API_BASE}/create-checkout`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify(checkoutPayload),
+      });
+      const coData = await coResp.json();
+      if (!coResp.ok || coData.error) {
+        throw new Error(coData.error || 'Could not start checkout.');
+      }
+      if (coData.url) {
+        window.location.href = coData.url;
+      } else {
+        throw new Error('Checkout session missing URL.');
+      }
+    } catch (err) {
+      setError(err.message || 'Something went wrong. Please try again.');
+      setSubmitting(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center">
+        <div className="animate-pulse text-j2s-ink/50">Loading registration&hellip;</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <StepIndicator current={step} />
+      <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
+        {error && (
+          <div className="mb-6 animate-fade-in rounded-xl border-2 border-j2s-orange-dark bg-j2s-orange/10 p-4">
+            <p className="font-bold text-j2s-orange-dark">Heads up</p>
+            <p className="mt-1 text-sm text-j2s-ink">{error}</p>
+          </div>
+        )}
+
+        <div className="animate-slide-up">
+          {step === 0 && (
+            <StepSchool
+              schoolsByDistrict={schoolsByDistrict}
+              selectedSchoolId={activeChild.program_location_id}
+              onSelectSchool={(s) => { setActiveChildSchool(s); setStep(1); }}
+              childIndex={activeChild.child_index}
+            />
+          )}
+          {step === 1 && (
+            <StepProgram
+              programs={programsAtActiveSchool}
+              schoolName={activeChild.school_name}
+              selectedItem={activeChild.items[0]}
+              onSelectItem={(item) => { setActiveChildItem(item); setStep(2); }}
+              allPrograms={programs}
+            />
+          )}
+          {step === 2 && (
+            <StepStudent
+              student={activeChild.student}
+              onUpdate={updateActiveStudent}
+              childIndex={activeChild.child_index}
+            />
+          )}
+          {step === 3 && (
+            <StepParent parent={cart.parent} onUpdate={updateParent} />
+          )}
+          {step === 4 && (
+            <StepWaivers
+              waivers={waivers}
+              signatures={activeChild.waivers}
+              onUpdateSignature={setActiveChildWaiver}
+              parentName={`${cart.parent.first_name} ${cart.parent.last_name}`}
+            />
+          )}
+          {step === 5 && (
+            <StepReview
+              cart={cart}
+              pricing={pricing}
+              installmentSchedule={installmentSchedule?.display || null}
+              onPromoApply={async (code) => {
+                setPromoInput(code);
+                const { data } = await supabase
+                  .from('promo_codes')
+                  .select('*')
+                  .eq('code', code.trim().toUpperCase())
+                  .eq('active', true)
+                  .maybeSingle();
+                if (data) {
+                  setPromo({
+                    code: data.code,
+                    discount_type: data.discount_type,
+                    discount_value: data.discount_value,
+                  });
+                  setPromoError('');
+                } else {
+                  setPromo(null);
+                  setPromoError('That code isn\'t valid.');
+                }
+              }}
+              onPromoClear={() => {
+                setPromo(null);
+                setPromoInput('');
+              }}
+              onTogglePaymentPlan={togglePaymentPlan}
+              onAddAnotherChild={handleAddAnotherChild}
+            />
+          )}
+          {step === 6 && (
+            <StepPay
+              pricing={pricing}
+              submitting={submitting}
+              onCheckout={handleCheckout}
+              paymentPlan={cart.payment_plan}
+              installmentSchedule={installmentSchedule?.display || null}
+            />
+          )}
+        </div>
+
+        {/* Nav */}
+        <div className="mt-10 flex items-center justify-between border-t border-j2s-purple/10 pt-6">
+          <button
+            onClick={back}
+            disabled={step === 0 || submitting}
+            className="rounded-lg px-4 py-2 font-semibold text-j2s-ink/70 transition hover:bg-j2s-purple-soft disabled:opacity-40"
+          >
+            &larr; Back
+          </button>
+          {step < 6 ? (
+            <button
+              onClick={next}
+              disabled={!canAdvance()}
+              className="btn-j2s-primary"
+            >
+              Continue →
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
