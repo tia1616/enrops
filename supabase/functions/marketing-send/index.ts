@@ -14,12 +14,18 @@ const REGISTER_URL = 'https://enrops.com/j2s';
 const VIP_TOTAL_CENTS = 72000;
 const VIP_PER_TERM_CENTS = 24000;
 
-const PURPLE = '#674EE8';
-const PURPLE_DARK = '#4A37B3';
-const ORANGE = '#F8A638';
+// Tenant-overridable colors and fonts are loaded per request from org_branding.
+// These constants are platform defaults applied when an org has no branding row
+// or a field is null.
+const DEFAULT_PRIMARY = '#674EE8';
+const DEFAULT_SECONDARY = '#4430AC';
+const DEFAULT_ACCENT = '#F8A638';
+const DEFAULT_PAGE_BG = '#f5f5f7';
+const DEFAULT_FONT_STACK = "-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif";
+
+// Platform-neutral text and chrome (not tenant-overridable).
 const TEXT = '#1f2937';
 const MUTED = '#6b7280';
-const BG = '#f5f5f7';
 const BORDER = '#e5e7eb';
 
 const corsHeaders = {
@@ -80,6 +86,17 @@ type Recipient = {
 
 type Org = { id: string; name: string; logo_url: string | null; logo_email_url: string | null };
 
+type Branding = {
+  primary: string;
+  secondary: string;
+  accent: string;
+  extra: string | null;
+  pageBg: string;
+  bodyFontStack: string;
+  headingFontStack: string;
+  googleFontsUrl: string | null;
+};
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -121,6 +138,8 @@ serve(async (req: Request) => {
       .eq('id', orgId)
       .single<Org>();
     if (oErr || !org) return json({ error: `org not found: ${oErr?.message}` }, 404);
+
+    const branding = await loadBranding(supabase, orgId);
 
     // ---- Load programs (joined with locations) ----
     const { data: progRows, error: pErr } = await supabase
@@ -250,7 +269,7 @@ serve(async (req: Request) => {
       const recipients = recipientsBySchool[ctx.displayName] ?? [];
       const subject = renderSubject(ctx);
       // Pre-render template once per school using a placeholder name for preview/test.
-      const previewHtml = renderHtml(ctx, td, org, 'there');
+      const previewHtml = renderHtml(ctx, td, org, 'there', branding);
       const result: SchoolResult = {
         school: ctx.displayName,
         subject,
@@ -287,7 +306,7 @@ serve(async (req: Request) => {
       for (const item of results as any[]) {
         const ctx: SchoolContext = item.ctx;
         const subject = `[TEST · ${ctx.displayName}] ${item.result.subject}`;
-        const html = renderHtml(ctx, td, org, 'Jessica');
+        const html = renderHtml(ctx, td, org, 'Jessica', branding);
         try {
           await sendViaResend(test_email, subject, html);
           testResults.push({ school: ctx.displayName, subject: item.result.subject, ok: true });
@@ -320,7 +339,7 @@ serve(async (req: Request) => {
           continue;
         }
         const firstName = parseFirstName(r);
-        const html = renderHtml(ctx, td, org, firstName);
+        const html = renderHtml(ctx, td, org, firstName, branding);
         const subject = result.subject;
         try {
           const resendId = await sendViaResend(r.email, subject, html);
@@ -449,10 +468,11 @@ function renderHtml(
   td: Campaign['template_data'],
   org: Org,
   firstName: string,
+  branding: Branding,
 ): string {
   const intro = buildIntro(ctx, firstName);
-  const vipBlock = ctx.hasFullYear ? renderVipBlock(ctx, td) : '';
-  const fallSection = renderFallSection(ctx, td);
+  const vipBlock = ctx.hasFullYear ? renderVipBlock(ctx, td, branding) : '';
+  const fallSection = renderFallSection(ctx, td, branding);
   const dividerForFallSection = ctx.hasFullYear
     ? `<tr><td style="padding:8px 0 0;">
          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
@@ -469,25 +489,29 @@ function renderHtml(
   const preheader = ctx.hasFullYear
     ? `Three terms, one registration. Save $${dollars(ctx.vipSavingsCents)} before June 5.`
     : `Fall STEAM at ${ctx.displayName} — save $${dollars(ctx.fallSavingsCents)} before June 5.`;
+  const fontsLink = branding.googleFontsUrl
+    ? `<link rel="stylesheet" href="${escapeHtml(branding.googleFontsUrl)}">`
+    : '';
 
-  return `<!DOCTYPE html>
+  return asciiSafeHtml(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(renderSubject(ctx))}</title>
+${fontsLink}
 </head>
-<body style="margin:0;padding:0;background:${BG};font-family:-apple-system,Helvetica,Arial,sans-serif;color:${TEXT};line-height:1.55;">
-<span style="display:none!important;visibility:hidden;mso-hide:all;font-size:1px;color:${BG};max-height:0;overflow:hidden;">${escapeHtml(preheader)}</span>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BG};padding:24px 12px;">
+<body style="margin:0;padding:0;background:${branding.pageBg};font-family:${branding.bodyFontStack};color:${TEXT};line-height:1.55;">
+<span style="display:none!important;visibility:hidden;mso-hide:all;font-size:1px;color:${branding.pageBg};max-height:0;overflow:hidden;">${escapeHtml(preheader)}</span>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${branding.pageBg};padding:24px 12px;">
 <tr><td align="center">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:14px;overflow:hidden;max-width:600px;width:100%;border:1px solid ${BORDER};">
 
-<tr><td style="background:${PURPLE};padding:24px 24px;text-align:center;">
-  ${renderHeaderLogo(org)}
+<tr><td style="background:${branding.primary};padding:24px 24px;text-align:center;">
+  ${renderHeaderLogo(org, branding)}
 </td></tr>
 
-<tr><td style="padding:32px 28px 8px;">
+<tr><td style="padding:32px 28px 8px;font-family:${branding.bodyFontStack};">
   <p style="margin:0 0 16px;font-size:16px;">Hi ${escapeHtml(firstName)},</p>
   <p style="margin:0 0 20px;font-size:16px;">${intro}</p>
 </td></tr>
@@ -497,7 +521,7 @@ ${vipBlock ? `<tr><td style="padding:0 28px;">${vipBlock}</td></tr>` : ''}
 ${
   ctx.hasFullYear
     ? `<tr><td style="padding:20px 28px 8px;text-align:center;">
-         ${renderCta(REGISTER_URL, 'Register for the full year &rarr;', 'primary')}
+         ${renderCta(REGISTER_URL, 'Register for the full year &rarr;', 'primary', branding)}
        </td></tr>`
     : ''
 }
@@ -509,14 +533,14 @@ ${dividerForFallSection}
 </td></tr>
 
 <tr><td style="padding:8px 28px 24px;text-align:center;">
-  ${renderCta(REGISTER_URL, ctx.hasFullYear ? 'Register for fall only &rarr;' : 'Register now &rarr;', ctx.hasFullYear ? 'secondary' : 'primary')}
+  ${renderCta(REGISTER_URL, ctx.hasFullYear ? 'Register for fall only &rarr;' : 'Register now &rarr;', ctx.hasFullYear ? 'secondary' : 'primary', branding)}
 </td></tr>
 
-<tr><td style="padding:8px 28px 28px;">
+<tr><td style="padding:8px 28px 28px;font-family:${branding.bodyFontStack};">
   ${ps}
 </td></tr>
 
-<tr><td style="background:${BG};padding:24px 28px;color:${MUTED};font-size:13px;line-height:1.55;border-top:1px solid ${BORDER};">
+<tr><td style="background:${branding.pageBg};padding:24px 28px;color:${MUTED};font-size:13px;line-height:1.55;border-top:1px solid ${BORDER};font-family:${branding.bodyFontStack};">
   <p style="margin:0 0 8px;color:${TEXT};font-weight:600;font-size:14px;">Jessica Vorster &middot; Journey to STEAM</p>
   <p style="margin:0 0 12px;">jessica@journeytosteam.com &middot; (971) 258-2178</p>
   <p style="margin:0;">You&rsquo;re receiving this because your child participated in a Journey to STEAM program at ${escapeHtml(ctx.displayName)}. Hit reply anytime &mdash; it goes straight to Jessica.</p>
@@ -526,10 +550,10 @@ ${dividerForFallSection}
 </td></tr>
 </table>
 </body>
-</html>`;
+</html>`);
 }
 
-function renderHeaderLogo(org: Org): string {
+function renderHeaderLogo(org: Org, branding: Branding): string {
   const safeName = escapeHtml(org.name);
   // Prefer the rasterized email-safe PNG. Fall back to logo_url for orgs that
   // have not yet been processed by regenerate-email-logo. Text wordmark last.
@@ -542,34 +566,34 @@ function renderHeaderLogo(org: Org): string {
         </td></tr>
       </table>`;
   }
-  return `<span style="display:inline-block;background:#ffffff;padding:10px 22px;border-radius:10px;font-weight:700;font-size:20px;color:${PURPLE};letter-spacing:0.3px;font-family:-apple-system,Helvetica,Arial,sans-serif;">${safeName}</span>`;
+  return `<span style="display:inline-block;background:#ffffff;padding:10px 22px;border-radius:10px;font-weight:700;font-size:20px;color:${branding.primary};letter-spacing:0.3px;font-family:${branding.headingFontStack};">${safeName}</span>`;
 }
 
-function renderVipBlock(ctx: SchoolContext, td: Campaign['template_data']): string {
+function renderVipBlock(ctx: SchoolContext, td: Campaign['template_data'], branding: Branding): string {
   const regularTotalCents = ctx.vipSavingsCents + VIP_TOTAL_CENTS;
   const pathwayBlocks = ctx.pathways
     .filter(p => p.length === 3)
     .map((path, idx) => {
       const dayLabel = ctx.isMultiProgram ? `${path[0].day_of_week} after-school pathway` : '';
-      const cards = path.map(p => renderTermCard(p)).join('');
+      const cards = path.map(p => renderTermCard(p, branding)).join('');
       const header = dayLabel
-        ? `<p style="margin:${idx === 0 ? '0' : '24px 0 0'};margin-bottom:12px;font-weight:700;font-size:13px;color:${PURPLE_DARK};text-transform:uppercase;letter-spacing:0.6px;">${escapeHtml(dayLabel)}</p>`
+        ? `<p style="margin:${idx === 0 ? '0' : '24px 0 0'};margin-bottom:12px;font-weight:700;font-size:13px;color:${branding.secondary};text-transform:uppercase;letter-spacing:0.6px;">${escapeHtml(dayLabel)}</p>`
         : '';
       return `${header}${cards}`;
     })
     .join('');
 
   return `
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:2px solid ${PURPLE};border-radius:14px;background:#faf9ff;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:2px solid ${branding.primary};border-radius:14px;background:#faf9ff;">
       <tr><td style="padding:20px 22px 4px;">
-        <p style="margin:0 0 6px;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${PURPLE_DARK};">STEAM Year VIP</p>
-        <p style="margin:0 0 4px;font-size:28px;font-weight:700;color:${TEXT};">
+        <p style="margin:0 0 6px;font-size:13px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${branding.secondary};">STEAM Year VIP</p>
+        <p style="margin:0 0 4px;font-size:32px;font-weight:700;color:${TEXT};font-family:${branding.headingFontStack};">
           $${dollars(VIP_TOTAL_CENTS)}
           <span style="font-size:14px;font-weight:400;color:${MUTED};text-decoration:line-through;margin-left:8px;">$${dollars(regularTotalCents)}</span>
         </p>
         <p style="margin:0 0 6px;color:${MUTED};font-size:14px;">3 terms · $${dollars(VIP_PER_TERM_CENTS)}/term</p>
         <p style="margin:0 0 14px;">
-          <span style="display:inline-block;background:${ORANGE};color:#ffffff;font-weight:700;font-size:12px;padding:4px 10px;border-radius:999px;letter-spacing:0.4px;">SAVE $${dollars(ctx.vipSavingsCents)}</span>
+          <span style="display:inline-block;background:${branding.accent};color:#ffffff;font-weight:700;font-size:12px;padding:4px 10px;border-radius:999px;letter-spacing:0.4px;">SAVE $${dollars(ctx.vipSavingsCents)}</span>
         </p>
       </td></tr>
       <tr><td style="padding:0 22px 20px;">
@@ -579,7 +603,7 @@ function renderVipBlock(ctx: SchoolContext, td: Campaign['template_data']): stri
     </table>`;
 }
 
-function renderTermCard(p: ProgramRow): string {
+function renderTermCard(p: ProgramRow, branding: Branding): string {
   const termLabel = p.term === 'FA26' ? 'Fall' : p.term === 'WI27' ? 'Winter' : 'Spring';
   const dateBit =
     p.term === 'FA26' && p.first_session_date
@@ -591,7 +615,7 @@ function renderTermCard(p: ProgramRow): string {
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:10px 0;">
       <tr>
         <td width="56" valign="top" style="width:56px;">
-          <div style="background:${PURPLE};color:#ffffff;border-radius:999px;width:44px;height:44px;line-height:44px;text-align:center;font-weight:700;font-size:12px;letter-spacing:0.5px;">${termLabel.toUpperCase().slice(0, 3)}</div>
+          <div style="background:${branding.primary};color:#ffffff;border-radius:999px;width:44px;height:44px;line-height:44px;text-align:center;font-weight:800;font-size:12px;letter-spacing:0.5px;">${termLabel.toUpperCase().slice(0, 3)}</div>
         </td>
         <td valign="top" style="padding-left:8px;">
           <p style="margin:0;font-weight:700;font-size:15px;color:${TEXT};">${escapeHtml(p.curriculum)}</p>
@@ -602,12 +626,12 @@ function renderTermCard(p: ProgramRow): string {
     </table>`;
 }
 
-function renderFallSection(ctx: SchoolContext, td: Campaign['template_data']): string {
-  const cards = ctx.programsByTerm.FA26.map(p => renderFallCard(p, ctx, td)).join('');
+function renderFallSection(ctx: SchoolContext, td: Campaign['template_data'], branding: Branding): string {
+  const cards = ctx.programsByTerm.FA26.map(p => renderFallCard(p, ctx, td, branding)).join('');
   return cards;
 }
 
-function renderFallCard(p: ProgramRow, ctx: SchoolContext, td: Campaign['template_data']): string {
+function renderFallCard(p: ProgramRow, ctx: SchoolContext, td: Campaign['template_data'], branding: Branding): string {
   const eb = p.early_bird_price_cents ?? p.price_cents;
   const reg = p.price_cents;
   const savings = Math.max(0, reg - eb);
@@ -627,20 +651,20 @@ function renderFallCard(p: ProgramRow, ctx: SchoolContext, td: Campaign['templat
         <p style="margin:0 0 4px;">
           <span style="font-size:22px;font-weight:700;color:${TEXT};">$${dollars(eb)}</span>
           <span style="font-size:14px;font-weight:400;color:${MUTED};text-decoration:line-through;margin-left:8px;">$${dollars(reg)}</span>
-          ${savings > 0 ? `<span style="display:inline-block;background:${ORANGE};color:#ffffff;font-weight:700;font-size:12px;padding:3px 10px;border-radius:999px;letter-spacing:0.4px;margin-left:8px;">SAVE $${dollars(savings)}</span>` : ''}
+          ${savings > 0 ? `<span style="display:inline-block;background:${branding.accent};color:#ffffff;font-weight:700;font-size:12px;padding:3px 10px;border-radius:999px;letter-spacing:0.4px;margin-left:8px;">SAVE $${dollars(savings)}</span>` : ''}
         </p>
-        <p style="margin:6px 0 0;color:${PURPLE_DARK};font-size:12px;font-weight:600;">Early-bird pricing ends June 5</p>
+        <p style="margin:6px 0 0;color:${branding.secondary};font-size:12px;font-weight:600;">Early-bird pricing ends June 5</p>
         ${desc}
         ${longDesc ? `<p style="margin:10px 0 0;font-size:13px;color:${MUTED};font-style:italic;">Future-ready skills, right after school.</p>` : ''}
       </td></tr>
     </table>`;
 }
 
-function renderCta(href: string, label: string, variant: 'primary' | 'secondary'): string {
+function renderCta(href: string, label: string, variant: 'primary' | 'secondary', branding: Branding): string {
   if (variant === 'primary') {
-    return `<a href="${href}" style="display:inline-block;background:${ORANGE};color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:14px 28px;border-radius:999px;letter-spacing:0.2px;">${label}</a>`;
+    return `<a href="${href}" style="display:inline-block;background:${branding.accent};color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:14px 28px;border-radius:999px;letter-spacing:0.2px;font-family:${branding.bodyFontStack};">${label}</a>`;
   }
-  return `<a href="${href}" style="display:inline-block;background:#ffffff;color:${PURPLE_DARK};text-decoration:none;font-weight:700;font-size:14px;padding:12px 24px;border-radius:999px;border:2px solid ${PURPLE};letter-spacing:0.2px;">${label}</a>`;
+  return `<a href="${href}" style="display:inline-block;background:#ffffff;color:${branding.secondary};text-decoration:none;font-weight:700;font-size:14px;padding:12px 24px;border-radius:999px;border:2px solid ${branding.primary};letter-spacing:0.2px;font-family:${branding.bodyFontStack};">${label}</a>`;
 }
 
 function renderPsBlock(ctx: SchoolContext, td: Campaign['template_data']): string {
@@ -670,13 +694,38 @@ function buildIntro(ctx: SchoolContext, _firstName: string): string {
   }
 
   // Robotics-heavy = majority of programs at this school are robotics curricula.
-  // Counts all pathways (so Cannady's Monday + Friday both count).
+  // Counts all pathways (so Cannady's Monday + Friday both count). The activity
+  // list adapts to which other domains the school actually has, so we never
+  // claim a school has LEGO when it doesn't.
   const roboticsPrograms = ctx.programs.filter(p => categorize(p.curriculum) === 'robotics').length;
   if (totalPrograms > 0 && roboticsPrograms / totalPrograms > 0.5) {
-    return `Happy Spring! Great news &mdash; we&rsquo;re already planning our next year at ${school}. Your child can explore a different STEAM challenge each term &mdash; coding their own games, programming real robots, and engineering structures that survive earthquake tests. Three terms, three totally different skill sets, one amazing year.`;
+    const heavyCats = new Set(ctx.programs.map(p => categorize(p.curriculum)));
+    const activities: string[] = [];
+    if (heavyCats.has('coding'))   activities.push('coding their own games');
+    if (heavyCats.has('robotics')) activities.push('programming real robots');
+    if (heavyCats.has('lego'))     activities.push('engineering real LEGO structures');
+    return `Happy Spring! Great news &mdash; we&rsquo;re already planning our next year at ${school}. Your child can explore a different STEAM challenge each term &mdash; ${joinWithAnd(activities)}. Three terms, three totally different skill sets, one amazing year.`;
   }
 
-  return `Happy Spring! Great news &mdash; we&rsquo;re already planning our next year at ${school}. Your child can explore a different side of STEAM each term &mdash; coding, engineering, and robotics. Each term builds different skills, so by the end of the year they&rsquo;ve designed games, engineered structures, and programmed robots. It&rsquo;s a full year of STEAM, not just one class.`;
+  // Variety intro — adapts to which STEAM domains the school actually offers
+  // so we never promise robotics to a school that has no robotics, etc.
+  const cats = new Set(ctx.programs.map(p => categorize(p.curriculum)));
+  const domains: string[] = [];
+  const accomplishments: string[] = [];
+  if (cats.has('coding')) { domains.push('coding'); accomplishments.push('designed games'); }
+  if (cats.has('lego'))   { domains.push('engineering'); accomplishments.push('engineered structures'); }
+  if (cats.has('robotics')) { domains.push('robotics'); accomplishments.push('programmed robots'); }
+  const domainList = joinWithAnd(domains);
+  const accomplishmentList = joinWithAnd(accomplishments);
+
+  return `Happy Spring! Great news &mdash; we&rsquo;re already planning our next year at ${school}. Your child can explore a different side of STEAM each term &mdash; ${domainList}. Each term builds different skills, so by the end of the year they&rsquo;ve ${accomplishmentList}. It&rsquo;s a full year of STEAM, not just one class.`;
+}
+
+function joinWithAnd(items: string[]): string {
+  if (items.length === 0) return '';
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 }
 
 function categorize(name: string): 'coding' | 'lego' | 'robotics' | 'other' {
@@ -716,6 +765,18 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
+// Belt-and-suspenders: rewrite every non-ASCII codepoint in the final HTML to
+// a numeric HTML entity. This makes the body pure ASCII so it renders
+// correctly even in email clients or viewers that misinterpret the charset.
+function asciiSafeHtml(html: string): string {
+  let out = '';
+  for (let i = 0; i < html.length; i++) {
+    const code = html.charCodeAt(i);
+    out += code >= 128 ? '&#' + code + ';' : html[i];
+  }
+  return out;
+}
+
 async function sendViaResend(to: string, subject: string, html: string): Promise<string> {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -746,6 +807,55 @@ function sleep(ms: number): Promise<void> {
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' },
   });
+}
+
+// Loads a tenant's branding row + resolves the two chosen fonts to full CSS
+// stacks plus a single Google Fonts <link> URL. Falls back to platform
+// defaults for any field that is null or for an org with no branding row.
+async function loadBranding(supabase: any, orgId: string): Promise<Branding> {
+  const { data: b } = await supabase
+    .from('org_branding')
+    .select('primary_color, secondary_color, accent_color, extra_color, page_bg_color, heading_font, body_font')
+    .eq('organization_id', orgId)
+    .maybeSingle();
+
+  let headingStack = DEFAULT_FONT_STACK;
+  let bodyStack = DEFAULT_FONT_STACK;
+  const fontParams: string[] = [];
+
+  const fontNames = [b?.heading_font, b?.body_font].filter(Boolean) as string[];
+  if (fontNames.length > 0) {
+    const { data: fonts } = await supabase
+      .from('available_fonts')
+      .select('name, google_fonts_param, fallback_stack')
+      .in('name', fontNames);
+    const byName = new Map<string, { name: string; google_fonts_param: string; fallback_stack: string }>(
+      (fonts ?? []).map((f: any) => [f.name, f]),
+    );
+    if (b?.heading_font && byName.has(b.heading_font)) {
+      const f = byName.get(b.heading_font)!;
+      headingStack = `'${f.name}',${f.fallback_stack}`;
+      fontParams.push(f.google_fonts_param);
+    }
+    if (b?.body_font && byName.has(b.body_font)) {
+      const f = byName.get(b.body_font)!;
+      bodyStack = `'${f.name}',${f.fallback_stack}`;
+      fontParams.push(f.google_fonts_param);
+    }
+  }
+
+  return {
+    primary: b?.primary_color ?? DEFAULT_PRIMARY,
+    secondary: b?.secondary_color ?? DEFAULT_SECONDARY,
+    accent: b?.accent_color ?? DEFAULT_ACCENT,
+    extra: b?.extra_color ?? null,
+    pageBg: b?.page_bg_color ?? DEFAULT_PAGE_BG,
+    bodyFontStack: bodyStack,
+    headingFontStack: headingStack,
+    googleFontsUrl: fontParams.length > 0
+      ? `https://fonts.googleapis.com/css2?${fontParams.map(p => `family=${p}`).join('&')}&display=swap`
+      : null,
+  };
 }
