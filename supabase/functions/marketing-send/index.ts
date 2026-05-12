@@ -7,10 +7,14 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const UNSUBSCRIBE_SECRET = Deno.env.get('MARKETING_UNSUBSCRIBE_SECRET')!;
 
 const FROM_EMAIL = 'Journey to STEAM <hello@updates.journeytosteam.com>';
 const REPLY_TO = 'jessica@journeytosteam.com';
 const REGISTER_URL = 'https://enrops.com/j2s';
+// Public endpoint for the unsubscribe edge function. Built from SUPABASE_URL so
+// it works in any project without hardcoding the project ref.
+const UNSUBSCRIBE_ENDPOINT = `${SUPABASE_URL}/functions/v1/marketing-unsubscribe`;
 const VIP_TOTAL_CENTS = 72000;
 const VIP_PER_TERM_CENTS = 24000;
 
@@ -262,6 +266,23 @@ serve(async (req: Request) => {
       if (page.length < PAGE) break;
     }
 
+    // ---- Load suppressed emails for this org ----
+    // Anyone in marketing_suppressions is skipped without writing to
+    // marketing_sends — the suppression row is the audit trail. CAN-SPAM
+    // compliance + Gmail/Yahoo bulk-sender rules require honoring opt-outs
+    // before sending, not after.
+    const suppressed = new Set<string>();
+    for (let off = 0; ; off += PAGE) {
+      const { data: page } = await supabase
+        .from('marketing_suppressions')
+        .select('email')
+        .eq('organization_id', orgId)
+        .range(off, off + PAGE - 1);
+      if (!page || page.length === 0) break;
+      for (const r of page as { email: string }[]) suppressed.add(r.email.toLowerCase());
+      if (page.length < PAGE) break;
+    }
+
     // ---- Render emails per school ----
     type SchoolResult = {
       school: string;
@@ -269,6 +290,7 @@ serve(async (req: Request) => {
       recipient_count: number;
       sent: number;
       skipped_already_sent: number;
+      skipped_suppressed: number;
       errors: number;
       first_error?: string;
       html?: string;
@@ -278,14 +300,17 @@ serve(async (req: Request) => {
     for (const ctx of contexts) {
       const recipients = recipientsBySchool[ctx.displayName] ?? [];
       const subject = renderSubject(ctx);
-      // Pre-render template once per school using a placeholder name for preview/test.
-      const previewHtml = renderHtml(ctx, td, org, 'there', branding);
+      // Preview HTML uses a synthetic unsubscribe URL — preview is never sent, so the
+      // token doesn't need to verify. Real sends compute per-recipient URLs below.
+      const previewUrl = await computeUnsubscribeUrl('preview@example.com', orgId);
+      const previewHtml = renderHtml(ctx, td, org, 'there', branding, previewUrl);
       const result: SchoolResult = {
         school: ctx.displayName,
         subject,
         recipient_count: recipients.length,
         sent: 0,
         skipped_already_sent: 0,
+        skipped_suppressed: 0,
         errors: 0,
       };
       if (mode === 'preview') {
@@ -304,6 +329,7 @@ serve(async (req: Request) => {
         schools_targeted: targetSchools.length,
         total_recipients: summary.reduce((n: number, r: SchoolResult) => n + r.recipient_count, 0),
         already_sent_count: alreadySent.size,
+        suppressed_count: suppressed.size,
         schools_with_zero_recipients: summary
           .filter((r: SchoolResult) => r.recipient_count === 0)
           .map((r: SchoolResult) => r.school),
@@ -313,12 +339,15 @@ serve(async (req: Request) => {
 
     if (mode === 'test') {
       const testResults: { school: string; subject: string; ok: boolean; error?: string }[] = [];
+      // Test sends use the test_email's real unsubscribe token so the link is
+      // clickable end-to-end during QA.
+      const testUnsubUrl = await computeUnsubscribeUrl(test_email!, orgId);
       for (const item of results as any[]) {
         const ctx: SchoolContext = item.ctx;
         const subject = `[TEST · ${ctx.displayName}] ${item.result.subject}`;
-        const html = renderHtml(ctx, td, org, 'Jessica', branding);
+        const html = renderHtml(ctx, td, org, 'Jessica', branding, testUnsubUrl);
         try {
-          await sendViaResend(test_email, subject, html);
+          await sendViaResend(test_email, subject, html, testUnsubUrl);
           testResults.push({ school: ctx.displayName, subject: item.result.subject, ok: true });
         } catch (e) {
           testResults.push({ school: ctx.displayName, subject: item.result.subject, ok: false, error: String(e) });
@@ -352,15 +381,21 @@ serve(async (req: Request) => {
           break sendLoop;
         }
         const r = recipients[i];
-        if (alreadySent.has(r.email.toLowerCase())) {
+        const emailLower = r.email.toLowerCase();
+        if (suppressed.has(emailLower)) {
+          result.skipped_suppressed++;
+          continue;
+        }
+        if (alreadySent.has(emailLower)) {
           result.skipped_already_sent++;
           continue;
         }
         const firstName = parseFirstName(r);
-        const html = renderHtml(ctx, td, org, firstName, branding);
+        const unsubUrl = await computeUnsubscribeUrl(r.email, orgId);
+        const html = renderHtml(ctx, td, org, firstName, branding, unsubUrl);
         const subject = result.subject;
         try {
-          const resendId = await sendViaResend(r.email, subject, html);
+          const resendId = await sendViaResend(r.email, subject, html, unsubUrl);
           alreadySent.add(r.email.toLowerCase());
           await supabase.from('marketing_sends').insert({
             organization_id: orgId,
@@ -426,8 +461,10 @@ serve(async (req: Request) => {
       finished_at: new Date().toISOString(),
       schools: summary.length,
       total_sent: summary.reduce((n: number, r: SchoolResult) => n + r.sent, 0),
-      total_skipped: summary.reduce((n: number, r: SchoolResult) => n + r.skipped_already_sent, 0),
+      total_skipped_already_sent: summary.reduce((n: number, r: SchoolResult) => n + r.skipped_already_sent, 0),
+      total_skipped_suppressed: summary.reduce((n: number, r: SchoolResult) => n + r.skipped_suppressed, 0),
       total_errors: summary.reduce((n: number, r: SchoolResult) => n + r.errors, 0),
+      suppressed_count: suppressed.size,
       chain_depth: chainDepth,
       continuation_fired: continuationFired,
       results: summary,
@@ -512,6 +549,7 @@ function renderHtml(
   org: Org,
   firstName: string,
   branding: Branding,
+  unsubscribeUrl: string,
 ): string {
   const intro = buildIntro(ctx, firstName);
   const vipBlock = ctx.hasFullYear ? renderVipBlock(ctx, td, branding) : '';
@@ -586,7 +624,8 @@ ${dividerForFallSection}
 <tr><td style="background:${branding.pageBg};padding:24px 28px;color:${MUTED};font-size:13px;line-height:1.55;border-top:1px solid ${BORDER};font-family:${branding.bodyFontStack};">
   <p style="margin:0 0 8px;color:${TEXT};font-weight:600;font-size:14px;">Jessica Vorster &middot; Journey to STEAM</p>
   <p style="margin:0 0 12px;">jessica@journeytosteam.com &middot; (971) 258-2178</p>
-  <p style="margin:0;">You&rsquo;re receiving this because your child participated in a Journey to STEAM program at ${escapeHtml(ctx.displayName)}. Hit reply anytime &mdash; it goes straight to Jessica.</p>
+  <p style="margin:0 0 14px;">You&rsquo;re receiving this because your child participated in a Journey to STEAM program at ${escapeHtml(ctx.displayName)}. Hit reply anytime &mdash; it goes straight to Jessica.</p>
+  <p style="margin:0;font-size:12px;color:${MUTED};">Don&rsquo;t want emails like this? <a href="${escapeHtml(unsubscribeUrl)}" style="color:${MUTED};text-decoration:underline;">Unsubscribe</a>.</p>
 </td></tr>
 
 </table>
@@ -820,7 +859,16 @@ function asciiSafeHtml(html: string): string {
   return out;
 }
 
-async function sendViaResend(to: string, subject: string, html: string): Promise<string> {
+async function sendViaResend(
+  to: string,
+  subject: string,
+  html: string,
+  unsubscribeUrl: string,
+): Promise<string> {
+  // List-Unsubscribe + List-Unsubscribe-Post: List-Unsubscribe=One-Click is the
+  // RFC 8058 pair Gmail and Yahoo require for bulk senders. Including a mailto
+  // fallback ensures clients that don't speak HTTPS one-click still get a
+  // working unsubscribe path.
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -833,6 +881,10 @@ async function sendViaResend(to: string, subject: string, html: string): Promise
       reply_to: REPLY_TO,
       subject,
       html,
+      headers: {
+        'List-Unsubscribe': `<${unsubscribeUrl}>, <mailto:${REPLY_TO}?subject=unsubscribe>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
     }),
   });
   if (!res.ok) {
@@ -841,6 +893,36 @@ async function sendViaResend(to: string, subject: string, html: string): Promise
   }
   const data = await res.json();
   return data.id ?? '';
+}
+
+// Builds the per-recipient unsubscribe URL with an HMAC-signed token. The
+// marketing-unsubscribe edge function verifies the token before inserting a
+// suppression row, which prevents a leaked URL pattern from being used to
+// unsubscribe arbitrary addresses.
+async function computeUnsubscribeUrl(email: string, orgId: string): Promise<string> {
+  const lowered = email.toLowerCase();
+  const token = await hmacToken(lowered, orgId);
+  const params = new URLSearchParams({ email: lowered, org: orgId, t: token });
+  return `${UNSUBSCRIBE_ENDPOINT}?${params.toString()}`;
+}
+
+async function hmacToken(email: string, orgId: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(UNSUBSCRIBE_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(`${email}:${orgId}`),
+  );
+  const bytes = new Uint8Array(sig);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function sleep(ms: number): Promise<void> {
