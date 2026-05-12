@@ -14,6 +14,16 @@ const REGISTER_URL = 'https://enrops.com/j2s';
 const VIP_TOTAL_CENTS = 72000;
 const VIP_PER_TERM_CENTS = 24000;
 
+// Each invocation gives itself this much wall-clock time for the send loop.
+// Supabase edge functions are capped at ~150s, so 120s leaves room for the
+// per-invocation setup (campaign/org/programs/recipients/dedup queries) plus
+// the response write. When the budget is exhausted, the function fires a
+// continuation request to its own URL (via EdgeRuntime.waitUntil) and returns
+// a partial summary. The continuation picks up exactly where we left off
+// because marketing_sends dedup skips everyone already sent.
+const SEND_TIME_BUDGET_MS = 120_000;
+const MAX_CHAIN_DEPTH = 30;
+
 // Tenant-overridable colors and fonts are loaded per request from org_branding.
 // These constants are platform defaults applied when an org has no branding row
 // or a field is null.
@@ -327,12 +337,20 @@ serve(async (req: Request) => {
 
     // mode === 'send'
     const sendStarted = new Date().toISOString();
+    const sendLoopStart = Date.now();
+    const chainDepth = Number((body as any)?._chainDepth ?? 0);
     let queued = 0;
-    for (const item of results as any[]) {
+    let outOfTime = false;
+
+    sendLoop: for (const item of results as any[]) {
       const ctx: SchoolContext = item.ctx;
       const recipients: Recipient[] = item.recipients;
       const result: SchoolResult = item.result;
       for (let i = 0; i < recipients.length; i++) {
+        if (Date.now() - sendLoopStart > SEND_TIME_BUDGET_MS) {
+          outOfTime = true;
+          break sendLoop;
+        }
         const r = recipients[i];
         if (alreadySent.has(r.email.toLowerCase())) {
           result.skipped_already_sent++;
@@ -377,6 +395,29 @@ serve(async (req: Request) => {
       }
     }
 
+    // If we stopped early because we were running out of time, fire a
+    // self-invocation to keep working in the background. Dedup against
+    // marketing_sends.status='sent' means the continuation picks up exactly
+    // where we left off without re-sending anyone.
+    let continuationFired = false;
+    if (outOfTime && chainDepth < MAX_CHAIN_DEPTH) {
+      try {
+        const continuationBody = { ...(body as Record<string, unknown>), _chainDepth: chainDepth + 1 };
+        const continuationPromise = fetch(req.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(continuationBody),
+        }).catch(err => console.error('continuation fetch failed:', err));
+        const edgeRuntime = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
+        if (edgeRuntime?.waitUntil) {
+          edgeRuntime.waitUntil(continuationPromise);
+        }
+        continuationFired = true;
+      } catch (e) {
+        console.error('failed to schedule continuation:', e);
+      }
+    }
+
     const summary = (results as any[]).map(r => r.result);
     return json({
       mode,
@@ -387,6 +428,8 @@ serve(async (req: Request) => {
       total_sent: summary.reduce((n: number, r: SchoolResult) => n + r.sent, 0),
       total_skipped: summary.reduce((n: number, r: SchoolResult) => n + r.skipped_already_sent, 0),
       total_errors: summary.reduce((n: number, r: SchoolResult) => n + r.errors, 0),
+      chain_depth: chainDepth,
+      continuation_fired: continuationFired,
       results: summary,
     });
   } catch (e) {
