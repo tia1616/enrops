@@ -152,7 +152,7 @@ serve(async (req: Request) => {
       `)
       .eq('organization_id', orgId)
       .in('term', ['FA26', 'WI27', 'SP27'])
-      .in('status', ['open', 'draft']);
+      .in('status', ['open']);
     if (pErr) return json({ error: `programs query failed: ${pErr.message}` }, 500);
 
     // ---- Build school -> programs map ----
