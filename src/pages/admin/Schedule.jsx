@@ -1702,13 +1702,6 @@ function ProgramCard({ item, getValidationFor, dragStateRef, onDrop, onNeedsHire
         role="lead"
         dragStateRef={dragStateRef}
         onClick={onInstructorClick}
-        rightContent={
-          <span style={{ fontSize: 11, color: enrollColor, fontWeight: 600, whiteSpace: "nowrap" }}>
-            {(!session.enrollment_synced_at && (session.current_enrollment ?? 0) === 0)
-              ? "Enrollment TBD"
-              : `${session.current_enrollment ?? 0} enrolled`}
-          </span>
-        }
       />
       {showDevelopingRow && (
         <SlotRow
@@ -1720,6 +1713,18 @@ function ProgramCard({ item, getValidationFor, dragStateRef, onDrop, onNeedsHire
           onClick={onInstructorClick}
         />
       )}
+      <div style={{
+        fontSize: 11,
+        color: enrollColor,
+        fontWeight: 600,
+        textAlign: "right",
+        marginTop: 4,
+        whiteSpace: "nowrap",
+      }}>
+        {(!session.enrollment_synced_at && (session.current_enrollment ?? 0) === 0)
+          ? "Enrollment TBD"
+          : `${session.current_enrollment ?? 0} enrolled`}
+      </div>
       {(dropEffect === "warn" || dropEffect === "block") && hoverResult && (
         <DragHoverPopup
           kind={dropEffect}
