@@ -767,6 +767,46 @@ export default function Schedule() {
     }
   }
 
+  async function handleRollback() {
+    if (state.status !== "ready") return;
+    const confirmed = window.confirm(
+      "Roll back published assignments in this cycle back to 'confirmed'? This lets you re-send them. " +
+      "Any instructor responses already received (Accept / Request change) will be cleared. " +
+      "Skyler and Kristin's $50 distance bonuses are preserved."
+    );
+    if (!confirmed) return;
+    setBusy("rolling_back");
+    setSaveError(null);
+    try {
+      const sessionIds = state.sessions.map((s) => s.id);
+      if (sessionIds.length === 0) return;
+      const { data, error: rbErr } = await supabase
+        .from("camp_assignments")
+        .update({
+          status: "confirmed",
+          published_at: null,
+          email_sent_at: null,
+          instructor_response_at: null,
+          change_request_message: null,
+          deadline: null,
+        })
+        .eq("status", "published")
+        .in("camp_session_id", sessionIds)
+        .select("id");
+      if (rbErr) throw rbErr;
+      const count = data?.length ?? 0;
+      setLastOp(null);
+      await loadAll();
+      setOfferDialog({ mode: "result", payload: { kind: "rollback", count } });
+    } catch (err) {
+      console.error("Rollback failed:", err);
+      setSaveError(`Couldn't roll back: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handlePreviewOffers() {
     if (state.status !== "ready") return;
     setBusy("previewing");
@@ -955,6 +995,9 @@ export default function Schedule() {
           busy={busy === "sending"}
           deadline={offerDeadline}
           onDeadlineChange={setOfferDeadline}
+          publishedCount={state.assignments?.filter((a) => a.status === "published").length ?? 0}
+          onRollback={handleRollback}
+          rollingBack={busy === "rolling_back"}
         />
       )}
       {previewData && (
@@ -1976,7 +2019,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
   );
 }
 
-function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange }) {
+function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, publishedCount, onRollback, rollingBack }) {
   if (dialog.mode === "result" && dialog.payload?.kind === "approve") {
     return (
       <ModalShell onClose={onClose} title="Approved">
@@ -1992,6 +2035,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
   }
   if (dialog.mode === "result" && dialog.payload?.kind === "send") {
     const p = dialog.payload;
+    const showRollback = p.sent === 0 && (p.mode === "test" || p.mode === "send") && publishedCount > 0;
     return (
       <ModalShell onClose={onClose} title={p.mode === "send" ? "Offers sent" : p.mode === "test" ? "Test sent" : "Preview"}>
         <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
@@ -2005,19 +2049,42 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
               </ul>
             </div>
           )}
-          {p.mode === "preview" && p.preview && p.preview.length > 0 && (
-            <div style={{ marginTop: 14, fontSize: 12, color: MUTED }}>
-              {p.preview.length} preview{p.preview.length === 1 ? "" : "s"} generated. Open the browser console to inspect HTML.
-            </div>
-          )}
-          {p.mode === "test" && (
+          {p.mode === "test" && p.sent > 0 && (
             <div style={{ marginTop: 12, padding: 10, background: `${GOLD}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
               All emails routed to <strong>jessica@journeytosteam.com</strong>. Assignments were flipped to <em>published</em>. Use Undo on individual rows if needed.
+            </div>
+          )}
+          {showRollback && (
+            <div style={{ marginTop: 14, padding: 12, background: `${GOLD}1A`, border: `1px solid ${GOLD}66`, borderRadius: 6 }}>
+              <div style={{ fontSize: 13, color: INK, marginBottom: 8 }}>
+                <strong>{publishedCount}</strong> assignment{publishedCount === 1 ? "" : "s"} in this cycle {publishedCount === 1 ? "is" : "are"} already <em>published</em>. Roll them back to <em>confirmed</em> so you can re-send fresh.
+              </div>
+              <button
+                type="button"
+                onClick={onRollback}
+                disabled={rollingBack}
+                style={{ ...btn(GOLD, INK, false, rollingBack), padding: "7px 12px", fontSize: 13 }}
+              >
+                {rollingBack ? "Rolling back…" : `Roll back ${publishedCount} published row${publishedCount === 1 ? "" : "s"}`}
+              </button>
             </div>
           )}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
           <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>
+        </div>
+      </ModalShell>
+    );
+  }
+
+  if (dialog.mode === "result" && dialog.payload?.kind === "rollback") {
+    return (
+      <ModalShell onClose={onClose} title="Rolled back">
+        <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
+          <strong>{dialog.payload.count}</strong> assignment{dialog.payload.count === 1 ? "" : "s"} reset to <em>confirmed</em>. Distance bonuses preserved. You can now Preview or Send Offers again.
+        </div>
+        <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>OK</button>
         </div>
       </ModalShell>
     );
