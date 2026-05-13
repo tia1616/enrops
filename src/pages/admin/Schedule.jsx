@@ -16,6 +16,7 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const OK_GREEN = "#3a7c3a";
+const CHANGE_REQ = "#8B4FB5"; // distinct violet for status='change_requested'
 
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
 const SESSION_TIME_RANK = { morning: 0, full_day: 1, afternoon: 2, after_school: 3 };
@@ -50,6 +51,7 @@ const DEVELOPING_THRESHOLD = 12;
 
 const FILTER_STATUSES = [
   { key: "needs_hire", label: "Needs hire" },
+  { key: "change_requested", label: "Change requested" },
   { key: "flagged", label: "Flagged" },
   { key: "ok", label: "OK" },
   { key: "confirmed", label: "Confirmed" },
@@ -110,7 +112,7 @@ function deriveStatus(session, assignments) {
     const rank = STATUS_RANK[a.status] ?? -1;
     if (!best || rank > best.rank) best = { status: a.status, rank, flags: a.flags ?? [] };
   }
-  if (best.status === "change_requested") return "flagged";
+  if (best.status === "change_requested") return "change_requested";
   if (Array.isArray(best.flags) && best.flags.length > 0) return "flagged";
   if (best.status === "confirmed" || best.status === "published") return "confirmed";
   return "ok";
@@ -119,6 +121,7 @@ function deriveStatus(session, assignments) {
 function statusColor(status) {
   if (status === "needs_hire") return CORAL;
   if (status === "flagged") return GOLD;
+  if (status === "change_requested") return CHANGE_REQ;
   return PLUM;
 }
 
@@ -214,6 +217,7 @@ export default function Schedule() {
   const [offerDialog, setOfferDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
   const [lastOp, setLastOp] = useState(null); // { type, ... } — supports a single-step undo
   const [candidatesFor, setCandidatesFor] = useState(null); // { session, currentAssignment | null }
+  const [changeRequestFor, setChangeRequestFor] = useState(null); // { session, assignment }
 
   const dragStateRef = useRef(null);
 
@@ -245,7 +249,7 @@ export default function Schedule() {
         sessionIds.length
           ? supabase
               .from("camp_assignments")
-              .select("id, camp_session_id, status, role, instructor:instructors(id, first_name, last_name)")
+              .select("id, camp_session_id, status, role, change_request_message, distance_bonus_cents, instructor_response_at, instructor:instructors(id, first_name, last_name, email)")
               .in("camp_session_id", sessionIds)
           : Promise.resolve({ data: [], error: null }),
         supabase
@@ -278,9 +282,13 @@ export default function Schedule() {
         camp_session_id: a.camp_session_id,
         status: a.status,
         role: a.role,
+        change_request_message: a.change_request_message ?? null,
+        distance_bonus_cents: a.distance_bonus_cents ?? null,
+        instructor_response_at: a.instructor_response_at ?? null,
         instructor_id: a.instructor?.id ?? null,
         instructor_first: a.instructor?.first_name ?? null,
         instructor_last: a.instructor?.last_name ?? null,
+        instructor_email: a.instructor?.email ?? null,
         flags: [],
       }));
       const instructors = instructorsRes.data ?? [];
@@ -385,14 +393,15 @@ export default function Schedule() {
 
   // Header counters always reflect the full cycle (truth).
   const counts = useMemo(() => {
-    if (!enriched) return { assigned: 0, flagged: 0, needsHire: 0 };
-    let assigned = 0, flagged = 0, needsHire = 0;
+    if (!enriched) return { assigned: 0, flagged: 0, changeRequested: 0, needsHire: 0 };
+    let assigned = 0, flagged = 0, changeRequested = 0, needsHire = 0;
     for (const e of enriched.values()) {
       if (e.status === "needs_hire") needsHire++;
       else if (e.status === "flagged") flagged++;
+      else if (e.status === "change_requested") changeRequested++;
       else assigned++;
     }
-    return { assigned, flagged, needsHire };
+    return { assigned, flagged, changeRequested, needsHire };
   }, [enriched]);
 
   // Overview dots respect filters so toggling them is visible without focusing a week.
@@ -823,6 +832,7 @@ export default function Schedule() {
             currentAssignment,
             role: currentAssignment?.role ?? roleHint ?? "lead",
           })}
+          onChangeRequestClick={(session, assignment) => setChangeRequestFor({ session, assignment })}
         />
       ) : (
         <div style={{
@@ -845,6 +855,23 @@ export default function Schedule() {
           onChoose={(mode) => handleSendOffers(mode)}
           onClose={() => setOfferDialog(null)}
           busy={busy === "sending"}
+        />
+      )}
+      {changeRequestFor && (
+        <ChangeRequestReview
+          session={changeRequestFor.session}
+          assignment={changeRequestFor.assignment}
+          cycle={cycle}
+          orgName={org?.name ?? "Journey to STEAM"}
+          onClose={() => setChangeRequestFor(null)}
+          onUnassign={async () => {
+            await handleRemoveAssignment(changeRequestFor.session, changeRequestFor.assignment);
+            setChangeRequestFor(null);
+          }}
+          onReassign={() => {
+            setCandidatesFor({ session: changeRequestFor.session, currentAssignment: changeRequestFor.assignment, role: changeRequestFor.assignment.role });
+            setChangeRequestFor(null);
+          }}
         />
       )}
       {candidatesFor && (
@@ -902,8 +929,9 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
       <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
         <Counter label="Assigned" value={counts.assigned} tone="assigned" />
         <Counter label="Flagged" value={counts.flagged} tone="flagged" />
+        <Counter label="Change req." value={counts.changeRequested} tone="change_requested" />
         <Counter label="Needs hire" value={counts.needsHire} tone="needs_hire" />
-        <Counter label="Missing surveys" value={missingSurveys} tone="muted" />
+        <Counter label="Surveys out" value={missingSurveys} tone="muted" />
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         {lastOp && (
@@ -943,6 +971,7 @@ function Counter({ label, value, tone }) {
   const color =
     tone === "assigned" ? PLUM :
     tone === "flagged" ? GOLD :
+    tone === "change_requested" ? CHANGE_REQ :
     tone === "needs_hire" ? CORAL : MUTED;
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
@@ -1233,7 +1262,11 @@ function TermOverview({ weeks, weekBuckets, focusedWeek, onFocus }) {
 }
 
 function Dot({ kind }) {
-  const color = kind === "needs_hire" ? CORAL : kind === "flagged" ? GOLD : PLUM;
+  const color =
+    kind === "needs_hire" ? CORAL :
+    kind === "flagged" ? GOLD :
+    kind === "change_requested" ? CHANGE_REQ :
+    PLUM;
   return <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: "50%", background: color, display: "inline-block" }} />;
 }
 
@@ -1241,6 +1274,7 @@ function Legend() {
   const items = [
     { kind: "ok", label: "Assigned" },
     { kind: "flagged", label: "Flagged" },
+    { kind: "change_requested", label: "Change requested" },
     { kind: "needs_hire", label: "Needs hire" },
   ];
   return (
@@ -1255,7 +1289,7 @@ function Legend() {
   );
 }
 
-function WeeklyGrid({ week, items, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick }) {
+function WeeklyGrid({ week, items, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
   const byDay = useMemo(() => {
     const m = new Map(WEEKDAYS.map((d) => [d, []]));
     for (const e of items) {
@@ -1286,6 +1320,7 @@ function WeeklyGrid({ week, items, getValidationFor, dragStateRef, onDrop, onNee
             onDrop={onDrop}
             onNeedsHireClick={onNeedsHireClick}
             onInstructorClick={onInstructorClick}
+            onChangeRequestClick={onChangeRequestClick}
           />
         ))}
       </div>
@@ -1293,7 +1328,7 @@ function WeeklyGrid({ week, items, getValidationFor, dragStateRef, onDrop, onNee
   );
 }
 
-function DayColumn({ day, cards, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick }) {
+function DayColumn({ day, cards, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
   const sorted = useMemo(() => {
     return [...cards].sort((a, b) => {
       const locA = a.session.location_name ?? "";
@@ -1343,6 +1378,7 @@ function DayColumn({ day, cards, getValidationFor, dragStateRef, onDrop, onNeeds
                 onDrop={onDrop}
                 onNeedsHireClick={onNeedsHireClick}
                 onInstructorClick={onInstructorClick}
+                onChangeRequestClick={onChangeRequestClick}
               />
             </div>
           );
@@ -1352,11 +1388,16 @@ function DayColumn({ day, cards, getValidationFor, dragStateRef, onDrop, onNeeds
   );
 }
 
-function ProgramCard({ item, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick }) {
+function ProgramCard({ item, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
   const { session, status, assignment, allAssignments, activeAssignments } = item;
   const [dropEffect, setDropEffect] = useState(null); // "ok" | "warn" | "block" | "self" | null
   const [hoverResult, setHoverResult] = useState(null); // full validation result during drag
   const isNeedsHire = status === "needs_hire";
+  const isChangeRequested = status === "change_requested";
+  // For change_requested cards, find the assignment that triggered it (status='change_requested')
+  const changeReqAssignment = isChangeRequested
+    ? activeAssignments.find((a) => a.status === "change_requested") ?? assignment
+    : null;
 
   // Lead + developing.
   const lead = activeAssignments.find((a) => a.role === "lead") ?? null;
@@ -1428,9 +1469,15 @@ function ProgramCard({ item, getValidationFor, dragStateRef, onDrop, onNeedsHire
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDropHandler}
-      onClick={isNeedsHire && onNeedsHireClick ? () => onNeedsHireClick(session) : undefined}
-      role={isNeedsHire ? "button" : undefined}
-      tabIndex={isNeedsHire ? 0 : undefined}
+      onClick={
+        isChangeRequested && onChangeRequestClick
+          ? () => onChangeRequestClick(session, changeReqAssignment)
+          : isNeedsHire && onNeedsHireClick
+          ? () => onNeedsHireClick(session)
+          : undefined
+      }
+      role={isNeedsHire || isChangeRequested ? "button" : undefined}
+      tabIndex={isNeedsHire || isChangeRequested ? 0 : undefined}
       style={{
         position: "relative",
         background: bgColor,
@@ -1441,10 +1488,14 @@ function ProgramCard({ item, getValidationFor, dragStateRef, onDrop, onNeedsHire
         display: "flex",
         flexDirection: "column",
         gap: 6,
-        cursor: isNeedsHire ? "pointer" : "default",
+        cursor: (isNeedsHire || isChangeRequested) ? "pointer" : "default",
         transition: "background 80ms ease, border-color 80ms ease",
       }}
-      title={isNeedsHire ? "Click to see eligible instructors" : undefined}
+      title={
+        isChangeRequested ? "Click to review the instructor's change request" :
+        isNeedsHire ? "Click to see eligible instructors" :
+        undefined
+      }
     >
       <div style={{ fontSize: 13, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
         {session.curriculum_name || "(unnamed)"}
@@ -1458,6 +1509,23 @@ function ProgramCard({ item, getValidationFor, dragStateRef, onDrop, onNeedsHire
       {cdLabel && (
         <div style={{ fontSize: 10, color: PLUM, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>
           {cdLabel}
+        </div>
+      )}
+      {isChangeRequested && changeReqAssignment?.change_request_message && (
+        <div style={{
+          fontSize: 11,
+          color: INK,
+          background: `${CHANGE_REQ}1A`,
+          border: `1px solid ${CHANGE_REQ}66`,
+          borderRadius: 4,
+          padding: "5px 8px",
+          lineHeight: 1.35,
+        }}>
+          <span style={{ fontWeight: 600, color: CHANGE_REQ }}>“ </span>
+          {changeReqAssignment.change_request_message.length > 60
+            ? changeReqAssignment.change_request_message.slice(0, 60) + "…"
+            : changeReqAssignment.change_request_message}
+          <span style={{ fontWeight: 600, color: CHANGE_REQ }}> ”</span>
         </div>
       )}
       <SlotRow
@@ -1665,6 +1733,99 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
       )}
       {extraCount > 0 && <span style={{ color: MUTED }}>+{extraCount}</span>}
     </span>
+  );
+}
+
+function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onUnassign, onReassign }) {
+  const [busy, setBusy] = useState(false);
+  const firstName = assignment?.instructor_first ?? "Instructor";
+  const email = assignment?.instructor_email;
+  const subject = `Re: Your ${cycle?.name ?? ""} schedule — ${session.curriculum_name ?? "camp"}`;
+  const body = [
+    `Hi ${firstName},`,
+    "",
+    `Got your note about ${session.curriculum_name ?? "this camp"} (Week ${session.week_num}, ${session.location_name}).`,
+    "",
+    assignment?.change_request_message ? `You wrote: "${assignment.change_request_message}"` : "",
+    "",
+    "Wanted to talk through options — what would work best for you?",
+    "",
+    `— Jessica, ${orgName}`,
+  ].filter(Boolean).join("\n");
+  const mailto = email
+    ? `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+    : null;
+
+  async function doUnassign() {
+    setBusy(true);
+    try { await onUnassign(); } finally { setBusy(false); }
+  }
+
+  return (
+    <ModalShell onClose={onClose} title="Change request">
+      <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+        <div>
+          <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>
+            From {firstName} · Week {session.week_num}
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginTop: 4 }}>
+            {session.curriculum_name ?? "(unnamed)"}
+          </div>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+            {session.location_name} · {titleCase(session.session_type)}
+          </div>
+        </div>
+
+        <div style={{
+          background: `${CHANGE_REQ}14`,
+          border: `1px solid ${CHANGE_REQ}66`,
+          borderRadius: 6,
+          padding: 12,
+          fontSize: 14,
+          color: INK,
+          lineHeight: 1.5,
+          whiteSpace: "pre-wrap",
+        }}>
+          {assignment?.change_request_message || <em style={{ color: MUTED }}>(no message)</em>}
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <DialogChoice
+            title={`Reassign someone else to this camp`}
+            subtitle={`Open the candidate picker for ${session.curriculum_name ?? "this camp"} so you can swap ${firstName} out.`}
+            onClick={onReassign}
+            disabled={busy}
+          />
+          <DialogChoice
+            title={`Unassign ${firstName} (mark Needs hire)`}
+            subtitle="Removes their assignment; the slot becomes Needs hire. Undo available."
+            onClick={doUnassign}
+            disabled={busy}
+            tone="warn"
+          />
+          {mailto ? (
+            <a
+              href={mailto}
+              style={{
+                ...btn("transparent", PLUM, true),
+                textAlign: "left",
+                padding: "10px 12px",
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 600, color: PLUM }}>Email {firstName}</div>
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>Opens your email client with a pre-filled reply at {email}.</div>
+            </a>
+          ) : (
+            <div style={{ padding: 10, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12, color: MUTED }}>
+              No email on file for {firstName} — can't auto-compose a reply.
+            </div>
+          )}
+        </div>
+      </div>
+      <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
+        <button type="button" onClick={onClose} disabled={busy} style={btn("transparent", MUTED, true)}>Close</button>
+      </div>
+    </ModalShell>
   );
 }
 
