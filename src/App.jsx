@@ -12,6 +12,7 @@ import AdminLayout from './layouts/AdminLayout.jsx';
 import AdminLogin from './pages/admin/AdminLogin.jsx';
 import AdminOverview from './pages/admin/AdminOverview.jsx';
 import MarketingShell from './pages/admin/marketing/MarketingShell.jsx';
+import Schedule from './pages/admin/Schedule.jsx';
 import { CartProvider } from './context/CartContext.jsx';
 
 export default function App() {
@@ -40,6 +41,7 @@ export default function App() {
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<AdminOverview />} />
         <Route path="marketing" element={<MarketingShell />} />
+        <Route path="schedule" element={<Schedule />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

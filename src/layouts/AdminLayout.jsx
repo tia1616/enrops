@@ -21,8 +21,8 @@ const NAV = [
   { to: "/admin/programs", label: "Programs", soon: true },
   { to: "/admin/contacts", label: "Contacts", soon: true },
   { to: "/admin/instructors", label: "Instructors", soon: true },
-  { to: "/admin/schedule", label: "Schedule", soon: true },
-  { to: "/admin/community", label: "Community", external: true, href: "#" },
+  { to: "/admin/schedule", label: "Schedule" },
+  { to: "/admin/community", label: "Community", soon: true },
   { to: "/admin/settings", label: "Settings", soon: true },
 ];
 
@@ -129,7 +129,18 @@ export default function AdminLayout() {
     <div style={{ minHeight: "100vh", background: CHALK, fontFamily: "'Space Grotesk', system-ui, sans-serif", color: INK }}>
       <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
         {/* Sidebar */}
-        <aside style={{ background: "#fff", borderRight: `1px solid ${RULE}`, padding: "20px 0", display: "flex", flexDirection: "column" }}>
+        <aside style={{
+          background: "#fff",
+          borderRight: `1px solid ${RULE}`,
+          padding: "20px 0",
+          display: "flex",
+          flexDirection: "column",
+          position: "sticky",
+          top: 0,
+          alignSelf: "start",
+          height: "100vh",
+          overflowY: "auto",
+        }}>
           <div style={{ padding: "0 20px 18px", borderBottom: `1px solid ${RULE}` }}>
             <div style={{ fontWeight: 700, fontSize: 22, color: PLUM, letterSpacing: -0.3 }}>
               Enrops
@@ -184,7 +195,7 @@ export default function AdminLayout() {
                   </span>
                 )}
               </NavLink>
-            ))}}
+            ))}
           </nav>
 
           <div style={{ padding: "12px 20px", borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED }}>
