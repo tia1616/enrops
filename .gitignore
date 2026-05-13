@@ -1,1 +1,5 @@
 .env
+.tmp/
+node_modules/
+dist/
+supabase/.temp/

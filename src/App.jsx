@@ -13,6 +13,7 @@ import AdminLogin from './pages/admin/AdminLogin.jsx';
 import AdminOverview from './pages/admin/AdminOverview.jsx';
 import MarketingShell from './pages/admin/marketing/MarketingShell.jsx';
 import Schedule from './pages/admin/Schedule.jsx';
+import InstructorPortal from './pages/j2s/InstructorPortal.jsx';
 import { CartProvider } from './context/CartContext.jsx';
 
 export default function App() {
@@ -37,6 +38,7 @@ export default function App() {
         <Route path="privacy" element={<PolicyPage policyType="privacy" orgSlug="j2s" />} />
         <Route path="terms" element={<PolicyPage policyType="terms" orgSlug="j2s" />} />
       </Route>
+      <Route path="/j2s/instructor" element={<InstructorPortal />} />
       <Route path="/admin/login" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<AdminOverview />} />

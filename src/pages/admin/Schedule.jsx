@@ -210,6 +210,8 @@ export default function Schedule() {
   const [selectedLocations, setSelectedLocations] = useState(() => new Set());
   const [selectedStatuses, setSelectedStatuses] = useState(() => new Set());
   const [saveError, setSaveError] = useState(null); // serious-error banner (DB failures only)
+  const [busy, setBusy] = useState(null); // "approving" | "sending" | null
+  const [offerDialog, setOfferDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
   const [lastOp, setLastOp] = useState(null); // { type, ... } — supports a single-step undo
   const [candidatesFor, setCandidatesFor] = useState(null); // { session, currentAssignment | null }
 
@@ -644,6 +646,65 @@ export default function Schedule() {
     return newInst.id;
   }
 
+  async function handleApprove() {
+    if (state.status !== "ready") return;
+    setBusy("approving");
+    setSaveError(null);
+    try {
+      const sessionIds = state.sessions.map((s) => s.id);
+      if (sessionIds.length === 0) return;
+      const { data, error: updErr } = await supabase
+        .from("camp_assignments")
+        .update({ status: "confirmed" })
+        .eq("status", "proposed")
+        .in("camp_session_id", sessionIds)
+        .select("id");
+      if (updErr) throw updErr;
+      const count = data?.length ?? 0;
+      // Also flip cycle status to 'scheduling' if it's still 'collecting'.
+      if (state.cycle.status === "collecting") {
+        await supabase
+          .from("scheduling_cycles")
+          .update({ status: "scheduling" })
+          .eq("id", state.cycle.id);
+      }
+      setLastOp(null); // approval is bulk; no per-row undo from here
+      await loadAll();
+      setOfferDialog({ mode: "result", payload: { kind: "approve", count } });
+    } catch (err) {
+      console.error("Approve failed:", err);
+      setSaveError(`Couldn't approve: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleSendOffers(mode) {
+    if (state.status !== "ready") return;
+    setBusy("sending");
+    setSaveError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-offers", {
+        body: { cycle_id: state.cycle.id, mode, instructor_ids: null },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      if (mode === "preview" && data?.preview) {
+        console.log("[send-offers] preview output:", data.preview);
+      }
+      await loadAll();
+      setOfferDialog({ mode: "result", payload: { kind: "send", mode, ...data } });
+    } catch (err) {
+      console.error("Send offers failed:", err);
+      setSaveError(`Couldn't send: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
+      setOfferDialog(null);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleUndo() {
     const op = lastOp;
     if (!op) return;
@@ -706,6 +767,11 @@ export default function Schedule() {
         missingSurveys={state.missingSurveys}
         lastOp={lastOp}
         onUndo={handleUndo}
+        busy={busy}
+        canApprove={cycle.status !== "published"}
+        canSend={cycle.status === "scheduling" || cycle.status === "published"}
+        onApprove={handleApprove}
+        onSendClick={() => setOfferDialog({ mode: "choose", payload: null })}
       />
       {saveError && (
         <div style={{
@@ -773,6 +839,14 @@ export default function Schedule() {
             : "Click a week above to see its day-by-day grid."}
         </div>
       )}
+      {offerDialog && (
+        <OfferDialog
+          dialog={offerDialog}
+          onChoose={(mode) => handleSendOffers(mode)}
+          onClose={() => setOfferDialog(null)}
+          busy={busy === "sending"}
+        />
+      )}
       {candidatesFor && (
         <CandidatePicker
           session={candidatesFor.session}
@@ -802,7 +876,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo }) {
+function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, onApprove, onSendClick }) {
   return (
     <header style={{
       background: "#fff",
@@ -842,8 +916,24 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo }) {
             ↶ Undo
           </button>
         )}
-        <button type="button" disabled title="Wires up with Approve & Send pass" style={btn("transparent", PLUM, true, true)}>Re-run agent</button>
-        <button type="button" disabled title="Wires up with Approve & Send pass" style={btn(PLUM, "#fff", false, true)}>Approve</button>
+        <button
+          type="button"
+          onClick={onApprove}
+          disabled={!canApprove || busy === "approving"}
+          title={canApprove ? "Flip all proposed assignments to confirmed" : "Already approved"}
+          style={btn("transparent", PLUM, true, !canApprove || busy === "approving")}
+        >
+          {busy === "approving" ? "Approving…" : "Approve"}
+        </button>
+        <button
+          type="button"
+          onClick={onSendClick}
+          disabled={!canSend || busy === "sending"}
+          title={canSend ? "Send the confirmed offers" : "Approve first to enable"}
+          style={btn(PLUM, "#fff", false, !canSend || busy === "sending")}
+        >
+          Send offers
+        </button>
       </div>
     </header>
   );
@@ -1575,6 +1665,149 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
       )}
       {extraCount > 0 && <span style={{ color: MUTED }}>+{extraCount}</span>}
     </span>
+  );
+}
+
+function OfferDialog({ dialog, onChoose, onClose, busy }) {
+  if (dialog.mode === "result" && dialog.payload?.kind === "approve") {
+    return (
+      <ModalShell onClose={onClose} title="Approved">
+        <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.5 }}>
+          {dialog.payload.count} assignment{dialog.payload.count === 1 ? "" : "s"} flipped from <em>proposed</em> to <em>confirmed</em>.
+          You can now send offers.
+        </div>
+        <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>OK</button>
+        </div>
+      </ModalShell>
+    );
+  }
+  if (dialog.mode === "result" && dialog.payload?.kind === "send") {
+    const p = dialog.payload;
+    return (
+      <ModalShell onClose={onClose} title={p.mode === "send" ? "Offers sent" : p.mode === "test" ? "Test sent" : "Preview"}>
+        <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
+          {p.note ? <div style={{ color: MUTED, marginBottom: 8 }}>{p.note}</div> : null}
+          <div><strong>{p.sent}</strong> email{p.sent === 1 ? "" : "s"} delivered.</div>
+          {p.failed && p.failed.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 600, color: CORAL, marginBottom: 4 }}>Failures ({p.failed.length}):</div>
+              <ul style={{ margin: 0, paddingLeft: 18, color: MUTED, fontSize: 12 }}>
+                {p.failed.map((f, i) => <li key={i}>{f.instructor_id.slice(0, 8)}… — {f.reason}</li>)}
+              </ul>
+            </div>
+          )}
+          {p.mode === "preview" && p.preview && p.preview.length > 0 && (
+            <div style={{ marginTop: 14, fontSize: 12, color: MUTED }}>
+              {p.preview.length} preview{p.preview.length === 1 ? "" : "s"} generated. Open the browser console to inspect HTML.
+            </div>
+          )}
+          {p.mode === "test" && (
+            <div style={{ marginTop: 12, padding: 10, background: `${GOLD}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
+              All emails routed to <strong>jessica@journeytosteam.com</strong>. Assignments were flipped to <em>published</em>. Use Undo on individual rows if needed.
+            </div>
+          )}
+        </div>
+        <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>
+        </div>
+      </ModalShell>
+    );
+  }
+
+  // mode === "choose"
+  return (
+    <ModalShell onClose={onClose} title="Send offers">
+      <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ color: MUTED }}>
+          This emails every instructor with a <em>confirmed</em> assignment in this cycle and flips those rows to <em>published</em>.
+        </div>
+        <DialogChoice
+          title="Preview only"
+          subtitle="Render every offer, return HTML to the console. No emails sent, no DB writes."
+          disabled={busy}
+          onClick={() => onChoose("preview")}
+        />
+        <DialogChoice
+          title="Test send → jessica@journeytosteam.com"
+          subtitle="Send each instructor's offer to your inbox so you can review. DB still flips to published."
+          disabled={busy}
+          onClick={() => onChoose("test")}
+          tone="warn"
+        />
+        <DialogChoice
+          title="Real send"
+          subtitle="Sends to actual instructor emails. Irreversible delivery."
+          disabled={busy}
+          onClick={() => onChoose("send")}
+          tone="danger"
+        />
+        {busy && <div style={{ color: MUTED, fontSize: 12 }}>Working…</div>}
+      </div>
+    </ModalShell>
+  );
+}
+
+function DialogChoice({ title, subtitle, onClick, disabled, tone }) {
+  const border = tone === "danger" ? CORAL : tone === "warn" ? GOLD : RULE;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        textAlign: "left",
+        background: "#fff",
+        border: `1px solid ${border}`,
+        borderRadius: 6,
+        padding: "10px 12px",
+        cursor: disabled ? "not-allowed" : "pointer",
+        fontFamily: "inherit",
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{title}</div>
+      <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{subtitle}</div>
+    </button>
+  );
+}
+
+function ModalShell({ title, children, onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.32)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 60,
+        padding: 16,
+      }}
+    >
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%",
+        maxWidth: 480,
+        background: "#fff",
+        border: `1px solid ${RULE}`,
+        borderRadius: 10,
+        boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
+      }}>
+        <div style={{
+          padding: "14px 20px",
+          borderBottom: `1px solid ${RULE}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: INK }}>{title}</h2>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ background: "transparent", border: "none", fontSize: 22, color: MUTED, cursor: "pointer", lineHeight: 1, padding: 4 }}>×</button>
+        </div>
+        {children}
+      </div>
+    </div>
   );
 }
 

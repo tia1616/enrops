@@ -1,0 +1,530 @@
+// src/pages/j2s/InstructorPortal.jsx
+// Minimal instructor portal: magic-link sign-in, list of published assignments,
+// Accept or Request Change per camp. Class detail + My Availability are v2.
+
+import { useEffect, useState } from "react";
+import { supabase } from "../../lib/supabase";
+
+const PLUM = "#691D39";
+const GOLD = "#CFB12F";
+const CHALK = "#EAEADD";
+const CORAL = "#D9694F";
+const INK = "#1a1a1a";
+const MUTED = "#6b6b6b";
+const RULE = "#e2dfd5";
+const OK_GREEN = "#3a7c3a";
+
+function fmt(date) {
+  if (!date) return "";
+  return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+}
+
+function fmtShort(date) {
+  if (!date) return "";
+  return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function fmtTime(t) {
+  if (!t) return "";
+  const [h, m] = t.split(":").map(Number);
+  const hr12 = ((h + 11) % 12) + 1;
+  const ampm = h >= 12 ? "pm" : "am";
+  return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
+}
+
+function titleCase(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
+}
+
+function dollars(cents) {
+  if (!cents) return "";
+  if (cents % 100 === 0) return `$${cents / 100}`;
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+export default function InstructorPortal() {
+  const [phase, setPhase] = useState("loading"); // loading | login | linking | ready | error
+  const [email, setEmail] = useState("");
+  const [sendBusy, setSendBusy] = useState(false);
+  const [sendMsg, setSendMsg] = useState("");
+  const [error, setError] = useState("");
+  const [instructor, setInstructor] = useState(null);
+  const [assignments, setAssignments] = useState([]);
+  const [actingOn, setActingOn] = useState(null); // assignment id currently being acted on
+  const [changeFor, setChangeFor] = useState(null); // assignment object pending request-change message
+  const [changeText, setChangeText] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!mounted) return;
+        if (!session?.user) {
+          setPhase("login");
+          return;
+        }
+        await linkAndLoad();
+      } catch (err) {
+        if (mounted) {
+          setError(err.message ?? "Couldn't load.");
+          setPhase("error");
+        }
+      }
+    })();
+    return () => { mounted = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function linkAndLoad() {
+    setPhase("linking");
+    setError("");
+    try {
+      const { data: linkData, error: linkErr } = await supabase.functions.invoke("link-instructor", {
+        body: {},
+      });
+      if (linkErr || linkData?.error) {
+        throw new Error(linkData?.error ?? linkErr?.message ?? "Couldn't find your instructor record.");
+      }
+      setInstructor(linkData);
+      await loadAssignments(linkData.instructor_id);
+      setPhase("ready");
+    } catch (err) {
+      setError(err.message ?? "Couldn't link your account.");
+      setPhase("error");
+    }
+  }
+
+  async function loadAssignments(instructorId) {
+    const { data, error: aErr } = await supabase
+      .from("camp_assignments")
+      .select("id, status, role, distance_bonus_cents, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, start_time, end_time, class_days)")
+      .eq("instructor_id", instructorId)
+      .not("published_at", "is", null)
+      .order("camp_sessions(starts_on)", { ascending: true });
+    if (aErr) throw aErr;
+    setAssignments(data ?? []);
+  }
+
+  async function handleSignIn(e) {
+    e.preventDefault();
+    if (!email) return;
+    setSendBusy(true);
+    setSendMsg("");
+    setError("");
+    try {
+      const { data, error: fnErr } = await supabase.functions.invoke("auth-send-magic-link", {
+        body: {
+          email,
+          redirect_to: `${window.location.origin}/j2s/instructor`,
+          context: "instructor",
+        },
+      });
+      if (fnErr) throw fnErr;
+      if (data?.error) throw new Error(data.error);
+      setSendMsg(`Check ${email} for your sign-in link.`);
+    } catch (err) {
+      setError(err.message ?? "Couldn't send the link. Try again.");
+    } finally {
+      setSendBusy(false);
+    }
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    setInstructor(null);
+    setAssignments([]);
+    setPhase("login");
+  }
+
+  async function handleAccept(assignment) {
+    setActingOn(assignment.id);
+    try {
+      const { error: updErr } = await supabase
+        .from("camp_assignments")
+        .update({ status: "confirmed", instructor_response_at: new Date().toISOString() })
+        .eq("id", assignment.id);
+      if (updErr) throw updErr;
+      await loadAssignments(instructor.instructor_id);
+    } catch (err) {
+      setError(err.message ?? "Couldn't accept.");
+    } finally {
+      setActingOn(null);
+    }
+  }
+
+  async function submitChangeRequest() {
+    if (!changeFor || !changeText.trim()) return;
+    setActingOn(changeFor.id);
+    try {
+      const { error: updErr } = await supabase
+        .from("camp_assignments")
+        .update({
+          status: "change_requested",
+          change_request_message: changeText.trim(),
+          instructor_response_at: new Date().toISOString(),
+        })
+        .eq("id", changeFor.id);
+      if (updErr) throw updErr;
+      // Also append to the message thread for admin visibility.
+      await supabase.from("instructor_offer_messages").insert({
+        organization_id: instructor.organization_id,
+        camp_assignment_id: changeFor.id,
+        sender_role: "instructor",
+        message: changeText.trim(),
+      });
+      setChangeFor(null);
+      setChangeText("");
+      await loadAssignments(instructor.instructor_id);
+    } catch (err) {
+      setError(err.message ?? "Couldn't send your request.");
+    } finally {
+      setActingOn(null);
+    }
+  }
+
+  if (phase === "loading" || phase === "linking") {
+    return <Shell><div style={{ color: MUTED, fontSize: 14, padding: 24 }}>Loading…</div></Shell>;
+  }
+
+  if (phase === "login") {
+    return (
+      <Shell>
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, maxWidth: 400 }}>
+          <h1 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, color: PLUM }}>Instructor sign in</h1>
+          <p style={{ margin: "0 0 18px", color: MUTED, fontSize: 14 }}>Enter your email and we'll send you a sign-in link.</p>
+          <form onSubmit={handleSignIn}>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              autoComplete="email"
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                border: `1px solid ${RULE}`,
+                borderRadius: 6,
+                fontSize: 14,
+                fontFamily: "inherit",
+                background: "#fff",
+                color: INK,
+                boxSizing: "border-box",
+              }}
+            />
+            <button
+              type="submit"
+              disabled={sendBusy || !email}
+              style={{
+                marginTop: 12,
+                width: "100%",
+                padding: "10px 14px",
+                background: PLUM,
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                fontSize: 14,
+                fontWeight: 600,
+                fontFamily: "inherit",
+                cursor: sendBusy ? "wait" : "pointer",
+                opacity: sendBusy ? 0.7 : 1,
+              }}
+            >
+              {sendBusy ? "Sending…" : "Email me a sign-in link"}
+            </button>
+          </form>
+          {sendMsg && (
+            <div style={{ marginTop: 14, padding: 10, borderRadius: 6, background: `${OK_GREEN}1A`, color: OK_GREEN, fontSize: 13 }}>{sendMsg}</div>
+          )}
+          {error && (
+            <div style={{ marginTop: 14, padding: 10, borderRadius: 6, background: `${CORAL}1A`, color: CORAL, fontSize: 13 }}>{error}</div>
+          )}
+        </div>
+      </Shell>
+    );
+  }
+
+  if (phase === "error") {
+    return (
+      <Shell>
+        <div style={{ background: "#fff", border: `1px solid ${CORAL}`, borderRadius: 10, padding: 28, maxWidth: 500 }}>
+          <h1 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: INK }}>We couldn't load your schedule</h1>
+          <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px", lineHeight: 1.5 }}>{error}</p>
+          <button type="button" onClick={signOut} style={{ padding: "8px 14px", background: "transparent", color: PLUM, border: `1px solid ${PLUM}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
+            Sign out and try again
+          </button>
+        </div>
+      </Shell>
+    );
+  }
+
+  // ready
+  const totalCount = assignments.length;
+  const pending = assignments.filter((a) => a.status === "published");
+  const accepted = assignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
+  const changeRequested = assignments.filter((a) => a.status === "change_requested");
+
+  return (
+    <Shell instructorName={instructor.first_name} onSignOut={signOut}>
+      <header style={{ marginBottom: 18 }}>
+        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: INK, letterSpacing: -0.3 }}>
+          Hi {instructor.first_name ?? "there"} 👋
+        </h1>
+        <p style={{ color: MUTED, margin: "4px 0 0", fontSize: 14 }}>
+          You have {totalCount} camp{totalCount === 1 ? "" : "s"} on your schedule
+          {pending.length > 0 && ` · ${pending.length} awaiting your response`}.
+        </p>
+      </header>
+
+      {error && (
+        <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+
+      {pending.length > 0 && (
+        <Section title="To review">
+          {pending.map((a) => (
+            <AssignmentCard
+              key={a.id}
+              assignment={a}
+              busy={actingOn === a.id}
+              onAccept={() => handleAccept(a)}
+              onRequestChange={() => { setChangeFor(a); setChangeText(""); }}
+            />
+          ))}
+        </Section>
+      )}
+
+      {accepted.length > 0 && (
+        <Section title="Accepted">
+          {accepted.map((a) => <AssignmentCard key={a.id} assignment={a} readOnly />)}
+        </Section>
+      )}
+
+      {changeRequested.length > 0 && (
+        <Section title="Change requested">
+          {changeRequested.map((a) => <AssignmentCard key={a.id} assignment={a} readOnly showChangeMessage />)}
+        </Section>
+      )}
+
+      {totalCount === 0 && (
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, color: MUTED, textAlign: "center" }}>
+          No schedule yet. Your admin will email you when it's ready.
+        </div>
+      )}
+
+      {changeFor && (
+        <ChangeRequestDialog
+          assignment={changeFor}
+          value={changeText}
+          onChange={setChangeText}
+          busy={actingOn === changeFor.id}
+          onSubmit={submitChangeRequest}
+          onClose={() => { setChangeFor(null); setChangeText(""); }}
+        />
+      )}
+    </Shell>
+  );
+}
+
+function Shell({ children, instructorName, onSignOut }) {
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: CHALK,
+      fontFamily: "'Space Grotesk', system-ui, sans-serif",
+      color: INK,
+      padding: "32px 16px",
+    }}>
+      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span style={{ fontWeight: 800, fontSize: 22, color: PLUM, letterSpacing: -0.3 }}>Enrops</span>
+            <span style={{ fontSize: 13, color: MUTED }}>Instructor portal</span>
+          </div>
+          {instructorName && onSignOut && (
+            <button type="button" onClick={onSignOut} style={{ background: "transparent", border: `1px solid ${PLUM}`, color: PLUM, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
+              Sign out
+            </button>
+          )}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, children }) {
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <h2 style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6 }}>
+        {title}
+      </h2>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{children}</div>
+    </div>
+  );
+}
+
+function AssignmentCard({ assignment, busy, onAccept, onRequestChange, readOnly, showChangeMessage }) {
+  const s = assignment.camp_sessions;
+  if (!s) return null;
+  const role = assignment.role === "developing" ? "Developing" : "Lead";
+  const statusColor =
+    assignment.status === "confirmed" ? OK_GREEN :
+    assignment.status === "change_requested" ? GOLD :
+    PLUM;
+  const statusLabel =
+    assignment.status === "confirmed" ? "✓ Accepted" :
+    assignment.status === "change_requested" ? "Change requested" :
+    "Awaiting response";
+
+  return (
+    <div style={{
+      background: "#fff",
+      border: `1px solid ${RULE}`,
+      borderLeft: `3px solid ${statusColor}`,
+      borderRadius: 8,
+      padding: "14px 16px",
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
+            {s.curriculum_name} <span style={{ fontWeight: 400, color: MUTED, fontSize: 12, marginLeft: 4 }}>· {role}</span>
+          </div>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.4 }}>
+            Week {s.week_num} · {fmtShort(s.starts_on)} – {fmtShort(s.ends_on)}<br />
+            {s.location_name} · {titleCase(s.session_type)} {fmtTime(s.start_time)}–{fmtTime(s.end_time)}
+          </div>
+        </div>
+        <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
+          {statusLabel}
+        </span>
+      </div>
+
+      {assignment.distance_bonus_cents ? (
+        <div style={{ fontSize: 13, color: PLUM, fontWeight: 600 }}>
+          + {dollars(assignment.distance_bonus_cents)} distance bonus
+        </div>
+      ) : null}
+
+      {showChangeMessage && assignment.change_request_message && (
+        <div style={{ fontSize: 13, color: INK, background: `${GOLD}1A`, border: `1px solid ${GOLD}`, padding: 8, borderRadius: 6, marginTop: 4 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Your message</div>
+          {assignment.change_request_message}
+        </div>
+      )}
+
+      {!readOnly && (
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={onAccept}
+            disabled={busy}
+            style={{
+              padding: "8px 14px",
+              background: PLUM,
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              fontSize: 13,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              cursor: busy ? "wait" : "pointer",
+              opacity: busy ? 0.6 : 1,
+            }}
+          >
+            {busy ? "Saving…" : "Accept"}
+          </button>
+          <button
+            type="button"
+            onClick={onRequestChange}
+            disabled={busy}
+            style={{
+              padding: "8px 14px",
+              background: "transparent",
+              color: PLUM,
+              border: `1px solid ${PLUM}`,
+              borderRadius: 6,
+              fontSize: 13,
+              fontWeight: 500,
+              fontFamily: "inherit",
+              cursor: busy ? "wait" : "pointer",
+              opacity: busy ? 0.6 : 1,
+            }}
+          >
+            Request change
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onClose }) {
+  const s = assignment.camp_sessions;
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 60 }}
+    >
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: "#fff",
+        border: `1px solid ${RULE}`,
+        borderRadius: 10,
+        boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
+        width: "100%",
+        maxWidth: 480,
+      }}>
+        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${RULE}` }}>
+          <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>
+            Request change
+          </div>
+          <h2 style={{ margin: "4px 0 0", fontSize: 17, fontWeight: 700, color: INK }}>
+            {s?.curriculum_name}
+          </h2>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+            Week {s?.week_num} · {s?.location_name}
+          </div>
+        </div>
+        <div style={{ padding: 20 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 6 }}>
+            Tell your admin why
+          </label>
+          <textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="e.g., I can't do this week — my kids are at a different camp."
+            rows={4}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              border: `1px solid ${RULE}`,
+              borderRadius: 6,
+              fontSize: 14,
+              fontFamily: "inherit",
+              color: INK,
+              background: "#fff",
+              boxSizing: "border-box",
+              resize: "vertical",
+            }}
+          />
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
+            Your admin will see your message and either reassign this camp or reply.
+          </div>
+        </div>
+        <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button type="button" onClick={onClose} disabled={busy} style={{ padding: "8px 14px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
+            Cancel
+          </button>
+          <button type="button" onClick={onSubmit} disabled={busy || !value.trim()} style={{ padding: "8px 14px", background: PLUM, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: (busy || !value.trim()) ? 0.6 : 1 }}>
+            {busy ? "Sending…" : "Send request"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
