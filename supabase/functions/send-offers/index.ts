@@ -386,10 +386,15 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
             </td>
           </tr>
           <tr>
-            <td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">
+            <td style="padding:14px 32px 8px;font-size:13px;color:${MUTED};line-height:1.55;">
               Once you've responded to every ${unitLabel(cycle.cycle_type, 1)}, you're set. Questions? Just reply to this email.
               <br /><br />
               — Jessica, ${escape(org.name)}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:12px 32px 24px;font-size:11px;color:${MUTED};line-height:1.5;font-style:italic;border-top:1px solid ${BORDER};">
+              * Assignments are subject to change according to enrollment. Changes can be made up to one week before the start date. More programs may open and be offered to you before the start of ${unitLabel(cycle.cycle_type, 2)} as well.
             </td>
           </tr>
         </table>
@@ -434,6 +439,8 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline }: {
   lines.push(`Once you've responded to every ${unitLabel(cycle.cycle_type, 1)}, you're set. Questions? Just reply to this email.`);
   lines.push('');
   lines.push(`— Jessica, ${org.name}`);
+  lines.push('');
+  lines.push(`* Assignments are subject to change according to enrollment. Changes can be made up to one week before the start date. More programs may open and be offered to you before the start of ${unitLabel(cycle.cycle_type, 2)} as well.`);
   return lines.join('\n');
 }
 
