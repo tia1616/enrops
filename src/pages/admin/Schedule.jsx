@@ -33,13 +33,22 @@ const LOCATION_PALETTE = [
   "#E1ECEA", // mint
 ];
 
-function locationColor(name) {
-  if (!name) return LOCATION_PALETTE[0];
-  let h = 0;
-  for (let i = 0; i < name.length; i++) {
-    h = (h * 31 + name.charCodeAt(i)) | 0;
+// Build a Map<location_name, color> by assigning palette positions in the order
+// locations appear in the sorted items list. Adjacent rows in the grid get
+// adjacent palette colors so groups always alternate visually.
+function locationColorMap(sortedItems) {
+  const seen = new Set();
+  const order = [];
+  for (const e of sortedItems) {
+    const loc = e?.session?.location_name;
+    if (loc && !seen.has(loc)) {
+      seen.add(loc);
+      order.push(loc);
+    }
   }
-  return LOCATION_PALETTE[Math.abs(h) % LOCATION_PALETTE.length];
+  const map = new Map();
+  order.forEach((loc, i) => map.set(loc, LOCATION_PALETTE[i % LOCATION_PALETTE.length]));
+  return map;
 }
 const DAY_SHORT = { monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat", sunday: "Sun" };
 const DAY_LABEL_FULL = { monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday", thursday: "Thursday", friday: "Friday" };
@@ -1505,6 +1514,8 @@ function WeeklyGrid({ week, items, cycleType, getValidationFor, dragStateRef, on
     });
   }, [items]);
 
+  const colorByLocation = useMemo(() => locationColorMap(sorted), [sorted]);
+
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
@@ -1563,6 +1574,7 @@ function WeeklyGrid({ week, items, cycleType, getValidationFor, dragStateRef, on
                     <ProgramCard
                       key={d}
                       item={e}
+                      cardBg={colorByLocation.get(e.session.location_name) ?? LOCATION_PALETTE[0]}
                       getValidationFor={getValidationFor}
                       dragStateRef={dragStateRef}
                       onDrop={onDrop}
@@ -1592,7 +1604,7 @@ function WeeklyGrid({ week, items, cycleType, getValidationFor, dragStateRef, on
   );
 }
 
-function ProgramCard({ item, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
+function ProgramCard({ item, cardBg, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
   const { session, status, assignment, allAssignments, activeAssignments } = item;
   const [dropEffect, setDropEffect] = useState(null); // "ok" | "warn" | "block" | "self" | null
   const [hoverResult, setHoverResult] = useState(null); // full validation result during drag
@@ -1660,7 +1672,7 @@ function ProgramCard({ item, getValidationFor, dragStateRef, onDrop, onNeedsHire
     dropEffect === "block" ? CORAL :
     dropEffect === "self" ? MUTED :
     RULE;
-  const baseBg = locationColor(session.location_name);
+  const baseBg = cardBg ?? LOCATION_PALETTE[0];
   const bgColor =
     dropEffect === "ok" ? `${OK_GREEN}33` :
     dropEffect === "warn" ? `${GOLD}33` :
