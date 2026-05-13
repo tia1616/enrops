@@ -1057,6 +1057,10 @@ function FilterBar({
           value={searchText}
           onChange={(e) => onSearchChange(e.target.value)}
           placeholder="Search camps, instructors, locations…"
+          name="schedule-search-filter"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
           style={{
             flex: "1 1 240px",
             minWidth: 200,

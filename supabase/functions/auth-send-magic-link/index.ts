@@ -4,7 +4,7 @@
 // Bypasses Supabase SMTP entirely.
 //
 // INPUT:  { email, redirect_to, context? }
-//   context: "parent" (J2S branded) | "admin" (Enrops branded)
+//   context: "parent" (J2S branded) | "admin" (Enrops admin) | "instructor" (J2S instructor)
 // OUTPUT: { sent: true } or { error: "..." }
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
@@ -28,16 +28,42 @@ serve(async (req: Request) => {
     if (!email) throw new Error('email is required');
 
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const isInstructor = context === 'instructor';
 
     // Verify the user exists in auth.users
     const { data: userList } = await supabase.auth.admin.listUsers();
-    const user = userList?.users?.find(
+    let user = userList?.users?.find(
       (u) => u.email?.toLowerCase() === email.toLowerCase(),
     );
     if (!user) {
-      // Don't reveal whether email exists — always say "check your inbox"
-      console.log(`No auth user found for ${email}, returning success silently`);
-      return json({ sent: true });
+      if (isInstructor) {
+        // For first-time instructor sign-in: if their email matches an active
+        // instructor record, auto-create the auth user so they can sign in.
+        const { data: instructorRow } = await supabase
+          .from('instructors')
+          .select('id')
+          .ilike('email', email)
+          .eq('is_active', true)
+          .maybeSingle();
+        if (instructorRow) {
+          const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+            email,
+            email_confirm: true,
+          });
+          if (createErr || !created?.user) {
+            throw new Error(`Couldn't create auth user: ${createErr?.message ?? 'unknown error'}`);
+          }
+          user = created.user;
+          console.log(`Auto-created auth user for instructor ${email}`);
+        } else {
+          // Email isn't a known instructor — silent no-op.
+          return json({ sent: true });
+        }
+      } else {
+        // Don't reveal whether email exists — always say "check your inbox"
+        console.log(`No auth user found for ${email}, returning success silently`);
+        return json({ sent: true });
+      }
     }
 
     // Generate the magic link server-side
@@ -64,16 +90,31 @@ serve(async (req: Request) => {
 
     // Build email HTML based on context
     const isAdmin = context === 'admin';
-    const firstName = user.user_metadata?.full_name
+
+    // For instructors, prefer the first_name on their instructors row over auth user metadata.
+    let firstName = user.user_metadata?.full_name
       ? user.user_metadata.full_name.split(' ')[0]
       : 'there';
+    if (isInstructor) {
+      const { data: instructorRow } = await supabase
+        .from('instructors')
+        .select('first_name')
+        .ilike('email', email)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (instructorRow?.first_name) firstName = instructorRow.first_name;
+    }
 
     const subject = isAdmin
       ? 'Sign in to Enrops Admin'
+      : isInstructor
+      ? 'Sign in to view your schedule'
       : 'Sign in to Journey to STEAM';
 
     const html = isAdmin
       ? buildAdminEmail(firstName, signInUrl)
+      : isInstructor
+      ? buildInstructorEmail(firstName, signInUrl)
       : buildParentEmail(firstName, signInUrl);
 
     // Send via Resend
@@ -125,6 +166,30 @@ function buildAdminEmail(firstName: string, signInUrl: string): string {
       </a>
     </div>
     <p style="margin:0;font-size:13px;color:#6b6b6b;">This link expires in 24 hours.</p>
+  </div>
+</div>
+</body></html>`;
+}
+
+function buildInstructorEmail(firstName: string, signInUrl: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#EAEADD;font-family:'Space Grotesk',system-ui,sans-serif;">
+<div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
+  <div style="background:#691D39;padding:32px 28px;text-align:center;">
+    <div style="color:#CFB12F;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Journey to STEAM</div>
+    <h1 style="color:#fff;margin:8px 0 0;font-size:24px;font-weight:700;">Sign in</h1>
+  </div>
+  <div style="padding:28px;">
+    <p style="margin:0 0 16px;font-size:15px;color:#1a1a1a;">Hi ${firstName},</p>
+    <p style="margin:0 0 24px;font-size:15px;color:#1a1a1a;line-height:1.6;">
+      Tap the button below to view your schedule, accept your camps, or request changes.
+    </p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${signInUrl}" style="display:inline-block;background:#691D39;color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
+        Open my schedule
+      </a>
+    </div>
+    <p style="margin:0;font-size:13px;color:#6b6b6b;">This link expires in 24 hours. Questions? Just reply to this email.</p>
   </div>
 </div>
 </body></html>`;
