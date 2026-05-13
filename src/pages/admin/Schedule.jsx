@@ -2035,7 +2035,8 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
   }
   if (dialog.mode === "result" && dialog.payload?.kind === "send") {
     const p = dialog.payload;
-    const showRollback = p.sent === 0 && (p.mode === "test" || p.mode === "send") && publishedCount > 0;
+    // Only Real Send needs the roll-back escape hatch — Test is non-destructive.
+    const showRollback = p.sent === 0 && p.mode === "send" && publishedCount > 0;
     return (
       <ModalShell onClose={onClose} title={p.mode === "send" ? "Offers sent" : p.mode === "test" ? "Test sent" : "Preview"}>
         <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
@@ -2051,7 +2052,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           )}
           {p.mode === "test" && p.sent > 0 && (
             <div style={{ marginTop: 12, padding: 10, background: `${GOLD}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
-              All emails routed to <strong>jessica@journeytosteam.com</strong>. Assignments were flipped to <em>published</em>. Use Undo on individual rows if needed.
+              All emails routed to <strong>jessica@journeytosteam.com</strong>. No assignments were changed — you can re-run Test as needed.
             </div>
           )}
           {showRollback && (
@@ -2095,7 +2096,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
     <ModalShell onClose={onClose} title="Send offers">
       <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ color: MUTED }}>
-          This emails every instructor with a <em>confirmed</em> assignment in this cycle and flips those rows to <em>published</em>. Use the <strong>Preview</strong> button if you want to see what'll go out before any email is sent.
+          The <strong>Respond by</strong> date below is only written to the database when you do a Real send.
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, background: "#fff" }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5 }}>Respond by</span>
@@ -2108,14 +2109,14 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
         </label>
         <DialogChoice
           title="Test send → jessica@journeytosteam.com"
-          subtitle="Send each instructor's offer to your inbox so you can review. DB flips to published."
+          subtitle="Sends each instructor's offer to your inbox. No assignments are changed — you can re-run this as many times as you need."
           disabled={busy}
           onClick={() => onChoose("test")}
           tone="warn"
         />
         <DialogChoice
           title="Real send"
-          subtitle="Sends to actual instructor emails. Irreversible delivery."
+          subtitle="Delivers to real instructor emails and marks them as sent (status → published). Re-running won't re-mail already-published instructors."
           disabled={busy}
           onClick={() => onChoose("send")}
           tone="danger"

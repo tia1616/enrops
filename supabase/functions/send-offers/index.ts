@@ -166,9 +166,10 @@ serve(async (req: Request) => {
       email_reply_to: brandingRow?.email_reply_to ?? null,
     };
 
-    // Preview mode shows confirmed AND published (admin inspecting email copy after a send).
-    // Test/Real send only fires on 'confirmed' so we never re-mail published rows.
-    const statusFilter = mode === 'preview' ? ['confirmed', 'published'] : ['confirmed'];
+    // Preview and Test include confirmed AND published — both are non-mutating, so
+    // they let admins inspect and re-test without changing the send-state.
+    // Real Send fires only on 'confirmed' so it never re-mails already-published rows.
+    const statusFilter = mode === 'send' ? ['confirmed'] : ['confirmed', 'published'];
     let assignmentsQuery = supabase
       .from('camp_assignments')
       .select('id, camp_session_id, instructor_id, role, status, distance_bonus_cents, deadline')
@@ -266,21 +267,24 @@ serve(async (req: Request) => {
           continue;
         }
 
-        // Flip every assignment in this batch to published with timestamps.
-        const ids = theirAssignments.map((a) => a.id);
-        const updatePayload: Record<string, any> = {
-          status: 'published',
-          published_at: new Date().toISOString(),
-          email_sent_at: new Date().toISOString(),
-        };
-        if (deadline) updatePayload.deadline = deadline;
-        const { error: upErr } = await supabase
-          .from('camp_assignments')
-          .update(updatePayload)
-          .in('id', ids);
-        if (upErr) {
-          failed.push({ instructor_id: instructorId, reason: `db update: ${upErr.message}` });
-          continue;
+        // Real Send: flip to published. Test mode skips this so it can be re-run
+        // without polluting send-state.
+        if (mode === 'send') {
+          const ids = theirAssignments.map((a) => a.id);
+          const updatePayload: Record<string, any> = {
+            status: 'published',
+            published_at: new Date().toISOString(),
+            email_sent_at: new Date().toISOString(),
+          };
+          if (deadline) updatePayload.deadline = deadline;
+          const { error: upErr } = await supabase
+            .from('camp_assignments')
+            .update(updatePayload)
+            .in('id', ids);
+          if (upErr) {
+            failed.push({ instructor_id: instructorId, reason: `db update: ${upErr.message}` });
+            continue;
+          }
         }
 
         sent.push(instructorId);
