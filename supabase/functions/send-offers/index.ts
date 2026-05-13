@@ -103,6 +103,7 @@ serve(async (req: Request) => {
     const cycleId: string | undefined = body.cycle_id;
     const instructorIdsInput: string[] | null | undefined = body.instructor_ids;
     const mode: 'preview' | 'test' | 'send' = body.mode ?? 'preview';
+    const deadline: string | null = body.deadline ?? null; // YYYY-MM-DD
 
     if (!cycleId) return json({ error: 'cycle_id is required' }, 400);
     if (!['preview', 'test', 'send'].includes(mode)) return json({ error: `unknown mode "${mode}"` }, 400);
@@ -216,8 +217,8 @@ serve(async (req: Request) => {
 
       const subject = `Your ${cycle.name} schedule is ready — please review`;
       const portalUrl = `https://enrops.com/${org.slug ?? 'j2s'}/instructor`;
-      const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl });
-      const text = renderText({ cycle, org, instructor, camps, portalUrl });
+      const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline });
+      const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline });
       const recipient = mode === 'send' ? instructor.email! : TEST_INBOX;
 
       previews.push({ instructor_id: instructorId, to: recipient, subject, html, text });
@@ -252,9 +253,15 @@ serve(async (req: Request) => {
 
         // Flip every assignment in this batch to published with timestamps.
         const ids = theirAssignments.map((a) => a.id);
+        const updatePayload: Record<string, any> = {
+          status: 'published',
+          published_at: new Date().toISOString(),
+          email_sent_at: new Date().toISOString(),
+        };
+        if (deadline) updatePayload.deadline = deadline;
         const { error: upErr } = await supabase
           .from('camp_assignments')
-          .update({ status: 'published', published_at: new Date().toISOString(), email_sent_at: new Date().toISOString() })
+          .update(updatePayload)
           .in('id', ids);
         if (upErr) {
           failed.push({ instructor_id: instructorId, reason: `db update: ${upErr.message}` });
@@ -286,13 +293,14 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function renderHtml({ cycle, org, branding, instructor, camps, portalUrl }: {
+function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline }: {
   cycle: Cycle;
   org: Org;
   branding: Branding;
   instructor: InstructorRow;
   camps: Array<{ a: AssignmentRow; s: SessionRow | undefined }>;
   portalUrl: string;
+  deadline: string | null;
 }) {
   const primary = branding.primary_color ?? DEFAULT_PRIMARY;
   const firstName = instructor.first_name ?? 'there';
@@ -340,7 +348,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl }: {
             <td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
               Hi ${escape(firstName)},
               <br /><br />
-              Your proposed schedule for ${escape(cycle.name)} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${campCount === 1 ? 'camp' : 'camps'}</strong>${cycleRange ? ` · ${cycleRange}` : ''} — your schedule isn't confirmed until we hear back from you on every one.
+              Your proposed schedule for ${escape(cycle.name)} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${campCount === 1 ? 'camp' : 'camps'}</strong>${cycleRange ? ` · ${cycleRange}` : ''} — your schedule isn't confirmed until we hear back from you on every one.${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
             </td>
           </tr>
           <tr>
@@ -373,12 +381,13 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl }: {
 </html>`;
 }
 
-function renderText({ cycle, org, instructor, camps, portalUrl }: {
+function renderText({ cycle, org, instructor, camps, portalUrl, deadline }: {
   cycle: Cycle;
   org: Org;
   instructor: InstructorRow;
   camps: Array<{ a: AssignmentRow; s: SessionRow | undefined }>;
   portalUrl: string;
+  deadline: string | null;
 }) {
   const firstName = instructor.first_name ?? 'there';
   const cycleRange = (cycle.starts_on && cycle.ends_on) ? ` (${fmt(cycle.starts_on)} – ${fmt(cycle.ends_on)})` : '';
@@ -386,6 +395,10 @@ function renderText({ cycle, org, instructor, camps, portalUrl }: {
   lines.push(`Hi ${firstName},`);
   lines.push('');
   lines.push(`Your proposed schedule for ${cycle.name}${cycleRange} is below. Please tap Accept or Request change on each of the ${camps.length} camp${camps.length === 1 ? '' : 's'} — your schedule isn't confirmed until we hear back from you on every one.`);
+  if (deadline) {
+    lines.push('');
+    lines.push(`Please respond by ${fmt(deadline)}.`);
+  }
   lines.push('');
   for (const { a, s } of camps) {
     if (!s) continue;

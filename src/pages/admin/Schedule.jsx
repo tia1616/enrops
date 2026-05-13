@@ -53,8 +53,9 @@ const FILTER_STATUSES = [
   { key: "needs_hire", label: "Needs hire" },
   { key: "change_requested", label: "Change requested" },
   { key: "flagged", label: "Flagged" },
-  { key: "ok", label: "OK" },
-  { key: "confirmed", label: "Confirmed" },
+  { key: "accepted", label: "Accepted" },
+  { key: "confirmed", label: "Awaiting response" },
+  { key: "ok", label: "Not yet sent" },
 ];
 
 const DRAG_MIME = "application/x-enrops-assignment";
@@ -110,10 +111,19 @@ function deriveStatus(session, assignments) {
   let best = null;
   for (const a of own) {
     const rank = STATUS_RANK[a.status] ?? -1;
-    if (!best || rank > best.rank) best = { status: a.status, rank, flags: a.flags ?? [] };
+    if (!best || rank > best.rank) {
+      best = {
+        status: a.status,
+        rank,
+        flags: a.flags ?? [],
+        instructor_response_at: a.instructor_response_at ?? null,
+      };
+    }
   }
   if (best.status === "change_requested") return "change_requested";
   if (Array.isArray(best.flags) && best.flags.length > 0) return "flagged";
+  // Instructor has actively accepted = confirmed + a response timestamp.
+  if (best.status === "confirmed" && best.instructor_response_at) return "accepted";
   if (best.status === "confirmed" || best.status === "published") return "confirmed";
   return "ok";
 }
@@ -122,6 +132,7 @@ function statusColor(status) {
   if (status === "needs_hire") return CORAL;
   if (status === "flagged") return GOLD;
   if (status === "change_requested") return CHANGE_REQ;
+  if (status === "accepted") return OK_GREEN;
   return PLUM;
 }
 
@@ -130,6 +141,18 @@ function enrollmentTone(n) {
   if (n < CANCEL_THRESHOLD) return "danger";
   if (n < MIN_ENROLLMENT) return "warn";
   return "ok";
+}
+
+// Returns business-days-from-today as YYYY-MM-DD (skips Sat/Sun).
+function businessDaysFromToday(days) {
+  const d = new Date();
+  let added = 0;
+  while (added < days) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) added++;
+  }
+  return d.toISOString().slice(0, 10);
 }
 
 function classDaysOverlap(a, b) {
@@ -188,7 +211,7 @@ function validateDrop({
   if (curPref === "not_preferred") {
     warnings.push(`${firstName} marked ${titleCase(targetSession.curriculum_category)} as not preferred.`);
   }
-  if (targetSession.current_enrollment != null && targetSession.current_enrollment < MIN_ENROLLMENT) {
+  if (targetSession.enrollment_synced_at && targetSession.current_enrollment != null && targetSession.current_enrollment < MIN_ENROLLMENT) {
     warnings.push(`Enrollment is ${targetSession.current_enrollment} — below the ${MIN_ENROLLMENT}-student minimum.`);
   }
   if (
@@ -216,6 +239,7 @@ export default function Schedule() {
   const [busy, setBusy] = useState(null); // "approving" | "sending" | "previewing" | null
   const [offerDialog, setOfferDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
   const [previewData, setPreviewData] = useState(null); // { previews: [...] } from preview mode
+  const [offerDeadline, setOfferDeadline] = useState(() => businessDaysFromToday(5));
   const [lastOp, setLastOp] = useState(null); // { type, ... } — supports a single-step undo
   const [candidatesFor, setCandidatesFor] = useState(null); // { session, currentAssignment | null }
   const [changeRequestFor, setChangeRequestFor] = useState(null); // { session, assignment }
@@ -238,7 +262,7 @@ export default function Schedule() {
 
       const sessionsRes = await supabase
         .from("camp_sessions")
-        .select("id, location_name, week_num, session_type, curriculum_category, curriculum_name, start_time, end_time, current_enrollment, class_days, status")
+        .select("id, location_name, week_num, session_type, curriculum_category, curriculum_name, start_time, end_time, current_enrollment, enrollment_synced_at, class_days, status")
         .eq("cycle_id", cycle.id)
         .eq("status", "active")
         .order("location_name", { ascending: true });
@@ -394,15 +418,16 @@ export default function Schedule() {
 
   // Header counters always reflect the full cycle (truth).
   const counts = useMemo(() => {
-    if (!enriched) return { assigned: 0, flagged: 0, changeRequested: 0, needsHire: 0 };
-    let assigned = 0, flagged = 0, changeRequested = 0, needsHire = 0;
+    if (!enriched) return { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0 };
+    let assigned = 0, accepted = 0, flagged = 0, changeRequested = 0, needsHire = 0;
     for (const e of enriched.values()) {
       if (e.status === "needs_hire") needsHire++;
       else if (e.status === "flagged") flagged++;
       else if (e.status === "change_requested") changeRequested++;
+      else if (e.status === "accepted") accepted++;
       else assigned++;
     }
-    return { assigned, flagged, changeRequested, needsHire };
+    return { assigned, accepted, flagged, changeRequested, needsHire };
   }, [enriched]);
 
   // Overview dots respect filters so toggling them is visible without focusing a week.
@@ -701,7 +726,7 @@ export default function Schedule() {
     setSaveError(null);
     try {
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode, instructor_ids: null },
+        body: { cycle_id: state.cycle.id, mode, instructor_ids: null, deadline: offerDeadline },
       });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
@@ -893,6 +918,8 @@ export default function Schedule() {
           onChoose={(mode) => handleSendOffers(mode)}
           onClose={() => setOfferDialog(null)}
           busy={busy === "sending"}
+          deadline={offerDeadline}
+          onDeadlineChange={setOfferDeadline}
         />
       )}
       {previewData && (
@@ -972,6 +999,7 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
       </div>
       <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
         <Counter label="Assigned" value={counts.assigned} tone="assigned" />
+        <Counter label="Accepted" value={counts.accepted} tone="accepted" />
         <Counter label="Flagged" value={counts.flagged} tone="flagged" />
         <Counter label="Change req." value={counts.changeRequested} tone="change_requested" />
         <Counter label="Needs hire" value={counts.needsHire} tone="needs_hire" />
@@ -1023,6 +1051,7 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
 function Counter({ label, value, tone }) {
   const color =
     tone === "assigned" ? PLUM :
+    tone === "accepted" ? OK_GREEN :
     tone === "flagged" ? GOLD :
     tone === "change_requested" ? CHANGE_REQ :
     tone === "needs_hire" ? CORAL : MUTED;
@@ -1323,6 +1352,7 @@ function Dot({ kind }) {
     kind === "needs_hire" ? CORAL :
     kind === "flagged" ? GOLD :
     kind === "change_requested" ? CHANGE_REQ :
+    kind === "accepted" ? OK_GREEN :
     PLUM;
   return <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: "50%", background: color, display: "inline-block" }} />;
 }
@@ -1330,6 +1360,7 @@ function Dot({ kind }) {
 function Legend() {
   const items = [
     { kind: "ok", label: "Assigned" },
+    { kind: "accepted", label: "Accepted" },
     { kind: "flagged", label: "Flagged" },
     { kind: "change_requested", label: "Change requested" },
     { kind: "needs_hire", label: "Needs hire" },
@@ -1594,7 +1625,9 @@ function ProgramCard({ item, getValidationFor, dragStateRef, onDrop, onNeedsHire
         onClick={onInstructorClick}
         rightContent={
           <span style={{ fontSize: 11, color: enrollColor, fontWeight: 600, whiteSpace: "nowrap" }}>
-            {session.current_enrollment ?? 0} enrolled
+            {(!session.enrollment_synced_at && (session.current_enrollment ?? 0) === 0)
+              ? "Enrollment TBD"
+              : `${session.current_enrollment ?? 0} enrolled`}
           </span>
         }
       />
@@ -1738,10 +1771,12 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
   }
 
   const tentative = !!assignment.instructor_needs_confirmation;
+  const accepted = assignment.status === "confirmed" && !!assignment.instructor_response_at;
   const baseTitle = draggable ? "Click to reassign · drag to move" : "Click to reassign";
   const tentativeTitle = tentative
     ? `Tentative — survey unconfirmed${assignment.instructor_notes ? `: "${assignment.instructor_notes}"` : ""}`
     : "";
+  const acceptedTitle = accepted ? "Accepted by instructor" : "";
 
   return (
     <span
@@ -1754,8 +1789,8 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
       style={{
         fontSize: 11,
         color: INK,
-        background: tentative ? `${GOLD}33` : CHALK,
-        border: tentative ? `1px solid ${GOLD}` : "none",
+        background: accepted ? `${OK_GREEN}26` : tentative ? `${GOLD}33` : CHALK,
+        border: accepted ? `1px solid ${OK_GREEN}` : tentative ? `1px solid ${GOLD}` : "none",
         padding: "3px 8px",
         borderRadius: 999,
         display: "inline-flex",
@@ -1765,10 +1800,29 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
         cursor: onClick ? "pointer" : (draggable ? "grab" : "default"),
         userSelect: "none",
       }}
-      title={tentative ? `${baseTitle} · ${tentativeTitle}` : baseTitle}
+      title={[baseTitle, acceptedTitle, tentativeTitle].filter(Boolean).join(" · ")}
     >
       {draggable && <span aria-hidden="true" style={{ color: MUTED, fontSize: 10, lineHeight: 1 }}>⋮⋮</span>}
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{assignment.instructor_first}</span>
+      {accepted && (
+        <span
+          aria-hidden="true"
+          style={{
+            fontSize: 10,
+            fontWeight: 800,
+            color: "#fff",
+            background: OK_GREEN,
+            borderRadius: "50%",
+            width: 13,
+            height: 13,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            lineHeight: 1,
+            flexShrink: 0,
+          }}
+        >✓</span>
+      )}
       {tentative && (
         <span
           aria-hidden="true"
@@ -1886,7 +1940,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
   );
 }
 
-function OfferDialog({ dialog, onChoose, onClose, busy }) {
+function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange }) {
   if (dialog.mode === "result" && dialog.payload?.kind === "approve") {
     return (
       <ModalShell onClose={onClose} title="Approved">
@@ -1940,6 +1994,15 @@ function OfferDialog({ dialog, onChoose, onClose, busy }) {
         <div style={{ color: MUTED }}>
           This emails every instructor with a <em>confirmed</em> assignment in this cycle and flips those rows to <em>published</em>. Use the <strong>Preview</strong> button if you want to see what'll go out before any email is sent.
         </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, background: "#fff" }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5 }}>Respond by</span>
+          <input
+            type="date"
+            value={deadline}
+            onChange={(e) => onDeadlineChange(e.target.value)}
+            style={{ flex: 1, padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 13, fontFamily: "inherit" }}
+          />
+        </label>
         <DialogChoice
           title="Test send → jessica@journeytosteam.com"
           subtitle="Send each instructor's offer to your inbox so you can review. DB flips to published."
@@ -2143,7 +2206,7 @@ function CandidatePicker({
       const warningsForBanner = [];
       if (locPref === "not_preferred") warningsForBanner.push(`${inst.first_name} marked ${session.location_name} as not preferred.`);
       if (curPref === "not_preferred") warningsForBanner.push(`${inst.first_name} marked ${titleCase(session.curriculum_category)} as not preferred.`);
-      if (session.current_enrollment != null && session.current_enrollment < MIN_ENROLLMENT) warningsForBanner.push(`Enrollment is ${session.current_enrollment} — below the ${MIN_ENROLLMENT}-student minimum.`);
+      if (session.enrollment_synced_at && session.current_enrollment != null && session.current_enrollment < MIN_ENROLLMENT) warningsForBanner.push(`Enrollment is ${session.current_enrollment} — below the ${MIN_ENROLLMENT}-student minimum.`);
       if (sessionTypes.includes("full_day") && (session.session_type === "morning" || session.session_type === "afternoon")) warningsForBanner.push(`${inst.first_name} is reserved for full-day work.`);
       if (avail.needs_confirmation) warningsForBanner.push(`${inst.first_name}'s availability is unconfirmed.`);
 
