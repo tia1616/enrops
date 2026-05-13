@@ -53,17 +53,51 @@ export default function InstructorPortal() {
   const [actingOn, setActingOn] = useState(null); // assignment id currently being acted on
   const [changeFor, setChangeFor] = useState(null); // assignment object pending request-change message
   const [changeText, setChangeText] = useState("");
+  const [impersonating, setImpersonating] = useState(null); // { asEmail, signedInEmail } when admin is viewing as instructor
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
+        const params = new URLSearchParams(window.location.search);
+        const asEmail = params.get("as");
+
         const { data: { session } } = await supabase.auth.getSession();
         if (!mounted) return;
         if (!session?.user) {
           setPhase("login");
           return;
         }
+
+        if (asEmail) {
+          // Admin-impersonation path: fetch the named instructor and load their
+          // view. Works only when the signed-in user is an org admin/owner —
+          // RLS on instructors limits other roles.
+          setPhase("linking");
+          const { data: target, error: targetErr } = await supabase
+            .from("instructors")
+            .select("id, organization_id, first_name, last_name, email")
+            .ilike("email", asEmail)
+            .eq("is_active", true)
+            .maybeSingle();
+          if (!mounted) return;
+          if (targetErr || !target) {
+            setError(`No active instructor found for ${asEmail}. (Are you signed in as an admin of the right org?)`);
+            setPhase("error");
+            return;
+          }
+          setInstructor({
+            instructor_id: target.id,
+            organization_id: target.organization_id,
+            first_name: target.first_name,
+            last_name: target.last_name,
+          });
+          setImpersonating({ asEmail: target.email, signedInEmail: session.user.email });
+          await loadAssignments(target.id);
+          setPhase("ready");
+          return;
+        }
+
         await linkAndLoad();
       } catch (err) {
         if (mounted) {
@@ -321,6 +355,20 @@ export default function InstructorPortal() {
 
   return (
     <Shell instructorName={instructor.first_name} onSignOut={signOut}>
+      {impersonating && (
+        <div style={{
+          background: `${GOLD}1F`,
+          border: `1px solid ${GOLD}`,
+          borderRadius: 8,
+          padding: "10px 14px",
+          marginBottom: 14,
+          fontSize: 13,
+          color: INK,
+          lineHeight: 1.5,
+        }}>
+          <strong>Admin preview</strong> — you're signed in as <em>{impersonating.signedInEmail}</em> and viewing <em>{impersonating.asEmail}</em>'s portal. Accept and Request change actions will fire on this instructor's behalf.
+        </div>
+      )}
       <header style={{ marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: INK, letterSpacing: -0.3 }}>
           Hi {instructor.first_name ?? "there"} 👋
