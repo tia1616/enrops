@@ -639,6 +639,32 @@ export default function Schedule() {
     }
   }
 
+  async function handleResetAcceptance(targetSession, currentAssignment) {
+    if (!currentAssignment) return;
+    try {
+      const prevStatus = currentAssignment.status;
+      const prevResponseAt = currentAssignment.instructor_response_at;
+      const { error: updErr } = await supabase
+        .from("camp_assignments")
+        .update({ status: "published", instructor_response_at: null })
+        .eq("id", currentAssignment.id);
+      if (updErr) throw updErr;
+      setLastOp({
+        type: "reset_acceptance",
+        assignmentId: currentAssignment.id,
+        prevStatus,
+        prevResponseAt,
+        label: `Reset acceptance on ${targetSession.location_name}, wk ${targetSession.week_num}`,
+      });
+      setCandidatesFor(null);
+      await loadAll();
+    } catch (err) {
+      console.error("Reset acceptance failed:", err);
+      setSaveError(`Couldn't reset: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
+    }
+  }
+
   async function handleRemoveAssignment(targetSession, currentAssignment) {
     if (!currentAssignment) return;
     try {
@@ -878,6 +904,12 @@ export default function Schedule() {
           .from("camp_assignments")
           .insert(op.snapshot);
         if (insErr) throw insErr;
+      } else if (op.type === "reset_acceptance") {
+        const { error: updErr } = await supabase
+          .from("camp_assignments")
+          .update({ status: op.prevStatus, instructor_response_at: op.prevResponseAt })
+          .eq("id", op.assignmentId);
+        if (updErr) throw updErr;
       } else if (op.type === "approve") {
         if (op.assignmentIds.length > 0) {
           const { error: revertErr } = await supabase
@@ -1036,6 +1068,7 @@ export default function Schedule() {
           role={candidatesFor.role}
           onPick={(instructorId) => handlePick(candidatesFor.session, candidatesFor.currentAssignment, instructorId, null, candidatesFor.role)}
           onRemove={() => handleRemoveAssignment(candidatesFor.session, candidatesFor.currentAssignment)}
+          onResetAcceptance={() => handleResetAcceptance(candidatesFor.session, candidatesFor.currentAssignment)}
           onCreateInstructor={async (form) => {
             const newId = await handleCreateInstructor(form, candidatesFor.session);
             await handlePick(candidatesFor.session, candidatesFor.currentAssignment, newId, null, candidatesFor.role);
@@ -2271,7 +2304,7 @@ function ModalShell({ title, children, onClose }) {
 function CandidatePicker({
   session, currentAssignment, role = "lead", instructors, availabilityByInstructor,
   locPrefLookup, curPrefLookup, allAssignments,
-  onClose, onPick, onRemove, onCreateInstructor,
+  onClose, onPick, onRemove, onResetAcceptance, onCreateInstructor,
 }) {
   const isReassign = !!currentAssignment;
   const currentInstructorId = currentAssignment?.instructor_id ?? null;
@@ -2428,17 +2461,33 @@ function CandidatePicker({
             alignItems: "center",
             justifyContent: "space-between",
             gap: 12,
+            flexWrap: "wrap",
           }}>
             <div style={{ fontSize: 13, color: INK }}>
               Currently: <strong>{currentAssignment.instructor_first}{currentAssignment.instructor_last ? " " + currentAssignment.instructor_last : ""}</strong>
+              {currentAssignment.status === "confirmed" && currentAssignment.instructor_response_at && (
+                <span style={{ marginLeft: 8, fontSize: 11, color: OK_GREEN, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>✓ Accepted</span>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={onRemove}
-              style={{ ...btn("transparent", CORAL, true), padding: "5px 10px", fontSize: 12 }}
-            >
-              Remove (mark needs hire)
-            </button>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {currentAssignment.status === "confirmed" && currentAssignment.instructor_response_at && onResetAcceptance && (
+                <button
+                  type="button"
+                  onClick={onResetAcceptance}
+                  title="Set back to 'awaiting response' (use this to clear a test-accept you made via Admin preview)"
+                  style={{ ...btn("transparent", GOLD, true), padding: "5px 10px", fontSize: 12, borderColor: GOLD }}
+                >
+                  Reset acceptance
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onRemove}
+                style={{ ...btn("transparent", CORAL, true), padding: "5px 10px", fontSize: 12 }}
+              >
+                Remove (mark needs hire)
+              </button>
+            </div>
           </div>
         )}
 
