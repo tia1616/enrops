@@ -805,9 +805,9 @@ export default function Schedule() {
   async function handleRollback() {
     if (state.status !== "ready") return;
     const confirmed = window.confirm(
-      "Roll back published assignments in this cycle back to 'confirmed'? This lets you re-send them. " +
-      "Any instructor responses already received (Accept / Request change) will be cleared. " +
-      "Skyler and Kristin's $50 distance bonuses are preserved."
+      "Reset all already-sent offers so you can send them again? " +
+      "Any Accept or Request change responses you've already received will be cleared. " +
+      "Distance bonuses are kept."
     );
     if (!confirmed) return;
     setBusy("rolling_back");
@@ -2092,7 +2092,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
     // Only Real Send needs the roll-back escape hatch — Test is non-destructive.
     const showRollback = p.sent === 0 && p.mode === "send" && publishedCount > 0;
     return (
-      <ModalShell onClose={onClose} title={p.mode === "send" ? "Offers sent" : p.mode === "test" ? "Test sent" : "Preview"}>
+      <ModalShell onClose={onClose} title={p.mode === "send" ? "Offers sent" : p.mode === "test" ? "Sent to you" : "Preview"}>
         <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
           {p.note ? <div style={{ color: MUTED, marginBottom: 8 }}>{p.note}</div> : null}
           <div><strong>{p.sent}</strong> email{p.sent === 1 ? "" : "s"} delivered.</div>
@@ -2106,13 +2106,13 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           )}
           {p.mode === "test" && p.sent > 0 && (
             <div style={{ marginTop: 12, padding: 10, background: `${GOLD}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
-              All emails routed to <strong>jessica@journeytosteam.com</strong>. No assignments were changed — you can re-run Test as needed.
+              All emails went to <strong>jessica@journeytosteam.com</strong> only — your instructors didn't receive anything. Check your inbox.
             </div>
           )}
           {showRollback && (
             <div style={{ marginTop: 14, padding: 12, background: `${GOLD}1A`, border: `1px solid ${GOLD}66`, borderRadius: 6 }}>
               <div style={{ fontSize: 13, color: INK, marginBottom: 8 }}>
-                <strong>{publishedCount}</strong> assignment{publishedCount === 1 ? "" : "s"} in this cycle {publishedCount === 1 ? "is" : "are"} already <em>published</em>. Roll them back to <em>confirmed</em> so you can re-send fresh.
+                <strong>{publishedCount}</strong> {publishedCount === 1 ? "instructor has" : "instructors have"} already been sent their offer. If you need to send again (after fixing something), reset them here first.
               </div>
               <button
                 type="button"
@@ -2120,7 +2120,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
                 disabled={rollingBack}
                 style={{ ...btn(GOLD, INK, false, rollingBack), padding: "7px 12px", fontSize: 13 }}
               >
-                {rollingBack ? "Rolling back…" : `Roll back ${publishedCount} published row${publishedCount === 1 ? "" : "s"}`}
+                {rollingBack ? "Resetting…" : `Reset ${publishedCount} already-sent ${publishedCount === 1 ? "offer" : "offers"}`}
               </button>
             </div>
           )}
@@ -2134,9 +2134,9 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
 
   if (dialog.mode === "result" && dialog.payload?.kind === "rollback") {
     return (
-      <ModalShell onClose={onClose} title="Rolled back">
+      <ModalShell onClose={onClose} title="Reset">
         <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
-          <strong>{dialog.payload.count}</strong> assignment{dialog.payload.count === 1 ? "" : "s"} reset to <em>confirmed</em>. Distance bonuses preserved. You can now Preview or Send Offers again.
+          <strong>{dialog.payload.count}</strong> {dialog.payload.count === 1 ? "offer is" : "offers are"} ready to be sent again. Distance bonuses are still there. Click <strong>Send offers</strong> when you're ready.
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
           <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>OK</button>
@@ -2150,7 +2150,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
     <ModalShell onClose={onClose} title="Send offers">
       <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ color: MUTED }}>
-          The <strong>Respond by</strong> date below is only written to the database when you do a Real send.
+          Pick the date you want instructors to respond by, then choose how to send.
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, background: "#fff" }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5 }}>Respond by</span>
@@ -2162,15 +2162,15 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           />
         </label>
         <DialogChoice
-          title="Test send → jessica@journeytosteam.com"
-          subtitle="Sends each instructor's offer to your inbox. No assignments are changed — you can re-run this as many times as you need."
+          title="Send to me first (recommended)"
+          subtitle="Every instructor's offer arrives in your inbox so you can read exactly what they'll see. Nothing else changes — run this as many times as you want."
           disabled={busy}
           onClick={() => onChoose("test")}
           tone="warn"
         />
         <DialogChoice
-          title="Real send"
-          subtitle="Delivers to real instructor emails and marks them as sent (status → published). Re-running won't re-mail already-published instructors."
+          title="Send to all instructors"
+          subtitle="Delivers each instructor's offer to their real email. They'll show on this page as awaiting response. Re-sending won't email anyone who's already received their offer."
           disabled={busy}
           onClick={() => onChoose("send")}
           tone="danger"
