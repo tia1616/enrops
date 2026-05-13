@@ -213,8 +213,9 @@ export default function Schedule() {
   const [selectedLocations, setSelectedLocations] = useState(() => new Set());
   const [selectedStatuses, setSelectedStatuses] = useState(() => new Set());
   const [saveError, setSaveError] = useState(null); // serious-error banner (DB failures only)
-  const [busy, setBusy] = useState(null); // "approving" | "sending" | null
+  const [busy, setBusy] = useState(null); // "approving" | "sending" | "previewing" | null
   const [offerDialog, setOfferDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
+  const [previewData, setPreviewData] = useState(null); // { previews: [...] } from preview mode
   const [lastOp, setLastOp] = useState(null); // { type, ... } — supports a single-step undo
   const [candidatesFor, setCandidatesFor] = useState(null); // { session, currentAssignment | null }
   const [changeRequestFor, setChangeRequestFor] = useState(null); // { session, assignment }
@@ -669,17 +670,22 @@ export default function Schedule() {
         .in("camp_session_id", sessionIds)
         .select("id");
       if (updErr) throw updErr;
-      const count = data?.length ?? 0;
-      // Also flip cycle status to 'scheduling' if it's still 'collecting'.
-      if (state.cycle.status === "collecting") {
+      const flippedIds = (data ?? []).map((r) => r.id);
+      const prevCycleStatus = state.cycle.status;
+      if (prevCycleStatus === "collecting") {
         await supabase
           .from("scheduling_cycles")
           .update({ status: "scheduling" })
           .eq("id", state.cycle.id);
       }
-      setLastOp(null); // approval is bulk; no per-row undo from here
+      setLastOp({
+        type: "approve",
+        assignmentIds: flippedIds,
+        prevCycleStatus,
+        label: `Approved ${flippedIds.length} assignment${flippedIds.length === 1 ? "" : "s"}`,
+      });
       await loadAll();
-      setOfferDialog({ mode: "result", payload: { kind: "approve", count } });
+      setOfferDialog({ mode: "result", payload: { kind: "approve", count: flippedIds.length } });
     } catch (err) {
       console.error("Approve failed:", err);
       setSaveError(`Couldn't approve: ${err.message ?? "unknown error"}`);
@@ -699,9 +705,6 @@ export default function Schedule() {
       });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
-      if (mode === "preview" && data?.preview) {
-        console.log("[send-offers] preview output:", data.preview);
-      }
       await loadAll();
       setOfferDialog({ mode: "result", payload: { kind: "send", mode, ...data } });
     } catch (err) {
@@ -709,6 +712,26 @@ export default function Schedule() {
       setSaveError(`Couldn't send: ${err.message ?? "unknown error"}`);
       setTimeout(() => setSaveError(null), 6000);
       setOfferDialog(null);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handlePreviewOffers() {
+    if (state.status !== "ready") return;
+    setBusy("previewing");
+    setSaveError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-offers", {
+        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: null },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setPreviewData(data);
+    } catch (err) {
+      console.error("Preview failed:", err);
+      setSaveError(`Couldn't preview: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
     } finally {
       setBusy(null);
     }
@@ -757,6 +780,20 @@ export default function Schedule() {
           .from("camp_assignments")
           .insert(op.snapshot);
         if (insErr) throw insErr;
+      } else if (op.type === "approve") {
+        if (op.assignmentIds.length > 0) {
+          const { error: revertErr } = await supabase
+            .from("camp_assignments")
+            .update({ status: "proposed" })
+            .in("id", op.assignmentIds);
+          if (revertErr) throw revertErr;
+        }
+        if (op.prevCycleStatus && op.prevCycleStatus !== state.cycle.status) {
+          await supabase
+            .from("scheduling_cycles")
+            .update({ status: op.prevCycleStatus })
+            .eq("id", state.cycle.id);
+        }
       }
       await loadAll();
     } catch (err) {
@@ -781,6 +818,7 @@ export default function Schedule() {
         canSend={cycle.status === "scheduling" || cycle.status === "published"}
         onApprove={handleApprove}
         onSendClick={() => setOfferDialog({ mode: "choose", payload: null })}
+        onPreviewClick={handlePreviewOffers}
       />
       {saveError && (
         <div style={{
@@ -857,6 +895,12 @@ export default function Schedule() {
           busy={busy === "sending"}
         />
       )}
+      {previewData && (
+        <PreviewViewer
+          data={previewData}
+          onClose={() => setPreviewData(null)}
+        />
+      )}
       {changeRequestFor && (
         <ChangeRequestReview
           session={changeRequestFor.session}
@@ -903,7 +947,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, onApprove, onSendClick }) {
+function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, onApprove, onSendClick, onPreviewClick }) {
   return (
     <header style={{
       background: "#fff",
@@ -952,6 +996,15 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
           style={btn("transparent", PLUM, true, !canApprove || busy === "approving")}
         >
           {busy === "approving" ? "Approving…" : "Approve"}
+        </button>
+        <button
+          type="button"
+          onClick={onPreviewClick}
+          disabled={busy === "previewing"}
+          title="Render every offer email — no sends, no DB changes"
+          style={btn("transparent", PLUM, true, busy === "previewing")}
+        >
+          {busy === "previewing" ? "Loading…" : "Preview offers"}
         </button>
         <button
           type="button"
@@ -1881,17 +1934,11 @@ function OfferDialog({ dialog, onChoose, onClose, busy }) {
     <ModalShell onClose={onClose} title="Send offers">
       <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ color: MUTED }}>
-          This emails every instructor with a <em>confirmed</em> assignment in this cycle and flips those rows to <em>published</em>.
+          This emails every instructor with a <em>confirmed</em> assignment in this cycle and flips those rows to <em>published</em>. Use the <strong>Preview</strong> button if you want to see what'll go out before any email is sent.
         </div>
         <DialogChoice
-          title="Preview only"
-          subtitle="Render every offer, return HTML to the console. No emails sent, no DB writes."
-          disabled={busy}
-          onClick={() => onChoose("preview")}
-        />
-        <DialogChoice
           title="Test send → jessica@journeytosteam.com"
-          subtitle="Send each instructor's offer to your inbox so you can review. DB still flips to published."
+          subtitle="Send each instructor's offer to your inbox so you can review. DB flips to published."
           disabled={busy}
           onClick={() => onChoose("test")}
           tone="warn"
@@ -1906,6 +1953,79 @@ function OfferDialog({ dialog, onChoose, onClose, busy }) {
         {busy && <div style={{ color: MUTED, fontSize: 12 }}>Working…</div>}
       </div>
     </ModalShell>
+  );
+}
+
+function PreviewViewer({ data, onClose }) {
+  const previews = data?.preview ?? [];
+  const [idx, setIdx] = useState(0);
+  if (previews.length === 0) {
+    return (
+      <ModalShell onClose={onClose} title="Preview">
+        <div style={{ padding: 20, color: MUTED, fontSize: 14 }}>
+          {data?.note ?? "No confirmed assignments to preview yet. Click Approve first."}
+        </div>
+        <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>
+        </div>
+      </ModalShell>
+    );
+  }
+  const cur = previews[idx];
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 60,
+        padding: 16,
+      }}
+    >
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%",
+        maxWidth: 900,
+        height: "85vh",
+        background: "#fff",
+        border: `1px solid ${RULE}`,
+        borderRadius: 10,
+        boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
+        display: "flex",
+        flexDirection: "column",
+      }}>
+        <div style={{
+          padding: "12px 16px",
+          borderBottom: `1px solid ${RULE}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+        }}>
+          <div>
+            <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>
+              Preview {idx + 1} of {previews.length} · {cur?.to}
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginTop: 2 }}>{cur?.subject}</div>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button type="button" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} style={btn("transparent", PLUM, true, idx === 0)}>‹ Prev</button>
+            <button type="button" onClick={() => setIdx((i) => Math.min(previews.length - 1, i + 1))} disabled={idx === previews.length - 1} style={btn("transparent", PLUM, true, idx === previews.length - 1)}>Next ›</button>
+            <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>
+          </div>
+        </div>
+        <div style={{ flex: 1, overflow: "hidden", background: CHALK, padding: 0 }}>
+          <iframe
+            title="Offer preview"
+            srcDoc={cur?.html ?? ""}
+            style={{ width: "100%", height: "100%", border: "none", background: "#fff" }}
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 

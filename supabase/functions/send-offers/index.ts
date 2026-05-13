@@ -151,11 +151,13 @@ serve(async (req: Request) => {
       email_reply_to: brandingRow?.email_reply_to ?? null,
     };
 
-    // All confirmed assignments in this cycle (filter to instructor_ids if provided).
+    // Preview mode shows confirmed AND published (admin inspecting email copy after a send).
+    // Test/Real send only fires on 'confirmed' so we never re-mail published rows.
+    const statusFilter = mode === 'preview' ? ['confirmed', 'published'] : ['confirmed'];
     let assignmentsQuery = supabase
       .from('camp_assignments')
       .select('id, camp_session_id, instructor_id, role, status, distance_bonus_cents, deadline')
-      .eq('status', 'confirmed')
+      .in('status', statusFilter)
       .in('camp_session_id', (
         await supabase
           .from('camp_sessions')
@@ -169,7 +171,10 @@ serve(async (req: Request) => {
     if (assignErr) return json({ error: `assignments query: ${assignErr.message}` }, 500);
     const assignments = (assignmentsRaw ?? []) as AssignmentRow[];
     if (assignments.length === 0) {
-      return json({ sent: 0, failed: [], preview: [], note: 'No confirmed assignments to send. Click Approve in Calendar UI first.' });
+      const note = mode === 'preview'
+        ? 'Nothing to preview — no confirmed or published assignments in this cycle. Click Approve to confirm some first.'
+        : 'No confirmed assignments to send. Either Approve some first, or roll published rows back if you re-need to send them.';
+      return json({ sent: 0, failed: [], preview: [], note });
     }
 
     const sessionIds = Array.from(new Set(assignments.map((a) => a.camp_session_id)));
@@ -335,7 +340,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl }: {
             <td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
               Hi ${escape(firstName)},
               <br /><br />
-              Your proposed schedule for ${escape(cycle.name)} is ready. You have ${campCount} ${campCount === 1 ? 'camp' : 'camps'} to review${cycleRange ? ` · ${cycleRange}` : ''}.
+              Your proposed schedule for ${escape(cycle.name)} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${campCount === 1 ? 'camp' : 'camps'}</strong>${cycleRange ? ` · ${cycleRange}` : ''} — your schedule isn't confirmed until we hear back from you on every one.
             </td>
           </tr>
           <tr>
@@ -344,15 +349,18 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl }: {
             </td>
           </tr>
           <tr>
-            <td style="padding:24px 32px 8px;" align="left">
-              <a href="${portalUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:12px 22px;border-radius:6px;font-size:15px;font-weight:600;">
-                View my schedule →
+            <td style="padding:24px 32px 6px;" align="left">
+              <a href="${portalUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;font-weight:700;letter-spacing:0.2px;">
+                Review and respond →
               </a>
+              <div style="font-size:12px;color:${MUTED};margin-top:10px;">
+                You'll see each camp with an <strong>Accept</strong> and <strong>Request change</strong> button.
+              </div>
             </td>
           </tr>
           <tr>
-            <td style="padding:6px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">
-              Pay info will be confirmed once you accept each camp. Questions? Just reply to this email.
+            <td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">
+              Once you've responded to every camp, you're set. Questions? Just reply to this email.
               <br /><br />
               — Jessica, ${escape(org.name)}
             </td>
@@ -377,7 +385,7 @@ function renderText({ cycle, org, instructor, camps, portalUrl }: {
   const lines: string[] = [];
   lines.push(`Hi ${firstName},`);
   lines.push('');
-  lines.push(`Your proposed schedule for ${cycle.name}${cycleRange} is ready. You have ${camps.length} camp${camps.length === 1 ? '' : 's'} to review.`);
+  lines.push(`Your proposed schedule for ${cycle.name}${cycleRange} is below. Please tap Accept or Request change on each of the ${camps.length} camp${camps.length === 1 ? '' : 's'} — your schedule isn't confirmed until we hear back from you on every one.`);
   lines.push('');
   for (const { a, s } of camps) {
     if (!s) continue;
@@ -388,9 +396,10 @@ function renderText({ cycle, org, instructor, camps, portalUrl }: {
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} distance bonus`);
     lines.push('');
   }
-  lines.push(`View your schedule: ${portalUrl}`);
+  lines.push(`Review and respond: ${portalUrl}`);
+  lines.push("(You'll see each camp with an Accept and Request change button.)");
   lines.push('');
-  lines.push('Pay info will be confirmed once you accept each camp. Questions? Just reply to this email.');
+  lines.push("Once you've responded to every camp, you're set. Questions? Just reply to this email.");
   lines.push('');
   lines.push(`— Jessica, ${org.name}`);
   return lines.join('\n');
