@@ -84,6 +84,14 @@ function unitLabel(cycleType: string | null, count: number) {
   return plural ? 'classes' : 'class';
 }
 
+function cycleDisplayName(code: string | null): string {
+  if (!code) return '';
+  const m = /^(SU|FA|WI|SP)(\d{2})$/.exec(code);
+  if (!m) return code;
+  const terms: Record<string, string> = { SU: 'Summer', FA: 'Fall', WI: 'Winter', SP: 'Spring' };
+  return `${terms[m[1]]} 20${m[2]}`;
+}
+
 function classDaysSummary(days: string[] | null) {
   if (!days || days.length === 0) return '';
   const order = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
@@ -221,7 +229,8 @@ serve(async (req: Request) => {
         .filter((row) => !!row.s)
         .sort((x, y) => (x.s!.starts_on ?? '').localeCompare(y.s!.starts_on ?? ''));
 
-      const subject = `Your ${cycle.name} schedule is ready — please review`;
+      const cycleDisplay = cycleDisplayName(cycle.name);
+      const subject = `Your ${cycleDisplay} schedule is ready — please review`;
       const portalUrl = `https://enrops.com/${org.slug ?? 'j2s'}/instructor`;
       const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline });
       const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline });
@@ -347,14 +356,14 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
           <tr>
             <td style="padding:28px 32px 8px;">
               <div style="font-size:13px;color:${MUTED};text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">${escape(org.name)}</div>
-              <h1 style="margin:6px 0 0;font-size:22px;color:${TEXT};font-weight:700;letter-spacing:-0.3px;">Your ${escape(cycle.name)} schedule is ready</h1>
+              <h1 style="margin:6px 0 0;font-size:22px;color:${TEXT};font-weight:700;letter-spacing:-0.3px;">Your ${escape(cycleDisplayName(cycle.name))} schedule is ready</h1>
             </td>
           </tr>
           <tr>
             <td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
               Hi ${escape(firstName)},
               <br /><br />
-              Your proposed schedule for ${escape(cycle.name)} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${unitLabel(cycle.cycle_type, campCount)}</strong>${cycleRange ? ` · ${cycleRange}` : ''} — your schedule isn't confirmed until we hear back from you on every one.${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
+              Your proposed schedule for ${escape(cycleDisplayName(cycle.name))} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${unitLabel(cycle.cycle_type, campCount)}</strong>${cycleRange ? ` · ${cycleRange}` : ''} — your schedule isn't confirmed until we hear back from you on every one.${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
             </td>
           </tr>
           <tr>
@@ -400,7 +409,7 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline }: {
   const lines: string[] = [];
   lines.push(`Hi ${firstName},`);
   lines.push('');
-  lines.push(`Your proposed schedule for ${cycle.name}${cycleRange} is below. Please tap Accept or Request change on each of the ${camps.length} ${unitLabel(cycle.cycle_type, camps.length)} — your schedule isn't confirmed until we hear back from you on every one.`);
+  lines.push(`Your proposed schedule for ${cycleDisplayName(cycle.name)}${cycleRange} is below. Please tap Accept or Request change on each of the ${camps.length} ${unitLabel(cycle.cycle_type, camps.length)} — your schedule isn't confirmed until we hear back from you on every one.`);
   if (deadline) {
     lines.push('');
     lines.push(`Please respond by ${fmt(deadline)}.`);

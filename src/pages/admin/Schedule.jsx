@@ -100,6 +100,16 @@ function unitLabel(cycleType, count) {
   return plural ? "classes" : "class";
 }
 
+// Cycle codes ("SU26") -> human-readable ("Summer 2026").
+// Falls back to the raw code if the pattern doesn't match.
+function cycleDisplayName(code) {
+  if (!code) return "";
+  const m = /^(SU|FA|WI|SP)(\d{2})$/.exec(code);
+  if (!m) return code;
+  const terms = { SU: "Summer", FA: "Fall", WI: "Winter", SP: "Spring" };
+  return `${terms[m[1]]} 20${m[2]}`;
+}
+
 function classDaysLabel(days) {
   if (!Array.isArray(days) || days.length === 0) return null;
   const isStandardWeek = days.length === 5 && WEEKDAYS.every((d) => days.includes(d));
@@ -1017,7 +1027,7 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
     }}>
       <div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>{cycle.name}</h1>
+          <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>{cycleDisplayName(cycle.name)}</h1>
           <span style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>{cycle.status}</span>
         </div>
         <div style={{ color: MUTED, marginTop: 4, fontSize: 14 }}>{fmtRange(cycle.starts_on, cycle.ends_on)}</div>
