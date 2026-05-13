@@ -4,7 +4,7 @@
 // Edit drawer + send-offers + multi-week occurrence modal land in follow-up passes.
 // Multi-tenant: all data RLS-scoped by org.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 
@@ -1490,15 +1490,19 @@ function Legend() {
 }
 
 function WeeklyGrid({ week, items, cycleType, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
-  const byDay = useMemo(() => {
-    const m = new Map(WEEKDAYS.map((d) => [d, []]));
-    for (const e of items) {
-      const days = Array.isArray(e.session.class_days) ? e.session.class_days : WEEKDAYS;
-      for (const d of days) {
-        if (m.has(d)) m.get(d).push(e);
-      }
-    }
-    return m;
+  // Sort camps globally by (location, session-time) so they share a row across all
+  // five day columns. Each row renders cells per weekday: an actual card when the
+  // camp meets that day, an em-dash placeholder otherwise. A gold line separates
+  // different locations.
+  const sorted = useMemo(() => {
+    return [...items].sort((a, b) => {
+      const locA = a.session.location_name ?? "";
+      const locB = b.session.location_name ?? "";
+      if (locA !== locB) return locA.localeCompare(locB);
+      const rA = SESSION_TIME_RANK[a.session.session_type] ?? 99;
+      const rB = SESSION_TIME_RANK[b.session.session_type] ?? 99;
+      return rA - rB;
+    });
   }, [items]);
 
   return (
@@ -1509,53 +1513,27 @@ function WeeklyGrid({ week, items, cycleType, getValidationFor, dragStateRef, on
         </h2>
         <div style={{ fontSize: 12, color: MUTED }}>{items.length} {unitLabel(cycleType, items.length)} shown · drag an instructor chip onto another card to reassign</div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10 }}>
+
+      {/* Day headers */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10, marginBottom: 8 }}>
         {WEEKDAYS.map((d) => (
-          <DayColumn
-            key={d}
-            day={d}
-            cards={byDay.get(d) ?? []}
-            getValidationFor={getValidationFor}
-            dragStateRef={dragStateRef}
-            onDrop={onDrop}
-            onNeedsHireClick={onNeedsHireClick}
-            onInstructorClick={onInstructorClick}
-            onChangeRequestClick={onChangeRequestClick}
-          />
+          <div key={d} style={{
+            fontSize: 11,
+            fontWeight: 700,
+            color: MUTED,
+            textTransform: "uppercase",
+            letterSpacing: 0.6,
+            paddingBottom: 4,
+            borderBottom: `1px solid ${RULE}`,
+          }}>
+            {DAY_LABEL_FULL[d]}
+          </div>
         ))}
       </div>
-    </div>
-  );
-}
 
-function DayColumn({ day, cards, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
-  const sorted = useMemo(() => {
-    return [...cards].sort((a, b) => {
-      const locA = a.session.location_name ?? "";
-      const locB = b.session.location_name ?? "";
-      if (locA !== locB) return locA.localeCompare(locB);
-      const rA = SESSION_TIME_RANK[a.session.session_type] ?? 99;
-      const rB = SESSION_TIME_RANK[b.session.session_type] ?? 99;
-      return rA - rB;
-    });
-  }, [cards]);
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{
-        fontSize: 11,
-        fontWeight: 700,
-        color: MUTED,
-        textTransform: "uppercase",
-        letterSpacing: 0.6,
-        paddingBottom: 4,
-        borderBottom: `1px solid ${RULE}`,
-      }}>
-        {DAY_LABEL_FULL[day]}
-      </div>
+      {/* Rows */}
       {sorted.length === 0 ? (
         <div style={{
-          flex: 1,
           minHeight: 80,
           border: `1px dashed ${RULE}`,
           borderRadius: 6,
@@ -1566,23 +1544,49 @@ function DayColumn({ day, cards, getValidationFor, dragStateRef, onDrop, onNeeds
           fontSize: 14,
         }}>—</div>
       ) : (
-        sorted.map((e, idx) => {
-          const prevLoc = idx > 0 ? sorted[idx - 1].session.location_name : null;
-          const newGroup = idx > 0 && prevLoc !== e.session.location_name;
-          return (
-            <div key={`${e.session.id}-${day}`} style={{ marginTop: newGroup ? 6 : 0 }}>
-              <ProgramCard
-                item={e}
-                getValidationFor={getValidationFor}
-                dragStateRef={dragStateRef}
-                onDrop={onDrop}
-                onNeedsHireClick={onNeedsHireClick}
-                onInstructorClick={onInstructorClick}
-                onChangeRequestClick={onChangeRequestClick}
-              />
-            </div>
-          );
-        })
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {sorted.map((e, idx) => {
+            const prevLoc = idx > 0 ? sorted[idx - 1].session.location_name : null;
+            const newGroup = idx > 0 && prevLoc !== e.session.location_name;
+            const days = Array.isArray(e.session.class_days) ? e.session.class_days : WEEKDAYS;
+            return (
+              <React.Fragment key={e.session.id}>
+                {newGroup && (
+                  <div style={{
+                    height: 0,
+                    borderTop: `2px solid ${GOLD}66`,
+                    margin: "4px 0",
+                  }} />
+                )}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10 }}>
+                  {WEEKDAYS.map((d) => days.includes(d) ? (
+                    <ProgramCard
+                      key={d}
+                      item={e}
+                      getValidationFor={getValidationFor}
+                      dragStateRef={dragStateRef}
+                      onDrop={onDrop}
+                      onNeedsHireClick={onNeedsHireClick}
+                      onInstructorClick={onInstructorClick}
+                      onChangeRequestClick={onChangeRequestClick}
+                    />
+                  ) : (
+                    <div key={d} style={{
+                      minHeight: 80,
+                      border: `1px dashed ${RULE}`,
+                      borderRadius: 6,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: MUTED,
+                      fontSize: 14,
+                    }}>—</div>
+                  ))}
+                </div>
+              </React.Fragment>
+            );
+          })}
+        </div>
       )}
     </div>
   );
