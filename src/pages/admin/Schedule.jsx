@@ -92,6 +92,14 @@ function titleCase(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// Cycle-aware singular/plural noun for instructional units.
+// summer_camp -> camp/camps; afterschool (and anything else) -> class/classes.
+function unitLabel(cycleType, count) {
+  const plural = count !== 1;
+  if (cycleType === "summer_camp") return plural ? "camps" : "camp";
+  return plural ? "classes" : "class";
+}
+
 function classDaysLabel(days) {
   if (!Array.isArray(days) || days.length === 0) return null;
   const isStandardWeek = days.length === 5 && WEEKDAYS.every((d) => days.includes(d));
@@ -463,7 +471,7 @@ export default function Schedule() {
   }, [enriched, focusedWeek, searchText, selectedInstructors, selectedLocations, selectedStatuses]);
 
   if (state.status === "loading") return <div style={{ color: MUTED, fontSize: 14 }}>Loading schedule…</div>;
-  if (state.status === "empty") return <Empty title="No active cycle" body="Create a scheduling cycle to begin assigning instructors to camps." />;
+  if (state.status === "empty") return <Empty title="No active cycle" body="Create a scheduling cycle to begin assigning instructors to camps or classes." />;
   if (state.status === "error") return <Empty title="Couldn't load schedule" body={state.message} tone="error" />;
 
   const { cycle } = state;
@@ -728,7 +736,14 @@ export default function Schedule() {
       const { data, error } = await supabase.functions.invoke("send-offers", {
         body: { cycle_id: state.cycle.id, mode, instructor_ids: null, deadline: offerDeadline },
       });
-      if (error) throw error;
+      if (error) {
+        let realMsg = error.message ?? "function error";
+        try {
+          const body = await error.context?.json?.();
+          if (body?.error) realMsg = body.error;
+        } catch {}
+        throw new Error(realMsg);
+      }
       if (data?.error) throw new Error(data.error);
       await loadAll();
       setOfferDialog({ mode: "result", payload: { kind: "send", mode, ...data } });
@@ -750,13 +765,21 @@ export default function Schedule() {
       const { data, error } = await supabase.functions.invoke("send-offers", {
         body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: null },
       });
-      if (error) throw error;
+      if (error) {
+        // Read the actual response body so we can see the real error message.
+        let realMsg = error.message ?? "function error";
+        try {
+          const body = await error.context?.json?.();
+          if (body?.error) realMsg = body.error;
+        } catch {}
+        throw new Error(realMsg);
+      }
       if (data?.error) throw new Error(data.error);
       setPreviewData(data);
     } catch (err) {
       console.error("Preview failed:", err);
       setSaveError(`Couldn't preview: ${err.message ?? "unknown error"}`);
-      setTimeout(() => setSaveError(null), 6000);
+      setTimeout(() => setSaveError(null), 9000);
     } finally {
       setBusy(null);
     }
@@ -862,6 +885,7 @@ export default function Schedule() {
         </div>
       )}
       <FilterBar
+        cycleType={cycle.cycle_type}
         searchText={searchText}
         onSearchChange={setSearchText}
         instructors={state.instructors}
@@ -886,6 +910,7 @@ export default function Schedule() {
         <WeeklyGrid
           week={weeks.find((w) => w.num === focusedWeek)}
           items={filteredEnrichedForWeek}
+          cycleType={cycle.cycle_type}
           getValidationFor={getValidationFor}
           dragStateRef={dragStateRef}
           onDrop={handleDrop}
@@ -908,7 +933,7 @@ export default function Schedule() {
           fontSize: 13,
         }}>
           {hasFilters
-            ? "Filters active — click a week above to see matching camps in its day-by-day grid."
+            ? `Filters active — click a week above to see matching ${unitLabel(cycle.cycle_type, 2)} in its day-by-day grid.`
             : "Click a week above to see its day-by-day grid."}
         </div>
       )}
@@ -1064,6 +1089,7 @@ function Counter({ label, value, tone }) {
 }
 
 function FilterBar({
+  cycleType,
   searchText, onSearchChange,
   instructors, selectedInstructors, onToggleInstructor,
   locations, selectedLocations, onToggleLocation,
@@ -1085,7 +1111,7 @@ function FilterBar({
           type="search"
           value={searchText}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search camps, instructors, locations…"
+          placeholder={`Search ${unitLabel(cycleType, 2)}, instructors, locations…`}
           name="schedule-search-filter"
           autoComplete="off"
           autoCorrect="off"
@@ -1377,7 +1403,7 @@ function Legend() {
   );
 }
 
-function WeeklyGrid({ week, items, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
+function WeeklyGrid({ week, items, cycleType, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
   const byDay = useMemo(() => {
     const m = new Map(WEEKDAYS.map((d) => [d, []]));
     for (const e of items) {
@@ -1395,7 +1421,7 @@ function WeeklyGrid({ week, items, getValidationFor, dragStateRef, onDrop, onNee
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: INK }}>
           Week {week?.num} <span style={{ fontWeight: 400, color: MUTED, fontSize: 13 }}>· {fmtShort(week?.starts_on)} – {fmtShort(week?.ends_on)}</span>
         </h2>
-        <div style={{ fontSize: 12, color: MUTED }}>{items.length} {items.length === 1 ? "camp" : "camps"} shown · drag an instructor chip onto another card to reassign</div>
+        <div style={{ fontSize: 12, color: MUTED }}>{items.length} {unitLabel(cycleType, items.length)} shown · drag an instructor chip onto another card to reassign</div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10 }}>
         {WEEKDAYS.map((d) => (

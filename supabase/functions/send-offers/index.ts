@@ -78,6 +78,12 @@ function titleCase(s: string | null) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
 }
 
+function unitLabel(cycleType: string | null, count: number) {
+  const plural = count !== 1;
+  if (cycleType === 'summer_camp') return plural ? 'camps' : 'camp';
+  return plural ? 'classes' : 'class';
+}
+
 function classDaysSummary(days: string[] | null) {
   if (!days || days.length === 0) return '';
   const order = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
@@ -348,7 +354,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
             <td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
               Hi ${escape(firstName)},
               <br /><br />
-              Your proposed schedule for ${escape(cycle.name)} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${campCount === 1 ? 'camp' : 'camps'}</strong>${cycleRange ? ` · ${cycleRange}` : ''} — your schedule isn't confirmed until we hear back from you on every one.${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
+              Your proposed schedule for ${escape(cycle.name)} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${unitLabel(cycle.cycle_type, campCount)}</strong>${cycleRange ? ` · ${cycleRange}` : ''} — your schedule isn't confirmed until we hear back from you on every one.${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
             </td>
           </tr>
           <tr>
@@ -362,13 +368,13 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
                 Review and respond →
               </a>
               <div style="font-size:12px;color:${MUTED};margin-top:10px;">
-                You'll see each camp with an <strong>Accept</strong> and <strong>Request change</strong> button.
+                You'll see each ${unitLabel(cycle.cycle_type, 1)} with an <strong>Accept</strong> and <strong>Request change</strong> button.
               </div>
             </td>
           </tr>
           <tr>
             <td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">
-              Once you've responded to every camp, you're set. Questions? Just reply to this email.
+              Once you've responded to every ${unitLabel(cycle.cycle_type, 1)}, you're set. Questions? Just reply to this email.
               <br /><br />
               — Jessica, ${escape(org.name)}
             </td>
@@ -394,7 +400,7 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline }: {
   const lines: string[] = [];
   lines.push(`Hi ${firstName},`);
   lines.push('');
-  lines.push(`Your proposed schedule for ${cycle.name}${cycleRange} is below. Please tap Accept or Request change on each of the ${camps.length} camp${camps.length === 1 ? '' : 's'} — your schedule isn't confirmed until we hear back from you on every one.`);
+  lines.push(`Your proposed schedule for ${cycle.name}${cycleRange} is below. Please tap Accept or Request change on each of the ${camps.length} ${unitLabel(cycle.cycle_type, camps.length)} — your schedule isn't confirmed until we hear back from you on every one.`);
   if (deadline) {
     lines.push('');
     lines.push(`Please respond by ${fmt(deadline)}.`);
@@ -403,16 +409,16 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline }: {
   for (const { a, s } of camps) {
     if (!s) continue;
     const role = a.role === 'developing' ? ' (Developing)' : '';
-    lines.push(`• ${s.curriculum_name ?? 'Camp'}${role}`);
+    lines.push(`• ${s.curriculum_name ?? titleCase(unitLabel(cycle.cycle_type, 1))}${role}`);
     lines.push(`  Week ${s.week_num} · ${fmt(s.starts_on)} – ${fmt(s.ends_on)} · ${classDaysSummary(s.class_days)}`);
     lines.push(`  ${s.location_name ?? ''} · ${titleCase(s.session_type)} ${fmtTime(s.start_time)}–${fmtTime(s.end_time)}`);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} distance bonus`);
     lines.push('');
   }
   lines.push(`Review and respond: ${portalUrl}`);
-  lines.push("(You'll see each camp with an Accept and Request change button.)");
+  lines.push(`(You'll see each ${unitLabel(cycle.cycle_type, 1)} with an Accept and Request change button.)`);
   lines.push('');
-  lines.push("Once you've responded to every camp, you're set. Questions? Just reply to this email.");
+  lines.push(`Once you've responded to every ${unitLabel(cycle.cycle_type, 1)}, you're set. Questions? Just reply to this email.`);
   lines.push('');
   lines.push(`— Jessica, ${org.name}`);
   return lines.join('\n');
