@@ -267,6 +267,7 @@ export default function Schedule() {
   const [offerDialog, setOfferDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
   const [previewData, setPreviewData] = useState(null); // { previews: [...] } from preview mode
   const [offerDeadline, setOfferDeadline] = useState(() => businessDaysFromToday(5));
+  const [autoReminders, setAutoReminders] = useState(true);
   const [lastOp, setLastOp] = useState(null); // { type, ... } — supports a single-step undo
   const [candidatesFor, setCandidatesFor] = useState(null); // { session, currentAssignment | null }
   const [changeRequestFor, setChangeRequestFor] = useState(null); // { session, assignment }
@@ -278,7 +279,7 @@ export default function Schedule() {
     try {
       const { data: cycle, error: cycleErr } = await supabase
         .from("scheduling_cycles")
-        .select("id, name, cycle_type, starts_on, ends_on, status, weeks")
+        .select("id, name, cycle_type, starts_on, ends_on, status, weeks, auto_reminders_enabled")
         .eq("organization_id", org.id)
         .neq("status", "archived")
         .order("created_at", { ascending: false })
@@ -865,6 +866,14 @@ export default function Schedule() {
     setBusy("sending");
     setSaveError(null);
     try {
+      // Write the auto-reminders preference on the cycle before the real send
+      // (the cron reads it daily to decide whether to fire for this cycle's rows).
+      if (mode === "send" && state.cycle.auto_reminders_enabled !== autoReminders) {
+        await supabase
+          .from("scheduling_cycles")
+          .update({ auto_reminders_enabled: autoReminders })
+          .eq("id", state.cycle.id);
+      }
       const { data, error } = await supabase.functions.invoke("send-offers", {
         body: { cycle_id: state.cycle.id, mode, instructor_ids: null, deadline: offerDeadline },
       });
@@ -1151,6 +1160,8 @@ export default function Schedule() {
           busy={busy === "sending"}
           deadline={offerDeadline}
           onDeadlineChange={setOfferDeadline}
+          autoReminders={autoReminders}
+          onAutoRemindersChange={setAutoReminders}
           publishedCount={state.assignments?.filter((a) => a.status === "published").length ?? 0}
           onRollback={handleRollback}
           rollingBack={busy === "rolling_back"}
@@ -2119,27 +2130,39 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
 
 function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onUnassign, onReassign }) {
   const [busy, setBusy] = useState(false);
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [replyError, setReplyError] = useState("");
+  const [replySent, setReplySent] = useState(false);
   const firstName = assignment?.instructor_first ?? "Instructor";
-  const email = assignment?.instructor_email;
-  const subject = `Re: Your ${cycle?.name ?? ""} schedule — ${session.curriculum_name ?? "camp"}`;
-  const body = [
-    `Hi ${firstName},`,
-    "",
-    `Got your note about ${session.curriculum_name ?? "this camp"} (Week ${session.week_num}, ${session.location_name}).`,
-    "",
-    assignment?.change_request_message ? `You wrote: "${assignment.change_request_message}"` : "",
-    "",
-    "Wanted to talk through options — what would work best for you?",
-    "",
-    `— Jessica, ${orgName}`,
-  ].filter(Boolean).join("\n");
-  const mailto = email
-    ? `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
-    : null;
 
   async function doUnassign() {
     setBusy(true);
     try { await onUnassign(); } finally { setBusy(false); }
+  }
+
+  async function sendReply() {
+    if (!replyText.trim()) return;
+    setReplyBusy(true);
+    setReplyError("");
+    try {
+      const { data, error } = await supabase.functions.invoke("offer-message-reply", {
+        body: { camp_assignment_id: assignment.id, message: replyText.trim() },
+      });
+      if (error) {
+        let realMsg = error.message ?? "send failed";
+        try { const b = await error.context?.json?.(); if (b?.error) realMsg = b.error; } catch {}
+        throw new Error(realMsg);
+      }
+      if (data?.error) throw new Error(data.error);
+      setReplySent(true);
+      setReplyText("");
+    } catch (err) {
+      setReplyError(err.message ?? "Couldn't send.");
+    } finally {
+      setReplyBusy(false);
+    }
   }
 
   return (
@@ -2184,21 +2207,51 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
             disabled={busy}
             tone="warn"
           />
-          {mailto ? (
-            <a
-              href={mailto}
-              style={{
-                ...btn("transparent", PLUM, true),
-                textAlign: "left",
-                padding: "10px 12px",
-              }}
-            >
-              <div style={{ fontSize: 14, fontWeight: 600, color: PLUM }}>Email {firstName}</div>
-              <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>Opens your email client with a pre-filled reply at {email}.</div>
-            </a>
+          {!replyOpen ? (
+            <DialogChoice
+              title={`Reply to ${firstName}`}
+              subtitle="Send a message via Enrops. It emails them and saves a copy to your conversation thread."
+              onClick={() => setReplyOpen(true)}
+              disabled={busy}
+            />
           ) : (
-            <div style={{ padding: 10, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12, color: MUTED }}>
-              No email on file for {firstName} — can't auto-compose a reply.
+            <div style={{ border: `1px solid ${PLUM}`, borderRadius: 6, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>Reply to {firstName}</div>
+              {replySent ? (
+                <div style={{ fontSize: 13, color: OK_GREEN, fontWeight: 500 }}>
+                  ✓ Sent. They'll get an email; your message is saved in the thread.
+                </div>
+              ) : (
+                <>
+                  <textarea
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    placeholder={`e.g., Hi ${firstName}, can you tell me a bit more? Just want to make sure I understand…`}
+                    rows={4}
+                    style={{
+                      width: "100%",
+                      padding: "8px 10px",
+                      border: `1px solid ${RULE}`,
+                      borderRadius: 6,
+                      fontSize: 13,
+                      fontFamily: "inherit",
+                      color: INK,
+                      background: "#fff",
+                      boxSizing: "border-box",
+                      resize: "vertical",
+                    }}
+                  />
+                  {replyError && <div style={{ color: CORAL, fontSize: 12 }}>{replyError}</div>}
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    <button type="button" onClick={() => { setReplyOpen(false); setReplyText(""); setReplyError(""); }} disabled={replyBusy} style={{ ...btn("transparent", MUTED, true), padding: "6px 10px", fontSize: 12 }}>
+                      Cancel
+                    </button>
+                    <button type="button" onClick={sendReply} disabled={replyBusy || !replyText.trim()} style={{ ...btn(PLUM, "#fff", false, replyBusy || !replyText.trim()), padding: "6px 12px", fontSize: 12 }}>
+                      {replyBusy ? "Sending…" : "Send"}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -2210,7 +2263,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
   );
 }
 
-function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy }) {
+function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy }) {
   if (dialog.mode === "result" && dialog.payload?.kind === "approve") {
     return (
       <ModalShell onClose={onClose} title="Approved">
@@ -2358,6 +2411,21 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
             onChange={(e) => onDeadlineChange(e.target.value)}
             style={{ flex: 1, padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 13, fontFamily: "inherit" }}
           />
+        </label>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", fontSize: 13, color: INK, cursor: "pointer", lineHeight: 1.45 }}>
+          <input
+            type="checkbox"
+            checked={autoReminders}
+            onChange={(e) => onAutoRemindersChange(e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            <strong>Auto-send a reminder 3 days before the deadline</strong> to anyone who hasn't responded.
+            <br />
+            <span style={{ color: MUTED, fontSize: 12 }}>
+              Runs daily on its own — no need to remember to click. Past-deadline offers are also auto-flagged in your calendar.
+            </span>
+          </span>
         </label>
         <DialogChoice
           title="Send to me first (recommended)"

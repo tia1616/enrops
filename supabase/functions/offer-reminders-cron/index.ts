@@ -29,7 +29,7 @@ const MUTED = '#6b6b6b';
 const BORDER = '#e2dfd5';
 
 const REMINDER_WINDOW_DAYS_MIN = 2;
-const REMINDER_WINDOW_DAYS_MAX = 4;
+const REMINDER_WINDOW_DAYS_MAX = 3;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -98,15 +98,29 @@ serve(async (req: Request) => {
     const reminderWindowEnd = addDaysISO(today, REMINDER_WINDOW_DAYS_MAX);
 
     // -------------------- REMINDER PASS --------------------
-    const { data: reminderRows, error: remErr } = await supabase
-      .from('camp_assignments')
-      .select('id, organization_id, instructor_id, camp_session_id, role, deadline, distance_bonus_cents')
-      .eq('status', 'published')
-      .is('reminder_sent_at', null)
-      .not('email_sent_at', 'is', null)
-      .not('deadline', 'is', null)
-      .gte('deadline', reminderWindowStart)
-      .lte('deadline', reminderWindowEnd);
+    // Skip cycles where the admin disabled auto-reminders for this batch.
+    const { data: enabledCycles } = await supabase
+      .from('scheduling_cycles')
+      .select('id')
+      .eq('auto_reminders_enabled', true);
+    const enabledCycleIds = (enabledCycles ?? []).map((c) => c.id);
+    const { data: enabledSessions } = enabledCycleIds.length
+      ? await supabase.from('camp_sessions').select('id').in('cycle_id', enabledCycleIds)
+      : { data: [] };
+    const enabledSessionIds = (enabledSessions ?? []).map((s) => s.id);
+
+    const { data: reminderRows, error: remErr } = enabledSessionIds.length
+      ? await supabase
+          .from('camp_assignments')
+          .select('id, organization_id, instructor_id, camp_session_id, role, deadline, distance_bonus_cents')
+          .eq('status', 'published')
+          .is('reminder_sent_at', null)
+          .not('email_sent_at', 'is', null)
+          .not('deadline', 'is', null)
+          .gte('deadline', reminderWindowStart)
+          .lte('deadline', reminderWindowEnd)
+          .in('camp_session_id', enabledSessionIds)
+      : { data: [], error: null };
     if (remErr) return json({ error: `reminder query: ${remErr.message}` }, 500);
 
     const reminders = reminderRows ?? [];
