@@ -2165,8 +2165,23 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
   const [replyBusy, setReplyBusy] = useState(false);
   const [replyError, setReplyError] = useState("");
   const [replySent, setReplySent] = useState(false);
+  const [thread, setThread] = useState([]);
   const firstName = assignment?.instructor_first ?? "Instructor";
   const isDeadlinePassed = assignment?.flagged_reason === "deadline_passed";
+
+  useEffect(() => {
+    if (!assignment?.id) return;
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("instructor_offer_messages")
+        .select("id, sender_role, message, created_at")
+        .eq("camp_assignment_id", assignment.id)
+        .order("created_at", { ascending: true });
+      if (alive) setThread(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [assignment?.id, replySent]);
 
   async function doUnassign() {
     setBusy(true);
@@ -2226,6 +2241,34 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
             : assignment?.change_request_message || <em style={{ color: MUTED }}>(no message)</em>
           }
         </div>
+
+        {thread.length > 1 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Conversation
+            </div>
+            {thread.map((m) => {
+              const isInstructor = m.sender_role === "instructor";
+              const isSystem = m.sender_role === "system";
+              return (
+                <div key={m.id} style={{
+                  padding: "8px 10px",
+                  background: isSystem ? "#f5f3ed" : (isInstructor ? `${CHANGE_REQ}10` : `${PLUM}10`),
+                  border: `1px solid ${isSystem ? RULE : (isInstructor ? `${CHANGE_REQ}40` : `${PLUM}40`)}`,
+                  borderRadius: 6,
+                  fontSize: 13,
+                  color: INK,
+                  lineHeight: 1.45,
+                }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+                    {isInstructor ? firstName : isSystem ? "System" : "You"} · {new Date(m.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                  </div>
+                  <div style={{ whiteSpace: "pre-wrap" }}>{m.message}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <DialogChoice
