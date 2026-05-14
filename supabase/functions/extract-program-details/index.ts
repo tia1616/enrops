@@ -56,7 +56,7 @@ async function verifyPlatformAdmin(authHeader: string | null): Promise<{ ok: tru
     global: { headers: { Authorization: `Bearer ${token}` } },
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const { data: userResp, error: userErr } = await userClient.auth.getUser();
+  const { data: userResp, error: userErr } = await userClient.auth.getUser(token);
   if (userErr || !userResp?.user) {
     return { ok: false, reason: "Invalid session", status: 401 };
   }
