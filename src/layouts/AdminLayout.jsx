@@ -18,7 +18,7 @@ const RULE = "#e2dfd5";
 const NAV = [
   { to: "/admin", label: "Overview", end: true },
   { to: "/admin/marketing", label: "Marketing" },
-  { to: "/admin/programs", label: "Programs", soon: true },
+  { to: "/admin/curricula", label: "Curricula" },
   { to: "/admin/contacts", label: "Contacts", soon: true },
   { to: "/admin/instructors", label: "Instructors", soon: true },
   { to: "/admin/schedule", label: "Schedule" },
