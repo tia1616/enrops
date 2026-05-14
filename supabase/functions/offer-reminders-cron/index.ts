@@ -261,10 +261,36 @@ serve(async (req: Request) => {
       expired = data ?? [];
     }
 
+    // Upcoming schedule: every still-pending row's deadline minus 3 days,
+    // grouped by fire-date. Lets the admin see "reminders will fire on May 17"
+    // even when today isn't in the window yet.
+    const { data: pendingAll } = enabledSessionIds.length
+      ? await supabase
+          .from('camp_assignments')
+          .select('instructor_id, deadline')
+          .eq('status', 'published')
+          .is('reminder_sent_at', null)
+          .not('email_sent_at', 'is', null)
+          .not('deadline', 'is', null)
+          .in('camp_session_id', enabledSessionIds)
+      : { data: [] };
+    const upcoming = new Map();
+    for (const r of pendingAll ?? []) {
+      const fireDate = addDaysISO(r.deadline, -3);
+      if (!upcoming.has(fireDate)) upcoming.set(fireDate, { camps: 0, instructors: new Set() });
+      const bucket = upcoming.get(fireDate);
+      bucket.camps += 1;
+      bucket.instructors.add(r.instructor_id);
+    }
+    const upcomingArr = Array.from(upcoming.entries())
+      .map(([fire_date, b]) => ({ fire_date, instructor_count: b.instructors.size, assignment_count: b.camps }))
+      .sort((a, b) => a.fire_date.localeCompare(b.fire_date));
+
     return json({
       dry_run,
       reminder_results: reminderResults,
       reminders_window: { from: reminderWindowStart, to: reminderWindowEnd },
+      upcoming: upcomingArr,
       expired_count: expired.length,
       expired_ids: dry_run ? expired.map((e) => e.id) : undefined,
       ran_at: new Date().toISOString(),

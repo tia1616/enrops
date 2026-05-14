@@ -2388,19 +2388,37 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
     const p = dialog.payload;
     const sent = p.reminder_results?.filter((r) => r.sent).length ?? 0;
     const wouldSend = p.reminder_results?.filter((r) => r.reason === "dry_run").length ?? 0;
+    const upcoming = p.upcoming ?? [];
+    const formatDate = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "long", day: "numeric" });
     return (
       <ModalShell onClose={onClose} title={p.dry_run ? "Reminders preview" : "Reminders sent"}>
         <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
           {p.dry_run ? (
             <>
-              <div><strong>{wouldSend}</strong> instructor{wouldSend === 1 ? "" : "s"} would get a reminder email.</div>
-              <div style={{ marginTop: 6 }}><strong>{p.expired_count}</strong> assignment{p.expired_count === 1 ? "" : "s"} would be flagged as past-deadline.</div>
+              <div><strong>Today:</strong> {wouldSend} reminder{wouldSend === 1 ? "" : "s"} would fire now, {p.expired_count} card{p.expired_count === 1 ? "" : "s"} would be flagged past-deadline.</div>
             </>
           ) : (
             <>
               <div><strong>{sent}</strong> reminder email{sent === 1 ? "" : "s"} delivered.</div>
               <div style={{ marginTop: 6 }}><strong>{p.expired_count}</strong> assignment{p.expired_count === 1 ? "" : "s"} flagged as past-deadline.</div>
             </>
+          )}
+          {upcoming.length > 0 && (
+            <div style={{ marginTop: 16, padding: 12, background: `${GOLD}1A`, border: `1px solid ${GOLD}66`, borderRadius: 6 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                Auto-scheduled
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 18, color: INK, fontSize: 13 }}>
+                {upcoming.map((u, i) => (
+                  <li key={i}>
+                    <strong>{formatDate(u.fire_date)}</strong> — {u.instructor_count} instructor{u.instructor_count === 1 ? "" : "s"} ({u.assignment_count} camp{u.assignment_count === 1 ? "" : "s"})
+                  </li>
+                ))}
+              </ul>
+              <div style={{ marginTop: 8, fontSize: 11, color: MUTED }}>
+                These fire automatically — you don't need to come back and click anything.
+              </div>
+            </div>
           )}
           {p.reminder_results && p.reminder_results.length > 0 && (
             <ul style={{ marginTop: 12, paddingLeft: 18, color: MUTED, fontSize: 12 }}>
