@@ -144,10 +144,13 @@ function deriveStatus(session, assignments) {
         rank,
         flags: a.flags ?? [],
         instructor_response_at: a.instructor_response_at ?? null,
+        flagged_reason: a.flagged_reason ?? null,
       };
     }
   }
   if (best.status === "change_requested") return "change_requested";
+  // Published rows past the deadline are auto-flagged by the expire pass.
+  if (best.flagged_reason) return "flagged";
   if (Array.isArray(best.flags) && best.flags.length > 0) return "flagged";
   // Instructor has actively accepted = confirmed + a response timestamp.
   if (best.status === "confirmed" && best.instructor_response_at) return "accepted";
@@ -271,6 +274,7 @@ export default function Schedule() {
   const [lastOp, setLastOp] = useState(null); // { type, ... } — supports a single-step undo
   const [candidatesFor, setCandidatesFor] = useState(null); // { session, currentAssignment | null }
   const [changeRequestFor, setChangeRequestFor] = useState(null); // { session, assignment }
+  const [recentlyUpdated, setRecentlyUpdated] = useState(() => new Set()); // assignment ids that flashed via realtime
 
   const dragStateRef = useRef(null);
 
@@ -302,7 +306,7 @@ export default function Schedule() {
         sessionIds.length
           ? supabase
               .from("camp_assignments")
-              .select("id, camp_session_id, status, role, change_request_message, distance_bonus_cents, instructor_response_at, instructor:instructors(id, first_name, last_name, email)")
+              .select("id, camp_session_id, status, role, change_request_message, distance_bonus_cents, instructor_response_at, flagged_reason, instructor:instructors(id, first_name, last_name, email)")
               .in("camp_session_id", sessionIds)
           : Promise.resolve({ data: [], error: null }),
         supabase
@@ -338,6 +342,7 @@ export default function Schedule() {
         change_request_message: a.change_request_message ?? null,
         distance_bonus_cents: a.distance_bonus_cents ?? null,
         instructor_response_at: a.instructor_response_at ?? null,
+        flagged_reason: a.flagged_reason ?? null,
         instructor_id: a.instructor?.id ?? null,
         instructor_first: a.instructor?.first_name ?? null,
         instructor_last: a.instructor?.last_name ?? null,
@@ -395,6 +400,22 @@ export default function Schedule() {
           // don't support IN-clauses, so we accept all and discard the rest).
           const row = payload.new ?? payload.old;
           if (!row?.camp_session_id || !sessionIds.includes(row.camp_session_id)) return;
+          // Flash the card for ~2s so the admin notices a fresh response.
+          if (row.id) {
+            setRecentlyUpdated((prev) => {
+              const next = new Set(prev);
+              next.add(row.id);
+              return next;
+            });
+            setTimeout(() => {
+              setRecentlyUpdated((prev) => {
+                if (!prev.has(row.id)) return prev;
+                const next = new Set(prev);
+                next.delete(row.id);
+                return next;
+              });
+            }, 2200);
+          }
           setState((s) => {
             if (s.status !== "ready") return s;
             if (payload.eventType === "DELETE") {
@@ -1126,6 +1147,7 @@ export default function Schedule() {
           week={weeks.find((w) => w.num === focusedWeek)}
           items={filteredEnrichedForWeek}
           cycleType={cycle.cycle_type}
+          recentlyUpdated={recentlyUpdated}
           getValidationFor={getValidationFor}
           dragStateRef={dragStateRef}
           onDrop={handleDrop}
@@ -1646,7 +1668,7 @@ function Legend() {
   );
 }
 
-function WeeklyGrid({ week, items, cycleType, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
+function WeeklyGrid({ week, items, cycleType, recentlyUpdated, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
   // Sort camps globally by (location, session-time) so they share a row across all
   // five day columns. Each row renders cells per weekday: an actual card when the
   // camp meets that day, an em-dash placeholder otherwise. A gold line separates
@@ -1723,6 +1745,7 @@ function WeeklyGrid({ week, items, cycleType, getValidationFor, dragStateRef, on
                       key={d}
                       item={e}
                       cardBg={colorByLocation.get(e.session.location_name) ?? LOCATION_PALETTE[0]}
+                      flash={e.activeAssignments.some((a) => recentlyUpdated?.has(a.id))}
                       getValidationFor={getValidationFor}
                       dragStateRef={dragStateRef}
                       onDrop={onDrop}
@@ -1752,16 +1775,21 @@ function WeeklyGrid({ week, items, cycleType, getValidationFor, dragStateRef, on
   );
 }
 
-function ProgramCard({ item, cardBg, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
+function ProgramCard({ item, cardBg, flash, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
   const { session, status, assignment, allAssignments, activeAssignments } = item;
   const [dropEffect, setDropEffect] = useState(null); // "ok" | "warn" | "block" | "self" | null
   const [hoverResult, setHoverResult] = useState(null); // full validation result during drag
   const isNeedsHire = status === "needs_hire";
   const isChangeRequested = status === "change_requested";
+  // Flagged-state can come from change_requested OR an auto-expire flagged_reason.
+  // For deadline-passed cards, route the click into the same review modal so admin
+  // can Reassign / Unassign / Reply.
+  const flaggedAssignment = activeAssignments.find((a) => a.flagged_reason) ?? null;
+  const isDeadlinePassed = status === "flagged" && !!flaggedAssignment && !isChangeRequested;
   // For change_requested cards, find the assignment that triggered it (status='change_requested')
   const changeReqAssignment = isChangeRequested
     ? activeAssignments.find((a) => a.status === "change_requested") ?? assignment
-    : null;
+    : isDeadlinePassed ? flaggedAssignment : null;
 
   // Lead + developing.
   const lead = activeAssignments.find((a) => a.role === "lead") ?? null;
@@ -1834,29 +1862,31 @@ function ProgramCard({ item, cardBg, getValidationFor, dragStateRef, onDrop, onN
       onDragLeave={onDragLeave}
       onDrop={onDropHandler}
       onClick={
-        isChangeRequested && onChangeRequestClick
+        (isChangeRequested || isDeadlinePassed) && onChangeRequestClick
           ? () => onChangeRequestClick(session, changeReqAssignment)
           : isNeedsHire && onNeedsHireClick
           ? () => onNeedsHireClick(session)
           : undefined
       }
-      role={isNeedsHire || isChangeRequested ? "button" : undefined}
-      tabIndex={isNeedsHire || isChangeRequested ? 0 : undefined}
+      role={isNeedsHire || isChangeRequested || isDeadlinePassed ? "button" : undefined}
+      tabIndex={isNeedsHire || isChangeRequested || isDeadlinePassed ? 0 : undefined}
       style={{
         position: "relative",
         background: bgColor,
-        border: `1px solid ${borderColor}`,
+        border: `1px solid ${flash ? GOLD : borderColor}`,
         borderLeft: `3px solid ${color}`,
         borderRadius: 6,
         padding: "10px 12px",
         display: "flex",
         flexDirection: "column",
         gap: 6,
-        cursor: (isNeedsHire || isChangeRequested) ? "pointer" : "default",
-        transition: "background 80ms ease, border-color 80ms ease",
+        cursor: (isNeedsHire || isChangeRequested || isDeadlinePassed) ? "pointer" : "default",
+        transition: "background 600ms ease, border-color 600ms ease, box-shadow 600ms ease",
+        boxShadow: flash ? `0 0 0 3px ${GOLD}55` : "none",
       }}
       title={
         isChangeRequested ? "Click to review the instructor's change request" :
+        isDeadlinePassed ? "Click to handle — instructor didn't respond by the deadline" :
         isNeedsHire ? "Click to see eligible instructors" :
         undefined
       }
@@ -2136,6 +2166,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
   const [replyError, setReplyError] = useState("");
   const [replySent, setReplySent] = useState(false);
   const firstName = assignment?.instructor_first ?? "Instructor";
+  const isDeadlinePassed = assignment?.flagged_reason === "deadline_passed";
 
   async function doUnassign() {
     setBusy(true);
@@ -2166,11 +2197,11 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
   }
 
   return (
-    <ModalShell onClose={onClose} title="Change request">
+    <ModalShell onClose={onClose} title={isDeadlinePassed ? "No response by deadline" : "Change request"}>
       <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
         <div>
           <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>
-            From {firstName} · Week {session.week_num}
+            {isDeadlinePassed ? `${firstName} didn't respond` : `From ${firstName}`} · Week {session.week_num}
           </div>
           <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginTop: 4 }}>
             {session.curriculum_name ?? "(unnamed)"}
@@ -2181,8 +2212,8 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
         </div>
 
         <div style={{
-          background: `${CHANGE_REQ}14`,
-          border: `1px solid ${CHANGE_REQ}66`,
+          background: isDeadlinePassed ? `${GOLD}1A` : `${CHANGE_REQ}14`,
+          border: `1px solid ${isDeadlinePassed ? GOLD : CHANGE_REQ}66`,
           borderRadius: 6,
           padding: 12,
           fontSize: 14,
@@ -2190,7 +2221,10 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
           lineHeight: 1.5,
           whiteSpace: "pre-wrap",
         }}>
-          {assignment?.change_request_message || <em style={{ color: MUTED }}>(no message)</em>}
+          {isDeadlinePassed
+            ? <span>No response received by the deadline. The offer is still in their inbox — but {firstName} hasn't tapped Accept or Request change. You can reach out, reassign someone else, or mark this slot as Needs hire.</span>
+            : assignment?.change_request_message || <em style={{ color: MUTED }}>(no message)</em>
+          }
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
