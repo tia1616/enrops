@@ -263,7 +263,7 @@ export default function Schedule() {
   const [selectedLocations, setSelectedLocations] = useState(() => new Set());
   const [selectedStatuses, setSelectedStatuses] = useState(() => new Set());
   const [saveError, setSaveError] = useState(null); // serious-error banner (DB failures only)
-  const [busy, setBusy] = useState(null); // "approving" | "sending" | "previewing" | null
+  const [busy, setBusy] = useState(null); // "approving" | "sending" | "previewing" | "rematching" | null
   const [offerDialog, setOfferDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
   const [previewData, setPreviewData] = useState(null); // { previews: [...] } from preview mode
   const [offerDeadline, setOfferDeadline] = useState(() => businessDaysFromToday(5));
@@ -374,6 +374,61 @@ export default function Schedule() {
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id]);
+
+  // Realtime: when an instructor accepts or requests a change in the portal, the
+  // camp_assignments row updates. Subscribe so the calendar reflects the change
+  // without a manual refresh. We merge the updated row in place rather than
+  // refetching the entire calendar.
+  useEffect(() => {
+    if (state.status !== "ready") return;
+    const sessionIds = state.sessions.map((s) => s.id);
+    if (sessionIds.length === 0) return;
+
+    const channel = supabase
+      .channel(`assignments-${state.cycle.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "camp_assignments" },
+        (payload) => {
+          // Filter client-side to rows in the active cycle (Realtime filters
+          // don't support IN-clauses, so we accept all and discard the rest).
+          const row = payload.new ?? payload.old;
+          if (!row?.camp_session_id || !sessionIds.includes(row.camp_session_id)) return;
+          setState((s) => {
+            if (s.status !== "ready") return s;
+            if (payload.eventType === "DELETE") {
+              return { ...s, assignments: s.assignments.filter((a) => a.id !== payload.old.id) };
+            }
+            const updated = {
+              id: payload.new.id,
+              camp_session_id: payload.new.camp_session_id,
+              status: payload.new.status,
+              role: payload.new.role,
+              change_request_message: payload.new.change_request_message ?? null,
+              distance_bonus_cents: payload.new.distance_bonus_cents ?? null,
+              instructor_response_at: payload.new.instructor_response_at ?? null,
+              instructor_id: payload.new.instructor_id,
+              // Realtime payloads don't include joined data — preserve our prior
+              // instructor name/email if we already have it, else they'll show up
+              // on the next full loadAll().
+              instructor_first: s.assignments.find((a) => a.id === payload.new.id)?.instructor_first ?? null,
+              instructor_last: s.assignments.find((a) => a.id === payload.new.id)?.instructor_last ?? null,
+              instructor_email: s.assignments.find((a) => a.id === payload.new.id)?.instructor_email ?? null,
+              flags: [],
+            };
+            const existingIdx = s.assignments.findIndex((a) => a.id === updated.id);
+            const nextAssignments = existingIdx >= 0
+              ? s.assignments.map((a, i) => (i === existingIdx ? { ...a, ...updated } : a))
+              : [...s.assignments, updated];
+            return { ...s, assignments: nextAssignments };
+          });
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.status === "ready" ? state.cycle?.id : null]);
 
   const enriched = useMemo(() => {
     if (state.status !== "ready") return null;
@@ -734,6 +789,38 @@ export default function Schedule() {
     return newInst.id;
   }
 
+  async function handleRerunAgent() {
+    if (state.status !== "ready") return;
+    if (state.cycle.status !== "collecting") return;
+    const ok = window.confirm(
+      "Re-run the matching agent for this cycle? This wipes existing proposed assignments and generates fresh ones from instructor surveys."
+    );
+    if (!ok) return;
+    setBusy("rematching");
+    setSaveError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("match-instructors", {
+        body: { cycle_id: state.cycle.id, dry_run: false },
+      });
+      if (error) {
+        let realMsg = error.message ?? "function error";
+        try {
+          const body = await error.context?.json?.();
+          if (body?.error) realMsg = body.error;
+        } catch {}
+        throw new Error(realMsg);
+      }
+      if (data?.error) throw new Error(data.error);
+      await loadAll();
+    } catch (err) {
+      console.error("Re-run agent failed:", err);
+      setSaveError(`Couldn't re-run the agent: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 8000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleApprove() {
     if (state.status !== "ready") return;
     setBusy("approving");
@@ -837,6 +924,31 @@ export default function Schedule() {
       console.error("Rollback failed:", err);
       setSaveError(`Couldn't roll back: ${err.message ?? "unknown error"}`);
       setTimeout(() => setSaveError(null), 6000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRunReminders(dryRun) {
+    if (state.status !== "ready") return;
+    setBusy("reminders");
+    setSaveError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("offer-reminders-cron", {
+        body: { dry_run: dryRun },
+      });
+      if (error) {
+        let realMsg = error.message ?? "function error";
+        try { const body = await error.context?.json?.(); if (body?.error) realMsg = body.error; } catch {}
+        throw new Error(realMsg);
+      }
+      if (data?.error) throw new Error(data.error);
+      await loadAll();
+      setOfferDialog({ mode: "result", payload: { kind: "reminders", dry_run: dryRun, ...data } });
+    } catch (err) {
+      console.error("Reminders failed:", err);
+      setSaveError(`Couldn't run reminders: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 8000);
     } finally {
       setBusy(null);
     }
@@ -955,9 +1067,12 @@ export default function Schedule() {
         busy={busy}
         canApprove={cycle.status !== "published"}
         canSend={cycle.status === "scheduling" || cycle.status === "published"}
+        canRematch={cycle.status === "collecting"}
         onApprove={handleApprove}
         onSendClick={() => setOfferDialog({ mode: "choose", payload: null })}
         onPreviewClick={handlePreviewOffers}
+        onRerunAgent={handleRerunAgent}
+        onRemindersClick={() => setOfferDialog({ mode: "reminders_choose", payload: null })}
       />
       {saveError && (
         <div style={{
@@ -1039,6 +1154,8 @@ export default function Schedule() {
           publishedCount={state.assignments?.filter((a) => a.status === "published").length ?? 0}
           onRollback={handleRollback}
           rollingBack={busy === "rolling_back"}
+          onRunReminders={handleRunReminders}
+          remindersBusy={busy === "reminders"}
         />
       )}
       {previewData && (
@@ -1094,7 +1211,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, onApprove, onSendClick, onPreviewClick }) {
+function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick }) {
   return (
     <header style={{
       background: "#fff",
@@ -1138,6 +1255,17 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
         )}
         <button
           type="button"
+          onClick={onRerunAgent}
+          disabled={!canRematch || busy === "rematching"}
+          title={canRematch
+            ? "Re-run the matching agent on this cycle's surveys to regenerate proposed assignments"
+            : "Re-running the matching agent isn't available once offers have been approved or sent — it only works on draft assignments before approval"}
+          style={btn("transparent", PLUM, true, !canRematch || busy === "rematching")}
+        >
+          {busy === "rematching" ? "Re-running…" : "Re-run agent"}
+        </button>
+        <button
+          type="button"
           onClick={onApprove}
           disabled={!canApprove || busy === "approving"}
           title={canApprove ? "Flip all proposed assignments to confirmed" : "Already approved"}
@@ -1162,6 +1290,15 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
           style={btn(PLUM, "#fff", false, !canSend || busy === "sending")}
         >
           Send offers
+        </button>
+        <button
+          type="button"
+          onClick={onRemindersClick}
+          disabled={busy === "reminders"}
+          title="Run reminder + deadline check (3 days before deadline → reminder; past deadline → flag for review)"
+          style={btn("transparent", PLUM, true, busy === "reminders")}
+        >
+          {busy === "reminders" ? "Working…" : "Reminders"}
         </button>
       </div>
     </header>
@@ -2073,7 +2210,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
   );
 }
 
-function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, publishedCount, onRollback, rollingBack }) {
+function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy }) {
   if (dialog.mode === "result" && dialog.payload?.kind === "approve") {
     return (
       <ModalShell onClose={onClose} title="Approved">
@@ -2123,6 +2260,67 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
                 {rollingBack ? "Resetting…" : `Reset ${publishedCount} already-sent ${publishedCount === 1 ? "offer" : "offers"}`}
               </button>
             </div>
+          )}
+        </div>
+        <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>
+        </div>
+      </ModalShell>
+    );
+  }
+
+  if (dialog.mode === "reminders_choose") {
+    return (
+      <ModalShell onClose={onClose} title="Reminders + deadline check">
+        <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ color: MUTED }}>
+            Runs two passes against your active cycle:
+            <br />• Sends a reminder email to any instructor whose deadline is 2–4 days away and who hasn't responded yet
+            <br />• Flags anyone whose deadline has already passed (the card turns Flagged in your calendar — no email)
+          </div>
+          <DialogChoice
+            title="Preview (no emails, no flags)"
+            subtitle="Shows you which instructors would get a reminder and how many camps would be flagged. Nothing changes."
+            disabled={remindersBusy}
+            onClick={() => onRunReminders(true)}
+          />
+          <DialogChoice
+            title="Run it for real"
+            subtitle="Sends reminder emails to non-responders and flags expired offers in your calendar."
+            disabled={remindersBusy}
+            onClick={() => onRunReminders(false)}
+            tone="warn"
+          />
+          {remindersBusy && <div style={{ color: MUTED, fontSize: 12 }}>Working…</div>}
+        </div>
+      </ModalShell>
+    );
+  }
+
+  if (dialog.mode === "result" && dialog.payload?.kind === "reminders") {
+    const p = dialog.payload;
+    const sent = p.reminder_results?.filter((r) => r.sent).length ?? 0;
+    const wouldSend = p.reminder_results?.filter((r) => r.reason === "dry_run").length ?? 0;
+    return (
+      <ModalShell onClose={onClose} title={p.dry_run ? "Reminders preview" : "Reminders sent"}>
+        <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
+          {p.dry_run ? (
+            <>
+              <div><strong>{wouldSend}</strong> instructor{wouldSend === 1 ? "" : "s"} would get a reminder email.</div>
+              <div style={{ marginTop: 6 }}><strong>{p.expired_count}</strong> assignment{p.expired_count === 1 ? "" : "s"} would be flagged as past-deadline.</div>
+            </>
+          ) : (
+            <>
+              <div><strong>{sent}</strong> reminder email{sent === 1 ? "" : "s"} delivered.</div>
+              <div style={{ marginTop: 6 }}><strong>{p.expired_count}</strong> assignment{p.expired_count === 1 ? "" : "s"} flagged as past-deadline.</div>
+            </>
+          )}
+          {p.reminder_results && p.reminder_results.length > 0 && (
+            <ul style={{ marginTop: 12, paddingLeft: 18, color: MUTED, fontSize: 12 }}>
+              {p.reminder_results.map((r, i) => (
+                <li key={i}>{r.email ?? r.instructor_id.slice(0, 8)} — {r.sent ? "sent" : r.reason}</li>
+              ))}
+            </ul>
           )}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
