@@ -311,6 +311,11 @@ function ProgramRow({ program: p, e, showDay = false }) {
 
 function formatTime(t) {
   if (!t) return "";
+  // start_time is stored as text — may already be display-formatted ("2:35 PM"
+  // / "3:00 PM") or raw 24-hour ("14:35" / "15:00"). Handle both.
+  if (/[ap]\s?m/i.test(t)) {
+    return t.toLowerCase().replace(/\s+/g, "");
+  }
   const [h, m] = t.split(":").map(Number);
   if (Number.isNaN(h)) return t;
   const hr12 = ((h + 11) % 12) + 1;
