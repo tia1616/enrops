@@ -62,7 +62,7 @@ serve(async (req: Request) => {
         parent_first_name: 'Test',
         student_first_name: 'Student',
         school_name: 'Test School',
-        class_name: 'Test Class',
+        curriculum_name: 'Test Class',
         day_of_week: 'Tuesday',
         first_session_date: 'September 17',
         start_time: '3:30 PM',

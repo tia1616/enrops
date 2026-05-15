@@ -275,7 +275,7 @@ export default function AutomationsTab({ org }) {
                         Available: {"{"}{"{"}<span style={{ color: "#0C447C" }}>parent_first_name</span>{"}"}{"}"}
                         {" "}{"{"}{"{"}<span style={{ color: "#0C447C" }}>student_first_name</span>{"}"}{"}"}
                         {" "}{"{"}{"{"}<span style={{ color: "#4A1B0C" }}>school_name</span>{"}"}{"}"}
-                        {" "}{"{"}{"{"}<span style={{ color: "#4A1B0C" }}>class_name</span>{"}"}{"}"}
+                        {" "}{"{"}{"{"}<span style={{ color: "#4A1B0C" }}>curriculum_name</span>{"}"}{"}"}
                         {" "}{"{"}{"{"}<span style={{ color: "#4A1B0C" }}>day_of_week</span>{"}"}{"}"}
                         {" "}{"{"}{"{"}<span style={{ color: "#4A1B0C" }}>start_time</span>{"}"}{"}"}
                         {" "}{"{"}{"{"}<span style={{ color: "#4A1B0C" }}>instructor_first_name</span>{"}"}{"}"}

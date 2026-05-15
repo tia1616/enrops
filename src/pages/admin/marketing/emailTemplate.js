@@ -104,7 +104,7 @@ export const PREVIEW_SAMPLE_DATA = {
   parent_first_name: "Maria",
   student_first_name: "Sage",
   school_name: "Cannady Elementary",
-  class_name: "Minecraft Coders",
+  curriculum_name: "Minecraft Coders",
   first_session_date: "September 17",
   day_of_week: "Tuesday",
   start_time: "3:30 PM",
