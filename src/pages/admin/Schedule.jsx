@@ -198,6 +198,18 @@ function sessionTimeOverlap(a, b) {
   return a === b;
 }
 
+// Whether an instructor's surveyed session_types covers a target camp's session_type.
+// "full_day" availability implies they can do morning OR afternoon halves too — they
+// said they're free all day, so we can still offer them a half. (Not the other way:
+// a morning-only instructor can't cover a full_day camp.) Admin gets a soft warning
+// at drop time so they know they're filling a half slot for someone reserved for full.
+function instructorCoversSessionType(sessionTypes, sessionType) {
+  if (!sessionType) return true;
+  if (sessionTypes.includes(sessionType)) return true;
+  if (sessionTypes.includes("full_day") && (sessionType === "morning" || sessionType === "afternoon")) return true;
+  return false;
+}
+
 // validateDrop returns { ok: boolean, hardBlocks: [msg], warnings: [msg] }.
 // `srcAssignmentId` is excluded from double-booking checks because it's the row being moved.
 function validateDrop({
@@ -218,7 +230,7 @@ function validateDrop({
   if (!availableWeeks.includes(targetSession.week_num)) {
     hardBlocks.push(`${firstName} isn't available in week ${targetSession.week_num}.`);
   }
-  if (targetSession.session_type && !sessionTypes.includes(targetSession.session_type)) {
+  if (!instructorCoversSessionType(sessionTypes, targetSession.session_type)) {
     hardBlocks.push(`${firstName} doesn't work ${titleCase(targetSession.session_type)} sessions.`);
   }
   // Double-booking — class_days-aware AND session-time-aware (morning+afternoon don't conflict).
@@ -2987,7 +2999,7 @@ function CandidatePicker({
       const sessionTypes = avail.session_types ?? [];
       const availableWeeks = avail.available_weeks ?? [];
       if (!availableWeeks.includes(session.week_num)) continue;
-      if (session.session_type && !sessionTypes.includes(session.session_type)) continue;
+      if (!instructorCoversSessionType(sessionTypes, session.session_type)) continue;
       const conflict = allAssignments.find((a) =>
         a.status !== "withdrawn" &&
         a.id !== currentAssignment?.id &&
