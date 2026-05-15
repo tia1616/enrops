@@ -26,7 +26,7 @@ const NAV = [
     group: "programs",
     children: [
       { to: "/admin/curricula", label: "Curricula" },
-      { to: "/admin/programs", label: "Scheduled programs", soon: true },
+      { to: "/admin/programs", label: "Scheduled programs" },
     ],
   },
   { to: "/admin/contacts", label: "Contacts", soon: true },

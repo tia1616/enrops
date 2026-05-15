@@ -15,6 +15,7 @@ import MarketingShell from './pages/admin/marketing/MarketingShell.jsx';
 import Schedule from './pages/admin/Schedule.jsx';
 import ExtractionTest from './pages/admin/dev/ExtractionTest.jsx';
 import CurriculaList from './pages/admin/curricula/CurriculaList.jsx';
+import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
 import InstructorPortal from './pages/j2s/InstructorPortal.jsx';
 import { CartProvider } from './context/CartContext.jsx';
 
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="marketing" element={<MarketingShell />} />
         <Route path="schedule" element={<Schedule />} />
         <Route path="curricula" element={<CurriculaList />} />
+        <Route path="programs" element={<ProgramsCalendar />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
