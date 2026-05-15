@@ -605,14 +605,14 @@ export default function Schedule() {
       const lead = pending.length === 1
         ? `${who} got assigned to ${what} but hasn't been emailed yet.`
         : `${pending.length} new assignments haven't been emailed yet (${distinctInstructors} instructor${distinctInstructors === 1 ? "" : "s"}).`;
-      const sending = busy === "patching";
-      const label = sending
-        ? "Sending…"
-        : (pending.length === 1 ? `Send ${who} the offer` : `Send ${distinctInstructors} email${distinctInstructors === 1 ? "" : "s"}`);
+      const loading = busy === "patching";
+      const label = loading
+        ? "Loading preview…"
+        : (pending.length === 1 ? `Preview the offer for ${who}` : `Preview ${distinctInstructors} pending email${distinctInstructors === 1 ? "" : "s"}`);
       tips.push({
         key: `${cycleId}.pendingPatches`,
-        message: `${lead} Want to send the offer${pending.length === 1 ? "" : "s"} now?`,
-        primary: { label, disabled: sending, onClick: () => handleSendPatchOffers(pending.map((a) => a.id)) },
+        message: `${lead} Want to review what would be sent?`,
+        primary: { label, disabled: loading, onClick: () => handlePreviewPatchOffers(pending.map((a) => a.id)) },
       });
     }
 
@@ -1148,17 +1148,44 @@ export default function Schedule() {
     }
   }
 
-  // One-click send for assignments that were added AFTER bulk send-offers ran
-  // (the Skyler case). Hits send-patch-offer edge function, which renders a
-  // "You have another camp to accept" email per instructor, flips status→published,
-  // stamps email_sent_at + deadline, and audit-logs the send.
-  async function handleSendPatchOffers(assignmentIds) {
+  // Patch-offer flow: preview first, then send on confirm. Sends a
+  // "You have another camp to accept" email per instructor for assignments
+  // added AFTER bulk send-offers ran (the Skyler case).
+  async function handlePreviewPatchOffers(assignmentIds) {
     if (!assignmentIds || assignmentIds.length === 0) return;
     setBusy("patching");
     setSaveError(null);
     try {
       const { data, error } = await supabase.functions.invoke("send-patch-offer", {
-        body: { assignment_ids: assignmentIds },
+        body: { assignment_ids: assignmentIds, mode: "preview" },
+      });
+      if (error) {
+        let real = error.message ?? "preview failed";
+        try { const b = await error.context?.json?.(); if (b?.error) real = b.error; } catch {}
+        throw new Error(real);
+      }
+      if (data?.error) throw new Error(data.error);
+      setPreviewData({
+        preview: data?.preview ?? [],
+        patchAssignmentIds: assignmentIds,
+      });
+    } catch (err) {
+      console.error("send-patch-offer preview failed:", err);
+      setSaveError(`Couldn't load preview: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 9000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleConfirmPatchSend() {
+    const ids = previewData?.patchAssignmentIds;
+    if (!ids || ids.length === 0) return;
+    setBusy("patching");
+    setSaveError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-patch-offer", {
+        body: { assignment_ids: ids, mode: "send" },
       });
       if (error) {
         let real = error.message ?? "send failed";
@@ -1166,9 +1193,10 @@ export default function Schedule() {
         throw new Error(real);
       }
       if (data?.error) throw new Error(data.error);
+      setPreviewData(null);
       await loadAll();
     } catch (err) {
-      console.error("send-patch-offer failed:", err);
+      console.error("send-patch-offer send failed:", err);
       setSaveError(`Couldn't send: ${err.message ?? "unknown error"}`);
       setTimeout(() => setSaveError(null), 9000);
     } finally {
@@ -1392,6 +1420,9 @@ export default function Schedule() {
         <PreviewViewer
           data={previewData}
           onClose={() => setPreviewData(null)}
+          onSend={previewData.patchAssignmentIds ? handleConfirmPatchSend : undefined}
+          sendLabel={previewData.patchAssignmentIds ? (previewData.preview?.length === 1 ? "Send this offer" : `Send ${previewData.preview?.length ?? 0} offers`) : undefined}
+          sending={busy === "patching"}
         />
       )}
       {changeRequestFor && (
@@ -2852,7 +2883,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
   );
 }
 
-function PreviewViewer({ data, onClose }) {
+function PreviewViewer({ data, onClose, onSend, sendLabel, sending }) {
   const previews = data?.preview ?? [];
   const [idx, setIdx] = useState(0);
   if (previews.length === 0) {
@@ -2910,7 +2941,13 @@ function PreviewViewer({ data, onClose }) {
           <div style={{ display: "flex", gap: 6 }}>
             <button type="button" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} style={btn("transparent", PLUM, true, idx === 0)}>‹ Prev</button>
             <button type="button" onClick={() => setIdx((i) => Math.min(previews.length - 1, i + 1))} disabled={idx === previews.length - 1} style={btn("transparent", PLUM, true, idx === previews.length - 1)}>Next ›</button>
-            <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>
+            <button type="button" onClick={onClose} disabled={sending} style={btn("transparent", PLUM, true, sending)}>Cancel</button>
+            {onSend && (
+              <button type="button" onClick={onSend} disabled={sending} style={btn(PLUM, "#fff", false, sending)}>
+                {sending ? "Sending…" : (sendLabel ?? "Send")}
+              </button>
+            )}
+            {!onSend && <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>}
           </div>
         </div>
         <div style={{ flex: 1, overflow: "hidden", background: CHALK, padding: 0 }}>

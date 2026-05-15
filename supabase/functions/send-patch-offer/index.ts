@@ -3,10 +3,13 @@
 // drops an instructor into a previously-open slot, and that one row needs its own
 // email rather than another bulk send).
 //
-// Input: { assignment_ids: string[] }
+// Input: { assignment_ids: string[], mode?: 'preview' | 'send' }
+// - mode 'preview' (or omitted-then-explicit): renders the email per instructor
+//   and returns { preview: [{ instructor_id, to, subject, html, text }] } without
+//   touching the DB or sending. Used by the Hat tip's preview-first flow.
+// - mode 'send': renders + sends via Resend + flips status→published, stamps
+//   published_at, email_sent_at, and default deadline (5 business days) if none.
 // - All ids must belong to the same cycle.
-// - For each id: flips status→published, sets published_at, email_sent_at, and a
-//   default deadline (5 business days from today) if none exists.
 // - Groups by instructor: if Skyler has 2 pending rows, she gets ONE email listing
 //   both, not two emails.
 //
@@ -110,6 +113,7 @@ serve(async (req: Request) => {
   try {
     const body = await req.json();
     const assignmentIds: string[] | undefined = body.assignment_ids;
+    const mode: 'preview' | 'send' = body.mode === 'preview' ? 'preview' : 'send';
     if (!Array.isArray(assignmentIds) || assignmentIds.length === 0) {
       return json({ error: 'assignment_ids is required (non-empty array)' }, 400);
     }
@@ -207,6 +211,7 @@ serve(async (req: Request) => {
 
     const sent: string[] = [];
     const failed: Array<{ instructor_id: string; reason: string }> = [];
+    const previews: Array<{ instructor_id: string; to: string; subject: string; html: string; text: string }> = [];
 
     for (const [instructorId, theirAssignments] of byInstructor) {
       const instructor = instructorById.get(instructorId);
@@ -230,6 +235,10 @@ serve(async (req: Request) => {
       const portalUrl = `https://enrops.com/${org.slug ?? 'j2s'}/instructor`;
       const html = renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline });
       const text = renderPatchText({ cycle, org, instructor, camps, portalUrl, deadline });
+
+      previews.push({ instructor_id: instructorId, to: instructor.email!, subject, html, text });
+
+      if (mode === 'preview') continue;
 
       try {
         const fromName = branding.email_from_name ?? org.name;
@@ -293,7 +302,13 @@ serve(async (req: Request) => {
       }
     }
 
-    return json({ sent: sent.length, failed, instructor_count: byInstructor.size });
+    return json({
+      mode,
+      sent: sent.length,
+      failed,
+      instructor_count: byInstructor.size,
+      preview: mode === 'preview' ? previews : undefined,
+    });
   } catch (err: any) {
     console.error('send-patch-offer fatal:', err);
     return json({ error: err.message ?? String(err) }, 500);
