@@ -104,7 +104,9 @@ export default function ProgramsCalendar() {
       pending += e.pending;
       capacity += (p.max_capacity ?? 0);
     }
-    return { paid, unpaid, pending, capacity, programCount: programs.length };
+    // "Enrolled" = seats committed (paid OR confirmed-unpaid, e.g. VIP on installments).
+    // Pending = incomplete checkouts; not counted as seats held.
+    return { paid, unpaid, pending, capacity, programCount: programs.length, enrolled: paid + unpaid };
   }, [programs, enrollmentByProgram]);
 
   return (
@@ -130,8 +132,15 @@ export default function ProgramsCalendar() {
       {!loading && !error && programs.length > 0 && (
         <div style={summaryBar}>
           <div><strong>{totals.programCount}</strong> programs</div>
-          <div><strong>{totals.paid}</strong> paid <span style={{ color: MUTED }}>/ {totals.capacity} seats</span></div>
-          <div style={{ color: MUTED }}>+{totals.unpaid} confirmed unpaid · +{totals.pending} pending</div>
+          <div>
+            <strong>{totals.enrolled}</strong> enrolled <span style={{ color: MUTED }}>/ {totals.capacity} seats</span>
+            {totals.enrolled > 0 && (
+              <span style={{ color: MUTED, fontSize: 12, marginLeft: 8 }}>
+                ({totals.paid} paid{totals.unpaid > 0 ? ` · ${totals.unpaid} on installments` : ""})
+              </span>
+            )}
+          </div>
+          {totals.pending > 0 && <div style={{ color: MUTED }}>+{totals.pending} pending</div>}
         </div>
       )}
 
@@ -214,10 +223,17 @@ function BySchoolView({ programs, enrollment }) {
 
 function ProgramCard({ program: p, e, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
+  const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
-  const pct = capacity > 0 ? Math.min(1, enr.paid / capacity) : 0;
-  const isFull = capacity > 0 && enr.paid >= capacity;
+  const pct = capacity > 0 ? Math.min(1, enrolled / capacity) : 0;
+  const isFull = capacity > 0 && enrolled >= capacity;
   const fillColor = isFull ? PLUM : pct >= 0.7 ? GOLD : "#a8c47f";
+
+  // Build the small breakdown line: "4 paid · 2 on installments" / "+1 pending" handled separately
+  const breakdownParts = [];
+  if (enr.paid > 0) breakdownParts.push(`${enr.paid} paid`);
+  if (enr.unpaid > 0) breakdownParts.push(`${enr.unpaid} on installments`);
+  const breakdown = breakdownParts.join(" · ");
 
   return (
     <div style={cardStyle}>
@@ -235,16 +251,15 @@ function ProgramCard({ program: p, e, showDay = false }) {
       <div style={{ marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
           <div style={{ fontSize: 13, color: INK, fontWeight: 600 }}>
-            {enr.paid}<span style={{ color: MUTED, fontWeight: 400 }}>{capacity > 0 ? ` / ${capacity}` : ""} paid</span>
+            {enrolled}<span style={{ color: MUTED, fontWeight: 400 }}>{capacity > 0 ? ` / ${capacity}` : ""} enrolled</span>
           </div>
-          {(enr.unpaid > 0 || enr.pending > 0) && (
-            <div style={{ fontSize: 11, color: MUTED }}>
-              {enr.unpaid > 0 ? `+${enr.unpaid} unpaid` : ""}
-              {enr.unpaid > 0 && enr.pending > 0 ? " · " : ""}
-              {enr.pending > 0 ? `+${enr.pending} pending` : ""}
-            </div>
+          {enr.pending > 0 && (
+            <div style={{ fontSize: 11, color: MUTED }}>+{enr.pending} pending</div>
           )}
         </div>
+        {breakdown && (
+          <div style={{ fontSize: 11, color: MUTED, marginBottom: 6 }}>{breakdown}</div>
+        )}
         <div style={{ height: 4, background: "#f0eee5", borderRadius: 2, overflow: "hidden" }}>
           <div style={{ width: `${pct * 100}%`, height: "100%", background: fillColor, transition: "width 0.3s" }} />
         </div>
