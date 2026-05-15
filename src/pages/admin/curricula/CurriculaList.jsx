@@ -34,7 +34,7 @@ export default function CurriculaList() {
       setLoading(true);
       const { data, error: qErr } = await supabase
         .from("curricula")
-        .select("id, name, age_min, age_max, session_count, status, updated_at, curriculum_to_locations(id)")
+        .select("id, name, age_range_min, age_range_max, grade_min, grade_max, format, session_count, status, updated_at")
         .eq("organization_id", org.id)
         .order("updated_at", { ascending: false });
       if (!mounted) return;
@@ -62,7 +62,7 @@ export default function CurriculaList() {
             Your library of curricula. Add a new one, then schedule it into a term when you're ready.
           </div>
         </div>
-        <Link to="/admin/curricula/new" style={primaryBtn}>+ New curriculum</Link>
+        <span style={{ ...primaryBtn, background: "#c8c4b7", cursor: "default" }} title="Onboarding flow ships in Chunk 2 of the new spec">+ New curriculum</span>
       </div>
 
       {loading && <div style={{ color: MUTED, padding: 12 }}>Loading…</div>}
@@ -73,10 +73,9 @@ export default function CurriculaList() {
       {!loading && !error && curricula.length === 0 && (
         <div style={{ ...emptyState }}>
           <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>No curricula yet.</div>
-          <div style={{ color: MUTED, fontSize: 14, marginBottom: 14 }}>
-            Add your first one — drop in your curriculum doc and Enrops will pull out the details for you.
+          <div style={{ color: MUTED, fontSize: 14 }}>
+            The upload-first onboarding flow is being rebuilt as part of Chunk 2. Come back after that ships and you'll be able to drop in a curriculum doc.
           </div>
-          <Link to="/admin/curricula/new" style={primaryBtn}>+ New curriculum</Link>
         </div>
       )}
 
@@ -97,13 +96,14 @@ export default function CurriculaList() {
 }
 
 function CurriculumCard({ curriculum: c }) {
-  const ageLabel = c.age_min != null && c.age_max != null
-    ? `Ages ${c.age_min}–${c.age_max}`
-    : c.age_min != null ? `Ages ${c.age_min}+`
-    : "Age range not set";
+  // Camp curricula use ages; afterschool uses grades. Show whichever is populated.
+  const ageLabel = c.age_range_min != null && c.age_range_max != null
+    ? `Ages ${c.age_range_min}–${c.age_range_max}`
+    : c.grade_min != null && c.grade_max != null
+    ? `Grades ${gradeLabel(c.grade_min)}–${gradeLabel(c.grade_max)}`
+    : "Age/grade not set";
   const sessionsLabel = c.session_count ? `${c.session_count} session${c.session_count === 1 ? "" : "s"}` : "Sessions not set";
-  const locationCount = c.curriculum_to_locations?.length ?? 0;
-  const locationLabel = locationCount === 0 ? "No locations" : `${locationCount} location${locationCount === 1 ? "" : "s"}`;
+  const formatLabel = c.format === "summer_camp" ? "Summer camp" : c.format === "afterschool" ? "Afterschool" : c.format ? "Other" : "Format not set";
 
   const cta = ctaForStatus(c);
 
@@ -116,7 +116,7 @@ function CurriculumCard({ curriculum: c }) {
       <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
         {ageLabel}<br />
         {sessionsLabel}<br />
-        {locationLabel}
+        {formatLabel}
       </div>
       <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
         {cta.map((item, i) => (
@@ -127,10 +127,16 @@ function CurriculumCard({ curriculum: c }) {
   );
 }
 
+function gradeLabel(n) {
+  if (n === 0) return "K";
+  if (n < 0) return `Pre-K${n < -1 ? n + 1 : ""}`;
+  return String(n);
+}
+
 function ctaForStatus(c) {
   switch (c.status) {
     case "draft":
-      return [{ to: `/admin/curricula/new?id=${c.id}`, label: "Add curriculum docs →", primary: true }];
+      return [{ to: `/admin/curricula/${c.id}/extracting`, label: "Resume extraction →", primary: true }];
     case "extracted":
       return [{ to: `/admin/curricula/${c.id}/review`, label: "Review and publish →", primary: true }];
     case "published":
