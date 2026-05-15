@@ -2273,8 +2273,10 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
     if (onClick) onClick();
   }
 
-  const tentative = !!assignment.instructor_needs_confirmation;
   const accepted = assignment.status === "confirmed" && !!assignment.instructor_response_at;
+  // Survey-level "maybe" flag — only relevant before the instructor explicitly accepts the offer.
+  // Once accepted, the survey uncertainty is moot, so we drop the ? badge.
+  const tentative = !!assignment.instructor_needs_confirmation && !accepted;
   const baseTitle = draggable ? "Click to reassign · drag to move" : "Click to reassign";
   const tentativeTitle = tentative
     ? `Tentative — survey unconfirmed${assignment.instructor_notes ? `: "${assignment.instructor_notes}"` : ""}`
