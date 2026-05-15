@@ -79,7 +79,7 @@ export default function ExtractionTest() {
       if (upErr) throw new Error(`Upload failed: ${upErr.message}`);
 
       // Fetch SSE stream
-      const resp = await fetch(`${API_BASE}/extract-program-details`, {
+      const resp = await fetch(`${API_BASE}/extract-curriculum-details`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

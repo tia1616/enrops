@@ -1,7 +1,8 @@
-// extract-program-details
-// Reads a curriculum document from the `program-documents` Storage bucket,
-// parses it to plain text, and asks Claude to extract structured program data
-// per the versioned prompt in prompts.ts.
+// extract-curriculum-details
+// Reads a curriculum document from the `program-documents` Storage bucket
+// (will move to `curriculum-documents` in the next data-model commit),
+// parses it to plain text, and asks Claude to extract structured curriculum
+// data per the versioned prompt in prompts.ts.
 //
 // Response is Server-Sent Events. Event types:
 //   - status: { message } — human-readable progress
@@ -153,9 +154,9 @@ serve(async (req) => {
                 firstChunk = false;
               }
               buffer += event.delta.text;
-              milestone("short_description", "Writing a parent-friendly description...");
-              milestone("skills", "Finding the skills kids will practice...");
-              milestone("sessions", "Listing out each session...");
+              milestone("short_description", "Drafting a parent description...");
+              milestone("skills_overall", "Listing the skills kids will practice...");
+              milestone("sessions", "Writing recap templates for each session...");
             }
           }
 
