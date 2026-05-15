@@ -3,8 +3,8 @@
 // All admin pages render inside <Outlet />. Enrops chrome (Plum/Gold/Chalk).
 // Multi-tenant: never hardcodes J2S. Reads org from logged-in user's org_members row.
 
-import { useEffect, useState } from "react";
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 // Enrops brand tokens
@@ -15,10 +15,20 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 
+// Top-level nav. Items with `children` render as expandable groups (the parent
+// label is not itself a route — clicking toggles the group; child routes do
+// the navigating). A group auto-expands when any of its children is active.
 const NAV = [
   { to: "/admin", label: "Overview", end: true },
   { to: "/admin/marketing", label: "Marketing" },
-  { to: "/admin/curricula", label: "Curricula" },
+  {
+    label: "Programs",
+    group: "programs",
+    children: [
+      { to: "/admin/curricula", label: "Curricula" },
+      { to: "/admin/programs", label: "Scheduled programs", soon: true },
+    ],
+  },
   { to: "/admin/contacts", label: "Contacts", soon: true },
   { to: "/admin/instructors", label: "Instructors", soon: true },
   { to: "/admin/schedule", label: "Schedule" },
@@ -28,11 +38,32 @@ const NAV = [
 
 export default function AdminLayout() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [authState, setAuthState] = useState("loading"); // loading | unauthorized | ready
   const [user, setUser] = useState(null);
   const [orgMember, setOrgMember] = useState(null);
   const [org, setOrg] = useState(null);
   const [debugInfo, setDebugInfo] = useState(null);
+  const [openGroups, setOpenGroups] = useState(() => new Set());
+
+  // Groups whose child route is currently active are forced open regardless of toggle state.
+  const activeGroupKeys = useMemo(() => {
+    const active = new Set();
+    for (const item of NAV) {
+      if (item.children && item.children.some((c) => location.pathname.startsWith(c.to))) {
+        active.add(item.group);
+      }
+    }
+    return active;
+  }, [location.pathname]);
+
+  function toggleGroup(key) {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -151,51 +182,102 @@ export default function AdminLayout() {
           </div>
 
           <nav style={{ padding: "12px 8px", flex: 1 }}>
-            {NAV.map((item) => item.external ? (
-              <a
-                key={item.to}
-                href={item.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "9px 12px", margin: "1px 0", borderRadius: 6,
-                  fontSize: 14, fontWeight: 500, color: INK,
-                  background: "transparent", textDecoration: "none",
-                }}
-              >
-                <span>{item.label}</span>
-                <span style={{ fontSize: 10, color: MUTED }}>↗</span>
-              </a>
-            ) : (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                style={({ isActive }) => ({
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "9px 12px",
-                  margin: "1px 0",
-                  borderRadius: 6,
-                  fontSize: 14,
-                  fontWeight: isActive ? 600 : 500,
-                  color: isActive ? PLUM : (item.soon ? MUTED : INK),
-                  background: isActive ? `${GOLD}22` : "transparent",
-                  textDecoration: "none",
-                  cursor: item.soon ? "default" : "pointer",
-                  pointerEvents: item.soon ? "none" : "auto",
-                })}
-              >
-                <span>{item.label}</span>
-                {item.soon && (
-                  <span style={{ fontSize: 10, color: MUTED, fontWeight: 500, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                    soon
-                  </span>
-                )}
-              </NavLink>
-            ))}
+            {NAV.map((item) => {
+              if (item.children) {
+                const isOpen = openGroups.has(item.group) || activeGroupKeys.has(item.group);
+                return (
+                  <div key={item.group}>
+                    <button
+                      onClick={() => toggleGroup(item.group)}
+                      style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        width: "100%", padding: "9px 12px", margin: "1px 0", borderRadius: 6,
+                        fontSize: 14, fontWeight: 500, color: INK,
+                        background: "transparent", border: "none", cursor: "pointer",
+                        fontFamily: "inherit", textAlign: "left",
+                      }}
+                    >
+                      <span>{item.label}</span>
+                      <span style={{ fontSize: 10, color: MUTED, transition: "transform 0.15s", transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▸</span>
+                    </button>
+                    {isOpen && item.children.map((child) => (
+                      <NavLink
+                        key={child.to}
+                        to={child.to}
+                        end={child.end}
+                        style={({ isActive }) => ({
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "7px 12px 7px 26px",
+                          margin: "1px 0",
+                          borderRadius: 6,
+                          fontSize: 13,
+                          fontWeight: isActive ? 600 : 500,
+                          color: isActive ? PLUM : (child.soon ? MUTED : INK),
+                          background: isActive ? `${GOLD}22` : "transparent",
+                          textDecoration: "none",
+                          cursor: child.soon ? "default" : "pointer",
+                          pointerEvents: child.soon ? "none" : "auto",
+                        })}
+                      >
+                        <span>{child.label}</span>
+                        {child.soon && (
+                          <span style={{ fontSize: 10, color: MUTED, fontWeight: 500, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                            soon
+                          </span>
+                        )}
+                      </NavLink>
+                    ))}
+                  </div>
+                );
+              }
+              return item.external ? (
+                <a
+                  key={item.to}
+                  href={item.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "9px 12px", margin: "1px 0", borderRadius: 6,
+                    fontSize: 14, fontWeight: 500, color: INK,
+                    background: "transparent", textDecoration: "none",
+                  }}
+                >
+                  <span>{item.label}</span>
+                  <span style={{ fontSize: 10, color: MUTED }}>↗</span>
+                </a>
+              ) : (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  style={({ isActive }) => ({
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "9px 12px",
+                    margin: "1px 0",
+                    borderRadius: 6,
+                    fontSize: 14,
+                    fontWeight: isActive ? 600 : 500,
+                    color: isActive ? PLUM : (item.soon ? MUTED : INK),
+                    background: isActive ? `${GOLD}22` : "transparent",
+                    textDecoration: "none",
+                    cursor: item.soon ? "default" : "pointer",
+                    pointerEvents: item.soon ? "none" : "auto",
+                  })}
+                >
+                  <span>{item.label}</span>
+                  {item.soon && (
+                    <span style={{ fontSize: 10, color: MUTED, fontWeight: 500, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                      soon
+                    </span>
+                  )}
+                </NavLink>
+              );
+            })}
           </nav>
 
           <div style={{ padding: "12px 20px", borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED }}>
