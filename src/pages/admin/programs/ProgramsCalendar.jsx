@@ -175,13 +175,25 @@ function CalendarView({ programs, enrollment }) {
   }, [programs]);
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-      {DAYS_OF_WEEK.filter((d) => byDay[d].length > 0).map((day) => (
-        <div key={day} style={dayColumn}>
-          <div style={dayHeader}>{DAY_LABELS[day]} <span style={{ color: MUTED, fontWeight: 400, fontSize: 12 }}>· {byDay[day].length}</span></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {byDay[day].map((p) => <ProgramCard key={p.id} program={p} e={enrollment[p.id]} />)}
+    <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8 }}>
+      {DAYS_OF_WEEK.filter((d) => byDay[d].length > 0).map((day, dayIdx, visibleDays) => (
+        <div key={day}>
+          <div style={{
+            padding: "10px 16px 8px",
+            background: "#fafaf5",
+            borderTop: dayIdx === 0 ? "none" : `1px solid ${RULE}`,
+            borderBottom: `1px solid ${RULE}`,
+            fontSize: 13, fontWeight: 700, color: PLUM,
+            textTransform: "uppercase", letterSpacing: 0.5,
+            display: "flex", alignItems: "center", gap: 8,
+            position: "sticky", top: 0, zIndex: 1,
+          }}>
+            {DAY_LABELS[day]}
+            <span style={{ color: MUTED, fontWeight: 400, fontSize: 12, textTransform: "none", letterSpacing: 0 }}>
+              · {byDay[day].length} program{byDay[day].length === 1 ? "" : "s"}
+            </span>
           </div>
+          {byDay[day].map((p) => <ProgramRow key={p.id} program={p} e={enrollment[p.id]} />)}
         </div>
       ))}
     </div>
@@ -206,13 +218,23 @@ function BySchoolView({ programs, enrollment }) {
   }, [programs]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {bySchool.map(([school, list]) => (
+    <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8 }}>
+      {bySchool.map(([school, list], idx) => (
         <div key={school}>
-          <div style={schoolHeader}>{school} <span style={{ color: MUTED, fontWeight: 400, fontSize: 12 }}>· {list.length} program{list.length === 1 ? "" : "s"}</span></div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 10 }}>
-            {list.map((p) => <ProgramCard key={p.id} program={p} e={enrollment[p.id]} showDay />)}
+          <div style={{
+            padding: "10px 16px 8px",
+            background: "#fafaf5",
+            borderTop: idx === 0 ? "none" : `1px solid ${RULE}`,
+            borderBottom: `1px solid ${RULE}`,
+            fontSize: 13, fontWeight: 700, color: PLUM,
+            display: "flex", alignItems: "center", gap: 8,
+          }}>
+            {school}
+            <span style={{ color: MUTED, fontWeight: 400, fontSize: 12 }}>
+              · {list.length} program{list.length === 1 ? "" : "s"}
+            </span>
           </div>
+          {list.map((p) => <ProgramRow key={p.id} program={p} e={enrollment[p.id]} showDay />)}
         </div>
       ))}
     </div>
@@ -221,7 +243,7 @@ function BySchoolView({ programs, enrollment }) {
 
 // ---- Card ----
 
-function ProgramCard({ program: p, e, showDay = false }) {
+function ProgramRow({ program: p, e, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -229,40 +251,59 @@ function ProgramCard({ program: p, e, showDay = false }) {
   const isFull = capacity > 0 && enrolled >= capacity;
   const fillColor = isFull ? PLUM : pct >= 0.7 ? GOLD : "#a8c47f";
 
-  // Build the small breakdown line: "4 paid · 2 on installments" / "+1 pending" handled separately
   const breakdownParts = [];
   if (enr.paid > 0) breakdownParts.push(`${enr.paid} paid`);
   if (enr.unpaid > 0) breakdownParts.push(`${enr.unpaid} on installments`);
+  if (enr.pending > 0) breakdownParts.push(`+${enr.pending} pending`);
   const breakdown = breakdownParts.join(" · ");
 
   return (
-    <div style={cardStyle}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
-        <div style={{ fontWeight: 600, color: INK, fontSize: 14, lineHeight: 1.3 }}>{p.curriculum ?? "Untitled"}</div>
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: "70px 1fr 110px 90px",
+      gap: 14,
+      alignItems: "center",
+      padding: "10px 16px",
+      borderBottom: `1px solid ${RULE}`,
+      fontSize: 13,
+    }}>
+      {/* Time (or day + time when showDay) */}
+      <div style={{ color: INK, fontWeight: 600, fontSize: 13 }}>
+        {showDay && p.day_of_week && <div style={{ fontSize: 11, color: MUTED, fontWeight: 500 }}>{DAY_LABELS[p.day_of_week.toLowerCase()]?.slice(0, 3) ?? p.day_of_week}</div>}
+        {formatTime(p.start_time) || <span style={{ color: MUTED, fontWeight: 400 }}>—</span>}
       </div>
-      <div style={{ color: MUTED, fontSize: 12, marginTop: 2 }}>
-        {showDay && p.day_of_week ? <>{DAY_LABELS[p.day_of_week.toLowerCase()] ?? p.day_of_week} · </> : null}
-        {formatTime(p.start_time)}{p.end_time ? `–${formatTime(p.end_time)}` : ""}
-        {!showDay && p.program_locations?.name ? <> · {p.program_locations.name}</> : null}
+
+      {/* Curriculum + school + instructor */}
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 600, color: INK, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {p.curriculum ?? "Untitled"}
+        </div>
+        <div style={{ color: MUTED, fontSize: 12, marginTop: 2 }}>
+          {!showDay && p.program_locations?.name ? p.program_locations.name : ""}
+          {!showDay && p.program_locations?.name && p.instructor_name ? " · " : ""}
+          {p.instructor_name ? p.instructor_name : ""}
+          {showDay && p.instructor_name ? p.instructor_name : ""}
+        </div>
       </div>
-      {p.instructor_name && (
-        <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>Instructor: {p.instructor_name}</div>
-      )}
-      <div style={{ marginTop: 8 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-          <div style={{ fontSize: 13, color: INK, fontWeight: 600 }}>
-            {enrolled}<span style={{ color: MUTED, fontWeight: 400 }}>{capacity > 0 ? ` / ${capacity}` : ""} enrolled</span>
-          </div>
-          {enr.pending > 0 && (
-            <div style={{ fontSize: 11, color: MUTED }}>+{enr.pending} pending</div>
-          )}
+
+      {/* Progress bar */}
+      <div style={{ height: 8, background: "#f0eee5", borderRadius: 4, overflow: "hidden", position: "relative" }}>
+        <div style={{
+          width: `${pct * 100}%`,
+          height: "100%",
+          background: fillColor,
+          transition: "width 0.3s",
+        }} />
+      </div>
+
+      {/* Count + breakdown */}
+      <div style={{ textAlign: "right" }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>
+          {enrolled}<span style={{ color: MUTED, fontWeight: 400 }}>{capacity > 0 ? ` / ${capacity}` : ""}</span>
         </div>
         {breakdown && (
-          <div style={{ fontSize: 11, color: MUTED, marginBottom: 6 }}>{breakdown}</div>
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{breakdown}</div>
         )}
-        <div style={{ height: 4, background: "#f0eee5", borderRadius: 2, overflow: "hidden" }}>
-          <div style={{ width: `${pct * 100}%`, height: "100%", background: fillColor, transition: "width 0.3s" }} />
-        </div>
       </div>
     </div>
   );

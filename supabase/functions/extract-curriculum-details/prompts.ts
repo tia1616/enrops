@@ -1,7 +1,7 @@
 // Versioned prompts for curriculum extraction.
 // Add v2, v3 etc. as siblings — the test surface dropdown reads PROMPT_VERSIONS keys.
 //
-// Chunk 1 (rewrite) schema: 11 curriculum-level fields + 7 per-session fields
+// Chunk 1 (rewrite) schema: 10 curriculum-level fields + 7 per-session fields
 // including recap_template + parent_engagement_question. Max tokens 16000 because
 // per-session recap templates take real space (a 10-session curriculum can produce
 // ~12K tokens of output).
@@ -55,9 +55,7 @@ Bad recap_template example (do not do this):
    - 0.4-0.6 = inferred from context (will be flagged for provider review)
    - 0.0-0.3 = uncertain (return null instead)
 
-9. INSTRUCTOR GUIDE NOTES preserve what doesn't fit structured fields. Classroom management approaches, common pitfalls, lesson flow structure (threshold → intro → warm-up → build → share → debrief if mentioned). Multi-paragraph plain text fine.
-
-10. SKILLS USE PLAIN LANGUAGE. "Building game logic with conditional statements" not "Boolean primitives." Skills appear in parent-facing surfaces.
+9. SKILLS USE PLAIN LANGUAGE. "Building game logic with conditional statements" not "Boolean primitives." Skills appear in parent-facing surfaces.
 
 Return ONLY valid JSON. No preamble, no markdown fences, no commentary.`;
 
@@ -71,9 +69,8 @@ const USER_TEMPLATE_V1 = (documentText: string) => `Here is the curriculum docum
   "session_count": { "value": int, "confidence": 0-1 },
   "format": { "value": "afterschool | summer_camp | other", "confidence": 0-1 },
   "session_types_supported": {
-    "value": ["full_day" | "half_day_am" | "half_day_pm" | "afterschool"],
-    "confidence": 0-1,
-    "note": "Which session structures this curriculum can run as"
+    "value": ["array of: full_day | half_day_am | half_day_pm | afterschool (which session structures this curriculum can run as)"],
+    "confidence": 0-1
   },
   "themes": {
     "value": ["string (pop culture themes parents recognize — Pokémon, Minecraft, etc.)"],
@@ -89,10 +86,6 @@ const USER_TEMPLATE_V1 = (documentText: string) => `Here is the curriculum docum
   },
   "materials": {
     "value": ["string (materials needed across the curriculum)"],
-    "confidence": 0-1
-  },
-  "instructor_guide_notes": {
-    "value": "string or null (instructor-facing prep notes, classroom mgmt tips, common pitfalls — multi-paragraph plain text fine)",
     "confidence": 0-1
   },
   "sessions": {
