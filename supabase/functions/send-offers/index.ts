@@ -41,6 +41,7 @@ type AssignmentRow = {
 
 type SessionRow = {
   id: string;
+  location_id: string | null;
   location_name: string | null;
   week_num: number | null;
   session_type: string | null;
@@ -50,6 +51,19 @@ type SessionRow = {
   start_time: string | null;
   end_time: string | null;
   class_days: string[] | null;
+};
+
+type LocationDetails = {
+  id: string;
+  name: string | null;
+  address: string | null;
+  room_number: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
+  arrival_instructions: string | null;
+  food_drink_policy: string | null;
+  notes: string | null;
 };
 
 type InstructorRow = { id: string; first_name: string | null; last_name: string | null; email: string | null };
@@ -198,9 +212,22 @@ serve(async (req: Request) => {
 
     const { data: sessions } = await supabase
       .from('camp_sessions')
-      .select('id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, start_time, end_time, class_days')
+      .select('id, location_id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, start_time, end_time, class_days')
       .in('id', sessionIds);
     const sessionById = new Map<string, SessionRow>((sessions ?? []).map((s) => [s.id, s as SessionRow]));
+
+    // Pull venue details (address, room, contact, arrival, food/drink, notes) for
+    // any locations referenced by these sessions. Each gets rendered under its camp
+    // row in the email so instructors have everything they need in one place. Fields
+    // are optional — only set fields render.
+    const locationIds = Array.from(new Set((sessions ?? []).map((s) => s.location_id).filter(Boolean)));
+    const { data: locations } = locationIds.length
+      ? await supabase
+          .from('program_locations')
+          .select('id, name, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, food_drink_policy, notes')
+          .in('id', locationIds)
+      : { data: [] } as any;
+    const locationById = new Map<string, any>((locations ?? []).map((l: any) => [l.id, l]));
 
     const { data: instructors } = await supabase
       .from('instructors')
@@ -233,8 +260,8 @@ serve(async (req: Request) => {
       const cycleDisplay = cycleDisplayName(cycle.name);
       const subject = `Your ${cycleDisplay} schedule is ready — please review`;
       const portalUrl = `https://enrops.com/${org.slug ?? 'j2s'}/instructor`;
-      const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline });
-      const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline });
+      const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById });
+      const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById });
       const recipient = mode === 'send' ? instructor.email! : TEST_INBOX;
 
       previews.push({ instructor_id: instructorId, to: recipient, subject, html, text });
@@ -312,7 +339,42 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline }: {
+// Renders the optional venue-detail block under each camp row. Only set fields
+// appear, so empty venues degrade gracefully (no missing-data placeholders).
+function renderVenueDetailsHtml(loc: LocationDetails | undefined): string {
+  if (!loc) return '';
+  const lines: string[] = [];
+  if (loc.address) lines.push(`<div>${escape(loc.address)}${loc.room_number ? ` · Room ${escape(loc.room_number)}` : ''}</div>`);
+  else if (loc.room_number) lines.push(`<div>Room ${escape(loc.room_number)}</div>`);
+  if (loc.arrival_instructions) lines.push(`<div><strong>Arrival:</strong> ${escape(loc.arrival_instructions)}</div>`);
+  if (loc.food_drink_policy) lines.push(`<div><strong>Food/drink:</strong> ${escape(loc.food_drink_policy)}</div>`);
+  const contactParts: string[] = [];
+  if (loc.contact_name) contactParts.push(escape(loc.contact_name));
+  if (loc.contact_phone) contactParts.push(escape(loc.contact_phone));
+  if (loc.contact_email) contactParts.push(escape(loc.contact_email));
+  if (contactParts.length) lines.push(`<div><strong>Venue contact:</strong> ${contactParts.join(' · ')}</div>`);
+  if (loc.notes) lines.push(`<div><strong>Notes:</strong> ${escape(loc.notes)}</div>`);
+  if (lines.length === 0) return '';
+  return `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">${lines.join('')}</div>`;
+}
+
+function renderVenueDetailsText(loc: LocationDetails | undefined): string[] {
+  if (!loc) return [];
+  const out: string[] = [];
+  if (loc.address) out.push(`  ${loc.address}${loc.room_number ? ` · Room ${loc.room_number}` : ''}`);
+  else if (loc.room_number) out.push(`  Room ${loc.room_number}`);
+  if (loc.arrival_instructions) out.push(`  Arrival: ${loc.arrival_instructions}`);
+  if (loc.food_drink_policy) out.push(`  Food/drink: ${loc.food_drink_policy}`);
+  const contactParts: string[] = [];
+  if (loc.contact_name) contactParts.push(loc.contact_name);
+  if (loc.contact_phone) contactParts.push(loc.contact_phone);
+  if (loc.contact_email) contactParts.push(loc.contact_email);
+  if (contactParts.length) out.push(`  Venue contact: ${contactParts.join(' · ')}`);
+  if (loc.notes) out.push(`  Notes: ${loc.notes}`);
+  return out;
+}
+
+function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById }: {
   cycle: Cycle;
   org: Org;
   branding: Branding;
@@ -320,6 +382,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
   camps: Array<{ a: AssignmentRow; s: SessionRow | undefined }>;
   portalUrl: string;
   deadline: string | null;
+  locationById: Map<string, LocationDetails>;
 }) {
   const primary = branding.primary_color ?? DEFAULT_PRIMARY;
   const firstName = instructor.first_name ?? 'there';
@@ -328,6 +391,8 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
 
   const campRows = camps.map(({ a, s }) => {
     if (!s) return '';
+    const loc = s.location_id ? locationById.get(s.location_id) : undefined;
+    const venue = renderVenueDetailsHtml(loc);
     const bonus = a.distance_bonus_cents ? `
       <div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">
         Includes a ${dollars(a.distance_bonus_cents)} distance bonus
@@ -344,6 +409,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
             Week ${s.week_num} · ${fmt(s.starts_on)} – ${fmt(s.ends_on)} · ${classDaysSummary(s.class_days)}<br />
             ${escape(s.location_name ?? '')} · ${titleCase(s.session_type)} ${fmtTime(s.start_time)}–${fmtTime(s.end_time)}
           </div>
+          ${venue}
           ${bonus}
         </td>
       </tr>
@@ -405,13 +471,14 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
 </html>`;
 }
 
-function renderText({ cycle, org, instructor, camps, portalUrl, deadline }: {
+function renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById }: {
   cycle: Cycle;
   org: Org;
   instructor: InstructorRow;
   camps: Array<{ a: AssignmentRow; s: SessionRow | undefined }>;
   portalUrl: string;
   deadline: string | null;
+  locationById: Map<string, LocationDetails>;
 }) {
   const firstName = instructor.first_name ?? 'there';
   const cycleRange = (cycle.starts_on && cycle.ends_on) ? ` (${fmt(cycle.starts_on)} – ${fmt(cycle.ends_on)})` : '';
@@ -426,10 +493,12 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline }: {
   lines.push('');
   for (const { a, s } of camps) {
     if (!s) continue;
+    const loc = s.location_id ? locationById.get(s.location_id) : undefined;
     const role = a.role === 'developing' ? ' (Developing)' : '';
     lines.push(`• ${s.curriculum_name ?? titleCase(unitLabel(cycle.cycle_type, 1))}${role}`);
     lines.push(`  Week ${s.week_num} · ${fmt(s.starts_on)} – ${fmt(s.ends_on)} · ${classDaysSummary(s.class_days)}`);
     lines.push(`  ${s.location_name ?? ''} · ${titleCase(s.session_type)} ${fmtTime(s.start_time)}–${fmtTime(s.end_time)}`);
+    for (const v of renderVenueDetailsText(loc)) lines.push(v);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} distance bonus`);
     lines.push('');
   }

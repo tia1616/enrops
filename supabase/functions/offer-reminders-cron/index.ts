@@ -144,9 +144,19 @@ serve(async (req: Request) => {
       const sessionIds = theirRows.map((r) => r.camp_session_id);
       const { data: sessions } = await supabase
         .from('camp_sessions')
-        .select('id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, cycle_id')
+        .select('id, location_id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, cycle_id')
         .in('id', sessionIds);
       const sessionById = new Map((sessions ?? []).map((s) => [s.id, s]));
+
+      // Venue details — same pattern as send-offers / send-patch-offer.
+      const locationIds = Array.from(new Set((sessions ?? []).map((s: any) => s.location_id).filter(Boolean)));
+      const { data: locations } = locationIds.length
+        ? await supabase
+            .from('program_locations')
+            .select('id, name, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, food_drink_policy, notes')
+            .in('id', locationIds)
+        : { data: [] } as any;
+      const locationById = new Map<string, any>((locations ?? []).map((l: any) => [l.id, l]));
       const cycleId = sessions?.[0]?.cycle_id;
       const { data: cycle } = cycleId
         ? await supabase.from('scheduling_cycles').select('id, name, cycle_type').eq('id', cycleId).maybeSingle()
@@ -173,8 +183,8 @@ serve(async (req: Request) => {
       const cycleDisplay = cycleDisplayName(cycle?.name ?? '');
       const portalUrl = `https://enrops.com/${org?.slug ?? 'j2s'}/instructor`;
       const subject = `Reminder: please respond to your ${cycleDisplay} schedule`;
-      const html = buildReminderHtml({ branding, instructor, camps, cycle, portalUrl, deadline, orgName: org?.name ?? '' });
-      const text = buildReminderText({ instructor, camps, cycle, portalUrl, deadline, orgName: org?.name ?? '' });
+      const html = buildReminderHtml({ branding, instructor, camps, cycle, portalUrl, deadline, orgName: org?.name ?? '', locationById });
+      const text = buildReminderText({ instructor, camps, cycle, portalUrl, deadline, orgName: org?.name ?? '', locationById });
 
       if (dry_run) {
         reminderResults.push({ instructor_id: instructorId, sent: false, reason: 'dry_run' });
@@ -301,22 +311,57 @@ serve(async (req: Request) => {
   }
 });
 
-function buildReminderHtml({ branding, instructor, camps, cycle, portalUrl, deadline, orgName }: any) {
+function renderVenueDetailsHtml(loc: any): string {
+  if (!loc) return '';
+  const lines: string[] = [];
+  if (loc.address) lines.push(`<div>${escape(loc.address)}${loc.room_number ? ` · Room ${escape(loc.room_number)}` : ''}</div>`);
+  else if (loc.room_number) lines.push(`<div>Room ${escape(loc.room_number)}</div>`);
+  if (loc.arrival_instructions) lines.push(`<div><strong>Arrival:</strong> ${escape(loc.arrival_instructions)}</div>`);
+  if (loc.food_drink_policy) lines.push(`<div><strong>Food/drink:</strong> ${escape(loc.food_drink_policy)}</div>`);
+  const contactParts: string[] = [];
+  if (loc.contact_name) contactParts.push(escape(loc.contact_name));
+  if (loc.contact_phone) contactParts.push(escape(loc.contact_phone));
+  if (loc.contact_email) contactParts.push(escape(loc.contact_email));
+  if (contactParts.length) lines.push(`<div><strong>Venue contact:</strong> ${contactParts.join(' · ')}</div>`);
+  if (loc.notes) lines.push(`<div><strong>Notes:</strong> ${escape(loc.notes)}</div>`);
+  if (lines.length === 0) return '';
+  return `<div style="margin-top:4px;font-size:11px;color:${MUTED};line-height:1.5;">${lines.join('')}</div>`;
+}
+
+function renderVenueDetailsText(loc: any): string[] {
+  if (!loc) return [];
+  const out: string[] = [];
+  if (loc.address) out.push(`  ${loc.address}${loc.room_number ? ` · Room ${loc.room_number}` : ''}`);
+  else if (loc.room_number) out.push(`  Room ${loc.room_number}`);
+  if (loc.arrival_instructions) out.push(`  Arrival: ${loc.arrival_instructions}`);
+  if (loc.food_drink_policy) out.push(`  Food/drink: ${loc.food_drink_policy}`);
+  const contactParts: string[] = [];
+  if (loc.contact_name) contactParts.push(loc.contact_name);
+  if (loc.contact_phone) contactParts.push(loc.contact_phone);
+  if (loc.contact_email) contactParts.push(loc.contact_email);
+  if (contactParts.length) out.push(`  Venue contact: ${contactParts.join(' · ')}`);
+  if (loc.notes) out.push(`  Notes: ${loc.notes}`);
+  return out;
+}
+
+function buildReminderHtml({ branding, instructor, camps, cycle, portalUrl, deadline, orgName, locationById }: any) {
   const primary = branding.primary_color ?? DEFAULT_PRIMARY;
   const firstName = instructor.first_name ?? 'there';
   const cycleDisplay = cycleDisplayName(cycle?.name ?? '');
   const unit = unitLabel(cycle?.cycle_type, camps.length);
 
   const campRows = camps.map(({ a, s }: any) => {
+    const loc = s.location_id ? locationById?.get(s.location_id) : undefined;
+    const venue = renderVenueDetailsHtml(loc);
     const role = a.role === 'developing' ? ' (Developing)' : '';
     const bonus = a.distance_bonus_cents ? `<div style="margin-top:4px;font-size:13px;color:${primary};font-weight:600;">Includes a $${(a.distance_bonus_cents / 100).toFixed(0)} distance bonus</div>` : '';
-    return `<tr><td style="padding:10px 0;border-bottom:1px solid ${BORDER};"><div style="font-size:14px;font-weight:600;color:${TEXT};">${escape(s.curriculum_name)}${role}</div><div style="font-size:12px;color:${MUTED};margin-top:2px;">Week ${s.week_num} · ${fmt(s.starts_on)} – ${fmt(s.ends_on)} · ${escape(s.location_name)}</div>${bonus}</td></tr>`;
+    return `<tr><td style="padding:10px 0;border-bottom:1px solid ${BORDER};"><div style="font-size:14px;font-weight:600;color:${TEXT};">${escape(s.curriculum_name)}${role}</div><div style="font-size:12px;color:${MUTED};margin-top:2px;">Week ${s.week_num} · ${fmt(s.starts_on)} – ${fmt(s.ends_on)} · ${escape(s.location_name)}</div>${venue}${bonus}</td></tr>`;
   }).join('');
 
   return `<!doctype html><html lang="en"><body style="margin:0;padding:0;background:${DEFAULT_PAGE_BG};font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif;color:${TEXT};"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${DEFAULT_PAGE_BG};padding:32px 16px;"><tr><td align="center"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;width:100%;background:#fff;border:1px solid ${BORDER};border-radius:10px;"><tr><td style="padding:28px 32px 8px;"><div style="font-size:13px;color:${MUTED};text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">${escape(orgName)}</div><h1 style="margin:6px 0 0;font-size:22px;color:${TEXT};font-weight:700;">Quick reminder — please respond</h1></td></tr><tr><td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">Hi ${escape(firstName)},<br /><br />Just a nudge — your ${cycleDisplay} schedule is still waiting for your response. <strong>Please tap Accept or Request change on each ${unit}</strong> by <strong>${fmt(deadline)}</strong>.</td></tr><tr><td style="padding:8px 32px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${campRows}</table></td></tr><tr><td style="padding:20px 32px 6px;"><a href="${portalUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:13px 26px;border-radius:6px;font-size:15px;font-weight:700;">Review and respond →</a></td></tr><tr><td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">Already responded? You can ignore this email — sometimes the timing crosses. Questions? Just reply.<br /><br />— Jessica, ${escape(orgName)}</td></tr></table></td></tr></table></body></html>`;
 }
 
-function buildReminderText({ instructor, camps, cycle, portalUrl, deadline, orgName }: any) {
+function buildReminderText({ instructor, camps, cycle, portalUrl, deadline, orgName, locationById }: any) {
   const firstName = instructor.first_name ?? 'there';
   const cycleDisplay = cycleDisplayName(cycle?.name ?? '');
   const unit = unitLabel(cycle?.cycle_type, camps.length);
@@ -326,9 +371,11 @@ function buildReminderText({ instructor, camps, cycle, portalUrl, deadline, orgN
   lines.push(`Just a nudge — your ${cycleDisplay} schedule is still waiting for your response. Please tap Accept or Request change on each ${unit} by ${fmt(deadline)}.`);
   lines.push('');
   for (const { a, s } of camps) {
+    const loc = s.location_id ? locationById?.get(s.location_id) : undefined;
     const role = a.role === 'developing' ? ' (Developing)' : '';
     lines.push(`• ${s.curriculum_name}${role}`);
     lines.push(`  Week ${s.week_num} · ${fmt(s.starts_on)} – ${fmt(s.ends_on)} · ${s.location_name}`);
+    for (const v of renderVenueDetailsText(loc)) lines.push(v);
     if (a.distance_bonus_cents) lines.push(`  Includes a $${(a.distance_bonus_cents / 100).toFixed(0)} distance bonus`);
   }
   lines.push('');
