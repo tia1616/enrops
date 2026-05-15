@@ -7,6 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import HatGuide from "../../components/HatGuide";
 
 const PLUM = "#691D39";
 const GOLD = "#CFB12F";
@@ -274,9 +275,19 @@ export default function Schedule() {
   const [lastOp, setLastOp] = useState(null); // { type, ... } — supports a single-step undo
   const [candidatesFor, setCandidatesFor] = useState(null); // { session, currentAssignment | null }
   const [changeRequestFor, setChangeRequestFor] = useState(null); // { session, assignment }
+  // When user reassigns from a change-request modal, we stash the request's id so the
+  // candidate-picker's onPick can auto-advance to the next change request afterward.
+  const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
   const [recentlyUpdated, setRecentlyUpdated] = useState(() => new Set()); // assignment ids that flashed via realtime
 
   const dragStateRef = useRef(null);
+  // stateRef mirrors the latest state so async callbacks can read post-DB-update assignments
+  // without going through stale closures.
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
+  // IDs the admin has chosen to skip during this change-request walk. Cleared when a
+  // walk starts (Hat click or calendar-card click) so skipped items resurface next time.
+  const skippedThisWalkRef = useRef(new Set());
 
   async function loadAll() {
     if (!org?.id) return;
@@ -306,7 +317,7 @@ export default function Schedule() {
         sessionIds.length
           ? supabase
               .from("camp_assignments")
-              .select("id, camp_session_id, status, role, change_request_message, distance_bonus_cents, instructor_response_at, flagged_reason, instructor:instructors(id, first_name, last_name, email)")
+              .select("id, camp_session_id, status, role, change_request_message, distance_bonus_cents, instructor_response_at, flagged_reason, email_sent_at, instructor:instructors(id, first_name, last_name, email)")
               .in("camp_session_id", sessionIds)
           : Promise.resolve({ data: [], error: null }),
         supabase
@@ -343,6 +354,7 @@ export default function Schedule() {
         distance_bonus_cents: a.distance_bonus_cents ?? null,
         instructor_response_at: a.instructor_response_at ?? null,
         flagged_reason: a.flagged_reason ?? null,
+        email_sent_at: a.email_sent_at ?? null,
         instructor_id: a.instructor?.id ?? null,
         instructor_first: a.instructor?.first_name ?? null,
         instructor_last: a.instructor?.last_name ?? null,
@@ -533,6 +545,99 @@ export default function Schedule() {
     }
     return { assigned, accepted, flagged, changeRequested, needsHire };
   }, [enriched]);
+
+  // Instructor Hat — "what should I do next?" tips surfaced above the calendar.
+  // v1 is deterministic: collects all relevant tips and stacks them in priority order.
+  // Per platform principle: max 5 on deck (we currently only have ~4 possible tips).
+  const nextTips = useMemo(() => {
+    if (state.status !== "ready") return [];
+    const cycleId = state.cycle.id;
+    const tips = [];
+
+    // Has the initial bulk send happened yet? If any row has email_sent_at, yes.
+    // Used to distinguish "first-time bulk send" from "patch a few rows after bulk."
+    const anyEmailed = state.assignments.some((a) => a.email_sent_at);
+
+    // Tip A: pending unsent offers — fires once bulk send has happened and there
+    // are rows the admin assigned afterward (the Skyler case).
+    const pending = state.assignments.filter(
+      (a) => a.instructor_id && !a.email_sent_at && a.status !== "withdrawn"
+    );
+    if (anyEmailed && pending.length > 0) {
+      const sample = pending[0];
+      const sampleSession = state.sessions.find((s) => s.id === sample.camp_session_id);
+      const who = sample.instructor_first || "An instructor";
+      const what = sampleSession
+        ? `${sampleSession.curriculum_name} at ${sampleSession.location_name}`
+        : "their new camp";
+      const distinctInstructors = new Set(pending.map((a) => a.instructor_id)).size;
+      const lead = pending.length === 1
+        ? `${who} got assigned to ${what} but hasn't been emailed yet.`
+        : `${pending.length} new assignments haven't been emailed yet (${distinctInstructors} instructor${distinctInstructors === 1 ? "" : "s"}).`;
+      const sending = busy === "patching";
+      const label = sending
+        ? "Sending…"
+        : (pending.length === 1 ? `Send ${who} the offer` : `Send ${distinctInstructors} email${distinctInstructors === 1 ? "" : "s"}`);
+      tips.push({
+        key: `${cycleId}.pendingPatches`,
+        message: `${lead} Want to send the offer${pending.length === 1 ? "" : "s"} now?`,
+        primary: { label, disabled: sending, onClick: () => handleSendPatchOffers(pending.map((a) => a.id)) },
+      });
+    }
+
+    // Tip B: change requests waiting for review.
+    if (counts.changeRequested > 0) {
+      const first = state.assignments.find((a) => a.status === "change_requested");
+      const firstSession = first ? state.sessions.find((s) => s.id === first.camp_session_id) : null;
+      const n = counts.changeRequested;
+      tips.push({
+        key: `${cycleId}.changeRequest`,
+        message: n === 1
+          ? `${first?.instructor_first ?? "An instructor"} asked to swap their schedule. Want to review the request?`
+          : `${n} instructors asked to swap their schedule. Want to review the requests?`,
+        primary: {
+          label: n === 1 ? "Review change request" : `Review ${n} change requests`,
+          onClick: () => {
+            if (firstSession && first) {
+              skippedThisWalkRef.current = new Set();
+              setFocusedWeek(firstSession.week_num);
+              setChangeRequestFor({ session: firstSession, assignment: first });
+            }
+          },
+        },
+      });
+    }
+
+    // Tip C: first-time bulk send — only fires when NOTHING has been emailed yet.
+    if (!anyEmailed && counts.assigned + counts.accepted > 0) {
+      const total = counts.assigned + counts.accepted;
+      tips.push({
+        key: `${cycleId}.bulkSend`,
+        message: `${total} camp${total === 1 ? "" : "s"} ${total === 1 ? "is" : "are"} ready to send out to instructors. Want to send all the offers now?`,
+        primary: {
+          label: "Send offers",
+          onClick: () => setOfferDialog({ mode: "choose", payload: null }),
+        },
+      });
+    }
+
+    // Tip D: celebration only when bulk send happened and nothing else is pending.
+    if (
+      tips.length === 0 &&
+      anyEmailed &&
+      counts.flagged === 0 &&
+      counts.needsHire === 0
+    ) {
+      tips.push({
+        key: null,
+        celebrate: true,
+        message: "Everything's responded to. Cycle's locked in. ✨",
+      });
+    }
+
+    return tips;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, counts, busy]);
 
   // Overview dots respect filters so toggling them is visible without focusing a week.
   const weekBuckets = useMemo(() => {
@@ -1012,6 +1117,57 @@ export default function Schedule() {
     }
   }
 
+  // One-click send for assignments that were added AFTER bulk send-offers ran
+  // (the Skyler case). Hits send-patch-offer edge function, which renders a
+  // "You have another camp to accept" email per instructor, flips status→published,
+  // stamps email_sent_at + deadline, and audit-logs the send.
+  async function handleSendPatchOffers(assignmentIds) {
+    if (!assignmentIds || assignmentIds.length === 0) return;
+    setBusy("patching");
+    setSaveError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-patch-offer", {
+        body: { assignment_ids: assignmentIds },
+      });
+      if (error) {
+        let real = error.message ?? "send failed";
+        try { const b = await error.context?.json?.(); if (b?.error) real = b.error; } catch {}
+        throw new Error(real);
+      }
+      if (data?.error) throw new Error(data.error);
+      await loadAll();
+    } catch (err) {
+      console.error("send-patch-offer failed:", err);
+      setSaveError(`Couldn't send: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 9000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // After unassigning, reassigning, or skipping a change_requested row, queue up the
+  // next pending one so the admin walks through them without re-clicking the Hat.
+  // Reads from stateRef + skippedThisWalkRef to dodge stale closure data.
+  function advanceOrCloseChangeRequest(justHandledAssignmentId) {
+    const fresh = stateRef.current;
+    if (fresh.status !== "ready") { setChangeRequestFor(null); return; }
+    const skipped = skippedThisWalkRef.current;
+    const remaining = fresh.assignments.filter(
+      (a) => a.status === "change_requested"
+        && a.id !== justHandledAssignmentId
+        && !skipped.has(a.id)
+    );
+    if (remaining.length === 0) {
+      setChangeRequestFor(null);
+      skippedThisWalkRef.current = new Set();
+      return;
+    }
+    const next = remaining[0];
+    const sess = fresh.sessions.find((s) => s.id === next.camp_session_id);
+    if (sess) setChangeRequestFor({ session: sess, assignment: next });
+    else { setChangeRequestFor(null); skippedThisWalkRef.current = new Set(); }
+  }
+
   async function handleUndo() {
     const op = lastOp;
     if (!op) return;
@@ -1120,6 +1276,13 @@ export default function Schedule() {
           {saveError}
         </div>
       )}
+      {nextTips.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {nextTips.map((t, i) => (
+            <HatGuide key={t.key ?? `tip-${i}`} character="instructor" tip={t} />
+          ))}
+        </div>
+      )}
       <FilterBar
         cycleType={cycle.cycle_type}
         searchText={searchText}
@@ -1157,7 +1320,10 @@ export default function Schedule() {
             currentAssignment,
             role: currentAssignment?.role ?? roleHint ?? "lead",
           })}
-          onChangeRequestClick={(session, assignment) => setChangeRequestFor({ session, assignment })}
+          onChangeRequestClick={(session, assignment) => {
+            skippedThisWalkRef.current = new Set();
+            setChangeRequestFor({ session, assignment });
+          }}
         />
       ) : (
         <div style={{
@@ -1203,14 +1369,24 @@ export default function Schedule() {
           assignment={changeRequestFor.assignment}
           cycle={cycle}
           orgName={org?.name ?? "Journey to STEAM"}
-          onClose={() => setChangeRequestFor(null)}
-          onUnassign={async () => {
-            await handleRemoveAssignment(changeRequestFor.session, changeRequestFor.assignment);
+          onClose={() => {
             setChangeRequestFor(null);
+            skippedThisWalkRef.current = new Set();
+          }}
+          onUnassign={async () => {
+            const handledId = changeRequestFor.assignment.id;
+            await handleRemoveAssignment(changeRequestFor.session, changeRequestFor.assignment);
+            advanceOrCloseChangeRequest(handledId);
           }}
           onReassign={() => {
+            setReassigningChangeRequestId(changeRequestFor.assignment.id);
             setCandidatesFor({ session: changeRequestFor.session, currentAssignment: changeRequestFor.assignment, role: changeRequestFor.assignment.role });
             setChangeRequestFor(null);
+          }}
+          onSkip={() => {
+            const handledId = changeRequestFor.assignment.id;
+            skippedThisWalkRef.current.add(handledId);
+            advanceOrCloseChangeRequest(handledId);
           }}
         />
       )}
@@ -1223,14 +1399,30 @@ export default function Schedule() {
           locPrefLookup={locPrefLookup}
           curPrefLookup={curPrefLookup}
           allAssignments={assignmentsWithSession}
-          onClose={() => setCandidatesFor(null)}
+          onClose={() => {
+            setCandidatesFor(null);
+            // Picker closed without picking — drop the pending advance so the next click of the Hat re-opens cleanly.
+            setReassigningChangeRequestId(null);
+          }}
           role={candidatesFor.role}
-          onPick={(instructorId) => handlePick(candidatesFor.session, candidatesFor.currentAssignment, instructorId, null, candidatesFor.role)}
+          onPick={async (instructorId) => {
+            await handlePick(candidatesFor.session, candidatesFor.currentAssignment, instructorId, null, candidatesFor.role);
+            if (reassigningChangeRequestId) {
+              const handledId = reassigningChangeRequestId;
+              setReassigningChangeRequestId(null);
+              advanceOrCloseChangeRequest(handledId);
+            }
+          }}
           onRemove={() => handleRemoveAssignment(candidatesFor.session, candidatesFor.currentAssignment)}
           onResetAcceptance={() => handleResetAcceptance(candidatesFor.session, candidatesFor.currentAssignment)}
           onCreateInstructor={async (form) => {
             const newId = await handleCreateInstructor(form, candidatesFor.session);
             await handlePick(candidatesFor.session, candidatesFor.currentAssignment, newId, null, candidatesFor.role);
+            if (reassigningChangeRequestId) {
+              const handledId = reassigningChangeRequestId;
+              setReassigningChangeRequestId(null);
+              advanceOrCloseChangeRequest(handledId);
+            }
           }}
         />
       )}
@@ -2158,8 +2350,9 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
   );
 }
 
-function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onUnassign, onReassign }) {
+function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onUnassign, onReassign, onSkip }) {
   const [busy, setBusy] = useState(false);
+  const [unassignArmed, setUnassignArmed] = useState(false);
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
   const [replyBusy, setReplyBusy] = useState(false);
@@ -2168,6 +2361,10 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
   const [thread, setThread] = useState([]);
   const firstName = assignment?.instructor_first ?? "Instructor";
   const isDeadlinePassed = assignment?.flagged_reason === "deadline_passed";
+
+  // Reset the confirmation arming whenever the modal opens on a different change request
+  // (auto-advance reuses this component instance to walk the queue).
+  useEffect(() => { setUnassignArmed(false); }, [assignment?.id]);
 
   useEffect(() => {
     if (!assignment?.id) return;
@@ -2277,13 +2474,71 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
             onClick={onReassign}
             disabled={busy}
           />
-          <DialogChoice
-            title={`Unassign ${firstName} (mark Needs hire)`}
-            subtitle="Removes their assignment; the slot becomes Needs hire. Undo available."
-            onClick={doUnassign}
-            disabled={busy}
-            tone="warn"
-          />
+          {unassignArmed ? (
+            <div style={{
+              background: `${CORAL}14`,
+              border: `1px solid ${CORAL}`,
+              borderRadius: 6,
+              padding: 12,
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}>
+              <div style={{ fontSize: 14, color: INK, fontWeight: 600 }}>
+                Really unassign {firstName} from {session.curriculum_name ?? "this camp"} ({session.location_name}, Week {session.week_num})?
+              </div>
+              <div style={{ fontSize: 12, color: MUTED }}>
+                Their assignment is removed and the slot becomes Needs hire. You can undo from the header.
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={doUnassign}
+                  disabled={busy}
+                  style={{
+                    padding: "8px 14px",
+                    background: CORAL,
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 6,
+                    cursor: busy ? "default" : "pointer",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    fontFamily: "inherit",
+                    opacity: busy ? 0.6 : 1,
+                  }}
+                >
+                  {busy ? "Unassigning…" : `Yes, unassign ${firstName}`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnassignArmed(false)}
+                  disabled={busy}
+                  style={{
+                    padding: "8px 14px",
+                    background: "transparent",
+                    color: INK,
+                    border: `1px solid ${RULE}`,
+                    borderRadius: 6,
+                    cursor: busy ? "default" : "pointer",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    fontFamily: "inherit",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <DialogChoice
+              title={`Unassign ${firstName} (mark Needs hire)`}
+              subtitle="Removes their assignment; the slot becomes Needs hire. Undo available."
+              onClick={() => setUnassignArmed(true)}
+              disabled={busy}
+              tone="warn"
+            />
+          )}
           {!replyOpen ? (
             <DialogChoice
               title={`Reply to ${firstName}`}
@@ -2333,7 +2588,29 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
           )}
         </div>
       </div>
-      <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
+      <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        {onSkip ? (
+          <button
+            type="button"
+            onClick={onSkip}
+            disabled={busy}
+            title="Leave this one as-is and move to the next change request"
+            style={{
+              padding: "8px 14px",
+              background: "transparent",
+              color: PLUM,
+              border: "none",
+              borderRadius: 6,
+              cursor: busy ? "default" : "pointer",
+              fontSize: 13,
+              fontWeight: 500,
+              fontFamily: "inherit",
+              textDecoration: "underline",
+            }}
+          >
+            Skip — review later →
+          </button>
+        ) : <div />}
         <button type="button" onClick={onClose} disabled={busy} style={btn("transparent", MUTED, true)}>Close</button>
       </div>
     </ModalShell>
