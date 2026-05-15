@@ -225,9 +225,10 @@ function instructorCoversSessionType(sessionTypes, sessionType) {
 
 // validateDrop returns { ok: boolean, hardBlocks: [msg], warnings: [msg] }.
 // `srcAssignmentId` is excluded from double-booking checks because it's the row being moved.
+// `srcRole` preserves lead-vs-developing on drop and gates developing → low-enrollment camps.
 function validateDrop({
   instructor, availability, locPref, curPref,
-  targetSession, otherAssignments, srcAssignmentId,
+  targetSession, otherAssignments, srcAssignmentId, srcRole,
 }) {
   const hardBlocks = [];
   const warnings = [];
@@ -245,6 +246,20 @@ function validateDrop({
   }
   if (!instructorCoversSessionType(sessionTypes, targetSession.session_type)) {
     hardBlocks.push(`${firstName} doesn't work ${titleCase(targetSession.session_type)} sessions.`);
+  }
+  // Developing instructors can only land on camps that have a developing slot —
+  // either enrollment ≥ threshold or an existing developing assignment to swap into.
+  if (srcRole === "developing") {
+    const targetHasDevSlot = (targetSession.current_enrollment ?? 0) >= DEVELOPING_THRESHOLD;
+    const targetHasDevAssignment = otherAssignments.some(
+      (a) => a.camp_session_id === targetSession.id
+        && a.role === "developing"
+        && a.status !== "withdrawn"
+        && a.id !== srcAssignmentId
+    );
+    if (!targetHasDevSlot && !targetHasDevAssignment) {
+      hardBlocks.push(`${firstName} is a developing instructor — this camp doesn't have a developing slot yet (needs ${DEVELOPING_THRESHOLD}+ enrolled).`);
+    }
   }
   // Double-booking — class_days-aware AND session-time-aware (morning+afternoon don't conflict).
   // Also catches morning+afternoon at DIFFERENT locations on the same day (impossible travel).
@@ -730,6 +745,7 @@ export default function Schedule() {
       instructor, availability, locPref, curPref,
       targetSession, otherAssignments: assignmentsWithSession,
       srcAssignmentId: srcAssignment.id,
+      srcRole: srcAssignment.role ?? "lead",
     });
   }
 
@@ -756,33 +772,36 @@ export default function Schedule() {
       role: srcAssignment.role,
       status: srcAssignment.status,
     };
-    const targetLead = state.assignments.find(
-      (a) => a.camp_session_id === targetSession.id && a.role === "lead" && a.status !== "withdrawn"
+    // Preserve role on move: a developing instructor stays developing on the target,
+    // a lead stays lead. Find the target session's slot for that same role (if any).
+    const srcRole = srcAssignment.role || "lead";
+    const targetSameRole = state.assignments.find(
+      (a) => a.camp_session_id === targetSession.id && a.role === srcRole && a.status !== "withdrawn"
     );
-    const tgtBefore = targetLead ? {
-      id: targetLead.id,
-      instructor_id: targetLead.instructor_id,
-      status: targetLead.status,
+    const tgtBefore = targetSameRole ? {
+      id: targetSameRole.id,
+      instructor_id: targetSameRole.instructor_id,
+      status: targetSameRole.status,
     } : null;
 
     try {
       let tgtNewId = null;
-      if (targetLead) {
-        // Reassign in place — UPDATE the existing lead row to point at the new instructor.
+      if (targetSameRole) {
+        // Swap in place — UPDATE the existing role-row to point at the new instructor.
         const { error: updErr } = await supabase
           .from("camp_assignments")
           .update({ instructor_id: srcAssignment.instructor_id, status: "proposed" })
-          .eq("id", targetLead.id);
+          .eq("id", targetSameRole.id);
         if (updErr) throw updErr;
       } else {
-        // No existing lead — INSERT a new row.
+        // No existing assignment for that role — INSERT.
         const { data: inserted, error: insErr } = await supabase
           .from("camp_assignments")
           .insert({
             organization_id: org.id,
             camp_session_id: targetSession.id,
             instructor_id: srcAssignment.instructor_id,
-            role: "lead",
+            role: srcRole,
             status: "proposed",
           })
           .select("id")
@@ -2190,7 +2209,7 @@ function ProgramCard({ item, cardBg, flash, getValidationFor, dragStateRef, onDr
           assignment={developing}
           session={session}
           role="developing"
-          dragStateRef={null /* developing not draggable for now */}
+          dragStateRef={dragStateRef}
           onClick={onInstructorClick}
         />
       )}
