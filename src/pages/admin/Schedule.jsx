@@ -198,6 +198,19 @@ function sessionTimeOverlap(a, b) {
   return a === b;
 }
 
+// Morning at location A + afternoon at location B on the same day is physically
+// impossible (the instructor would need to teleport between sites mid-day). Same
+// location is fine — back-to-back at one school is normal. Catches the "Skyler
+// already does afternoons in Forest Grove, don't offer her mornings in Portland"
+// case that sessionTimeOverlap alone would miss.
+function sameDayDifferentLocationConflict(existing, target) {
+  if (!existing || !target) return false;
+  if (existing.location_name === target.location_name) return false;
+  const a = existing.session_type, b = target.session_type;
+  if ((a === "morning" && b === "afternoon") || (a === "afternoon" && b === "morning")) return true;
+  return false;
+}
+
 // Whether an instructor's surveyed session_types covers a target camp's session_type.
 // "full_day" availability implies they can do morning OR afternoon halves too — they
 // said they're free all day, so we can still offer them a half. (Not the other way:
@@ -234,6 +247,7 @@ function validateDrop({
     hardBlocks.push(`${firstName} doesn't work ${titleCase(targetSession.session_type)} sessions.`);
   }
   // Double-booking — class_days-aware AND session-time-aware (morning+afternoon don't conflict).
+  // Also catches morning+afternoon at DIFFERENT locations on the same day (impossible travel).
   const conflicts = otherAssignments.filter((a) =>
     a.id !== srcAssignmentId &&
     a.status !== "withdrawn" &&
@@ -241,11 +255,16 @@ function validateDrop({
     a.session.week_num === targetSession.week_num &&
     a.session.id !== targetSession.id &&
     classDaysOverlap(a.session.class_days ?? WEEKDAYS, targetSession.class_days ?? WEEKDAYS) &&
-    sessionTimeOverlap(a.session.session_type, targetSession.session_type)
+    (sessionTimeOverlap(a.session.session_type, targetSession.session_type) ||
+     sameDayDifferentLocationConflict(a.session, targetSession))
   );
   if (conflicts.length) {
     const c = conflicts[0].session;
-    hardBlocks.push(`${firstName} would be double-booked: also on ${c.location_name} (${c.session_type}) week ${c.week_num}.`);
+    if (sessionTimeOverlap(c.session_type, targetSession.session_type)) {
+      hardBlocks.push(`${firstName} would be double-booked: also on ${c.location_name} (${c.session_type}) week ${c.week_num}.`);
+    } else {
+      hardBlocks.push(`${firstName} already has a ${c.session_type} camp at ${c.location_name} that week — they can't be in two locations on the same day.`);
+    }
   }
 
   if (locPref === "not_preferred") {
@@ -3007,7 +3026,8 @@ function CandidatePicker({
         a.session.week_num === session.week_num &&
         a.session.id !== session.id &&
         classDaysOverlap(a.session.class_days ?? WEEKDAYS, session.class_days ?? WEEKDAYS) &&
-        sessionTimeOverlap(a.session.session_type, session.session_type)
+        (sessionTimeOverlap(a.session.session_type, session.session_type) ||
+         sameDayDifferentLocationConflict(a.session, session))
       );
       if (conflict) continue;
 
