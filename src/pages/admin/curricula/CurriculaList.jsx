@@ -62,7 +62,7 @@ export default function CurriculaList() {
             Your library of curricula. Add a new one, then schedule it into a term when you're ready.
           </div>
         </div>
-        <span style={{ ...primaryBtn, background: "#c8c4b7", cursor: "default" }} title="Onboarding flow ships in Chunk 2 of the new spec">+ New curriculum</span>
+        <Link to="/admin/curricula/new" style={primaryBtn}>+ New curriculum</Link>
       </div>
 
       {loading && <div style={{ color: MUTED, padding: 12 }}>Loading…</div>}
@@ -73,9 +73,10 @@ export default function CurriculaList() {
       {!loading && !error && curricula.length === 0 && (
         <div style={{ ...emptyState }}>
           <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>No curricula yet.</div>
-          <div style={{ color: MUTED, fontSize: 14 }}>
-            The upload-first onboarding flow is being rebuilt as part of Chunk 2. Come back after that ships and you'll be able to drop in a curriculum doc.
+          <div style={{ color: MUTED, fontSize: 14, marginBottom: 16 }}>
+            Drop a lesson plan or curriculum guide and we'll set up everything around it — registration page, marketing flyer, parent emails, instructor portal — automatically.
           </div>
+          <Link to="/admin/curricula/new" style={primaryBtn}>+ Add your first curriculum</Link>
         </div>
       )}
 

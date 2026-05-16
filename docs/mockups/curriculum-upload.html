@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mockup — Add a curriculum (Step 1)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --plum: #691D39;
+    --gold: #CFB12F;
+    --chalk: #EAEADD;
+    --ink: #1a1a1a;
+    --muted: #6b6b6b;
+    --rule: #e2dfd5;
+    --panel: #fff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--chalk); color: var(--ink); font-family: "Space Grotesk", system-ui, sans-serif; }
+  .frame { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+  aside { background: #fff; border-right: 1px solid var(--rule); padding: 20px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  aside .brand { padding: 0 20px 18px; border-bottom: 1px solid var(--rule); }
+  aside .brand h1 { margin: 0; color: var(--plum); font-weight: 700; font-size: 22px; letter-spacing: -0.3px; }
+  aside .brand p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  aside nav { padding: 12px 8px; }
+  aside nav a, aside nav .group { display: flex; justify-content: space-between; padding: 9px 12px; margin: 1px 0; border-radius: 6px; font-size: 14px; font-weight: 500; color: var(--ink); text-decoration: none; }
+  aside nav .group { font-weight: 500; }
+  aside nav .child { padding: 7px 12px 7px 26px; font-size: 13px; }
+  aside nav .child.active { background: rgba(207, 177, 47, 0.13); color: var(--plum); font-weight: 600; }
+  aside nav .soon { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; align-self: center; }
+  main { padding: 28px 36px; max-width: 980px; }
+
+  .crumbs { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  .crumbs a { color: var(--muted); text-decoration: none; }
+  .crumbs a:hover { color: var(--plum); }
+
+  h2.page-title { margin: 0; color: var(--plum); font-size: 26px; font-weight: 700; }
+  p.sub { color: var(--muted); font-size: 14px; margin: 6px 0 22px; }
+
+  .state-toggle { background: #fff; border: 1px solid var(--rule); border-radius: 8px; padding: 6px; display: inline-flex; gap: 4px; margin-bottom: 20px; }
+  .state-toggle button { background: transparent; border: none; padding: 7px 12px; font-family: inherit; font-size: 13px; color: var(--ink); border-radius: 5px; cursor: pointer; font-weight: 500; }
+  .state-toggle button.active { background: var(--plum); color: #fff; }
+
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 22px; }
+
+  .drop { border: 2px dashed var(--rule); border-radius: 8px; padding: 44px 24px; text-align: center; background: var(--chalk); cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+  .drop:hover { border-color: var(--gold); }
+  .drop .icon { font-size: 32px; color: var(--plum); margin-bottom: 10px; }
+  .drop .head { font-weight: 600; color: var(--ink); font-size: 16px; }
+  .drop .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+  .drop.filled { background: #faf8f0; border-style: solid; border-color: var(--gold); padding: 22px; text-align: left; cursor: default; display: flex; gap: 14px; align-items: center; }
+  .drop.filled .file-pill { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #fff; border: 1px solid var(--rule); border-radius: 6px; }
+  .drop.filled .file-pill .name { font-weight: 600; font-size: 14px; color: var(--ink); }
+  .drop.filled .file-pill .size { color: var(--muted); font-size: 12px; }
+  .drop.filled .replace { margin-left: auto; font-size: 12px; color: var(--plum); background: transparent; border: 1px solid var(--plum); border-radius: 5px; padding: 5px 10px; cursor: pointer; font-family: inherit; font-weight: 600; }
+
+  .secondary-zones { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .drop.small { padding: 18px; text-align: center; }
+  .drop.small .head { font-size: 13px; }
+  .drop.small .meta { font-size: 11px; }
+
+  .filetypes { text-align: center; color: var(--muted); font-size: 12px; margin-top: 10px; }
+
+  details.drive { margin-top: 20px; border-top: 1px solid var(--rule); padding-top: 16px; }
+  details.drive summary { cursor: pointer; color: var(--plum); font-weight: 600; font-size: 14px; list-style: none; user-select: none; }
+  details.drive summary::-webkit-details-marker { display: none; }
+  details.drive summary::before { content: "▸"; display: inline-block; margin-right: 8px; font-size: 11px; transition: transform 0.15s; color: var(--plum); }
+  details.drive[open] summary::before { transform: rotate(90deg); }
+  details.drive .inner { padding: 14px 0 4px; }
+  details.drive input { width: 100%; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 6px; font-family: inherit; font-size: 14px; color: var(--ink); background: #fff; }
+  details.drive .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  details.drive .hint strong { color: var(--ink); }
+
+  .cta-row { margin-top: 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 18px; border-top: 1px solid var(--rule); }
+  .cta-row .help { color: var(--muted); font-size: 13px; }
+  .btn { padding: 11px 20px; border-radius: 6px; font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer; border: none; }
+  .btn.primary { background: var(--plum); color: #fff; }
+  .btn.primary:disabled { background: #c8c4b7; color: #fff; cursor: not-allowed; }
+  .btn.secondary { background: transparent; color: var(--plum); border: 1px solid var(--plum); }
+
+  .reveal-note { background: rgba(207, 177, 47, 0.15); border-left: 3px solid var(--gold); padding: 10px 14px; border-radius: 4px; font-size: 13px; color: #5c4400; margin-top: 16px; }
+
+  /* state machine via :target */
+  .state { display: none; }
+  body[data-state="empty"] .state-empty { display: block; }
+  body[data-state="filled"] .state-filled { display: block; }
+  body[data-state="drive"] .state-drive { display: block; }
+
+  .unlock { background: rgba(207, 177, 47, 0.10); border-left: 3px solid var(--gold); border-radius: 4px; padding: 16px 18px; margin: 0 0 18px; }
+  .unlock-title { font-weight: 700; color: var(--plum); font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .unlock-list { margin: 0; padding-left: 18px; line-height: 1.6; font-size: 13.5px; color: var(--ink); }
+  .unlock-list li { margin: 2px 0; }
+  .unlock-list strong { color: var(--plum); font-weight: 600; }
+  .unlock-reassure { margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(207, 177, 47, 0.4); font-size: 13px; color: var(--ink); line-height: 1.5; font-style: italic; }
+
+  .title-warning { background: #fff; border: 1px solid var(--rule); border-left: 3px solid var(--plum); border-radius: 4px; padding: 12px 14px; margin: 0 0 22px; font-size: 13px; line-height: 1.5; color: var(--ink); }
+  .title-warning strong { color: var(--plum); }
+
+  .annotations { background: #fff; border: 1px dashed var(--rule); border-radius: 8px; padding: 18px; margin-top: 24px; font-size: 13px; color: var(--ink); }
+  .annotations h3 { margin: 0 0 8px; color: var(--plum); font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  .annotations ul { margin: 6px 0 0; padding-left: 20px; line-height: 1.55; }
+  .annotations code { background: #f5f3eb; padding: 1px 6px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body data-state="empty">
+
+<div class="frame">
+  <aside>
+    <div class="brand">
+      <h1>Enrops</h1>
+      <p>Admin · Journey to STEAM</p>
+    </div>
+    <nav>
+      <a href="#">Overview</a>
+      <a href="#">Marketing</a>
+      <div class="group">Programs <span style="color:var(--muted);font-size:10px;">▾</span></div>
+      <a class="child active" href="#">Curricula</a>
+      <a class="child" href="#">Scheduled programs</a>
+      <a href="#">Contacts <span class="soon">soon</span></a>
+      <a href="#">Instructors <span class="soon">soon</span></a>
+      <a href="#">Schedule</a>
+      <a href="#">Community <span class="soon">soon</span></a>
+      <a href="#">Settings <span class="soon">soon</span></a>
+    </nav>
+  </aside>
+
+  <main>
+    <div class="crumbs"><a href="#">Curricula</a> &nbsp;›&nbsp; <span>New</span></div>
+    <h2 class="page-title">Add a curriculum to your library</h2>
+    <p class="sub">One doc sets up the whole thing — your registration page, marketing flyer, parent emails, and instructor portal — without you re-typing a thing.</p>
+
+    <div class="unlock">
+      <div class="unlock-title">What this one doc sets up for you</div>
+      <ul class="unlock-list">
+        <li>A <strong>parent-facing registration listing</strong> — title, ages, description, themes, what kids will do</li>
+        <li>A <strong>marketing flyer</strong> + welcome emails you can send out to families</li>
+        <li><strong>Session recap emails</strong> that go out to parents automatically after each class</li>
+        <li>An <strong>instructor portal</strong> with the full lesson plans, prep notes, and materials</li>
+        <li>A <strong>substitute handover</strong> so a sub can step in without scrambling</li>
+      </ul>
+      <div class="unlock-reassure">Your doc doesn't need to be perfect — if anything's missing (like the age range), we'll ask you a couple of quick questions on the next screen.</div>
+    </div>
+
+    <div class="title-warning">
+      <strong>One thing before you upload:</strong> the curriculum title in your doc becomes the public name parents see — on your registration page, flyers, emails, all of it. Make sure it matches the class offering name you market. You'll get to edit on the next screen.
+    </div>
+
+    <div class="state-toggle" role="tablist">
+      <button class="active" onclick="setState('empty')">① Empty</button>
+      <button onclick="setState('filled')">② Primary file picked</button>
+      <button onclick="setState('drive')">③ Drive link expanded</button>
+    </div>
+
+    <!-- STATE 1: Empty -->
+    <div class="state state-empty">
+      <div class="panel">
+        <div class="drop">
+          <div class="icon">⬆</div>
+          <div class="head">Drop your curriculum doc here</div>
+          <div class="meta">or click to browse</div>
+        </div>
+        <div class="filetypes">.pdf · .docx · .xlsx · .txt · .md &nbsp;·&nbsp; up to 25 MB</div>
+
+        <details class="drive">
+          <summary>Or link a Google Doc</summary>
+          <div class="inner">
+            <input type="text" placeholder="Paste a Google Doc / Drive URL" disabled />
+            <div class="hint"><strong>Coming soon:</strong> Drive import is the next thing we're building. For now, please upload a file.</div>
+          </div>
+        </details>
+
+        <div class="cta-row">
+          <div class="help">Drop a file and we'll get started.</div>
+          <button class="btn primary" disabled>Read my curriculum →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATE 2: Primary file picked, secondary zones revealed -->
+    <div class="state state-filled">
+      <div class="panel">
+        <div class="drop filled">
+          <div class="file-pill">
+            <span style="color:var(--plum);font-size:18px;">📄</span>
+            <div>
+              <div class="name">LEGO Game Makers — Instructor Guide.pdf</div>
+              <div class="size">2.4 MB · curriculum guide</div>
+            </div>
+          </div>
+          <button class="replace">Replace</button>
+        </div>
+
+        <div class="reveal-note">
+          Got it. Anything else you want us to keep on file? All optional.
+        </div>
+
+        <div class="secondary-zones">
+          <div class="drop small">
+            <div class="head">Class materials <span style="color:var(--muted);font-weight:500;">(optional)</span></div>
+            <div class="meta">What the instructor brings or orders</div>
+          </div>
+          <div class="drop small">
+            <div class="head">Student materials <span style="color:var(--muted);font-weight:500;">(optional)</span></div>
+            <div class="meta">Worksheets or printables</div>
+          </div>
+        </div>
+
+        <details class="drive">
+          <summary>Or link a Google Doc</summary>
+          <div class="inner">
+            <input type="text" placeholder="Paste a Google Doc / Drive URL" disabled />
+            <div class="hint"><strong>Coming soon:</strong> Drive import is the next thing we're building.</div>
+          </div>
+        </details>
+
+        <div class="cta-row">
+          <div class="help">Takes 30–45 seconds. You'll review everything we found before it goes live.</div>
+          <button class="btn primary">Read my curriculum →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATE 3: Drive link expanded (no file picked) -->
+    <div class="state state-drive">
+      <div class="panel">
+        <div class="drop">
+          <div class="icon">⬆</div>
+          <div class="head">Drop your curriculum doc here</div>
+          <div class="meta">or click to browse</div>
+        </div>
+        <div class="filetypes">.pdf · .docx · .xlsx · .txt · .md &nbsp;·&nbsp; up to 25 MB</div>
+
+        <details class="drive" open>
+          <summary>Or link a Google Doc</summary>
+          <div class="inner">
+            <input type="text" value="https://docs.google.com/document/d/1fiQXjc1zDf9z39xWNK3Wzp8Bq3-ay5hb/edit" />
+            <div class="hint"><strong>Coming soon:</strong> Drive import is the next thing we're building. We'll save your link, but please upload a file too for now.</div>
+          </div>
+        </details>
+
+        <div class="cta-row">
+          <div class="help">Drop a file above to get started.</div>
+          <button class="btn primary" disabled>Read my curriculum →</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="annotations">
+      <h3>Behavior notes (for build)</h3>
+      <ul>
+        <li><strong>Primary drop zone is the only required upload.</strong> Class/student materials zones only appear after the primary doc lands.</li>
+        <li><strong>File limits:</strong> 25 MB each, up to 10 files per curriculum, allowed: <code>.pdf .docx .xlsx .txt .md</code>. Others rejected inline with a clear message.</li>
+        <li><strong>Drive link:</strong> input is disabled in Chunk 2 (greyed out with "coming soon" hint). Chunk 2.5 turns it on.</li>
+        <li><strong>On "Read my curriculum" click:</strong> create a <code>curricula</code> row at <code>status='draft'</code> with name = primary filename. Insert <code>curriculum_documents</code> rows for every uploaded file, tagged <code>doc_type</code> ∈ <code>{primary, materials, journal}</code>. Trigger the edge function on the primary doc. Route to <code>/admin/curricula/:id/extracting</code>.</li>
+        <li><strong>Class/student materials are stored but not read by AI yet.</strong> They sit alongside the primary doc; we can have AI read them later if needed (no work for Jessica required).</li>
+        <li><strong>Title-match rule</strong> (called out in the Plum-bordered note above): the title we read drives the public name parents see. Chunk 3 review screen will reinforce this with an explicit "doesn't match any of your existing programs — sure?" check before publishing.</li>
+        <li><strong>Error states:</strong> bad file type, oversize, upload failure all surface inline above the CTA — never as a modal.</li>
+      </ul>
+    </div>
+  </main>
+</div>
+
+<script>
+  function setState(s) {
+    document.body.dataset.state = s;
+    document.querySelectorAll('.state-toggle button').forEach((b, i) => {
+      b.classList.toggle('active', ['empty','filled','drive'][i] === s);
+    });
+  }
+</script>
+</body>
+</html>

@@ -1,6 +1,8 @@
 // /admin/dev/extraction-test
-// Dogfooding surface for the extract-program-details edge function.
+// Dogfooding surface for the extract-curriculum-details edge function (dev mode).
 // Drop a curriculum doc, watch live status, see the JSON, run again to compare.
+// Dev-mode runs do NOT persist into curricula — they only round-trip through
+// the AI for prompt iteration. Production extraction lives at /admin/curricula/new.
 //
 // Platform-admin only — AdminLayout already gates on org_members; we add a
 // second platform_admins check here so other accepted org members can't reach
@@ -71,10 +73,11 @@ export default function ExtractionTest() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Sign in expired. Reload and try again.");
 
-      // Upload to Storage
-      const path = `${session.user.id}/${Date.now()}-${file.name}`;
+      // Upload to Storage. Dev mode lives under `_dev/` so it never collides
+      // with org-scoped production paths.
+      const path = `_dev/${session.user.id}/${Date.now()}-${file.name}`;
       const { error: upErr } = await supabase.storage
-        .from("program-documents")
+        .from("curriculum-documents")
         .upload(path, file, { upsert: false });
       if (upErr) throw new Error(`Upload failed: ${upErr.message}`);
 
