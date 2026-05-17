@@ -580,17 +580,26 @@ export default function Schedule() {
 
   // Header counters always reflect the full cycle (truth).
   const counts = useMemo(() => {
-    if (!enriched) return { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0 };
-    let assigned = 0, accepted = 0, flagged = 0, changeRequested = 0, needsHire = 0;
-    for (const e of enriched.values()) {
-      if (e.status === "needs_hire") needsHire++;
-      else if (e.status === "flagged") flagged++;
-      else if (e.status === "change_requested") changeRequested++;
-      else if (e.status === "accepted") accepted++;
-      else assigned++;
+    if (state.status !== "ready") return { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0 };
+    // Per-assignment counters — each lead and developing row counts independently so
+    // an accepted lead + awaiting developing reads as 1 accepted + 1 assigned, not 1 accepted.
+    let assigned = 0, accepted = 0, flagged = 0, changeRequested = 0;
+    for (const a of state.assignments) {
+      if (a.status === "withdrawn") continue;
+      if (a.status === "change_requested") { changeRequested++; continue; }
+      if (a.flagged_reason || (Array.isArray(a.flags) && a.flags.length > 0)) { flagged++; continue; }
+      if (a.status === "confirmed" && a.instructor_response_at) { accepted++; continue; }
+      assigned++;
+    }
+    // Needs-hire stays session-level: it's the count of camps with no active assignments.
+    let needsHire = 0;
+    if (enriched) {
+      for (const e of enriched.values()) {
+        if (e.status === "needs_hire") needsHire++;
+      }
     }
     return { assigned, accepted, flagged, changeRequested, needsHire };
-  }, [enriched]);
+  }, [state, enriched]);
 
   // Instructor Hat — "what should I do next?" tips surfaced above the calendar.
   // v1 is deterministic: collects all relevant tips and stacks them in priority order.
