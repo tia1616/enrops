@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mockup — Review curriculum (Chunk 3)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --plum: #691D39;
+    --plum-soft: rgba(105, 29, 57, 0.08);
+    --gold: #CFB12F;
+    --gold-soft: rgba(207, 177, 47, 0.13);
+    --gold-border: rgba(207, 177, 47, 0.55);
+    --chalk: #EAEADD;
+    --ink: #1a1a1a;
+    --muted: #6b6b6b;
+    --rule: #e2dfd5;
+    --panel: #fff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--chalk); color: var(--ink); font-family: "Space Grotesk", system-ui, sans-serif; }
+  .frame { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+  aside { background: #fff; border-right: 1px solid var(--rule); padding: 20px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  aside .brand { padding: 0 20px 18px; border-bottom: 1px solid var(--rule); }
+  aside .brand h1 { margin: 0; color: var(--plum); font-weight: 700; font-size: 22px; letter-spacing: -0.3px; }
+  aside .brand p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  aside nav { padding: 12px 8px; }
+  aside nav a, aside nav .group { display: flex; justify-content: space-between; padding: 9px 12px; margin: 1px 0; border-radius: 6px; font-size: 14px; font-weight: 500; color: var(--ink); text-decoration: none; }
+  aside nav .child { padding: 7px 12px 7px 26px; font-size: 13px; }
+  aside nav .child.active { background: var(--gold-soft); color: var(--plum); font-weight: 600; }
+  aside nav .soon { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; align-self: center; }
+
+  main { padding: 24px 32px 80px; max-width: 1200px; }
+  .crumbs { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  .crumbs a { color: var(--muted); text-decoration: none; }
+  .crumbs a:hover { color: var(--plum); }
+  .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 4px; }
+  h2.page-title { margin: 0; color: var(--plum); font-size: 26px; font-weight: 700; }
+  .status-pill { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 12px; text-transform: uppercase; letter-spacing: 0.5px; background: var(--gold-soft); color: #7a5a00; }
+  p.sub { color: var(--muted); font-size: 14px; margin: 6px 0 22px; max-width: 720px; }
+
+  .state-toggle { background: #fff; border: 1px solid var(--rule); border-radius: 8px; padding: 6px; display: inline-flex; gap: 4px; margin-bottom: 22px; }
+  .state-toggle button { background: transparent; border: none; padding: 7px 12px; font-family: inherit; font-size: 13px; color: var(--ink); border-radius: 5px; cursor: pointer; font-weight: 500; }
+  .state-toggle button.active { background: var(--plum); color: #fff; }
+
+  /* two column layout */
+  .layout { display: grid; grid-template-columns: 280px 1fr; gap: 22px; }
+  @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+
+  /* left column — source docs */
+  .docs-panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 16px; position: sticky; top: 20px; align-self: start; }
+  .docs-panel h3 { margin: 0 0 12px; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .doc-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--rule); font-size: 13px; }
+  .doc-row:first-of-type { border-top: 0; padding-top: 0; }
+  .doc-row .icon { color: var(--plum); }
+  .doc-row .name { flex: 1; color: var(--ink); }
+  .doc-row .name small { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+  .doc-row a { color: var(--plum); font-size: 12px; text-decoration: none; font-weight: 600; }
+
+  /* right column */
+  .right-col { display: flex; flex-direction: column; gap: 18px; }
+
+  /* Dora banner (replaces Section A input cards) */
+  .dora-banner { background: var(--panel); border: 1px solid var(--gold-border); border-left: 4px solid var(--gold); border-radius: 8px; padding: 16px 20px; display: flex; align-items: center; gap: 14px; }
+  .dora-banner.calm { border-color: var(--rule); border-left-color: var(--rule); background: #fafaf3; }
+  .dora-avatar { width: 38px; height: 38px; border-radius: 50%; background: var(--plum); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
+  .dora-banner.calm .dora-avatar { background: #9b9b8e; }
+  .dora-body { flex: 1; }
+  .dora-name { font-weight: 700; color: var(--plum); font-size: 14px; }
+  .dora-name small { color: var(--muted); font-weight: 500; font-size: 12px; margin-left: 6px; }
+  .dora-banner.calm .dora-name { color: var(--ink); }
+  .dora-msg { font-size: 14px; color: var(--ink); margin-top: 2px; line-height: 1.45; }
+  .dora-msg .count { font-weight: 700; color: var(--plum); }
+  .dora-action { background: var(--plum); color: #fff; border: none; border-radius: 5px; padding: 8px 14px; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; flex-shrink: 0; }
+
+  /* "Dora flagged" badge on Section B fields */
+  .flag-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 700; color: #7a5a00; background: var(--gold-soft); border: 1px solid var(--gold-border); padding: 2px 7px; border-radius: 10px; text-transform: none; letter-spacing: 0; margin-left: 8px; }
+  .flag-badge::before { content: "◆"; font-size: 9px; }
+
+  /* Section B */
+  .review-section { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 22px; }
+  .section-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .section-head h3 { margin: 0; font-size: 18px; font-weight: 700; color: var(--ink); }
+  .section-head .micro { color: var(--muted); font-size: 12px; }
+  .section-head .micro::before { content: "•"; margin-right: 8px; color: var(--rule); }
+  .section-blurb { color: var(--muted); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
+
+  .field { margin-bottom: 16px; }
+  .field-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--ink); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .field-label .conf-flag { color: var(--gold); font-size: 12px; cursor: help; }
+  .field-help { font-size: 12px; color: var(--muted); margin-bottom: 6px; line-height: 1.4; }
+  .field input[type="text"], .field input[type="number"], .field textarea, .field select {
+    font-family: inherit; font-size: 14px; padding: 9px 12px; border: 1px solid var(--rule); border-radius: 6px; background: #fff; color: var(--ink); width: 100%;
+  }
+  .field input.low-conf, .field textarea.low-conf, .field select.low-conf, .field .chips.low-conf {
+    border-color: var(--gold-border); box-shadow: 0 0 0 3px var(--gold-soft);
+  }
+  .field textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
+  .field .saved-tick { font-size: 12px; color: var(--gold); margin-left: 6px; opacity: 0; transition: opacity 0.2s; }
+  .field.just-saved .saved-tick { opacity: 1; }
+
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+  /* age/grade toggle */
+  .age-grade-toggle { display: inline-flex; background: #f7f6ef; border: 1px solid var(--rule); border-radius: 5px; padding: 3px; margin-bottom: 8px; }
+  .age-grade-toggle button { background: transparent; border: none; padding: 5px 10px; font-family: inherit; font-size: 12px; color: var(--muted); border-radius: 3px; cursor: pointer; font-weight: 600; }
+  .age-grade-toggle button.active { background: #fff; color: var(--plum); box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  .age-range-row { display: flex; gap: 8px; align-items: center; max-width: 240px; }
+  .age-range-row input { max-width: 90px; }
+  .age-range-row span { color: var(--muted); }
+
+  /* multi-select pills */
+  .multi-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .multi-pills label { display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: #fff; border: 1px solid var(--rule); border-radius: 18px; font-size: 13px; cursor: pointer; user-select: none; }
+  .multi-pills label.checked { background: var(--plum-soft); border-color: var(--plum); color: var(--plum); font-weight: 600; }
+  .multi-pills input { display: none; }
+
+  /* chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; background: #fff; min-height: 40px; }
+  .chips .chip { background: var(--gold-soft); color: #6b4a00; padding: 4px 8px 4px 10px; border-radius: 14px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+  .chips .chip .x { color: #997800; cursor: pointer; font-weight: 700; font-size: 14px; line-height: 1; }
+  .chips input { flex: 1; min-width: 100px; border: none; outline: none; font-family: inherit; font-size: 13px; padding: 4px 0; }
+
+  /* Sessions accordion */
+  .sessions-section { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 22px; }
+  .session { border-top: 1px solid var(--rule); }
+  .session:first-of-type { border-top: 0; }
+  .session-head { display: flex; align-items: center; gap: 10px; padding: 14px 0; cursor: pointer; user-select: none; }
+  .session-head .num { width: 26px; height: 26px; border-radius: 50%; background: var(--plum-soft); color: var(--plum); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0; }
+  .session-head .title { flex: 1; font-weight: 600; color: var(--ink); font-size: 14px; }
+  .session-head .caret { color: var(--muted); transition: transform 0.15s; }
+  .session.open .session-head .caret { transform: rotate(90deg); }
+  .session-body { padding: 0 0 18px 36px; display: none; }
+  .session.open .session-body { display: block; }
+
+  /* CTAs */
+  .cta-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 18px 22px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; position: sticky; bottom: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.04); }
+  .cta-bar .left { color: var(--muted); font-size: 13px; }
+  .cta-bar .right { display: flex; gap: 10px; }
+  .btn { padding: 10px 18px; border-radius: 6px; font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer; border: none; }
+  .btn.primary { background: var(--plum); color: #fff; }
+  .btn.secondary { background: transparent; color: var(--plum); border: 1px solid var(--plum); }
+  .btn.tertiary { background: transparent; color: var(--muted); border: none; padding: 10px 12px; }
+
+  /* Publish modal */
+  .modal-back { position: fixed; inset: 0; background: rgba(26,26,26,0.45); display: none; align-items: center; justify-content: center; z-index: 100; padding: 24px; }
+  body[data-state="publish"] .modal-back { display: flex; }
+  .modal { background: #fff; border-radius: 10px; max-width: 520px; width: 100%; padding: 26px 28px; box-shadow: 0 10px 32px rgba(0,0,0,0.15); }
+  .modal h3 { margin: 0 0 6px; color: var(--plum); font-size: 20px; font-weight: 700; }
+  .modal .modal-sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .match-suggest { background: var(--gold-soft); border: 1px solid var(--gold-border); border-radius: 6px; padding: 14px 16px; margin-bottom: 18px; font-size: 13.5px; line-height: 1.55; color: var(--ink); }
+  .match-suggest .head { font-weight: 700; color: var(--plum); margin-bottom: 4px; display: flex; gap: 6px; align-items: center; }
+  .match-suggest strong { color: var(--plum); }
+  .match-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .match-row label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+  /* state machine */
+  .state { display: none; }
+  body[data-state="follow-ups"] .state-follow-ups { display: block; }
+  body[data-state="cleared"] .state-cleared { display: block; }
+  body[data-state="publish"] .state-follow-ups { display: block; }
+
+  /* annotations panel */
+  .annotations { background: #fff; border: 1px dashed var(--rule); border-radius: 8px; padding: 18px; margin-top: 24px; font-size: 13px; color: var(--ink); }
+  .annotations h3 { margin: 0 0 8px; color: var(--plum); font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  .annotations ul { margin: 6px 0 0; padding-left: 20px; line-height: 1.6; }
+  .annotations code { background: #f5f3eb; padding: 1px 6px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body data-state="follow-ups">
+
+<div class="frame">
+  <aside>
+    <div class="brand">
+      <h1>Enrops</h1>
+      <p>Admin · Journey to STEAM</p>
+    </div>
+    <nav>
+      <a href="#">Overview</a>
+      <a href="#">Marketing</a>
+      <div class="group">Programs <span style="color:var(--muted);font-size:10px;">▾</span></div>
+      <a class="child active" href="#">Curricula</a>
+      <a class="child" href="#">Scheduled programs</a>
+      <a href="#">Contacts <span class="soon">soon</span></a>
+      <a href="#">Instructors <span class="soon">soon</span></a>
+      <a href="#">Schedule</a>
+      <a href="#">Community <span class="soon">soon</span></a>
+      <a href="#">Settings <span class="soon">soon</span></a>
+    </nav>
+  </aside>
+
+  <main>
+    <div class="crumbs"><a href="#">Curricula</a> &nbsp;›&nbsp; <span>Next Level Robotics Camp</span> &nbsp;›&nbsp; <span>Review</span></div>
+    <div class="page-head">
+      <div>
+        <h2 class="page-title">Next Level Robotics Camp</h2>
+        <p class="sub">We pulled out the structure. Look it over, edit anything, then publish so it's ready to schedule into a term.</p>
+      </div>
+      <span class="status-pill">Extracted</span>
+    </div>
+
+    <div class="state-toggle" role="tablist">
+      <button class="active" onclick="setState('follow-ups')">① With follow-ups</button>
+      <button onclick="setState('cleared')">② All cleared</button>
+      <button onclick="setState('publish')">③ Publish confirm</button>
+    </div>
+
+    <div class="layout">
+      <!-- LEFT: source docs -->
+      <div class="docs-panel">
+        <h3>Source documents</h3>
+        <div class="doc-row">
+          <span class="icon">📄</span>
+          <div class="name">Next_Level_Robotics_Camp_Instructor_Guide.pdf<small>2.1 MB · curriculum guide</small></div>
+          <a href="#">Open</a>
+        </div>
+        <div class="doc-row">
+          <span class="icon">📄</span>
+          <div class="name">NLR_Materials_List.xlsx<small>34 KB · materials</small></div>
+          <a href="#">Open</a>
+        </div>
+      </div>
+
+      <!-- RIGHT: sections -->
+      <div class="right-col">
+
+        <!-- Dora banner — flagged state -->
+        <div class="state state-follow-ups">
+          <section class="dora-banner">
+            <div class="dora-avatar">D</div>
+            <div class="dora-body">
+              <div class="dora-name">Dora<small>your Director</small></div>
+              <div class="dora-msg">I flagged <span class="count">3 fields</span> below worth a look — they're outlined in gold. Edit any of them to clear the flag.</div>
+            </div>
+            <button class="dora-action">Jump to first ↓</button>
+          </section>
+        </div>
+
+        <!-- Dora banner — cleared state -->
+        <div class="state state-cleared">
+          <section class="dora-banner calm">
+            <div class="dora-avatar">D</div>
+            <div class="dora-body">
+              <div class="dora-name">Dora<small>your Director</small></div>
+              <div class="dora-msg">All caught up. ✓ Ready to publish whenever you are.</div>
+            </div>
+          </section>
+        </div>
+
+        <!-- SECTION B — Full review -->
+        <section class="review-section">
+          <div class="section-head">
+            <h3>The full curriculum</h3>
+            <span class="micro">Edits save as you go</span>
+          </div>
+          <p class="section-blurb">Everything below feeds your registration page, marketing emails, instructor portal, and parent recaps. Fields with a soft gold highlight are ones we weren't fully sure about — worth a glance.</p>
+
+          <div class="field">
+            <div class="field-label">Curriculum name</div>
+            <input type="text" value="Next Level Robotics Camp" />
+          </div>
+
+          <div class="field">
+            <div class="field-label">Short description</div>
+            <div class="field-help">This is what parents see on your registration page. Lead with what kids do and make.</div>
+            <textarea>Kids build a city all week with recurring characters who need their help — designing buildings, vehicles, sorting systems, games, and a working bus. Each day's builds add to a shared city map that grows into a Family Showcase on Day 5.</textarea>
+          </div>
+
+          <div class="row-2">
+            <div class="field">
+              <div class="field-label">Age / grade range <span class="flag-badge">Dora flagged</span></div>
+              <div class="age-grade-toggle">
+                <button class="active">Ages</button>
+                <button>Grades</button>
+              </div>
+              <div class="age-range-row">
+                <input type="number" value="8" class="low-conf" /><span>to</span><input type="number" value="13" class="low-conf" />
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="field-label">Format</div>
+              <select>
+                <option>Summer camp</option>
+                <option>Afterschool</option>
+                <option>Other</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row-2">
+            <div class="field">
+              <div class="field-label">Sessions <span style="color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0;">— change requires re-uploading</span></div>
+              <input type="number" value="5" disabled style="background:#f7f6ef;color:var(--muted);max-width:120px;" />
+            </div>
+
+            <div class="field">
+              <div class="field-label">Class size <span class="flag-badge">Dora flagged</span></div>
+              <div class="field-help">Drives waitlist + cancel-by logic. Usually 4–20 for camps, 5–14 for afterschool.</div>
+              <div class="age-range-row">
+                <input type="number" placeholder="min" class="low-conf" /><span>to</span><input type="number" placeholder="max" class="low-conf" /><span style="color:var(--muted);font-size:13px;">students</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label">Prerequisites <span style="color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0;">— optional</span> <span class="flag-badge">Dora flagged</span></div>
+            <div class="field-help">What parents should know before signing up.</div>
+            <input type="text" placeholder="e.g. Beginner OK · should be comfortable reading" class="low-conf" />
+          </div>
+
+          <div class="field">
+            <div class="field-label">Session types supported</div>
+            <div class="field-help">Which formats can this run as?</div>
+            <div class="multi-pills">
+              <label class="checked"><input type="checkbox" checked /> Full-day camp</label>
+              <label><input type="checkbox" /> Half-day AM camp</label>
+              <label><input type="checkbox" /> Half-day PM camp</label>
+              <label><input type="checkbox" /> Afterschool</label>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label">Themes</div>
+            <div class="field-help">Pop-culture or topical themes parents recognize.</div>
+            <div class="chips">
+              <span class="chip">city building <span class="x">×</span></span>
+              <span class="chip">recurring characters <span class="x">×</span></span>
+              <input type="text" placeholder="add a theme + enter" />
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label">Narrative arc <span style="color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0;">— optional</span></div>
+            <div class="field-help">If there's a story or theme running across all sessions, it lives here.</div>
+            <textarea>Kids design and build a city all week, helping four recurring characters — Leo, Maria, Sofie, and Daniel — get around, carry stuff, sort trash, play games, and ride a bus. Each day's builds get added to a shared city map, building toward a Family Showcase on Day 5.</textarea>
+          </div>
+
+          <div class="field">
+            <div class="field-label">Skills overall</div>
+            <div class="field-help">Plain-language. Used in parent-facing surfaces + the final recap email at term end.</div>
+            <div class="chips">
+              <span class="chip">building functional structures <span class="x">×</span></span>
+              <span class="chip">testing and iterating designs <span class="x">×</span></span>
+              <span class="chip">simple machines <span class="x">×</span></span>
+              <span class="chip">basic motor + sensor wiring <span class="x">×</span></span>
+              <span class="chip">collaborative problem-solving <span class="x">×</span></span>
+              <input type="text" placeholder="add a skill + enter" />
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label">Mid-term skills <span style="color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0;">— optional</span></div>
+            <div class="field-help">The 3–5 skills you'd highlight in the mid-program recap email. Defaults to skills from sessions 1–3.</div>
+            <div class="chips">
+              <span class="chip">structural design <span class="x">×</span></span>
+              <span class="chip">cardboard prototyping <span class="x">×</span></span>
+              <span class="chip">LEGO building <span class="x">×</span></span>
+              <input type="text" placeholder="add a skill + enter" />
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label">Final showcase <span style="color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0;">— optional</span></div>
+            <div class="field-help">If the curriculum ends with a capstone, performance, or family event. Powers the pre-launch reminder email.</div>
+            <textarea placeholder="e.g. Day 5 Family Showcase — parents come at 4pm, kids present their city builds.">Family Showcase on Day 5 — parents arrive at 4pm to walk the shared city map; each kid presents one build they're proudest of.</textarea>
+          </div>
+
+          <div class="field">
+            <div class="field-label">Materials</div>
+            <div class="chips">
+              <span class="chip">LEGO Education kits <span class="x">×</span></span>
+              <span class="chip">cardboard <span class="x">×</span></span>
+              <span class="chip">tape <span class="x">×</span></span>
+              <span class="chip">9V batteries <span class="x">×</span></span>
+              <span class="chip">small motors <span class="x">×</span></span>
+              <span class="chip">poster paper <span class="x">×</span></span>
+              <input type="text" placeholder="add a material + enter" />
+            </div>
+          </div>
+        </section>
+
+        <!-- SESSIONS -->
+        <section class="sessions-section">
+          <div class="section-head">
+            <h3>Sessions</h3>
+            <span class="micro">5 sessions</span>
+          </div>
+          <p class="section-blurb">Each session has a recap that appears in the <strong>parent portal</strong> after class. By default we email parents a mid-term and final recap only — you'll be able to change the email cadence later. Use <code>{photos}</code> where the instructor's photos slot in.</p>
+
+          <div class="session open">
+            <div class="session-head" onclick="toggleSession(this)">
+              <span class="num">1</span>
+              <span class="title">Welcome to the city — meet Leo and build his apartment</span>
+              <span class="caret">▶</span>
+            </div>
+            <div class="session-body">
+              <div class="field">
+                <div class="field-label">Title</div>
+                <input type="text" value="Welcome to the city — meet Leo and build his apartment" />
+              </div>
+              <div class="field">
+                <div class="field-label">Description</div>
+                <textarea>Kids meet the four city residents and build Leo's apartment — first design with cardboard, then upgrade with LEGO Education pieces. The first piece of the shared city map goes up.</textarea>
+              </div>
+              <div class="field">
+                <div class="field-label">Skills practiced</div>
+                <div class="chips">
+                  <span class="chip">structural design <span class="x">×</span></span>
+                  <span class="chip">cardboard prototyping <span class="x">×</span></span>
+                  <span class="chip">LEGO building <span class="x">×</span></span>
+                  <input type="text" placeholder="add a skill" />
+                </div>
+              </div>
+              <div class="field">
+                <div class="field-label">Materials this session</div>
+                <div class="chips">
+                  <span class="chip">cardboard <span class="x">×</span></span>
+                  <span class="chip">LEGO kits <span class="x">×</span></span>
+                  <span class="chip">tape <span class="x">×</span></span>
+                  <input type="text" placeholder="add" />
+                </div>
+              </div>
+              <div class="field">
+                <div class="field-label">Recap template</div>
+                <div class="field-help">Shown in the parent portal after this session runs. Also used in the mid-term and final recap emails.</div>
+                <textarea>Today the kids met Leo, our first city resident, and got to work designing his apartment! They started with cardboard mock-ups, then upgraded their favorite design using LEGO Education pieces. Leo's apartment is now the first building on our shared city map. {photos} Ask your kid which design feature they're proudest of — and what Leo's apartment is missing that the city still needs.</textarea>
+              </div>
+              <div class="field">
+                <div class="field-label">Parent engagement question</div>
+                <input type="text" value="Ask your kid what Leo's apartment is missing that the city still needs." />
+              </div>
+            </div>
+          </div>
+
+          <div class="session">
+            <div class="session-head" onclick="toggleSession(this)">
+              <span class="num">2</span>
+              <span class="title">Vehicles for Maria — carts that carry stuff</span>
+              <span class="caret">▶</span>
+            </div>
+            <div class="session-body"></div>
+          </div>
+          <div class="session">
+            <div class="session-head" onclick="toggleSession(this)">
+              <span class="num">3</span>
+              <span class="title">Sofie's sorting line</span>
+              <span class="caret">▶</span>
+            </div>
+            <div class="session-body"></div>
+          </div>
+          <div class="session">
+            <div class="session-head" onclick="toggleSession(this)">
+              <span class="num">4</span>
+              <span class="title">Daniel's game day — interactive builds</span>
+              <span class="caret">▶</span>
+            </div>
+            <div class="session-body"></div>
+          </div>
+          <div class="session">
+            <div class="session-head" onclick="toggleSession(this)">
+              <span class="num">5</span>
+              <span class="title">The Family Showcase bus</span>
+              <span class="caret">▶</span>
+            </div>
+            <div class="session-body"></div>
+          </div>
+        </section>
+
+        <!-- CTA bar -->
+        <div class="cta-bar">
+          <div class="left">All edits are saved.</div>
+          <div class="right">
+            <button class="btn tertiary">← Back to library</button>
+            <button class="btn secondary">Save as draft</button>
+            <button class="btn primary" onclick="setState('publish')">Publish curriculum →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="annotations">
+      <h3>Behavior notes (for build)</h3>
+      <ul>
+        <li><strong>Dora banner (top of right column).</strong> Replaces the duplicate input-card pattern. Counts fields where (<code>confidence &lt; 0.7</code>) OR (extracted_value is null AND field is in Dora's flag list: age_range, class_size, format, session_types_supported, prerequisites, mid_term_skills, final_showcase). "Jump to first ↓" scrolls to the first flagged field. When zero flags remain, banner switches to the muted "All caught up" state.</li>
+        <li><strong>Field-level "Dora flagged" badge.</strong> Each flagged field in Section B gets a soft gold-bordered chip in the label + a low-confidence ring on the input. Saving/editing the field clears the flag: sets <code>human_approved=true</code> + <code>human_approved_by</code> on the corresponding <code>curriculum_extracted_fields</code> row (or creates one for fields that didn't extract at all). The Dora banner count auto-decrements.</li>
+        <li><strong>Dora is admin-portal only.</strong> No agent avatars or persona voice on parent / instructor / public registration surfaces.</li>
+        <li><strong>Dora avatar.</strong> Placeholder is a plum circle with "D". Real art (Jessica has it) swaps in after first ship — just a CSS background-image change.</li>
+        <li><strong>Section B fields.</strong> Pulled live from <code>curricula</code> + <code>curriculum_extracted_fields</code>. <strong>Schema additions (this chunk):</strong> <code>class_size_min</code>, <code>class_size_max</code>, <code>prerequisites</code>, <code>mid_term_skills</code> (text[]), <code>final_showcase</code> (text). <strong>Dropped:</strong> <code>instructor_guide_notes</code> already gone via commit <code>b0bbce0</code>. <strong>Already-existed addition:</strong> <code>grade_min/grade_max</code> shown via ages/grades toggle (whichever pair is populated).</li>
+        <li><strong>Confidence indicators.</strong> Fields where <code>confidence &lt; 0.7</code> in <code>curriculum_extracted_fields</code> get a soft gold ring + tooltip "Double-check this one — we weren't fully sure." Never red.</li>
+        <li><strong>Saving.</strong> Text inputs debounced 800ms after last keystroke. Chip add/remove + checkbox + toggle save immediately. Every save: (a) update the canonical column on <code>curricula</code> or <code>curriculum_sessions</code>, (b) for top-level fields, update <code>curriculum_extracted_fields.human_edited_value</code> + flip <code>human_approved=true</code>.</li>
+        <li><strong>Sessions accordion.</strong> First session expanded by default. Session-level edits write only to <code>curriculum_sessions</code> (no per-session-field row in <code>curriculum_extracted_fields</code> — the whole sessions array is one row).</li>
+        <li><strong>Session count is read-only.</strong> Changing it would require a re-extraction.</li>
+        <li><strong>Publish flow (2-step modal).</strong> Step ①: confirm the curriculum name (editable inline) — it's the public-facing name. Step ②: fuzzy-match SQL query — normalized lowercase compare of <code>curricula.name</code> vs distinct <code>programs.curriculum</code> WHERE <code>organization_id = current org AND curriculum_id IS NULL</code>. If matches score high, show checkboxes per matched program run. On confirm: flip <code>curricula.status='published'</code> + set <code>programs.curriculum_id = curricula.id</code> on checked rows. Returns to <code>/admin/curricula</code>.</li>
+        <li><strong>Save as draft.</strong> Status stays <code>'extracted'</code>. Returns to library.</li>
+        <li><strong>Org-context preload for the extraction prompt (follow-up commit, not this chunk).</strong> Edit <code>supabase/functions/extract-curriculum-details/index.ts</code> + <code>prompts.ts</code> to pull distinct age ranges, class-size ranges, and format from the caller's <code>programs</code> rows and inject as system-prompt context: "This org's existing programs typically use ages 6–10 or 7–12 (camps) with class sizes 4–20. Use this as a sanity check when extracting." Reduces hallucination on policy-shaped fields. Lands as small follow-up before next test upload.</li>
+        <li><strong>Recap-template surface.</strong> Per-session <code>recap_template</code> is the <strong>parent portal entry</strong> after each class — not a per-session email. Default email cadence = mid-term + final only (mid-term uses <code>curricula.mid_term_skills</code> + sessions 1 to mid-point; final uses <code>curricula.skills_overall</code>). Provider-configurable email cadence (per-session / weekly / mid-term + final / final only / none) is deferred to a later chunk — out of scope here.</li>
+        <li><strong>Parent-portal per-session view.</strong> Reads <code>curriculum_sessions.{title, description, skills_practiced, parent_engagement_question, recap_template}</code> — all already extracted.</li>
+        <li><strong>Multi-tenant.</strong> Every query filters by <code>organization_id</code> from outlet context. No J2S hardcoding. Dora's persona copy is generic.</li>
+        <li><strong>RLS.</strong> Curricula + sessions + extracted_fields already RLS-scoped per org. Updates use anon client + user JWT.</li>
+      </ul>
+    </div>
+  </main>
+</div>
+
+<!-- Publish modal -->
+<div class="modal-back">
+  <div class="modal">
+    <div class="dora-head" style="margin-bottom:14px;">
+      <div class="dora-avatar">D</div>
+      <div>
+        <span class="name">Dora</span><small>your Director</small>
+      </div>
+    </div>
+
+    <h3 style="margin-top:0;">Two quick things before we publish.</h3>
+
+    <div style="background:#fcfbf6;border:1px solid var(--rule);border-radius:6px;padding:14px 16px;margin-bottom:14px;">
+      <div style="font-weight:700;color:var(--ink);font-size:13px;margin-bottom:6px;">① Confirm the name</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:8px;line-height:1.45;">This becomes the public name on your registration page, flyers, emails — everywhere parents see it. Read right?</div>
+      <input type="text" value="Next Level Robotics Camp" style="width:100%;font-family:inherit;font-size:14px;padding:9px 12px;border:1px solid var(--rule);border-radius:5px;" />
+    </div>
+
+    <div class="match-suggest" style="margin-bottom:18px;">
+      <div class="head">② Link your existing programs?</div>
+      Looks like this is the curriculum behind <strong>"Next Level Robotics Camp"</strong> in your scheduled programs. Want me to link them so the schedule knows about its lesson plan?
+      <div class="match-row">
+        <label><input type="checkbox" checked /> Link 3 program runs: Forest Grove · Camas · Hudson Park (all SU26)</label>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn tertiary" onclick="setState('follow-ups')">Cancel</button>
+      <button class="btn primary">Publish →</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function setState(s) {
+    document.body.dataset.state = s;
+    document.querySelectorAll('.state-toggle button').forEach((b, i) => {
+      b.classList.toggle('active', ['follow-ups','cleared','publish'][i] === s);
+    });
+  }
+  function toggleSession(el) {
+    const s = el.parentElement;
+    s.classList.toggle('open');
+  }
+</script>
+</body>
+</html>

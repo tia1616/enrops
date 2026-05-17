@@ -17,7 +17,7 @@ import ExtractionTest from './pages/admin/dev/ExtractionTest.jsx';
 import CurriculaList from './pages/admin/curricula/CurriculaList.jsx';
 import CurriculumNew from './pages/admin/curricula/CurriculumNew.jsx';
 import CurriculumExtracting from './pages/admin/curricula/CurriculumExtracting.jsx';
-import CurriculumReviewPlaceholder from './pages/admin/curricula/CurriculumReviewPlaceholder.jsx';
+import CurriculumReview from './pages/admin/curricula/CurriculumReview.jsx';
 import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
 import InstructorPortal from './pages/j2s/InstructorPortal.jsx';
 import { CartProvider } from './context/CartContext.jsx';
@@ -53,7 +53,7 @@ export default function App() {
         <Route path="curricula" element={<CurriculaList />} />
         <Route path="curricula/new" element={<CurriculumNew />} />
         <Route path="curricula/:id/extracting" element={<CurriculumExtracting />} />
-        <Route path="curricula/:id/review" element={<CurriculumReviewPlaceholder />} />
+        <Route path="curricula/:id/review" element={<CurriculumReview />} />
         <Route path="programs" element={<ProgramsCalendar />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />
       </Route>
