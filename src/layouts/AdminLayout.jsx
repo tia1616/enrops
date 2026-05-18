@@ -45,6 +45,12 @@ export default function AdminLayout() {
   const [org, setOrg] = useState(null);
   const [debugInfo, setDebugInfo] = useState(null);
   const [openGroups, setOpenGroups] = useState(() => new Set());
+  // Lifetime time-saved tally (rolling sum of time_saved_events for this org).
+  // See project_enrops_time_saved memory: every Director action that completes
+  // work for the operator inserts a row; this is the always-on receipt.
+  const [timeSavedTotal, setTimeSavedTotal] = useState(null);
+  const [timeSavedRecent, setTimeSavedRecent] = useState([]);
+  const [tallyOpen, setTallyOpen] = useState(false);
 
   // Groups whose child route is currently active are forced open regardless of toggle state.
   const activeGroupKeys = useMemo(() => {
@@ -114,6 +120,44 @@ export default function AdminLayout() {
   async function signOut() {
     await supabase.auth.signOut();
     navigate("/");
+  }
+
+  // Load the time-saved tally once we know which org the operator's in.
+  // Refetches on route change so newly-fired events show up after the
+  // operator publishes / schedules / etc.
+  useEffect(() => {
+    if (!org?.id) return;
+    let mounted = true;
+    (async () => {
+      const [{ data: sumRows }, { data: recentRows }] = await Promise.all([
+        supabase
+          .from("time_saved_events")
+          .select("hours_saved")
+          .eq("organization_id", org.id),
+        supabase
+          .from("time_saved_events")
+          .select("action_label, hours_saved, created_at")
+          .eq("organization_id", org.id)
+          .order("created_at", { ascending: false })
+          .limit(5),
+      ]);
+      if (!mounted) return;
+      const total = (sumRows ?? []).reduce((s, r) => s + Number(r.hours_saved || 0), 0);
+      setTimeSavedTotal(total);
+      setTimeSavedRecent(recentRows ?? []);
+    })();
+    return () => { mounted = false; };
+  }, [org?.id, location.pathname]);
+
+  function relativeTime(iso) {
+    const now = Date.now();
+    const then = new Date(iso).getTime();
+    const diffSec = Math.max(0, Math.round((now - then) / 1000));
+    if (diffSec < 60) return "just now";
+    if (diffSec < 3600) return `${Math.round(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.round(diffSec / 3600)}h ago`;
+    if (diffSec < 86400 * 7) return `${Math.round(diffSec / 86400)}d ago`;
+    return new Date(iso).toLocaleDateString();
   }
 
   if (authState === "loading") {
@@ -279,6 +323,72 @@ export default function AdminLayout() {
               );
             })}
           </nav>
+
+          {/* Lifetime time-saved tally — every Director action contributes. */}
+          {timeSavedTotal != null && timeSavedTotal > 0 && (
+            <div style={{ position: "relative", padding: "0 12px", marginBottom: 8 }}>
+              <button
+                type="button"
+                onClick={() => setTallyOpen((v) => !v)}
+                title="Click for the breakdown"
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  background: "rgba(78, 145, 78, 0.12)",
+                  border: "1px solid rgba(78, 145, 78, 0.35)",
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                <div style={{ fontSize: 10, color: "#2d5a2d", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+                  Saved with Enrops
+                </div>
+                <div style={{ fontSize: 16, color: "#2d5a2d", fontWeight: 700, marginTop: 2 }}>
+                  ⏱ {Math.round(timeSavedTotal)}+ hours
+                </div>
+                <div style={{ fontSize: 10, color: MUTED, marginTop: 4 }}>
+                  {tallyOpen ? "tap to close" : "tap for breakdown"}
+                </div>
+              </button>
+              {tallyOpen && (
+                <div style={{
+                  position: "absolute",
+                  bottom: "calc(100% + 6px)",
+                  left: 12,
+                  right: 12,
+                  background: "#fff",
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 8,
+                  padding: 14,
+                  boxShadow: "0 8px 24px rgba(0, 0, 0, 0.15)",
+                  zIndex: 50,
+                }}>
+                  <div style={{ color: PLUM, fontWeight: 700, fontSize: 14, marginBottom: 2 }}>
+                    Saved you {Math.round(timeSavedTotal)}+ hours
+                  </div>
+                  <div style={{ color: MUTED, fontSize: 11, marginBottom: 10 }}>
+                    Lifetime · last 5 actions
+                  </div>
+                  <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: 12, lineHeight: 1.45 }}>
+                    {timeSavedRecent.length === 0 && (
+                      <li style={{ color: MUTED }}>No actions logged yet.</li>
+                    )}
+                    {timeSavedRecent.map((ev, i) => (
+                      <li key={i} style={{ display: "flex", justifyContent: "space-between", gap: 6, padding: "5px 0", borderBottom: i < timeSavedRecent.length - 1 ? `1px solid ${RULE}` : "none" }}>
+                        <span style={{ flex: 1, color: INK }}>
+                          <strong style={{ color: "#2d5a2d" }}>+{Math.round(Number(ev.hours_saved))} hr</strong> · {ev.action_label}
+                        </span>
+                        <span style={{ color: MUTED, fontSize: 10, whiteSpace: "nowrap" }}>{relativeTime(ev.created_at)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ padding: "12px 20px", borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED }}>
             <div style={{ marginBottom: 6, color: INK, fontWeight: 500 }}>{user?.email}</div>

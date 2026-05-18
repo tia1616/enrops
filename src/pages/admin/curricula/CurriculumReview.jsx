@@ -569,6 +569,22 @@ export default function CurriculumReview() {
       // True totals = newly linked this publish session + previously linked.
       setLinkedProgramCount(programIdsToLink.length + preLinkedProgramCount);
       setLinkedCampSessionCount(campSessionIdsToLink.length + preLinkedCampSessionCount);
+
+      // Log the time-saved event so the sidebar tally + future analytics see
+      // this work. Dynamic estimate: 1.5 hours per session, floor 10 hours.
+      // Per project_enrops_time_saved memory: "saved you N+ hours" framing.
+      const sessionCount = sessions.length || 5;
+      const hoursSaved = Math.max(10, Math.ceil(sessionCount * 1.5));
+      const { error: tsErr } = await supabase.from("time_saved_events").insert({
+        organization_id: org.id,
+        action_type: "curriculum_published",
+        action_label: `Published "${finalName}"`,
+        hours_saved: hoursSaved,
+        related_entity_type: "curriculum",
+        related_entity_id: curriculum.id,
+        created_by: user?.id ?? null,
+      });
+      if (tsErr) console.warn("time_saved_events insert failed (non-fatal):", tsErr.message);
       setPublishing(false);
       setPublishStep(3); // celebration
     } catch (e) {
