@@ -83,20 +83,36 @@ export default function CurriculaList() {
     items: curricula.filter((c) => c.status === g.key),
   }));
 
-  // Delete a draft / extracted curriculum:
-  //   1. confirm with operator
-  //   2. fetch the curriculum_documents storage_paths so we can clean storage
-  //      (Postgres cascade doesn't extend to storage objects)
-  //   3. call Storage API to remove the files
-  //   4. DELETE the curricula row — cascade clears curriculum_sessions /
+  // Delete a curriculum (any status):
+  //   1. confirm with operator -- stronger warning for published (will unlink
+  //      any linked programs + camp_sessions, those go back to free-text)
+  //   2. fetch curriculum_documents storage paths for cleanup (cascade doesn't
+  //      extend to storage)
+  //   3. UPDATE programs SET curriculum_id=NULL WHERE curriculum_id=this
+  //      (programs FK is ON DELETE NO ACTION so we have to unlink first;
+  //      camp_sessions FK is ON DELETE SET NULL so it cleans itself)
+  //   4. call Storage API to remove the files
+  //   5. DELETE the curricula row -- cascade clears curriculum_sessions /
   //      curriculum_extracted_fields / curriculum_documents
-  //   5. drop from local list
-  // Published curricula are linked to programs + camp_sessions; deletion via
-  // the card is intentionally not supported (would break those FKs).
+  //   6. drop from local list
   const [deleting, setDeleting] = useState(null); // curriculum id being deleted
   async function deleteCurriculum(c) {
-    if (c.status === "published") return;
-    if (!window.confirm(`Delete "${c.name}"?\n\nThis removes the curriculum, all its sessions, and any uploaded documents. This can't be undone.`)) return;
+    let linkedProgCount = 0;
+    let linkedCampCount = 0;
+    if (c.status === "published") {
+      const [{ count: pc }, { count: cc }] = await Promise.all([
+        supabase.from("programs").select("id", { count: "exact", head: true }).eq("curriculum_id", c.id),
+        supabase.from("camp_sessions").select("id", { count: "exact", head: true }).eq("curriculum_id", c.id),
+      ]);
+      linkedProgCount = pc ?? 0;
+      linkedCampCount = cc ?? 0;
+    }
+    const linkedTotal = linkedProgCount + linkedCampCount;
+    const baseMsg = `Delete "${c.name}"?\n\nThis removes the curriculum, all its sessions, extracted fields, and any uploaded documents. This can't be undone.`;
+    const linkMsg = linkedTotal > 0
+      ? `\n\nThis curriculum is currently linked to ${linkedProgCount} program${linkedProgCount === 1 ? "" : "s"} and ${linkedCampCount} camp session${linkedCampCount === 1 ? "" : "s"}. They'll be unlinked (their free-text curriculum name stays) but not deleted.`
+      : "";
+    if (!window.confirm(baseMsg + linkMsg)) return;
     setDeleting(c.id);
     try {
       const { data: docs } = await supabase
@@ -104,6 +120,21 @@ export default function CurriculaList() {
         .select("storage_path")
         .eq("curriculum_id", c.id);
       const paths = (docs ?? []).map((d) => d.storage_path).filter(Boolean);
+
+      // Unlink programs first (FK is NO ACTION, would block the delete).
+      // camp_sessions FK is SET NULL so it handles itself on cascade.
+      if (linkedProgCount > 0 || c.status === "published") {
+        const { error: unlinkErr } = await supabase
+          .from("programs")
+          .update({ curriculum_id: null })
+          .eq("curriculum_id", c.id);
+        if (unlinkErr) {
+          alert(`Couldn't unlink programs: ${unlinkErr.message}`);
+          setDeleting(null);
+          return;
+        }
+      }
+
       if (paths.length > 0) {
         const { error: stErr } = await supabase.storage.from("curriculum-documents").remove(paths);
         if (stErr) console.warn("storage remove failed (continuing with row delete):", stErr.message);
@@ -164,7 +195,7 @@ export default function CurriculaList() {
                 curriculum={c}
                 flagCount={flagCounts[c.id] ?? 0}
                 hasDoc={docsByCurriculumId.has(c.id)}
-                onDelete={c.status !== "published" ? () => deleteCurriculum(c) : undefined}
+                onDelete={() => deleteCurriculum(c)}
                 deleting={deleting === c.id}
               />
             ))}
