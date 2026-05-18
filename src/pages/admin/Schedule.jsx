@@ -1176,6 +1176,53 @@ export default function Schedule() {
     }
   }
 
+  // Resend an offer that's already gone out (e.g. instructor says they didn't
+  // receive it). Clears email_sent_at / reminder_sent_at / deadline on that row so
+  // send-patch-offer picks it up, refreshes state, then opens the patch preview.
+  async function handleResendOffer(assignmentId) {
+    if (!assignmentId) return;
+    setBusy("patching");
+    setSaveError(null);
+    try {
+      const { error: upErr } = await supabase
+        .from("camp_assignments")
+        .update({ email_sent_at: null, reminder_sent_at: null, deadline: null })
+        .eq("id", assignmentId);
+      if (upErr) throw upErr;
+      await loadAll();
+      setCandidatesFor(null);
+      await handlePreviewPatchOffers([assignmentId]);
+    } catch (err) {
+      console.error("Resend offer failed:", err);
+      setSaveError(`Couldn't prepare resend: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 9000);
+      setBusy(null);
+    }
+  }
+
+  // Send a free-form message to an instructor through the existing offer-message-reply
+  // edge function (same path as the Reply button on the Change Request modal). The
+  // message lands in their inbox + the instructor_offer_messages thread tied to the
+  // chosen assignment.
+  async function handleSendInstructorMessage(assignmentId, message) {
+    if (!assignmentId || !message?.trim()) return { ok: false, error: "Message is empty" };
+    try {
+      const { data, error } = await supabase.functions.invoke("offer-message-reply", {
+        body: { camp_assignment_id: assignmentId, message: message.trim() },
+      });
+      if (error) {
+        let real = error.message ?? "send failed";
+        try { const b = await error.context?.json?.(); if (b?.error) real = b.error; } catch {}
+        throw new Error(real);
+      }
+      if (data?.error) throw new Error(data.error);
+      return { ok: true };
+    } catch (err) {
+      console.error("Send instructor message failed:", err);
+      return { ok: false, error: err.message ?? "Couldn't send" };
+    }
+  }
+
   // Patch-offer flow: preview first, then send on confirm. Sends a
   // "You have another camp to accept" email per instructor for assignments
   // added AFTER bulk send-offers ran (the Skyler case).
@@ -1505,6 +1552,8 @@ export default function Schedule() {
           }}
           onRemove={() => handleRemoveAssignment(candidatesFor.session, candidatesFor.currentAssignment)}
           onResetAcceptance={() => handleResetAcceptance(candidatesFor.session, candidatesFor.currentAssignment)}
+          onResendOffer={() => handleResendOffer(candidatesFor.currentAssignment?.id)}
+          onSendMessage={(text) => handleSendInstructorMessage(candidatesFor.currentAssignment?.id, text)}
           onCreateInstructor={async (form) => {
             const newId = await handleCreateInstructor(form, candidatesFor.session);
             await handlePick(candidatesFor.session, candidatesFor.currentAssignment, newId, null, candidatesFor.role);
@@ -3056,10 +3105,48 @@ function ModalShell({ title, children, onClose }) {
 function CandidatePicker({
   session, currentAssignment, role = "lead", instructors, availabilityByInstructor,
   locPrefLookup, curPrefLookup, allAssignments,
-  onClose, onPick, onRemove, onResetAcceptance, onCreateInstructor,
+  onClose, onPick, onRemove, onResetAcceptance, onResendOffer, onSendMessage, onCreateInstructor,
 }) {
   const isReassign = !!currentAssignment;
   const currentInstructorId = currentAssignment?.instructor_id ?? null;
+  const currentFirstName = currentAssignment?.instructor_first ?? "this instructor";
+  const hasBeenEmailed = !!currentAssignment?.email_sent_at;
+
+  // Inline action UI state for the new buttons.
+  const [resendArmed, setResendArmed] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
+  const [msgOpen, setMsgOpen] = useState(false);
+  const [msgText, setMsgText] = useState("");
+  const [msgBusy, setMsgBusy] = useState(false);
+  const [msgError, setMsgError] = useState("");
+  const [msgSent, setMsgSent] = useState(false);
+
+  // Reset inline state when the picker is reused for a different assignment.
+  useEffect(() => {
+    setResendArmed(false);
+    setResendBusy(false);
+    setMsgOpen(false);
+    setMsgText("");
+    setMsgError("");
+    setMsgSent(false);
+  }, [currentAssignment?.id]);
+
+  async function handleSendMessageClick() {
+    if (!msgText.trim() || !onSendMessage) return;
+    setMsgBusy(true);
+    setMsgError("");
+    try {
+      const res = await onSendMessage(msgText);
+      if (res?.ok) {
+        setMsgSent(true);
+        setMsgText("");
+      } else {
+        setMsgError(res?.error ?? "Couldn't send.");
+      }
+    } finally {
+      setMsgBusy(false);
+    }
+  }
   // Same person can't be both lead and developing of the same camp.
   const otherRoleInstructorId = useMemo(() => {
     const otherRole = role === "lead" ? "developing" : "lead";
@@ -3207,40 +3294,164 @@ function CandidatePicker({
 
         {isReassign && (
           <div style={{
-            padding: "10px 20px",
             background: CHALK,
             borderBottom: `1px solid ${RULE}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            flexWrap: "wrap",
           }}>
-            <div style={{ fontSize: 13, color: INK }}>
-              Currently: <strong>{currentAssignment.instructor_first}{currentAssignment.instructor_last ? " " + currentAssignment.instructor_last : ""}</strong>
-              {currentAssignment.status === "confirmed" && currentAssignment.instructor_response_at && (
-                <span style={{ marginLeft: 8, fontSize: 11, color: OK_GREEN, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>✓ Accepted</span>
-              )}
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {currentAssignment.status === "confirmed" && currentAssignment.instructor_response_at && onResetAcceptance && (
+            <div style={{
+              padding: "10px 20px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+            }}>
+              <div style={{ fontSize: 13, color: INK }}>
+                Currently: <strong>{currentAssignment.instructor_first}{currentAssignment.instructor_last ? " " + currentAssignment.instructor_last : ""}</strong>
+                {currentAssignment.status === "confirmed" && currentAssignment.instructor_response_at && (
+                  <span style={{ marginLeft: 8, fontSize: 11, color: OK_GREEN, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>✓ Accepted</span>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {onSendMessage && (
+                  <button
+                    type="button"
+                    onClick={() => { setMsgOpen((v) => !v); setMsgSent(false); setMsgError(""); }}
+                    title={`Send ${currentFirstName} a message — emails them and saves a copy to the conversation thread`}
+                    style={{ ...btn("transparent", PLUM, true), padding: "5px 10px", fontSize: 12 }}
+                  >
+                    {msgOpen ? "Cancel message" : `Message ${currentFirstName}`}
+                  </button>
+                )}
+                {onResendOffer && hasBeenEmailed && (
+                  <button
+                    type="button"
+                    onClick={() => setResendArmed(true)}
+                    disabled={resendArmed || resendBusy}
+                    title={`Resend the offer email for this ${role === "developing" ? "developing slot" : "camp"} — opens preview before sending`}
+                    style={{ ...btn("transparent", PLUM, true), padding: "5px 10px", fontSize: 12, opacity: (resendArmed || resendBusy) ? 0.6 : 1 }}
+                  >
+                    Resend offer email
+                  </button>
+                )}
+                {currentAssignment.status === "confirmed" && currentAssignment.instructor_response_at && onResetAcceptance && (
+                  <button
+                    type="button"
+                    onClick={onResetAcceptance}
+                    title="Set back to 'awaiting response' (use this to clear a test-accept you made via Admin preview)"
+                    style={{ ...btn("transparent", GOLD, true), padding: "5px 10px", fontSize: 12, borderColor: GOLD }}
+                  >
+                    Reset acceptance
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={onResetAcceptance}
-                  title="Set back to 'awaiting response' (use this to clear a test-accept you made via Admin preview)"
-                  style={{ ...btn("transparent", GOLD, true), padding: "5px 10px", fontSize: 12, borderColor: GOLD }}
+                  onClick={onRemove}
+                  style={{ ...btn("transparent", CORAL, true), padding: "5px 10px", fontSize: 12 }}
                 >
-                  Reset acceptance
+                  Remove (mark needs hire)
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={onRemove}
-                style={{ ...btn("transparent", CORAL, true), padding: "5px 10px", fontSize: 12 }}
-              >
-                Remove (mark needs hire)
-              </button>
+              </div>
             </div>
+
+            {resendArmed && (
+              <div style={{
+                margin: "0 20px 12px",
+                padding: 10,
+                background: `${GOLD}1A`,
+                border: `1px solid ${GOLD}`,
+                borderRadius: 6,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}>
+                <div style={{ fontSize: 13, color: INK, fontWeight: 600 }}>
+                  Resend the offer email to {currentFirstName} for {session.curriculum_name ?? "this camp"} ({session.location_name}, Week {session.week_num})?
+                </div>
+                <div style={{ fontSize: 12, color: MUTED }}>
+                  A fresh email will go out. Their original deadline gets reset to 5 business days from today.
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={async () => { setResendBusy(true); try { await onResendOffer(); } finally { setResendBusy(false); } }}
+                    disabled={resendBusy}
+                    style={{ ...btn(PLUM, "#fff", false, resendBusy), padding: "6px 12px", fontSize: 12 }}
+                  >
+                    {resendBusy ? "Preparing preview…" : `Yes, resend to ${currentFirstName}`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResendArmed(false)}
+                    disabled={resendBusy}
+                    style={{ ...btn("transparent", MUTED, true), padding: "6px 12px", fontSize: 12 }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {msgOpen && (
+              <div style={{
+                margin: "0 20px 12px",
+                padding: 10,
+                background: "#fff",
+                border: `1px solid ${PLUM}`,
+                borderRadius: 6,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}>
+                <div style={{ fontSize: 13, color: INK, fontWeight: 600 }}>
+                  Message {currentFirstName}
+                </div>
+                {msgSent ? (
+                  <div style={{ fontSize: 13, color: OK_GREEN, fontWeight: 500 }}>
+                    ✓ Sent. They'll get an email; your message is saved in the conversation thread.
+                  </div>
+                ) : (
+                  <>
+                    <textarea
+                      value={msgText}
+                      onChange={(e) => setMsgText(e.target.value)}
+                      placeholder={`e.g., Hi ${currentFirstName}, quick question about your schedule…`}
+                      rows={4}
+                      style={{
+                        width: "100%",
+                        padding: "8px 10px",
+                        border: `1px solid ${RULE}`,
+                        borderRadius: 6,
+                        fontSize: 13,
+                        fontFamily: "inherit",
+                        color: INK,
+                        background: "#fff",
+                        boxSizing: "border-box",
+                        resize: "vertical",
+                      }}
+                    />
+                    {msgError && <div style={{ color: CORAL, fontSize: 12 }}>{msgError}</div>}
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <button
+                        type="button"
+                        onClick={() => { setMsgOpen(false); setMsgText(""); setMsgError(""); }}
+                        disabled={msgBusy}
+                        style={{ ...btn("transparent", MUTED, true), padding: "6px 10px", fontSize: 12 }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSendMessageClick}
+                        disabled={msgBusy || !msgText.trim()}
+                        style={{ ...btn(PLUM, "#fff", false, msgBusy || !msgText.trim()), padding: "6px 12px", fontSize: 12 }}
+                      >
+                        {msgBusy ? "Sending…" : "Send message"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
 
