@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { CAPABILITY_ICONS, deriveOrgStatesForCurriculum, isCapabilityUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 
 const PLUM = "#691D39";
 const GOLD = "#CFB12F";
@@ -23,45 +24,6 @@ const STATUS_GROUPS = [
   { key: "published", label: "Published" },
 ];
 
-// Map capability_definitions.icon_name -> emoji glyph used in the strip.
-// Lucide icons would be the production target; emojis are the v1 placeholder.
-const CAPABILITY_ICONS = {
-  "file-text": "📝",
-  "printer": "🖨",
-  "book-open": "📚",
-  "mail": "✉",
-  "calendar": "📅",
-  "clipboard-check": "🎟",
-  "mail-check": "📩",
-  "send": "📬",
-  "user": "👤",
-  "user-check": "🧑",
-  "tag": "🏷",
-  "repeat": "🔁",
-  "users": "👥",
-  "inbox": "📥",
-};
-
-// Which states the operator's data currently satisfies, given a curriculum +
-// its linked scheduled-instance count. Only the states we can cheaply derive
-// today are computed; others stay locked until later chunks add the signal.
-function deriveOrgStatesForCurriculum(curriculum, scheduledCount) {
-  const states = new Set();
-  if (curriculum.status === "published") states.add("curriculum_published");
-  if ((scheduledCount ?? 0) > 0) states.add("program_scheduled");
-  return states;
-}
-
-function isCapabilityUnlocked(capability, satisfiedStates) {
-  if (!Array.isArray(capability.required_states) || capability.required_states.length === 0) {
-    return true;
-  }
-  for (const req of capability.required_states) {
-    if (!satisfiedStates.has(req)) return false;
-  }
-  return true;
-}
-
 export default function CurriculaList() {
   const { org } = useOutletContext();
   const [loading, setLoading] = useState(true);
@@ -77,6 +39,8 @@ export default function CurriculaList() {
   const [scheduledCounts, setScheduledCounts] = useState({});
   // capability_definitions rows (global table, 14 rows seeded in Chunk 3.5)
   const [capabilities, setCapabilities] = useState([]);
+  // Click-detail modal state: { capability, unlocked } | null
+  const [capabilityModalConfig, setCapabilityModalConfig] = useState(null);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -253,6 +217,14 @@ export default function CurriculaList() {
         </div>
       )}
 
+      {capabilityModalConfig && (
+        <CapabilityDetailModal
+          capability={capabilityModalConfig.capability}
+          unlocked={capabilityModalConfig.unlocked}
+          onClose={() => setCapabilityModalConfig(null)}
+        />
+      )}
+
       {!loading && !error && grouped.map((group) => group.items.length > 0 && (
         <div key={group.key} style={{ marginBottom: 28 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>
@@ -267,6 +239,7 @@ export default function CurriculaList() {
                 hasDoc={docsByCurriculumId.has(c.id)}
                 scheduledCount={scheduledCounts[c.id] ?? 0}
                 capabilities={capabilities}
+                onCapabilityClick={(cap, unlocked) => setCapabilityModalConfig({ capability: cap, unlocked })}
                 onDelete={() => deleteCurriculum(c)}
                 deleting={deleting === c.id}
               />
@@ -278,7 +251,7 @@ export default function CurriculaList() {
   );
 }
 
-function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, scheduledCount = 0, capabilities = [], onDelete, deleting = false }) {
+function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, scheduledCount = 0, capabilities = [], onCapabilityClick, onDelete, deleting = false }) {
   // Camp curricula use ages; afterschool uses grades. Show whichever is populated.
   const ageLabel = c.age_range_min != null && c.age_range_max != null
     ? `Ages ${c.age_range_min}–${c.age_range_max}`
@@ -342,11 +315,13 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
               const unlocked = isCapabilityUnlocked(cap, satisfiedStates);
               const glyph = CAPABILITY_ICONS[cap.icon_name] ?? "•";
               return (
-                <div
+                <button
                   key={cap.slug}
+                  type="button"
+                  onClick={() => onCapabilityClick?.(cap, unlocked)}
                   title={unlocked
-                    ? `${cap.display_name} — unlocked`
-                    : `${cap.display_name} — ${cap.required_states_human || "locked"}`}
+                    ? `${cap.display_name} — unlocked (click for details)`
+                    : `${cap.display_name} — ${cap.required_states_human || "locked"} (click for details)`}
                   style={{
                     width: 26,
                     height: 26,
@@ -358,11 +333,13 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
                     alignItems: "center",
                     justifyContent: "center",
                     fontSize: 13,
-                    cursor: "default",
+                    cursor: "pointer",
+                    padding: 0,
+                    fontFamily: "inherit",
                   }}
                 >
                   {glyph}
-                </div>
+                </button>
               );
             })}
           </div>

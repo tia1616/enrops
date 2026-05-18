@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { CAPABILITY_ICONS as SHARED_CAPABILITY_ICONS, deriveOrgStatesForCurriculum as sharedDeriveStates, isCapabilityUnlocked as sharedIsUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 
 const PLUM = "#691D39";
 const PLUM_SOFT = "rgba(105, 29, 57, 0.08)";
@@ -157,6 +158,10 @@ export default function CurriculumReview() {
   // Link-existing-programs modal: opens from the celebration screen's
   // link_existing recommendation CTA, or from the published-curriculum CTA bar.
   const [linkModalOpen, setLinkModalOpen] = useState(false);
+  // Capability detail modal: opens when the operator clicks any celebration
+  // tile (also used by CurriculaList for the strip icons via the same shared
+  // component).
+  const [capabilityModalConfig, setCapabilityModalConfig] = useState(null);
   // Global save state — drives the tri-state CTA-bar copy
   // values: "idle" | "saving" | "saved" | "error"
   const [saveState, setSaveState] = useState("idle");
@@ -881,6 +886,15 @@ export default function CurriculumReview() {
             setPublishOpen(false);
             setLinkModalOpen(true);
           }}
+          onCapabilityClick={(cap, unlocked) => setCapabilityModalConfig({ capability: cap, unlocked })}
+        />
+      )}
+
+      {capabilityModalConfig && (
+        <CapabilityDetailModal
+          capability={capabilityModalConfig.capability}
+          unlocked={capabilityModalConfig.unlocked}
+          onClose={() => setCapabilityModalConfig(null)}
         />
       )}
 
@@ -897,11 +911,13 @@ export default function CurriculumReview() {
           curriculumId={curriculum.id}
           curriculumName={curriculum.name}
           organizationId={org.id}
+          userId={user?.id}
           onClose={() => setLinkModalOpen(false)}
           onSaved={() => {
             // After saving, refresh linked counts so the capability strip on
-            // the next library visit reflects the new linkage. Simplest path:
-            // reload the curriculum row + its sessions (already wired).
+            // the next library visit reflects the new linkage. The CurriculaList
+            // re-queries on org change which doesn't trigger here, but the
+            // operator will see the new state on their next navigation.
             setLinkModalOpen(false);
           }}
         />
@@ -1526,7 +1542,7 @@ function PolishModal({ curriculumId, config, onClose }) {
 // Loads every unlinked row in the org, groups by source + name, scores each
 // group against the curriculum name, pre-selects high-confidence matches,
 // lets the operator pick the rest manually. Save -> bulk UPDATE curriculum_id.
-function LinkExistingModal({ curriculumId, curriculumName, organizationId, onClose, onSaved }) {
+function LinkExistingModal({ curriculumId, curriculumName, organizationId, userId, onClose, onSaved }) {
   const [loading, setLoading] = useState(true);
   const [matches, setMatches] = useState([]); // [{ source, name, ids, runCount, score, key }]
   const [selectedKeys, setSelectedKeys] = useState(new Set());
@@ -1621,6 +1637,25 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, onClo
           .in("id", campSessionIds);
         if (err) throw err;
       }
+      // Log a time-saved event so the sidebar tally + future analytics see
+      // this as Director work. Manually editing each row in the schedule UI
+      // (when it exists) or via SQL would take ~30 min; flat 0.5 hr per link
+      // batch is conservative but credible.
+      const totalRows = programIds.length + campSessionIds.length;
+      const linkLabel = totalRows === 1
+        ? `Linked 1 row to "${curriculumName}"`
+        : `Linked ${totalRows} rows to "${curriculumName}"`;
+      const { error: tsErr } = await supabase.from("time_saved_events").insert({
+        organization_id: organizationId,
+        action_type: "curriculum_linked",
+        action_label: linkLabel,
+        hours_saved: 0.5,
+        related_entity_type: "curriculum",
+        related_entity_id: curriculumId,
+        created_by: userId ?? null,
+      });
+      if (tsErr) console.warn("time_saved_events insert failed (non-fatal):", tsErr.message);
+
       onSaved?.({ programs: programIds.length, campSessions: campSessionIds.length });
       onClose();
     } catch (e) {
@@ -1734,37 +1769,11 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, onClo
   );
 }
 
-// Chunk 3.5: shared icon map for capability tiles + strip. Lucide icons are
-// the production target; emojis are the v1 placeholder.
-const CAPABILITY_ICONS = {
-  "file-text": "📝",
-  "printer": "🖨",
-  "book-open": "📚",
-  "mail": "✉",
-  "calendar": "📅",
-  "clipboard-check": "🎟",
-  "mail-check": "📩",
-  "send": "📬",
-  "user": "👤",
-  "user-check": "🧑",
-  "tag": "🏷",
-  "repeat": "🔁",
-  "users": "👥",
-  "inbox": "📥",
-};
-
-function deriveOrgStatesForCurriculum(curriculum, linkedCount) {
-  const states = new Set();
-  if (curriculum?.status === "published") states.add("curriculum_published");
-  if ((linkedCount ?? 0) > 0) states.add("program_scheduled");
-  return states;
-}
-
-function isCapabilityUnlocked(capability, satisfiedStates) {
-  if (!Array.isArray(capability.required_states) || capability.required_states.length === 0) return true;
-  for (const req of capability.required_states) if (!satisfiedStates.has(req)) return false;
-  return true;
-}
+// Re-exported from the shared helpers module so the rest of this file's
+// celebration tile code reads the same as before.
+const CAPABILITY_ICONS = SHARED_CAPABILITY_ICONS;
+const deriveOrgStatesForCurriculum = sharedDeriveStates;
+const isCapabilityUnlocked = sharedIsUnlocked;
 
 function PublishModal({
   step, nameDraft, setNameDraft, programMatches, selectedMatchKeys, setSelectedMatchKeys,
@@ -1772,6 +1781,7 @@ function PublishModal({
   curriculum, sessionCount, linkedProgramCount, linkedCampSessionCount,
   preLinkedProgramCount = 0, preLinkedCampSessionCount = 0,
   capabilities = [], recommendation = null, onDone, onRecommendationCta, onLinkExisting,
+  onCapabilityClick,
 }) {
   function toggleMatch(key) {
     setSelectedMatchKeys((prev) => {
@@ -1867,11 +1877,13 @@ function PublishModal({
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
                 {tiles.map((t) => (
-                  <div
+                  <button
                     key={t.slug}
+                    type="button"
+                    onClick={() => onCapabilityClick?.(t, t.unlocked)}
                     title={t.unlocked
-                      ? `${t.display_name} — unlocked`
-                      : `${t.display_name} — ${t.required_states_human || "locked"}`}
+                      ? `${t.display_name} — unlocked (click for details)`
+                      : `${t.display_name} — ${t.required_states_human || "locked"} (click for details)`}
                     style={{
                       background: PANEL,
                       border: `1px solid ${RULE}`,
@@ -1884,6 +1896,10 @@ function PublishModal({
                       gap: 9,
                       alignItems: "flex-start",
                       opacity: t.unlocked ? 1 : 0.78,
+                      cursor: "pointer",
+                      textAlign: "left",
+                      width: "100%",
+                      fontFamily: "inherit",
                     }}
                   >
                     <div style={{
@@ -1911,7 +1927,7 @@ function PublishModal({
                           : t.required_states_human || "Locked"}
                       </div>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
 
