@@ -8,7 +8,7 @@
 // Storage paths start with org_id so the bucket RLS allows the insert.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useOutletContext, Link } from "react-router-dom";
+import { useNavigate, useOutletContext, useSearchParams, Link } from "react-router-dom";
 import { supabase, API_BASE } from "../../../lib/supabase.js";
 
 const PLUM = "#691D39";
@@ -33,6 +33,13 @@ const UNLOCK_ITEMS = [
 export default function CurriculumNew() {
   const navigate = useNavigate();
   const { org, user } = useOutletContext();
+  const [searchParams] = useSearchParams();
+  // Attach-to-existing mode: when ?attach_to=<curriculum_id> is set, we skip
+  // creating a new curricula row and instead create curriculum_documents rows
+  // tied to the existing curriculum. Used for backfilled drafts (no doc yet)
+  // that the operator wants to populate via extraction.
+  const attachToId = searchParams.get("attach_to") || "";
+  const [attachTarget, setAttachTarget] = useState(null); // { id, name, organization_id } or null
 
   const [primary, setPrimary] = useState(null);
   const [materials, setMaterials] = useState(null);
@@ -43,6 +50,32 @@ export default function CurriculumNew() {
   const primaryRef = useRef(null);
   const materialsRef = useRef(null);
   const journalRef = useRef(null);
+
+  // Load the attach target on mount (if any). If the curriculum doesn't exist
+  // or belongs to a different org, show an error rather than silently dropping
+  // into the new-curriculum flow.
+  useEffect(() => {
+    if (!attachToId || !org?.id) return;
+    let mounted = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("curricula")
+        .select("id, name, organization_id, status")
+        .eq("id", attachToId)
+        .maybeSingle();
+      if (!mounted) return;
+      if (error || !data) {
+        setErrors([{ zone: "attach", message: `Couldn't load that curriculum: ${error?.message ?? "not found"}` }]);
+        return;
+      }
+      if (data.organization_id !== org.id) {
+        setErrors([{ zone: "attach", message: "That curriculum belongs to a different organization." }]);
+        return;
+      }
+      setAttachTarget(data);
+    })();
+    return () => { mounted = false; };
+  }, [attachToId, org?.id]);
 
   function fileExt(name) {
     const m = /\.([a-z0-9]+)$/i.exec(name || "");
@@ -113,26 +146,33 @@ export default function CurriculumNew() {
 
   async function onSubmit() {
     if (!primary || busy) return;
+    if (attachToId && !attachTarget) return; // Attach mode but target not loaded
     setBusy(true);
     setErrors([]);
-    let createdCurriculumId = null;
     try {
       if (!org?.id) throw new Error("Couldn't find your organization. Try signing out and back in.");
 
-      // 1. Create the curriculum row (status='draft', name=filename minus ext)
-      const placeholderName = primary.name.replace(/\.[^.]+$/, "").slice(0, 200);
-      const { data: curRow, error: curErr } = await supabase
-        .from("curricula")
-        .insert({
-          organization_id: org.id,
-          name: placeholderName,
-          status: "draft",
-          created_by: user?.id ?? null,
-        })
-        .select("id")
-        .single();
-      if (curErr || !curRow) throw new Error(`Couldn't create the curriculum: ${curErr?.message ?? "no row"}`);
-      createdCurriculumId = curRow.id;
+      // 1. Create the curriculum row OR use the existing attach target.
+      //    Attach mode skips the insert so we don't duplicate the row that the
+      //    operator is uploading docs into.
+      let curriculumId;
+      if (attachTarget) {
+        curriculumId = attachTarget.id;
+      } else {
+        const placeholderName = primary.name.replace(/\.[^.]+$/, "").slice(0, 200);
+        const { data: curRow, error: curErr } = await supabase
+          .from("curricula")
+          .insert({
+            organization_id: org.id,
+            name: placeholderName,
+            status: "draft",
+            created_by: user?.id ?? null,
+          })
+          .select("id")
+          .single();
+        if (curErr || !curRow) throw new Error(`Couldn't create the curriculum: ${curErr?.message ?? "no row"}`);
+        curriculumId = curRow.id;
+      }
 
       // 2. Upload primary + optional secondaries. doc_type values must match
       //    the curriculum_documents_doc_type_check constraint:
@@ -140,20 +180,20 @@ export default function CurriculumNew() {
       const primaryDocId = await uploadOne({
         file: primary,
         docType: "instructor_guide",
-        curriculumId: curRow.id,
+        curriculumId,
         organizationId: org.id,
       });
       if (materials) {
-        await uploadOne({ file: materials, docType: "materials_list", curriculumId: curRow.id, organizationId: org.id });
+        await uploadOne({ file: materials, docType: "materials_list", curriculumId, organizationId: org.id });
       }
       if (journal) {
-        await uploadOne({ file: journal, docType: "student_materials", curriculumId: curRow.id, organizationId: org.id });
+        await uploadOne({ file: journal, docType: "student_materials", curriculumId, organizationId: org.id });
       }
 
-      // 3. Persist optional Drive URL (not extracted in Chunk 2)
+      // 3. Persist optional Drive URL (not extracted until Chunk 2.5)
       if (driveUrl.trim()) {
         await supabase.from("curriculum_documents").insert({
-          curriculum_id: curRow.id,
+          curriculum_id: curriculumId,
           organization_id: org.id,
           doc_type: "instructor_guide",
           source_type: "drive_link",
@@ -181,7 +221,7 @@ export default function CurriculumNew() {
       }
 
       // 5. Route to Step 2
-      navigate(`/admin/curricula/${curRow.id}/extracting`);
+      navigate(`/admin/curricula/${curriculumId}/extracting`);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setErrors([{ zone: "submit", message }]);
@@ -200,14 +240,24 @@ export default function CurriculumNew() {
       <div style={crumbs}>
         <Link to="/admin/curricula" style={crumbLink}>Curricula</Link>
         <span style={{ margin: "0 8px", color: MUTED }}>›</span>
-        <span>New</span>
+        {attachTarget ? (
+          <>
+            <Link to={`/admin/curricula/${attachTarget.id}/review`} style={crumbLink}>{attachTarget.name}</Link>
+            <span style={{ margin: "0 8px", color: MUTED }}>›</span>
+            <span>Add doc</span>
+          </>
+        ) : (
+          <span>New</span>
+        )}
       </div>
 
       <h1 style={{ margin: 0, color: PLUM, fontSize: 26, fontWeight: 700 }}>
-        Add a curriculum to your library
+        {attachTarget ? `Add a doc to ${attachTarget.name}` : "Add a curriculum to your library"}
       </h1>
       <p style={{ color: MUTED, fontSize: 14, margin: "6px 0 22px", lineHeight: 1.5 }}>
-        One doc sets up the whole thing — your registration page, marketing flyer, parent emails, and instructor portal — without you re-typing a thing.
+        {attachTarget
+          ? "We'll attach this doc to the existing curriculum and run extraction so the fields populate automatically."
+          : "One doc sets up the whole thing — your registration page, marketing flyer, parent emails, and instructor portal — without you re-typing a thing."}
       </p>
 
       {/* Unlock panel */}

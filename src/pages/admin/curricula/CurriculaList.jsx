@@ -261,12 +261,17 @@ function gradeLabel(n) {
 function ctaForStatus(c, hasDoc = false) {
   switch (c.status) {
     case "draft":
-      // Backfilled drafts (no document) can't resume extraction — route them
-      // to the editable review screen instead, where the operator can fill
-      // fields manually. Drafts with a document mid-flight still resume.
+      // Backfilled drafts (no document) get two CTAs:
+      //   - "Upload curriculum doc" (primary) attaches a doc and runs
+      //     extraction to populate fields automatically
+      //   - "Edit details" (secondary) for manual entry without a doc
+      // Drafts that already have a doc are mid-extraction and resume.
       return hasDoc
         ? [{ to: `/admin/curricula/${c.id}/extracting`, label: "Resume extraction →", primary: true }]
-        : [{ to: `/admin/curricula/${c.id}/review`, label: "Edit details →", primary: true }];
+        : [
+            { to: `/admin/curricula/${c.id}/review`, label: "Edit details", primary: false },
+            { to: `/admin/curricula/new?attach_to=${c.id}`, label: "Upload doc →", primary: true },
+          ];
     case "extracted":
       return [{ to: `/admin/curricula/${c.id}/review`, label: "Review and publish →", primary: true }];
     case "published":
