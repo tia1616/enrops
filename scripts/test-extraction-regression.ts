@@ -26,6 +26,7 @@
 //        $env:DOC_PATH_LEGO       = '_test/lego-game-makers.pdf'
 //        $env:DOC_PATH_MINECRAFT  = '_test/minecraft-makers.pdf'
 //        $env:DOC_PATH_TOY        = '_test/toy-designers.pdf'
+//        $env:PROMPT_VERSION      = 'v2'   # defaults to v2 (current production prompt)
 //
 //   3. Run:
 //        deno run --allow-env --allow-net scripts/test-extraction-regression.ts
@@ -38,6 +39,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
 const EMAIL = Deno.env.get("ADMIN_EMAIL");
 const PASSWORD = Deno.env.get("ADMIN_PASSWORD");
+const PROMPT_VERSION = Deno.env.get("PROMPT_VERSION") ?? "v2";
 if (!SUPABASE_URL || !ANON_KEY || !EMAIL || !PASSWORD) {
   console.error("Missing one of: SUPABASE_URL, SUPABASE_ANON_KEY, ADMIN_EMAIL, ADMIN_PASSWORD.");
   Deno.exit(1);
@@ -141,7 +143,7 @@ async function runOne(tc: TestCase): Promise<Result> {
       apikey: ANON_KEY!,
       Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ document_path: tc.docPath, prompt_version: "v1" }),
+    body: JSON.stringify({ document_path: tc.docPath, prompt_version: PROMPT_VERSION }),
   });
   if (!resp.ok || !resp.body) {
     const text = await resp.text().catch(() => "");
@@ -301,7 +303,7 @@ async function runOne(tc: TestCase): Promise<Result> {
 
 // --- Main ---
 
-console.log(`Running ${TESTS.length} extraction regression tests…\n`);
+console.log(`Running ${TESTS.length} extraction regression tests against prompt ${PROMPT_VERSION}…\n`);
 const results: Result[] = [];
 for (const tc of TESTS) {
   console.log(`▶ ${tc.label} (${tc.docPath})…`);

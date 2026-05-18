@@ -1,6 +1,6 @@
 // /admin/curricula/new
 // Step 1 of the upload-first onboarding flow. Provider drops their curriculum
-// doc (and optional class/student materials), clicks "Read my curriculum",
+// doc (and optional class/student materials), clicks "Extract curriculum",
 // we create draft DB rows + storage objects + kick off the extract edge
 // function, then route to the live status page (Step 2).
 //
@@ -349,7 +349,7 @@ export default function CurriculumNew() {
             disabled={submitDisabled}
             style={submitDisabled ? primaryBtnDisabled : primaryBtn}
           >
-            {busy ? "Starting…" : "Read my curriculum →"}
+            {busy ? "Starting…" : "Extract curriculum →"}
           </button>
         </div>
       </div>

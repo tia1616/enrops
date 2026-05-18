@@ -24,7 +24,7 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const PANEL = "#fff";
 
-const INITIAL_MESSAGE = "Reading your curriculum...";
+const INITIAL_MESSAGE = "Extracting your curriculum...";
 
 export default function CurriculumExtracting() {
   const { id: curriculumId } = useParams();
@@ -184,7 +184,7 @@ export default function CurriculumExtracting() {
 
       <div style={centerPanel}>
         <h1 style={{ margin: 0, color: PLUM, fontSize: 28, fontWeight: 700, textAlign: "center" }}>
-          {isDone ? "All set." : isFailed ? "Something went wrong." : "Reading your curriculum…"}
+          {isDone ? "All set." : isFailed ? "Something went wrong." : "Extracting your curriculum…"}
         </h1>
         <p style={subline}>
           {isDone

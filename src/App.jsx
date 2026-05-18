@@ -54,6 +54,7 @@ export default function App() {
         <Route path="curricula/new" element={<CurriculumNew />} />
         <Route path="curricula/:id/extracting" element={<CurriculumExtracting />} />
         <Route path="curricula/:id/review" element={<CurriculumReview />} />
+        <Route path="curricula/:id/edit" element={<CurriculumReview />} />
         <Route path="programs" element={<ProgramsCalendar />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />
       </Route>
