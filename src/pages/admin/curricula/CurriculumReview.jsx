@@ -395,6 +395,20 @@ export default function CurriculumReview() {
     });
   }
 
+  // Description polish: free-text rewrite using the same polish-skills edge
+  // function (which branches on field === "short_description"). onAccept saves
+  // back through the usual debounced path.
+  function openPolishForDescription(current) {
+    setPolishConfig({
+      field: "short_description",
+      sessionId: undefined,
+      current,
+      targetCount: 1,
+      onAccept: (polished) =>
+        saveTopFieldDebounced("short_description", { short_description: polished }, polished, true),
+    });
+  }
+
   function toggleSession(id) {
     setOpenSessionIds((prev) => {
       const next = new Set(prev);
@@ -635,6 +649,7 @@ export default function CurriculumReview() {
               onChange={(v) => saveTopFieldDebounced("short_description", { short_description: v }, v)}
               flagged={isFieldFlagged({ curriculum, fieldName: "short_description", extractedRow: extractedByName.short_description })}
               saved={savingField === "short_description"}
+              onPolish={(current) => openPolishForDescription(current)}
             />
 
             <div style={row2}>
@@ -949,10 +964,34 @@ function FieldNumber({ label, inlineHelp, value, ...rest }) {
   );
 }
 
-function FieldTextarea({ label, inlineHelp, help, value, onChange, flagged, saved, placeholder }) {
+function FieldTextarea({ label, inlineHelp, help, value, onChange, flagged, saved, placeholder, onPolish }) {
+  const canPolish = typeof onPolish === "function" && typeof value === "string" && value.trim().length > 0;
   return (
     <div data-flagged={flagged ? "true" : undefined} style={fieldWrap}>
-      <FieldLabel inlineHelp={inlineHelp} flagged={flagged}>{label}<SavedTick on={saved} /></FieldLabel>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+        <FieldLabel inlineHelp={inlineHelp} flagged={flagged}>{label}<SavedTick on={saved} /></FieldLabel>
+        {onPolish && (
+          <button
+            type="button"
+            onClick={() => canPolish && onPolish(value)}
+            disabled={!canPolish}
+            title={canPolish ? "Ask Dora to rewrite this into parent-impressive copy" : "Add text first"}
+            style={{
+              background: canPolish ? GOLD_SOFT : "transparent",
+              border: `1px solid ${canPolish ? GOLD_BORDER : RULE}`,
+              color: canPolish ? "#7a5a00" : MUTED,
+              borderRadius: 12,
+              fontSize: 11,
+              fontWeight: 600,
+              padding: "3px 9px",
+              cursor: canPolish ? "pointer" : "not-allowed",
+              whiteSpace: "nowrap",
+            }}
+          >
+            ✨ Polish with Dora
+          </button>
+        )}
+      </div>
       {help && <div style={fieldHelp}>{help}</div>}
       <textarea
         value={value}
@@ -1201,10 +1240,14 @@ function SessionRow({ session, open, onToggle, onSave, savingField, onPolishSkil
 
 function PolishModal({ curriculumId, config, onClose }) {
   const { field, sessionId, current, targetCount, onAccept } = config;
+  // Text mode is used for free-text fields like short_description; list mode
+  // for chip/skill arrays. They share the polish-skills edge function but
+  // render different UI for current vs polished.
+  const mode = field === "short_description" ? "text" : "list";
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [polished, setPolished] = useState([]);
-  const [draft, setDraft] = useState("");
+  const [polishedList, setPolishedList] = useState([]); // list mode
+  const [polishedText, setPolishedText] = useState("");  // text mode
 
   function fetchPolish() {
     setLoading(true);
@@ -1233,8 +1276,18 @@ function PolishModal({ curriculumId, config, onClose }) {
           setLoading(false);
           return;
         }
-        const arr = Array.isArray(data?.polished) ? data.polished : [];
-        setPolished(arr);
+        const polished = data?.polished;
+        if (mode === "text") {
+          // Backend may return either a string or a 1-element array for text mode.
+          const txt = typeof polished === "string"
+            ? polished
+            : Array.isArray(polished) && typeof polished[0] === "string"
+              ? polished[0]
+              : "";
+          setPolishedText(txt);
+        } else {
+          setPolishedList(Array.isArray(polished) ? polished : []);
+        }
         setLoading(false);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -1248,22 +1301,39 @@ function PolishModal({ curriculumId, config, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function addPolished() {
-    const v = draft.trim();
-    if (!v) return;
-    if (polished.includes(v)) { setDraft(""); return; }
-    setPolished([...polished, v]);
-    setDraft("");
+  function updateListItem(idx, v) {
+    setPolishedList((arr) => arr.map((s, i) => (i === idx ? v : s)));
   }
-  function removePolished(idx) {
-    const next = polished.slice(); next.splice(idx, 1); setPolished(next);
+  function removeListItem(idx) {
+    setPolishedList((arr) => arr.filter((_, i) => i !== idx));
+  }
+  function addListItem() {
+    setPolishedList((arr) => [...arr, ""]);
   }
   function accept() {
-    onAccept(polished);
+    if (mode === "text") {
+      onAccept(polishedText);
+    } else {
+      onAccept(polishedList.map((s) => s.trim()).filter((s) => s.length > 0));
+    }
     onClose();
   }
 
-  const acceptDisabled = polished.length === 0;
+  const acceptDisabled = mode === "text"
+    ? polishedText.trim().length === 0
+    : polishedList.filter((s) => s.trim().length > 0).length === 0;
+
+  const currentText = mode === "text"
+    ? (typeof current === "string" ? current : Array.isArray(current) ? current[0] ?? "" : "")
+    : "";
+
+  const heading = mode === "text" ? "Polish this description" : "Polish these skills";
+  const blurb = mode === "text"
+    ? "Rewrite to lead with what kids do + make, drop jargon, and read parent-impressive. Edit anything before accepting."
+    : `Rewrite + re-rank into the top ${targetCount} parent-impressive concepts. Edit each line before accepting.`;
+  const loadingCopy = mode === "text"
+    ? "Asking Dora to polish this description…"
+    : `Asking Dora to polish these ${current.length} skill${current.length === 1 ? "" : "s"}…`;
 
   return (
     <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -1277,15 +1347,11 @@ function PolishModal({ curriculumId, config, onClose }) {
           </div>
         </div>
 
-        <h3 style={{ margin: "0 0 6px", color: INK, fontSize: 20, fontWeight: 700 }}>Polish these skills</h3>
-        <p style={{ color: MUTED, fontSize: 13, margin: "0 0 18px", lineHeight: 1.45 }}>
-          Rewrite + re-rank into the top {targetCount} parent-impressive concepts. Edit anything before accepting.
-        </p>
+        <h3 style={{ margin: "0 0 6px", color: INK, fontSize: 20, fontWeight: 700 }}>{heading}</h3>
+        <p style={{ color: MUTED, fontSize: 13, margin: "0 0 18px", lineHeight: 1.45 }}>{blurb}</p>
 
         {loading && (
-          <div style={{ padding: "30px 0", color: MUTED, fontSize: 13, textAlign: "center" }}>
-            Asking Dora to polish these {current.length} skill{current.length === 1 ? "" : "s"}…
-          </div>
+          <div style={{ padding: "30px 0", color: MUTED, fontSize: 13, textAlign: "center" }}>{loadingCopy}</div>
         )}
 
         {!loading && error && (
@@ -1298,33 +1364,76 @@ function PolishModal({ curriculumId, config, onClose }) {
           </>
         )}
 
-        {!loading && !error && (
+        {!loading && !error && mode === "text" && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginBottom: 18 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Your current text</div>
+                <div style={{ background: "#f6f4ec", border: `1px solid ${RULE}`, borderRadius: 6, padding: 10, fontSize: 13, lineHeight: 1.5, color: MUTED, minHeight: 110, whiteSpace: "pre-wrap" }}>
+                  {currentText || <em style={{ color: "#bbb" }}>(empty)</em>}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Dora</div>
+                <textarea
+                  value={polishedText}
+                  onChange={(e) => setPolishedText(e.target.value)}
+                  style={{ width: "100%", minHeight: 110, border: `1px solid ${GOLD_BORDER}`, background: GOLD_SOFT, borderRadius: 6, padding: 10, fontSize: 13, lineHeight: 1.5, color: INK, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }}
+                />
+              </div>
+            </div>
+            <div style={modalActions}>
+              <button onClick={onClose} style={tertiaryBtn}>Keep my text</button>
+              <button
+                onClick={accept}
+                disabled={acceptDisabled}
+                style={{ ...primaryBtn, opacity: acceptDisabled ? 0.5 : 1, cursor: acceptDisabled ? "not-allowed" : "pointer" }}
+              >
+                Use Dora's polish →
+              </button>
+            </div>
+          </>
+        )}
+
+        {!loading && !error && mode === "list" && (
           <>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginBottom: 18 }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Your current list</div>
                 <div style={{ ...chipsBox, opacity: 0.65, background: "#f6f4ec" }}>
-                  {current.map((c, i) => (
+                  {(Array.isArray(current) ? current : []).map((c, i) => (
                     <span key={`cur-${i}`} style={{ ...chipStyle, background: "#ece8dc" }}>{c}</span>
                   ))}
                 </div>
               </div>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Dora</div>
-                <div style={{ ...chipsBox, borderColor: GOLD_BORDER, background: GOLD_SOFT }}>
-                  {polished.map((c, i) => (
-                    <span key={`pol-${i}`} style={chipStyle}>
-                      {c} <span onClick={() => removePolished(i)} style={{ color: "#997800", cursor: "pointer", fontWeight: 700 }}>×</span>
-                    </span>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, background: GOLD_SOFT, border: `1px solid ${GOLD_BORDER}`, borderRadius: 6, padding: 8 }}>
+                  {polishedList.map((c, i) => (
+                    <div key={`pol-${i}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        type="text"
+                        value={c}
+                        onChange={(e) => updateListItem(i, e.target.value)}
+                        style={{ flex: 1, border: `1px solid ${RULE}`, borderRadius: 4, padding: "5px 8px", fontSize: 13, fontFamily: "inherit", background: PANEL, color: INK }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeListItem(i)}
+                        title="Remove this one"
+                        style={{ background: "transparent", border: "none", color: "#997800", fontSize: 16, fontWeight: 700, cursor: "pointer", padding: "0 6px" }}
+                      >
+                        ×
+                      </button>
+                    </div>
                   ))}
-                  <input
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addPolished(); } }}
-                    onBlur={addPolished}
-                    placeholder="add + enter"
-                    style={{ flex: 1, minWidth: 100, border: "none", outline: "none", fontFamily: "inherit", fontSize: 13, padding: "4px 0", background: "transparent" }}
-                  />
+                  <button
+                    type="button"
+                    onClick={addListItem}
+                    style={{ alignSelf: "flex-start", background: "transparent", border: "none", color: PLUM, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: "4px 0", marginTop: 2 }}
+                  >
+                    + Add another
+                  </button>
                 </div>
               </div>
             </div>

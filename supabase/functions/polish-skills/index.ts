@@ -37,7 +37,13 @@ const SUPPORTED_FIELDS = new Set([
   "skills_practiced",
   "mid_term_skills",
   "final_recap_skills",
+  "short_description",
 ]);
+
+// Free-text fields use a different system prompt + a string (not array) for
+// both input and output. Today this is just short_description; future fields
+// (e.g., final_showcase, narrative_arc) can join the set.
+const TEXT_FIELDS = new Set(["short_description"]);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -109,6 +115,32 @@ async function verifyCaller(
 // ---------------------------------------------------------------------------
 // Prompt
 // ---------------------------------------------------------------------------
+
+const SYSTEM_PROMPT_DESCRIPTION = `You are polishing a parent-facing short description for a kids' enrichment program. This text shows up on the registration page, in marketing flyers, and in welcome emails -- it's how a parent decides whether to click "Enroll."
+
+GOAL: lead with what kids DO and MAKE. Specific actions, not abstract benefits. 2-3 sentences. Read like a parent who's excited about the class would describe it to a friend, not like a school brochure.
+
+DROP:
+- Education jargon ("computational thinking", "fine motor skills", "21st-century skills", "social-emotional learning")
+- Emotional claims ("feel proud", "boost confidence", "build self-esteem") -- parents decide on emotions
+- Vague filler ("engaging activities", "fun-filled", "amazing experience")
+- Marketing puffery ("transformative", "unique", "innovative")
+
+KEEP:
+- Specific things kids will build, code, design, perform, draw, etc.
+- Pop culture themes if the original has them (Pokemon, Minecraft, LEGO, Mario, Demon Slayer)
+- The age-appropriate concept being practiced, named plainly
+
+Good example:
+"Build robots that race, sense color, and follow lines using the mBot2 platform. Kids program with block code, debug their bots through head-to-head challenges, and finish the week with a carnival-game showdown."
+
+Bad example (do not produce this):
+"This engaging robotics program builds confidence and 21st-century skills as students explore computational thinking through fun, hands-on activities that foster creativity and collaboration."
+
+Return ONLY a JSON object with this shape:
+{ "polished": "the rewritten description text" }
+
+No preamble, no markdown fences, no commentary.`;
 
 const SYSTEM_PROMPT = `You are polishing a list of kid-program skills to make them parent-facing and impressive-specific. Skills appear in registration listings, recap emails, and the parent portal -- parents skim them when deciding to enroll and when telling friends what their kid is doing.
 
@@ -240,15 +272,32 @@ serve(async (req) => {
   if (!body.field || !SUPPORTED_FIELDS.has(body.field)) {
     return jsonError(`field must be one of: ${[...SUPPORTED_FIELDS].join(", ")}`);
   }
-  if (!Array.isArray(body.current)) {
-    return jsonError("current must be an array of strings");
-  }
-  const currentSkills = body.current
-    .filter((x): x is string => typeof x === "string")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-  if (currentSkills.length === 0) {
-    return jsonError("current must contain at least one non-empty skill");
+  const isTextField = TEXT_FIELDS.has(body.field);
+
+  // Text fields accept a single string; skill-array fields accept string[].
+  let currentText = "";
+  let currentSkills: string[] = [];
+  if (isTextField) {
+    const raw = typeof body.current === "string"
+      ? body.current
+      : Array.isArray(body.current) && typeof body.current[0] === "string"
+        ? body.current[0]
+        : "";
+    currentText = raw.trim();
+    if (currentText.length === 0) {
+      return jsonError("current must be a non-empty string for text fields");
+    }
+  } else {
+    if (!Array.isArray(body.current)) {
+      return jsonError("current must be an array of strings for skill fields");
+    }
+    currentSkills = body.current
+      .filter((x): x is string => typeof x === "string")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (currentSkills.length === 0) {
+      return jsonError("current must contain at least one non-empty skill");
+    }
   }
   if (body.field === "skills_practiced" && !body.session_id) {
     return jsonError("session_id is required when field is skills_practiced");
@@ -281,7 +330,14 @@ serve(async (req) => {
   }
 
   const contextBlock = renderContext(curriculum, session);
-  const userMessage = `${contextBlock}
+  const systemPrompt = isTextField ? SYSTEM_PROMPT_DESCRIPTION : SYSTEM_PROMPT;
+  const userMessage = isTextField
+    ? `${contextBlock}
+
+CURRENT DESCRIPTION (rewrite to lead with what kids do + make, drop jargon, 2-3 sentences, parent-impressive):
+
+${currentText}`
+    : `${contextBlock}
 
 CURRENT SKILL LIST (rewrite + filter to the top ${targetCount} most impressive concepts these represent; drop pure activity steps):
 
@@ -296,7 +352,7 @@ Target count: ${targetCount}`;
     const resp = await anthropic.messages.create({
       model: SONNET_MODEL,
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [{ role: "user", content: userMessage }],
     });
     for (const block of resp.content) {
@@ -318,6 +374,19 @@ Target count: ${targetCount}`;
       502,
     );
   }
+
+  if (isTextField) {
+    const polishedText = typeof parsed.polished === "string"
+      ? parsed.polished.trim()
+      : Array.isArray(parsed.polished) && typeof parsed.polished[0] === "string"
+        ? parsed.polished[0].trim()
+        : "";
+    if (polishedText.length === 0) {
+      return jsonError("Polished text came back empty", 502);
+    }
+    return jsonOk({ polished: polishedText });
+  }
+
   if (!Array.isArray(parsed.polished)) {
     return jsonError("Response missing 'polished' array", 502);
   }
