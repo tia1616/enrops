@@ -23,6 +23,45 @@ const STATUS_GROUPS = [
   { key: "published", label: "Published" },
 ];
 
+// Map capability_definitions.icon_name -> emoji glyph used in the strip.
+// Lucide icons would be the production target; emojis are the v1 placeholder.
+const CAPABILITY_ICONS = {
+  "file-text": "📝",
+  "printer": "🖨",
+  "book-open": "📚",
+  "mail": "✉",
+  "calendar": "📅",
+  "clipboard-check": "🎟",
+  "mail-check": "📩",
+  "send": "📬",
+  "user": "👤",
+  "user-check": "🧑",
+  "tag": "🏷",
+  "repeat": "🔁",
+  "users": "👥",
+  "inbox": "📥",
+};
+
+// Which states the operator's data currently satisfies, given a curriculum +
+// its linked scheduled-instance count. Only the states we can cheaply derive
+// today are computed; others stay locked until later chunks add the signal.
+function deriveOrgStatesForCurriculum(curriculum, scheduledCount) {
+  const states = new Set();
+  if (curriculum.status === "published") states.add("curriculum_published");
+  if ((scheduledCount ?? 0) > 0) states.add("program_scheduled");
+  return states;
+}
+
+function isCapabilityUnlocked(capability, satisfiedStates) {
+  if (!Array.isArray(capability.required_states) || capability.required_states.length === 0) {
+    return true;
+  }
+  for (const req of capability.required_states) {
+    if (!satisfiedStates.has(req)) return false;
+  }
+  return true;
+}
+
 export default function CurriculaList() {
   const { org } = useOutletContext();
   const [loading, setLoading] = useState(true);
@@ -34,6 +73,10 @@ export default function CurriculaList() {
   // pick the right Draft CTA — backfilled drafts (no docs) route to Edit,
   // upload-in-progress drafts route to Resume extraction.
   const [docsByCurriculumId, setDocsByCurriculumId] = useState(new Set());
+  // curriculum_id -> count of programs + camp_sessions pointing at this row
+  const [scheduledCounts, setScheduledCounts] = useState({});
+  // capability_definitions rows (global table, 14 rows seeded in Chunk 3.5)
+  const [capabilities, setCapabilities] = useState([]);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -44,6 +87,9 @@ export default function CurriculaList() {
         { data, error: qErr },
         { data: flagRows },
         { data: docRows },
+        { data: progRows },
+        { data: campRows },
+        { data: capRows },
       ] = await Promise.all([
         supabase
           .from("curricula")
@@ -60,6 +106,21 @@ export default function CurriculaList() {
           .from("curriculum_documents")
           .select("curriculum_id")
           .eq("organization_id", org.id),
+        supabase
+          .from("programs")
+          .select("curriculum_id")
+          .eq("organization_id", org.id)
+          .not("curriculum_id", "is", null),
+        supabase
+          .from("camp_sessions")
+          .select("curriculum_id")
+          .eq("organization_id", org.id)
+          .not("curriculum_id", "is", null),
+        supabase
+          .from("capability_definitions")
+          .select("slug, display_name, category, short_description, required_states, required_states_human, icon_name, display_order")
+          .eq("is_available", true)
+          .order("display_order", { ascending: true }),
       ]);
       if (!mounted) return;
       if (qErr) {
@@ -73,6 +134,15 @@ export default function CurriculaList() {
       }
       setFlagCounts(counts);
       setDocsByCurriculumId(new Set((docRows ?? []).map((r) => r.curriculum_id)));
+      const sched = {};
+      for (const r of progRows ?? []) {
+        sched[r.curriculum_id] = (sched[r.curriculum_id] ?? 0) + 1;
+      }
+      for (const r of campRows ?? []) {
+        sched[r.curriculum_id] = (sched[r.curriculum_id] ?? 0) + 1;
+      }
+      setScheduledCounts(sched);
+      setCapabilities(capRows ?? []);
       setLoading(false);
     })();
     return () => { mounted = false; };
@@ -195,6 +265,8 @@ export default function CurriculaList() {
                 curriculum={c}
                 flagCount={flagCounts[c.id] ?? 0}
                 hasDoc={docsByCurriculumId.has(c.id)}
+                scheduledCount={scheduledCounts[c.id] ?? 0}
+                capabilities={capabilities}
                 onDelete={() => deleteCurriculum(c)}
                 deleting={deleting === c.id}
               />
@@ -206,7 +278,7 @@ export default function CurriculaList() {
   );
 }
 
-function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, onDelete, deleting = false }) {
+function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, scheduledCount = 0, capabilities = [], onDelete, deleting = false }) {
   // Camp curricula use ages; afterschool uses grades. Show whichever is populated.
   const ageLabel = c.age_range_min != null && c.age_range_max != null
     ? `Ages ${c.age_range_min}–${c.age_range_max}`
@@ -220,6 +292,13 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, onDelete
   // Tag only fires on Extracted cards — for Draft the operator hasn't reviewed
   // yet (expected); for Published the review has happened already.
   const showNeedsReview = c.status === "extracted" && flagCount > 0;
+
+  // Capability strip: 8 icons per row, color-coded unlocked/locked.
+  // Only show on extracted/published cards — draft cards don't have content yet.
+  const showCapStrip = (c.status === "extracted" || c.status === "published") && capabilities.length > 0;
+  const stripCapabilities = showCapStrip ? capabilities.slice(0, 8) : [];
+  const satisfiedStates = showCapStrip ? deriveOrgStatesForCurriculum(c, scheduledCount) : new Set();
+  const unlockedCount = stripCapabilities.filter((cap) => isCapabilityUnlocked(cap, satisfiedStates)).length;
 
   return (
     <div style={cardStyle}>
@@ -253,6 +332,42 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, onDelete
         {sessionsLabel}<br />
         {formatLabel}
       </div>
+      {showCapStrip && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}` }}>
+          <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 6 }}>
+            {unlockedCount} of {stripCapabilities.length} unlocked
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {stripCapabilities.map((cap) => {
+              const unlocked = isCapabilityUnlocked(cap, satisfiedStates);
+              const glyph = CAPABILITY_ICONS[cap.icon_name] ?? "•";
+              return (
+                <div
+                  key={cap.slug}
+                  title={unlocked
+                    ? `${cap.display_name} — unlocked`
+                    : `${cap.display_name} — ${cap.required_states_human || "locked"}`}
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: "50%",
+                    border: `1px solid ${unlocked ? "rgba(78, 145, 78, 0.45)" : RULE}`,
+                    background: unlocked ? "rgba(78, 145, 78, 0.12)" : "#f7f6ef",
+                    color: unlocked ? "#2d5a2d" : MUTED,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 13,
+                    cursor: "default",
+                  }}
+                >
+                  {glyph}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
         {cta.map((item, i) => (
           <Link key={i} to={item.to} style={item.primary ? cardCtaPrimary : cardCtaSecondary}>{item.label}</Link>

@@ -150,6 +150,10 @@ export default function CurriculumReview() {
 
   // Polish with Dora: when set, the modal opens for this field
   const [polishConfig, setPolishConfig] = useState(null);
+  // Chunk 3.5: capability_definitions (14 rows, global) + Dora's Phase 2
+  // recommendation for the just-published curriculum (fetched after publish).
+  const [capabilities, setCapabilities] = useState([]);
+  const [doraRecommendation, setDoraRecommendation] = useState(null);
   // Global save state — drives the tri-state CTA-bar copy
   // values: "idle" | "saving" | "saved" | "error"
   const [saveState, setSaveState] = useState("idle");
@@ -170,11 +174,13 @@ export default function CurriculumReview() {
         { data: sessRows },
         { data: extRows },
         { data: docRows },
+        { data: capRows },
       ] = await Promise.all([
         supabase.from("curricula").select("*").eq("id", curriculumId).maybeSingle(),
         supabase.from("curriculum_sessions").select("*").eq("curriculum_id", curriculumId).order("session_number"),
         supabase.from("curriculum_extracted_fields").select("*").eq("curriculum_id", curriculumId),
         supabase.from("curriculum_documents").select("id, original_filename, doc_type, storage_path, uploaded_at").eq("curriculum_id", curriculumId).order("uploaded_at"),
+        supabase.from("capability_definitions").select("slug, display_name, category, short_description, why_it_matters, stat_text, stat_source, required_states, required_states_human, icon_name, display_order").eq("is_available", true).order("display_order"),
       ]);
       if (!mounted) return;
       if (curErr || !curRow) {
@@ -185,6 +191,7 @@ export default function CurriculumReview() {
       setCurriculum(curRow);
       setNameDraft(curRow.name || "");
       setSessions(sessRows ?? []);
+      setCapabilities(capRows ?? []);
       const byName = {};
       for (const r of extRows ?? []) byName[r.field_name] = r;
       setExtractedByName(byName);
@@ -585,6 +592,17 @@ export default function CurriculumReview() {
         created_by: user?.id ?? null,
       });
       if (tsErr) console.warn("time_saved_events insert failed (non-fatal):", tsErr.message);
+
+      // Phase 2 recommendation: ask dora-recommend what the next clear action
+      // is. Non-fatal -- the celebration screen has a static fallback CTA.
+      try {
+        const { data: recData, error: recErr } = await supabase.functions.invoke("dora-recommend", {
+          body: { curriculum_id: curriculum.id },
+        });
+        if (!recErr && recData) setDoraRecommendation(recData);
+      } catch (e) {
+        console.warn("dora-recommend failed (using fallback):", e instanceof Error ? e.message : String(e));
+      }
       setPublishing(false);
       setPublishStep(3); // celebration
     } catch (e) {
@@ -846,7 +864,10 @@ export default function CurriculumReview() {
           linkedCampSessionCount={linkedCampSessionCount}
           preLinkedProgramCount={preLinkedProgramCount}
           preLinkedCampSessionCount={preLinkedCampSessionCount}
+          capabilities={capabilities}
+          recommendation={doraRecommendation}
           onDone={() => navigate("/admin/curricula")}
+          onRecommendationCta={(to) => navigate(to)}
         />
       )}
 
@@ -1470,11 +1491,44 @@ function PolishModal({ curriculumId, config, onClose }) {
   );
 }
 
+// Chunk 3.5: shared icon map for capability tiles + strip. Lucide icons are
+// the production target; emojis are the v1 placeholder.
+const CAPABILITY_ICONS = {
+  "file-text": "📝",
+  "printer": "🖨",
+  "book-open": "📚",
+  "mail": "✉",
+  "calendar": "📅",
+  "clipboard-check": "🎟",
+  "mail-check": "📩",
+  "send": "📬",
+  "user": "👤",
+  "user-check": "🧑",
+  "tag": "🏷",
+  "repeat": "🔁",
+  "users": "👥",
+  "inbox": "📥",
+};
+
+function deriveOrgStatesForCurriculum(curriculum, linkedCount) {
+  const states = new Set();
+  if (curriculum?.status === "published") states.add("curriculum_published");
+  if ((linkedCount ?? 0) > 0) states.add("program_scheduled");
+  return states;
+}
+
+function isCapabilityUnlocked(capability, satisfiedStates) {
+  if (!Array.isArray(capability.required_states) || capability.required_states.length === 0) return true;
+  for (const req of capability.required_states) if (!satisfiedStates.has(req)) return false;
+  return true;
+}
+
 function PublishModal({
   step, nameDraft, setNameDraft, programMatches, selectedMatchKeys, setSelectedMatchKeys,
   publishing, error, onCancel, onContinue, onPublish,
   curriculum, sessionCount, linkedProgramCount, linkedCampSessionCount,
-  preLinkedProgramCount = 0, preLinkedCampSessionCount = 0, onDone,
+  preLinkedProgramCount = 0, preLinkedCampSessionCount = 0,
+  capabilities = [], recommendation = null, onDone, onRecommendationCta,
 }) {
   function toggleMatch(key) {
     setSelectedMatchKeys((prev) => {
@@ -1541,51 +1595,130 @@ function PublishModal({
           </>
         )}
 
-        {isCelebration && (
-          <>
-            <h3 style={{ margin: "0 0 6px", color: PLUM, fontSize: 22, fontWeight: 700 }}>
-              {curriculum?.name} is live.
-            </h3>
-            <p style={{ color: INK, fontSize: 14, margin: "0 0 18px", lineHeight: 1.5 }}>
-              One upload, and all of this is now wired up — instead of you writing it from scratch each term.
-            </p>
+        {isCelebration && (() => {
+          // Dynamic time-saved: 1.5 hours per session, floor 10 hours (per
+          // project_enrops_time_saved memory). Matches the value written to
+          // time_saved_events on publish so the sidebar tally agrees.
+          const hoursSaved = Math.max(10, Math.ceil((sessionCount || 5) * 1.5));
+          // Build the 8-tile capability strip. linkedCount is the operator's
+          // total scheduled instances for this curriculum (existing + newly
+          // linked), so the program_scheduled state lights up if anything's
+          // linked.
+          const linkedCount = totalLinked;
+          const satisfiedStates = deriveOrgStatesForCurriculum(curriculum, linkedCount);
+          const tiles = capabilities.slice(0, 8).map((cap) => ({
+            ...cap,
+            unlocked: isCapabilityUnlocked(cap, satisfiedStates),
+            glyph: CAPABILITY_ICONS[cap.icon_name] ?? "•",
+          }));
+          return (
+            <>
+              <h3 style={{ margin: "0 0 6px", color: PLUM, fontSize: 22, fontWeight: 700 }}>
+                {curriculum?.name} is live.
+              </h3>
+              <p style={{ color: INK, fontSize: 14, margin: "0 0 18px", lineHeight: 1.5 }}>
+                {totalLinked > 0
+                  ? `Linked to ${linkedSummary()}. Here's what just unlocked.`
+                  : "Here's what just unlocked."}
+              </p>
 
-            <ul style={unlockList}>
-              <UnlockItem
-                title="A parent-facing registration listing"
-                body="Title, age range, description, themes, what kids do — ready to go on your registration page the moment you schedule a program."
-              />
-              <UnlockItem
-                title="Per-session content for your parent portal"
-                body={`${sessionCount} session${sessionCount === 1 ? "" : "s"}, each with what kids did + a dinner-table question for parents to ask after class.`}
-              />
-              <UnlockItem
-                title="Mid-term + final recap emails"
-                body="Top-6 skill lists baked in for both. We'll auto-send these on your schedule (default: mid-term + end of term)."
-              />
-              <UnlockItem
-                title="Instructor portal lesson plans"
-                body="Full per-session content, materials, prep notes — ready for instructors and any subs that step in."
-              />
-              <UnlockItem
-                title={totalLinked > 0
-                  ? `Linked to ${linkedSummary()}`
-                  : "Ready to schedule into a term"}
-                body={totalLinked > 0
-                  ? "Those scheduled instances now know their curriculum — rosters, instructor briefings, and parent emails will pull from this lesson plan."
-                  : "Pull this curriculum into any term's program calendar in one click."}
-              />
-            </ul>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+                {tiles.map((t) => (
+                  <div
+                    key={t.slug}
+                    title={t.unlocked
+                      ? `${t.display_name} — unlocked`
+                      : `${t.display_name} — ${t.required_states_human || "locked"}`}
+                    style={{
+                      background: PANEL,
+                      border: `1px solid ${RULE}`,
+                      borderLeft: t.unlocked
+                        ? "3px solid #4e914e"
+                        : `3px solid ${RULE}`,
+                      borderRadius: 6,
+                      padding: "9px 11px",
+                      display: "flex",
+                      gap: 9,
+                      alignItems: "flex-start",
+                      opacity: t.unlocked ? 1 : 0.78,
+                    }}
+                  >
+                    <div style={{
+                      flexShrink: 0,
+                      width: 24,
+                      height: 24,
+                      borderRadius: "50%",
+                      background: t.unlocked ? "rgba(78, 145, 78, 0.12)" : "#f3f0e6",
+                      color: t.unlocked ? "#2d5a2d" : MUTED,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 13,
+                      marginTop: 1,
+                    }}>
+                      {t.unlocked ? "✓" : t.glyph}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, color: t.unlocked ? INK : MUTED, fontSize: 12, lineHeight: 1.3 }}>
+                        {t.display_name}
+                      </div>
+                      <div style={{ color: MUTED, fontSize: 11, lineHeight: 1.35, marginTop: 1 }}>
+                        {t.unlocked
+                          ? t.short_description
+                          : t.required_states_human || "Locked"}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
 
-            <div style={timeSavedPill}>
-              ⏱ <strong style={{ marginLeft: 6, marginRight: 4 }}>Saved you {TIME_SAVED_HOURS}+ hours</strong> of setup work for this curriculum.
-            </div>
+              <div style={timeSavedPill}>
+                ⏱ <strong style={{ marginLeft: 6, marginRight: 4 }}>Saved you {hoursSaved}+ hours</strong> of setup work for this curriculum.
+              </div>
 
-            <div style={{ ...modalActions, justifyContent: "flex-end" }}>
-              <button onClick={onDone} style={primaryBtn}>Back to library →</button>
-            </div>
-          </>
-        )}
+              {recommendation && (
+                <div style={{
+                  background: PLUM_SOFT,
+                  border: `1px solid ${PLUM}33`,
+                  borderRadius: 8,
+                  padding: 14,
+                  marginTop: 14,
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "flex-start",
+                }}>
+                  <DoraAvatar size={48} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: MUTED, marginBottom: 2 }}>
+                      <strong style={{ color: PLUM }}>Dora's recommendation</strong>
+                    </div>
+                    <div style={{ fontWeight: 700, color: INK, fontSize: 15, lineHeight: 1.35, marginBottom: 4 }}>
+                      {recommendation.headline}
+                    </div>
+                    <div style={{ color: INK, fontSize: 13, lineHeight: 1.45 }}>
+                      {recommendation.body}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ ...modalActions, justifyContent: "flex-end", gap: 10 }}>
+                <button onClick={onDone} style={tertiaryBtn}>Back to library</button>
+                {recommendation?.primary_cta && (
+                  <button
+                    onClick={() => onRecommendationCta?.(recommendation.primary_cta_to)}
+                    style={primaryBtn}
+                  >
+                    {recommendation.primary_cta}
+                  </button>
+                )}
+                {!recommendation?.primary_cta && (
+                  <button onClick={onDone} style={primaryBtn}>Back to library →</button>
+                )}
+              </div>
+            </>
+          );
+        })()}
 
         {step === 2 && (
           <>
