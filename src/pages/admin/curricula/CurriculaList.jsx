@@ -30,6 +30,10 @@ export default function CurriculaList() {
   const [curricula, setCurricula] = useState([]);
   // curriculum_id -> count of low-confidence-not-yet-approved extracted_fields
   const [flagCounts, setFlagCounts] = useState({});
+  // Set of curriculum_ids that have at least one uploaded document. Used to
+  // pick the right Draft CTA — backfilled drafts (no docs) route to Edit,
+  // upload-in-progress drafts route to Resume extraction.
+  const [docsByCurriculumId, setDocsByCurriculumId] = useState(new Set());
 
   useEffect(() => {
     if (!org?.id) return;
@@ -39,6 +43,7 @@ export default function CurriculaList() {
       const [
         { data, error: qErr },
         { data: flagRows },
+        { data: docRows },
       ] = await Promise.all([
         supabase
           .from("curricula")
@@ -51,6 +56,10 @@ export default function CurriculaList() {
           .eq("organization_id", org.id)
           .lt("confidence", 0.7)
           .eq("human_approved", false),
+        supabase
+          .from("curriculum_documents")
+          .select("curriculum_id")
+          .eq("organization_id", org.id),
       ]);
       if (!mounted) return;
       if (qErr) {
@@ -63,6 +72,7 @@ export default function CurriculaList() {
         counts[r.curriculum_id] = (counts[r.curriculum_id] ?? 0) + 1;
       }
       setFlagCounts(counts);
+      setDocsByCurriculumId(new Set((docRows ?? []).map((r) => r.curriculum_id)));
       setLoading(false);
     })();
     return () => { mounted = false; };
@@ -153,6 +163,7 @@ export default function CurriculaList() {
                 key={c.id}
                 curriculum={c}
                 flagCount={flagCounts[c.id] ?? 0}
+                hasDoc={docsByCurriculumId.has(c.id)}
                 onDelete={c.status !== "published" ? () => deleteCurriculum(c) : undefined}
                 deleting={deleting === c.id}
               />
@@ -164,7 +175,7 @@ export default function CurriculaList() {
   );
 }
 
-function CurriculumCard({ curriculum: c, flagCount = 0, onDelete, deleting = false }) {
+function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, onDelete, deleting = false }) {
   // Camp curricula use ages; afterschool uses grades. Show whichever is populated.
   const ageLabel = c.age_range_min != null && c.age_range_max != null
     ? `Ages ${c.age_range_min}–${c.age_range_max}`
@@ -174,7 +185,7 @@ function CurriculumCard({ curriculum: c, flagCount = 0, onDelete, deleting = fal
   const sessionsLabel = c.session_count ? `${c.session_count} session${c.session_count === 1 ? "" : "s"}` : "Sessions not set";
   const formatLabel = c.format === "summer_camp" ? "Summer camp" : c.format === "afterschool" ? "Afterschool" : c.format ? "Other" : "Format not set";
 
-  const cta = ctaForStatus(c);
+  const cta = ctaForStatus(c, hasDoc);
   // Tag only fires on Extracted cards — for Draft the operator hasn't reviewed
   // yet (expected); for Published the review has happened already.
   const showNeedsReview = c.status === "extracted" && flagCount > 0;
@@ -247,10 +258,15 @@ function gradeLabel(n) {
   return String(n);
 }
 
-function ctaForStatus(c) {
+function ctaForStatus(c, hasDoc = false) {
   switch (c.status) {
     case "draft":
-      return [{ to: `/admin/curricula/${c.id}/extracting`, label: "Resume extraction →", primary: true }];
+      // Backfilled drafts (no document) can't resume extraction — route them
+      // to the editable review screen instead, where the operator can fill
+      // fields manually. Drafts with a document mid-flight still resume.
+      return hasDoc
+        ? [{ to: `/admin/curricula/${c.id}/extracting`, label: "Resume extraction →", primary: true }]
+        : [{ to: `/admin/curricula/${c.id}/review`, label: "Edit details →", primary: true }];
     case "extracted":
       return [{ to: `/admin/curricula/${c.id}/review`, label: "Review and publish →", primary: true }];
     case "published":

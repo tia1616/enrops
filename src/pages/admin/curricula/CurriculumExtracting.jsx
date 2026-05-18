@@ -158,10 +158,18 @@ export default function CurriculumExtracting() {
     return <div style={{ color: MUTED, padding: 24 }}>Loading…</div>;
   }
   if (loadError) {
+    // Common case for backfilled drafts (no upload doc): nudge to the review
+    // screen where the operator can edit fields manually instead of dead-ending.
+    const noDocCase = /uploaded doc/i.test(loadError);
     return (
       <div style={{ ...errorBox, maxWidth: 520 }}>
-        Couldn't load this curriculum: {loadError}
-        <div style={{ marginTop: 12 }}>
+        {noDocCase
+          ? "This curriculum doesn't have an uploaded document yet — there's nothing to extract. Edit the details manually, or upload a curriculum doc from the library."
+          : `Couldn't load this curriculum: ${loadError}`}
+        <div style={{ marginTop: 12, display: "flex", gap: 14 }}>
+          {curriculum && noDocCase && (
+            <Link to={`/admin/curricula/${curriculum.id}/review`} style={linkStyle}>Edit details →</Link>
+          )}
           <Link to="/admin/curricula" style={linkStyle}>← Back to Curricula</Link>
         </div>
       </div>
