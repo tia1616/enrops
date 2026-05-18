@@ -3145,6 +3145,7 @@ function CandidatePicker({
   const [msgBusy, setMsgBusy] = useState(false);
   const [msgError, setMsgError] = useState("");
   const [msgSent, setMsgSent] = useState(false);
+  const [thread, setThread] = useState([]);
 
   // Reset inline state when the picker is reused for a different assignment.
   useEffect(() => {
@@ -3154,7 +3155,25 @@ function CandidatePicker({
     setMsgText("");
     setMsgError("");
     setMsgSent(false);
+    setThread([]);
   }, [currentAssignment?.id]);
+
+  // Load message thread for the current assignment so admin can see prior
+  // back-and-forth with the instructor (offers, reminders, replies, requests).
+  // Refetched after each new message send so the admin's reply shows immediately.
+  useEffect(() => {
+    if (!currentAssignment?.id) return;
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("instructor_offer_messages")
+        .select("id, sender_role, message, created_at")
+        .eq("camp_assignment_id", currentAssignment.id)
+        .order("created_at", { ascending: true });
+      if (alive) setThread(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [currentAssignment?.id, msgSent]);
 
   async function handleSendMessageClick() {
     if (!msgText.trim() || !onSendMessage) return;
@@ -3475,6 +3494,34 @@ function CandidatePicker({
                     </div>
                   </>
                 )}
+              </div>
+            )}
+
+            {thread.length > 0 && (
+              <div style={{ padding: "0 20px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  Conversation with {currentFirstName}
+                </div>
+                {thread.map((m) => {
+                  const isInstructor = m.sender_role === "instructor";
+                  const isSystem = m.sender_role === "system";
+                  return (
+                    <div key={m.id} style={{
+                      padding: "8px 10px",
+                      background: isSystem ? "#f5f3ed" : (isInstructor ? `${CHANGE_REQ}10` : `${PLUM}10`),
+                      border: `1px solid ${isSystem ? RULE : (isInstructor ? `${CHANGE_REQ}40` : `${PLUM}40`)}`,
+                      borderRadius: 6,
+                      fontSize: 13,
+                      color: INK,
+                      lineHeight: 1.45,
+                    }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+                        {isInstructor ? currentFirstName : isSystem ? "System" : "You"} · {new Date(m.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                      </div>
+                      <div style={{ whiteSpace: "pre-wrap" }}>{m.message}</div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
