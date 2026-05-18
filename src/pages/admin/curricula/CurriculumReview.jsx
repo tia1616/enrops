@@ -154,6 +154,9 @@ export default function CurriculumReview() {
   // recommendation for the just-published curriculum (fetched after publish).
   const [capabilities, setCapabilities] = useState([]);
   const [doraRecommendation, setDoraRecommendation] = useState(null);
+  // Link-existing-programs modal: opens from the celebration screen's
+  // link_existing recommendation CTA, or from the published-curriculum CTA bar.
+  const [linkModalOpen, setLinkModalOpen] = useState(false);
   // Global save state — drives the tri-state CTA-bar copy
   // values: "idle" | "saving" | "saved" | "error"
   const [saveState, setSaveState] = useState("idle");
@@ -838,8 +841,14 @@ export default function CurriculumReview() {
             <SaveStateLabel state={saveState} />
             <div style={{ display: "flex", gap: 10 }}>
               <Link to="/admin/curricula" style={tertiaryBtn}>← Back to library</Link>
-              <button onClick={saveAsDraft} style={secondaryBtn}>Save as draft</button>
-              <button onClick={startPublish} style={primaryBtn}>Publish curriculum →</button>
+              {curriculum.status === "published" ? (
+                <button onClick={() => setLinkModalOpen(true)} style={secondaryBtn}>Link existing programs</button>
+              ) : (
+                <>
+                  <button onClick={saveAsDraft} style={secondaryBtn}>Save as draft</button>
+                  <button onClick={startPublish} style={primaryBtn}>Publish curriculum →</button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -868,6 +877,10 @@ export default function CurriculumReview() {
           recommendation={doraRecommendation}
           onDone={() => navigate("/admin/curricula")}
           onRecommendationCta={(to) => navigate(to)}
+          onLinkExisting={() => {
+            setPublishOpen(false);
+            setLinkModalOpen(true);
+          }}
         />
       )}
 
@@ -876,6 +889,21 @@ export default function CurriculumReview() {
           curriculumId={curriculum?.id}
           config={polishConfig}
           onClose={() => setPolishConfig(null)}
+        />
+      )}
+
+      {linkModalOpen && curriculum && (
+        <LinkExistingModal
+          curriculumId={curriculum.id}
+          curriculumName={curriculum.name}
+          organizationId={org.id}
+          onClose={() => setLinkModalOpen(false)}
+          onSaved={() => {
+            // After saving, refresh linked counts so the capability strip on
+            // the next library visit reflects the new linkage. Simplest path:
+            // reload the curriculum row + its sessions (already wired).
+            setLinkModalOpen(false);
+          }}
         />
       )}
     </div>
@@ -1491,6 +1519,221 @@ function PolishModal({ curriculumId, config, onClose }) {
   );
 }
 
+// Modal to manually link unlinked programs + camp_sessions to a published
+// curriculum. Entry points:
+//   - Celebration screen "Link existing programs ->" CTA (link_existing variant)
+//   - CTA bar "Link existing programs" button on published curricula
+// Loads every unlinked row in the org, groups by source + name, scores each
+// group against the curriculum name, pre-selects high-confidence matches,
+// lets the operator pick the rest manually. Save -> bulk UPDATE curriculum_id.
+function LinkExistingModal({ curriculumId, curriculumName, organizationId, onClose, onSaved }) {
+  const [loading, setLoading] = useState(true);
+  const [matches, setMatches] = useState([]); // [{ source, name, ids, runCount, score, key }]
+  const [selectedKeys, setSelectedKeys] = useState(new Set());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      setError("");
+      const [{ data: progRows }, { data: campRows }] = await Promise.all([
+        supabase
+          .from("programs")
+          .select("id, curriculum, term")
+          .eq("organization_id", organizationId)
+          .is("curriculum_id", null),
+        supabase
+          .from("camp_sessions")
+          .select("id, curriculum_name")
+          .eq("organization_id", organizationId)
+          .is("curriculum_id", null),
+      ]);
+      if (!mounted) return;
+      const groups = new Map();
+      for (const p of progRows ?? []) {
+        const name = (p.curriculum || "").trim();
+        if (!name) continue;
+        const key = `programs::${name}`;
+        if (!groups.has(key)) groups.set(key, { source: "programs", name, ids: [], runCount: 0, key });
+        const g = groups.get(key);
+        g.ids.push(p.id);
+        g.runCount += 1;
+      }
+      for (const c of campRows ?? []) {
+        const name = (c.curriculum_name || "").trim();
+        if (!name) continue;
+        const key = `camp_sessions::${name}`;
+        if (!groups.has(key)) groups.set(key, { source: "camp_sessions", name, ids: [], runCount: 0, key });
+        const g = groups.get(key);
+        g.ids.push(c.id);
+        g.runCount += 1;
+      }
+      const scored = [];
+      for (const g of groups.values()) {
+        scored.push({ ...g, score: matchScore(curriculumName, g.name) });
+      }
+      scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+      setMatches(scored);
+      // Pre-select strong matches (>= 0.5) so the common case is a one-click confirm.
+      setSelectedKeys(new Set(scored.filter((m) => m.score >= 0.5).map((m) => m.key)));
+      setLoading(false);
+    })();
+    return () => { mounted = false; };
+  }, [curriculumId, organizationId, curriculumName]);
+
+  function toggleKey(key) {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
+  async function doSave() {
+    setSaving(true);
+    setError("");
+    const programIds = [];
+    const campSessionIds = [];
+    for (const m of matches) {
+      if (!selectedKeys.has(m.key)) continue;
+      if (m.source === "programs") programIds.push(...m.ids);
+      else campSessionIds.push(...m.ids);
+    }
+    if (programIds.length === 0 && campSessionIds.length === 0) {
+      setError("Pick at least one row to link.");
+      setSaving(false);
+      return;
+    }
+    try {
+      if (programIds.length > 0) {
+        const { error: err } = await supabase
+          .from("programs")
+          .update({ curriculum_id: curriculumId })
+          .in("id", programIds);
+        if (err) throw err;
+      }
+      if (campSessionIds.length > 0) {
+        const { error: err } = await supabase
+          .from("camp_sessions")
+          .update({ curriculum_id: curriculumId, updated_at: new Date().toISOString() })
+          .in("id", campSessionIds);
+        if (err) throw err;
+      }
+      onSaved?.({ programs: programIds.length, campSessions: campSessionIds.length });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setSaving(false);
+    }
+  }
+
+  const campMatches = matches.filter((m) => m.source === "camp_sessions");
+  const programMatchesGroup = matches.filter((m) => m.source === "programs");
+  const selectedCount = selectedKeys.size;
+
+  function MatchRow({ m }) {
+    const kindLabel = m.source === "camp_sessions" ? "camp session" : "program run";
+    const scorePct = Math.round(m.score * 100);
+    const isStrong = m.score >= 0.5;
+    return (
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "7px 0", fontSize: 13, cursor: "pointer", borderBottom: `1px solid ${RULE}` }}>
+        <input
+          type="checkbox"
+          checked={selectedKeys.has(m.key)}
+          onChange={() => toggleKey(m.key)}
+          style={{ marginTop: 3 }}
+        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <strong>{m.name}</strong>
+            {m.score > 0 && (
+              <span style={{
+                fontSize: 10,
+                fontWeight: 600,
+                padding: "2px 7px",
+                borderRadius: 8,
+                background: isStrong ? "rgba(78, 145, 78, 0.12)" : "#f3f0e6",
+                color: isStrong ? "#2d5a2d" : MUTED,
+                border: `1px solid ${isStrong ? "rgba(78, 145, 78, 0.35)" : RULE}`,
+              }}>
+                {isStrong ? `≈${scorePct}% match` : "manual"}
+              </span>
+            )}
+          </div>
+          <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
+            {m.runCount} {kindLabel}{m.runCount === 1 ? "" : "s"}
+          </div>
+        </div>
+      </label>
+    );
+  }
+
+  return (
+    <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget && !saving) onClose(); }}>
+      <div style={{ ...modal, maxWidth: 640 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+          <div>
+            <h3 style={{ margin: "0 0 4px", color: INK, fontSize: 20, fontWeight: 700 }}>
+              Link existing programs to {curriculumName}
+            </h3>
+            <p style={{ color: MUTED, fontSize: 13, margin: 0, lineHeight: 1.45 }}>
+              Tick any unlinked rows that should belong to this curriculum. Strong matches are pre-selected; you can add or remove anything before saving.
+            </p>
+          </div>
+        </div>
+
+        {loading && (
+          <div style={{ padding: "30px 0", color: MUTED, fontSize: 13, textAlign: "center" }}>
+            Loading unlinked programs and camp sessions…
+          </div>
+        )}
+
+        {!loading && matches.length === 0 && (
+          <div style={{ background: "#f6f4ec", border: `1px solid ${RULE}`, borderRadius: 6, padding: 14, fontSize: 13, color: MUTED }}>
+            No unlinked programs or camp sessions in your library. If you schedule a new program later, it'll show up here.
+          </div>
+        )}
+
+        {!loading && matches.length > 0 && (
+          <>
+            {campMatches.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 4 }}>
+                  Summer camps ({campMatches.reduce((s, m) => s + m.runCount, 0)})
+                </div>
+                {campMatches.map((m) => <MatchRow key={m.key} m={m} />)}
+              </div>
+            )}
+            {programMatchesGroup.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 4 }}>
+                  Afterschool programs ({programMatchesGroup.reduce((s, m) => s + m.runCount, 0)})
+                </div>
+                {programMatchesGroup.map((m) => <MatchRow key={m.key} m={m} />)}
+              </div>
+            )}
+          </>
+        )}
+
+        {error && <div style={{ ...errorBox, marginTop: 12 }}>{error}</div>}
+
+        <div style={modalActions}>
+          <button onClick={onClose} style={tertiaryBtn} disabled={saving}>Cancel</button>
+          <button
+            onClick={doSave}
+            disabled={saving || selectedCount === 0}
+            style={{ ...primaryBtn, opacity: saving || selectedCount === 0 ? 0.5 : 1, cursor: saving || selectedCount === 0 ? "not-allowed" : "pointer" }}
+          >
+            {saving ? "Linking…" : `Link ${selectedCount} ${selectedCount === 1 ? "group" : "groups"} →`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Chunk 3.5: shared icon map for capability tiles + strip. Lucide icons are
 // the production target; emojis are the v1 placeholder.
 const CAPABILITY_ICONS = {
@@ -1528,7 +1771,7 @@ function PublishModal({
   publishing, error, onCancel, onContinue, onPublish,
   curriculum, sessionCount, linkedProgramCount, linkedCampSessionCount,
   preLinkedProgramCount = 0, preLinkedCampSessionCount = 0,
-  capabilities = [], recommendation = null, onDone, onRecommendationCta,
+  capabilities = [], recommendation = null, onDone, onRecommendationCta, onLinkExisting,
 }) {
   function toggleMatch(key) {
     setSelectedMatchKeys((prev) => {
@@ -1706,10 +1949,18 @@ function PublishModal({
                 <button onClick={onDone} style={tertiaryBtn}>Back to library</button>
                 {recommendation?.primary_cta && (
                   <button
-                    onClick={() => onRecommendationCta?.(recommendation.primary_cta_to)}
+                    onClick={() => {
+                      // link_existing variant opens an in-place modal instead
+                      // of navigating away; everything else routes via URL.
+                      if (recommendation.variant === "link_existing") {
+                        onLinkExisting?.();
+                      } else {
+                        onRecommendationCta?.(recommendation.primary_cta_to);
+                      }
+                    }}
                     style={primaryBtn}
                   >
-                    {recommendation.primary_cta}
+                    {recommendation.variant === "link_existing" ? "Link existing programs →" : recommendation.primary_cta}
                   </button>
                 )}
                 {!recommendation?.primary_cta && (
