@@ -9,6 +9,8 @@ import { supabase } from "../../../lib/supabase.js";
 
 const PLUM = "#691D39";
 const GOLD = "#CFB12F";
+const GOLD_SOFT = "rgba(207, 177, 47, 0.13)";
+const GOLD_BORDER = "rgba(207, 177, 47, 0.55)";
 const CHALK = "#EAEADD";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -26,23 +28,41 @@ export default function CurriculaList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [curricula, setCurricula] = useState([]);
+  // curriculum_id -> count of low-confidence-not-yet-approved extracted_fields
+  const [flagCounts, setFlagCounts] = useState({});
 
   useEffect(() => {
     if (!org?.id) return;
     let mounted = true;
     (async () => {
       setLoading(true);
-      const { data, error: qErr } = await supabase
-        .from("curricula")
-        .select("id, name, age_range_min, age_range_max, grade_min, grade_max, format, session_count, status, updated_at")
-        .eq("organization_id", org.id)
-        .order("updated_at", { ascending: false });
+      const [
+        { data, error: qErr },
+        { data: flagRows },
+      ] = await Promise.all([
+        supabase
+          .from("curricula")
+          .select("id, name, age_range_min, age_range_max, grade_min, grade_max, format, session_count, status, updated_at")
+          .eq("organization_id", org.id)
+          .order("updated_at", { ascending: false }),
+        supabase
+          .from("curriculum_extracted_fields")
+          .select("curriculum_id")
+          .eq("organization_id", org.id)
+          .lt("confidence", 0.7)
+          .eq("human_approved", false),
+      ]);
       if (!mounted) return;
       if (qErr) {
         setError(qErr.message);
       } else {
         setCurricula(data ?? []);
       }
+      const counts = {};
+      for (const r of flagRows ?? []) {
+        counts[r.curriculum_id] = (counts[r.curriculum_id] ?? 0) + 1;
+      }
+      setFlagCounts(counts);
       setLoading(false);
     })();
     return () => { mounted = false; };
@@ -52,6 +72,48 @@ export default function CurriculaList() {
     ...g,
     items: curricula.filter((c) => c.status === g.key),
   }));
+
+  // Delete a draft / extracted curriculum:
+  //   1. confirm with operator
+  //   2. fetch the curriculum_documents storage_paths so we can clean storage
+  //      (Postgres cascade doesn't extend to storage objects)
+  //   3. call Storage API to remove the files
+  //   4. DELETE the curricula row — cascade clears curriculum_sessions /
+  //      curriculum_extracted_fields / curriculum_documents
+  //   5. drop from local list
+  // Published curricula are linked to programs + camp_sessions; deletion via
+  // the card is intentionally not supported (would break those FKs).
+  const [deleting, setDeleting] = useState(null); // curriculum id being deleted
+  async function deleteCurriculum(c) {
+    if (c.status === "published") return;
+    if (!window.confirm(`Delete "${c.name}"?\n\nThis removes the curriculum, all its sessions, and any uploaded documents. This can't be undone.`)) return;
+    setDeleting(c.id);
+    try {
+      const { data: docs } = await supabase
+        .from("curriculum_documents")
+        .select("storage_path")
+        .eq("curriculum_id", c.id);
+      const paths = (docs ?? []).map((d) => d.storage_path).filter(Boolean);
+      if (paths.length > 0) {
+        const { error: stErr } = await supabase.storage.from("curriculum-documents").remove(paths);
+        if (stErr) console.warn("storage remove failed (continuing with row delete):", stErr.message);
+      }
+      const { error: delErr } = await supabase.from("curricula").delete().eq("id", c.id);
+      if (delErr) {
+        alert(`Couldn't delete: ${delErr.message}`);
+        setDeleting(null);
+        return;
+      }
+      setCurricula((rows) => rows.filter((r) => r.id !== c.id));
+      setFlagCounts((m) => {
+        const next = { ...m };
+        delete next[c.id];
+        return next;
+      });
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   return (
     <div>
@@ -87,7 +149,13 @@ export default function CurriculaList() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
             {group.items.map((c) => (
-              <CurriculumCard key={c.id} curriculum={c} />
+              <CurriculumCard
+                key={c.id}
+                curriculum={c}
+                flagCount={flagCounts[c.id] ?? 0}
+                onDelete={c.status !== "published" ? () => deleteCurriculum(c) : undefined}
+                deleting={deleting === c.id}
+              />
             ))}
           </div>
         </div>
@@ -96,7 +164,7 @@ export default function CurriculaList() {
   );
 }
 
-function CurriculumCard({ curriculum: c }) {
+function CurriculumCard({ curriculum: c, flagCount = 0, onDelete, deleting = false }) {
   // Camp curricula use ages; afterschool uses grades. Show whichever is populated.
   const ageLabel = c.age_range_min != null && c.age_range_max != null
     ? `Ages ${c.age_range_min}–${c.age_range_max}`
@@ -107,22 +175,67 @@ function CurriculumCard({ curriculum: c }) {
   const formatLabel = c.format === "summer_camp" ? "Summer camp" : c.format === "afterschool" ? "Afterschool" : c.format ? "Other" : "Format not set";
 
   const cta = ctaForStatus(c);
+  // Tag only fires on Extracted cards — for Draft the operator hasn't reviewed
+  // yet (expected); for Published the review has happened already.
+  const showNeedsReview = c.status === "extracted" && flagCount > 0;
 
   return (
     <div style={cardStyle}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
         <div style={{ fontWeight: 600, color: INK, fontSize: 15, lineHeight: 1.3 }}>{c.name}</div>
-        <StatusBadge status={c.status} />
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+          <StatusBadge status={c.status} />
+          {showNeedsReview && (
+            <span
+              title={`${flagCount} field${flagCount === 1 ? "" : "s"} Dora isn't sure about`}
+              style={{
+                background: GOLD_SOFT,
+                color: "#7a5a00",
+                fontSize: 10,
+                fontWeight: 600,
+                padding: "2px 7px",
+                borderRadius: 9,
+                textTransform: "uppercase",
+                letterSpacing: 0.4,
+                border: `1px solid ${GOLD_BORDER}`,
+                whiteSpace: "nowrap",
+              }}
+            >
+              Needs your review · {flagCount}
+            </span>
+          )}
+        </div>
       </div>
       <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
         {ageLabel}<br />
         {sessionsLabel}<br />
         {formatLabel}
       </div>
-      <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+      <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
         {cta.map((item, i) => (
           <Link key={i} to={item.to} style={item.primary ? cardCtaPrimary : cardCtaSecondary}>{item.label}</Link>
         ))}
+        {onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={deleting}
+            title="Delete this curriculum"
+            style={{
+              marginLeft: "auto",
+              background: "transparent",
+              border: "none",
+              color: deleting ? MUTED : "#a13a3a",
+              cursor: deleting ? "wait" : "pointer",
+              fontSize: 16,
+              padding: "6px 8px",
+              opacity: deleting ? 0.5 : 0.7,
+              lineHeight: 1,
+            }}
+          >
+            {deleting ? "…" : "🗑"}
+          </button>
+        )}
       </div>
     </div>
   );

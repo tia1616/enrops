@@ -142,6 +142,13 @@ export default function CurriculumReview() {
   const [linkedProgramCount, setLinkedProgramCount] = useState(0);
   const [linkedCampSessionCount, setLinkedCampSessionCount] = useState(0);
 
+  // Polish with Dora: when set, the modal opens for this field
+  const [polishConfig, setPolishConfig] = useState(null);
+  // Global save state — drives the tri-state CTA-bar copy
+  // values: "idle" | "saving" | "saved" | "error"
+  const [saveState, setSaveState] = useState("idle");
+  const savedFlashTimer = useRef(null);
+
   // Debounce timers per field-name
   const debounceTimers = useRef(new Map());
 
@@ -253,11 +260,23 @@ export default function CurriculumReview() {
     setTimeout(() => setSavingField((cur) => (cur === fieldName ? null : cur)), 1100);
   }
 
+  // Drives the tri-state CTA-bar copy. Auto-resets back to "idle" after a short
+  // window so the bar doesn't sit on "Saved" forever once the operator moves on.
+  function markSaveState(next) {
+    setSaveState(next);
+    if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
+    if (next === "saved" || next === "error") {
+      const ms = next === "error" ? 4000 : 2000;
+      savedFlashTimer.current = setTimeout(() => setSaveState("idle"), ms);
+    }
+  }
+
   // Write a top-level field both to curricula and to curriculum_extracted_fields.
   // For null-from-extraction fields (e.g. class_size on existing rows) the
   // extracted_fields row may not exist yet — upsert by (curriculum_id, field_name).
   async function persistTopField(fieldName, columnPatch, extractedValue) {
     if (!curriculum || !org?.id) return;
+    markSaveState("saving");
     // 1. patch curricula
     const { error: curErr } = await supabase
       .from("curricula")
@@ -265,6 +284,7 @@ export default function CurriculumReview() {
       .eq("id", curriculum.id);
     if (curErr) {
       console.error("save curricula failed", fieldName, curErr);
+      markSaveState("error");
       return;
     }
     // 2. upsert extracted_fields
@@ -299,6 +319,7 @@ export default function CurriculumReview() {
     }
     setCurriculum((c) => ({ ...c, ...columnPatch }));
     flashSaved(fieldName);
+    markSaveState("saved");
   }
 
   // Debounced version for text inputs. Immediate variant for chips / selects.
@@ -324,16 +345,48 @@ export default function CurriculumReview() {
     const timers = debounceTimers.current;
     if (timers.has(key)) clearTimeout(timers.get(key));
     const run = async () => {
+      markSaveState("saving");
       const { error } = await supabase
         .from("curriculum_sessions")
         .update(columnPatch)
         .eq("id", sessionId);
-      if (error) console.error("save session failed", error);
-      else flashSaved(key);
+      if (error) {
+        console.error("save session failed", error);
+        markSaveState("error");
+      } else {
+        flashSaved(key);
+        markSaveState("saved");
+      }
       timers.delete(key);
     };
     if (immediate) { run(); return; }
     timers.set(key, setTimeout(run, 800));
+  }
+
+  // Polish with Dora: open the modal pre-loaded with the right field's context.
+  // For curriculum-level skill rollups, the onAccept replaces the field via
+  // the same debounced save path. For per-session skills_practiced, it routes
+  // through saveSessionField.
+  function openPolishForTopField(fieldName, current, targetCount = 6) {
+    setPolishConfig({
+      field: fieldName,
+      sessionId: undefined,
+      current,
+      targetCount,
+      onAccept: (polished) =>
+        saveTopFieldDebounced(fieldName, { [fieldName]: polished }, polished, true),
+    });
+  }
+
+  function openPolishForSession(sessionId, current) {
+    setPolishConfig({
+      field: "skills_practiced",
+      sessionId,
+      current,
+      targetCount: 4,
+      onAccept: (polished) =>
+        saveSessionField(sessionId, { skills_practiced: polished }, true),
+    });
   }
 
   function toggleSession(id) {
@@ -638,6 +691,7 @@ export default function CurriculumReview() {
               onChange={(arr) => saveTopFieldDebounced("skills_overall", { skills_overall: arr }, arr, true)}
               flagged={isFieldFlagged({ curriculum, fieldName: "skills_overall", extractedRow: extractedByName.skills_overall })}
               saved={savingField === "skills_overall"}
+              onPolish={(current) => openPolishForTopField("skills_overall", current, 6)}
             />
 
             <FieldChips
@@ -648,6 +702,7 @@ export default function CurriculumReview() {
               onChange={(arr) => saveTopFieldDebounced("mid_term_skills", { mid_term_skills: arr }, arr, true)}
               flagged={isFieldFlagged({ curriculum, fieldName: "mid_term_skills", extractedRow: extractedByName.mid_term_skills })}
               saved={savingField === "mid_term_skills"}
+              onPolish={(current) => openPolishForTopField("mid_term_skills", current, 6)}
             />
 
             <FieldChips
@@ -658,6 +713,7 @@ export default function CurriculumReview() {
               onChange={(arr) => saveTopFieldDebounced("final_recap_skills", { final_recap_skills: arr }, arr, true)}
               flagged={isFieldFlagged({ curriculum, fieldName: "final_recap_skills", extractedRow: extractedByName.final_recap_skills })}
               saved={savingField === "final_recap_skills"}
+              onPolish={(current) => openPolishForTopField("final_recap_skills", current, 6)}
             />
 
             <FieldTextarea
@@ -696,13 +752,14 @@ export default function CurriculumReview() {
                 onToggle={() => toggleSession(s.id)}
                 onSave={(patch, immediate) => saveSessionField(s.id, patch, immediate)}
                 savingField={savingField}
+                onPolishSkills={openPolishForSession}
               />
             ))}
           </section>
 
           {/* Sticky CTA bar */}
           <div style={ctaBar}>
-            <div style={{ color: MUTED, fontSize: 13 }}>All edits are saved.</div>
+            <SaveStateLabel state={saveState} />
             <div style={{ display: "flex", gap: 10 }}>
               <Link to="/admin/curricula" style={tertiaryBtn}>← Back to library</Link>
               <button onClick={saveAsDraft} style={secondaryBtn}>Save as draft</button>
@@ -732,8 +789,29 @@ export default function CurriculumReview() {
           onDone={() => navigate("/admin/curricula")}
         />
       )}
+
+      {polishConfig && (
+        <PolishModal
+          curriculumId={curriculum?.id}
+          config={polishConfig}
+          onClose={() => setPolishConfig(null)}
+        />
+      )}
     </div>
   );
+}
+
+function SaveStateLabel({ state }) {
+  if (state === "saving") {
+    return <div style={{ color: MUTED, fontSize: 13 }}>Saving…</div>;
+  }
+  if (state === "saved") {
+    return <div style={{ color: "#4e914e", fontSize: 13, fontWeight: 600 }}>✓ Saved</div>;
+  }
+  if (state === "error") {
+    return <div style={{ color: "#a13a3a", fontSize: 13, fontWeight: 600 }}>Couldn't save — try again</div>;
+  }
+  return <div style={{ color: MUTED, fontSize: 13 }}>All edits are saved.</div>;
 }
 
 // --- Subcomponents ---
@@ -979,7 +1057,7 @@ function SessionTypesField({ value, onChange, flagged, saved }) {
   );
 }
 
-function FieldChips({ label, inlineHelp, help, value, onChange, flagged, saved }) {
+function FieldChips({ label, inlineHelp, help, value, onChange, flagged, saved, onPolish }) {
   const [draft, setDraft] = useState("");
   function add() {
     const v = draft.trim();
@@ -991,9 +1069,33 @@ function FieldChips({ label, inlineHelp, help, value, onChange, flagged, saved }
   function remove(idx) {
     const next = value.slice(); next.splice(idx, 1); onChange(next);
   }
+  const canPolish = typeof onPolish === "function" && Array.isArray(value) && value.length > 0;
   return (
     <div data-flagged={flagged ? "true" : undefined} style={fieldWrap}>
-      <FieldLabel inlineHelp={inlineHelp} flagged={flagged}>{label}<SavedTick on={saved} /></FieldLabel>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+        <FieldLabel inlineHelp={inlineHelp} flagged={flagged}>{label}<SavedTick on={saved} /></FieldLabel>
+        {onPolish && (
+          <button
+            type="button"
+            onClick={() => canPolish && onPolish(value)}
+            disabled={!canPolish}
+            title={canPolish ? "Ask Dora to re-rank and rewrite these as parent-impressive concepts" : "Add at least one skill first"}
+            style={{
+              background: canPolish ? GOLD_SOFT : "transparent",
+              border: `1px solid ${canPolish ? GOLD_BORDER : RULE}`,
+              color: canPolish ? "#7a5a00" : MUTED,
+              borderRadius: 12,
+              fontSize: 11,
+              fontWeight: 600,
+              padding: "3px 9px",
+              cursor: canPolish ? "pointer" : "not-allowed",
+              whiteSpace: "nowrap",
+            }}
+          >
+            ✨ Polish with Dora
+          </button>
+        )}
+      </div>
       {help && <div style={fieldHelp}>{help}</div>}
       <div style={{ ...chipsBox, ...(flagged ? lowConf : {}) }}>
         {value.map((chip, i) => (
@@ -1014,7 +1116,7 @@ function FieldChips({ label, inlineHelp, help, value, onChange, flagged, saved }
   );
 }
 
-function SessionRow({ session, open, onToggle, onSave, savingField }) {
+function SessionRow({ session, open, onToggle, onSave, savingField, onPolishSkills }) {
   return (
     <div style={{ borderTop: `1px solid ${RULE}` }}>
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 0", cursor: "pointer", userSelect: "none" }}>
@@ -1041,6 +1143,7 @@ function SessionRow({ session, open, onToggle, onSave, savingField }) {
             value={session.skills_practiced ?? []}
             onChange={(arr) => onSave({ skills_practiced: arr }, true)}
             saved={savingField === `session-${session.id}-skills_practiced`}
+            onPolish={onPolishSkills ? (current) => onPolishSkills(session.id, current) : undefined}
           />
           <FieldChips
             label="Materials this session"
@@ -1063,6 +1166,152 @@ function SessionRow({ session, open, onToggle, onSave, savingField }) {
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function PolishModal({ curriculumId, config, onClose }) {
+  const { field, sessionId, current, targetCount, onAccept } = config;
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [polished, setPolished] = useState([]);
+  const [draft, setDraft] = useState("");
+
+  function fetchPolish() {
+    setLoading(true);
+    setError("");
+    (async () => {
+      try {
+        const { data, error: invokeErr } = await supabase.functions.invoke("polish-skills", {
+          body: {
+            curriculum_id: curriculumId,
+            field,
+            current,
+            session_id: sessionId,
+            target_count: targetCount,
+          },
+        });
+        if (invokeErr) {
+          let msg = invokeErr.message || "Polish failed.";
+          try {
+            const ctx = invokeErr.context;
+            if (ctx && typeof ctx.json === "function") {
+              const body = await ctx.json();
+              if (body?.error) msg = body.error;
+            }
+          } catch { /* keep msg */ }
+          setError(msg);
+          setLoading(false);
+          return;
+        }
+        const arr = Array.isArray(data?.polished) ? data.polished : [];
+        setPolished(arr);
+        setLoading(false);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setLoading(false);
+      }
+    })();
+  }
+
+  useEffect(() => {
+    fetchPolish();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function addPolished() {
+    const v = draft.trim();
+    if (!v) return;
+    if (polished.includes(v)) { setDraft(""); return; }
+    setPolished([...polished, v]);
+    setDraft("");
+  }
+  function removePolished(idx) {
+    const next = polished.slice(); next.splice(idx, 1); setPolished(next);
+  }
+  function accept() {
+    onAccept(polished);
+    onClose();
+  }
+
+  const acceptDisabled = polished.length === 0;
+
+  return (
+    <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={modal}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
+          <DoraAvatar size={54} />
+          <div>
+            <div style={{ fontWeight: 700, color: PLUM, fontSize: 15 }}>
+              Dora<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your Director</span>
+            </div>
+          </div>
+        </div>
+
+        <h3 style={{ margin: "0 0 6px", color: INK, fontSize: 20, fontWeight: 700 }}>Polish these skills</h3>
+        <p style={{ color: MUTED, fontSize: 13, margin: "0 0 18px", lineHeight: 1.45 }}>
+          Rewrite + re-rank into the top {targetCount} parent-impressive concepts. Edit anything before accepting.
+        </p>
+
+        {loading && (
+          <div style={{ padding: "30px 0", color: MUTED, fontSize: 13, textAlign: "center" }}>
+            Asking Dora to polish these {current.length} skill{current.length === 1 ? "" : "s"}…
+          </div>
+        )}
+
+        {!loading && error && (
+          <>
+            <div style={errorBox}>{error}</div>
+            <div style={modalActions}>
+              <button onClick={onClose} style={tertiaryBtn}>Cancel</button>
+              <button onClick={fetchPolish} style={primaryBtn}>Try again</button>
+            </div>
+          </>
+        )}
+
+        {!loading && !error && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginBottom: 18 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Your current list</div>
+                <div style={{ ...chipsBox, opacity: 0.65, background: "#f6f4ec" }}>
+                  {current.map((c, i) => (
+                    <span key={`cur-${i}`} style={{ ...chipStyle, background: "#ece8dc" }}>{c}</span>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Dora</div>
+                <div style={{ ...chipsBox, borderColor: GOLD_BORDER, background: GOLD_SOFT }}>
+                  {polished.map((c, i) => (
+                    <span key={`pol-${i}`} style={chipStyle}>
+                      {c} <span onClick={() => removePolished(i)} style={{ color: "#997800", cursor: "pointer", fontWeight: 700 }}>×</span>
+                    </span>
+                  ))}
+                  <input
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addPolished(); } }}
+                    onBlur={addPolished}
+                    placeholder="add + enter"
+                    style={{ flex: 1, minWidth: 100, border: "none", outline: "none", fontFamily: "inherit", fontSize: 13, padding: "4px 0", background: "transparent" }}
+                  />
+                </div>
+              </div>
+            </div>
+            <div style={modalActions}>
+              <button onClick={onClose} style={tertiaryBtn}>Keep my list</button>
+              <button
+                onClick={accept}
+                disabled={acceptDisabled}
+                style={{ ...primaryBtn, opacity: acceptDisabled ? 0.5 : 1, cursor: acceptDisabled ? "not-allowed" : "pointer" }}
+              >
+                Use Dora's polish →
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
