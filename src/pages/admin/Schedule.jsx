@@ -1154,7 +1154,7 @@ export default function Schedule() {
     setSaveError(null);
     try {
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: null },
+        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: null, deadline: offerDeadline },
       });
       if (error) {
         // Read the actual response body so we can see the real error message.
