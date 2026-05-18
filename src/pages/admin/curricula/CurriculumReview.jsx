@@ -1737,27 +1737,43 @@ function PublishModal({
                 <strong style={{ color: "#7a5a00" }}>Already linked:</strong> {preLinkedSummary()}
               </div>
             )}
-            {hasMatches && (
-              <div style={matchBox}>
-                {programMatches.map((m) => {
-                  const kindLabel = m.source === "camp_sessions" ? "camp session" : "program run";
-                  return (
-                    <label key={m.key} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", fontSize: 13, cursor: "pointer" }}>
-                      <input
-                        type="checkbox"
-                        checked={selectedMatchKeys.has(m.key)}
-                        onChange={() => toggleMatch(m.key)}
-                        style={{ marginTop: 3 }}
-                      />
-                      <span>
-                        <strong>{m.name}</strong>
-                        <span style={{ color: MUTED, marginLeft: 6 }}>· {m.runCount} {kindLabel}{m.runCount === 1 ? "" : "s"}</span>
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
+            {hasMatches && (() => {
+              // Group matches by source so the operator can see at a glance
+              // whether the suggestion is for summer camps or afterschool
+              // programs. The kindLabel text alone was too easy to miss.
+              const campMatches = programMatches.filter((m) => m.source === "camp_sessions");
+              const programMatchesAfter = programMatches.filter((m) => m.source === "programs");
+              const renderGroup = (label, group) => group.length === 0 ? null : (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 6 }}>
+                    {label}
+                  </div>
+                  {group.map((m) => {
+                    const kindLabel = m.source === "camp_sessions" ? "camp session" : "program run";
+                    return (
+                      <label key={m.key} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", fontSize: 13, cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedMatchKeys.has(m.key)}
+                          onChange={() => toggleMatch(m.key)}
+                          style={{ marginTop: 3 }}
+                        />
+                        <span>
+                          <strong>{m.name}</strong>
+                          <span style={{ color: MUTED, marginLeft: 6 }}>· {m.runCount} {kindLabel}{m.runCount === 1 ? "" : "s"}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              );
+              return (
+                <div style={matchBox}>
+                  {renderGroup("Summer camps", campMatches)}
+                  {renderGroup("Afterschool programs", programMatchesAfter)}
+                </div>
+              );
+            })()}
             {error && <div style={{ ...errorBox, marginTop: 12 }}>{error}</div>}
             <div style={modalActions}>
               <button onClick={onCancel} style={tertiaryBtn} disabled={publishing}>Cancel</button>
@@ -1944,6 +1960,7 @@ const modalBack = {
 const modal = {
   background: "#fff", borderRadius: 10, maxWidth: 540, width: "100%",
   padding: "26px 28px", boxShadow: "0 10px 32px rgba(0,0,0,0.15)",
+  maxHeight: "90vh", overflowY: "auto",
 };
 const celebrationModal = {
   ...modal,

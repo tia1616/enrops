@@ -129,6 +129,8 @@ serve(async (req) => {
     { count: thisCamps },
     { count: otherProgs },
     { count: otherCamps },
+    { count: unlinkedProgs },
+    { count: unlinkedCamps },
     { data: otherCurriculaSample },
   ] = await Promise.all([
     admin.from("programs").select("id", { count: "exact", head: true })
@@ -145,6 +147,12 @@ serve(async (req) => {
       .eq("organization_id", curr.organization_id)
       .neq("curriculum_id", curr.id)
       .not("curriculum_id", "is", null),
+    admin.from("programs").select("id", { count: "exact", head: true })
+      .eq("organization_id", curr.organization_id)
+      .is("curriculum_id", null),
+    admin.from("camp_sessions").select("id", { count: "exact", head: true })
+      .eq("organization_id", curr.organization_id)
+      .is("curriculum_id", null),
     admin.from("curricula").select("id, name")
       .eq("organization_id", curr.organization_id)
       .eq("status", "published")
@@ -155,9 +163,27 @@ serve(async (req) => {
 
   const thisHasSchedule = (thisProgs ?? 0) + (thisCamps ?? 0) > 0;
   const orgHasOtherSchedule = (otherProgs ?? 0) + (otherCamps ?? 0) > 0;
-  // Pick an "anchor" other curriculum to reference in copy-from-other variant.
-  // First published-and-recent OTHER curriculum wins; defensible default.
+  const unlinkedTotal = (unlinkedProgs ?? 0) + (unlinkedCamps ?? 0);
   const anchor = (otherCurriculaSample ?? [])[0];
+
+  // Priority: when this curriculum has no linked schedule yet BUT the org has
+  // unlinked programs/camp_sessions sitting in the library, the right next
+  // action is almost always to LINK them rather than schedule fresh. The
+  // title-match step misses cases like "LEGO Engineers: Superhero Edition"
+  // vs "LEGO Superheroes" where the doc name differs from the offering name.
+  if (!thisHasSchedule && unlinkedTotal > 0) {
+    const parts: string[] = [];
+    if ((unlinkedProgs ?? 0) > 0) parts.push(`${unlinkedProgs} unlinked program${unlinkedProgs === 1 ? "" : "s"}`);
+    if ((unlinkedCamps ?? 0) > 0) parts.push(`${unlinkedCamps} unlinked camp session${unlinkedCamps === 1 ? "" : "s"}`);
+    return jsonOk({
+      variant: "link_existing",
+      headline: `Already scheduled ${curr.name} somewhere?`,
+      body: `Your library has ${parts.join(" and ")} that aren't linked to a curriculum yet. If ${curr.name} is one of them (maybe under a different name), open Schedule to update the curriculum on those rows. Otherwise, schedule it fresh.`,
+      primary_cta: "Open schedule →",
+      primary_cta_to: "/admin/schedule",
+      data: { unlinked_programs: unlinkedProgs ?? 0, unlinked_camp_sessions: unlinkedCamps ?? 0 },
+    });
+  }
 
   if (!thisHasSchedule && !orgHasOtherSchedule) {
     return jsonOk({
