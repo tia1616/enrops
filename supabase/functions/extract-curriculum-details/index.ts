@@ -231,6 +231,7 @@ type ExtractedShape = {
 async function processExtractionInBackground(
   documentId: string,
   promptVersion: PromptVersion,
+  preserveName: boolean = false,
 ): Promise<void> {
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -348,8 +349,10 @@ async function processExtractionInBackground(
     }
 
     // ---- Persist into curricula ----
+    // Attach-mode extractions keep the operator's existing name (set during
+    // curriculum creation / backfill). The doc's name is informational only.
     const curriculaUpdates: Record<string, unknown> = {
-      name: extracted.name.value.trim(),
+      ...(preserveName ? {} : { name: extracted.name.value.trim() }),
       short_description: extracted.short_description?.value ?? null,
       age_range_min: extracted.age_range?.value?.min ?? null,
       age_range_max: extracted.age_range?.value?.max ?? null,
@@ -555,7 +558,7 @@ serve(async (req) => {
   if (!authResult.ok) return jsonError(authResult.reason, authResult.status);
   const { caller, userClient } = authResult;
 
-  let body: { document_id?: string; document_path?: string; prompt_version?: string };
+  let body: { document_id?: string; document_path?: string; prompt_version?: string; preserve_name?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -581,7 +584,7 @@ serve(async (req) => {
       return jsonError("You need admin/owner access to this organization", 403);
     }
 
-    scheduleBackground(processExtractionInBackground(body.document_id, promptVersion));
+    scheduleBackground(processExtractionInBackground(body.document_id, promptVersion, body.preserve_name === true));
     return jsonOk({ ok: true, document_id: body.document_id, curriculum_id: doc.curriculum_id });
   }
 

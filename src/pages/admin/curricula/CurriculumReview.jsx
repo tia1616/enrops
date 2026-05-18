@@ -141,6 +141,12 @@ export default function CurriculumReview() {
   const [publishError, setPublishError] = useState("");
   const [linkedProgramCount, setLinkedProgramCount] = useState(0);
   const [linkedCampSessionCount, setLinkedCampSessionCount] = useState(0);
+  // Programs / camp_sessions already linked to this curriculum BEFORE this
+  // publish session — surfaced in step 2 ("8 already linked") so the operator
+  // isn't misled when the match suggestions come back empty, and added to the
+  // celebration screen totals so they reflect truth instead of only new links.
+  const [preLinkedProgramCount, setPreLinkedProgramCount] = useState(0);
+  const [preLinkedCampSessionCount, setPreLinkedCampSessionCount] = useState(0);
 
   // Polish with Dora: when set, the modal opens for this field
   const [polishConfig, setPolishConfig] = useState(null);
@@ -440,7 +446,15 @@ export default function CurriculumReview() {
     //   - programs.curriculum (afterschool: FA, WI, SP)
     //   - camp_sessions.curriculum_name (summer camps)
     // Either side where curriculum_id IS NULL is a candidate to link.
-    const [{ data: progRows }, { data: campRows }] = await Promise.all([
+    // Also count rows ALREADY linked to this curriculum so step 2 + the
+    // celebration screen can reflect that linkage (e.g., when the operator
+    // attaches a doc to a backfilled draft that's already linked to camps).
+    const [
+      { data: progRows },
+      { data: campRows },
+      { count: alreadyProgCount },
+      { count: alreadyCampCount },
+    ] = await Promise.all([
       supabase
         .from("programs")
         .select("id, curriculum, term")
@@ -451,7 +465,19 @@ export default function CurriculumReview() {
         .select("id, curriculum_name")
         .eq("organization_id", org.id)
         .is("curriculum_id", null),
+      supabase
+        .from("programs")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", org.id)
+        .eq("curriculum_id", curriculum.id),
+      supabase
+        .from("camp_sessions")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", org.id)
+        .eq("curriculum_id", curriculum.id),
     ]);
+    setPreLinkedProgramCount(alreadyProgCount ?? 0);
+    setPreLinkedCampSessionCount(alreadyCampCount ?? 0);
 
     // Group by name within each source so the operator picks a clean "this match"
     // rather than dozens of individual rows.
@@ -526,8 +552,9 @@ export default function CurriculumReview() {
           .in("id", campSessionIdsToLink);
         if (linkCampErr) console.error("link camp_sessions failed", linkCampErr);
       }
-      setLinkedProgramCount(programIdsToLink.length);
-      setLinkedCampSessionCount(campSessionIdsToLink.length);
+      // True totals = newly linked this publish session + previously linked.
+      setLinkedProgramCount(programIdsToLink.length + preLinkedProgramCount);
+      setLinkedCampSessionCount(campSessionIdsToLink.length + preLinkedCampSessionCount);
       setPublishing(false);
       setPublishStep(3); // celebration
     } catch (e) {
@@ -786,6 +813,8 @@ export default function CurriculumReview() {
           sessionCount={sessions.length}
           linkedProgramCount={linkedProgramCount}
           linkedCampSessionCount={linkedCampSessionCount}
+          preLinkedProgramCount={preLinkedProgramCount}
+          preLinkedCampSessionCount={preLinkedCampSessionCount}
           onDone={() => navigate("/admin/curricula")}
         />
       )}
@@ -1319,7 +1348,8 @@ function PolishModal({ curriculumId, config, onClose }) {
 function PublishModal({
   step, nameDraft, setNameDraft, programMatches, selectedMatchKeys, setSelectedMatchKeys,
   publishing, error, onCancel, onContinue, onPublish,
-  curriculum, sessionCount, linkedProgramCount, linkedCampSessionCount, onDone,
+  curriculum, sessionCount, linkedProgramCount, linkedCampSessionCount,
+  preLinkedProgramCount = 0, preLinkedCampSessionCount = 0, onDone,
 }) {
   function toggleMatch(key) {
     setSelectedMatchKeys((prev) => {
@@ -1329,6 +1359,13 @@ function PublishModal({
     });
   }
   const hasMatches = programMatches.length > 0;
+  const totalPreLinked = (preLinkedProgramCount || 0) + (preLinkedCampSessionCount || 0);
+  function preLinkedSummary() {
+    const parts = [];
+    if (preLinkedCampSessionCount > 0) parts.push(`${preLinkedCampSessionCount} camp session${preLinkedCampSessionCount === 1 ? "" : "s"}`);
+    if (preLinkedProgramCount > 0) parts.push(`${preLinkedProgramCount} program run${preLinkedProgramCount === 1 ? "" : "s"}`);
+    return parts.join(" + ");
+  }
   const totalLinked = (linkedProgramCount || 0) + (linkedCampSessionCount || 0);
   function linkedSummary() {
     const parts = [];
@@ -1433,8 +1470,15 @@ function PublishModal({
             <p style={{ color: MUTED, fontSize: 13, margin: "0 0 14px", lineHeight: 1.45 }}>
               {hasMatches
                 ? <>Looks like this might be the curriculum behind {programMatches.length === 1 ? "an" : "some"} existing scheduled program{programMatches.length === 1 ? "" : "s"}. Linking lets the schedule know about its lesson plan.</>
-                : <>No matching scheduled programs found — that's fine. We'll publish it to your library and you can schedule it from there.</>}
+                : totalPreLinked > 0
+                  ? <>This curriculum is already linked to {preLinkedSummary()} — no new matches to suggest. Publish to confirm.</>
+                  : <>No matching scheduled programs found — that's fine. We'll publish it to your library and you can schedule it from there.</>}
             </p>
+            {totalPreLinked > 0 && (
+              <div style={{ background: GOLD_SOFT, border: `1px solid ${GOLD_BORDER}`, borderRadius: 6, padding: "10px 12px", marginBottom: 14, fontSize: 13, color: INK }}>
+                <strong style={{ color: "#7a5a00" }}>Already linked:</strong> {preLinkedSummary()}
+              </div>
+            )}
             {hasMatches && (
               <div style={matchBox}>
                 {programMatches.map((m) => {

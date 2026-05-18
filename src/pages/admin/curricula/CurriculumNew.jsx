@@ -40,6 +40,11 @@ export default function CurriculumNew() {
   // that the operator wants to populate via extraction.
   const attachToId = searchParams.get("attach_to") || "";
   const [attachTarget, setAttachTarget] = useState(null); // { id, name, organization_id } or null
+  // When attaching to a curriculum that already has sessions or approved
+  // fields, uploading a new doc will replace them (delete-then-reinsert in
+  // the edge function). Surface a warning + confirm checkbox before submit.
+  const [attachExistingWork, setAttachExistingWork] = useState(null); // { sessions, approvedFields } or null
+  const [confirmedReplace, setConfirmedReplace] = useState(false);
 
   const [primary, setPrimary] = useState(null);
   const [materials, setMaterials] = useState(null);
@@ -73,6 +78,23 @@ export default function CurriculumNew() {
         return;
       }
       setAttachTarget(data);
+
+      // Detect existing work that an attach-mode extraction will overwrite.
+      const [{ count: sessCount }, { count: approvedCount }] = await Promise.all([
+        supabase
+          .from("curriculum_sessions")
+          .select("id", { count: "exact", head: true })
+          .eq("curriculum_id", data.id),
+        supabase
+          .from("curriculum_extracted_fields")
+          .select("id", { count: "exact", head: true })
+          .eq("curriculum_id", data.id)
+          .eq("human_approved", true),
+      ]);
+      if (!mounted) return;
+      if ((sessCount ?? 0) > 0 || (approvedCount ?? 0) > 0) {
+        setAttachExistingWork({ sessions: sessCount ?? 0, approvedFields: approvedCount ?? 0 });
+      }
     })();
     return () => { mounted = false; };
   }, [attachToId, org?.id]);
@@ -213,7 +235,12 @@ export default function CurriculumNew() {
           apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ document_id: primaryDocId }),
+        body: JSON.stringify({
+          document_id: primaryDocId,
+          // Attach mode keeps the operator's existing curriculum name; the doc
+          // is informational. New-curriculum mode lets extraction set the name.
+          preserve_name: !!attachTarget,
+        }),
       });
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
@@ -229,7 +256,7 @@ export default function CurriculumNew() {
     }
   }
 
-  const submitDisabled = !primary || busy;
+  const submitDisabled = !primary || busy || (attachExistingWork && !confirmedReplace);
   const primaryErr = errors.find((e) => e.zone === "primary")?.message;
   const materialsErr = errors.find((e) => e.zone === "materials")?.message;
   const journalErr = errors.find((e) => e.zone === "journal")?.message;
@@ -276,11 +303,40 @@ export default function CurriculumNew() {
         </div>
       </div>
 
-      {/* Title-match warning */}
-      <div style={titleWarning}>
-        <strong style={{ color: PLUM }}>One thing before you upload:</strong>{" "}
-        the curriculum title in your doc becomes the public name parents see — on your registration page, flyers, emails, all of it. Make sure it matches the class offering name you market. You'll get to edit on the next screen.
-      </div>
+      {/* Attach-mode destructive-replace warning */}
+      {attachExistingWork && (
+        <div style={destructiveWarning}>
+          <strong style={{ color: "#7a1a1a", display: "block", marginBottom: 6 }}>Heads up — this will replace existing work</strong>
+          <div style={{ color: INK, fontSize: 13, lineHeight: 1.5, marginBottom: 10 }}>
+            "{attachTarget?.name}" already has{" "}
+            {attachExistingWork.sessions > 0 && (
+              <><strong>{attachExistingWork.sessions} session{attachExistingWork.sessions === 1 ? "" : "s"}</strong></>
+            )}
+            {attachExistingWork.sessions > 0 && attachExistingWork.approvedFields > 0 && " and "}
+            {attachExistingWork.approvedFields > 0 && (
+              <><strong>{attachExistingWork.approvedFields} reviewed field{attachExistingWork.approvedFields === 1 ? "" : "s"}</strong></>
+            )}
+            . Uploading a doc will re-extract everything and overwrite that work. The curriculum name will be preserved.
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, color: INK, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={confirmedReplace}
+              onChange={(e) => setConfirmedReplace(e.target.checked)}
+              style={{ width: 16, height: 16 }}
+            />
+            I understand. Replace it.
+          </label>
+        </div>
+      )}
+
+      {/* Title-match warning (only for new curriculum mode -- attach mode preserves the name) */}
+      {!attachTarget && (
+        <div style={titleWarning}>
+          <strong style={{ color: PLUM }}>One thing before you upload:</strong>{" "}
+          the curriculum title in your doc becomes the public name parents see — on your registration page, flyers, emails, all of it. Make sure it matches the class offering name you market. You'll get to edit on the next screen.
+        </div>
+      )}
 
       {/* Main panel */}
       <div style={panel}>
@@ -503,6 +559,15 @@ const titleWarning = {
   fontSize: 13,
   lineHeight: 1.5,
   color: INK,
+};
+
+const destructiveWarning = {
+  background: "#fff5f5",
+  border: "1px solid #f0c4c4",
+  borderLeft: "3px solid #a13a3a",
+  borderRadius: 4,
+  padding: "12px 14px",
+  margin: "0 0 22px",
 };
 
 const panel = {
