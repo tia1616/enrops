@@ -797,9 +797,21 @@ export default function Schedule() {
       let tgtNewId = null;
       if (targetSameRole) {
         // Swap in place — UPDATE the existing role-row to point at the new instructor.
+        // Wipe the displaced instructor's email/response trail so the new instructor
+        // surfaces as "needs an offer email" in the Hat tip.
         const { error: updErr } = await supabase
           .from("camp_assignments")
-          .update({ instructor_id: srcAssignment.instructor_id, status: "proposed" })
+          .update({
+            instructor_id: srcAssignment.instructor_id,
+            status: "proposed",
+            email_sent_at: null,
+            reminder_sent_at: null,
+            deadline: null,
+            instructor_response_at: null,
+            flagged_reason: null,
+            published_at: null,
+            change_request_message: null,
+          })
           .eq("id", targetSameRole.id);
         if (updErr) throw updErr;
       } else {
@@ -848,9 +860,22 @@ export default function Schedule() {
       if (currentAssignment) {
         const prevInstructorId = currentAssignment.instructor_id;
         const prevStatus = currentAssignment.status;
+        // Reassign — wipe the previous instructor's email/response trail so the
+        // new instructor surfaces in the Hat's "needs an offer email" tip and
+        // doesn't inherit the old deadline or acceptance.
         const { error: updErr } = await supabase
           .from("camp_assignments")
-          .update({ instructor_id: instructorId, status: "proposed" })
+          .update({
+            instructor_id: instructorId,
+            status: "proposed",
+            email_sent_at: null,
+            reminder_sent_at: null,
+            deadline: null,
+            instructor_response_at: null,
+            flagged_reason: null,
+            published_at: null,
+            change_request_message: null,
+          })
           .eq("id", currentAssignment.id);
         if (updErr) throw updErr;
         setLastOp({
