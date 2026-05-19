@@ -98,7 +98,14 @@ function isStepValid(step, inputs) {
   if (step === 2) {
     if (!inputs.who?.audience) return false;
     if (inputs.who.audience !== "parents") return false; // partners/instructors disabled in v1
-    return !!inputs.who.filter?.type;
+    const f = inputs.who.filter;
+    if (!f?.type) return false;
+    if (f.type === "master_list") return true;
+    if (f.type === "school") return Array.isArray(f.school_ids) && f.school_ids.length > 0;
+    if (f.type === "area") return typeof f.area === "string" && f.area.length > 0;
+    if (f.type === "segment") return Array.isArray(f.segments) && f.segments.length > 0;
+    if (f.type === "person") return !!f.recipient_id;
+    return false;
   }
   if (step === 3) return !!inputs.duration;
   if (step === 4) return inputs.channels.length > 0;
