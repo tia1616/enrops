@@ -27,6 +27,7 @@ const INITIAL = {
   draft: null,
   loading: false,
   error: null,
+  scheduled: false,
 };
 
 function reducer(state, action) {
@@ -68,6 +69,8 @@ function reducer(state, action) {
         },
       };
     }
+    case "APPROVE_SCHEDULED":
+      return { ...state, scheduled: true };
     case "RESET":
       return INITIAL;
     default:
@@ -135,7 +138,7 @@ export default function AICampaignBuilder() {
     setActionBusy(true);
     setTimeout(() => {
       setActionBusy(false);
-      alert("Approve & schedule — chunk 07 sets approved_at, queues touchpoints via marketing-touchpoint-cron.");
+      dispatch({ type: "APPROVE_SCHEDULED" });
     }, 400);
   };
   const onRegenerate = (touchpointId) => {
@@ -169,24 +172,47 @@ export default function AICampaignBuilder() {
     }, 2000);
   }
 
-  // Picks a realistic touchpoint count by duration to mirror the real prompt's
-  // cadence heuristics. Subjects and bodies are stubs — real Don writes them.
+  // Picks a realistic touchpoint count by duration. Subjects mimic the style
+  // real Don writes — short, action-oriented, no clickbait, ≤ 60 chars.
+  // Bodies use merge tokens like {{first_name}} and {{school}} so the
+  // anti-hallucination pattern is visible end-to-end (the renderer fills
+  // them at send time).
   function buildMockSchedule(topics, duration, closer) {
     const today = new Date();
     const startDate = new Date(today);
-    startDate.setDate(today.getDate() + 2); // first send in 2 days
+    startDate.setDate(today.getDate() + 2);
+    const primary = topics[0] ?? "your program";
     function fmtIso(d, hour) {
       const dt = new Date(d);
       dt.setHours(hour, 0, 0, 0);
       return dt.toISOString();
     }
+    // Realistic-ish subject lines per touchpoint label. Real Don will write
+    // better, more topic-specific copy; this is just to stop the mock from
+    // looking like a placeholder.
+    const SUBJECT_TEMPLATES = {
+      "kickoff": (t) => `${t} is open for registration`,
+      "mid-window": (t) => `Halfway through — still time for ${t}`,
+      "48h-promo": (t) => `Early-bird pricing ends in 48 hours`,
+      "24h-promo": (t) => `Last 24 hours for early-bird pricing`,
+      "48h-reg-close": (t) => `Registration closes in 48 hours`,
+      "24h-reg-close": (t) => `Last 24 hours to register for ${t}`,
+    };
+    const BODY_TEMPLATES = {
+      "kickoff": (t) => `<p>Hi {{first_name}},</p><p>Great news — ${t} is open for registration at {{school}}. Kids design, code, and build with the tools they already love.</p><p>Tap to register now.</p>`,
+      "mid-window": (t) => `<p>Hi {{first_name}},</p><p>Just a heads-up — spots in ${t} are filling up at {{school}}. Lock yours in before the early-bird pricing ends.</p>`,
+      "48h-promo": (t) => `<p>Hi {{first_name}},</p><p>Quick reminder — early-bird pricing for ${t} ends in 48 hours. Register today to save on every program.</p>`,
+      "24h-promo": (t) => `<p>Hi {{first_name}},</p><p>Last call for early-bird pricing on ${t} — it ends tomorrow. Register tonight to lock in the savings.</p>`,
+      "48h-reg-close": (t) => `<p>Hi {{first_name}},</p><p>Registration for ${t} at {{school}} closes in 48 hours. If you've been thinking about it, now's the moment.</p>`,
+      "24h-reg-close": (t) => `<p>Hi {{first_name}},</p><p>One more day to register your kid for ${t} at {{school}}. After tomorrow, the roster is set.</p>`,
+    };
     const plan = [
-      { offset: 0,  label: "kickoff",       hour: 10, scope: "primary" },
-      { offset: 7,  label: "mid-window",    hour: 10, scope: "primary" },
-      { offset: 14, label: "48h-promo",     hour: 10, scope: "primary" },
-      { offset: 15, label: "24h-promo",     hour: 7,  scope: "primary" },
-      { offset: 21, label: "48h-reg-close", hour: 10, scope: "primary" },
-      { offset: 22, label: "24h-reg-close", hour: 7,  scope: "primary" },
+      { offset: 0,  label: "kickoff",       hour: 10 },
+      { offset: 7,  label: "mid-window",    hour: 10 },
+      { offset: 14, label: "48h-promo",     hour: 10 },
+      { offset: 15, label: "24h-promo",     hour: 7  },
+      { offset: 21, label: "48h-reg-close", hour: 10 },
+      { offset: 22, label: "24h-reg-close", hour: 7  },
     ];
     const count =
       duration === "2 weeks" ? 3 :
@@ -196,15 +222,17 @@ export default function AICampaignBuilder() {
     return plan.slice(0, count).map((p, i) => {
       const at = new Date(startDate);
       at.setDate(startDate.getDate() + p.offset);
+      const subject = (SUBJECT_TEMPLATES[p.label] ?? ((t) => `${t} update`))(primary);
+      const body = (BODY_TEMPLATES[p.label] ?? ((t) => `<p>Hi {{first_name}},</p><p>${t} update.</p>`))(primary);
       return {
         id: `mock-tp-${i}`,
         order_index: i,
         type: "email",
         label: p.label,
         scheduled_at: fmtIso(at, p.hour),
-        subject: `${topics.join(" + ").slice(0, 40)} — ${p.label}`,
-        body_html: `<p>Hi {{first_name}},</p><p>(${p.label}) Mock body for ${topics.join(" + ")}. Real Don writes this in chunk 07.</p>${closer ? `<p><em>${closer}</em></p>` : ""}`,
-        body_text: `(${p.label}) Mock body for ${topics.join(" + ")}.`,
+        subject: subject.slice(0, 60),
+        body_html: `${body}${closer ? `<p><em>${closer}</em></p>` : ""}`,
+        body_text: body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
         topics: topics,
         status: "queued",
       };
@@ -217,6 +245,15 @@ export default function AICampaignBuilder() {
       <div style={{ padding: 24, color: MUTED }}>
         Loading your org context…
       </div>
+    );
+  }
+
+  if (state.step === "review" && state.scheduled) {
+    return (
+      <CelebrationScreen
+        draft={state.draft}
+        onReset={() => dispatch({ type: "RESET" })}
+      />
     );
   }
 
@@ -280,4 +317,59 @@ function ProgressHeader({ step }) {
   );
 }
 
-// (ReviewPlaceholder was removed — ScheduleReview is the live review screen now.)
+function CelebrationScreen({ draft, onReset }) {
+  const count = draft?.schedule?.touchpoints?.length ?? 0;
+  const recipientCount = draft?.recipients?.count ?? 0;
+  const first = draft?.schedule?.touchpoints?.[0];
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto", paddingTop: 24, textAlign: "center" }}>
+      <div style={{ fontSize: 56 }}>🎉</div>
+      <h2 style={{ margin: "8px 0 4px", fontSize: 28, color: PLUM }}>Huzzah!</h2>
+      <p style={{ margin: 0, color: INK, fontSize: 15 }}>
+        {count} touchpoint{count === 1 ? "" : "s"} scheduled for {recipientCount} recipient{recipientCount === 1 ? "" : "s"}. Don will take it from here.
+      </p>
+      <div style={{ marginTop: 16, display: "inline-flex", alignItems: "center", gap: 6, background: "#EAF3DE", color: OK, fontWeight: 600, fontSize: 13, padding: "6px 12px", borderRadius: 999, border: `1px solid ${OK}` }}>
+        ⏱ Hours of work, done in 90 seconds
+      </div>
+
+      {first && (
+        <div style={{ textAlign: "left", marginTop: 24, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 16 }}>
+          <p style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, margin: 0 }}>Next up</p>
+          <p style={{ margin: "4px 0 0", fontSize: 14, color: INK, fontWeight: 600 }}>
+            {first.subject}
+          </p>
+          <p style={{ margin: "2px 0 0", fontSize: 12, color: MUTED }}>
+            {new Date(first.scheduled_at).toLocaleString(undefined, { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}
+          </p>
+        </div>
+      )}
+
+      <div style={{ marginTop: 24, display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+        <button
+          onClick={() => { window.location.href = "/admin/marketing"; }}
+          style={{
+            padding: "10px 16px", background: "#fff", color: INK,
+            border: `1px solid ${RULE}`, borderRadius: 6, cursor: "pointer",
+            fontSize: 14, fontFamily: "inherit", fontWeight: 500,
+          }}
+        >
+          Back to campaigns
+        </button>
+        <button
+          onClick={onReset}
+          style={{
+            padding: "10px 16px", background: PLUM, color: "#fff",
+            border: "none", borderRadius: 6, cursor: "pointer",
+            fontSize: 14, fontFamily: "inherit", fontWeight: 600,
+          }}
+        >
+          Build another
+        </button>
+      </div>
+
+      <p style={{ marginTop: 20, fontSize: 11, color: MUTED }}>
+        Chunk 06 mock — real approval flow lands in chunk 07.
+      </p>
+    </div>
+  );
+}

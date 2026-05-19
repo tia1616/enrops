@@ -387,6 +387,17 @@ function buildSystemPrompt(
     `- For any topic that has a known deadline (early-bird ends, registration closes), include BOTH a 48-hour-before AND a 24-hour-before reminder email.`,
     `- Pop-culture themes (Pokémon, Minecraft, LEGO, Mario) welcome when they fit.`,
     `- No promotional puffery. Lead with what kids do and make.`,
+    ``,
+    `ANTI-HALLUCINATION RULES (CRITICAL — adhere strictly):`,
+    `- DO NOT invent specific dollar amounts ("Save $90!"). If you don't know the exact savings, write "save on early-bird pricing" or use a {{savings}} merge token. The caller injects exact figures from programs.early_bird_price_cents at send time.`,
+    `- DO NOT name specific programs, curricula, day-of-week schedules, or session counts unless they appear verbatim in the campaign topics above. If unsure, refer to "your child's after-school STEAM program" or similar generic phrasing.`,
+    `- DO NOT name specific schools. Use the {{school}} merge token. The renderer fills it per-recipient.`,
+    `- DO NOT name specific parents or kids. Use {{first_name}} for the parent. If you reference a child, use generic phrasing like "your child" — never invent a name.`,
+    `- DO NOT use a promo code in copy unless the campaign topics explicitly mention one. If unsure, refer to "early-bird pricing" without inventing a code.`,
+    `- DO NOT invent historical statistics ("Last year 200 families joined", "82% of kids continued"). If you don't have the number, leave it out.`,
+    `- DO NOT invent specific dates beyond the touchpoint's own scheduled_at. For deadlines, say "registration closes [date]" only if the date is implied by the duration. Otherwise, say "before the deadline" and let the caller fill in.`,
+    `- DO NOT invent staff names, instructor names, or organizational details. The sender name is "${sender}" — use that. If you need to refer to the team, use "${sender}" or "our team".`,
+    `- When in doubt about a specific fact, choose generic phrasing over making something up. Merge tokens always beat invented specifics.`,
   ].join("\n");
 
   const cadenceGuidance = `CADENCE HEURISTICS by duration:
