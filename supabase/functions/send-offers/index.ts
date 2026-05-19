@@ -312,6 +312,17 @@ serve(async (req: Request) => {
             failed.push({ instructor_id: instructorId, reason: `db update: ${upErr.message}` });
             continue;
           }
+
+          // Audit row per assignment so the cycle-wide email activity log can show
+          // exactly who got the bulk offer and when.
+          await supabase.from('instructor_offer_messages').insert(
+            ids.map((assignmentId) => ({
+              organization_id: cycle.organization_id,
+              camp_assignment_id: assignmentId,
+              sender_role: 'system',
+              message: deadline ? `Offer email sent — deadline ${deadline}` : 'Offer email sent',
+            }))
+          );
         }
 
         sent.push(instructorId);

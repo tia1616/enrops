@@ -3059,9 +3059,9 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
 }
 
 // Cycle-wide email activity log: every offer / patch / reminder / reply that touched
-// any assignment in this cycle. Combines instructor_offer_messages with synthetic
-// "offer email sent" events derived from camp_assignments.email_sent_at (since the
-// bulk send path doesn't write to the messages table). Filter chips narrow by kind.
+// any assignment in this cycle. Reads directly from instructor_offer_messages —
+// send-offers, send-patch-offer, offer-reminders-cron, and offer-message-reply all
+// write to that table now, so the timeline is complete without JS-side synthesis.
 function EmailActivityModal({ cycleDisplay, assignments, sessions, onClose }) {
   const [rows, setRows] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -3096,47 +3096,29 @@ function EmailActivityModal({ cycleDisplay, assignments, sessions, onClose }) {
     return () => { alive = false; };
   }, [assignments]);
 
-  // Merge messages + synthetic offer-sent events into a single descending timeline.
+  // Classify each message row into a kind (offer / patch / reminder / reply / flag).
   const events = useMemo(() => {
-    const all = [];
-
-    // Synthetic offer-sent events (bulk send doesn't write to messages).
-    for (const a of assignments ?? []) {
-      if (a.email_sent_at) {
-        all.push({
-          id: `offer-${a.id}`,
-          kind: "offer",
-          sender: "system",
-          created_at: a.email_sent_at,
-          camp_assignment_id: a.id,
-          message: "Offer email sent",
-        });
-      }
-    }
-
-    // Messages from DB. Derive kind from message text + role.
-    for (const m of rows) {
-      let kind;
+    return rows.map((m) => {
       const role = m.sender_role;
       const text = (m.message || "").toLowerCase();
+      let kind;
       if (role === "system" && text.startsWith("reminder email")) kind = "reminder";
       else if (role === "system" && text.startsWith("patch offer")) kind = "patch";
+      else if (role === "system" && text.startsWith("offer email")) kind = "offer";
       else if (role === "system" && text.startsWith("deadline passed")) kind = "flag";
       else if (role === "instructor") kind = "instructor_reply";
       else if (role === "admin") kind = "admin_reply";
       else kind = "system_other";
-      all.push({
+      return {
         id: m.id,
         kind,
         sender: role,
         created_at: m.created_at,
         camp_assignment_id: m.camp_assignment_id,
         message: m.message,
-      });
-    }
-
-    return all.sort((x, y) => (y.created_at || "").localeCompare(x.created_at || ""));
-  }, [rows, assignments]);
+      };
+    });
+  }, [rows]);
 
   const filtered = useMemo(() => {
     if (filter === "all") return events;
