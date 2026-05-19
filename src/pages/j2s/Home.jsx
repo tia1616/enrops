@@ -1,21 +1,27 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { districtFullName } from '../../lib/tenants.js';
 import { useCart } from '../../context/CartContext.jsx';
 import {
   formatMoney,
+  formatEarlyBirdDate,
   LEGACY_PRICE_CENTS,
   isLegacyActive,
   VIP_PRICE_PER_TERM_CENTS,
   VIP_TOTAL_CENTS,
-  calculateProgramPrice,
+  basePriceForItem,
+  standardPriceFor,
 } from '../../lib/pricing.js';
 
 const ORG_SLUG = 'j2s';
 
 export default function J2SHome() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // ?keep=1 means we arrived here from the wizard's "Add another child" flow.
+  // Skip clearCart so the in-progress sibling registration keeps its parent + child 1 state.
+  const keepCart = searchParams.get('keep') === '1';
   const { clearCart } = useCart();
   const [orgId, setOrgId] = useState(null);
   const [branding, setBranding] = useState(null);
@@ -125,7 +131,7 @@ export default function J2SHome() {
   }, [selectedSchool, programs]);
 
   function startRegistration(programId, isVip = false) {
-    clearCart();
+    if (!keepCart) clearCart();
     const params = new URLSearchParams({ school: selectedSchool });
     if (programId) params.set('program', programId);
     if (isVip) params.set('vip', '1');
@@ -253,12 +259,16 @@ export default function J2SHome() {
                   {programsAtSchool.map((p) => {
                     const bundle = vipBundles[p.id];
                     const vipEligible = !!bundle;
-                    const fallPrice = calculateProgramPrice(p);
-                    // VIP comparison: sum of actual calculated prices across 3 terms,
+                    const fallPricing = basePriceForItem({ program: p, isVip: false });
+                    const fallShowsEarlyBird = fallPricing.is_legacy;
+                    const fallEarlyBirdLabel = fallPricing.early_bird_deadline
+                      ? formatEarlyBirdDate(fallPricing.early_bird_deadline)
+                      : null;
+                    // VIP comparison: sum of standard (non-early-bird) prices across 3 terms,
                     // since different terms may have different session_count.
                     const standardTotal = vipEligible
-                      ? fallPrice + calculateProgramPrice(bundle.winter) + calculateProgramPrice(bundle.spring)
-                      : fallPrice * 3;
+                      ? standardPriceFor(p) + standardPriceFor(bundle.winter) + standardPriceFor(bundle.spring)
+                      : standardPriceFor(p) * 3;
                     const vipSavings = standardTotal - VIP_TOTAL_CENTS;
                     return (
                       <div
@@ -313,9 +323,9 @@ export default function J2SHome() {
                                 Save up to {formatMoney(vipSavings).replace('.00', '')}
                               </span>
                               {/* #8: Early-bird on both cards */}
-                              {isLegacyActive() && (
+                              {fallShowsEarlyBird && fallEarlyBirdLabel && (
                                 <p className="mt-2 text-xs font-semibold text-j2s-orange-dark">
-                                  Early-bird pricing ends June 5
+                                  Early-bird pricing ends {fallEarlyBirdLabel}
                                 </p>
                               )}
                               {/* #6: "Your child's full school year:" */}
@@ -350,26 +360,26 @@ export default function J2SHome() {
                               Fall only
                             </p>
                             <div className="mt-2">
-                              {isLegacyActive() && LEGACY_PRICE_CENTS < fallPrice ? (
+                              {fallShowsEarlyBird ? (
                                 <>
                                   <p className="font-titan text-3xl text-j2s-orange-dark">
-                                    {formatMoney(LEGACY_PRICE_CENTS)}
+                                    {formatMoney(fallPricing.base_cents)}
                                   </p>
                                   <p className="text-xs text-j2s-ink/60 line-through">
-                                    {formatMoney(fallPrice)}
+                                    {formatMoney(fallPricing.standard_cents)}
                                   </p>
                                 </>
                               ) : (
                                 <p className="font-titan text-3xl text-j2s-purple">
-                                  {formatMoney(fallPrice)}
+                                  {formatMoney(fallPricing.base_cents)}
                                 </p>
                               )}
                             </div>
                             <p className="mt-1 text-xs text-j2s-ink/60">Fall 2026</p>
                             {/* #8: Early-bird on both cards */}
-                            {isLegacyActive() && LEGACY_PRICE_CENTS < fallPrice && (
+                            {fallShowsEarlyBird && fallEarlyBirdLabel && (
                               <p className="mt-2 text-xs font-semibold text-j2s-orange-dark">
-                                Early-bird pricing ends June 5
+                                Early-bird pricing ends {fallEarlyBirdLabel}
                               </p>
                             )}
                             {/* #9: Fall = outline/secondary button */}

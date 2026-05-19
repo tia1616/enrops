@@ -137,7 +137,7 @@ serve(async (req) => {
 
     const base = origin || 'https://enrops.com';
     const successPath = success_path || '/j2s/register/success';
-    const cancelPath = cancel_path || '/j2s/register';
+    const cancelPath = cancel_path || '/j2s';
 
     if (use_installments && aggregated && perLine) {
       const c1 = aggregated.find((a) => a.installment_number === 1)!;

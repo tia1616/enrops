@@ -1,28 +1,35 @@
-// Pricing engine per Enrops Registration Spec §1 + locked overrides (April 22, 2026).
+// Pricing engine.
 //
-// LOCKED BUSINESS RULES:
-//   - Standard rate: $35.625/session ($285 ÷ 8 sessions)
-//   - Coding/Robotics rate: $37.375/session ($299 ÷ 8 sessions)
-//   - Formula-based pricing: session_count × rate, rounded to nearest dollar
-//   - One pricing model — no per-school overrides. 6 sessions costs the same everywhere.
-//   - Legacy price: $275 flat for all tiers before June 5, 2026
-//   - VIP: $240/term × 3 terms = $720 total (single price, locked)
+// Source of truth for per-program price:
+//   programs.price_cents              — standard price (always set)
+//   programs.early_bird_price_cents   — optional, per-row early-bird price
+//   programs.early_bird_deadline      — optional, per-row deadline (date)
+//
+// `basePriceForItem` reads from those columns. The per-session-rate formula
+// below is kept ONLY as a fallback for programs that somehow lack price_cents.
+// In practice every program row has price_cents (NOT NULL in schema).
+//
+// J2S-specific business rules still hardcoded here (revisit for multi-tenant):
+//   - VIP: $240/term × 3 terms = $720 (locked per-term anchor)
 //   - Sibling discount: 10% off for child 2+
-//   - Promo codes: stack with sibling + VIP
+//   - Coding-robotics keyword list used by the formula fallback
+//   - LEGACY_PRICE_CENTS / LEGACY_DEADLINE: fallback-only safety net,
+//     used if a row is missing both early_bird_* columns
 //
-// Stacking order:
-//   1. Start with base (formula price OR legacy OR VIP)
-//   2. Apply sibling discount for children 2+
-//   3. Apply promo code on remaining subtotal
+// Stacking order (unchanged):
+//   1. Base from DB (early-bird if active, else standard)
+//   2. Sibling discount for children 2+
+//   3. Promo code on remaining subtotal
 //
 // All money math in cents. Never floats for currency.
 
-// Per-session rates (in cents, not rounded — used as multipliers only)
+// Fallback-only per-session rates. Live data should use programs.price_cents.
 export const STANDARD_RATE_CENTS = 3562.5;  // $35.625/session ($285/8)
 export const CODING_RATE_CENTS = 3737.5;    // $37.375/session ($299/8)
 
-// Keywords that identify coding/robotics programs (higher material cost)
-// Matches against program.curriculum (case-insensitive, word boundary not required)
+// Used only by the formula fallback for detecting coding-vs-standard tier
+// when program_type isn't set. Multi-tenant: deprecate once all rows have
+// program_type populated.
 const CODING_ROBOTICS_KEYWORDS = [
   'minecraft',
   'coder',
@@ -38,17 +45,48 @@ const CODING_ROBOTICS_KEYWORDS = [
   'AI',
 ];
 
-export const LEGACY_PRICE_CENTS = 27500; // $275 flat
+// Fallback-only. Live rows carry their own early_bird_price_cents /
+// early_bird_deadline. These constants kick in only if a row is missing both.
+export const LEGACY_PRICE_CENTS = 27500;
 export const LEGACY_DEADLINE = '2026-06-05';
-export const VIP_PRICE_PER_TERM_CENTS = 24000; // $240/term locked
+export const VIP_PRICE_PER_TERM_CENTS = 24000;
 export const VIP_TERMS_COUNT = 3;
-export const VIP_TOTAL_CENTS = VIP_PRICE_PER_TERM_CENTS * VIP_TERMS_COUNT; // $720
+export const VIP_TOTAL_CENTS = VIP_PRICE_PER_TERM_CENTS * VIP_TERMS_COUNT;
 export const SIBLING_DISCOUNT_PCT = 10;
 export const INSTALLMENT_MIN_CENTS = 20000;
 
 export function isLegacyActive(today = new Date()) {
   const deadline = new Date(LEGACY_DEADLINE + 'T23:59:59');
   return today < deadline;
+}
+
+// UTC-safe early-bird gate. dateStr is 'YYYY-MM-DD' from a Postgres date column.
+// A parent on the west coast and one on the east coast see the same gate state.
+export function isEarlyBirdActive(dateStr, today = new Date()) {
+  if (!dateStr) return false;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const deadlineMs = Date.UTC(y, m - 1, d, 23, 59, 59);
+  return today.getTime() <= deadlineMs;
+}
+
+// 'YYYY-MM-DD' -> 'June 5'. Fixed to UTC to avoid TZ wobble shifting the day.
+export function formatEarlyBirdDate(dateStr) {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d, 12));
+  return date.toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+// DB-first standard price. Falls back to the formula only when price_cents
+// isn't set (shouldn't happen for live data — column is NOT NULL).
+export function standardPriceFor(program) {
+  if (!program) return 0;
+  if (program.price_cents != null) return program.price_cents;
+  return calculateProgramPrice(program);
 }
 
 export function formatMoney(cents) {
@@ -70,9 +108,8 @@ export function detectProgramType(curriculum) {
   return 'standard';
 }
 
-// Calculate program price from session_count + program_type using per-session rate.
-// Rounds to nearest dollar for clean pricing displays.
-// Falls back gracefully if session_count or program_type aren't set yet (DB migration pending).
+// Formula-fallback price: session_count × per-session rate. Used only when
+// program.price_cents is missing; live data should hit standardPriceFor instead.
 export function calculateProgramPrice(program) {
   if (!program) return 0;
   // Fallbacks for pre-migration data
@@ -81,40 +118,70 @@ export function calculateProgramPrice(program) {
     program.program_type || detectProgramType(program.curriculum);
   const rate =
     programType === 'coding_robotics' ? CODING_RATE_CENTS : STANDARD_RATE_CENTS;
-  const raw = sessionCount * rate;
-  // Round to nearest dollar (100 cents)
-  return Math.round(raw / 100) * 100;
+  return Math.round(sessionCount * rate);
 }
 
-export function basePriceForItem({ program, isVip }) {
+export function basePriceForItem({ program, isVip, today = new Date() }) {
   if (isVip) {
-    // VIP price PER TERM. The cart expands a VIP item into 3 cart lines
-    // (Fall + Winter + Spring), each at this $240 price. Cart total naturally
-    // sums to $720 across the 3 lines. The create-registration edge function
-    // also writes $240 to each of the 3 registration rows directly.
+    // VIP is per-term anchor. Cart expands a VIP item into 3 lines (Fall +
+    // Winter + Spring), each at $240. create-registration writes $240 to each
+    // of the 3 registration rows directly.
     return {
       base_cents: VIP_PRICE_PER_TERM_CENTS,
       label: 'All 3 Terms',
       is_legacy: false,
       is_vip: true,
+      standard_cents: VIP_PRICE_PER_TERM_CENTS,
+      early_bird_deadline: null,
     };
   }
-  // Calculate formula price from session_count + program_type
-  const standardPrice = calculateProgramPrice(program);
-  // Legacy is a discount, not a surcharge — only apply if it's cheaper than standard.
-  if (isLegacyActive() && LEGACY_PRICE_CENTS < standardPrice) {
+
+  const standardPrice = standardPriceFor(program);
+
+  // Per-row early bird from DB.
+  const ebPrice = program?.early_bird_price_cents;
+  const ebDeadline = program?.early_bird_deadline;
+  if (
+    ebPrice != null &&
+    ebPrice < standardPrice &&
+    isEarlyBirdActive(ebDeadline, today)
+  ) {
     return {
-      base_cents: LEGACY_PRICE_CENTS,
-      label: 'Early-bird price (before June 5)',
+      base_cents: ebPrice,
+      label: `Early bird (through ${formatEarlyBirdDate(ebDeadline)})`,
       is_legacy: true,
       is_vip: false,
+      standard_cents: standardPrice,
+      early_bird_deadline: ebDeadline,
     };
   }
+
+  // Fallback safety net: if a row has neither early_bird_price_cents nor
+  // early_bird_deadline, honor the global LEGACY discount (J2S launch behavior).
+  // No live FA26 row hits this branch — kept for defensive parity until tenant 2.
+  if (
+    ebPrice == null &&
+    ebDeadline == null &&
+    isLegacyActive(today) &&
+    LEGACY_PRICE_CENTS < standardPrice
+  ) {
+    return {
+      base_cents: LEGACY_PRICE_CENTS,
+      label: `Early bird (through ${formatEarlyBirdDate(LEGACY_DEADLINE)})`,
+      is_legacy: true,
+      is_vip: false,
+      standard_cents: standardPrice,
+      early_bird_deadline: LEGACY_DEADLINE,
+    };
+  }
+
   return {
     base_cents: standardPrice,
     label: 'Standard price',
     is_legacy: false,
     is_vip: false,
+    standard_cents: standardPrice,
+    early_bird_deadline: null,
   };
 }
 

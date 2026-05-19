@@ -4,8 +4,6 @@ import { supabase, API_BASE } from '../../lib/supabase.js';
 import { VIP_PRICE_PER_TERM_CENTS } from '../../lib/pricing.js';
 import { useCart } from '../../context/CartContext.jsx';
 import StepIndicator from '../../components/StepIndicator.jsx';
-import StepSchool from './register-steps/StepSchool.jsx';
-import StepProgram from './register-steps/StepProgram.jsx';
 import StepStudent from './register-steps/StepStudent.jsx';
 import StepParent from './register-steps/StepParent.jsx';
 import StepWaivers from './register-steps/StepWaivers.jsx';
@@ -163,12 +161,11 @@ export default function Register() {
     load();
   }, []);
 
-  // If parent reaches /register without school+program params (including
-  // browser-back from Stripe which strips the query string), redirect home.
-  // Dependency on searchParams ensures this fires on every URL change, not
-  // just on initial mount.
+  // /register requires a ?program= param. School + program selection lives on
+  // /j2s — anyone landing here without a program (including browser-back from
+  // Stripe, which strips the query string) bounces home.
   useEffect(() => {
-    if (!searchParams.get('school') && !searchParams.get('program')) {
+    if (!searchParams.get('program')) {
       navigate(`/${ORG_SLUG}`, { replace: true });
     }
   }, [searchParams, navigate]);
@@ -178,31 +175,21 @@ export default function Register() {
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, [step]);
 
-  // If school= query param, preload the school
-  useEffect(() => {
-    const schoolFromUrl = searchParams.get('school');
-    if (schoolFromUrl && schools.length && !activeChild.program_location_id) {
-      const s = schools.find((x) => x.id === schoolFromUrl);
-      if (s) {
-        setActiveChildSchool(s);
-        setStep(1);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schools]);
-
-  // Pre-select program + VIP from URL params (Home.jsx passes ?program=X&vip=1)
+  // Pre-select program + school + VIP from URL params (Home.jsx passes
+  // ?program=X&vip=1). This is the only entry point into the wizard.
   useEffect(() => {
     const programFromUrl = searchParams.get('program');
     const vipFromUrl = searchParams.get('vip') === '1';
-    if (!programFromUrl || !programs.length || activeChild.items.length) return;
+    if (!programFromUrl || !programs.length || !schools.length || activeChild.items.length) return;
 
     const program = programs.find((x) => x.id === programFromUrl);
     if (!program) return;
 
+    const school = schools.find((s) => s.id === program.program_location_id);
+    if (school) setActiveChildSchool(school);
+
     if (!vipFromUrl) {
       setActiveChildItem({ program, isVip: false });
-      setStep(2);
       return;
     }
 
@@ -222,15 +209,13 @@ export default function Register() {
           isVip: true,
           vipBundle: { fall: program, winter, spring },
         });
-        setStep(2);
       } else {
         // VIP eligibility broke between Home and here — fall back to standard
         setActiveChildItem({ program, isVip: false });
-        setStep(2);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [programs]);
+  }, [programs, schools]);
 
   async function load() {
     const [schoolsRes, programsRes, waiversRes] = await Promise.all([
@@ -258,31 +243,10 @@ export default function Register() {
     setLoading(false);
   }
 
-  const schoolsByDistrict = useMemo(() => {
-    const withPrograms = new Set(programs.map((p) => p.program_location_id));
-    const map = {};
-    schools
-      .filter((s) => withPrograms.has(s.id))
-      .forEach((s) => {
-        const key = s.district || 'Other';
-        (map[key] ||= []).push(s);
-      });
-    return map;
-  }, [schools, programs]);
-
-  const programsAtActiveSchool = useMemo(() => {
-    if (!activeChild.program_location_id) return [];
-    return programs.filter((p) => p.program_location_id === activeChild.program_location_id);
-  }, [activeChild.program_location_id, programs]);
-
-  // Navigation guards
+  // Navigation guards — steps are 0=Student, 1=Parent, 2=Waivers, 3=Review, 4=Pay.
   function canAdvance() {
     switch (step) {
-      case 0:
-        return !!activeChild.program_location_id;
-      case 1:
-        return activeChild.items.length > 0;
-      case 2: {
+      case 0: {
         const s = activeChild.student;
         return (
           !!s.first_name &&
@@ -294,20 +258,20 @@ export default function Register() {
           !!s.emergency_contact_phone
         );
       }
-      case 3:
+      case 1:
         return (
           !!cart.parent.first_name &&
           !!cart.parent.last_name &&
           !!cart.parent.email &&
           !!cart.parent.phone
         );
-      case 4: {
+      case 2: {
         const requiredWaivers = waivers.filter((w) => w.required);
         return requiredWaivers.every(
           (w) => activeChild.waivers[w.id]?.agreed === true,
         );
       }
-      case 5:
+      case 3:
         return true;
       default:
         return false;
@@ -317,7 +281,7 @@ export default function Register() {
   function next() {
     if (!canAdvance()) return;
     setError('');
-    setStep((s) => Math.min(6, s + 1));
+    setStep((s) => Math.min(4, s + 1));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -327,10 +291,12 @@ export default function Register() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  // Adding a sibling means picking a new school + program for them. Cart state
+  // (Child 1, parent info) survives via the CartContext above /j2s. The ?keep=1
+  // flag tells Home.jsx to skip its default clearCart.
   function handleAddAnotherChild() {
     addAnotherChild();
-    setStep(0);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    navigate(`/${ORG_SLUG}?keep=1`);
   }
 
   async function handleCheckout() {
@@ -454,33 +420,16 @@ export default function Register() {
 
         <div className="animate-slide-up">
           {step === 0 && (
-            <StepSchool
-              schoolsByDistrict={schoolsByDistrict}
-              selectedSchoolId={activeChild.program_location_id}
-              onSelectSchool={(s) => { setActiveChildSchool(s); setStep(1); }}
-              childIndex={activeChild.child_index}
-            />
-          )}
-          {step === 1 && (
-            <StepProgram
-              programs={programsAtActiveSchool}
-              schoolName={activeChild.school_name}
-              selectedItem={activeChild.items[0]}
-              onSelectItem={(item) => { setActiveChildItem(item); setStep(2); }}
-              allPrograms={programs}
-            />
-          )}
-          {step === 2 && (
             <StepStudent
               student={activeChild.student}
               onUpdate={updateActiveStudent}
               childIndex={activeChild.child_index}
             />
           )}
-          {step === 3 && (
+          {step === 1 && (
             <StepParent parent={cart.parent} onUpdate={updateParent} />
           )}
-          {step === 4 && (
+          {step === 2 && (
             <StepWaivers
               waivers={waivers}
               signatures={activeChild.waivers}
@@ -488,7 +437,7 @@ export default function Register() {
               parentName={`${cart.parent.first_name} ${cart.parent.last_name}`}
             />
           )}
-          {step === 5 && (
+          {step === 3 && (
             <StepReview
               cart={cart}
               pricing={pricing}
@@ -521,7 +470,7 @@ export default function Register() {
               onAddAnotherChild={handleAddAnotherChild}
             />
           )}
-          {step === 6 && (
+          {step === 4 && (
             <StepPay
               pricing={pricing}
               submitting={submitting}
@@ -541,7 +490,7 @@ export default function Register() {
           >
             &larr; Back
           </button>
-          {step < 6 ? (
+          {step < 4 ? (
             <button
               onClick={next}
               disabled={!canAdvance()}

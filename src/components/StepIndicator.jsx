@@ -1,8 +1,6 @@
 import React from 'react';
 
 const STEP_LABELS = [
-  'School',
-  'Program',
   'Student',
   'Parent',
   'Waivers',

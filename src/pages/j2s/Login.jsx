@@ -129,7 +129,7 @@ export default function Login() {
 
         <p className="mt-6 text-center text-sm text-j2s-ink/60">
           No account yet?{' '}
-          <Link to="/j2s/register" className="font-semibold text-j2s-purple hover:underline">
+          <Link to="/j2s" className="font-semibold text-j2s-purple hover:underline">
             Register for a program →
           </Link>
         </p>

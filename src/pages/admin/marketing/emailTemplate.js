@@ -109,7 +109,7 @@ export const PREVIEW_SAMPLE_DATA = {
   day_of_week: "Tuesday",
   start_time: "3:30 PM",
   instructor_first_name: "Anjelique",
-  registration_link: "https://enrops.com/j2s/register",
+  registration_link: "https://enrops.com/j2s",
   organization_name: "Journey to STEAM",
   mid_term_skills: "[curriculum skills — requires DB migration]",
   final_skills: "[curriculum skills — requires DB migration]",
