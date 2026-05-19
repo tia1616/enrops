@@ -29,15 +29,18 @@ Companion to `marketing-ai-builder.html`. Every interactive element in the mocku
 
 | Element | Wires to |
 |---|---|
-| Text input | Local form state; flows into `inputs.what` in the chunk 3.6.03 `DraftRequest`. |
-| Chip presets | Pre-fill the text input. Stored as a static list (could later be per-org "recent topics"). |
+| Multi-topic input (chips + Enter to add) | Local form state. Flows into `inputs.what` as a **`string[]`** in the chunk 3.6.03 `DraftRequest` (the spec'd `what: string` shape needs to be widened to `string[]` — one campaign can promote multiple things at once, e.g., Fall + Summer). The edge function passes all topics to Claude and asks it to weave them into a single coherent schedule with topic-tagged touchpoints. |
+| Chip presets | Add to the chip list (no longer overwrite). Stored as a static list; future: per-org "recent topics". |
+| Topic color | Each topic gets a rotating color from a fixed palette (brand / accent / emerald / pink / sky). Re-used in the schedule view to tag each touchpoint with the topic(s) it covers. |
 | Marketing-data hint | Hardcoded copy for v1. Future: pull from a curated `marketing_insights` table keyed by campaign type. |
 
 ## Q2 — Who
 
 | Element | Wires to |
 |---|---|
-| Audience radios (Parents / Partners / Instructors) | Sets `inputs.who.audience` per chunk 3.6.03 spec. Parents fully wired; partners + instructors return 501 in `marketing-draft-campaign` until later chunks. |
+| Audience radios (Parents / Partners / Instructors) | Sets `inputs.who.audience` per chunk 3.6.03 spec. **UI shows all three as first-class choices** with their own sub-filter panes. Backend: parents fully wired in `marketing-draft-campaign` v1; partners + instructors return 501 until their respective Hat chunks (Partner Hat + Instructor Hat) land. |
+| Partners sub-filter — type + role + specific-orgs | Type select maps to a `partner_orgs.type` column (school / parks_rec / church / library / community). Role select maps to `partner_org_contacts.role`. Both tables are TBD — they ship with the Partner Hat. |
+| Instructors sub-filter — tier + status + specific | Existing `instructors` table already has tier and status columns. Joins to `auth.users` for email. |
 | Status select (All / Current / Past / Prospect) | Becomes part of the `parents` filter. Resolves via joins: current = active programs roster, past = `marketing_recipients` with `source_term` older than current and no recent registration, prospect = recipient with no `registrations` row. |
 | Scope select (Master / School / Area / Segment / Person) | Maps 1:1 to `ParentsFilter` union from chunk 03 (`master_list`, `school` w/ `school_ids[]`, `area`, `segment`, `person`). |
 | Scope detail input (typeahead) | School: queries `program_locations` by name + `name_aliases` (added in chunk 3.6.01). Area: queries `marketing_recipients.geo_segment`. Segment: queries `marketing_recipients.segments` (chunk 01 column). Person: `marketing_recipients` by name/email. |
@@ -103,7 +106,8 @@ Each `<details>` card has a summary (always visible) and an expanded editor + pr
 
 | Element | Wires to |
 |---|---|
-| Card type chip (Email / Social / Flyer) | Derived from a `touchpoints[].type` field on the draft. Stored in `marketing_campaign_touchpoints` (new table: id, campaign_id, type, scheduled_at, payload jsonb, order_index, status). |
+| Card type chip (Email / Social / Flyer) | Derived from a `touchpoints[].type` field on the draft. Stored in `marketing_campaign_touchpoints` (new table: id, campaign_id, type, scheduled_at, payload jsonb, order_index, status, topics text[]). |
+| Topic badges (Fall / Summer / etc.) | `marketing_campaign_touchpoints.topics text[]` — array of topic labels from the original Q1 input. Each topic gets a stable color (assigned at draft time). Lets the admin see at a glance which touchpoints cover which promoted thing. |
 | Subject input (email) | `marketing_campaign_touchpoints.payload.subject`. |
 | From field (readonly) | `organizations.default_sender_name + default_sender_email` (chunk 3.6.01). Not editable here. |
 | "Edit there" link | Settings → Branding. |
