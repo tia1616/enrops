@@ -1,0 +1,1115 @@
+<!DOCTYPE html>
+<!--
+  SAMPLE COPY ONLY. All tenant-specific text in this mockup (sender name,
+  brand closer, school names, recipient counts, body content, promo codes,
+  time-saved numbers, marketing data figures) is PLACEHOLDER and must come
+  from the database (organizations.brand_voice, marketing_recipients,
+  program_locations, marketing_campaigns, plus an industry-data lookup we
+  will add later) in the React build. Do not copy these strings into
+  components.
+
+  Chunk 3.6.04 — Marketing & Communications mockup (v2)
+  Tab hub: Campaigns | Contacts (Parents / Partners / Instructors) | Automations.
+  Flow: Q1 What -> Q2 Who -> Q3 Duration -> Q4 Channels ->
+  Don drafting -> Schedule review (promo suggestion + list-fatigue check +
+  cancellation policy + 9 touchpoints with rendered previews) -> Celebration.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Marketing &amp; Communications — Enrops mockup</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          brand: { 50: '#f4f1ff', 100: '#ebe5ff', 500: '#674EE8', 600: '#5a3fd9', 700: '#4430AC' },
+          accent: { 500: '#F8A638' },
+        },
+      },
+    },
+  };
+</script>
+<style>
+  body { font-family: -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+  .screen { display: none; }
+  .screen.active { display: block; }
+  .tab-btn[data-active="true"] { background: #ebe5ff; color: #4430AC; }
+  .sub-tab-btn[data-active="true"] { color: #4430AC; border-bottom-color: #674EE8; }
+  .audience-row { transition: background 0.12s ease; }
+  .audience-row:hover { background: #faf7ff; }
+  /* Confetti */
+  .confetti { position: absolute; width: 8px; height: 14px; opacity: 0; animation: fall 1.6s ease-out forwards; }
+  @keyframes fall {
+    0% { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+    100% { transform: translateY(420px) rotate(720deg); opacity: 0; }
+  }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  details[open] .chev { transform: rotate(90deg); }
+  .chev { transition: transform 0.15s ease; }
+  /* Phone frame for email preview */
+  .phone-frame { border: 12px solid #1f2937; border-radius: 32px; background: #fff; overflow: hidden; }
+  .phone-statusbar { background: #1f2937; color: #fff; font-size: 10px; padding: 6px 14px; display: flex; justify-content: space-between; }
+  /* Flyer / social frames */
+  .flyer-frame { box-shadow: 0 8px 24px -8px rgba(0,0,0,0.18); }
+  .ig-frame { box-shadow: 0 8px 24px -8px rgba(0,0,0,0.18); border-radius: 16px; overflow: hidden; }
+  /* Drafting pulse */
+  @keyframes pulse-soft { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+  .pulse { animation: pulse-soft 1.4s ease-in-out infinite; }
+  /* Toast */
+  #toast-host { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 50; pointer-events: none; }
+  .toast { background: #1f2937; color: #fff; padding: 10px 16px; border-radius: 10px; box-shadow: 0 8px 24px -8px rgba(0,0,0,0.4); font-size: 13px; max-width: 460px; margin-top: 8px; opacity: 0; animation: toast-in 0.2s ease-out forwards, toast-out 0.3s ease-in forwards 3.2s; }
+  .toast .toast-tag { display: inline-block; background: #674EE8; color: #fff; font-weight: 700; font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase; padding: 2px 6px; border-radius: 999px; margin-right: 6px; vertical-align: 1px; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes toast-out { to { opacity: 0; transform: translateY(8px); } }
+</style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+
+<!-- ============ TAB HUB SHELL ============ -->
+<header class="bg-white border-b border-gray-200">
+  <div class="max-w-6xl mx-auto px-4 sm:px-6 py-4">
+    <div class="flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <p class="text-xs uppercase tracking-wider text-brand-700 font-semibold">Marketing &amp; Communications</p>
+        <h1 class="text-xl sm:text-2xl font-bold text-gray-900 mt-0.5">Don&rsquo;s desk</h1>
+      </div>
+      <div class="flex items-center gap-2 text-sm">
+        <span class="hidden sm:inline text-gray-500">Logged in as</span>
+        <span class="font-medium">Jessica @ Journey to STEAM</span><!-- placeholder -->
+      </div>
+    </div>
+    <nav class="mt-4 flex gap-1 overflow-x-auto -mx-1 px-1">
+      <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 whitespace-nowrap"
+              data-active="true" data-tab="campaigns" onclick="showTab('campaigns')">Campaigns</button>
+      <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 whitespace-nowrap"
+              data-active="false" data-tab="contacts" onclick="showTab('contacts')">Contacts</button>
+      <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 whitespace-nowrap"
+              data-active="false" data-tab="automations" onclick="showTab('automations')">Automations</button>
+    </nav>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
+
+<!-- ===================== CAMPAIGNS TAB ===================== -->
+<section id="tab-campaigns" class="tab-pane">
+
+<!-- ===== Screen: Campaigns home (start + recent) ===== -->
+<div id="screen-campaigns-home" class="screen active">
+  <div class="bg-gradient-to-br from-brand-500 to-brand-700 rounded-2xl p-6 sm:p-8 text-white shadow-md">
+    <p class="text-sm uppercase tracking-wider text-brand-100 font-semibold">Don says</p>
+    <h2 class="text-2xl sm:text-3xl font-bold mt-1 leading-tight">Tell me what you want to put in front of families &mdash; I&rsquo;ll handle the rest.</h2>
+    <p class="mt-3 text-brand-100 max-w-xl">Nothing complicated. Just answer the questions, and we&rsquo;ll take care of the rest.</p>
+    <div class="mt-5 flex flex-wrap gap-3">
+      <button class="bg-white text-brand-700 font-semibold px-5 py-3 rounded-lg shadow hover:shadow-lg transition" onclick="showScreen('q1')">Start a campaign &rarr;</button>
+      <button class="bg-brand-600/40 hover:bg-brand-600/60 text-white font-medium px-5 py-3 rounded-lg" onclick="showScreen('q1')">Send a quick message</button>
+    </div>
+  </div>
+
+  <div class="mt-8">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-lg font-semibold text-gray-900">Recent</h3>
+      <a href="#" class="text-sm text-brand-700 hover:underline" onclick="event.preventDefault(); wired('opens a full campaigns list — paginated query against marketing_campaigns where organization_id = current org.')">View all</a>
+    </div>
+    <div class="bg-white rounded-xl divide-y divide-gray-100 shadow-sm border border-gray-200">
+      <button class="w-full text-left p-4 flex items-center justify-between gap-4 hover:bg-gray-50 transition" onclick="showScreen('schedule')">
+        <div class="min-w-0">
+          <p class="font-medium text-gray-900 truncate">FA26 early bird &mdash; Hillsboro families</p><!-- placeholder -->
+          <p class="text-sm text-gray-500 mt-0.5">Scheduled &middot; 6 emails, 2 social, 1 flyer, 1 promo code &middot; 247 recipients</p>
+          <p class="text-xs text-brand-700 mt-1">Open to review &rarr;</p>
+        </div>
+        <span class="text-xs font-semibold bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full whitespace-nowrap">Awaiting approval</span>
+      </button>
+      <button class="w-full text-left p-4 flex items-center justify-between gap-4 hover:bg-gray-50 transition" onclick="showScreen('celebration')">
+        <div class="min-w-0">
+          <p class="font-medium text-gray-900 truncate">Summer camp last call</p><!-- placeholder -->
+          <p class="text-sm text-gray-500 mt-0.5">Sent yesterday &middot; 1 email &middot; 312 recipients &middot; 41% opened</p>
+          <p class="text-xs text-brand-700 mt-1">See the wins &rarr;</p>
+        </div>
+        <span class="text-xs font-semibold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full whitespace-nowrap">Sent</span>
+      </button>
+      <button class="w-full text-left p-4 flex items-center justify-between gap-4 hover:bg-gray-50 transition" onclick="showScreen('schedule')">
+        <div class="min-w-0">
+          <p class="font-medium text-gray-900 truncate">Partner-school reminder &mdash; FA26 start dates</p><!-- placeholder -->
+          <p class="text-sm text-gray-500 mt-0.5">Draft &middot; 1 email &middot; 14 recipients</p>
+          <p class="text-xs text-brand-700 mt-1">Continue editing &rarr;</p>
+        </div>
+        <span class="text-xs font-semibold bg-gray-100 text-gray-700 px-2.5 py-1 rounded-full whitespace-nowrap">Draft</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Question framing helper ===== -->
+<!-- Used as <QHeader step="N" question="..."/> and inlined by JS at load. -->
+
+<!-- ===== Screen: Q1 What ===== -->
+<div id="screen-q1" class="screen">
+  <QHeader step="1" total="4" question="What are you promoting?"></QHeader>
+  <p class="text-gray-600 mt-2">Type whatever&rsquo;s on your mind &mdash; or pick a starter.</p>
+  <div class="mt-6">
+    <input id="q1-input" type="text" class="w-full border-2 border-gray-200 focus:border-brand-500 rounded-xl px-4 py-3 text-lg outline-none"
+           value="FA26 early bird registration" /><!-- placeholder -->
+  </div>
+  <div class="mt-4 flex flex-wrap gap-2">
+    <button class="text-sm bg-white border border-gray-200 hover:border-brand-500 hover:text-brand-700 px-3 py-1.5 rounded-full" onclick="fillInput('#q1-input', 'FA26 early bird registration')">FA26 early bird</button><!-- placeholder -->
+    <button class="text-sm bg-white border border-gray-200 hover:border-brand-500 hover:text-brand-700 px-3 py-1.5 rounded-full" onclick="fillInput('#q1-input', 'Summer 26 last call — final spots')">Summer 26 last call</button><!-- placeholder -->
+    <button class="text-sm bg-white border border-gray-200 hover:border-brand-500 hover:text-brand-700 px-3 py-1.5 rounded-full" onclick="fillInput('#q1-input', 'Spring 27 waitlist sign-up')">Spring 27 waitlist</button><!-- placeholder -->
+    <button class="text-sm bg-white border border-gray-200 hover:border-brand-500 hover:text-brand-700 px-3 py-1.5 rounded-full" onclick="fillInput('#q1-input', 'Quick note to partner schools')">Just a note to partners</button>
+    <button class="text-sm bg-white border border-gray-200 hover:border-brand-500 hover:text-brand-700 px-3 py-1.5 rounded-full" onclick="fillInput('#q1-input', '')">Custom&hellip;</button>
+  </div>
+
+  <!-- Don's why-this-works hint -->
+  <div class="mt-5 bg-emerald-50 border border-emerald-100 rounded-lg p-3 text-sm text-emerald-900 flex items-start gap-2">
+    <span class="text-emerald-600">💡</span>
+    <span>The clearer the topic, the better the draft. &ldquo;FA26 early bird&rdquo; converts ~24% better than &ldquo;Fall registration&rdquo; because Don can lean into the urgency.</span>
+  </div>
+
+  <div class="mt-8 flex justify-between">
+    <button class="text-sm text-gray-600 hover:text-gray-900" onclick="showScreen('campaigns-home')">&larr; Not now</button>
+    <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-3 rounded-lg" onclick="showScreen('q2')">Next &rarr;</button>
+  </div>
+</div>
+
+<!-- ===== Screen: Q2 Who ===== -->
+<div id="screen-q2" class="screen">
+  <QHeader step="2" total="4" question="Who&rsquo;s this going to?"></QHeader>
+  <p class="text-gray-600 mt-2">Pick an audience and I&rsquo;ll narrow it from there.</p>
+
+  <div class="mt-6 bg-white border border-gray-200 rounded-xl divide-y divide-gray-100">
+    <label class="audience-row flex items-start gap-3 p-4 cursor-pointer">
+      <input type="radio" name="audience" class="mt-1" checked onclick="toggleAudienceFilter('parents')" />
+      <div class="flex-1">
+        <p class="font-medium">Parents</p>
+        <p class="text-sm text-gray-500">Past, current, or all participants. By school, area, segment, or just one family.</p>
+      </div>
+    </label>
+    <label class="audience-row flex items-start gap-3 p-4 cursor-pointer">
+      <input type="radio" name="audience" class="mt-1" onclick="toggleAudienceFilter('partners')" />
+      <div class="flex-1">
+        <p class="font-medium">Partner orgs</p>
+        <p class="text-sm text-gray-500">Schools, parks &amp; rec, churches, libraries. Site coordinators, principals, PTA contacts.</p>
+        <span class="text-xs font-semibold text-amber-700 bg-amber-100 inline-block mt-1 px-2 py-0.5 rounded-full">Coming soon</span>
+      </div>
+    </label>
+    <label class="audience-row flex items-start gap-3 p-4 cursor-pointer">
+      <input type="radio" name="audience" class="mt-1" onclick="toggleAudienceFilter('instructors')" />
+      <div class="flex-1">
+        <p class="font-medium">Instructors</p>
+        <p class="text-sm text-gray-500">All active, by tier (lead / developing / apprentice), or pick specific people.</p>
+        <span class="text-xs font-semibold text-amber-700 bg-amber-100 inline-block mt-1 px-2 py-0.5 rounded-full">Coming soon</span>
+      </div>
+    </label>
+  </div>
+
+  <!-- Parents sub-filter (visible by default since parents is pre-selected) -->
+  <div id="filter-parents" class="mt-4 bg-brand-50 border border-brand-100 rounded-xl p-4">
+    <p class="text-xs uppercase tracking-wider text-brand-700 font-semibold">Narrow it down</p>
+    <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div>
+        <label class="text-xs font-semibold text-gray-600">Participation status</label>
+        <select class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2">
+          <option>All participants</option>
+          <option>Current participants</option>
+          <option>Past participants (didn&rsquo;t re-enroll)</option>
+          <option>Prospects only (never enrolled)</option>
+        </select>
+      </div>
+      <div>
+        <label class="text-xs font-semibold text-gray-600">Scope</label>
+        <select class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2" onchange="onScopeChange(this.value)">
+          <option value="master">Master list (everyone)</option>
+          <option value="school" selected>A specific school&hellip;</option>
+          <option value="area">An area&hellip;</option>
+          <option value="segment">A saved segment&hellip;</option>
+          <option value="person">Just one person&hellip;</option>
+        </select>
+      </div>
+    </div>
+    <div id="scope-detail" class="mt-3">
+      <input type="text" placeholder="Search schools&hellip;" value="Hillsboro Family Center, Cascadia"
+             class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm" /><!-- placeholder -->
+      <p class="text-xs text-gray-500 mt-2">Type to search. Multiple is fine.</p>
+    </div>
+    <div class="mt-4 flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-200">
+      <p class="text-sm"><span class="font-semibold">~247 recipients</span> match so far<!-- placeholder --></p>
+      <button class="text-xs text-brand-700 hover:underline" onclick="wired('opens a slide-over showing the resolved recipient list — query against marketing_recipients filtered by organization_id and the chosen status + scope, paginated.')">Preview list</button>
+    </div>
+  </div>
+
+  <div class="mt-8 flex justify-between">
+    <button class="text-sm text-gray-600 hover:text-gray-900" onclick="showScreen('q1')">&larr; Back</button>
+    <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-3 rounded-lg" onclick="showScreen('q3')">Next &rarr;</button>
+  </div>
+</div>
+
+<!-- ===== Screen: Q3 Duration ===== -->
+<div id="screen-q3" class="screen">
+  <QHeader step="3" total="4" question="How long should this run?"></QHeader>
+  <p class="text-gray-600 mt-2">I&rsquo;ll spread the touchpoints out so they land at the right moments.</p>
+
+  <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+    <label class="cursor-pointer">
+      <input type="radio" name="duration" class="sr-only peer" />
+      <div class="bg-white border-2 border-gray-200 peer-checked:border-brand-500 peer-checked:bg-brand-50 rounded-xl p-4 h-full">
+        <p class="font-semibold">2 weeks</p>
+        <p class="text-xs text-gray-500 mt-1">Punchy: kickoff + 2 reminders + 1 social</p>
+      </div>
+    </label>
+    <label class="cursor-pointer">
+      <input type="radio" name="duration" class="sr-only peer" checked />
+      <div class="bg-white border-2 border-gray-200 peer-checked:border-brand-500 peer-checked:bg-brand-50 rounded-xl p-4 h-full">
+        <p class="font-semibold">1 month</p>
+        <p class="text-xs text-gray-500 mt-1">Standard: 6 emails + 2 social + 1 flyer</p>
+      </div>
+    </label>
+    <label class="cursor-pointer">
+      <input type="radio" name="duration" class="sr-only peer" />
+      <div class="bg-white border-2 border-gray-200 peer-checked:border-brand-500 peer-checked:bg-brand-50 rounded-xl p-4 h-full">
+        <p class="font-semibold">2 months</p>
+        <p class="text-xs text-gray-500 mt-1">Slow build: 4 emails + 4 social + 1 flyer</p>
+      </div>
+    </label>
+    <label class="cursor-pointer">
+      <input type="radio" name="duration" class="sr-only peer" />
+      <div class="bg-white border-2 border-gray-200 peer-checked:border-brand-500 peer-checked:bg-brand-50 rounded-xl p-4 h-full">
+        <p class="font-semibold">Custom&hellip;</p>
+        <p class="text-xs text-gray-500 mt-1">Pick your own deadlines</p>
+      </div>
+    </label>
+  </div>
+
+  <div class="mt-5 bg-emerald-50 border border-emerald-100 rounded-lg p-3 text-sm text-emerald-900 flex items-start gap-2">
+    <span class="text-emerald-600">📊</span>
+    <span>1-month windows convert best for early-bird campaigns (avg 28% vs 12% for single sends). I&rsquo;ll add 48h and 24h reminders at each deadline automatically.</span>
+  </div>
+
+  <div class="mt-8 flex justify-between">
+    <button class="text-sm text-gray-600 hover:text-gray-900" onclick="showScreen('q2')">&larr; Back</button>
+    <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-3 rounded-lg" onclick="showScreen('q4')">Next &rarr;</button>
+  </div>
+</div>
+
+<!-- ===== Screen: Q4 Channels ===== -->
+<div id="screen-q4" class="screen">
+  <QHeader step="4" total="4" question="How are you reaching them?"></QHeader>
+  <p class="text-gray-600 mt-2">Pick any combo &mdash; I&rsquo;ll draft each one.</p>
+
+  <div class="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <label class="cursor-pointer">
+      <input type="checkbox" class="sr-only peer" checked />
+      <div class="bg-white border-2 border-gray-200 peer-checked:border-brand-500 peer-checked:bg-brand-50 rounded-xl p-4 h-full">
+        <div class="text-2xl">✉️</div>
+        <p class="font-semibold mt-2">Email + parent portal</p>
+        <p class="text-xs text-gray-500 mt-1">Personalized per recipient. Also lands in their parent portal feed.</p>
+      </div>
+    </label>
+    <label class="cursor-not-allowed opacity-60">
+      <input type="checkbox" class="sr-only" disabled />
+      <div class="bg-white border-2 border-gray-200 rounded-xl p-4 h-full">
+        <div class="text-2xl">📄</div>
+        <p class="font-semibold mt-2">Flyer (PDF)</p>
+        <p class="text-xs text-gray-500 mt-1">Branded handout for partners.</p>
+        <span class="text-xs font-semibold text-amber-700 bg-amber-100 inline-block mt-2 px-2 py-0.5 rounded-full">Coming soon</span>
+      </div>
+    </label>
+    <label class="cursor-not-allowed opacity-60">
+      <input type="checkbox" class="sr-only" disabled />
+      <div class="bg-white border-2 border-gray-200 rounded-xl p-4 h-full">
+        <div class="text-2xl">📣</div>
+        <p class="font-semibold mt-2">Social post</p>
+        <p class="text-xs text-gray-500 mt-1">Caption + hashtags + tags.</p>
+        <span class="text-xs font-semibold text-amber-700 bg-amber-100 inline-block mt-2 px-2 py-0.5 rounded-full">Coming soon</span>
+      </div>
+    </label>
+  </div>
+
+  <div class="mt-5 bg-emerald-50 border border-emerald-100 rounded-lg p-3 text-sm text-emerald-900 flex items-start gap-2">
+    <span class="text-emerald-600">📊</span>
+    <span>Multi-channel campaigns convert ~3.2&times; better than email alone. I&rsquo;ll keep each piece on-brand and on-message.</span>
+  </div>
+
+  <div class="mt-8 flex justify-between">
+    <button class="text-sm text-gray-600 hover:text-gray-900" onclick="showScreen('q3')">&larr; Back</button>
+    <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-3 rounded-lg" onclick="startDrafting()">Draft it ✨</button>
+  </div>
+</div>
+
+<!-- ===== Screen: Drafting (transition) ===== -->
+<div id="screen-drafting" class="screen">
+  <div class="bg-white rounded-2xl border border-gray-200 p-10 text-center">
+    <div class="text-5xl pulse">✨</div>
+    <h2 class="text-2xl font-bold mt-4 text-gray-900">Don&rsquo;s putting your plan together&hellip;</h2>
+    <p class="text-gray-600 mt-2">Pulling your brand voice, the right recipients, and the best timing.</p>
+    <ul class="mt-6 space-y-2 text-sm text-gray-700 max-w-md mx-auto text-left">
+      <li>✅ Loaded brand voice from your org settings</li>
+      <li>✅ Resolved 247 recipients (Hillsboro Family Center + Cascadia)</li>
+      <li class="pulse">⏳ Writing the kickoff email&hellip;</li>
+      <li class="text-gray-400">⏳ Drafting 48h + 24h reminders</li>
+      <li class="text-gray-400">⏳ Designing flyer + social posts</li>
+      <li class="text-gray-400">⏳ Picking a promo code</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== Screen: Schedule Review (the big one) ===== -->
+<div id="screen-schedule" class="screen">
+  <button class="text-sm text-gray-600 hover:text-gray-900" onclick="showScreen('campaigns-home')">&larr; Back to campaigns</button>
+  <div class="flex items-start justify-between flex-wrap gap-3 mt-3">
+    <div>
+      <p class="text-xs uppercase tracking-wider text-brand-700 font-semibold">Draft plan &middot; review &amp; approve</p>
+      <h2 class="text-2xl sm:text-3xl font-bold text-gray-900">Here&rsquo;s the campaign Don put together.</h2>
+      <p class="text-gray-600 mt-1">Expand any card to edit and preview. Approve when it&rsquo;s right.</p>
+    </div>
+    <span class="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-800 text-sm font-semibold px-3 py-1.5 rounded-full border border-emerald-200">
+      ⏱ Saved you ~16 hours<!-- placeholder J2S baseline -->
+    </span>
+  </div>
+
+  <!-- Plan summary -->
+  <div class="mt-6 bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+      <div>
+        <p class="text-xs uppercase tracking-wider text-gray-500">Topic</p>
+        <p class="font-medium mt-0.5">FA26 early bird</p><!-- placeholder -->
+      </div>
+      <div>
+        <p class="text-xs uppercase tracking-wider text-gray-500">Audience</p>
+        <p class="font-medium mt-0.5">247 parents · Hillsboro + Cascadia</p><!-- placeholder -->
+      </div>
+      <div>
+        <p class="text-xs uppercase tracking-wider text-gray-500">Window</p>
+        <p class="font-medium mt-0.5">May 19 — Jun 18</p><!-- placeholder -->
+      </div>
+      <div>
+        <p class="text-xs uppercase tracking-wider text-gray-500">Channels</p>
+        <p class="font-medium mt-0.5">Email · Social · Flyer · Promo</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Promo code suggestion -->
+  <div class="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-4 sm:p-5">
+    <div class="flex items-start gap-3">
+      <div class="text-2xl">🎟️</div>
+      <div class="flex-1 min-w-0">
+        <p class="text-xs uppercase tracking-wider text-amber-800 font-semibold">Promo code Don suggests</p>
+        <h3 class="text-lg font-semibold text-gray-900 mt-1">Early-bird pricing &mdash; <span class="font-mono bg-white px-2 py-0.5 border border-amber-300 rounded">EARLYBIRD90</span> for $90 off</h3>
+        <p class="text-sm text-gray-700 mt-1">Auto-applies to <strong>11 open FA26 programs</strong> at checkout. Code expires at the early-bird deadline; prices step up automatically &mdash; you don&rsquo;t have to remember.</p>
+        <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+          <div class="bg-white rounded-lg p-3 border border-amber-200">
+            <p class="text-xs uppercase font-semibold text-gray-500">Discount</p>
+            <p class="font-semibold mt-0.5">$90 off / program</p><!-- placeholder -->
+          </div>
+          <div class="bg-white rounded-lg p-3 border border-amber-200">
+            <p class="text-xs uppercase font-semibold text-gray-500">Active until</p>
+            <p class="font-semibold mt-0.5">Jun 5, 11:59 PM</p>
+          </div>
+          <div class="bg-white rounded-lg p-3 border border-amber-200">
+            <p class="text-xs uppercase font-semibold text-gray-500">After expiry</p>
+            <p class="font-semibold mt-0.5">Auto step-up to $325</p><!-- placeholder -->
+          </div>
+        </div>
+        <div class="mt-3 bg-emerald-50 border border-emerald-100 rounded-lg p-3 text-sm text-emerald-900 flex items-start gap-2">
+          <span class="text-emerald-600">📊</span>
+          <span>Time-limited promo codes lift conversion ~37% on K-5 enrichment campaigns. The auto-expiry removes the &ldquo;did I update the prices?&rdquo; tax on you.</span>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button class="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-lg text-sm" onclick="wired('writes a row to promo_codes (new table), sets programs.early_bird_price_cents + programs.early_bird_deadline on every open FA26 program for this org, and schedules a Supabase function call at 11:59 PM Jun 5 to restore the regular price.')">Approve &amp; apply to open programs</button>
+          <button class="bg-white border border-amber-300 text-gray-800 font-medium px-4 py-2 rounded-lg text-sm" onclick="wired('opens an inline editor for the code string, discount amount, expiry datetime, and which programs the code applies to (defaults: all open FA26).')">Edit code or amount</button>
+          <button class="text-sm text-gray-600 hover:text-gray-900 px-2" onclick="wired('skips the promo step; no row written to promo_codes. Don will rewrite the body copy to drop the code mention.')">Skip the promo</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- List-fatigue check -->
+  <div class="mt-3 bg-sky-50 border border-sky-200 rounded-xl p-4 flex items-start gap-3">
+    <div class="text-2xl">🧠</div>
+    <div class="flex-1">
+      <p class="text-sm font-semibold text-sky-900">Don checked: 9 touchpoints to 247 people over 30 days &mdash; that&rsquo;s about 1 every 3.3 days. Within the healthy range.</p>
+      <p class="text-sm text-sky-800 mt-1">Industry data caps cold-list campaigns at ~7 touchpoints; warm lists tolerate 10+. Your audience is warm (past participants), so this is on the right side.</p>
+      <p class="text-xs text-sky-700 mt-2"><a href="#" class="underline" onclick="event.preventDefault(); wired('expands an inline panel with engagement-data sources + per-touchpoint expected lift, sourced from a marketing-data table we add later.')">See the breakdown</a> &middot; <a href="#" class="underline" onclick="event.preventDefault(); wired('re-asks Claude (marketing-draft-campaign) to consolidate to the 6 highest-value touchpoints. Promo, kickoff, 24h-promo, 24h-reg, final social, mid-window.')">Trim to 6 touchpoints</a></p>
+    </div>
+  </div>
+
+  <!-- Cancellation policy banner -->
+  <div class="mt-3 bg-gray-50 border border-gray-200 rounded-xl p-4 flex items-start gap-3 flex-wrap">
+    <div class="text-2xl">📅</div>
+    <div class="flex-1 min-w-0">
+      <p class="text-sm font-medium text-gray-900">Default policy applied: programs auto-close 7 days before start if under-enrolled.</p>
+      <p class="text-sm text-gray-600 mt-0.5">All deadline-related messages are timed off this. Edit the rule if your providers do it differently.</p>
+    </div>
+    <button class="text-xs text-brand-700 hover:underline whitespace-nowrap" onclick="wired('jumps to Settings → Programs where the org-level auto-close lead time lives (organizations.auto_close_days_before_start, defaults to 7).')">Edit policy</button>
+  </div>
+
+  <!-- Timeline of touchpoints -->
+  <h3 class="text-lg font-semibold text-gray-900 mt-8 mb-3">The schedule</h3>
+  <ol class="space-y-3">
+
+    <!-- 1. Email Kickoff (with full editor + email phone preview) -->
+    <li class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <details open>
+        <summary class="p-4 flex items-center gap-3 hover:bg-gray-50">
+          <span class="chev text-gray-400">▶</span>
+          <div class="w-9 h-9 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center font-semibold">✉️</div>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium truncate">Email · Kickoff &mdash; FA26 spots are open</p><!-- placeholder -->
+            <p class="text-xs text-gray-500 mt-0.5">Tue May 21 · 10:00 AM · 247 recipients · also pushes to parent portal</p>
+          </div>
+          <span class="text-xs font-semibold bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full hidden sm:inline">Email</span>
+        </summary>
+        <div class="border-t border-gray-100 p-4 sm:p-5 bg-gray-50">
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <!-- Editor -->
+            <div>
+              <label class="text-xs uppercase font-semibold text-gray-500">Subject</label>
+              <input type="text" value="FA26 spots are open — early bird ends June 5"
+                     class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm" /><!-- placeholder -->
+              <label class="text-xs uppercase font-semibold text-gray-500 mt-3 block">From</label>
+              <input type="text" value="Jessica @ Journey to STEAM" readonly
+                     class="mt-1 w-full bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600" /><!-- placeholder -->
+              <p class="text-xs text-gray-500 mt-1">Pulled from your org settings. <a href="#" class="text-brand-700 hover:underline" onclick="event.preventDefault(); wired('jumps to Settings → Branding where organizations.default_sender_name + default_sender_email are edited (chunk 3.6.01 added those columns).')">Edit there</a>.</p>
+              <label class="text-xs uppercase font-semibold text-gray-500 mt-3 block">Send time</label>
+              <input type="datetime-local" value="2026-05-21T10:00"
+                     class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              <label class="text-xs uppercase font-semibold text-gray-500 mt-3 block">Body</label>
+              <textarea rows="8" class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm leading-relaxed">Hi {{first_name}},
+
+Happy Spring! Great news — Journey to STEAM is coming back to {{school}} this fall, and early-bird registration just opened.
+
+Use code EARLYBIRD90 to save $90 on each program. Kids design games, code in Minecraft, and build with real robotics — a different STEAM challenge each term.
+
+Register by June 5 to lock in the early-bird price.
+
+Future-ready skills, right after school.</textarea><!-- placeholder J2S closer -->
+              <div class="mt-2 flex gap-2 text-xs flex-wrap">
+                <button class="px-2.5 py-1 bg-white border border-gray-200 rounded-full hover:border-brand-500 hover:text-brand-700" onclick="wired('re-calls marketing-draft-campaign edge function with this touchpoint`s context + a `regenerate this section` flag. Replaces subject/body in place.')">✨ Regenerate</button>
+                <button class="px-2.5 py-1 bg-white border border-gray-200 rounded-full hover:border-brand-500 hover:text-brand-700" onclick="wired('calls existing marketing-send edge function with mode=test and test_email=current user`s email. Routes through Resend; preview HTML is the same renderer the real send uses.')">Send test to me</button>
+              </div>
+            </div>
+            <!-- Rendered preview -->
+            <div>
+              <p class="text-xs uppercase font-semibold text-gray-500 mb-2">Preview (what families will see)</p>
+              <div class="phone-frame mx-auto" style="max-width:300px;">
+                <div class="phone-statusbar">
+                  <span>9:41</span>
+                  <span>● ● ●</span>
+                </div>
+                <div class="bg-gray-50 px-3 py-2 text-[10px] text-gray-500 flex items-center gap-2 border-b border-gray-200">
+                  <div class="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold">J</div>
+                  <div class="flex-1 min-w-0">
+                    <p class="font-semibold text-gray-900">Jessica @ Journey to STEAM</p>
+                    <p class="truncate">FA26 spots are open — early bird ends June 5</p>
+                  </div>
+                  <span>10:00 AM</span>
+                </div>
+                <div class="bg-white p-3 text-[11px] leading-relaxed text-gray-800">
+                  <div class="bg-brand-500 -mx-3 -mt-3 px-3 py-3 text-center">
+                    <span class="inline-block bg-white text-brand-700 font-bold px-3 py-1 rounded">Journey to STEAM</span>
+                  </div>
+                  <p class="mt-3"><strong>Hi Maria,</strong></p>
+                  <p class="mt-2">Happy Spring! Great news — Journey to STEAM is coming back to Hillsboro Family Center this fall, and early-bird registration just opened.</p>
+                  <p class="mt-2">Use code <strong class="bg-amber-100 px-1 rounded">EARLYBIRD90</strong> to save $90 on each program.</p>
+                  <a class="block mt-3 bg-accent-500 text-white text-center font-semibold py-2 rounded">Register now →</a>
+                  <p class="mt-3 text-gray-600 text-[10px] italic">Future-ready skills, right after school.</p>
+                </div>
+              </div>
+              <p class="text-xs text-gray-500 mt-2 text-center">Also lands in the parent portal feed.</p>
+            </div>
+          </div>
+        </div>
+      </details>
+    </li>
+
+    <!-- 2. Flyer -->
+    <li class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <details>
+        <summary class="p-4 flex items-center gap-3 hover:bg-gray-50">
+          <span class="chev text-gray-400">▶</span>
+          <div class="w-9 h-9 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center font-semibold">📄</div>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium truncate">Flyer · Partner-school handout (PDF)</p>
+            <p class="text-xs text-gray-500 mt-0.5">Ready now · branded · drop in partner emails or print for the front office</p>
+          </div>
+          <span class="text-xs font-semibold bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full hidden sm:inline">Flyer</span>
+        </summary>
+        <div class="border-t border-gray-100 p-4 sm:p-5 bg-gray-50 grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div>
+            <label class="text-xs uppercase font-semibold text-gray-500">Headline</label>
+            <input type="text" value="Fall 2026 STEAM is back at Hillsboro!" class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm" /><!-- placeholder -->
+            <label class="text-xs uppercase font-semibold text-gray-500 mt-3 block">Sub-headline</label>
+            <input type="text" value="Save $90 with code EARLYBIRD90 — through June 5" class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+            <label class="text-xs uppercase font-semibold text-gray-500 mt-3 block">Call to action</label>
+            <input type="text" value="enrops.com/j2s" class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+            <div class="mt-3 flex gap-2 text-xs flex-wrap">
+              <button class="px-2.5 py-1 bg-white border border-gray-200 rounded-full hover:border-brand-500 hover:text-brand-700" onclick="wired('re-calls a future flyer-draft edge function (chunk 3.7+). Uses org_branding colors + logo for layout.')">✨ Regenerate</button>
+              <button class="px-2.5 py-1 bg-white border border-gray-200 rounded-full hover:border-brand-500 hover:text-brand-700" onclick="wired('returns a signed Storage URL to the flyer PDF, generated server-side from the editable headline/sub/CTA fields with org branding applied.')">Download PDF</button>
+            </div>
+          </div>
+          <div>
+            <p class="text-xs uppercase font-semibold text-gray-500 mb-2">Preview</p>
+            <div class="flyer-frame bg-white rounded-lg overflow-hidden mx-auto" style="max-width:280px; aspect-ratio: 3/4;">
+              <div class="bg-brand-500 p-4 text-white">
+                <p class="text-xs uppercase tracking-wider opacity-80">Fall 2026</p>
+                <h4 class="text-lg font-bold leading-tight mt-1">STEAM is back at Hillsboro!</h4>
+              </div>
+              <div class="p-4 text-xs text-gray-800 space-y-2">
+                <p>Kids design games, code in Minecraft, and build with real robotics — a different STEAM challenge each term.</p>
+                <div class="bg-amber-100 border border-amber-300 rounded p-2 text-center">
+                  <p class="text-[10px] uppercase font-semibold text-amber-700">Save $90 with code</p>
+                  <p class="font-mono font-bold text-amber-900 mt-0.5">EARLYBIRD90</p>
+                  <p class="text-[10px] text-amber-700 mt-0.5">Through June 5</p>
+                </div>
+                <div class="grid grid-cols-3 gap-1 mt-2 text-center text-[9px]">
+                  <div class="bg-gray-100 rounded p-1.5"><strong class="block">Fall</strong>Minecraft</div>
+                  <div class="bg-gray-100 rounded p-1.5"><strong class="block">Winter</strong>LEGO</div>
+                  <div class="bg-gray-100 rounded p-1.5"><strong class="block">Spring</strong>Robotics</div>
+                </div>
+                <p class="text-[9px] text-center text-gray-500 mt-3">enrops.com/j2s</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
+    </li>
+
+    <!-- 3. Social 1 (with IG-frame preview) -->
+    <li class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <details>
+        <summary class="p-4 flex items-center gap-3 hover:bg-gray-50">
+          <span class="chev text-gray-400">▶</span>
+          <div class="w-9 h-9 rounded-lg bg-pink-100 text-pink-700 flex items-center justify-center font-semibold">📣</div>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium truncate">Social · Instagram + Facebook excitement post</p>
+            <p class="text-xs text-gray-500 mt-0.5">Thu May 23 · 8:00 AM · caption + hashtags + tags ready</p>
+          </div>
+          <span class="text-xs font-semibold bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full hidden sm:inline">Social</span>
+        </summary>
+        <div class="border-t border-gray-100 p-4 sm:p-5 bg-gray-50 grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div>
+            <label class="text-xs uppercase font-semibold text-gray-500">Caption</label>
+            <textarea rows="5" class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm">Fall STEAM at Hillsboro is open for registration! 🎉 Kids code their own Minecraft worlds, build with LEGO, and program real robots. Code EARLYBIRD90 saves $90 — through June 5. Link in bio.</textarea>
+            <label class="text-xs uppercase font-semibold text-gray-500 mt-3 block">Hashtags</label>
+            <input type="text" value="#STEAMforKids #AfterSchoolPDX #HillsboroFamilies #JourneyToSTEAM" class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" />
+            <label class="text-xs uppercase font-semibold text-gray-500 mt-3 block">Tag</label>
+            <input type="text" value="@hillsborosd @journeytosteam" class="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" />
+            <div class="mt-3 flex gap-2 text-xs flex-wrap">
+              <button class="px-2.5 py-1 bg-white border border-gray-200 rounded-full hover:border-brand-500 hover:text-brand-700" onclick="wired('re-calls a future social-draft edge function (chunk 3.7+). Picks a caption tone matching brand_voice + suggests hashtags from a curated list.')">✨ Regenerate</button>
+              <button class="px-2.5 py-1 bg-white border border-gray-200 rounded-full hover:border-brand-500 hover:text-brand-700" onclick="navigator.clipboard?.writeText(this.closest('details').querySelector('textarea').value); toast('Caption copied to clipboard.', 'Done');">Copy caption</button>
+            </div>
+          </div>
+          <div>
+            <p class="text-xs uppercase font-semibold text-gray-500 mb-2">Preview</p>
+            <div class="ig-frame bg-white mx-auto" style="max-width:280px;">
+              <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-200">
+                <div class="w-7 h-7 rounded-full bg-gradient-to-tr from-pink-500 to-amber-400"></div>
+                <p class="text-xs font-semibold">journeytosteam</p>
+              </div>
+              <div class="aspect-square bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-white p-4 text-center">
+                <div>
+                  <p class="text-[10px] uppercase tracking-wider opacity-80">Fall 2026</p>
+                  <p class="text-lg font-bold leading-tight mt-1">STEAM is back!</p>
+                  <p class="text-xs mt-2">Code EARLYBIRD90 — $90 off through June 5</p>
+                </div>
+              </div>
+              <div class="p-3 text-xs">
+                <p>❤️ 142 likes</p>
+                <p class="mt-1"><strong>journeytosteam</strong> Fall STEAM at Hillsboro is open! 🎉 …</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
+    </li>
+
+    <!-- 4. Email mid-window reminder -->
+    <li class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <details>
+        <summary class="p-4 flex items-center gap-3 hover:bg-gray-50">
+          <span class="chev text-gray-400">▶</span>
+          <div class="w-9 h-9 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center font-semibold">✉️</div>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium truncate">Email · Mid-window reminder &mdash; 2 weeks left</p>
+            <p class="text-xs text-gray-500 mt-0.5">Tue Jun 2 · 10:00 AM · 247 minus already-registered · portal push</p>
+          </div>
+          <span class="text-xs font-semibold bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full hidden sm:inline">Email</span>
+        </summary>
+        <div class="border-t border-gray-100 p-4 sm:p-5 bg-gray-50 text-sm text-gray-600">
+          Same edit + preview layout as the kickoff email.
+        </div>
+      </details>
+    </li>
+
+    <!-- 5. Email 48h before promo ends -->
+    <li class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <details>
+        <summary class="p-4 flex items-center gap-3 hover:bg-gray-50">
+          <span class="chev text-gray-400">▶</span>
+          <div class="w-9 h-9 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center font-semibold">✉️</div>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium truncate">Email · Early-bird ends in 48 hours</p>
+            <p class="text-xs text-gray-500 mt-0.5">Wed Jun 3 · 10:00 AM · 247 minus already-registered · portal push</p>
+          </div>
+          <span class="text-xs font-semibold bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full hidden sm:inline">Email</span>
+        </summary>
+        <div class="border-t border-gray-100 p-4 sm:p-5 bg-gray-50 text-sm text-gray-600">
+          Same edit + preview layout.
+        </div>
+      </details>
+    </li>
+
+    <!-- 6. Email 24h before promo ends -->
+    <li class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <details>
+        <summary class="p-4 flex items-center gap-3 hover:bg-gray-50">
+          <span class="chev text-gray-400">▶</span>
+          <div class="w-9 h-9 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center font-semibold">✉️</div>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium truncate">Email · Last 24 hours for early-bird pricing</p>
+            <p class="text-xs text-gray-500 mt-0.5">Thu Jun 4 · 10:00 AM · 247 minus already-registered · portal push</p>
+          </div>
+          <span class="text-xs font-semibold bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full hidden sm:inline">Email</span>
+        </summary>
+        <div class="border-t border-gray-100 p-4 sm:p-5 bg-gray-50 text-sm text-gray-600">
+          Same edit + preview layout. After this lands, code auto-expires at 11:59 PM Jun 5.
+        </div>
+      </details>
+    </li>
+
+    <!-- 7. Social final-call -->
+    <li class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <details>
+        <summary class="p-4 flex items-center gap-3 hover:bg-gray-50">
+          <span class="chev text-gray-400">▶</span>
+          <div class="w-9 h-9 rounded-lg bg-pink-100 text-pink-700 flex items-center justify-center font-semibold">📣</div>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium truncate">Social · Last-call story (early-bird deadline)</p>
+            <p class="text-xs text-gray-500 mt-0.5">Fri Jun 5 · 9:00 AM</p>
+          </div>
+          <span class="text-xs font-semibold bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full hidden sm:inline">Social</span>
+        </summary>
+        <div class="border-t border-gray-100 p-4 sm:p-5 bg-gray-50 text-sm text-gray-600">
+          Same edit + preview layout as the first social post.
+        </div>
+      </details>
+    </li>
+
+    <!-- 8. Email 48h before reg closes -->
+    <li class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <details>
+        <summary class="p-4 flex items-center gap-3 hover:bg-gray-50">
+          <span class="chev text-gray-400">▶</span>
+          <div class="w-9 h-9 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center font-semibold">✉️</div>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium truncate">Email · Registration closes in 48 hours</p>
+            <p class="text-xs text-gray-500 mt-0.5">Mon Jun 16 · 10:00 AM · 247 minus already-registered · portal push</p>
+          </div>
+          <span class="text-xs font-semibold bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full hidden sm:inline">Email</span>
+        </summary>
+        <div class="border-t border-gray-100 p-4 sm:p-5 bg-gray-50 text-sm text-gray-600">
+          Same edit + preview layout. Tied to the 7-day-before-start auto-close policy above.
+        </div>
+      </details>
+    </li>
+
+    <!-- 9. Email 24h before reg closes -->
+    <li class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <details>
+        <summary class="p-4 flex items-center gap-3 hover:bg-gray-50">
+          <span class="chev text-gray-400">▶</span>
+          <div class="w-9 h-9 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center font-semibold">✉️</div>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium truncate">Email · Last 24 hours to register for FA26</p>
+            <p class="text-xs text-gray-500 mt-0.5">Tue Jun 17 · 10:00 AM · 247 minus already-registered · portal push</p>
+          </div>
+          <span class="text-xs font-semibold bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full hidden sm:inline">Email</span>
+        </summary>
+        <div class="border-t border-gray-100 p-4 sm:p-5 bg-gray-50 text-sm text-gray-600">
+          Same edit + preview layout.
+        </div>
+      </details>
+    </li>
+  </ol>
+
+  <!-- Sticky action bar -->
+  <div class="mt-8 bg-white rounded-xl border border-gray-200 p-4 sm:p-5 flex flex-wrap gap-3 items-center justify-between">
+    <div class="flex-1 min-w-[240px]">
+      <p class="text-sm font-medium text-gray-900">Approve to schedule everything.</p>
+      <p class="text-xs text-gray-500 mt-0.5">You can still edit any item between now and the moment it sends.</p>
+    </div>
+    <div class="flex gap-2 flex-wrap">
+      <button class="bg-white border border-gray-300 hover:border-gray-400 text-gray-800 font-medium px-4 py-2 rounded-lg" onclick="showScreen('q1')">Start over</button>
+      <button class="bg-white border border-gray-300 hover:border-gray-400 text-gray-800 font-medium px-4 py-2 rounded-lg" onclick="wired('updates marketing_campaigns row with current edits, leaves status=draft and approved_at=null. Touchpoints stay editable; nothing is queued to send.'); showScreen('campaigns-home');">Save as draft</button>
+      <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-2 rounded-lg" onclick="celebrate()">Approve &amp; schedule ✨</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Screen: Celebration ===== -->
+<div id="screen-celebration" class="screen relative">
+  <div id="confetti-host" class="pointer-events-none absolute inset-x-0 top-0 h-0 overflow-visible"></div>
+  <div class="bg-gradient-to-br from-brand-50 to-white border border-brand-100 rounded-2xl p-8 sm:p-12 text-center">
+    <div class="text-6xl">🎉</div>
+    <h2 class="text-3xl sm:text-4xl font-bold mt-3 text-brand-700">Huzzah!</h2>
+    <p class="text-gray-700 mt-2 max-w-xl mx-auto">Your FA26 early-bird campaign is scheduled. Don will take it from here.</p><!-- placeholder -->
+
+    <div class="mt-6 inline-flex items-center gap-2 bg-emerald-50 text-emerald-800 text-sm font-semibold px-4 py-2 rounded-full border border-emerald-200">
+      ⏱ ~16 hours of work, done in 90 seconds.
+    </div>
+
+    <!-- What you unlocked -->
+    <div class="mt-8 bg-white rounded-xl border border-gray-200 p-5 text-left">
+      <p class="text-xs uppercase tracking-wider text-gray-500 font-semibold">What you just unlocked</p>
+      <div class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="bg-brand-50 rounded-lg p-3 text-center">
+          <p class="text-2xl font-bold text-brand-700">6</p>
+          <p class="text-xs text-gray-600 mt-0.5">emails scheduled</p>
+        </div>
+        <div class="bg-pink-50 rounded-lg p-3 text-center">
+          <p class="text-2xl font-bold text-pink-700">2</p>
+          <p class="text-xs text-gray-600 mt-0.5">social posts queued</p>
+        </div>
+        <div class="bg-amber-50 rounded-lg p-3 text-center">
+          <p class="text-2xl font-bold text-amber-700">1</p>
+          <p class="text-xs text-gray-600 mt-0.5">flyer ready</p>
+        </div>
+        <div class="bg-emerald-50 rounded-lg p-3 text-center">
+          <p class="text-2xl font-bold text-emerald-700">11</p>
+          <p class="text-xs text-gray-600 mt-0.5">programs with promo</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Time saved breakdown -->
+    <div class="mt-4 bg-white rounded-xl border border-gray-200 p-5 text-left">
+      <p class="text-xs uppercase tracking-wider text-gray-500 font-semibold">Where the ~16 hours went</p>
+      <ul class="mt-3 space-y-2 text-sm">
+        <li class="flex justify-between"><span>Writing 6 email drafts personalized per recipient</span><span class="font-semibold text-emerald-700">~6h</span></li>
+        <li class="flex justify-between"><span>Designing the partner flyer</span><span class="font-semibold text-emerald-700">~3h</span></li>
+        <li class="flex justify-between"><span>Drafting 2 social posts + hashtags + tags</span><span class="font-semibold text-emerald-700">~1.5h</span></li>
+        <li class="flex justify-between"><span>Picking promo amount + setting expiry on 11 programs</span><span class="font-semibold text-emerald-700">~2h</span></li>
+        <li class="flex justify-between"><span>Scheduling sends &amp; remembering each deadline</span><span class="font-semibold text-emerald-700">~3.5h</span></li>
+      </ul>
+    </div>
+
+    <!-- Why this campaign will work (marketing data) -->
+    <div class="mt-4 bg-white rounded-xl border border-gray-200 p-5 text-left">
+      <p class="text-xs uppercase tracking-wider text-gray-500 font-semibold">Why this campaign will work</p>
+      <ul class="mt-3 space-y-2 text-sm">
+        <li class="flex gap-2"><span class="text-emerald-600">📊</span><span><strong>Multi-channel lifts conversion ~3.2×</strong> vs email alone for K-5 enrichment programs.</span></li>
+        <li class="flex gap-2"><span class="text-emerald-600">📊</span><span><strong>Time-limited promos add ~37% to early-bird conversion.</strong> EARLYBIRD90 auto-expires June 5.</span></li>
+        <li class="flex gap-2"><span class="text-emerald-600">📊</span><span><strong>48h and 24h deadline reminders drive 31% of total conversions.</strong> Don sends them automatically.</span></li>
+        <li class="flex gap-2"><span class="text-emerald-600">📊</span><span><strong>Warm-list cadence (1 every 3.3 days)</strong> sits inside the engagement sweet spot &mdash; high signal, low unsub.</span></li>
+      </ul>
+    </div>
+
+    <!-- Homescreen wins preview -->
+    <div class="mt-4 bg-white rounded-xl border border-gray-200 p-5 text-left">
+      <p class="text-xs uppercase tracking-wider text-gray-500 font-semibold">Preview &mdash; how Tuesday will look on your homescreen</p>
+      <div class="mt-3 bg-gradient-to-br from-emerald-50 to-white border border-emerald-200 rounded-lg p-4">
+        <p class="text-xs font-semibold text-emerald-700 uppercase tracking-wider">Win of the day</p>
+        <p class="font-medium mt-1">Great job &mdash; your kickoff email for FA26 just landed in 247 inboxes (and parent portals).</p>
+        <p class="text-sm text-gray-600 mt-1">Hillsboro families &middot; 41% open rate so far</p>
+      </div>
+    </div>
+
+    <div class="mt-8 flex flex-wrap gap-3 justify-center">
+      <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-2.5 rounded-lg" onclick="showScreen('campaigns-home')">Back to campaigns</button>
+      <button class="bg-white border border-gray-300 hover:border-gray-400 text-gray-800 font-medium px-5 py-2.5 rounded-lg" onclick="showScreen('q1')">Build another</button>
+    </div>
+  </div>
+</div>
+
+</section><!-- /tab-campaigns -->
+
+<!-- ===================== CONTACTS TAB ===================== -->
+<section id="tab-contacts" class="tab-pane hidden">
+  <div class="flex flex-wrap items-end justify-between gap-3">
+    <div>
+      <h2 class="text-2xl sm:text-3xl font-bold text-gray-900">Contacts</h2>
+      <p class="text-gray-600 mt-1">Everyone you can message. Searchable. Tagged. Yours.</p>
+    </div>
+    <button class="bg-white border border-gray-300 hover:border-gray-400 text-gray-800 font-medium px-4 py-2 rounded-lg text-sm" onclick="wired('opens the existing CSV import flow. Inserts into marketing_recipients with source=`manual`, organization_id=current org. Detects duplicates by email+school_name+source.')">Import contacts</button>
+  </div>
+
+  <!-- Sub-tabs -->
+  <nav class="mt-5 flex gap-4 border-b border-gray-200">
+    <button class="sub-tab-btn pb-2 px-1 text-sm font-medium border-b-2 border-transparent text-gray-600" data-active="true" onclick="showContactsSub('parents')">Parents <span class="text-gray-400">(2,275)</span></button>
+    <button class="sub-tab-btn pb-2 px-1 text-sm font-medium border-b-2 border-transparent text-gray-600" data-active="false" onclick="showContactsSub('partners')">Partners <span class="text-gray-400">(47)</span></button>
+    <button class="sub-tab-btn pb-2 px-1 text-sm font-medium border-b-2 border-transparent text-gray-600" data-active="false" onclick="showContactsSub('instructors')">Instructors <span class="text-gray-400">(18)</span></button>
+  </nav>
+
+  <!-- Parents sub-pane -->
+  <div id="contacts-parents" class="contacts-sub mt-4">
+    <div class="bg-white rounded-xl border border-gray-200 p-3 flex flex-wrap gap-2">
+      <input type="text" placeholder="Search parents, kids, or school&hellip;" class="flex-1 min-w-[200px] border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+      <select class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+        <option>All schools</option><option>Cascadia</option><option>Hillsboro Family Center</option>
+      </select>
+      <select class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+        <option>All statuses</option><option>Current</option><option>Past (no re-enroll)</option><option>Prospect</option>
+      </select>
+    </div>
+    <div class="mt-3 bg-white rounded-xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
+      <div class="p-4 flex items-center justify-between gap-3"><div class="min-w-0"><p class="font-medium truncate">Maria Reyes</p><p class="text-sm text-gray-500 truncate">maria.reyes@example.com · Hillsboro · current</p></div><button class="text-xs text-brand-700 hover:underline whitespace-nowrap" onclick="wired('launches the campaign builder pre-filled: Q1 stays empty for the topic, Q2 is locked to this single recipient (audience filter = single person, recipient_id pinned), Q3+Q4 still editable. Same marketing-send pipeline.')">Send a message →</button></div>
+      <div class="p-4 flex items-center justify-between gap-3"><div class="min-w-0"><p class="font-medium truncate">Anil Kapoor</p><p class="text-sm text-gray-500 truncate">anil.k@example.com · Cascadia · past (last enrolled SU25)</p></div><button class="text-xs text-brand-700 hover:underline whitespace-nowrap" onclick="wired('launches the campaign builder pre-filled: Q1 stays empty for the topic, Q2 is locked to this single recipient (audience filter = single person, recipient_id pinned), Q3+Q4 still editable. Same marketing-send pipeline.')">Send a message →</button></div>
+      <div class="p-4 flex items-center justify-between gap-3"><div class="min-w-0"><p class="font-medium truncate">Brianna Whitfield</p><p class="text-sm text-gray-500 truncate">brianna.w@example.com · Alameda · prospect</p></div><button class="text-xs text-brand-700 hover:underline whitespace-nowrap" onclick="wired('launches the campaign builder pre-filled: Q1 stays empty for the topic, Q2 is locked to this single recipient (audience filter = single person, recipient_id pinned), Q3+Q4 still editable. Same marketing-send pipeline.')">Send a message →</button></div>
+    </div>
+  </div>
+
+  <!-- Partners sub-pane -->
+  <div id="contacts-partners" class="contacts-sub hidden mt-4">
+    <div class="bg-white rounded-xl border border-gray-200 p-3 flex flex-wrap gap-2">
+      <input type="text" placeholder="Search partner orgs&hellip;" class="flex-1 min-w-[200px] border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+      <select class="border border-gray-200 rounded-lg px-3 py-2 text-sm"><option>All types</option><option>School</option><option>Parks &amp; Rec</option><option>Church</option><option>Library</option></select>
+    </div>
+    <div class="mt-3 bg-white rounded-xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
+      <div class="p-4 flex items-center justify-between gap-3"><div class="min-w-0"><p class="font-medium truncate">Hillsboro Family Center</p><p class="text-sm text-gray-500 truncate">School · Coordinator: Pat Lin · pat@hsd.k12.or.us</p></div><button class="text-xs text-brand-700 hover:underline whitespace-nowrap" onclick="wired('launches the campaign builder pre-filled: Q1 stays empty for the topic, Q2 is locked to this single recipient (audience filter = single person, recipient_id pinned), Q3+Q4 still editable. Same marketing-send pipeline.')">Send a message →</button></div>
+      <div class="p-4 flex items-center justify-between gap-3"><div class="min-w-0"><p class="font-medium truncate">Beaverton Parks &amp; Rec</p><p class="text-sm text-gray-500 truncate">Parks &amp; Rec · Liaison: Sam Ortiz · sortiz@thprd.org</p></div><button class="text-xs text-brand-700 hover:underline whitespace-nowrap" onclick="wired('launches the campaign builder pre-filled: Q1 stays empty for the topic, Q2 is locked to this single recipient (audience filter = single person, recipient_id pinned), Q3+Q4 still editable. Same marketing-send pipeline.')">Send a message →</button></div>
+      <div class="p-4 flex items-center justify-between gap-3"><div class="min-w-0"><p class="font-medium truncate">Cedar Hills Library</p><p class="text-sm text-gray-500 truncate">Library · Children&rsquo;s coordinator: Devon Chase</p></div><button class="text-xs text-brand-700 hover:underline whitespace-nowrap" onclick="wired('launches the campaign builder pre-filled: Q1 stays empty for the topic, Q2 is locked to this single recipient (audience filter = single person, recipient_id pinned), Q3+Q4 still editable. Same marketing-send pipeline.')">Send a message →</button></div>
+    </div>
+    <p class="text-xs text-gray-500 mt-3">Partner contact onboarding wizard lands in a later chunk.</p>
+  </div>
+
+  <!-- Instructors sub-pane -->
+  <div id="contacts-instructors" class="contacts-sub hidden mt-4">
+    <div class="bg-white rounded-xl border border-gray-200 p-3 flex flex-wrap gap-2">
+      <input type="text" placeholder="Search instructors&hellip;" class="flex-1 min-w-[200px] border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+      <select class="border border-gray-200 rounded-lg px-3 py-2 text-sm"><option>All tiers</option><option>Lead</option><option>Developing</option><option>Apprentice</option></select>
+      <select class="border border-gray-200 rounded-lg px-3 py-2 text-sm"><option>Active + on leave</option><option>Active only</option><option>Inactive</option></select>
+    </div>
+    <div class="mt-3 bg-white rounded-xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
+      <div class="p-4 flex items-center justify-between gap-3"><div class="min-w-0"><p class="font-medium truncate">Skyler Adams</p><p class="text-sm text-gray-500 truncate">Lead · 14 terms · skyler@example.com</p></div><button class="text-xs text-brand-700 hover:underline whitespace-nowrap" onclick="wired('launches the campaign builder pre-filled: Q1 stays empty for the topic, Q2 is locked to this single recipient (audience filter = single person, recipient_id pinned), Q3+Q4 still editable. Same marketing-send pipeline.')">Send a message →</button></div>
+      <div class="p-4 flex items-center justify-between gap-3"><div class="min-w-0"><p class="font-medium truncate">Kristin Park</p><p class="text-sm text-gray-500 truncate">Developing · 4 terms · kpark@example.com</p></div><button class="text-xs text-brand-700 hover:underline whitespace-nowrap" onclick="wired('launches the campaign builder pre-filled: Q1 stays empty for the topic, Q2 is locked to this single recipient (audience filter = single person, recipient_id pinned), Q3+Q4 still editable. Same marketing-send pipeline.')">Send a message →</button></div>
+      <div class="p-4 flex items-center justify-between gap-3"><div class="min-w-0"><p class="font-medium truncate">Bo Tran</p><p class="text-sm text-gray-500 truncate">Apprentice · 1 term · bo@example.com</p></div><button class="text-xs text-brand-700 hover:underline whitespace-nowrap" onclick="wired('launches the campaign builder pre-filled: Q1 stays empty for the topic, Q2 is locked to this single recipient (audience filter = single person, recipient_id pinned), Q3+Q4 still editable. Same marketing-send pipeline.')">Send a message →</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== AUTOMATIONS TAB ===================== -->
+<section id="tab-automations" class="tab-pane hidden">
+  <div>
+    <h2 class="text-2xl sm:text-3xl font-bold text-gray-900">Automations</h2>
+    <p class="text-gray-600 mt-1">Comms Don sends in the background. You approve the rules once; he handles the rest. Edit the copy any time.</p>
+  </div>
+
+  <div class="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-3">
+    <!-- 6 automation cards -->
+    <div class="bg-white rounded-xl border border-gray-200 p-4">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="font-medium">Thank-you note after first session</p>
+          <p class="text-sm text-gray-500 mt-1">Sends to the parent the evening of their child&rsquo;s first class.</p>
+        </div>
+        <label class="inline-flex items-center cursor-pointer">
+          <input type="checkbox" checked class="sr-only peer" />
+          <div class="w-10 h-6 bg-gray-200 peer-checked:bg-brand-500 rounded-full relative transition">
+            <span class="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full peer-checked:translate-x-4 transition-transform"></span>
+          </div>
+        </label>
+      </div>
+      <button class="mt-3 text-xs text-brand-700 hover:underline" onclick="wired('opens a dedicated edit screen for this automation. Per-org copy lives in automation_templates (org_id, automation_key, subject, body_template). Falls back to platform default when null.')">Edit copy</button>
+    </div>
+
+    <div class="bg-white rounded-xl border border-gray-200 p-4">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="font-medium">Mid-term recap email</p>
+          <p class="text-sm text-gray-500 mt-1">Halfway through the term, summarize what kids have built and link to the skills tracker.</p>
+        </div>
+        <label class="inline-flex items-center cursor-pointer">
+          <input type="checkbox" checked class="sr-only peer" />
+          <div class="w-10 h-6 bg-gray-200 peer-checked:bg-brand-500 rounded-full relative transition">
+            <span class="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full peer-checked:translate-x-4 transition-transform"></span>
+          </div>
+        </label>
+      </div>
+      <button class="mt-3 text-xs text-brand-700 hover:underline" onclick="wired('opens a dedicated edit screen for this automation. Per-org copy lives in automation_templates (org_id, automation_key, subject, body_template). Falls back to platform default when null.')">Edit copy</button>
+    </div>
+
+    <div class="bg-white rounded-xl border border-gray-200 p-4">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="font-medium">Final recap + skills checklist</p>
+          <p class="text-sm text-gray-500 mt-1">Last day of the term, mail the &ldquo;here&rsquo;s what your kid learned&rdquo; recap.</p>
+        </div>
+        <label class="inline-flex items-center cursor-pointer">
+          <input type="checkbox" checked class="sr-only peer" />
+          <div class="w-10 h-6 bg-gray-200 peer-checked:bg-brand-500 rounded-full relative transition">
+            <span class="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full peer-checked:translate-x-4 transition-transform"></span>
+          </div>
+        </label>
+      </div>
+      <button class="mt-3 text-xs text-brand-700 hover:underline" onclick="wired('opens a dedicated edit screen for this automation. Per-org copy lives in automation_templates (org_id, automation_key, subject, body_template). Falls back to platform default when null.')">Edit copy</button>
+    </div>
+
+    <div class="bg-white rounded-xl border border-gray-200 p-4">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="font-medium">Happy-birthday note (kid&rsquo;s b-day)</p>
+          <p class="text-sm text-gray-500 mt-1">Sends the morning of the participant&rsquo;s birthday, if you&rsquo;ve got it on file.</p>
+        </div>
+        <label class="inline-flex items-center cursor-pointer">
+          <input type="checkbox" class="sr-only peer" />
+          <div class="w-10 h-6 bg-gray-200 peer-checked:bg-brand-500 rounded-full relative transition">
+            <span class="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full peer-checked:translate-x-4 transition-transform"></span>
+          </div>
+        </label>
+      </div>
+      <button class="mt-3 text-xs text-brand-700 hover:underline" onclick="wired('opens a dedicated edit screen for this automation. Per-org copy lives in automation_templates (org_id, automation_key, subject, body_template). Falls back to platform default when null.')">Edit copy</button>
+    </div>
+
+    <div class="bg-white rounded-xl border border-gray-200 p-4">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="font-medium">Pre-charge reminder (installments)</p>
+          <p class="text-sm text-gray-500 mt-1">3 days before each scheduled installment, a friendly heads-up.</p>
+        </div>
+        <label class="inline-flex items-center cursor-pointer">
+          <input type="checkbox" checked class="sr-only peer" />
+          <div class="w-10 h-6 bg-gray-200 peer-checked:bg-brand-500 rounded-full relative transition">
+            <span class="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full peer-checked:translate-x-4 transition-transform"></span>
+          </div>
+        </label>
+      </div>
+      <button class="mt-3 text-xs text-brand-700 hover:underline" onclick="wired('opens a dedicated edit screen for this automation. Per-org copy lives in automation_templates (org_id, automation_key, subject, body_template). Falls back to platform default when null.')">Edit copy</button>
+    </div>
+
+    <div class="bg-white rounded-xl border border-gray-200 p-4">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="font-medium">Failed-charge follow-up</p>
+          <p class="text-sm text-gray-500 mt-1">If a card fails, a non-shaming retry-link note. (Never says &ldquo;cancel&rdquo;.)</p>
+        </div>
+        <label class="inline-flex items-center cursor-pointer">
+          <input type="checkbox" checked class="sr-only peer" />
+          <div class="w-10 h-6 bg-gray-200 peer-checked:bg-brand-500 rounded-full relative transition">
+            <span class="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full peer-checked:translate-x-4 transition-transform"></span>
+          </div>
+        </label>
+      </div>
+      <button class="mt-3 text-xs text-brand-700 hover:underline" onclick="wired('opens a dedicated edit screen for this automation. Per-org copy lives in automation_templates (org_id, automation_key, subject, body_template). Falls back to platform default when null.')">Edit copy</button>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="mt-10 py-6 border-t border-gray-200 text-center text-xs text-gray-500">
+  Mockup &middot; Chunk 3.6.04 v2 &middot; Sample copy is placeholder. All real text loads from the database.
+</footer>
+<div id="toast-host"></div>
+
+<script>
+  // ---------- Toast ----------
+  function toast(message, tag) {
+    const host = document.getElementById('toast-host');
+    if (!host) return;
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.innerHTML = (tag ? `<span class="toast-tag">${tag}</span>` : '') + message;
+    host.appendChild(el);
+    setTimeout(() => el.remove(), 3800);
+  }
+  // Wire-up sentinel: shows the connection the real build will make so every
+  // button gives visible feedback AND inline documentation of what's wired to
+  // what. See mockups/WIRE_UP_MAP.md for the full table.
+  function wired(message) { toast(message, 'In the real build'); }
+  function fillInput(selector, value) {
+    const el = document.querySelector(selector);
+    if (el) { el.value = value; el.focus(); }
+  }
+
+  // ---------- Screen routing ----------
+  function showScreen(id) {
+    document.querySelectorAll('#tab-campaigns .screen').forEach(s => s.classList.remove('active'));
+    const el = document.getElementById('screen-' + id);
+    if (el) el.classList.add('active');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function showTab(tab) {
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.add('hidden'));
+    document.getElementById('tab-' + tab).classList.remove('hidden');
+    document.querySelectorAll('.tab-btn').forEach(b => b.dataset.active = (b.dataset.tab === tab));
+    // Clicking Campaigns always returns to the campaigns home — otherwise users
+    // get stuck on whatever inner screen was last active.
+    if (tab === 'campaigns') showScreen('campaigns-home');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function showContactsSub(sub) {
+    document.querySelectorAll('.contacts-sub').forEach(p => p.classList.add('hidden'));
+    document.getElementById('contacts-' + sub).classList.remove('hidden');
+    document.querySelectorAll('.sub-tab-btn').forEach((b, i) => {
+      const names = ['parents','partners','instructors'];
+      b.dataset.active = (names[i] === sub);
+    });
+  }
+
+  function toggleAudienceFilter(which) {
+    document.getElementById('filter-parents').classList.toggle('hidden', which !== 'parents');
+  }
+
+  function onScopeChange(v) {
+    const detail = document.getElementById('scope-detail');
+    detail.classList.toggle('hidden', v === 'master');
+  }
+
+  function startDrafting() {
+    showScreen('drafting');
+    setTimeout(() => showScreen('schedule'), 1800);
+  }
+
+  // ---------- Confetti ----------
+  function celebrate() {
+    showScreen('celebration');
+    const host = document.getElementById('confetti-host');
+    host.innerHTML = '';
+    const colors = ['#674EE8', '#F8A638', '#10b981', '#ec4899', '#3b82f6'];
+    for (let i = 0; i < 48; i++) {
+      const c = document.createElement('span');
+      c.className = 'confetti';
+      c.style.left = Math.random() * 100 + '%';
+      c.style.background = colors[i % colors.length];
+      c.style.animationDelay = (Math.random() * 0.6) + 's';
+      c.style.transform = `translateY(-20px) rotate(${Math.random() * 360}deg)`;
+      host.appendChild(c);
+    }
+  }
+
+  // ---------- Question header shim ----------
+  // <QHeader step="N" total="M" question="..."/> inlines into real HTML.
+  function hydrateQHeaders() {
+    document.querySelectorAll('QHeader').forEach(el => {
+      const step = el.getAttribute('step') || '1';
+      const total = el.getAttribute('total') || '4';
+      const q = el.getAttribute('question') || '';
+      const wrap = document.createElement('div');
+      wrap.innerHTML = `
+        <div class="flex items-center justify-between gap-3">
+          <button class="text-xs text-gray-600 hover:text-gray-900" onclick="showScreen('campaigns-home')">&larr; Exit</button>
+          <div class="flex items-center gap-2 text-xs text-gray-500">
+            <span class="font-semibold text-brand-700">Question ${step}</span>
+            <span>of ${total}</span>
+            <div class="ml-1 w-28 sm:w-40 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+              <div class="h-full bg-brand-500" style="width:${(parseInt(step)/parseInt(total))*100}%"></div>
+            </div>
+          </div>
+        </div>
+        <h2 class="text-2xl sm:text-3xl font-bold text-gray-900 mt-4">${q}</h2>`;
+      el.replaceWith(...wrap.children);
+    });
+  }
+  hydrateQHeaders();
+  // Initialize parents filter visible
+  document.getElementById('filter-parents').classList.remove('hidden');
+</script>
+
+</body>
+</html>
