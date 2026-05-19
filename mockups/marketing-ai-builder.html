@@ -33,6 +33,7 @@
   };
 </script>
 <style>
+  html, body { overflow-x: hidden; }
   body { font-family: -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif; }
   .screen { display: none; }
   .screen.active { display: block; }
@@ -178,7 +179,8 @@
     <span>The clearer the topic, the better the draft. &ldquo;FA26 early bird&rdquo; converts ~24% better than &ldquo;Fall registration&rdquo; because Don can lean into the urgency.</span>
   </div>
 
-  <div class="mt-8 flex justify-between">
+  <div class="h-20"></div>
+  <div class="fixed bottom-0 left-0 right-0 px-4 sm:px-6 py-3 bg-gray-50/95 backdrop-blur border-t border-gray-200 flex justify-between gap-3 z-20">
     <button class="text-sm text-gray-600 hover:text-gray-900" onclick="showScreen('campaigns-home')">&larr; Not now</button>
     <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-3 rounded-lg" onclick="showScreen('q2')">Next &rarr;</button>
   </div>
@@ -316,7 +318,8 @@
     </div>
   </div>
 
-  <div class="mt-8 flex justify-between">
+  <div class="h-20"></div>
+  <div class="fixed bottom-0 left-0 right-0 px-4 sm:px-6 py-3 bg-gray-50/95 backdrop-blur border-t border-gray-200 flex justify-between gap-3 z-20">
     <button class="text-sm text-gray-600 hover:text-gray-900" onclick="showScreen('q1')">&larr; Back</button>
     <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-3 rounded-lg" onclick="showScreen('q3')">Next &rarr;</button>
   </div>
@@ -363,7 +366,8 @@
     <span>1-month windows convert best for early-bird campaigns (avg 28% vs 12% for single sends). I&rsquo;ll add 48h and 24h reminders at each deadline automatically.</span>
   </div>
 
-  <div class="mt-8 flex justify-between">
+  <div class="h-20"></div>
+  <div class="fixed bottom-0 left-0 right-0 px-4 sm:px-6 py-3 bg-gray-50/95 backdrop-blur border-t border-gray-200 flex justify-between gap-3 z-20">
     <button class="text-sm text-gray-600 hover:text-gray-900" onclick="showScreen('q2')">&larr; Back</button>
     <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-3 rounded-lg" onclick="showScreen('q4')">Next &rarr;</button>
   </div>
@@ -408,7 +412,8 @@
     <span>Multi-channel campaigns convert ~3.2&times; better than email alone. I&rsquo;ll keep each piece on-brand and on-message.</span>
   </div>
 
-  <div class="mt-8 flex justify-between">
+  <div class="h-20"></div>
+  <div class="fixed bottom-0 left-0 right-0 px-4 sm:px-6 py-3 bg-gray-50/95 backdrop-blur border-t border-gray-200 flex justify-between gap-3 z-20">
     <button class="text-sm text-gray-600 hover:text-gray-900" onclick="showScreen('q3')">&larr; Back</button>
     <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-3 rounded-lg" onclick="startDrafting()">Draft it ✨</button>
   </div>
