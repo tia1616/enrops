@@ -3179,7 +3179,7 @@ function EmailActivityModal({ cycleDisplay, assignments, sessions, onClose }) {
   function kindPill(kind) {
     const map = {
       offer:             { label: "Offer",            bg: PLUM,        fg: "#fff" },
-      patch:             { label: "Patch offer",      bg: GOLD,        fg: PLUM   },
+      patch:             { label: "Add-on offer",     bg: GOLD,        fg: PLUM   },
       reminder:          { label: "Reminder",         bg: `${PLUM}33`, fg: PLUM   },
       admin_reply:       { label: "Your message",     bg: `${OK_GREEN}22`, fg: OK_GREEN },
       instructor_reply:  { label: "Instructor reply", bg: `${CHANGE_REQ}22`, fg: CHANGE_REQ },
@@ -3220,7 +3220,7 @@ function EmailActivityModal({ cycleDisplay, assignments, sessions, onClose }) {
           {[
             { key: "all",       label: `All (${counts.all})` },
             { key: "offers",    label: `Offers (${counts.offers})` },
-            { key: "patches",   label: `Patches (${counts.patches})` },
+            { key: "patches",   label: `Add-on offers (${counts.patches})` },
             { key: "reminders", label: `Reminders (${counts.reminders})` },
             { key: "replies",   label: `Replies (${counts.replies})` },
           ].map((f) => (
