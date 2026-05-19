@@ -486,7 +486,10 @@
   <div class="h-20"></div>
   <div class="fixed bottom-0 left-0 right-0 px-4 sm:px-6 py-3 bg-gray-50/95 backdrop-blur border-t border-gray-200 flex justify-between gap-3 z-20">
     <button class="text-sm text-gray-600 hover:text-gray-900" onclick="showScreen('q3')">&larr; Back</button>
-    <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-3 rounded-lg" onclick="startDrafting()">Draft it ✨</button>
+    <div class="flex gap-2 flex-wrap">
+      <button class="bg-white border border-gray-300 hover:border-gray-400 text-gray-800 font-medium px-4 py-3 rounded-lg text-sm" onclick="wired('saves your answers so far and parks a reminder card on the homescreen. Don will check back when you have headspace. No draft created yet.'); showScreen('campaigns-home');">Remind me later</button>
+      <button class="bg-brand-500 hover:bg-brand-600 text-white font-semibold px-5 py-3 rounded-lg" onclick="startDrafting()">Draft it ✨</button>
+    </div>
   </div>
 </div>
 

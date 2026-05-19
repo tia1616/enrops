@@ -72,7 +72,10 @@ type WhoInput =
   | { audience: "instructors"; filter: Record<string, unknown> };
 
 type DraftInputs = {
-  what: string;
+  // Topics being promoted. Accept either a single string (legacy / quick send)
+  // or a list of topics (multi-topic campaign — Don weaves them into one
+  // schedule with topic-tagged touchpoints).
+  what: string | string[];
   who: WhoInput;
   duration: string;
   channels: string[];
@@ -180,9 +183,25 @@ function parseRequest(body: unknown):
   if (!inputs || typeof inputs !== "object") {
     return { ok: false, error: "inputs object required", status: 400 };
   }
-  if (typeof inputs.what !== "string" || !inputs.what.trim()) {
-    return { ok: false, error: "inputs.what required", status: 400 };
+  // `what` accepts string OR string[] (multi-topic). Normalize to string[].
+  let topics: string[];
+  if (typeof inputs.what === "string") {
+    if (!inputs.what.trim()) {
+      return { ok: false, error: "inputs.what cannot be empty", status: 400 };
+    }
+    topics = [inputs.what.trim()];
+  } else if (Array.isArray(inputs.what)) {
+    if (inputs.what.length === 0) {
+      return { ok: false, error: "inputs.what must contain at least one topic", status: 400 };
+    }
+    if (inputs.what.some((t) => typeof t !== "string" || !t.trim())) {
+      return { ok: false, error: "inputs.what must be non-empty strings", status: 400 };
+    }
+    topics = inputs.what.map((t) => (t as string).trim());
+  } else {
+    return { ok: false, error: "inputs.what must be a string or array of strings", status: 400 };
   }
+  (inputs as { what: string[] }).what = topics;
   if (typeof inputs.duration !== "string" || !inputs.duration.trim()) {
     return { ok: false, error: "inputs.duration required", status: 400 };
   }
@@ -204,9 +223,9 @@ function parseRequest(body: unknown):
     req: {
       organization_id: b.organization_id,
       inputs: {
-        what: inputs.what,
+        what: topics,
         who: who as unknown as WhoInput,
-        duration: inputs.duration,
+        duration: inputs.duration as string,
         channels: inputs.channels as string[],
       },
     },
@@ -331,15 +350,39 @@ function buildSystemPrompt(org: OrgConfig, inputs: DraftInputs, segmentSummary: 
   };
   const sender = org.default_sender_name ?? "the team";
   const audience = v.audience ?? "parents of enrichment-program students";
-  const tone = v.tone ?? "warm and professional";
+  const tone = v.tone ?? "warm, positive, celebratory; no tech jargon";
   const avoid = v.do_not_use?.length ? `Avoid these phrases: ${v.do_not_use.join(", ")}.` : "";
   const favor = v.do_use?.length ? `Favor language like: ${v.do_use.join(", ")}.` : "";
   const notes = v.additional_notes ?? "";
   const closer = v.closer ? `End the email body with this exact line on its own paragraph: "${v.closer}"` : "";
 
+  // Topics — string[] normalized in parseRequest. Single topic = one focus;
+  // multiple topics = weave them so families hear about each without overlap.
+  const topics = Array.isArray(inputs.what) ? inputs.what : [inputs.what];
+  const topicLine = topics.length === 1
+    ? `Campaign topic: ${topics[0]}`
+    : `Campaign topics (weave these into one coherent message — do not stack them; pick a primary anchor and reference the other(s) naturally): ${topics.map((t) => `"${t}"`).join(", ")}`;
+
   const channelNote = inputs.channels.length > 1
-    ? `Channels requested: ${inputs.channels.join(", ")}. v1 only generates email content; other channels surface a "coming soon" pill in the UI.`
+    ? `Channels requested: ${inputs.channels.join(", ")}. v1 only generates email content; flyer + social are scaffolded but not rendered here.`
     : "Channel: email.";
+
+  // Standing rules — distilled from operator best-practice playbook.
+  // These apply to every draft for every tenant.
+  const standingRules = [
+    `STANDING RULES (apply to every draft):`,
+    `- Never use cancellation language with parents (use "we'll keep the date open while we wait for one more family" etc.).`,
+    `- One clear call to action per email. The CTA links to the org's registration page (caller will inject the URL).`,
+    `- Subject line under 60 characters; no all-caps; no clickbait; no emoji.`,
+    `- Preheader (first ~80 chars of body) extends the subject, never repeats it.`,
+    `- Personalize with {{first_name}} and {{school}} merge tokens where natural.`,
+    `- If the campaign window crosses an early-bird deadline, mention the savings amount and the deadline date plainly. The caller pulls pricing from programs.early_bird_price_cents.`,
+    `- Tuesday/Thursday 10am PT is the default send time. Deadline-day reminders go at 7am PT. Welcome notes go Monday 9am PT. Never Friday afternoons or weekends.`,
+    `- Throttle: this org caps marketing at 1 email per parent per 10 days. Don't draft a cadence that would over-touch — assume a 6 to 10 day spacing between consecutive emails to the same audience.`,
+    `- For deadline-driven campaigns, include 48-hour and 24-hour reminder emails before each deadline.`,
+    `- Pop-culture themes (Pokémon, Minecraft, LEGO, Mario, etc.) are welcome when they fit the audience.`,
+    `- No promotional puffery ("transformative," "unique," "innovative"). Lead with what kids do and make.`,
+  ].join("\n");
 
   return [
     `You are drafting a marketing email on behalf of ${sender}.`,
@@ -351,15 +394,17 @@ function buildSystemPrompt(org: OrgConfig, inputs: DraftInputs, segmentSummary: 
     notes,
     closer,
     ``,
-    `Campaign topic: ${inputs.what}`,
+    topicLine,
     `Sending to: ${segmentSummary}`,
     `Campaign duration: ${inputs.duration}`,
     channelNote,
     ``,
+    standingRules,
+    ``,
     `Return ONLY a single JSON object with these fields (no markdown fences):`,
     `{`,
-    `  "subject": "<= 80 characters, no emoji, no clickbait",`,
-    `  "body_html": "<clean HTML, no <html>/<body> wrappers, no inline <style>>",`,
+    `  "subject": "<= 60 characters",`,
+    `  "body_html": "<clean HTML; no <html>/<body> wrappers; no inline <style>>",`,
     `  "body_text": "<plain-text version for clients that strip HTML>"`,
     `}`,
   ]
@@ -369,12 +414,15 @@ function buildSystemPrompt(org: OrgConfig, inputs: DraftInputs, segmentSummary: 
 
 type Draft = { subject: string; body_html: string; body_text: string };
 
-async function callClaude(systemPrompt: string, what: string): Promise<
+async function callClaude(systemPrompt: string, topics: string[]): Promise<
   | { ok: true; draft: Draft; model: string }
   | { ok: false; error: string; status: number }
 > {
   const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-  const userMessage = `Write the email now for: "${what}"`;
+  const topicsLine = topics.length === 1
+    ? `"${topics[0]}"`
+    : topics.map((t) => `"${t}"`).join(" + ");
+  const userMessage = `Write the email now. Topic(s): ${topicsLine}.`;
 
   const attempt = async (): Promise<{ raw: string }> => {
     const controller = new AbortController();
@@ -509,7 +557,8 @@ serve(async (req: Request) => {
 
   // ---- Build prompt + call Claude ----
   const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary);
-  const claudeResult = await callClaude(systemPrompt, inputs.what);
+  const topicsArr = Array.isArray(inputs.what) ? inputs.what : [inputs.what];
+  const claudeResult = await callClaude(systemPrompt, topicsArr);
   if (!claudeResult.ok) return jsonError(claudeResult.error, claudeResult.status);
   const { draft, model } = claudeResult;
 
@@ -518,7 +567,7 @@ serve(async (req: Request) => {
     .from("marketing_campaigns")
     .insert({
       organization_id,
-      name: inputs.what.slice(0, 200),
+      name: topicsArr.join(" + ").slice(0, 200),
       campaign_type: "custom",
       status: "draft",
       subject_template: draft.subject,
