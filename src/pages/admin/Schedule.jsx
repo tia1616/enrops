@@ -324,6 +324,7 @@ export default function Schedule() {
   // When user reassigns from a change-request modal, we stash the request's id so the
   // candidate-picker's onPick can auto-advance to the next change request afterward.
   const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
+  const [emailActivityOpen, setEmailActivityOpen] = useState(false);
   const [recentlyUpdated, setRecentlyUpdated] = useState(() => new Set()); // assignment ids that flashed via realtime
 
   const dragStateRef = useRef(null);
@@ -604,6 +605,40 @@ export default function Schedule() {
   // Instructor Hat — "what should I do next?" tips surfaced above the calendar.
   // v1 is deterministic: collects all relevant tips and stacks them in priority order.
   // Per platform principle: max 5 on deck (we currently only have ~4 possible tips).
+  // Forecast for the next reminder fire: groups awaiting-response rows by their
+  // deadline-minus-3-days fire date, returns the soonest. Lets admin see "May 22
+  // → 3 instructors" without invoking the cron.
+  const nextRemindersForecast = useMemo(() => {
+    if (state.status !== "ready") return null;
+    function addDays(iso, days) {
+      const d = new Date(`${iso}T00:00:00`);
+      d.setDate(d.getDate() + days);
+      return d.toISOString().slice(0, 10);
+    }
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const pending = state.assignments.filter(
+      (a) => a.status === "published"
+        && !a.reminder_sent_at
+        && a.email_sent_at
+        && a.deadline
+        && !a.instructor_response_at
+        && a.status !== "withdrawn"
+    );
+    if (pending.length === 0) return null;
+    const buckets = new Map();
+    for (const a of pending) {
+      const computed = addDays(a.deadline, -3);
+      const fire = computed < todayIso ? todayIso : computed;
+      if (!buckets.has(fire)) buckets.set(fire, { instructors: new Set(), camps: 0 });
+      const b = buckets.get(fire);
+      b.instructors.add(a.instructor_id);
+      b.camps += 1;
+    }
+    const next = [...buckets.keys()].sort()[0];
+    const b = buckets.get(next);
+    return { fireDate: next, instructorCount: b.instructors.size, campCount: b.camps };
+  }, [state]);
+
   const nextTips = useMemo(() => {
     if (state.status !== "ready") return [];
     const cycleId = state.cycle.id;
@@ -1418,6 +1453,8 @@ export default function Schedule() {
         onPreviewClick={handlePreviewOffers}
         onRerunAgent={handleRerunAgent}
         onRemindersClick={() => setOfferDialog({ mode: "reminders_choose", payload: null })}
+        nextReminders={nextRemindersForecast}
+        onOpenEmailActivity={() => setEmailActivityOpen(true)}
       />
       {saveError && (
         <div style={{
@@ -1516,6 +1553,14 @@ export default function Schedule() {
           remindersBusy={busy === "reminders"}
         />
       )}
+      {emailActivityOpen && (
+        <EmailActivityModal
+          cycleDisplay={`${cycleDisplayName(cycle.name)} · ${cycle.status}`}
+          assignments={state.assignments}
+          sessions={state.sessions}
+          onClose={() => setEmailActivityOpen(false)}
+        />
+      )}
       {previewData && (
         <PreviewViewer
           data={previewData}
@@ -1600,7 +1645,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick }) {
+function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity }) {
   return (
     <header style={{
       background: "#fff",
@@ -1622,6 +1667,34 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
           <span style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>{cycle.status}</span>
         </div>
         <div style={{ color: MUTED, marginTop: 4, fontSize: 14 }}>{fmtRange(cycle.starts_on, cycle.ends_on)}</div>
+        <div style={{ marginTop: 8, fontSize: 13, color: MUTED, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+          {nextReminders && (
+            <span>
+              Next reminders fire <strong style={{ color: INK }}>{fmtShort(nextReminders.fireDate)}</strong>
+              {" → "}
+              {nextReminders.instructorCount} instructor{nextReminders.instructorCount === 1 ? "" : "s"} · {nextReminders.campCount} camp{nextReminders.campCount === 1 ? "" : "s"}
+            </span>
+          )}
+          {onOpenEmailActivity && (
+            <button
+              type="button"
+              onClick={onOpenEmailActivity}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: PLUM,
+                fontSize: 13,
+                fontWeight: 500,
+                fontFamily: "inherit",
+                cursor: "pointer",
+                padding: 0,
+                textDecoration: "underline",
+              }}
+            >
+              View email activity →
+            </button>
+          )}
+        </div>
       </div>
       <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
         <Counter label="Assigned" value={counts.assigned} tone="assigned" />
@@ -2982,6 +3055,216 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
         {busy && <div style={{ color: MUTED, fontSize: 12 }}>Working…</div>}
       </div>
     </ModalShell>
+  );
+}
+
+// Cycle-wide email activity log: every offer / patch / reminder / reply that touched
+// any assignment in this cycle. Combines instructor_offer_messages with synthetic
+// "offer email sent" events derived from camp_assignments.email_sent_at (since the
+// bulk send path doesn't write to the messages table). Filter chips narrow by kind.
+function EmailActivityModal({ cycleDisplay, assignments, sessions, onClose }) {
+  const [rows, setRows] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [filter, setFilter] = useState("all"); // all | offers | patches | reminders | replies
+
+  const sessionsById = useMemo(() => {
+    const m = new Map();
+    for (const s of sessions ?? []) m.set(s.id, s);
+    return m;
+  }, [sessions]);
+  const assignmentsById = useMemo(() => {
+    const m = new Map();
+    for (const a of assignments ?? []) m.set(a.id, a);
+    return m;
+  }, [assignments]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const ids = (assignments ?? []).map((a) => a.id);
+      if (ids.length === 0) { setLoaded(true); return; }
+      const { data, error } = await supabase
+        .from("instructor_offer_messages")
+        .select("id, camp_assignment_id, sender_role, message, created_at")
+        .in("camp_assignment_id", ids)
+        .order("created_at", { ascending: false });
+      if (!alive) return;
+      if (error) { setRows([]); setLoaded(true); return; }
+      setRows(data ?? []);
+      setLoaded(true);
+    })();
+    return () => { alive = false; };
+  }, [assignments]);
+
+  // Merge messages + synthetic offer-sent events into a single descending timeline.
+  const events = useMemo(() => {
+    const all = [];
+
+    // Synthetic offer-sent events (bulk send doesn't write to messages).
+    for (const a of assignments ?? []) {
+      if (a.email_sent_at) {
+        all.push({
+          id: `offer-${a.id}`,
+          kind: "offer",
+          sender: "system",
+          created_at: a.email_sent_at,
+          camp_assignment_id: a.id,
+          message: "Offer email sent",
+        });
+      }
+    }
+
+    // Messages from DB. Derive kind from message text + role.
+    for (const m of rows) {
+      let kind;
+      const role = m.sender_role;
+      const text = (m.message || "").toLowerCase();
+      if (role === "system" && text.startsWith("reminder email")) kind = "reminder";
+      else if (role === "system" && text.startsWith("patch offer")) kind = "patch";
+      else if (role === "system" && text.startsWith("deadline passed")) kind = "flag";
+      else if (role === "instructor") kind = "instructor_reply";
+      else if (role === "admin") kind = "admin_reply";
+      else kind = "system_other";
+      all.push({
+        id: m.id,
+        kind,
+        sender: role,
+        created_at: m.created_at,
+        camp_assignment_id: m.camp_assignment_id,
+        message: m.message,
+      });
+    }
+
+    return all.sort((x, y) => (y.created_at || "").localeCompare(x.created_at || ""));
+  }, [rows, assignments]);
+
+  const filtered = useMemo(() => {
+    if (filter === "all") return events;
+    const allowed = {
+      offers:    new Set(["offer"]),
+      patches:   new Set(["patch"]),
+      reminders: new Set(["reminder"]),
+      replies:   new Set(["admin_reply", "instructor_reply"]),
+    }[filter] ?? new Set();
+    return events.filter((e) => allowed.has(e.kind));
+  }, [events, filter]);
+
+  const counts = useMemo(() => ({
+    all: events.length,
+    offers: events.filter((e) => e.kind === "offer").length,
+    patches: events.filter((e) => e.kind === "patch").length,
+    reminders: events.filter((e) => e.kind === "reminder").length,
+    replies: events.filter((e) => e.kind === "admin_reply" || e.kind === "instructor_reply").length,
+  }), [events]);
+
+  function kindPill(kind) {
+    const map = {
+      offer:             { label: "Offer",            bg: PLUM,        fg: "#fff" },
+      patch:             { label: "Patch offer",      bg: GOLD,        fg: PLUM   },
+      reminder:          { label: "Reminder",         bg: `${PLUM}33`, fg: PLUM   },
+      admin_reply:       { label: "Your message",     bg: `${OK_GREEN}22`, fg: OK_GREEN },
+      instructor_reply:  { label: "Instructor reply", bg: `${CHANGE_REQ}22`, fg: CHANGE_REQ },
+      flag:              { label: "Deadline flag",    bg: `${CORAL}22`, fg: CORAL },
+      system_other:      { label: "System",           bg: CHALK,       fg: MUTED  },
+    }[kind] ?? { label: kind, bg: CHALK, fg: MUTED };
+    return (
+      <span style={{ background: map.bg, color: map.fg, fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 999, whiteSpace: "nowrap" }}>
+        {map.label}
+      </span>
+    );
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 60, padding: 16,
+      }}
+    >
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%", maxWidth: 820, height: "85vh", background: "#fff",
+        border: `1px solid ${RULE}`, borderRadius: 10,
+        boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
+        display: "flex", flexDirection: "column",
+      }}>
+        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${RULE}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>{cycleDisplay}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: INK, marginTop: 2 }}>Email activity</div>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ background: "transparent", border: "none", fontSize: 22, color: MUTED, cursor: "pointer", padding: 4, lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: "10px 20px", borderBottom: `1px solid ${RULE}`, display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {[
+            { key: "all",       label: `All (${counts.all})` },
+            { key: "offers",    label: `Offers (${counts.offers})` },
+            { key: "patches",   label: `Patches (${counts.patches})` },
+            { key: "reminders", label: `Reminders (${counts.reminders})` },
+            { key: "replies",   label: `Replies (${counts.replies})` },
+          ].map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => setFilter(f.key)}
+              style={{
+                padding: "5px 10px",
+                fontSize: 12,
+                fontWeight: 600,
+                fontFamily: "inherit",
+                border: `1px solid ${filter === f.key ? PLUM : RULE}`,
+                background: filter === f.key ? PLUM : "#fff",
+                color: filter === f.key ? "#fff" : INK,
+                borderRadius: 999,
+                cursor: "pointer",
+              }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "10px 20px 20px" }}>
+          {!loaded ? (
+            <div style={{ padding: 24, textAlign: "center", color: MUTED, fontSize: 13 }}>Loading…</div>
+          ) : filtered.length === 0 ? (
+            <div style={{ padding: 24, textAlign: "center", color: MUTED, fontSize: 13 }}>
+              No email activity {filter !== "all" ? "in this filter" : "yet"}.
+            </div>
+          ) : (
+            filtered.map((e) => {
+              const a = assignmentsById.get(e.camp_assignment_id);
+              const s = a ? sessionsById.get(a.camp_session_id) : null;
+              const who = a ? `${a.instructor_first ?? ""}${a.instructor_last ? " " + a.instructor_last : ""}`.trim() : "(unknown instructor)";
+              const where = s ? `${s.curriculum_name ?? "—"} · ${s.location_name ?? "—"} · Wk ${s.week_num}` : "—";
+              return (
+                <div key={e.id} style={{
+                  padding: "10px 0",
+                  borderBottom: `1px solid ${RULE}`,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    {kindPill(e.kind)}
+                    <span style={{ fontSize: 14, fontWeight: 600, color: INK }}>{who || "(no name)"}</span>
+                    <span style={{ fontSize: 12, color: MUTED, marginLeft: "auto" }}>
+                      {new Date(e.created_at).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: MUTED }}>{where}</div>
+                  {e.kind === "instructor_reply" || e.kind === "admin_reply" ? (
+                    <div style={{ fontSize: 13, color: INK, marginTop: 2, whiteSpace: "pre-wrap" }}>{e.message}</div>
+                  ) : null}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
