@@ -165,7 +165,12 @@ export default function AICampaignBuilder() {
   if (state.step === "review") {
     // Placeholder review screen — chunk 06 builds the real two-column edit UI.
     return (
-      <ReviewPlaceholder draft={state.draft} org={org} onReset={() => dispatch({ type: "RESET" })} />
+      <ReviewPlaceholder
+        draft={state.draft}
+        org={org}
+        onBack={() => dispatch({ type: "BACK" })}
+        onReset={() => dispatch({ type: "RESET" })}
+      />
     );
   }
 
@@ -211,10 +216,20 @@ function ProgressHeader({ step }) {
   );
 }
 
-function ReviewPlaceholder({ draft, org, onReset }) {
+function ReviewPlaceholder({ draft, org, onBack, onReset }) {
   const touchpoints = draft?.schedule?.touchpoints ?? [];
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", paddingBottom: 24 }}>
+      <button
+        onClick={onBack}
+        style={{
+          background: "transparent", border: "none", color: MUTED,
+          cursor: "pointer", fontSize: 13, fontFamily: "inherit",
+          padding: "0 0 12px", display: "inline-flex", alignItems: "center", gap: 4,
+        }}
+      >
+        ← Back to questions
+      </button>
       <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 24 }}>
         <p style={{ fontSize: 12, fontWeight: 600, color: OK, textTransform: "uppercase", letterSpacing: 0.4, margin: 0 }}>
           Schedule ready (chunk 05 mock)
@@ -266,15 +281,28 @@ function ReviewPlaceholder({ draft, org, onReset }) {
         <p style={{ marginTop: 16, fontSize: 12, color: MUTED }}>
           The full editable schedule (per-touchpoint edit, send-test, approve &amp; schedule, promo card) lands in chunk 3.6.06.
         </p>
-        <button
-          onClick={onReset}
-          style={{
-            marginTop: 16, padding: "8px 14px", background: PLUM, color: "#fff",
-            border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 500,
-          }}
-        >
-          Build another
-        </button>
+        <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+          <button
+            onClick={onBack}
+            style={{
+              padding: "8px 14px", background: "#fff", color: INK,
+              border: `1px solid ${RULE}`, borderRadius: 6, cursor: "pointer",
+              fontSize: 13, fontWeight: 500, fontFamily: "inherit",
+            }}
+          >
+            ← Edit answers
+          </button>
+          <button
+            onClick={onReset}
+            style={{
+              padding: "8px 14px", background: PLUM, color: "#fff",
+              border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 500,
+              fontFamily: "inherit",
+            }}
+          >
+            Start a new campaign
+          </button>
+        </div>
       </div>
     </div>
   );
