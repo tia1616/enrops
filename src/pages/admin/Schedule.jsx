@@ -325,6 +325,10 @@ export default function Schedule() {
   // candidate-picker's onPick can auto-advance to the next change request afterward.
   const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
   const [emailActivityOpen, setEmailActivityOpen] = useState(false);
+  // Term/cycle picker — list of all non-archived cycles for this org + the currently
+  // viewed one. selectedCycleId=null means "use the latest one I find" (default).
+  const [allCycles, setAllCycles] = useState([]);
+  const [selectedCycleId, setSelectedCycleId] = useState(null);
   const [recentlyUpdated, setRecentlyUpdated] = useState(() => new Set()); // assignment ids that flashed via realtime
 
   const dragStateRef = useRef(null);
@@ -339,16 +343,21 @@ export default function Schedule() {
   async function loadAll() {
     if (!org?.id) return;
     try {
-      const { data: cycle, error: cycleErr } = await supabase
+      // Fetch every non-archived cycle so the term picker has a complete list,
+      // then choose which one to load: explicit selectedCycleId wins, else the
+      // most recently created cycle.
+      const { data: cyclesList, error: cyclesErr } = await supabase
         .from("scheduling_cycles")
         .select("id, name, cycle_type, starts_on, ends_on, status, weeks, auto_reminders_enabled")
         .eq("organization_id", org.id)
         .neq("status", "archived")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (cycleErr) throw cycleErr;
-      if (!cycle) { setState({ status: "empty" }); return; }
+        .order("starts_on", { ascending: false, nullsFirst: false });
+      if (cyclesErr) throw cyclesErr;
+      setAllCycles(cyclesList ?? []);
+      if (!cyclesList || cyclesList.length === 0) { setState({ status: "empty" }); return; }
+      const cycle = selectedCycleId
+        ? (cyclesList.find((c) => c.id === selectedCycleId) ?? cyclesList[0])
+        : cyclesList[0];
 
       const sessionsRes = await supabase
         .from("camp_sessions")
@@ -444,7 +453,7 @@ export default function Schedule() {
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [org?.id]);
+  }, [org?.id, selectedCycleId]);
 
   // Realtime: when an instructor accepts or requests a change in the portal, the
   // camp_assignments row updates. Subscribe so the calendar reflects the change
@@ -1286,6 +1295,25 @@ export default function Schedule() {
     }
   }
 
+  // Undo a recorded decline so the picker suggests this instructor again for
+  // this camp. Used by the "Re-suggest" button under the declined list.
+  async function handleUndecline(sessionId, instructorId) {
+    if (!sessionId || !instructorId) return;
+    try {
+      const { error } = await supabase
+        .from("session_declined_instructors")
+        .delete()
+        .eq("camp_session_id", sessionId)
+        .eq("instructor_id", instructorId);
+      if (error) throw error;
+      await loadAll();
+    } catch (err) {
+      console.error("Undecline failed:", err);
+      setSaveError(`Couldn't re-suggest: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
+    }
+  }
+
   // Resend an offer that's already gone out (e.g. instructor says they didn't
   // receive it). Clears email_sent_at / reminder_sent_at / deadline on that row so
   // send-patch-offer picks it up, refreshes state, then opens the patch preview.
@@ -1490,6 +1518,8 @@ export default function Schedule() {
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <HeaderStrip
         cycle={cycle}
+        allCycles={allCycles}
+        onSwitchCycle={setSelectedCycleId}
         phaseLabel={derivedPhase}
         counts={counts}
         missingSurveys={state.missingSurveys}
@@ -1661,6 +1691,7 @@ export default function Schedule() {
           curPrefLookup={curPrefLookup}
           allAssignments={assignmentsWithSession}
           declinedInstructorIds={declinedBySession.get(candidatesFor.session.id) ?? new Set()}
+          onUndecline={(instructorId) => handleUndecline(candidatesFor.session.id, instructorId)}
           onClose={() => {
             setCandidatesFor(null);
             // Picker closed without picking — drop the pending advance so the next click of the Hat re-opens cleanly.
@@ -1700,7 +1731,8 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity }) {
+function HeaderStrip({ cycle, allCycles, onSwitchCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity }) {
+  const otherCycles = (allCycles ?? []).filter((c) => c.id !== cycle.id);
   return (
     <header style={{
       background: "#fff",
@@ -1717,8 +1749,38 @@ function HeaderStrip({ cycle, phaseLabel, counts, missingSurveys, lastOp, onUndo
       zIndex: 5,
     }}>
       <div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>{cycleDisplayName(cycle.name)}</h1>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+          {otherCycles.length > 0 ? (
+            <select
+              value={cycle.id}
+              onChange={(e) => onSwitchCycle && onSwitchCycle(e.target.value)}
+              title="Switch to another scheduling cycle"
+              style={{
+                fontSize: 26,
+                fontWeight: 700,
+                color: INK,
+                letterSpacing: -0.4,
+                fontFamily: "inherit",
+                background: "transparent",
+                border: "none",
+                borderBottom: `2px dotted ${RULE}`,
+                padding: "0 22px 2px 0",
+                cursor: "pointer",
+                appearance: "none",
+                backgroundImage: `linear-gradient(45deg, transparent 50%, ${MUTED} 50%), linear-gradient(135deg, ${MUTED} 50%, transparent 50%)`,
+                backgroundPosition: "calc(100% - 12px) center, calc(100% - 7px) center",
+                backgroundSize: "5px 5px, 5px 5px",
+                backgroundRepeat: "no-repeat",
+              }}
+            >
+              <option value={cycle.id}>{cycleDisplayName(cycle.name)}</option>
+              {otherCycles.map((c) => (
+                <option key={c.id} value={c.id}>{cycleDisplayName(c.name)}</option>
+              ))}
+            </select>
+          ) : (
+            <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>{cycleDisplayName(cycle.name)}</h1>
+          )}
           <span style={{
             fontSize: 11,
             color: PLUM,
@@ -3735,8 +3797,13 @@ function CandidatePicker({
   session, currentAssignment, role = "lead", instructors, availabilityByInstructor,
   locPrefLookup, curPrefLookup, allAssignments,
   declinedInstructorIds = new Set(),
-  onClose, onPick, onRemove, onResetAcceptance, onResendOffer, onSendMessage, onCreateInstructor,
+  onClose, onPick, onRemove, onResetAcceptance, onResendOffer, onSendMessage, onCreateInstructor, onUndecline,
 }) {
+  const declinedInstructors = useMemo(() => {
+    if (!declinedInstructorIds || declinedInstructorIds.size === 0) return [];
+    return instructors.filter((i) => declinedInstructorIds.has(i.id));
+  }, [declinedInstructorIds, instructors]);
+  const [declinedExpanded, setDeclinedExpanded] = useState(false);
   const isReassign = !!currentAssignment;
   const currentInstructorId = currentAssignment?.instructor_id ?? null;
   const currentFirstName = currentAssignment?.instructor_first ?? "this instructor";
@@ -4175,6 +4242,62 @@ function CandidatePicker({
                 </button>
               </div>
             ))
+          )}
+
+          {declinedInstructors.length > 0 && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${RULE}` }}>
+              <button
+                type="button"
+                onClick={() => setDeclinedExpanded((v) => !v)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: MUTED,
+                  fontSize: 12,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  padding: "4px 0",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <span>Previously declined this camp ({declinedInstructors.length})</span>
+                <span style={{ fontSize: 11 }}>{declinedExpanded ? "▲" : "▼"}</span>
+              </button>
+              {declinedExpanded && (
+                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>
+                    Recorded because they (or you, after their change request) marked the camp as declined.
+                    Click <strong>Re-suggest</strong> if this was a mistake — the instructor will show up in the list above.
+                  </div>
+                  {declinedInstructors.map((inst) => (
+                    <div key={inst.id} style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "6px 10px",
+                      background: "#f7f6ef",
+                      border: `1px solid ${RULE}`,
+                      borderRadius: 6,
+                      fontSize: 13,
+                      color: INK,
+                    }}>
+                      <span>{inst.first_name} {inst.last_name ?? ""}</span>
+                      {onUndecline && (
+                        <button
+                          type="button"
+                          onClick={() => onUndecline(inst.id)}
+                          style={{ ...btn("transparent", PLUM, true), padding: "4px 10px", fontSize: 11 }}
+                        >
+                          Re-suggest
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
 
