@@ -140,4 +140,4 @@ Hard to force in production. To simulate locally: set `CLAUDE_TIMEOUT_MS = 1` in
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `SONNET_MODEL` (optional; defaults to `claude-sonnet-4-6`)
+- `MARKETING_DRAFT_MODEL` (optional; defaults to `claude-opus-4-6` — Opus 4.6 chosen over Sonnet 4.6 for warmer parent-facing copy; Opus 4.7 was rejected for over-thinking the draft)

@@ -40,7 +40,10 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
-const SONNET_MODEL = Deno.env.get("SONNET_MODEL") ?? "claude-sonnet-4-6";
+// Opus 4.6 picked over Sonnet 4.6 for marketing copy quality. Jessica's
+// feedback: Opus 4.7 "overthinks" the draft and produces colder copy. 4.6
+// stays warm and punchy. Override per-deploy via MARKETING_DRAFT_MODEL.
+const DRAFT_MODEL = Deno.env.get("MARKETING_DRAFT_MODEL") ?? "claude-opus-4-6";
 
 const MAX_TOKENS = 1500;
 const CLAUDE_TIMEOUT_MS = 60_000;
@@ -379,7 +382,7 @@ async function callClaude(systemPrompt: string, what: string): Promise<
     try {
       const resp = await anthropic.messages.create(
         {
-          model: SONNET_MODEL,
+          model: DRAFT_MODEL,
           max_tokens: MAX_TOKENS,
           system: systemPrompt,
           messages: [{ role: "user", content: userMessage }],
@@ -434,7 +437,7 @@ async function callClaude(systemPrompt: string, what: string): Promise<
     }
   }
   if (!draft) return { ok: false, error: "claude returned malformed JSON after retry", status: 502 };
-  return { ok: true, draft, model: SONNET_MODEL };
+  return { ok: true, draft, model: DRAFT_MODEL };
 }
 
 // ---------------------------------------------------------------------------
