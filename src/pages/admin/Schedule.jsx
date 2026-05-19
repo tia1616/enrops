@@ -605,6 +605,24 @@ export default function Schedule() {
   // Instructor Hat — "what should I do next?" tips surfaced above the calendar.
   // v1 is deterministic: collects all relevant tips and stacks them in priority order.
   // Per platform principle: max 5 on deck (we currently only have ~4 possible tips).
+  // Translate raw cycle.status + assignment-state into a human-friendly phase
+  // label for the header chip. Maps to the workflow stage the admin is actually in.
+  const derivedPhase = useMemo(() => {
+    if (state.status !== "ready") return "";
+    const status = state.cycle.status;
+    if (status === "collecting") return "Collecting surveys";
+    const A = state.assignments;
+    const anyProposed = A.some((a) => a.status === "proposed");
+    const anyConfirmed = A.some((a) => a.status === "confirmed");
+    const anyPublished = A.some((a) => a.status === "published");
+    const anyAwaiting = A.some((a) => a.status === "published" && !a.instructor_response_at);
+    if (anyProposed && !anyConfirmed && !anyPublished) return "Building draft";
+    if (anyConfirmed && !anyPublished) return "Ready to send";
+    if (anyAwaiting) return "Awaiting responses";
+    if (anyPublished) return "All responses in";
+    return status;
+  }, [state]);
+
   // Forecast for the next reminder fire: groups awaiting-response rows by their
   // deadline-minus-3-days fire date, returns the soonest. Lets admin see "May 22
   // → 3 instructors" without invoking the cron.
@@ -1440,14 +1458,16 @@ export default function Schedule() {
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <HeaderStrip
         cycle={cycle}
+        phaseLabel={derivedPhase}
         counts={counts}
         missingSurveys={state.missingSurveys}
         lastOp={lastOp}
         onUndo={handleUndo}
         busy={busy}
         canApprove={cycle.status !== "published" && state.assignments.some((a) => a.status === "proposed")}
-        canSend={cycle.status === "scheduling" || cycle.status === "published"}
+        canSend={state.assignments.some((a) => a.status === "confirmed")}
         canRematch={cycle.status === "collecting"}
+        canRunReminders={state.assignments.some((a) => a.status === "published" && !a.instructor_response_at)}
         onApprove={handleApprove}
         onSendClick={() => setOfferDialog({ mode: "choose", payload: null })}
         onPreviewClick={handlePreviewOffers}
@@ -1645,7 +1665,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity }) {
+function HeaderStrip({ cycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity }) {
   return (
     <header style={{
       background: "#fff",
@@ -1664,7 +1684,16 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
       <div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
           <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>{cycleDisplayName(cycle.name)}</h1>
-          <span style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>{cycle.status}</span>
+          <span style={{
+            fontSize: 11,
+            color: PLUM,
+            background: `${GOLD}22`,
+            textTransform: "uppercase",
+            letterSpacing: 0.6,
+            fontWeight: 700,
+            padding: "3px 8px",
+            borderRadius: 999,
+          }}>{phaseLabel || cycle.status}</span>
         </div>
         <div style={{ color: MUTED, marginTop: 4, fontSize: 14 }}>{fmtRange(cycle.starts_on, cycle.ends_on)}</div>
         <div style={{ marginTop: 8, fontSize: 13, color: MUTED, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
@@ -1715,17 +1744,17 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
             ↶ Undo
           </button>
         )}
-        <button
-          type="button"
-          onClick={onRerunAgent}
-          disabled={!canRematch || busy === "rematching"}
-          title={canRematch
-            ? "Re-run the matching agent on this cycle's surveys to regenerate proposed assignments"
-            : "Re-running the matching agent isn't available once offers have been approved or sent — it only works on draft assignments before approval"}
-          style={btn("transparent", PLUM, true, !canRematch || busy === "rematching")}
-        >
-          {busy === "rematching" ? "Re-running…" : "Re-run agent"}
-        </button>
+        {canRematch && (
+          <button
+            type="button"
+            onClick={onRerunAgent}
+            disabled={busy === "rematching"}
+            title="Re-run the matching agent on this cycle's surveys to regenerate a fresh draft of proposed assignments"
+            style={btn("transparent", PLUM, true, busy === "rematching")}
+          >
+            {busy === "rematching" ? "Re-running…" : "Re-run matching"}
+          </button>
+        )}
         {canApprove && (
           <button
             type="button"
@@ -1737,33 +1766,39 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
             {busy === "approving" ? "Approving…" : "Approve draft"}
           </button>
         )}
-        <button
-          type="button"
-          onClick={onPreviewClick}
-          disabled={busy === "previewing"}
-          title="Render every offer email — no sends, no DB changes"
-          style={btn("transparent", PLUM, true, busy === "previewing")}
-        >
-          {busy === "previewing" ? "Loading…" : "Preview offers"}
-        </button>
-        <button
-          type="button"
-          onClick={onSendClick}
-          disabled={!canSend || busy === "sending"}
-          title={canSend ? "Send the confirmed offers" : "Approve first to enable"}
-          style={btn(PLUM, "#fff", false, !canSend || busy === "sending")}
-        >
-          Send offers
-        </button>
-        <button
-          type="button"
-          onClick={onRemindersClick}
-          disabled={busy === "reminders"}
-          title="Run reminder + deadline check (3 days before deadline → reminder; past deadline → flag for review)"
-          style={btn("transparent", PLUM, true, busy === "reminders")}
-        >
-          {busy === "reminders" ? "Working…" : "Reminders"}
-        </button>
+        {canSend && (
+          <>
+            <button
+              type="button"
+              onClick={onPreviewClick}
+              disabled={busy === "previewing"}
+              title="Render every offer email so you can review before sending — no real sends, no DB changes"
+              style={btn("transparent", PLUM, true, busy === "previewing")}
+            >
+              {busy === "previewing" ? "Loading…" : "Preview offers"}
+            </button>
+            <button
+              type="button"
+              onClick={onSendClick}
+              disabled={busy === "sending"}
+              title="Send the confirmed offers to every assigned instructor"
+              style={btn(PLUM, "#fff", false, busy === "sending")}
+            >
+              Send offers
+            </button>
+          </>
+        )}
+        {canRunReminders && (
+          <button
+            type="button"
+            onClick={onRemindersClick}
+            disabled={busy === "reminders"}
+            title="Fire reminder emails right now to anyone whose response is still pending (the cron auto-fires 2–3 days before each deadline — this is for manual nudges)"
+            style={btn("transparent", PLUM, true, busy === "reminders")}
+          >
+            {busy === "reminders" ? "Working…" : "Send reminders now"}
+          </button>
+        )}
       </div>
     </header>
   );
