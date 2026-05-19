@@ -1445,7 +1445,7 @@ export default function Schedule() {
         lastOp={lastOp}
         onUndo={handleUndo}
         busy={busy}
-        canApprove={cycle.status !== "published"}
+        canApprove={cycle.status !== "published" && state.assignments.some((a) => a.status === "proposed")}
         canSend={cycle.status === "scheduling" || cycle.status === "published"}
         canRematch={cycle.status === "collecting"}
         onApprove={handleApprove}
@@ -1726,15 +1726,17 @@ function HeaderStrip({ cycle, counts, missingSurveys, lastOp, onUndo, busy, canA
         >
           {busy === "rematching" ? "Re-running…" : "Re-run agent"}
         </button>
-        <button
-          type="button"
-          onClick={onApprove}
-          disabled={!canApprove || busy === "approving"}
-          title={canApprove ? "Flip all proposed assignments to confirmed" : "Already approved"}
-          style={btn("transparent", PLUM, true, !canApprove || busy === "approving")}
-        >
-          {busy === "approving" ? "Approving…" : "Approve"}
-        </button>
+        {canApprove && (
+          <button
+            type="button"
+            onClick={onApprove}
+            disabled={busy === "approving"}
+            title="Lock in the AI's draft assignments — flips every proposed row to confirmed so you can send offers. This is the draft-approval gate, not instructor acceptances."
+            style={btn("transparent", PLUM, true, busy === "approving")}
+          >
+            {busy === "approving" ? "Approving…" : "Approve draft"}
+          </button>
+        )}
         <button
           type="button"
           onClick={onPreviewClick}
