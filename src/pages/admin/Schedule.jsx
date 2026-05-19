@@ -1576,6 +1576,8 @@ export default function Schedule() {
       {emailActivityOpen && (
         <EmailActivityModal
           cycleDisplay={`${cycleDisplayName(cycle.name)} · ${cycle.status}`}
+          cycle={cycle}
+          orgName={org?.name ?? "Journey to STEAM"}
           assignments={state.assignments}
           sessions={state.sessions}
           onClose={() => setEmailActivityOpen(false)}
@@ -3095,14 +3097,170 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
   );
 }
 
+// ---- Email preview renderers ----------------------------------------------
+// Mirror the templates in send-offers / send-patch-offer / offer-reminders-cron
+// so clicking a row in EmailActivityModal can show "what this instructor saw"
+// without round-tripping to an edge function. Drift risk if email templates
+// diverge later — keep in sync if you change the server templates.
+
+const EMAIL_BRAND = {
+  primary: "#691D39",
+  pageBg: "#EAEADD",
+  text: "#1a1a1a",
+  muted: "#6b6b6b",
+  border: "#e2dfd5",
+};
+
+function emailFmtDateLong(dateStr) {
+  if (!dateStr) return "";
+  return new Date(`${dateStr}T00:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+}
+
+function emailFmtTime(t) {
+  if (!t) return "";
+  const [h, m] = t.split(":").map(Number);
+  const hr12 = ((h + 11) % 12) + 1;
+  const ampm = h >= 12 ? "pm" : "am";
+  return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
+}
+
+function emailClassDaysSummary(days) {
+  if (!Array.isArray(days) || days.length === 0) return "";
+  const order = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+  const short = { monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat", sunday: "Sun" };
+  if (days.length === 5 && order.slice(0, 5).every((d) => days.includes(d))) return "Mon–Fri";
+  return days.slice().sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((d) => short[d] ?? d).join(", ");
+}
+
+function emailDollars(cents) {
+  if (!cents) return "";
+  return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+}
+
+function emailEscape(s) {
+  if (!s) return "";
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function renderVenueDetailsBlockHtml(loc) {
+  if (!loc) return "";
+  const { muted, border } = EMAIL_BRAND;
+  const lines = [];
+  if (loc.address) lines.push(`<div>${emailEscape(loc.address)}${loc.room_number ? ` · Room ${emailEscape(loc.room_number)}` : ""}</div>`);
+  else if (loc.room_number) lines.push(`<div>Room ${emailEscape(loc.room_number)}</div>`);
+  if (loc.arrival_instructions) lines.push(`<div><strong>Arrival:</strong> ${emailEscape(loc.arrival_instructions)}</div>`);
+  if (loc.food_drink_policy) lines.push(`<div><strong>Food/drink:</strong> ${emailEscape(loc.food_drink_policy)}</div>`);
+  const contact = [loc.contact_name, loc.contact_phone, loc.contact_email].filter(Boolean).map(emailEscape);
+  if (contact.length) lines.push(`<div><strong>Venue contact:</strong> ${contact.join(" · ")}</div>`);
+  if (loc.notes) lines.push(`<div><strong>Notes:</strong> ${emailEscape(loc.notes)}</div>`);
+  if (lines.length === 0) return "";
+  return `<div style="margin-top:6px;font-size:12px;color:${muted};line-height:1.5;">${lines.join("")}</div>`;
+}
+
+function renderCampRowHtml(camp, locationsById, primary) {
+  const { s, a } = camp;
+  if (!s) return "";
+  const { muted, text, border } = EMAIL_BRAND;
+  const loc = s.location_id ? locationsById.get(s.location_id) : null;
+  const venue = renderVenueDetailsBlockHtml(loc);
+  const bonus = a.distance_bonus_cents
+    ? `<div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">Includes a ${emailDollars(a.distance_bonus_cents)} distance bonus</div>`
+    : "";
+  const role = a.role === "developing"
+    ? `<span style="font-size:11px;color:${muted};text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-left:6px;">Developing</span>`
+    : "";
+  return `
+    <tr>
+      <td style="padding:14px 0;border-bottom:1px solid ${border};">
+        <div style="font-size:15px;font-weight:700;color:${text};line-height:1.3;">${emailEscape(s.curriculum_name ?? "Camp")}${role}</div>
+        <div style="font-size:13px;color:${muted};margin-top:4px;line-height:1.4;">
+          Week ${s.week_num} · ${emailFmtDateLong(s.starts_on)} – ${emailFmtDateLong(s.ends_on)} · ${emailClassDaysSummary(s.class_days)}<br />
+          ${emailEscape(s.location_name ?? "")} · ${titleCase(s.session_type)} ${emailFmtTime(s.start_time)}–${emailFmtTime(s.end_time)}
+        </div>
+        ${venue}
+        ${bonus}
+      </td>
+    </tr>
+  `;
+}
+
+// Wrap the inner body HTML in the standard outer email shell (background, container,
+// header strip, footer).
+function emailShellHtml({ orgName, headlineHtml, bodyHtml, ctaUrl, ctaSubtitle, footerHtml, badgeText }) {
+  const { pageBg, text, muted, border, primary } = EMAIL_BRAND;
+  return `<!doctype html><html lang="en"><body style="margin:0;padding:0;background:${pageBg};font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif;color:${text};">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${pageBg};padding:32px 16px;"><tr><td align="center">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;width:100%;background:#fff;border:1px solid ${border};border-radius:10px;">
+      <tr><td style="padding:28px 32px 8px;">
+        <div style="font-size:13px;color:${muted};text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">${emailEscape(orgName)}${badgeText ? ` · ${emailEscape(badgeText)}` : ""}</div>
+        <h1 style="margin:6px 0 0;font-size:22px;color:${text};font-weight:700;letter-spacing:-0.3px;">${headlineHtml}</h1>
+      </td></tr>
+      <tr><td style="padding:14px 32px 6px;font-size:15px;color:${text};line-height:1.55;">${bodyHtml}</td></tr>
+      ${ctaUrl ? `<tr><td style="padding:24px 32px 6px;" align="left">
+        <a href="${ctaUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;font-weight:700;letter-spacing:0.2px;">Review and respond →</a>
+        ${ctaSubtitle ? `<div style="font-size:12px;color:${muted};margin-top:10px;">${ctaSubtitle}</div>` : ""}
+      </td></tr>` : ""}
+      <tr><td style="padding:14px 32px 24px;font-size:13px;color:${muted};line-height:1.55;">${footerHtml}</td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+}
+
+function renderCampsTableHtml(camps, locationsById, primary) {
+  const rows = camps.map((c) => renderCampRowHtml(c, locationsById, primary)).join("");
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${rows}</table>`;
+}
+
+function renderOfferEmailHtml({ assignment, instructorCamps, locationsById, cycle, orgName, portalUrl, deadline }) {
+  const firstName = assignment.instructor_first ?? "there";
+  const cycleDisp = cycleDisplayName(cycle.name);
+  const campCount = instructorCamps.length;
+  const unit = unitLabel(cycle.cycle_type, campCount);
+  const deadlineLine = deadline ? `<br /><br /><strong>Please respond by ${emailFmtDateLong(deadline)}.</strong>` : "";
+  const headline = `Your ${emailEscape(cycleDisp)} schedule is ready`;
+  const body = `Hi ${emailEscape(firstName)},<br /><br />Your proposed schedule for ${emailEscape(cycleDisp)} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${unit}</strong> — your schedule isn't confirmed until we hear back from you on every one.${deadlineLine}<br /><br />${renderCampsTableHtml(instructorCamps, locationsById, EMAIL_BRAND.primary)}`;
+  const footer = `Once you've responded to every ${unitLabel(cycle.cycle_type, 1)}, you're set. Questions? Just reply to this email.<br /><br />— Jessica, ${emailEscape(orgName)}`;
+  return emailShellHtml({ orgName, headlineHtml: headline, bodyHtml: body, ctaUrl: portalUrl, ctaSubtitle: `You'll see each ${unitLabel(cycle.cycle_type, 1)} with an <strong>Accept</strong> and <strong>Request change</strong> button.`, footerHtml: footer });
+}
+
+function renderPatchEmailHtml({ instructorCamps, locationsById, cycle, orgName, portalUrl, deadline, instructorFirst }) {
+  const firstName = instructorFirst ?? "there";
+  const cycleDisp = cycleDisplayName(cycle.name);
+  const isOne = instructorCamps.length === 1;
+  const unit = unitLabel(cycle.cycle_type, instructorCamps.length);
+  const oneUnit = unitLabel(cycle.cycle_type, 1);
+  const deadlineLine = deadline ? `<br /><br /><strong>Please respond by ${emailFmtDateLong(deadline)}.</strong>` : "";
+  const headline = isOne ? `You have another ${oneUnit} to accept` : `You have ${instructorCamps.length} more ${unit} to accept`;
+  const intro = isOne
+    ? `Good news — another ${oneUnit} just got added to your ${emailEscape(cycleDisp)} schedule. <strong>Please tap Accept or Request change</strong> when you get a moment.`
+    : `${instructorCamps.length} more ${unit} just got added to your ${emailEscape(cycleDisp)} schedule. <strong>Please tap Accept or Request change on each one</strong> when you get a moment.`;
+  const body = `Hi ${emailEscape(firstName)},<br /><br />${intro}${deadlineLine}<br /><br />${renderCampsTableHtml(instructorCamps, locationsById, EMAIL_BRAND.primary)}`;
+  const footer = `Questions? Just reply to this email.<br /><br />— Jessica, ${emailEscape(orgName)}`;
+  return emailShellHtml({ orgName, headlineHtml: headline, bodyHtml: body, ctaUrl: portalUrl, ctaSubtitle: `You'll see ${isOne ? `the new ${oneUnit}` : `each new ${oneUnit}`} with an <strong>Accept</strong> and <strong>Request change</strong> button.`, footerHtml: footer, badgeText: cycleDisp });
+}
+
+function renderReminderEmailHtml({ instructorCamps, locationsById, cycle, orgName, portalUrl, deadline, instructorFirst }) {
+  const firstName = instructorFirst ?? "there";
+  const cycleDisp = cycleDisplayName(cycle.name);
+  const unit = unitLabel(cycle.cycle_type, instructorCamps.length);
+  const headline = `Quick reminder — please respond`;
+  const body = `Hi ${emailEscape(firstName)},<br /><br />Just a nudge — your ${emailEscape(cycleDisp)} schedule is still waiting for your response. <strong>Please tap Accept or Request change on each ${unitLabel(cycle.cycle_type, 1)}</strong> by <strong>${emailFmtDateLong(deadline)}</strong>.<br /><br />${renderCampsTableHtml(instructorCamps, locationsById, EMAIL_BRAND.primary)}`;
+  const footer = `Already responded? You can ignore this email — sometimes the timing crosses. Questions? Just reply.<br /><br />— Jessica, ${emailEscape(orgName)}`;
+  return emailShellHtml({ orgName, headlineHtml: headline, bodyHtml: body, ctaUrl: portalUrl, ctaSubtitle: null, footerHtml: footer });
+}
+
+// ---- end email preview renderers ------------------------------------------
+
 // Cycle-wide email activity log: every offer / patch / reminder / reply that touched
 // any assignment in this cycle. Reads directly from instructor_offer_messages —
 // send-offers, send-patch-offer, offer-reminders-cron, and offer-message-reply all
 // write to that table now, so the timeline is complete without JS-side synthesis.
-function EmailActivityModal({ cycleDisplay, assignments, sessions, onClose }) {
+function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, sessions, onClose }) {
   const [rows, setRows] = useState([]);
+  const [locationsById, setLocationsById] = useState(new Map());
   const [loaded, setLoaded] = useState(false);
   const [filter, setFilter] = useState("all"); // all | offers | patches | reminders | replies
+  const [expandedRowId, setExpandedRowId] = useState(null);
 
   const sessionsById = useMemo(() => {
     const m = new Map();
@@ -3120,18 +3278,31 @@ function EmailActivityModal({ cycleDisplay, assignments, sessions, onClose }) {
     (async () => {
       const ids = (assignments ?? []).map((a) => a.id);
       if (ids.length === 0) { setLoaded(true); return; }
-      const { data, error } = await supabase
-        .from("instructor_offer_messages")
-        .select("id, camp_assignment_id, sender_role, message, created_at")
-        .in("camp_assignment_id", ids)
-        .order("created_at", { ascending: false });
+      const [msgRes, locRes] = await Promise.all([
+        supabase
+          .from("instructor_offer_messages")
+          .select("id, camp_assignment_id, sender_role, message, created_at")
+          .in("camp_assignment_id", ids)
+          .order("created_at", { ascending: false }),
+        (async () => {
+          const locIds = Array.from(new Set((sessions ?? []).map((s) => s.location_id).filter(Boolean)));
+          if (locIds.length === 0) return { data: [] };
+          return supabase
+            .from("program_locations")
+            .select("id, name, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, food_drink_policy, notes")
+            .in("id", locIds);
+        })(),
+      ]);
       if (!alive) return;
-      if (error) { setRows([]); setLoaded(true); return; }
-      setRows(data ?? []);
+      if (msgRes.error) { setRows([]); setLoaded(true); return; }
+      setRows(msgRes.data ?? []);
+      const locMap = new Map();
+      for (const l of locRes.data ?? []) locMap.set(l.id, l);
+      setLocationsById(locMap);
       setLoaded(true);
     })();
     return () => { alive = false; };
-  }, [assignments]);
+  }, [assignments, sessions]);
 
   // Classify each message row into a kind (offer / patch / reminder / reply / flag).
   const events = useMemo(() => {
@@ -3258,6 +3429,8 @@ function EmailActivityModal({ cycleDisplay, assignments, sessions, onClose }) {
               const s = a ? sessionsById.get(a.camp_session_id) : null;
               const who = a ? `${a.instructor_first ?? ""}${a.instructor_last ? " " + a.instructor_last : ""}`.trim() : "(unknown instructor)";
               const where = s ? `${s.curriculum_name ?? "—"} · ${s.location_name ?? "—"} · Wk ${s.week_num}` : "—";
+              const previewable = e.kind === "offer" || e.kind === "patch" || e.kind === "reminder";
+              const expanded = expandedRowId === e.id;
               return (
                 <div key={e.id} style={{
                   padding: "10px 0",
@@ -3266,23 +3439,119 @@ function EmailActivityModal({ cycleDisplay, assignments, sessions, onClose }) {
                   flexDirection: "column",
                   gap: 4,
                 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <div
+                    onClick={previewable ? () => setExpandedRowId(expanded ? null : e.id) : undefined}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      flexWrap: "wrap",
+                      cursor: previewable ? "pointer" : "default",
+                    }}
+                  >
                     {kindPill(e.kind)}
                     <span style={{ fontSize: 14, fontWeight: 600, color: INK }}>{who || "(no name)"}</span>
                     <span style={{ fontSize: 12, color: MUTED, marginLeft: "auto" }}>
                       {new Date(e.created_at).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
                     </span>
+                    {previewable && (
+                      <span style={{ fontSize: 12, color: PLUM, fontWeight: 500 }}>
+                        {expanded ? "Hide email ▲" : "View email ▼"}
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 12, color: MUTED }}>{where}</div>
                   {e.kind === "instructor_reply" || e.kind === "admin_reply" ? (
                     <div style={{ fontSize: 13, color: INK, marginTop: 2, whiteSpace: "pre-wrap" }}>{e.message}</div>
                   ) : null}
+                  {expanded && previewable && (
+                    <EmailPreviewPanel
+                      event={e}
+                      assignment={a}
+                      session={s}
+                      assignments={assignments}
+                      sessions={sessions}
+                      sessionsById={sessionsById}
+                      locationsById={locationsById}
+                      cycle={cycle}
+                      orgName={orgName}
+                    />
+                  )}
                 </div>
               );
             })
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Renders the actual email an instructor saw, inline below a clicked row in
+// EmailActivityModal. Looks up the same bundled-camps logic each send function
+// uses (one instructor can get several camps in one email when timestamps match).
+function EmailPreviewPanel({ event, assignment, session, assignments, sessions, sessionsById, locationsById, cycle, orgName }) {
+  if (!assignment || !session || !cycle) {
+    return (
+      <div style={{ marginTop: 8, padding: 12, border: `1px solid ${RULE}`, borderRadius: 6, background: CHALK, fontSize: 12, color: MUTED }}>
+        Couldn't load the camp this email was tied to (the assignment or session was removed).
+      </div>
+    );
+  }
+
+  // The send functions bundle all of an instructor's camps that went out in the same
+  // wave. Approximate that here: find assignments for the same instructor where the
+  // matching event timestamp is within 60 seconds of this one (typical bulk send).
+  const sameInstructorAssignments = (assignments ?? []).filter((a) => a.instructor_id === assignment.instructor_id);
+  const ts = new Date(event.created_at).getTime();
+  const bundled = sameInstructorAssignments
+    .map((a) => ({ a, s: sessionsById.get(a.camp_session_id) }))
+    .filter((row) => !!row.s)
+    .sort((x, y) => (x.s.starts_on ?? "").localeCompare(y.s.starts_on ?? ""));
+
+  // Filter to camps whose event occurred near this one — best-effort grouping.
+  // For reminders / patches: a single event usually maps to a single camp.
+  // For offers: bulk send wave shares a millisecond-class timestamp.
+  let instructorCamps;
+  if (event.kind === "offer") {
+    instructorCamps = bundled.filter(({ a }) => {
+      if (!a.email_sent_at) return false;
+      return Math.abs(new Date(a.email_sent_at).getTime() - ts) < 60_000;
+    });
+    if (instructorCamps.length === 0) instructorCamps = [{ a: assignment, s: session }];
+  } else {
+    instructorCamps = [{ a: assignment, s: session }];
+  }
+
+  // Recover deadline from the system message text when it ended in "deadline YYYY-MM-DD".
+  const deadlineMatch = /deadline\s+(\d{4}-\d{2}-\d{2})/i.exec(event.message || "");
+  const deadline = deadlineMatch ? deadlineMatch[1] : assignment.deadline ?? null;
+
+  const portalUrl = `https://enrops.com/j2s/instructor`;
+  const ctx = {
+    assignment,
+    instructorCamps,
+    locationsById,
+    cycle,
+    orgName,
+    portalUrl,
+    deadline,
+    instructorFirst: assignment.instructor_first,
+  };
+
+  let html;
+  if (event.kind === "offer") html = renderOfferEmailHtml(ctx);
+  else if (event.kind === "patch") html = renderPatchEmailHtml(ctx);
+  else if (event.kind === "reminder") html = renderReminderEmailHtml(ctx);
+  else html = "";
+
+  return (
+    <div style={{ marginTop: 8, border: `1px solid ${RULE}`, borderRadius: 6, overflow: "hidden", background: CHALK }}>
+      <iframe
+        title="Email preview"
+        srcDoc={html}
+        style={{ width: "100%", height: 520, border: "none", background: "#fff" }}
+      />
     </div>
   );
 }
