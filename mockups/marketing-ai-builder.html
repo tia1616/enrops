@@ -239,10 +239,65 @@
         </select>
       </div>
     </div>
-    <div id="scope-detail" class="mt-3">
-      <input type="text" placeholder="Search schools&hellip;" value="Hillsboro Family Center, Cascadia"
-             class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm" /><!-- placeholder -->
-      <p class="text-xs text-gray-500 mt-2">Type to search. Multiple is fine.</p>
+    <!-- Scope detail (swaps based on scope select). Each pane is a real
+         multi-select pulled from the org's contacts/locations in the real build. -->
+    <div id="scope-detail-school" class="scope-detail mt-3">
+      <p class="text-xs text-gray-500 mb-2">Pick one or more schools (from your locations list).</p>
+      <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <input type="text" placeholder="Search your schools&hellip;"
+               class="w-full border-0 border-b border-gray-200 px-3 py-2 text-sm focus:ring-0 outline-none" />
+        <div class="max-h-48 overflow-y-auto divide-y divide-gray-100">
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" checked /><span class="text-sm">Hillsboro Family Center</span><span class="ml-auto text-xs text-gray-400">68 parents</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" checked /><span class="text-sm">Cascadia</span><span class="ml-auto text-xs text-gray-400">179 parents</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Alameda</span><span class="ml-auto text-xs text-gray-400">122 parents</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Mabel Rush</span><span class="ml-auto text-xs text-gray-400">94 parents</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Cannady</span><span class="ml-auto text-xs text-gray-400">76 parents</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Forest Grove</span><span class="ml-auto text-xs text-gray-400">58 parents</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Atfalati Ridge</span><span class="ml-auto text-xs text-gray-400">41 parents</span></label>
+        </div>
+      </div>
+    </div>
+
+    <div id="scope-detail-area" class="scope-detail mt-3 hidden">
+      <p class="text-xs text-gray-500 mb-2">Pick one or more areas (from the geo segments on your recipients).</p>
+      <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div class="max-h-48 overflow-y-auto divide-y divide-gray-100">
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" checked /><span class="text-sm">Hillsboro</span><span class="ml-auto text-xs text-gray-400">412 parents · 4 schools</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Beaverton</span><span class="ml-auto text-xs text-gray-400">389 parents · 5 schools</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Forest Grove</span><span class="ml-auto text-xs text-gray-400">217 parents · 3 schools</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Portland (NW)</span><span class="ml-auto text-xs text-gray-400">144 parents · 2 schools</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Tualatin</span><span class="ml-auto text-xs text-gray-400">88 parents · 2 schools</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Camas (WA)</span><span class="ml-auto text-xs text-gray-400">71 parents · 1 school</span></label>
+        </div>
+      </div>
+    </div>
+
+    <div id="scope-detail-segment" class="scope-detail mt-3 hidden">
+      <p class="text-xs text-gray-500 mb-2">Pick one or more saved segments (from <code>marketing_recipients.segments</code>).</p>
+      <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div class="max-h-48 overflow-y-auto divide-y divide-gray-100">
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm font-mono">fa26_prospect</span><span class="ml-auto text-xs text-gray-400">312 parents</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm font-mono">summer26_hillsboro</span><span class="ml-auto text-xs text-gray-400">87 parents</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm font-mono">past_no_reenroll</span><span class="ml-auto text-xs text-gray-400">196 parents</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm font-mono">pta_engaged</span><span class="ml-auto text-xs text-gray-400">42 parents</span></label>
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm font-mono">vip_full_year</span><span class="ml-auto text-xs text-gray-400">28 parents</span></label>
+        </div>
+      </div>
+    </div>
+
+    <div id="scope-detail-person" class="scope-detail mt-3 hidden">
+      <p class="text-xs text-gray-500 mb-2">Find one parent by name, email, or child&rsquo;s name.</p>
+      <input type="text" placeholder="Start typing&hellip;" class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+      <div class="mt-2 bg-white border border-gray-200 rounded-lg divide-y divide-gray-100 text-sm">
+        <button class="w-full text-left px-3 py-2 hover:bg-gray-50 flex justify-between items-center" onclick="wired('selects this parent; campaign locks to a single recipient_id.')"><span><strong>Maria Reyes</strong> &middot; maria.reyes@example.com</span><span class="text-xs text-gray-400">Hillsboro</span></button>
+        <button class="w-full text-left px-3 py-2 hover:bg-gray-50 flex justify-between items-center" onclick="wired('selects this parent; campaign locks to a single recipient_id.')"><span><strong>Anil Kapoor</strong> &middot; anil.k@example.com</span><span class="text-xs text-gray-400">Cascadia</span></button>
+      </div>
+    </div>
+
+    <div id="scope-detail-master" class="scope-detail mt-3 hidden">
+      <div class="bg-white border border-gray-200 rounded-lg p-3 text-sm text-gray-600">
+        All 2,275 recipients in your master list are included. Use the &ldquo;Participation status&rdquo; filter above to narrow by current / past / prospect.
+      </div>
     </div>
     <div class="mt-4 flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-200">
       <p class="text-sm"><span class="font-semibold">~247 recipients</span> match so far<!-- placeholder --></p>
@@ -275,9 +330,17 @@
         </select>
       </div>
     </div>
-    <div class="mt-3">
-      <input type="text" placeholder="Or pick specific orgs&hellip;" value="Hillsboro Family Center, Beaverton Parks &amp; Rec"
-             class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm" /><!-- placeholder -->
+    <p class="text-xs text-gray-500 mt-3 mb-2">Or pick specific orgs from your partner list:</p>
+    <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <input type="text" placeholder="Search your partner orgs&hellip;"
+             class="w-full border-0 border-b border-gray-200 px-3 py-2 text-sm focus:ring-0 outline-none" />
+      <div class="max-h-48 overflow-y-auto divide-y divide-gray-100">
+        <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" checked /><span class="text-sm">Hillsboro Family Center</span><span class="ml-auto text-xs text-gray-400">School · Pat Lin</span></label>
+        <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" checked /><span class="text-sm">Beaverton Parks &amp; Rec</span><span class="ml-auto text-xs text-gray-400">Parks · Sam Ortiz</span></label>
+        <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Cedar Hills Library</span><span class="ml-auto text-xs text-gray-400">Library · Devon Chase</span></label>
+        <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Cascadia Elementary</span><span class="ml-auto text-xs text-gray-400">School · Pat Choi</span></label>
+        <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Forest Grove SD</span><span class="ml-auto text-xs text-gray-400">District · Alex Murray</span></label>
+      </div>
     </div>
     <div class="mt-4 flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-200">
       <p class="text-sm"><span class="font-semibold">~12 partner contacts</span> match so far<!-- placeholder --></p>
@@ -308,9 +371,17 @@
         </select>
       </div>
     </div>
-    <div class="mt-3">
-      <input type="text" placeholder="Or pick specific instructors&hellip;" value="Skyler Adams, Kristin Park"
-             class="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm" /><!-- placeholder -->
+    <p class="text-xs text-gray-500 mt-3 mb-2">Or pick specific instructors from your roster:</p>
+    <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <input type="text" placeholder="Search your instructors&hellip;"
+             class="w-full border-0 border-b border-gray-200 px-3 py-2 text-sm focus:ring-0 outline-none" />
+      <div class="max-h-48 overflow-y-auto divide-y divide-gray-100">
+        <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" checked /><span class="text-sm">Skyler Adams</span><span class="ml-auto text-xs text-gray-400">Lead · 14 terms</span></label>
+        <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" checked /><span class="text-sm">Kristin Park</span><span class="ml-auto text-xs text-gray-400">Developing · 4 terms</span></label>
+        <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Bo Tran</span><span class="ml-auto text-xs text-gray-400">Apprentice · 1 term</span></label>
+        <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Lance Whitaker</span><span class="ml-auto text-xs text-gray-400">Lead · 9 terms</span></label>
+        <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"><input type="checkbox" /><span class="text-sm">Devon Yu</span><span class="ml-auto text-xs text-gray-400">Developing · 3 terms</span></label>
+      </div>
     </div>
     <div class="mt-4 flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-200">
       <p class="text-sm"><span class="font-semibold">~18 instructors</span> match so far<!-- placeholder --></p>
@@ -1194,8 +1265,10 @@ Future-ready skills, right after school.</textarea><!-- placeholder J2S closer -
   }
 
   function onScopeChange(v) {
-    const detail = document.getElementById('scope-detail');
-    detail.classList.toggle('hidden', v === 'master');
+    document.querySelectorAll('.scope-detail').forEach(el => el.classList.add('hidden'));
+    const map = { master: 'scope-detail-master', school: 'scope-detail-school', area: 'scope-detail-area', segment: 'scope-detail-segment', person: 'scope-detail-person' };
+    const target = document.getElementById(map[v]);
+    if (target) target.classList.remove('hidden');
   }
 
   function startDrafting() {
