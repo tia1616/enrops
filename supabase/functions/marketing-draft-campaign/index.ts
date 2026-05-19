@@ -342,6 +342,22 @@ function joinWithAnd(items: string[]): string {
 // Prompt + Claude call
 // ---------------------------------------------------------------------------
 
+// Approved merge tokens — must match docs/marketing-merge-tokens.md exactly.
+// The mechanical-check pass rejects drafts that use a {{token}} not in this set.
+const APPROVED_TOKENS = new Set([
+  // per-recipient
+  "first_name", "parent_name", "child_first_name", "child_last_name",
+  "school", "city", "zip", "geo_segment", "unsubscribe_url",
+  // per-org
+  "org_name", "sender_name", "sender_email", "register_url", "reply_to",
+  "logo_url", "closer", "phone", "website",
+  // per-program (computed from this recipient's school's programs)
+  "savings", "early_bird_price", "regular_price", "early_bird_deadline",
+  "first_session_date", "session_count", "day_of_week", "curriculum", "vip_price",
+  // per-campaign
+  "topic", "topics_list", "promo_code", "promo_amount",
+]);
+
 function buildSystemPrompt(
   org: OrgConfig,
   inputs: DraftInputs,
@@ -358,12 +374,11 @@ function buildSystemPrompt(
     closer?: string;
   };
   const sender = org.default_sender_name ?? "the team";
-  const audience = v.audience ?? "parents of enrichment-program students";
-  const tone = v.tone ?? "warm, positive, celebratory; no tech jargon";
-  const avoid = v.do_not_use?.length ? `Avoid these phrases: ${v.do_not_use.join(", ")}.` : "";
-  const favor = v.do_use?.length ? `Favor language like: ${v.do_use.join(", ")}.` : "";
-  const notes = v.additional_notes ?? "";
-  const closer = v.closer ? `End every email body with this exact line on its own paragraph: "${v.closer}"` : "";
+  const audience = v.audience ?? "parents of K-5 kids enrolled or interested in enrichment programs";
+  const tone = v.tone ?? "warm, positive, smart, casual — like a thoughtful friend";
+  const avoid = v.do_not_use?.length ? `\nThis provider has asked you to AVOID these phrases (their explicit corrections beat your defaults): ${v.do_not_use.join(", ")}` : "";
+  const favor = v.do_use?.length ? `\nThis provider reaches for these phrases — favor them when natural: ${v.do_use.join(", ")}` : "";
+  const notes = v.additional_notes ? `\nProvider notes: ${v.additional_notes}` : "";
 
   const topics = Array.isArray(inputs.what) ? inputs.what : [inputs.what];
   const topicLine = topics.length === 1
@@ -374,31 +389,61 @@ function buildSystemPrompt(
     ? `Channels requested: ${inputs.channels.join(", ")}. v1 generates email touchpoints only; flyer + social are placeholders.`
     : "Channels: email only in v1.";
 
-  const standingRules = [
-    `STANDING RULES (apply to every touchpoint):`,
-    `- Never use cancellation language with parents.`,
-    `- One clear call to action per email. CTA links to the org's registration page (caller injects URL).`,
-    `- Subject line under 60 characters; no all-caps, no clickbait, no emoji.`,
-    `- Preheader (first ~80 chars of body) extends the subject, never repeats it.`,
-    `- Personalize with {{first_name}} and {{school}} merge tokens where natural.`,
-    `- If a touchpoint references an early-bird deadline or savings, mention the date plainly; caller injects pricing from programs.early_bird_price_cents.`,
-    `- DEFAULT SEND TIMES (org timezone ${orgTimezone}): Tuesday/Thursday 10am for regular sends. Deadline-day reminders 7am. Welcome notes Monday 9am. NEVER Friday afternoons or weekends.`,
-    `- THROTTLE: this org caps marketing at 1 email per parent per 10 days. Space consecutive emails at least 6 days apart.`,
-    `- For any topic that has a known deadline (early-bird ends, registration closes), include BOTH a 48-hour-before AND a 24-hour-before reminder email.`,
-    `- Pop-culture themes (Pokémon, Minecraft, LEGO, Mario) welcome when they fit.`,
-    `- No promotional puffery. Lead with what kids do and make.`,
-    ``,
-    `ANTI-HALLUCINATION RULES (CRITICAL — adhere strictly):`,
-    `- DO NOT invent specific dollar amounts ("Save $90!"). If you don't know the exact savings, write "save on early-bird pricing" or use a {{savings}} merge token. The caller injects exact figures from programs.early_bird_price_cents at send time.`,
-    `- DO NOT name specific programs, curricula, day-of-week schedules, or session counts unless they appear verbatim in the campaign topics above. If unsure, refer to "your child's after-school STEAM program" or similar generic phrasing.`,
-    `- DO NOT name specific schools. Use the {{school}} merge token. The renderer fills it per-recipient.`,
-    `- DO NOT name specific parents or kids. Use {{first_name}} for the parent. If you reference a child, use generic phrasing like "your child" — never invent a name.`,
-    `- DO NOT use a promo code in copy unless the campaign topics explicitly mention one. If unsure, refer to "early-bird pricing" without inventing a code.`,
-    `- DO NOT invent historical statistics ("Last year 200 families joined", "82% of kids continued"). If you don't have the number, leave it out.`,
-    `- DO NOT invent specific dates beyond the touchpoint's own scheduled_at. For deadlines, say "registration closes [date]" only if the date is implied by the duration. Otherwise, say "before the deadline" and let the caller fill in.`,
-    `- DO NOT invent staff names, instructor names, or organizational details. The sender name is "${sender}" — use that. If you need to refer to the team, use "${sender}" or "our team".`,
-    `- When in doubt about a specific fact, choose generic phrasing over making something up. Merge tokens always beat invented specifics.`,
-  ].join("\n");
+  const tokenList = `Approved merge tokens (use these for ALL specifics):
+- Per-recipient: {{first_name}}, {{parent_name}}, {{child_first_name}}, {{child_last_name}}, {{school}}, {{city}}, {{zip}}, {{geo_segment}}, {{unsubscribe_url}}
+- Per-org: {{org_name}}, {{sender_name}}, {{sender_email}}, {{register_url}}, {{reply_to}}, {{logo_url}}, {{closer}}, {{phone}}, {{website}}
+- Per-program (pulled per recipient's school): {{savings}}, {{early_bird_price}}, {{regular_price}}, {{early_bird_deadline}}, {{first_session_date}}, {{session_count}}, {{day_of_week}}, {{curriculum}}, {{vip_price}}
+- Per-campaign: {{topic}}, {{topics_list}}, {{promo_code}}, {{promo_amount}}
+
+If a {{token}} you'd want doesn't appear in this list, do NOT invent one. Write around it generically.`;
+
+  const personaBlock = `You are Don, the marketing director avatar for Enrops — a platform that helps after-school enrichment providers run their programs. You write emails on behalf of ${sender} to parents of K-5 kids.
+
+WHO YOU ARE
+You're warm, positive, smart, and casual. You write like a thoughtful friend who happens to know a lot about kids and learning — not like a marketer. Parents make decisions emotionally for their kids, so you lean into the good feelings: excitement, possibility, the joy of seeing a kid light up about something new. You don't manufacture fear, FOMO, or anxiety about kids "falling behind." Mild urgency around real deadlines is fine ("early-bird ends Friday") — manufactured scarcity ("only 3 spots left!") is not.
+
+Emojis are welcome when they feel natural. One or two in a subject line, a sprinkle in the body. Never decorative rows of them.
+
+WHO YOU'RE WRITING TO
+Audience: ${audience}.
+Tone: ${tone}.${avoid}${favor}${notes}
+
+THE HARD RULE: USE TOKENS FOR SPECIFICS
+You MUST use the approved merge tokens for anything specific. You MUST NOT invent specifics.
+
+- Never write a dollar amount inline. Use {{early_bird_price}}, {{regular_price}}, {{savings}}, or {{promo_amount}}.
+- Never write a specific date, day of week, or session count. Use {{early_bird_deadline}} or {{first_session_date}}, or write around it ("registration is open now", "before the deadline").
+- Never write a parent's name, child's name, or school name. Use {{first_name}}, {{child_first_name}}, {{school}}.
+- Never invent a promo code. Only reference {{promo_code}} if the operator's topics explicitly mention one.
+- Never invent a curriculum name, instructor name, location detail, or program beyond what the operator typed.
+- Never cite statistics ("200 families joined last year", "92% of kids improved"). Don't fabricate social proof.
+
+If you need a specific fact and there's no token, write generically ("our upcoming session", "more details on the registration page"). Generic copy is always better than invented copy.
+
+THINGS YOU SHOULD NEVER CLAIM
+- That a program is "selling fast" or "almost full" (unless the operator said so).
+- That it's "award-winning," "accredited," or "the most popular" anything.
+- That a child will achieve a specific outcome ("your child will master Python"). Describe what they'll do, not what they'll become.
+- That this program is better than another provider's.
+- Never use cancellation language with parents.
+
+VOICE DETAILS
+- One exclamation point per email max; ideally zero in subject lines.
+- Address the parent, not the kid. "Your student" not "you."
+- Subject line under 60 characters; no all-caps; no clickbait.
+- Preheader (first ~80 chars of body) extends the subject, never repeats it.
+- Match length to purpose: a kickoff can be substantial; a 24-hour reminder is three or four sentences.
+- End every email body with the closer line on its own paragraph: "${v.closer ?? "(no closer set)"}" — only if a closer is set, otherwise omit.
+
+${tokenList}
+
+SCHEDULE-PLANNING RULES (you plan a multi-touchpoint sequence, not a single send)
+- DEFAULT SEND TIMES (org timezone ${orgTimezone}): Tuesday/Thursday 10am for regular sends. Deadline-day reminders at 7am. Welcome notes Monday 9am. NEVER Friday afternoons or weekends.
+- THROTTLE: this org caps at 1 email per parent per 10 days. Space consecutive emails at least 6 days apart.
+- For any topic with a known deadline, include BOTH a 48-hour-before AND a 24-hour-before reminder email.
+
+PER-PROVIDER NOTES
+If the provider has refined your voice over time (their "Don's notes" file), those corrections beat your defaults. None supplied yet for this draft.`;
 
   const cadenceGuidance = `CADENCE HEURISTICS by duration:
 - "2 weeks": 2-3 emails. Kickoff + 1 mid + 1 final-call if a deadline lives in-window.
@@ -407,14 +452,7 @@ function buildSystemPrompt(
 - "custom": pick a reasonable cadence with 6-10 day spacing.`;
 
   return [
-    `You are Don, the marketing director for ${sender}. You plan multi-touchpoint email campaigns.`,
-    ``,
-    `Audience: ${audience}`,
-    `Tone: ${tone}`,
-    avoid,
-    favor,
-    notes,
-    closer,
+    personaBlock,
     ``,
     `Today is: ${todayIso} (org timezone: ${orgTimezone})`,
     topicLine,
@@ -422,22 +460,21 @@ function buildSystemPrompt(
     `Campaign duration: "${inputs.duration}" — count from today.`,
     channelNote,
     ``,
-    standingRules,
-    ``,
     cadenceGuidance,
     ``,
     `OUTPUT FORMAT:`,
     `Return ONLY a single JSON object (no markdown fences). Schema:`,
     `{`,
     `  "schedule_summary": "<one short sentence describing the overall plan>",`,
+    `  "notes_to_operator": "<optional: anything ambiguous, missing, or that the operator should know. Empty string if nothing to flag.>",`,
     `  "touchpoints": [`,
     `    {`,
     `      "order_index": 0,`,
     `      "type": "email",`,
-    `      "label": "<brief internal name: kickoff | mid-window | 48h-promo | 24h-promo | 48h-reg-close | 24h-reg-close | final-call | thanks>",`,
+    `      "label": "<kickoff | mid-window | 48h-promo | 24h-promo | 48h-reg-close | 24h-reg-close | final-call | thanks>",`,
     `      "scheduled_at": "<ISO 8601 with timezone offset, e.g. 2026-05-21T10:00:00-07:00>",`,
-    `      "subject": "<= 60 chars",`,
-    `      "body_html": "<clean HTML, no <html>/<body> wrappers, no inline <style>>",`,
+    `      "subject": "<= 60 chars, uses tokens for any specifics>",`,
+    `      "body_html": "<clean HTML, no wrappers, uses {{first_name}} and {{school}} merge tokens>",`,
     `      "body_text": "<plain-text version>",`,
     `      "topics": ["<which input topics this touchpoint covers; subset of: ${topics.map((t) => `\\"${t}\\"`).join(", ")}>"]`,
     `    }`,
@@ -449,6 +486,7 @@ function buildSystemPrompt(
     `- order_index starts at 0 and is contiguous.`,
     `- scheduled_at must be in the future (after today) and respect default send times.`,
     `- Each touchpoint's "topics" array must be a non-empty subset of the input topics.`,
+    `- If a topic is ambiguous or you're unsure about something, put it in notes_to_operator — DON'T guess in the copy.`,
   ]
     .filter((line) => line !== undefined && line !== null && (typeof line !== "string" || line !== ""))
     .join("\n");
@@ -465,8 +503,129 @@ type Touchpoint = {
   topics: string[];
 };
 
+// ---------------------------------------------------------------------------
+// Mechanical validation — see docs/don/mechanical-checks.md
+// ---------------------------------------------------------------------------
+
+const KNOWN_ACRONYMS = new Set([
+  "STEAM", "STEM", "LEGO", "PT", "PST", "PDT", "EST", "EDT", "AM", "PM",
+  "USA", "FAQ", "CEO", "VIP", "AI", "TV", "PC", "NPR", "K", "FA", "WI", "SP", "SU",
+]);
+
+const BANNED_CLAIM_PATTERNS: { pattern: RegExp; label: string }[] = [
+  { pattern: /\bmost popular\b/i, label: "most popular" },
+  { pattern: /\baward[-\s]?winning\b/i, label: "award-winning" },
+  { pattern: /\bbest in\b/i, label: "best in" },
+  { pattern: /\btop[-\s]?rated\b/i, label: "top-rated" },
+  { pattern: /\bvoted #?1\b/i, label: "voted #1" },
+  { pattern: /\bselling fast\b/i, label: "selling fast" },
+  { pattern: /\bgoing fast\b/i, label: "going fast" },
+  { pattern: /\balmost full\b/i, label: "almost full" },
+  { pattern: /\bfilling up\b/i, label: "filling up" },
+  { pattern: /\bback by popular demand\b/i, label: "back by popular demand" },
+];
+
+const MONTH_DATE_PATTERN = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?\b/i;
+const NUMERIC_DATE_PATTERN = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+type ValidationIssue = { type: string; detail: string };
+type TouchpointValidation = {
+  touchpoint_label: string;
+  order_index: number;
+  hard: ValidationIssue[];
+  warnings: ValidationIssue[];
+};
+
+function validateTouchpoint(
+  tp: Touchpoint,
+  brandVoice: { do_not_use?: string[] } | null,
+): TouchpointValidation {
+  const hard: ValidationIssue[] = [];
+  const warnings: ValidationIssue[] = [];
+  const subject = tp.subject ?? "";
+  const bodyHtml = tp.body_html ?? "";
+  const bodyText = tp.body_text ?? "";
+  const bodyStripped = stripHtml(bodyHtml);
+  const combined = `${subject}\n${bodyStripped}\n${bodyText}`;
+
+  // -------- Hard: inline dollar amounts ----------
+  const dollarMatch = combined.match(/\$\d[\d,]*(?:\.\d{1,2})?/);
+  if (dollarMatch) {
+    hard.push({ type: "inline_dollar_amount", detail: dollarMatch[0] });
+  }
+
+  // -------- Hard: unknown tokens ----------
+  const seenTokens = new Set<string>();
+  for (const m of combined.matchAll(/\{\{(\w+)\}\}/g)) {
+    seenTokens.add(m[1]);
+  }
+  for (const tok of seenTokens) {
+    if (!APPROVED_TOKENS.has(tok)) {
+      hard.push({ type: "unknown_token", detail: `{{${tok}}}` });
+    }
+  }
+
+  // -------- Hard: banned phrases from brand_voice.do_not_use ----------
+  for (const phrase of brandVoice?.do_not_use ?? []) {
+    if (!phrase) continue;
+    const re = new RegExp(`\\b${escapeRegex(phrase)}\\b`, "i");
+    if (re.test(combined)) {
+      hard.push({ type: "banned_phrase", detail: phrase });
+    }
+  }
+
+  // -------- Soft: bare dates ----------
+  const monthDate = bodyStripped.match(MONTH_DATE_PATTERN);
+  const numericDate = bodyStripped.match(NUMERIC_DATE_PATTERN);
+  if (monthDate) warnings.push({ type: "bare_date", detail: monthDate[0] });
+  if (numericDate) warnings.push({ type: "bare_date", detail: numericDate[0] });
+
+  // -------- Soft: exclamation count ----------
+  const exSubject = (subject.match(/!/g) ?? []).length;
+  const exBody = (bodyStripped.match(/!/g) ?? []).length;
+  if (exSubject > 1) warnings.push({ type: "exclamation_subject", detail: `${exSubject} in subject` });
+  if (exBody > 2) warnings.push({ type: "exclamation_body", detail: `${exBody} in body` });
+
+  // -------- Soft: all-caps words ----------
+  const capsWords = (combined.match(/\b[A-Z]{4,}\b/g) ?? []).filter((w) => !KNOWN_ACRONYMS.has(w));
+  if (capsWords.length > 0) {
+    warnings.push({ type: "all_caps", detail: capsWords.slice(0, 3).join(", ") });
+  }
+
+  // -------- Soft: emoji count ----------
+  // \p{Extended_Pictographic} matches emojis. Use 'u' flag.
+  const emojiMatches = combined.match(/\p{Extended_Pictographic}/gu) ?? [];
+  if (emojiMatches.length > 3) warnings.push({ type: "too_many_emojis", detail: `${emojiMatches.length} emojis` });
+
+  // -------- Soft: unverifiable claims ----------
+  for (const { pattern, label } of BANNED_CLAIM_PATTERNS) {
+    const m = combined.match(pattern);
+    if (m) warnings.push({ type: "unverifiable_claim", detail: `"${label}" → ${m[0]}` });
+  }
+
+  return { touchpoint_label: tp.label, order_index: tp.order_index, hard, warnings };
+}
+
+function validateSchedule(
+  schedule: Schedule,
+  brandVoice: { do_not_use?: string[] } | null,
+): { results: TouchpointValidation[]; anyHard: boolean } {
+  const results = schedule.touchpoints.map((tp) => validateTouchpoint(tp, brandVoice));
+  const anyHard = results.some((r) => r.hard.length > 0);
+  return { results, anyHard };
+}
+
 type Schedule = {
   schedule_summary: string;
+  notes_to_operator?: string;
   touchpoints: Touchpoint[];
 };
 
@@ -531,7 +690,11 @@ async function callClaude(systemPrompt: string, topics: string[]): Promise<
             topics: tp.topics,
           });
         }
-        return { schedule_summary: parsed.schedule_summary, touchpoints: tps };
+        return {
+          schedule_summary: parsed.schedule_summary,
+          notes_to_operator: typeof parsed.notes_to_operator === "string" ? parsed.notes_to_operator : undefined,
+          touchpoints: tps,
+        };
       }
     } catch {
       // fall through
@@ -634,9 +797,39 @@ serve(async (req: Request) => {
   const todayIso = new Date().toISOString();
   const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone);
   const topicsArr = Array.isArray(inputs.what) ? inputs.what : [inputs.what];
-  const claudeResult = await callClaude(systemPrompt, topicsArr);
+  let claudeResult = await callClaude(systemPrompt, topicsArr);
   if (!claudeResult.ok) return jsonError(claudeResult.error, claudeResult.status);
-  const { schedule, model } = claudeResult;
+  let { schedule, model } = claudeResult;
+  const brandVoice = orgRow.brand_voice as { do_not_use?: string[] } | null;
+
+  // Mechanical-check pass. Hard failures get one retry (Claude re-rolls).
+  // Soft warnings always pass through to the operator for review.
+  let validation = validateSchedule(schedule, brandVoice);
+  let retried = false;
+  if (validation.anyHard) {
+    retried = true;
+    const retry = await callClaude(systemPrompt, topicsArr);
+    if (retry.ok) {
+      const retryValidation = validateSchedule(retry.schedule, brandVoice);
+      // Prefer the retry only if it has fewer hard failures (or zero).
+      const beforeHard = validation.results.reduce((n, r) => n + r.hard.length, 0);
+      const afterHard = retryValidation.results.reduce((n, r) => n + r.hard.length, 0);
+      if (afterHard < beforeHard) {
+        schedule = retry.schedule;
+        model = retry.model;
+        validation = retryValidation;
+      }
+    }
+  }
+  const mechanicalChecks = {
+    retried,
+    touchpoints: validation.results.map((r) => ({
+      order_index: r.order_index,
+      label: r.touchpoint_label,
+      hard_failures: r.hard,
+      warnings: r.warnings,
+    })),
+  };
 
   // First touchpoint = the "lead" email; its subject/body populate the parent
   // campaigns row so the existing campaigns list keeps working.
@@ -691,6 +884,7 @@ serve(async (req: Request) => {
     campaign_id: inserted.id,
     schedule: {
       summary: schedule.schedule_summary,
+      notes_to_operator: schedule.notes_to_operator ?? "",
       touchpoints: (insertedTps ?? []).map((tp: { id: string; order_index: number; type: string; scheduled_at: string; status: string; payload: Record<string, unknown>; topics: string[] }) => ({
         id: tp.id,
         order_index: tp.order_index,
@@ -713,6 +907,7 @@ serve(async (req: Request) => {
       count: recipientCount,
       segment_summary,
     },
+    mechanical_checks: mechanicalChecks,
     model,
     inputs_echo: inputs,
     ...(zeroRecipientWarning ? { warning: zeroRecipientWarning } : {}),
