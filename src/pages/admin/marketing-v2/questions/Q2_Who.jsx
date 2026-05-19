@@ -238,7 +238,6 @@ function AreaSelect({ orgId, selected, onChange }) {
     let alive = true;
     setAreas(null);
     setErr(null);
-    // Pull distinct non-null geo_segments via a simple query (cap at 500).
     supabase
       .from("marketing_recipients")
       .select("geo_segment")
