@@ -100,6 +100,23 @@ type Recipient = {
 
 type Org = { id: string; name: string; logo_url: string | null; logo_email_url: string | null };
 
+// Request contract. Keep additive — UI and back-end agree on this shape.
+type SendRequest = {
+  campaign_id: string;
+  mode: 'preview' | 'test' | 'send';
+  test_email?: string;
+  school_filter?: string[];
+  batch_size?: number;
+  delay_ms?: number;
+  // AI Campaign Builder (Chunk 3.6): when present and non-empty, this exact list
+  // of marketing_recipients.id values is the send target. Saved
+  // school_list / school_filter on the campaign are bypassed. All IDs must
+  // belong to the campaign's organization or the request is rejected.
+  ad_hoc_recipient_ids?: string[];
+};
+
+const AD_HOC_RECIPIENT_CAP = 5000;
+
 type Branding = {
   primary: string;
   secondary: string;
@@ -116,22 +133,18 @@ serve(async (req: Request) => {
 
   try {
     const body = await req.json();
+    const parsed = parseRequest(body);
+    if ('error' in parsed) return json({ error: parsed.error }, parsed.status);
     const {
       campaign_id,
-      mode = 'preview',
+      mode,
       test_email,
       school_filter,
-      batch_size = 50,
-      delay_ms = 1000,
-    } = body ?? {};
-
-    if (!campaign_id) return json({ error: 'campaign_id required' }, 400);
-    if (!['preview', 'test', 'send'].includes(mode)) {
-      return json({ error: `invalid mode: ${mode}` }, 400);
-    }
-    if (mode === 'test' && !test_email) {
-      return json({ error: 'test_email required for mode=test' }, 400);
-    }
+      batch_size,
+      delay_ms,
+      ad_hoc_recipient_ids,
+    } = parsed.req;
+    const adHocMode = (ad_hoc_recipient_ids?.length ?? 0) > 0;
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -191,25 +204,116 @@ serve(async (req: Request) => {
       (schoolPrograms[schoolName] ||= []).push(p);
     }
 
-    // ---- Determine the school list ----
-    const campaignSchools = td.school_list ?? [];
-    const filterSet = school_filter ? new Set<string>(school_filter) : null;
-    const targetSchools = campaignSchools.filter(s => {
-      if (!schoolPrograms[s]) return false;
-      if (!filterSet) return true;
-      // school_filter accepts either display names or recipient aliases
-      const recAliases = Object.entries(td.school_name_aliases ?? {})
-        .filter(([_, disp]) => disp === s)
-        .map(([rec]) => rec);
-      return filterSet.has(s) || recAliases.some(a => filterSet.has(a));
-    });
-
     // ---- Build display->recipient school name map ----
+    // Always built from campaign's aliases — used in both ad-hoc and legacy modes
+    // to translate a recipient.school_name back to the campaign's display name.
+    const campaignSchools = td.school_list ?? [];
     const displayToRecipientNames: Record<string, string[]> = {};
     for (const s of campaignSchools) displayToRecipientNames[s] = [s];
     for (const [recName, dispName] of Object.entries(td.school_name_aliases ?? {})) {
       const arr = (displayToRecipientNames[dispName] ||= []);
       if (!arr.includes(recName)) arr.push(recName);
+    }
+
+    const PAGE = 1000;
+    let targetSchools: string[] = [];
+    const recipientsBySchool: Record<string, Recipient[]> = {};
+    let skippedNoSchoolMatch = 0;
+
+    if (adHocMode) {
+      // ---- Ad-hoc path: AI builder supplied the exact recipient list ----
+      const ids = ad_hoc_recipient_ids!;
+      if (ids.length > AD_HOC_RECIPIENT_CAP) {
+        return json(
+          { error: 'ad_hoc_recipient_ids_too_large', cap: AD_HOC_RECIPIENT_CAP, received: ids.length },
+          413,
+        );
+      }
+      // .in() can take a large list but PostgREST may chunk. We page-load in
+      // batches of PAGE just like the legacy path.
+      const recRows: Recipient[] = [];
+      for (let start = 0; start < ids.length; start += PAGE) {
+        const slice = ids.slice(start, start + PAGE);
+        const { data: page, error: rErr } = await supabase
+          .from('marketing_recipients')
+          .select('id, email, parent_name, child_first_name, school_name')
+          .eq('organization_id', orgId)
+          .in('id', slice);
+        if (rErr) return json({ error: `recipients query failed: ${rErr.message}` }, 500);
+        if (page) recRows.push(...(page as Recipient[]));
+      }
+      // Cross-tenant / unknown-id guard: every requested ID must come back from
+      // this org's row set. Missing IDs mean either a typo or a foreign-org id.
+      if (recRows.length !== ids.length) {
+        return json(
+          {
+            error: 'recipient_org_mismatch',
+            requested: ids.length,
+            resolved: recRows.length,
+          },
+          403,
+        );
+      }
+      // Bucket by display name (via reverse alias lookup). Recipients whose
+      // school_name doesn't map to any display name on this campaign — or whose
+      // display name has no programs — get counted but skipped. The AI builder
+      // should resolve this on its end next time; reporting it here gives the
+      // admin visibility before send.
+      const seenDisplays = new Set<string>();
+      for (const r of recRows) {
+        const recSchool = r.school_name ?? '';
+        const display = Object.keys(displayToRecipientNames).find(d =>
+          (displayToRecipientNames[d] ?? []).includes(recSchool),
+        );
+        if (!display || !schoolPrograms[display]) {
+          skippedNoSchoolMatch++;
+          continue;
+        }
+        (recipientsBySchool[display] ||= []).push(r);
+        seenDisplays.add(display);
+      }
+      targetSchools = [...seenDisplays];
+    } else {
+      // ---- Legacy path: derive recipients from campaign's school_list ----
+      const filterSet = school_filter ? new Set<string>(school_filter) : null;
+      targetSchools = campaignSchools.filter(s => {
+        if (!schoolPrograms[s]) return false;
+        if (!filterSet) return true;
+        // school_filter accepts either display names or recipient aliases
+        const recAliases = Object.entries(td.school_name_aliases ?? {})
+          .filter(([_, disp]) => disp === s)
+          .map(([rec]) => rec);
+        return filterSet.has(s) || recAliases.some(a => filterSet.has(a));
+      });
+
+      const allRecipientAliases = new Set<string>();
+      for (const s of targetSchools) {
+        for (const r of displayToRecipientNames[s] ?? []) allRecipientAliases.add(r);
+      }
+      // PostgREST caps responses at 1000 rows by default. Paginate so we always
+      // get every recipient.
+      const recRows: Recipient[] = [];
+      const aliasList = [...allRecipientAliases];
+      for (let off = 0; ; off += PAGE) {
+        const { data: page, error: rErr } = await supabase
+          .from('marketing_recipients')
+          .select('id, email, parent_name, child_first_name, school_name')
+          .eq('organization_id', orgId)
+          .in('school_name', aliasList)
+          .range(off, off + PAGE - 1);
+        if (rErr) return json({ error: `recipients query failed: ${rErr.message}` }, 500);
+        if (!page || page.length === 0) break;
+        recRows.push(...(page as Recipient[]));
+        if (page.length < PAGE) break;
+      }
+
+      for (const r of recRows) {
+        const display = targetSchools.find(d =>
+          (displayToRecipientNames[d] ?? []).includes(r.school_name ?? ''),
+        );
+        if (!display) continue;
+        (recipientsBySchool[display] ||= []).push(r);
+      }
     }
 
     // ---- Build school contexts ----
@@ -218,39 +322,6 @@ serve(async (req: Request) => {
       const programs = schoolPrograms[displayName] ?? [];
       return buildSchoolContext(displayName, programs, softOpenSet.has(displayName));
     });
-
-    // ---- Load recipients for target schools ----
-    const allRecipientAliases = new Set<string>();
-    for (const s of targetSchools) {
-      for (const r of displayToRecipientNames[s] ?? []) allRecipientAliases.add(r);
-    }
-    // PostgREST caps responses at 1000 rows by default. Paginate so we always
-    // get every recipient.
-    const recRows: Recipient[] = [];
-    const aliasList = [...allRecipientAliases];
-    const PAGE = 1000;
-    for (let off = 0; ; off += PAGE) {
-      const { data: page, error: rErr } = await supabase
-        .from('marketing_recipients')
-        .select('id, email, parent_name, child_first_name, school_name')
-        .eq('organization_id', orgId)
-        .in('school_name', aliasList)
-        .range(off, off + PAGE - 1);
-      if (rErr) return json({ error: `recipients query failed: ${rErr.message}` }, 500);
-      if (!page || page.length === 0) break;
-      recRows.push(...(page as Recipient[]));
-      if (page.length < PAGE) break;
-    }
-
-    const recipientsBySchool: Record<string, Recipient[]> = {};
-    for (const r of recRows) {
-      // map recipient.school_name back to display name
-      const display = targetSchools.find(d =>
-        (displayToRecipientNames[d] ?? []).includes(r.school_name ?? ''),
-      );
-      if (!display) continue;
-      (recipientsBySchool[display] ||= []).push(r);
-    }
 
     // ---- Load already-sent emails for dedup ----
     const alreadySent = new Set<string>();
@@ -326,10 +397,12 @@ serve(async (req: Request) => {
         mode,
         campaign_id,
         organization: org.name,
+        ad_hoc_mode: adHocMode,
         schools_targeted: targetSchools.length,
         total_recipients: summary.reduce((n: number, r: SchoolResult) => n + r.recipient_count, 0),
         already_sent_count: alreadySent.size,
         suppressed_count: suppressed.size,
+        skipped_no_school_match: skippedNoSchoolMatch,
         schools_with_zero_recipients: summary
           .filter((r: SchoolResult) => r.recipient_count === 0)
           .map((r: SchoolResult) => r.school),
@@ -347,7 +420,7 @@ serve(async (req: Request) => {
         const subject = `[TEST · ${ctx.displayName}] ${item.result.subject}`;
         const html = renderHtml(ctx, td, org, 'Jessica', branding, testUnsubUrl);
         try {
-          await sendViaResend(test_email, subject, html, testUnsubUrl);
+          await sendViaResend(test_email!, subject, html, testUnsubUrl);
           testResults.push({ school: ctx.displayName, subject: item.result.subject, ok: true });
         } catch (e) {
           testResults.push({ school: ctx.displayName, subject: item.result.subject, ok: false, error: String(e) });
@@ -457,12 +530,14 @@ serve(async (req: Request) => {
     return json({
       mode,
       campaign_id,
+      ad_hoc_mode: adHocMode,
       started_at: sendStarted,
       finished_at: new Date().toISOString(),
       schools: summary.length,
       total_sent: summary.reduce((n: number, r: SchoolResult) => n + r.sent, 0),
       total_skipped_already_sent: summary.reduce((n: number, r: SchoolResult) => n + r.skipped_already_sent, 0),
       total_skipped_suppressed: summary.reduce((n: number, r: SchoolResult) => n + r.skipped_suppressed, 0),
+      total_skipped_no_school_match: skippedNoSchoolMatch,
       total_errors: summary.reduce((n: number, r: SchoolResult) => n + r.errors, 0),
       suppressed_count: suppressed.size,
       chain_depth: chainDepth,
@@ -478,6 +553,49 @@ serve(async (req: Request) => {
 // =====================================================================
 // Helpers
 // =====================================================================
+
+// Single source of truth for the request shape. Front-end and back-end agree
+// on this contract. Returns either a normalized SendRequest or a JSON error +
+// HTTP status. `_chainDepth` is intentionally not part of SendRequest — it's
+// an internal continuation field read directly from `body` in the send loop.
+type ParsedRequest = SendRequest & { batch_size: number; delay_ms: number };
+function parseRequest(body: any): { req: ParsedRequest } | { error: string; status: number } {
+  const b = body ?? {};
+  if (!b.campaign_id || typeof b.campaign_id !== 'string') {
+    return { error: 'campaign_id required', status: 400 };
+  }
+  const mode = (b.mode ?? 'preview') as SendRequest['mode'];
+  if (!['preview', 'test', 'send'].includes(mode)) {
+    return { error: `invalid mode: ${mode}`, status: 400 };
+  }
+  if (mode === 'test' && (!b.test_email || typeof b.test_email !== 'string')) {
+    return { error: 'test_email required for mode=test', status: 400 };
+  }
+  if (b.ad_hoc_recipient_ids !== undefined && !Array.isArray(b.ad_hoc_recipient_ids)) {
+    return { error: 'ad_hoc_recipient_ids must be an array of UUID strings', status: 400 };
+  }
+  if (Array.isArray(b.ad_hoc_recipient_ids)) {
+    for (const id of b.ad_hoc_recipient_ids) {
+      if (typeof id !== 'string') {
+        return { error: 'ad_hoc_recipient_ids must be an array of UUID strings', status: 400 };
+      }
+    }
+  }
+  if (b.school_filter !== undefined && !Array.isArray(b.school_filter)) {
+    return { error: 'school_filter must be an array of strings', status: 400 };
+  }
+  return {
+    req: {
+      campaign_id: b.campaign_id,
+      mode,
+      test_email: b.test_email,
+      school_filter: b.school_filter,
+      batch_size: typeof b.batch_size === 'number' ? b.batch_size : 50,
+      delay_ms: typeof b.delay_ms === 'number' ? b.delay_ms : 1000,
+      ad_hoc_recipient_ids: b.ad_hoc_recipient_ids,
+    },
+  };
+}
 
 function buildSchoolContext(
   displayName: string,
