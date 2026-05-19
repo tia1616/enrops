@@ -7,13 +7,14 @@
 //   - inputs.who: structured WhoInput (audience + filter) — same forward-compat.
 // All tenant context (org, user) comes from useOutletContext(). No hardcoded ids.
 
-import { useReducer } from "react";
+import { useReducer, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { PLUM, RULE, INK, MUTED, OK } from "../marketing/tokens.jsx";
 import Q1_What from "./questions/Q1_What.jsx";
 import Q2_Who from "./questions/Q2_Who.jsx";
 import Q3_Duration from "./questions/Q3_Duration.jsx";
 import Q4_Channels from "./questions/Q4_Channels.jsx";
+import ScheduleReview from "./ScheduleReview.jsx";
 
 const INITIAL = {
   step: 1,
@@ -42,6 +43,31 @@ function reducer(state, action) {
       return { ...state, loading: false, draft: action.draft, step: "review" };
     case "DRAFT_FAILED":
       return { ...state, loading: false, error: action.error };
+    case "UPDATE_TOUCHPOINT": {
+      if (!state.draft) return state;
+      const tps = (state.draft.schedule?.touchpoints ?? []).map((tp) =>
+        tp.id === action.id ? { ...tp, ...action.patch } : tp,
+      );
+      return {
+        ...state,
+        draft: {
+          ...state.draft,
+          schedule: { ...state.draft.schedule, touchpoints: tps },
+        },
+      };
+    }
+    case "REMOVE_RECIPIENT": {
+      if (!state.draft) return state;
+      const r = state.draft.recipients ?? { ids: [], count: 0 };
+      const ids = r.ids.filter((id) => id !== action.id);
+      return {
+        ...state,
+        draft: {
+          ...state.draft,
+          recipients: { ...r, ids, count: Math.max(0, r.count - 1) },
+        },
+      };
+    }
     case "RESET":
       return INITIAL;
     default:
@@ -79,10 +105,42 @@ function isStepValid(step, inputs) {
 export default function AICampaignBuilder() {
   const { org, user } = useOutletContext() ?? {};
   const [state, dispatch] = useReducer(reducer, INITIAL);
+  const [actionBusy, setActionBusy] = useState(false);
 
   const setField = (field, value) => dispatch({ type: "SET_FIELD", field, value });
   const next = () => dispatch({ type: "NEXT" });
   const back = () => dispatch({ type: "BACK" });
+
+  // Local-only updates for chunk 06. Chunk 07 PATCHes the touchpoint row.
+  const updateTouchpoint = (id, patch) => dispatch({ type: "UPDATE_TOUCHPOINT", id, patch });
+  const removeRecipient = (id) => dispatch({ type: "REMOVE_RECIPIENT", id });
+
+  // Action stubs — chunk 07 wires these to real edge function + PATCH calls.
+  const onSaveDraft = () => {
+    setActionBusy(true);
+    setTimeout(() => {
+      setActionBusy(false);
+      alert("Save as draft — chunk 07 wires the PATCH against marketing_campaigns + marketing_campaign_touchpoints.");
+    }, 300);
+  };
+  const onSendTest = () => {
+    setActionBusy(true);
+    setTimeout(() => {
+      setActionBusy(false);
+      alert(`Send test to me — chunk 07 calls marketing-send (mode=test) with the admin recipient. ${user?.email ? "Will send to " + user.email : ""}`);
+    }, 300);
+  };
+  const onApprove = () => {
+    if (!confirm(`Approve ${state.draft?.schedule?.touchpoints?.length ?? 0} touchpoints and schedule them to ${state.draft?.recipients?.count ?? 0} recipients?`)) return;
+    setActionBusy(true);
+    setTimeout(() => {
+      setActionBusy(false);
+      alert("Approve & schedule — chunk 07 sets approved_at, queues touchpoints via marketing-touchpoint-cron.");
+    }, 400);
+  };
+  const onRegenerate = (touchpointId) => {
+    alert(`Regenerate ${touchpointId} — chunk 07 re-calls marketing-draft-campaign with a regenerate flag for this touchpoint only.`);
+  };
 
   // Mock draft trigger — chunk 07 swaps this for a real fetch to
   // marketing-draft-campaign. The shape mirrors the real response so the
@@ -163,13 +221,19 @@ export default function AICampaignBuilder() {
   }
 
   if (state.step === "review") {
-    // Placeholder review screen — chunk 06 builds the real two-column edit UI.
     return (
-      <ReviewPlaceholder
+      <ScheduleReview
         draft={state.draft}
         org={org}
         onBack={() => dispatch({ type: "BACK" })}
         onReset={() => dispatch({ type: "RESET" })}
+        onUpdateTouchpoint={updateTouchpoint}
+        onRemoveRecipient={removeRecipient}
+        onSaveDraft={onSaveDraft}
+        onSendTest={onSendTest}
+        onApprove={onApprove}
+        onRegenerate={onRegenerate}
+        busy={actionBusy}
       />
     );
   }
@@ -216,94 +280,4 @@ function ProgressHeader({ step }) {
   );
 }
 
-function ReviewPlaceholder({ draft, org, onBack, onReset }) {
-  const touchpoints = draft?.schedule?.touchpoints ?? [];
-  return (
-    <div style={{ maxWidth: 720, margin: "0 auto", paddingBottom: 24 }}>
-      <button
-        onClick={onBack}
-        style={{
-          background: "transparent", border: "none", color: MUTED,
-          cursor: "pointer", fontSize: 13, fontFamily: "inherit",
-          padding: "0 0 12px", display: "inline-flex", alignItems: "center", gap: 4,
-        }}
-      >
-        ← Back to questions
-      </button>
-      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 24 }}>
-        <p style={{ fontSize: 12, fontWeight: 600, color: OK, textTransform: "uppercase", letterSpacing: 0.4, margin: 0 }}>
-          Schedule ready (chunk 05 mock)
-        </p>
-        <h2 style={{ margin: "8px 0 6px", fontSize: 22, color: INK }}>
-          Here's the campaign Don put together.
-        </h2>
-        <p style={{ margin: "0 0 16px", color: MUTED, fontSize: 13 }}>
-          {draft?.schedule?.summary}
-        </p>
-
-        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px", fontSize: 13, marginBottom: 16 }}>
-          <div style={{ color: MUTED }}>Sender</div>
-          <div>{draft?.sender?.name}</div>
-          <div style={{ color: MUTED }}>Audience</div>
-          <div>{draft?.recipients?.segment_summary} ({draft?.recipients?.count} recipients)</div>
-        </div>
-
-        <p style={{ fontSize: 11, fontWeight: 600, color: PLUM, textTransform: "uppercase", letterSpacing: 0.6, margin: "16px 0 8px" }}>
-          The schedule ({touchpoints.length} touchpoints)
-        </p>
-
-        <ol style={{ listStyle: "none", margin: 0, padding: 0 }}>
-          {touchpoints.map((tp) => (
-            <li key={tp.id} style={{ border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 8, overflow: "hidden" }}>
-              <details>
-                <summary style={{ cursor: "pointer", listStyle: "none", padding: 10, display: "flex", alignItems: "center", gap: 10, background: "#fafafa" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: 6, background: "#f0e3e8", color: PLUM, fontWeight: 700, fontSize: 14 }}>
-                    {tp.type === "email" ? "✉" : tp.type === "social" ? "📣" : "📄"}
-                  </span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>
-                      {tp.label} · {tp.subject}
-                    </div>
-                    <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
-                      {new Date(tp.scheduled_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                      &nbsp;·&nbsp;{tp.topics?.join(" + ")}
-                    </div>
-                  </div>
-                </summary>
-                <div style={{ padding: 12, fontSize: 12, lineHeight: 1.55, color: INK, background: "#fff" }}
-                  dangerouslySetInnerHTML={{ __html: tp.body_html ?? "" }}
-                />
-              </details>
-            </li>
-          ))}
-        </ol>
-
-        <p style={{ marginTop: 16, fontSize: 12, color: MUTED }}>
-          The full editable schedule (per-touchpoint edit, send-test, approve &amp; schedule, promo card) lands in chunk 3.6.06.
-        </p>
-        <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-          <button
-            onClick={onBack}
-            style={{
-              padding: "8px 14px", background: "#fff", color: INK,
-              border: `1px solid ${RULE}`, borderRadius: 6, cursor: "pointer",
-              fontSize: 13, fontWeight: 500, fontFamily: "inherit",
-            }}
-          >
-            ← Edit answers
-          </button>
-          <button
-            onClick={onReset}
-            style={{
-              padding: "8px 14px", background: PLUM, color: "#fff",
-              border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 500,
-              fontFamily: "inherit",
-            }}
-          >
-            Start a new campaign
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// (ReviewPlaceholder was removed — ScheduleReview is the live review screen now.)
