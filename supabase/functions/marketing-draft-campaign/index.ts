@@ -45,8 +45,10 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 // stays warm and punchy. Override per-deploy via MARKETING_DRAFT_MODEL.
 const DRAFT_MODEL = Deno.env.get("MARKETING_DRAFT_MODEL") ?? "claude-opus-4-6";
 
-const MAX_TOKENS = 1500;
-const CLAUDE_TIMEOUT_MS = 60_000;
+// Multi-touchpoint schedules return ~6-9 emails worth of JSON. 8000 max_tokens
+// fits comfortably; if Don wants more, future chunks can stream or paginate.
+const MAX_TOKENS = 8000;
+const CLAUDE_TIMEOUT_MS = 120_000;
 const RECIPIENT_HARD_CAP = 5000;
 
 const corsHeaders = {
@@ -92,6 +94,7 @@ type OrgConfig = {
   default_sender_email: string | null;
   sending_domain: string | null;
   brand_voice: Record<string, unknown> | null;
+  timezone: string | null;
 };
 
 type ResolvedRecipients = {
@@ -339,7 +342,13 @@ function joinWithAnd(items: string[]): string {
 // Prompt + Claude call
 // ---------------------------------------------------------------------------
 
-function buildSystemPrompt(org: OrgConfig, inputs: DraftInputs, segmentSummary: string): string {
+function buildSystemPrompt(
+  org: OrgConfig,
+  inputs: DraftInputs,
+  segmentSummary: string,
+  todayIso: string,
+  orgTimezone: string,
+): string {
   const v = (org.brand_voice ?? {}) as {
     audience?: string;
     tone?: string;
@@ -354,38 +363,40 @@ function buildSystemPrompt(org: OrgConfig, inputs: DraftInputs, segmentSummary: 
   const avoid = v.do_not_use?.length ? `Avoid these phrases: ${v.do_not_use.join(", ")}.` : "";
   const favor = v.do_use?.length ? `Favor language like: ${v.do_use.join(", ")}.` : "";
   const notes = v.additional_notes ?? "";
-  const closer = v.closer ? `End the email body with this exact line on its own paragraph: "${v.closer}"` : "";
+  const closer = v.closer ? `End every email body with this exact line on its own paragraph: "${v.closer}"` : "";
 
-  // Topics — string[] normalized in parseRequest. Single topic = one focus;
-  // multiple topics = weave them so families hear about each without overlap.
   const topics = Array.isArray(inputs.what) ? inputs.what : [inputs.what];
   const topicLine = topics.length === 1
-    ? `Campaign topic: ${topics[0]}`
-    : `Campaign topics (weave these into one coherent message — do not stack them; pick a primary anchor and reference the other(s) naturally): ${topics.map((t) => `"${t}"`).join(", ")}`;
+    ? `Campaign topic: "${topics[0]}"`
+    : `Campaign topics (weave them across the schedule — each touchpoint covers one or more; tag each touchpoint with which topics it covers): ${topics.map((t) => `"${t}"`).join(", ")}`;
 
   const channelNote = inputs.channels.length > 1
-    ? `Channels requested: ${inputs.channels.join(", ")}. v1 only generates email content; flyer + social are scaffolded but not rendered here.`
-    : "Channel: email.";
+    ? `Channels requested: ${inputs.channels.join(", ")}. v1 generates email touchpoints only; flyer + social are placeholders.`
+    : "Channels: email only in v1.";
 
-  // Standing rules — distilled from operator best-practice playbook.
-  // These apply to every draft for every tenant.
   const standingRules = [
-    `STANDING RULES (apply to every draft):`,
-    `- Never use cancellation language with parents (use "we'll keep the date open while we wait for one more family" etc.).`,
-    `- One clear call to action per email. The CTA links to the org's registration page (caller will inject the URL).`,
-    `- Subject line under 60 characters; no all-caps; no clickbait; no emoji.`,
+    `STANDING RULES (apply to every touchpoint):`,
+    `- Never use cancellation language with parents.`,
+    `- One clear call to action per email. CTA links to the org's registration page (caller injects URL).`,
+    `- Subject line under 60 characters; no all-caps, no clickbait, no emoji.`,
     `- Preheader (first ~80 chars of body) extends the subject, never repeats it.`,
     `- Personalize with {{first_name}} and {{school}} merge tokens where natural.`,
-    `- If the campaign window crosses an early-bird deadline, mention the savings amount and the deadline date plainly. The caller pulls pricing from programs.early_bird_price_cents.`,
-    `- Tuesday/Thursday 10am PT is the default send time. Deadline-day reminders go at 7am PT. Welcome notes go Monday 9am PT. Never Friday afternoons or weekends.`,
-    `- Throttle: this org caps marketing at 1 email per parent per 10 days. Don't draft a cadence that would over-touch — assume a 6 to 10 day spacing between consecutive emails to the same audience.`,
-    `- For deadline-driven campaigns, include 48-hour and 24-hour reminder emails before each deadline.`,
-    `- Pop-culture themes (Pokémon, Minecraft, LEGO, Mario, etc.) are welcome when they fit the audience.`,
-    `- No promotional puffery ("transformative," "unique," "innovative"). Lead with what kids do and make.`,
+    `- If a touchpoint references an early-bird deadline or savings, mention the date plainly; caller injects pricing from programs.early_bird_price_cents.`,
+    `- DEFAULT SEND TIMES (org timezone ${orgTimezone}): Tuesday/Thursday 10am for regular sends. Deadline-day reminders 7am. Welcome notes Monday 9am. NEVER Friday afternoons or weekends.`,
+    `- THROTTLE: this org caps marketing at 1 email per parent per 10 days. Space consecutive emails at least 6 days apart.`,
+    `- For any topic that has a known deadline (early-bird ends, registration closes), include BOTH a 48-hour-before AND a 24-hour-before reminder email.`,
+    `- Pop-culture themes (Pokémon, Minecraft, LEGO, Mario) welcome when they fit.`,
+    `- No promotional puffery. Lead with what kids do and make.`,
   ].join("\n");
 
+  const cadenceGuidance = `CADENCE HEURISTICS by duration:
+- "2 weeks": 2-3 emails. Kickoff + 1 mid + 1 final-call if a deadline lives in-window.
+- "1 month": 4-6 emails. Kickoff, mid-window, plus 48h + 24h reminders for each deadline. Add a "thanks for registering" send if appropriate at the end.
+- "2 months": 5-7 emails. Slower build with longer gaps between general sends; ALWAYS the 48h + 24h reminders near deadlines.
+- "custom": pick a reasonable cadence with 6-10 day spacing.`;
+
   return [
-    `You are drafting a marketing email on behalf of ${sender}.`,
+    `You are Don, the marketing director for ${sender}. You plan multi-touchpoint email campaigns.`,
     ``,
     `Audience: ${audience}`,
     `Tone: ${tone}`,
@@ -394,35 +405,69 @@ function buildSystemPrompt(org: OrgConfig, inputs: DraftInputs, segmentSummary: 
     notes,
     closer,
     ``,
+    `Today is: ${todayIso} (org timezone: ${orgTimezone})`,
     topicLine,
     `Sending to: ${segmentSummary}`,
-    `Campaign duration: ${inputs.duration}`,
+    `Campaign duration: "${inputs.duration}" — count from today.`,
     channelNote,
     ``,
     standingRules,
     ``,
-    `Return ONLY a single JSON object with these fields (no markdown fences):`,
+    cadenceGuidance,
+    ``,
+    `OUTPUT FORMAT:`,
+    `Return ONLY a single JSON object (no markdown fences). Schema:`,
     `{`,
-    `  "subject": "<= 60 characters",`,
-    `  "body_html": "<clean HTML; no <html>/<body> wrappers; no inline <style>>",`,
-    `  "body_text": "<plain-text version for clients that strip HTML>"`,
+    `  "schedule_summary": "<one short sentence describing the overall plan>",`,
+    `  "touchpoints": [`,
+    `    {`,
+    `      "order_index": 0,`,
+    `      "type": "email",`,
+    `      "label": "<brief internal name: kickoff | mid-window | 48h-promo | 24h-promo | 48h-reg-close | 24h-reg-close | final-call | thanks>",`,
+    `      "scheduled_at": "<ISO 8601 with timezone offset, e.g. 2026-05-21T10:00:00-07:00>",`,
+    `      "subject": "<= 60 chars",`,
+    `      "body_html": "<clean HTML, no <html>/<body> wrappers, no inline <style>>",`,
+    `      "body_text": "<plain-text version>",`,
+    `      "topics": ["<which input topics this touchpoint covers; subset of: ${topics.map((t) => `\\"${t}\\"`).join(", ")}>"]`,
+    `    }`,
+    `  ]`,
     `}`,
+    ``,
+    `IMPORTANT:`,
+    `- Generate 2-7 touchpoints depending on duration (see cadence heuristics).`,
+    `- order_index starts at 0 and is contiguous.`,
+    `- scheduled_at must be in the future (after today) and respect default send times.`,
+    `- Each touchpoint's "topics" array must be a non-empty subset of the input topics.`,
   ]
     .filter((line) => line !== undefined && line !== null && (typeof line !== "string" || line !== ""))
     .join("\n");
 }
 
-type Draft = { subject: string; body_html: string; body_text: string };
+type Touchpoint = {
+  order_index: number;
+  type: "email" | "flyer" | "social";
+  label: string;
+  scheduled_at: string;
+  subject?: string;
+  body_html?: string;
+  body_text?: string;
+  topics: string[];
+};
+
+type Schedule = {
+  schedule_summary: string;
+  touchpoints: Touchpoint[];
+};
 
 async function callClaude(systemPrompt: string, topics: string[]): Promise<
-  | { ok: true; draft: Draft; model: string }
+  | { ok: true; schedule: Schedule; model: string }
   | { ok: false; error: string; status: number }
 > {
   const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
   const topicsLine = topics.length === 1
     ? `"${topics[0]}"`
     : topics.map((t) => `"${t}"`).join(" + ");
-  const userMessage = `Write the email now. Topic(s): ${topicsLine}.`;
+  const userMessage = `Plan the full campaign schedule now. Topic(s): ${topicsLine}. Generate every touchpoint with its scheduled_at, subject, body_html, body_text, and topics array. Return the JSON object only.`;
 
   const attempt = async (): Promise<{ raw: string }> => {
     const controller = new AbortController();
@@ -447,16 +492,35 @@ async function callClaude(systemPrompt: string, topics: string[]): Promise<
     }
   };
 
-  const tryParse = (raw: string): Draft | null => {
+  const tryParse = (raw: string): Schedule | null => {
     const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "");
     try {
-      const parsed = JSON.parse(cleaned) as Partial<Draft>;
+      const parsed = JSON.parse(cleaned) as Partial<Schedule>;
       if (
-        typeof parsed.subject === "string" &&
-        typeof parsed.body_html === "string" &&
-        typeof parsed.body_text === "string"
+        typeof parsed.schedule_summary === "string" &&
+        Array.isArray(parsed.touchpoints) &&
+        parsed.touchpoints.length > 0
       ) {
-        return { subject: parsed.subject, body_html: parsed.body_html, body_text: parsed.body_text };
+        // Validate each touchpoint has the minimum shape we need.
+        const tps: Touchpoint[] = [];
+        for (const tp of parsed.touchpoints) {
+          if (typeof tp.order_index !== "number") return null;
+          if (tp.type !== "email" && tp.type !== "flyer" && tp.type !== "social") return null;
+          if (typeof tp.label !== "string") return null;
+          if (typeof tp.scheduled_at !== "string") return null;
+          if (!Array.isArray(tp.topics) || tp.topics.length === 0) return null;
+          tps.push({
+            order_index: tp.order_index,
+            type: tp.type,
+            label: tp.label,
+            scheduled_at: tp.scheduled_at,
+            subject: tp.subject,
+            body_html: tp.body_html,
+            body_text: tp.body_text,
+            topics: tp.topics,
+          });
+        }
+        return { schedule_summary: parsed.schedule_summary, touchpoints: tps };
       }
     } catch {
       // fall through
@@ -472,20 +536,19 @@ async function callClaude(systemPrompt: string, topics: string[]): Promise<
     if (err.toLowerCase().includes("abort")) return { ok: false, error: "draft_timeout", status: 504 };
     return { ok: false, error: `claude call failed: ${err}`, status: 502 };
   }
-  let draft = tryParse(first.raw);
-  if (!draft) {
-    // Retry once on malformed output, then fail.
+  let schedule = tryParse(first.raw);
+  if (!schedule) {
     try {
       const second = await attempt();
-      draft = tryParse(second.raw);
+      schedule = tryParse(second.raw);
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e);
       if (err.toLowerCase().includes("abort")) return { ok: false, error: "draft_timeout", status: 504 };
       return { ok: false, error: `claude retry failed: ${err}`, status: 502 };
     }
   }
-  if (!draft) return { ok: false, error: "claude returned malformed JSON after retry", status: 502 };
-  return { ok: true, draft, model: DRAFT_MODEL };
+  if (!schedule) return { ok: false, error: "claude returned malformed schedule JSON after retry", status: 502 };
+  return { ok: true, schedule, model: DRAFT_MODEL };
 }
 
 // ---------------------------------------------------------------------------
@@ -534,7 +597,7 @@ serve(async (req: Request) => {
   // ---- Load org config ----
   const { data: orgRow, error: oErr } = await supabase
     .from("organizations")
-    .select("id, default_sender_name, default_sender_email, sending_domain, brand_voice")
+    .select("id, default_sender_name, default_sender_email, sending_domain, brand_voice, timezone")
     .eq("id", organization_id)
     .single<OrgConfig>();
   if (oErr || !orgRow) return jsonError(`organization not found: ${oErr?.message ?? "unknown"}`, 404);
@@ -556,13 +619,19 @@ serve(async (req: Request) => {
   const zeroRecipientWarning = recipientCount === 0 ? "no_recipients_matched" : null;
 
   // ---- Build prompt + call Claude ----
-  const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary);
+  const orgTimezone = orgRow.timezone ?? "America/Los_Angeles";
+  const todayIso = new Date().toISOString();
+  const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone);
   const topicsArr = Array.isArray(inputs.what) ? inputs.what : [inputs.what];
   const claudeResult = await callClaude(systemPrompt, topicsArr);
   if (!claudeResult.ok) return jsonError(claudeResult.error, claudeResult.status);
-  const { draft, model } = claudeResult;
+  const { schedule, model } = claudeResult;
 
-  // ---- Persist as a draft campaign ----
+  // First touchpoint = the "lead" email; its subject/body populate the parent
+  // campaigns row so the existing campaigns list keeps working.
+  const lead = schedule.touchpoints[0];
+
+  // ---- Persist parent campaign row ----
   const { data: inserted, error: iErr } = await supabase
     .from("marketing_campaigns")
     .insert({
@@ -570,8 +639,8 @@ serve(async (req: Request) => {
       name: topicsArr.join(" + ").slice(0, 200),
       campaign_type: "custom",
       status: "draft",
-      subject_template: draft.subject,
-      body_template: draft.body_html,
+      subject_template: lead?.subject ?? topicsArr.join(" + "),
+      body_template: lead?.body_html ?? "",
       draft_source: "ai_assisted",
       draft_inputs: inputs as unknown as Record<string, unknown>,
       draft_model: model,
@@ -583,14 +652,50 @@ serve(async (req: Request) => {
     return jsonError(`failed to persist draft: ${iErr?.message ?? "unknown"}`, 500);
   }
 
+  // ---- Persist touchpoint rows ----
+  const touchpointRows = schedule.touchpoints.map((tp) => ({
+    campaign_id: inserted.id,
+    organization_id,
+    type: tp.type,
+    order_index: tp.order_index,
+    scheduled_at: tp.scheduled_at,
+    status: "queued",
+    payload: {
+      label: tp.label,
+      subject: tp.subject ?? null,
+      body_html: tp.body_html ?? null,
+      body_text: tp.body_text ?? null,
+    },
+    topics: tp.topics,
+  }));
+  const { data: insertedTps, error: tpErr } = await supabase
+    .from("marketing_campaign_touchpoints")
+    .insert(touchpointRows)
+    .select("id, order_index, type, scheduled_at, status, payload, topics");
+  if (tpErr) {
+    return jsonError(`failed to persist touchpoints: ${tpErr.message}`, 500);
+  }
+
   return jsonOk({
     campaign_id: inserted.id,
-    draft: {
-      subject: draft.subject,
-      body_html: draft.body_html,
-      body_text: draft.body_text,
-      sender_name: orgRow.default_sender_name!,
-      sender_email: orgRow.default_sender_email!,
+    schedule: {
+      summary: schedule.schedule_summary,
+      touchpoints: (insertedTps ?? []).map((tp: { id: string; order_index: number; type: string; scheduled_at: string; status: string; payload: Record<string, unknown>; topics: string[] }) => ({
+        id: tp.id,
+        order_index: tp.order_index,
+        type: tp.type,
+        scheduled_at: tp.scheduled_at,
+        status: tp.status,
+        label: (tp.payload as { label?: string })?.label ?? null,
+        subject: (tp.payload as { subject?: string })?.subject ?? null,
+        body_html: (tp.payload as { body_html?: string })?.body_html ?? null,
+        body_text: (tp.payload as { body_text?: string })?.body_text ?? null,
+        topics: tp.topics,
+      })),
+    },
+    sender: {
+      name: orgRow.default_sender_name!,
+      email: orgRow.default_sender_email!,
     },
     recipients: {
       ids: recipientIds,
