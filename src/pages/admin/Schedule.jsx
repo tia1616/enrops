@@ -360,7 +360,7 @@ export default function Schedule() {
       const sessions = sessionsRes.data ?? [];
       const sessionIds = sessions.map((s) => s.id);
 
-      const [assignmentsRes, instructorsRes, availabilityRes, locPrefRes, curPrefRes] = await Promise.all([
+      const [assignmentsRes, instructorsRes, availabilityRes, locPrefRes, curPrefRes, declinesRes] = await Promise.all([
         sessionIds.length
           ? supabase
               .from("camp_assignments")
@@ -385,12 +385,17 @@ export default function Schedule() {
           .from("instructor_curriculum_preferences")
           .select("instructor_id, curriculum_category, preference")
           .eq("cycle_id", cycle.id),
+        supabase
+          .from("session_declined_instructors")
+          .select("camp_session_id, instructor_id, reason")
+          .eq("cycle_id", cycle.id),
       ]);
       if (assignmentsRes.error) throw assignmentsRes.error;
       if (instructorsRes.error) throw instructorsRes.error;
       if (availabilityRes.error) throw availabilityRes.error;
       if (locPrefRes.error) throw locPrefRes.error;
       if (curPrefRes.error) throw curPrefRes.error;
+      if (declinesRes.error) throw declinesRes.error;
 
       const assignments = (assignmentsRes.data ?? []).map((a) => ({
         id: a.id,
@@ -422,6 +427,7 @@ export default function Schedule() {
         availability,
         locPrefs: locPrefRes.data ?? [],
         curPrefs: curPrefRes.data ?? [],
+        declines: declinesRes.data ?? [],
         missingSurveys,
       });
     } catch (err) {
@@ -546,6 +552,17 @@ export default function Schedule() {
   const curPrefLookup = useMemo(() => {
     if (state.status !== "ready") return new Map();
     return new Map((state.curPrefs ?? []).map((r) => [`${r.instructor_id}|${r.curriculum_category}`, r.preference]));
+  }, [state]);
+  // declinedBySession: sessionId → Set<instructorId> that previously turned this camp
+  // down (status=change_requested at time of admin remove). Picker filters these out.
+  const declinedBySession = useMemo(() => {
+    if (state.status !== "ready") return new Map();
+    const m = new Map();
+    for (const d of state.declines ?? []) {
+      if (!m.has(d.camp_session_id)) m.set(d.camp_session_id, new Set());
+      m.get(d.camp_session_id).add(d.instructor_id);
+    }
+    return m;
   }, [state]);
   // For double-booking lookups: assignment rows joined with their session class_days/week.
   const assignmentsWithSession = useMemo(() => {
@@ -1003,6 +1020,21 @@ export default function Schedule() {
         role: currentAssignment.role,
         status: currentAssignment.status,
       };
+      // If the instructor was being removed after they (or admin via picker) flagged
+      // a change request, remember it so the picker won't suggest them for this same
+      // camp again. Plain admin removals (no change_requested status) are NOT recorded
+      // — admin might just be reorganizing and may want them re-suggested later.
+      if (currentAssignment.status === "change_requested" && currentAssignment.instructor_id) {
+        await supabase
+          .from("session_declined_instructors")
+          .upsert({
+            organization_id: org.id,
+            cycle_id: state.cycle.id,
+            camp_session_id: currentAssignment.camp_session_id,
+            instructor_id: currentAssignment.instructor_id,
+            reason: "change_request",
+          }, { onConflict: "camp_session_id,instructor_id" });
+      }
       const { error: delErr } = await supabase
         .from("camp_assignments")
         .delete()
@@ -1628,6 +1660,7 @@ export default function Schedule() {
           locPrefLookup={locPrefLookup}
           curPrefLookup={curPrefLookup}
           allAssignments={assignmentsWithSession}
+          declinedInstructorIds={declinedBySession.get(candidatesFor.session.id) ?? new Set()}
           onClose={() => {
             setCandidatesFor(null);
             // Picker closed without picking — drop the pending advance so the next click of the Hat re-opens cleanly.
@@ -3701,6 +3734,7 @@ function ModalShell({ title, children, onClose }) {
 function CandidatePicker({
   session, currentAssignment, role = "lead", instructors, availabilityByInstructor,
   locPrefLookup, curPrefLookup, allAssignments,
+  declinedInstructorIds = new Set(),
   onClose, onPick, onRemove, onResetAcceptance, onResendOffer, onSendMessage, onCreateInstructor,
 }) {
   const isReassign = !!currentAssignment;
@@ -3780,6 +3814,7 @@ function CandidatePicker({
     for (const inst of instructors) {
       if (inst.id === currentInstructorId) continue; // skip the one already assigned
       if (inst.id === otherRoleInstructorId) continue; // can't be both roles on same camp
+      if (declinedInstructorIds.has(inst.id)) continue; // already turned this camp down
       const avail = availabilityByInstructor.get(inst.id);
       if (!avail) continue;
       const sessionTypes = avail.session_types ?? [];
@@ -3817,7 +3852,7 @@ function CandidatePicker({
       out.push({ instructor: inst, score, locPref, curPref, fullDayCapable: sessionTypes.includes("full_day"), needsConfirmation: !!avail.needs_confirmation, warningsForBanner });
     }
     return out.sort((a, b) => b.score - a.score);
-  }, [session, currentAssignment, currentInstructorId, otherRoleInstructorId, instructors, availabilityByInstructor, locPrefLookup, curPrefLookup, allAssignments]);
+  }, [session, currentAssignment, currentInstructorId, otherRoleInstructorId, instructors, availabilityByInstructor, locPrefLookup, curPrefLookup, allAssignments, declinedInstructorIds]);
 
   async function submitNewInstructor() {
     if (!addForm.firstName.trim()) {
