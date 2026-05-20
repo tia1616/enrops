@@ -1637,7 +1637,6 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
       if (upErr) throw new Error(`Couldn't upload ${file.name}: ${upErr.message}`);
 
       // 2. Insert curriculum_documents row tied to the existing curriculum.
-      //    Old rows stay (history); the new one becomes the active source.
       const { data: docRow, error: insErr } = await supabase
         .from("curriculum_documents")
         .insert({
@@ -1656,6 +1655,29 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
       if (insErr || !docRow) {
         await supabase.storage.from("curriculum-documents").remove([path]).catch(() => {});
         throw new Error(`Couldn't save ${file.name} record: ${insErr?.message ?? "no row"}`);
+      }
+
+      // 2b. Delete the OLD instructor_guide docs (this is a REPLACE flow, not
+      //     an append). Other doc_types (materials_list, student_materials)
+      //     stay -- they aren't being replaced. Failures here are non-fatal:
+      //     we warn but don't block the re-extraction.
+      const { data: oldDocs } = await supabase
+        .from("curriculum_documents")
+        .select("id, storage_path")
+        .eq("curriculum_id", curriculumId)
+        .eq("doc_type", "instructor_guide")
+        .neq("id", docRow.id);
+      if (oldDocs && oldDocs.length > 0) {
+        const oldPaths = oldDocs.map((d) => d.storage_path).filter(Boolean);
+        if (oldPaths.length > 0) {
+          const { error: stErr } = await supabase.storage.from("curriculum-documents").remove(oldPaths);
+          if (stErr) console.warn("Couldn't clean old doc storage (continuing):", stErr.message);
+        }
+        const { error: delErr } = await supabase
+          .from("curriculum_documents")
+          .delete()
+          .in("id", oldDocs.map((d) => d.id));
+        if (delErr) console.warn("Couldn't delete old doc rows (continuing):", delErr.message);
       }
 
       // 3. Kick off extract-curriculum-details with preserve_name=true so the
