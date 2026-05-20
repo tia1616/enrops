@@ -1757,9 +1757,20 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
     }
   }
 
-  const campMatches = matches.filter((m) => m.source === "camp_sessions");
-  const programMatchesGroup = matches.filter((m) => m.source === "programs");
-  const selectedCount = selectedKeys.size;
+  // Top-level split: rows currently part of this curriculum vs everything
+  // else. The operator opens this modal to manage what's IN the curriculum;
+  // the linked/unlinked distinction is the first thing they want to see.
+  const linkedRows = matches.filter((m) => m.linked);
+  const unlinkedRows = matches.filter((m) => !m.linked);
+
+  // Pending change count drives the Save-button label. The button stays
+  // clickable in both states so "No changes" just closes.
+  let pendingChangeCount = 0;
+  for (const m of matches) {
+    const selected = selectedKeys.has(m.key);
+    const was = initialLinkedKeys.has(m.key);
+    if (selected !== was) pendingChangeCount++;
+  }
 
   function MatchRow({ m }) {
     const kindLabel = m.source === "camp_sessions"
@@ -1820,35 +1831,47 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
 
         {!loading && matches.length > 0 && (
           <>
-            {campMatches.length > 0 && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 4 }}>
-                  Summer camps ({campMatches.reduce((s, m) => s + m.runCount, 0)})
-                </div>
-                {campMatches.map((m) => <MatchRow key={m.key} m={m} />)}
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 4 }}>
+                Linked programs ({linkedRows.reduce((s, m) => s + m.runCount, 0)})
               </div>
-            )}
-            {programMatchesGroup.length > 0 && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 4 }}>
-                  Afterschool programs ({programMatchesGroup.reduce((s, m) => s + m.runCount, 0)})
+              {linkedRows.length === 0 ? (
+                <div style={{ color: MUTED, fontSize: 12, fontStyle: "italic", padding: "10px 4px" }}>
+                  Nothing linked yet — tick anything below to add it.
                 </div>
-                {programMatchesGroup.map((m) => <MatchRow key={m.key} m={m} />)}
+              ) : (
+                linkedRows.map((m) => <MatchRow key={m.key} m={m} />)
+              )}
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 4 }}>
+                Unlinked programs ({unlinkedRows.reduce((s, m) => s + m.runCount, 0)})
               </div>
-            )}
+              {unlinkedRows.length === 0 ? (
+                <div style={{ color: MUTED, fontSize: 12, fontStyle: "italic", padding: "10px 4px" }}>
+                  Everything in your schedule is already part of a curriculum.
+                </div>
+              ) : (
+                unlinkedRows.map((m) => <MatchRow key={m.key} m={m} />)
+              )}
+            </div>
           </>
         )}
 
         {error && <div style={{ ...errorBox, marginTop: 12 }}>{error}</div>}
 
         <div style={modalActions}>
-          <button onClick={onClose} style={tertiaryBtn} disabled={saving}>Cancel</button>
           <button
             onClick={doSave}
             disabled={saving}
             style={{ ...primaryBtn, opacity: saving ? 0.5 : 1, cursor: saving ? "not-allowed" : "pointer" }}
           >
-            {saving ? "Saving…" : "Save"}
+            {saving
+              ? "Saving…"
+              : pendingChangeCount === 0
+                ? "No changes"
+                : `Save ${pendingChangeCount} change${pendingChangeCount === 1 ? "" : "s"}`}
           </button>
         </div>
       </div>
