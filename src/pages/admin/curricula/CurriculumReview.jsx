@@ -1563,8 +1563,13 @@ function PolishModal({ curriculumId, config, onClose }) {
 // lets the operator pick the rest manually. Save -> bulk UPDATE curriculum_id.
 function LinkExistingModal({ curriculumId, curriculumName, organizationId, userId, onClose, onSaved }) {
   const [loading, setLoading] = useState(true);
-  const [matches, setMatches] = useState([]); // [{ source, name, ids, runCount, score, key }]
+  // matches now mixes ALREADY-linked groups (linked: true, pre-checked) and
+  // UNLINKED candidates (linked: false, match-scored, strong matches pre-checked).
+  const [matches, setMatches] = useState([]);
   const [selectedKeys, setSelectedKeys] = useState(new Set());
+  // Snapshot of which group keys started out as linked. Used at save time to
+  // diff against the operator's selection: untick a linked group -> unlink.
+  const [initialLinkedKeys, setInitialLinkedKeys] = useState(new Set());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -1573,7 +1578,12 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
     (async () => {
       setLoading(true);
       setError("");
-      const [{ data: progRows }, { data: campRows }] = await Promise.all([
+      const [
+        { data: progRowsUnlinked },
+        { data: campRowsUnlinked },
+        { data: progRowsLinked },
+        { data: campRowsLinked },
+      ] = await Promise.all([
         supabase
           .from("programs")
           .select("id, curriculum, term")
@@ -1584,39 +1594,63 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
           .select("id, curriculum_name, session_type")
           .eq("organization_id", organizationId)
           .is("curriculum_id", null),
+        supabase
+          .from("programs")
+          .select("id, curriculum, term")
+          .eq("organization_id", organizationId)
+          .eq("curriculum_id", curriculumId),
+        supabase
+          .from("camp_sessions")
+          .select("id, curriculum_name, session_type")
+          .eq("organization_id", organizationId)
+          .eq("curriculum_id", curriculumId),
       ]);
       if (!mounted) return;
       const groups = new Map();
-      for (const p of progRows ?? []) {
+      const addProgram = (p, linked) => {
         const name = (p.curriculum || "").trim();
-        if (!name) continue;
-        const key = `programs::${name}`;
-        if (!groups.has(key)) groups.set(key, { source: "programs", name, ids: [], runCount: 0, key });
+        if (!name) return;
+        const key = `programs::${linked ? "linked" : "unlinked"}::${name}`;
+        if (!groups.has(key)) groups.set(key, { source: "programs", name, ids: [], runCount: 0, key, linked });
         const g = groups.get(key);
         g.ids.push(p.id);
         g.runCount += 1;
-      }
-      for (const c of campRows ?? []) {
+      };
+      const addCamp = (c, linked) => {
         const name = (c.curriculum_name || "").trim();
-        if (!name) continue;
+        if (!name) return;
         // Camp_sessions: group by name AND session_type so half-day (afternoon /
-        // morning) and full_day sessions don't bundle together. They're typically
-        // different curricula even when scheduled under the same brand name.
+        // morning) and full_day sessions don't bundle together.
         const sessionType = c.session_type || "unknown";
-        const key = `camp_sessions::${name}::${sessionType}`;
-        if (!groups.has(key)) groups.set(key, { source: "camp_sessions", name, sessionType, ids: [], runCount: 0, key });
+        const key = `camp_sessions::${linked ? "linked" : "unlinked"}::${name}::${sessionType}`;
+        if (!groups.has(key)) groups.set(key, { source: "camp_sessions", name, sessionType, ids: [], runCount: 0, key, linked });
         const g = groups.get(key);
         g.ids.push(c.id);
         g.runCount += 1;
-      }
-      const scored = [];
+      };
+      for (const p of progRowsLinked ?? []) addProgram(p, true);
+      for (const p of progRowsUnlinked ?? []) addProgram(p, false);
+      for (const c of campRowsLinked ?? []) addCamp(c, true);
+      for (const c of campRowsUnlinked ?? []) addCamp(c, false);
+
+      const allGroups = [];
+      const linkedKeys = new Set();
       for (const g of groups.values()) {
-        scored.push({ ...g, score: matchScore(curriculumName, g.name) });
+        allGroups.push({ ...g, score: g.linked ? 1 : matchScore(curriculumName, g.name) });
+        if (g.linked) linkedKeys.add(g.key);
       }
-      scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
-      setMatches(scored);
-      // Pre-select strong matches (>= 0.5) so the common case is a one-click confirm.
-      setSelectedKeys(new Set(scored.filter((m) => m.score >= 0.5).map((m) => m.key)));
+      // Sort: linked rows first (within source group, alphabetical), then
+      // unlinked sorted by score descending.
+      allGroups.sort((a, b) => {
+        if (a.linked !== b.linked) return a.linked ? -1 : 1;
+        if (a.linked) return a.name.localeCompare(b.name);
+        return b.score - a.score || a.name.localeCompare(b.name);
+      });
+      setMatches(allGroups);
+      setInitialLinkedKeys(linkedKeys);
+      // Pre-select: all linked groups (so they stay linked unless unticked) +
+      // strong matches among unlinked.
+      setSelectedKeys(new Set(allGroups.filter((m) => m.linked || m.score >= 0.5).map((m) => m.key)));
       setLoading(false);
     })();
     return () => { mounted = false; };
@@ -1633,53 +1667,87 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
   async function doSave() {
     setSaving(true);
     setError("");
-    const programIds = [];
-    const campSessionIds = [];
+    // Diff selectedKeys against initialLinkedKeys to compute four buckets:
+    //   linkProgramIds  -- unlinked program rows ticked  -> set curriculum_id
+    //   linkCampIds     -- unlinked camp rows ticked     -> set curriculum_id
+    //   unlinkProgramIds-- previously-linked program rows unticked -> NULL
+    //   unlinkCampIds   -- previously-linked camp rows unticked    -> NULL
+    const linkProgramIds = [];
+    const linkCampIds = [];
+    const unlinkProgramIds = [];
+    const unlinkCampIds = [];
     for (const m of matches) {
-      if (!selectedKeys.has(m.key)) continue;
-      if (m.source === "programs") programIds.push(...m.ids);
-      else campSessionIds.push(...m.ids);
+      const isSelected = selectedKeys.has(m.key);
+      const wasLinked = initialLinkedKeys.has(m.key);
+      if (isSelected && !wasLinked) {
+        if (m.source === "programs") linkProgramIds.push(...m.ids);
+        else linkCampIds.push(...m.ids);
+      } else if (!isSelected && wasLinked) {
+        if (m.source === "programs") unlinkProgramIds.push(...m.ids);
+        else unlinkCampIds.push(...m.ids);
+      }
     }
-    if (programIds.length === 0 && campSessionIds.length === 0) {
-      setError("Pick at least one row to link.");
+    const totalChanges = linkProgramIds.length + linkCampIds.length + unlinkProgramIds.length + unlinkCampIds.length;
+    if (totalChanges === 0) {
+      setError("No changes to save. Tick to link or untick a currently-linked row to unlink.");
       setSaving(false);
       return;
     }
     try {
-      if (programIds.length > 0) {
+      if (linkProgramIds.length > 0) {
         const { error: err } = await supabase
           .from("programs")
           .update({ curriculum_id: curriculumId })
-          .in("id", programIds);
+          .in("id", linkProgramIds);
         if (err) throw err;
       }
-      if (campSessionIds.length > 0) {
+      if (linkCampIds.length > 0) {
         const { error: err } = await supabase
           .from("camp_sessions")
           .update({ curriculum_id: curriculumId, updated_at: new Date().toISOString() })
-          .in("id", campSessionIds);
+          .in("id", linkCampIds);
         if (err) throw err;
       }
-      // Log a time-saved event so the sidebar tally + future analytics see
-      // this as Director work. Manually editing each row in the schedule UI
-      // (when it exists) or via SQL would take ~30 min; flat 0.5 hr per link
-      // batch is conservative but credible.
-      const totalRows = programIds.length + campSessionIds.length;
-      const linkLabel = totalRows === 1
-        ? `Linked 1 row to "${curriculumName}"`
-        : `Linked ${totalRows} rows to "${curriculumName}"`;
-      const { error: tsErr } = await supabase.from("time_saved_events").insert({
-        organization_id: organizationId,
-        action_type: "curriculum_linked",
-        action_label: linkLabel,
-        hours_saved: 0.5,
-        related_entity_type: "curriculum",
-        related_entity_id: curriculumId,
-        created_by: userId ?? null,
-      });
-      if (tsErr) console.warn("time_saved_events insert failed (non-fatal):", tsErr.message);
+      if (unlinkProgramIds.length > 0) {
+        const { error: err } = await supabase
+          .from("programs")
+          .update({ curriculum_id: null })
+          .in("id", unlinkProgramIds);
+        if (err) throw err;
+      }
+      if (unlinkCampIds.length > 0) {
+        const { error: err } = await supabase
+          .from("camp_sessions")
+          .update({ curriculum_id: null, updated_at: new Date().toISOString() })
+          .in("id", unlinkCampIds);
+        if (err) throw err;
+      }
+      // Log time-saved only when we LINKED something new; pure-unlink edits
+      // don't add Director value worth pilling. Flat 0.5 hr per save when
+      // any new linkage happened.
+      const linkedRows = linkProgramIds.length + linkCampIds.length;
+      if (linkedRows > 0) {
+        const linkLabel = linkedRows === 1
+          ? `Linked 1 row to "${curriculumName}"`
+          : `Linked ${linkedRows} rows to "${curriculumName}"`;
+        const { error: tsErr } = await supabase.from("time_saved_events").insert({
+          organization_id: organizationId,
+          action_type: "curriculum_linked",
+          action_label: linkLabel,
+          hours_saved: 0.5,
+          related_entity_type: "curriculum",
+          related_entity_id: curriculumId,
+          created_by: userId ?? null,
+        });
+        if (tsErr) console.warn("time_saved_events insert failed (non-fatal):", tsErr.message);
+      }
 
-      onSaved?.({ programs: programIds.length, campSessions: campSessionIds.length });
+      onSaved?.({
+        linkedPrograms: linkProgramIds.length,
+        linkedCampSessions: linkCampIds.length,
+        unlinkedPrograms: unlinkProgramIds.length,
+        unlinkedCampSessions: unlinkCampIds.length,
+      });
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1698,7 +1766,7 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
     const scorePct = Math.round(m.score * 100);
     const isStrong = m.score >= 0.5;
     return (
-      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "7px 0", fontSize: 13, cursor: "pointer", borderBottom: `1px solid ${RULE}` }}>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "7px 0", fontSize: 13, cursor: "pointer", borderBottom: `1px solid ${RULE}`, background: m.linked ? "rgba(105, 29, 57, 0.04)" : "transparent" }}>
         <input
           type="checkbox"
           checked={selectedKeys.has(m.key)}
@@ -1708,7 +1776,21 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <strong>{m.name}</strong>
-            {m.score > 0 && (
+            {m.linked ? (
+              <span style={{
+                fontSize: 10,
+                fontWeight: 600,
+                padding: "2px 7px",
+                borderRadius: 8,
+                background: PLUM_SOFT,
+                color: PLUM,
+                border: `1px solid ${PLUM}55`,
+                textTransform: "uppercase",
+                letterSpacing: 0.4,
+              }}>
+                Currently linked
+              </span>
+            ) : m.score > 0 ? (
               <span style={{
                 fontSize: 10,
                 fontWeight: 600,
@@ -1720,15 +1802,29 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
               }}>
                 {isStrong ? `≈${scorePct}% match` : "manual"}
               </span>
-            )}
+            ) : null}
           </div>
           <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
             {m.runCount} {kindLabel}{m.runCount === 1 ? "" : "s"}
+            {m.linked && <span style={{ marginLeft: 8, color: MUTED }}>· untick to unlink</span>}
           </div>
         </div>
       </label>
     );
   }
+
+  // Compute the diff for the save-button label, so the operator sees what
+  // they're about to change before clicking.
+  let pendingLinkCount = 0;
+  let pendingUnlinkCount = 0;
+  for (const m of matches) {
+    const selected = selectedKeys.has(m.key);
+    const was = initialLinkedKeys.has(m.key);
+    if (selected && !was) pendingLinkCount++;
+    else if (!selected && was) pendingUnlinkCount++;
+  }
+  const noChanges = pendingLinkCount === 0 && pendingUnlinkCount === 0;
+  const initialLinkedCount = initialLinkedKeys.size;
 
   return (
     <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget && !saving) onClose(); }}>
@@ -1736,23 +1832,30 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
           <div>
             <h3 style={{ margin: "0 0 4px", color: INK, fontSize: 20, fontWeight: 700 }}>
-              Link existing programs to {curriculumName}
+              Manage links for {curriculumName}
             </h3>
             <p style={{ color: MUTED, fontSize: 13, margin: 0, lineHeight: 1.45 }}>
-              Tick any unlinked rows that should belong to this curriculum. Strong matches are pre-selected; you can add or remove anything before saving.
+              Currently linked rows are pre-checked (plum row, "Currently linked" pill). Untick to unlink.
+              Strong unlinked matches are pre-checked too — tick or untick anything before saving.
             </p>
           </div>
         </div>
 
+        {!loading && initialLinkedCount > 0 && (
+          <div style={{ background: GOLD_SOFT, border: `1px solid ${GOLD_BORDER}`, borderRadius: 6, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: INK }}>
+            <strong style={{ color: "#7a5a00" }}>Currently linked:</strong> {initialLinkedCount} group{initialLinkedCount === 1 ? "" : "s"} (shown with the plum pill below)
+          </div>
+        )}
+
         {loading && (
           <div style={{ padding: "30px 0", color: MUTED, fontSize: 13, textAlign: "center" }}>
-            Loading unlinked programs and camp sessions…
+            Loading current + unlinked programs and camp sessions…
           </div>
         )}
 
         {!loading && matches.length === 0 && (
           <div style={{ background: "#f6f4ec", border: `1px solid ${RULE}`, borderRadius: 6, padding: 14, fontSize: 13, color: MUTED }}>
-            No unlinked programs or camp sessions in your library. If you schedule a new program later, it'll show up here.
+            Nothing to link or unlink. No programs or camp sessions are currently linked to this curriculum, and no unlinked rows are in your library. If you schedule a new program later, it'll show up here.
           </div>
         )}
 
@@ -1783,10 +1886,18 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
           <button onClick={onClose} style={tertiaryBtn} disabled={saving}>Cancel</button>
           <button
             onClick={doSave}
-            disabled={saving || selectedCount === 0}
-            style={{ ...primaryBtn, opacity: saving || selectedCount === 0 ? 0.5 : 1, cursor: saving || selectedCount === 0 ? "not-allowed" : "pointer" }}
+            disabled={saving || noChanges}
+            style={{ ...primaryBtn, opacity: saving || noChanges ? 0.5 : 1, cursor: saving || noChanges ? "not-allowed" : "pointer" }}
           >
-            {saving ? "Linking…" : `Link ${selectedCount} ${selectedCount === 1 ? "group" : "groups"} →`}
+            {saving
+              ? "Saving…"
+              : noChanges
+                ? "No changes"
+                : pendingUnlinkCount === 0
+                  ? `Link ${pendingLinkCount} group${pendingLinkCount === 1 ? "" : "s"} →`
+                  : pendingLinkCount === 0
+                    ? `Unlink ${pendingUnlinkCount} group${pendingUnlinkCount === 1 ? "" : "s"} →`
+                    : `Link ${pendingLinkCount}, unlink ${pendingUnlinkCount} →`}
           </button>
         </div>
       </div>
