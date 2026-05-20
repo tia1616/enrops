@@ -119,13 +119,9 @@ export default function TouchpointCard({
             />
           </div>
 
-          <EditableField
-            label="Body"
-            multiline
-            rows={8}
-            value={tp.body_html}
+          <BodyEditor
+            value={tp.body_html ?? ""}
             onChange={(v) => onUpdate(tp.id, { body_html: v, body_text: stripHtml(v) })}
-            placeholder="Click to write the email body"
           />
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -162,4 +158,70 @@ export default function TouchpointCard({
 function stripHtml(html) {
   if (!html) return "";
   return html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+}
+
+// Wraps merge tokens like {{first_name}} in a styled span so operators can
+// see at a glance which bits get personalized at send time. Returns HTML safe
+// to drop into dangerouslySetInnerHTML (input is Don's already-sanitized HTML).
+function highlightTokens(html) {
+  if (!html) return "";
+  return html.replace(/\{\{(\w+)\}\}/g, (_, name) =>
+    `<span style="display:inline-block;padding:0 6px;border-radius:4px;background:#f0e3e8;color:#691D39;font-size:0.9em;font-weight:600;font-family:ui-monospace,monospace;">{{${name}}}</span>`,
+  );
+}
+
+function BodyEditor({ value, onChange }) {
+  const [editing, setEditing] = useState(false);
+
+  return (
+    <div>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        marginBottom: 4,
+      }}>
+        <span style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
+          Email body
+        </span>
+        <button
+          onClick={() => setEditing((v) => !v)}
+          style={{
+            background: "transparent", border: "none", color: PLUM,
+            cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: 600,
+          }}
+        >
+          {editing ? "Done editing" : "Edit"}
+        </button>
+      </div>
+
+      {editing ? (
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={10}
+          style={{
+            width: "100%", padding: "10px 12px",
+            border: `1px solid ${RULE}`, borderRadius: 6,
+            fontFamily: "ui-monospace, monospace", fontSize: 12,
+            lineHeight: 1.5, color: INK, background: "#fff",
+            resize: "vertical", boxSizing: "border-box",
+          }}
+        />
+      ) : (
+        <div
+          style={{
+            padding: "14px 16px",
+            border: `1px solid ${RULE}`, borderRadius: 6,
+            background: "#fff", fontSize: 14, color: INK, lineHeight: 1.55,
+          }}
+          dangerouslySetInnerHTML={{ __html: highlightTokens(value) }}
+        />
+      )}
+
+      {!editing && (
+        <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED }}>
+          Highlighted tags like <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span> get filled in for each parent when the email sends.
+        </p>
+      )}
+    </div>
+  );
 }

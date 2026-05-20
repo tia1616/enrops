@@ -339,6 +339,151 @@ function joinWithAnd(items: string[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// Curriculum grounding — match input topics against this org's curricula and
+// inject the matched curriculum's facts into Don's prompt so he writes from
+// real data instead of making things up.
+// ---------------------------------------------------------------------------
+
+type CurriculumRow = {
+  id: string;
+  name: string;
+  short_description: string | null;
+  age_range_min: number | null;
+  age_range_max: number | null;
+  session_count: number | null;
+  format: string | null;
+  themes: string[] | null;
+  skills_overall: string[] | null;
+  mid_term_skills: string[] | null;
+  final_showcase: string | null;
+};
+
+type CurriculumMatch = {
+  topic: string;
+  match: CurriculumRow | null;
+  score: number;
+};
+
+const CURRICULUM_MATCH_THRESHOLD = 0.4;
+// Stop-words filtered before token matching. Generic enrichment-program words
+// would otherwise inflate the overlap on every curriculum.
+const STOP_WORDS = new Set([
+  "the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for", "with", "by", "is",
+  "camp", "class", "course", "program", "session", "edition", "kids", "kid",
+  "after", "school", "afterschool",
+]);
+
+function tokenize(s: string): string[] {
+  return s.toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 1 && !STOP_WORDS.has(t));
+}
+
+async function loadCurricula(
+  supabase: SupabaseClient,
+  orgId: string,
+): Promise<CurriculumRow[]> {
+  const { data, error } = await supabase
+    .from("curricula")
+    .select("id, name, short_description, age_range_min, age_range_max, session_count, format, themes, skills_overall, mid_term_skills, final_showcase")
+    .eq("organization_id", orgId)
+    .limit(500);
+  if (error) {
+    console.error("curricula load failed:", error.message);
+    return [];
+  }
+  return (data ?? []) as CurriculumRow[];
+}
+
+function scoreCurriculum(topic: string, c: CurriculumRow): number {
+  const tTokens = new Set(tokenize(topic));
+  if (tTokens.size === 0) return 0;
+
+  const nameTokens = new Set(tokenize(c.name));
+  const themeTokens = new Set<string>();
+  for (const theme of c.themes ?? []) for (const tok of tokenize(theme)) themeTokens.add(tok);
+  const descTokens = new Set(tokenize(c.short_description ?? ""));
+
+  let nameMatch = 0;
+  for (const tok of tTokens) if (nameTokens.has(tok)) nameMatch++;
+  // Jaccard on names — denominator is union, so two single-word matches don't
+  // dominate just because the curriculum name happens to be short.
+  const denom = new Set([...tTokens, ...nameTokens]).size || 1;
+  const nameScore = nameMatch / denom;
+
+  let themeMatch = 0;
+  for (const tok of tTokens) if (themeTokens.has(tok)) themeMatch++;
+  const themeScore = themeMatch / tTokens.size;
+
+  let descMatch = 0;
+  for (const tok of tTokens) if (descTokens.has(tok)) descMatch++;
+  const descScore = descMatch / tTokens.size;
+
+  return nameScore + themeScore * 0.5 + descScore * 0.2;
+}
+
+function matchCurriculaToTopics(
+  topics: string[],
+  curricula: CurriculumRow[],
+): CurriculumMatch[] {
+  return topics.map((topic) => {
+    if (curricula.length === 0) return { topic, match: null, score: 0 };
+    let best: CurriculumRow | null = null;
+    let bestScore = 0;
+    for (const c of curricula) {
+      const s = scoreCurriculum(topic, c);
+      if (s > bestScore) {
+        bestScore = s;
+        best = c;
+      }
+    }
+    return {
+      topic,
+      match: bestScore >= CURRICULUM_MATCH_THRESHOLD ? best : null,
+      score: bestScore,
+    };
+  });
+}
+
+function formatCurriculaForPrompt(matches: CurriculumMatch[]): string {
+  const matchedBlocks: string[] = [];
+  for (const m of matches) {
+    if (!m.match) continue;
+    const c = m.match;
+    const parts = [`Topic "${m.topic}" matches curriculum "${c.name}":`];
+    if (c.short_description) parts.push(`- Description: ${c.short_description}`);
+    if (c.age_range_min != null && c.age_range_max != null) {
+      parts.push(`- Age range: ${c.age_range_min}–${c.age_range_max}`);
+    }
+    if (c.session_count != null) parts.push(`- Session count: ${c.session_count}`);
+    if (c.format) parts.push(`- Format: ${c.format}`);
+    if (c.themes?.length) parts.push(`- Themes: ${c.themes.join(", ")}`);
+    if (c.skills_overall?.length) {
+      parts.push(`- Skills covered:`);
+      for (const s of c.skills_overall) parts.push(`    • ${s}`);
+    }
+    if (c.final_showcase) parts.push(`- Final showcase: ${c.final_showcase}`);
+    matchedBlocks.push(parts.join("\n"));
+  }
+
+  const unmatched = matches.filter((m) => !m.match).map((m) => m.topic);
+
+  const sections: string[] = [];
+  if (matchedBlocks.length > 0) {
+    sections.push(
+      `KNOWN PROGRAM DETAILS (factual ground-truth from the provider's curricula — draw your specifics ONLY from these. Do not invent activities, skills, ages, or session counts beyond what is listed here):\n\n${matchedBlocks.join("\n\n")}`,
+    );
+  }
+  if (unmatched.length > 0) {
+    sections.push(
+      `NO CURRICULUM MATCH for these topics: ${unmatched.map((t) => `"${t}"`).join(", ")}. Write generically for these (no invented activities or outcomes), and list each one in notes_to_operator so the operator knows to either rename the topic to match an existing curriculum or upload one.`,
+    );
+  }
+  return sections.join("\n\n");
+}
+
+// ---------------------------------------------------------------------------
 // Prompt + Claude call
 // ---------------------------------------------------------------------------
 
@@ -364,6 +509,7 @@ function buildSystemPrompt(
   segmentSummary: string,
   todayIso: string,
   orgTimezone: string,
+  curriculumMatches: CurriculumMatch[],
 ): string {
   const v = (org.brand_voice ?? {}) as {
     audience?: string;
@@ -408,7 +554,7 @@ WHO YOU'RE WRITING TO
 Audience: ${audience}.
 Tone: ${tone}.${avoid}${favor}${notes}
 
-THE HARD RULE: USE TOKENS FOR SPECIFICS
+THE HARD RULE: USE TOKENS FOR SPECIFICS AND GROUND-TRUTH FOR EVERYTHING ELSE
 You MUST use the approved merge tokens for anything specific. You MUST NOT invent specifics.
 
 - Never write a dollar amount inline. Use {{early_bird_price}}, {{regular_price}}, {{savings}}, or {{promo_amount}}.
@@ -417,6 +563,7 @@ You MUST use the approved merge tokens for anything specific. You MUST NOT inven
 - Never invent a promo code. Only reference {{promo_code}} if the operator's topics explicitly mention one.
 - Never invent a curriculum name, instructor name, location detail, or program beyond what the operator typed.
 - Never cite statistics ("200 families joined last year", "92% of kids improved"). Don't fabricate social proof.
+- When KNOWN PROGRAM DETAILS are provided below, draw your specifics ONLY from those facts. Don't add activities, skills, ages, or session counts that aren't listed there. If a topic has no curriculum match, write generically (no invented bullets) and name the topic in notes_to_operator so the operator knows you didn't have facts to work from.
 
 If you need a specific fact and there's no token, write generically ("our upcoming session", "more details on the registration page"). Generic copy is always better than invented copy.
 
@@ -451,6 +598,8 @@ If the provider has refined your voice over time (their "Don's notes" file), tho
 - "2 months": 5-7 emails. Slower build with longer gaps between general sends; ALWAYS the 48h + 24h reminders near deadlines.
 - "custom": pick a reasonable cadence with 6-10 day spacing.`;
 
+  const curriculumBlock = formatCurriculaForPrompt(curriculumMatches);
+
   return [
     personaBlock,
     ``,
@@ -459,6 +608,8 @@ If the provider has refined your voice over time (their "Don's notes" file), tho
     `Sending to: ${segmentSummary}`,
     `Campaign duration: "${inputs.duration}" — count from today.`,
     channelNote,
+    ``,
+    curriculumBlock,
     ``,
     cadenceGuidance,
     ``,
@@ -792,11 +943,15 @@ serve(async (req: Request) => {
   // and adjust the filter without re-running the whole question flow.
   const zeroRecipientWarning = recipientCount === 0 ? "no_recipients_matched" : null;
 
+  // ---- Curriculum grounding ----
+  const topicsArr = Array.isArray(inputs.what) ? inputs.what : [inputs.what];
+  const curricula = await loadCurricula(supabase, organization_id);
+  const curriculumMatches = matchCurriculaToTopics(topicsArr, curricula);
+
   // ---- Build prompt + call Claude ----
   const orgTimezone = orgRow.timezone ?? "America/Los_Angeles";
   const todayIso = new Date().toISOString();
-  const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone);
-  const topicsArr = Array.isArray(inputs.what) ? inputs.what : [inputs.what];
+  const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone, curriculumMatches);
   let claudeResult = await callClaude(systemPrompt, topicsArr);
   if (!claudeResult.ok) return jsonError(claudeResult.error, claudeResult.status);
   let { schedule, model } = claudeResult;
@@ -908,6 +1063,11 @@ serve(async (req: Request) => {
       segment_summary,
     },
     mechanical_checks: mechanicalChecks,
+    curriculum_matches: curriculumMatches.map((m) => ({
+      topic: m.topic,
+      score: Number(m.score.toFixed(3)),
+      matched: m.match ? { id: m.match.id, name: m.match.name } : null,
+    })),
     model,
     inputs_echo: inputs,
     ...(zeroRecipientWarning ? { warning: zeroRecipientWarning } : {}),

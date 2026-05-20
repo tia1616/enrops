@@ -1,5 +1,5 @@
 // AICampaignBuilder — top-level container for the 4-question flow.
-// Chunk 3.6.05 — state management only; mock setTimeout for draft (real API in 07).
+// Chunk 3.6.07 step 1 — real fetch to marketing-draft-campaign.
 //
 // State is forward-compatible with the deployed `marketing-draft-campaign`:
 //   - inputs.what: string[] (multi-topic) — UI starts with a single chip but the
@@ -9,12 +9,14 @@
 
 import { useReducer, useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import { supabase } from "../../../lib/supabase.js";
 import { PLUM, RULE, INK, MUTED, OK } from "../marketing/tokens.jsx";
 import Q1_What from "./questions/Q1_What.jsx";
 import Q2_Who from "./questions/Q2_Who.jsx";
 import Q3_Duration from "./questions/Q3_Duration.jsx";
 import Q4_Channels from "./questions/Q4_Channels.jsx";
 import ScheduleReview from "./ScheduleReview.jsx";
+import DraftingScreen from "./DraftingScreen.jsx";
 
 const INITIAL = {
   step: 1,
@@ -29,6 +31,37 @@ const INITIAL = {
   error: null,
   scheduled: false,
 };
+
+// supabase-js wraps non-2xx edge-function responses in FunctionsHttpError with
+// the raw Response on `context.response`. Read it to surface the edge function's
+// own JSON error message (e.g. org_not_configured, draft_timeout) — falling back
+// to the SDK message if the body isn't parseable.
+async function friendlyDraftError(error) {
+  let payload = null;
+  try {
+    const resp = error?.context?.response;
+    if (resp && typeof resp.clone === "function") {
+      payload = await resp.clone().json();
+    }
+  } catch {
+    // body wasn't JSON or already consumed — fall back below
+  }
+  const code = payload?.error ?? error?.message ?? "unknown_error";
+  if (code === "org_not_configured") {
+    const missing = Array.isArray(payload?.missing) ? payload.missing.join(", ") : "sender info";
+    return `Your org is missing ${missing}. Add it in Settings, then try again.`;
+  }
+  if (code === "draft_timeout") {
+    return "Don took too long to draft this one. Try again — usually clears up on a retry.";
+  }
+  if (typeof code === "string" && code.toLowerCase().includes("forbidden")) {
+    return "You don't have admin access to this org's marketing.";
+  }
+  if (typeof code === "string" && code.startsWith("audience ")) {
+    return "Only the Parents audience is supported in this build. Partners + Instructors are coming soon.";
+  }
+  return `Couldn't draft the campaign: ${code}`;
+}
 
 function reducer(state, action) {
   switch (action.type) {
@@ -152,97 +185,38 @@ export default function AICampaignBuilder() {
     alert(`Regenerate ${touchpointId} — chunk 07 re-calls marketing-draft-campaign with a regenerate flag for this touchpoint only.`);
   };
 
-  // Mock draft trigger — chunk 07 swaps this for a real fetch to
-  // marketing-draft-campaign. The shape mirrors the real response so the
-  // review screen we build next isn't a moving target.
-  function startDrafting() {
-    dispatch({ type: "START_DRAFTING" });
-    setTimeout(() => {
-      const topics = state.inputs.what;
-      const duration = state.inputs.duration;
-      const touchpoints = buildMockSchedule(topics, duration, org?.brand_voice?.closer ?? "");
-      dispatch({
-        type: "DRAFT_RECEIVED",
-        draft: {
-          campaign_id: "mock-" + Date.now(),
-          schedule: {
-            summary: `Mock plan: ${touchpoints.length} touchpoints over ${duration}.`,
-            touchpoints,
-          },
-          sender: {
-            name: org?.default_sender_name ?? "(set sender in Settings)",
-            email: org?.default_sender_email ?? "",
-          },
-          recipients: { ids: [], count: 247, segment_summary: "all parents on the master list (mock)" },
-        },
-      });
-    }, 2000);
-  }
-
-  // Picks a realistic touchpoint count by duration. Subjects mimic the style
-  // real Don writes — short, action-oriented, no clickbait, ≤ 60 chars.
-  // Bodies use merge tokens like {{first_name}} and {{school}} so the
-  // anti-hallucination pattern is visible end-to-end (the renderer fills
-  // them at send time).
-  function buildMockSchedule(topics, duration, closer) {
-    const today = new Date();
-    const startDate = new Date(today);
-    startDate.setDate(today.getDate() + 2);
-    const primary = topics[0] ?? "your program";
-    function fmtIso(d, hour) {
-      const dt = new Date(d);
-      dt.setHours(hour, 0, 0, 0);
-      return dt.toISOString();
+  async function startDrafting() {
+    if (!org?.id) {
+      dispatch({ type: "DRAFT_FAILED", error: "Couldn't find your organization. Refresh and try again." });
+      return;
     }
-    // Realistic-ish subject lines per touchpoint label. Real Don will write
-    // better, more topic-specific copy; this is just to stop the mock from
-    // looking like a placeholder.
-    const SUBJECT_TEMPLATES = {
-      "kickoff": (t) => `${t} is open for registration`,
-      "mid-window": (t) => `Halfway through — still time for ${t}`,
-      "48h-promo": (t) => `Early-bird pricing ends in 48 hours`,
-      "24h-promo": (t) => `Last 24 hours for early-bird pricing`,
-      "48h-reg-close": (t) => `Registration closes in 48 hours`,
-      "24h-reg-close": (t) => `Last 24 hours to register for ${t}`,
-    };
-    const BODY_TEMPLATES = {
-      "kickoff": (t) => `<p>Hi {{first_name}},</p><p>Great news — ${t} is open for registration at {{school}}. Kids design, code, and build with the tools they already love.</p><p>Tap to register now.</p>`,
-      "mid-window": (t) => `<p>Hi {{first_name}},</p><p>Just a heads-up — spots in ${t} are filling up at {{school}}. Lock yours in before the early-bird pricing ends.</p>`,
-      "48h-promo": (t) => `<p>Hi {{first_name}},</p><p>Quick reminder — early-bird pricing for ${t} ends in 48 hours. Register today to save on every program.</p>`,
-      "24h-promo": (t) => `<p>Hi {{first_name}},</p><p>Last call for early-bird pricing on ${t} — it ends tomorrow. Register tonight to lock in the savings.</p>`,
-      "48h-reg-close": (t) => `<p>Hi {{first_name}},</p><p>Registration for ${t} at {{school}} closes in 48 hours. If you've been thinking about it, now's the moment.</p>`,
-      "24h-reg-close": (t) => `<p>Hi {{first_name}},</p><p>One more day to register your kid for ${t} at {{school}}. After tomorrow, the roster is set.</p>`,
-    };
-    const plan = [
-      { offset: 0,  label: "kickoff",       hour: 10 },
-      { offset: 7,  label: "mid-window",    hour: 10 },
-      { offset: 14, label: "48h-promo",     hour: 10 },
-      { offset: 15, label: "24h-promo",     hour: 7  },
-      { offset: 21, label: "48h-reg-close", hour: 10 },
-      { offset: 22, label: "24h-reg-close", hour: 7  },
-    ];
-    const count =
-      duration === "2 weeks" ? 3 :
-      duration === "1 month" ? 6 :
-      duration === "2 months" ? 6 :
-      4;
-    return plan.slice(0, count).map((p, i) => {
-      const at = new Date(startDate);
-      at.setDate(startDate.getDate() + p.offset);
-      const subject = (SUBJECT_TEMPLATES[p.label] ?? ((t) => `${t} update`))(primary);
-      const body = (BODY_TEMPLATES[p.label] ?? ((t) => `<p>Hi {{first_name}},</p><p>${t} update.</p>`))(primary);
-      return {
-        id: `mock-tp-${i}`,
-        order_index: i,
-        type: "email",
-        label: p.label,
-        scheduled_at: fmtIso(at, p.hour),
-        subject: subject.slice(0, 60),
-        body_html: `${body}${closer ? `<p><em>${closer}</em></p>` : ""}`,
-        body_text: body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
-        topics: topics,
-        status: "queued",
-      };
+    dispatch({ type: "START_DRAFTING" });
+    const { data, error } = await supabase.functions.invoke("marketing-draft-campaign", {
+      body: { organization_id: org.id, inputs: state.inputs },
+    });
+    if (error) {
+      const msg = await friendlyDraftError(error);
+      dispatch({ type: "DRAFT_FAILED", error: msg });
+      return;
+    }
+    if (!data?.schedule?.touchpoints?.length) {
+      dispatch({ type: "DRAFT_FAILED", error: "Don couldn't draft a schedule. Try again, or simplify the topics." });
+      return;
+    }
+    dispatch({
+      type: "DRAFT_RECEIVED",
+      draft: {
+        campaign_id: data.campaign_id,
+        schedule: {
+          summary: data.schedule.summary,
+          notes_to_operator: data.schedule.notes_to_operator ?? "",
+          touchpoints: data.schedule.touchpoints,
+        },
+        sender: data.sender,
+        recipients: data.recipients,
+        mechanical_checks: data.mechanical_checks ?? null,
+        warning: data.warning ?? null,
+      },
     });
   }
 
@@ -262,6 +236,10 @@ export default function AICampaignBuilder() {
         onReset={() => dispatch({ type: "RESET" })}
       />
     );
+  }
+
+  if (state.loading) {
+    return <DraftingScreen />;
   }
 
   if (state.step === "review") {

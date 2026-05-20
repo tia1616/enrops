@@ -54,6 +54,8 @@ export default function ScheduleReview({
 
   const firstDate = touchpoints[0]?.scheduled_at;
   const lastDate = touchpoints[touchpoints.length - 1]?.scheduled_at;
+  const operatorNotes = draft?.schedule?.notes_to_operator?.trim();
+  const zeroRecipients = draft?.warning === "no_recipients_matched" || recipients.count === 0;
 
   return (
     <div style={{ maxWidth: 820, margin: "0 auto", paddingBottom: 96 }}>
@@ -114,6 +116,24 @@ export default function ScheduleReview({
           </div>
         </div>
       </div>
+
+      {operatorNotes && (
+        <div style={{
+          background: "#FFF8E1", border: "1px solid #E6C77A", borderRadius: 8,
+          padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#5C4A1C",
+        }}>
+          <strong style={{ fontWeight: 700 }}>A note from Don:</strong> {operatorNotes}
+        </div>
+      )}
+
+      {zeroRecipients && (
+        <div style={{
+          background: "#FDECEA", border: "1px solid #E5A6A0", borderRadius: 8,
+          padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#7A1F19",
+        }}>
+          <strong style={{ fontWeight: 700 }}>No recipients matched.</strong> Don drafted the schedule, but no parents fit this filter yet. Go back and widen the audience, or save as a draft for later.
+        </div>
+      )}
 
       {/* Recipient summary */}
       <div style={{
@@ -217,7 +237,7 @@ function RecipientList({ ids, onRemove }) {
   if (!ids || ids.length === 0) {
     return (
       <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
-        Recipient list is empty in this mock. Chunk 07 will load the actual rows.
+        No recipients matched this filter.
       </p>
     );
   }
