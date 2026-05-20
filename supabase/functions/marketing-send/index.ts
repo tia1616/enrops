@@ -28,6 +28,13 @@ const VIP_PER_TERM_CENTS = 24000;
 const SEND_TIME_BUDGET_MS = 120_000;
 const MAX_CHAIN_DEPTH = 30;
 
+// Statuses that mean "we successfully handed this email to Resend at least once."
+// Used by the dedup query — anything outside this set (failed, throttled, bounced,
+// pending) is treated as not-yet-delivered and IS eligible for retry on a re-send
+// of the same campaign. Keep this list narrow: only statuses written by us or by
+// a downstream webhook that confirm actual delivery progress.
+const DELIVERED_STATUSES = ['sent', 'delivered', 'opened', 'clicked'];
+
 // Tenant-overridable colors and fonts are loaded per request from org_branding.
 // These constants are platform defaults applied when an org has no branding row
 // or a field is null.
@@ -330,7 +337,7 @@ serve(async (req: Request) => {
         .from('marketing_sends')
         .select('email')
         .eq('campaign_id', campaign_id)
-        .eq('status', 'sent')
+        .in('status', DELIVERED_STATUSES)
         .range(off, off + PAGE - 1);
       if (!page || page.length === 0) break;
       for (const r of page as { email: string }[]) alreadySent.add(r.email.toLowerCase());
