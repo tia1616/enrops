@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
-import { supabase } from "../../../lib/supabase.js";
+import { supabase, API_BASE } from "../../../lib/supabase.js";
 import { CAPABILITY_ICONS as SHARED_CAPABILITY_ICONS, deriveOrgStatesForCurriculum as sharedDeriveStates, isCapabilityUnlocked as sharedIsUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 
 const PLUM = "#691D39";
@@ -173,6 +173,10 @@ export default function CurriculumReview() {
   // Link-existing-programs modal: opens from the celebration screen's
   // link_existing recommendation CTA, or from the published-curriculum CTA bar.
   const [linkModalOpen, setLinkModalOpen] = useState(false);
+  // Replace-source-doc modal: lets the operator upload an edited version of
+  // the curriculum doc to re-run extraction without losing the curriculum_id
+  // (so linked programs + camp_sessions stay attached).
+  const [replaceDocOpen, setReplaceDocOpen] = useState(false);
   // Capability detail modal: opens when the operator clicks any celebration
   // tile (also used by CurriculaList for the strip icons via the same shared
   // component).
@@ -681,6 +685,25 @@ export default function CurriculumReview() {
               >Open</button>
             </div>
           ))}
+          <button
+            type="button"
+            onClick={() => setReplaceDocOpen(true)}
+            style={{
+              marginTop: 14,
+              width: "100%",
+              padding: "8px 12px",
+              background: "transparent",
+              border: `1px dashed ${PLUM}66`,
+              borderRadius: 6,
+              color: PLUM,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            ↻ Replace with new doc
+          </button>
         </div>
 
         {/* RIGHT */}
@@ -922,6 +945,19 @@ export default function CurriculumReview() {
           curriculumId={curriculum?.id}
           config={polishConfig}
           onClose={() => setPolishConfig(null)}
+        />
+      )}
+
+      {replaceDocOpen && curriculum && (
+        <ReplaceDocModal
+          curriculumId={curriculum.id}
+          curriculumName={curriculum.name}
+          organizationId={org.id}
+          onClose={() => setReplaceDocOpen(false)}
+          onStarted={(docId) => {
+            setReplaceDocOpen(false);
+            navigate(`/admin/curricula/${curriculum.id}/extracting`);
+          }}
         />
       )}
 
@@ -1549,6 +1585,183 @@ function PolishModal({ curriculumId, config, onClose }) {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Modal to replace the source doc on an existing curriculum and re-run
+// extraction. Keeps the curriculum row (so linked programs + camp_sessions
+// stay attached) and preserves the curriculum name; everything else
+// (sessions, extracted fields) gets overwritten from the new doc.
+function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose, onStarted }) {
+  const [file, setFile] = useState(null);
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const ALLOWED_EXTS = ["pdf", "docx", "txt", "md", "xlsx"];
+  const MAX_BYTES = 25 * 1024 * 1024;
+
+  function fileExt(name) {
+    const m = /\.([a-z0-9]+)$/i.exec(name || "");
+    return m ? m[1].toLowerCase() : "";
+  }
+
+  function pickFile(f) {
+    setError("");
+    if (!f) { setFile(null); return; }
+    const ext = fileExt(f.name);
+    if (!ALLOWED_EXTS.includes(ext)) {
+      setError(`We can read .pdf, .docx, .xlsx, .txt, or .md — not .${ext || "unknown"}.`);
+      return;
+    }
+    if (f.size > MAX_BYTES) {
+      setError(`That file is ${(f.size / 1024 / 1024).toFixed(1)} MB — please keep it under 25 MB.`);
+      return;
+    }
+    setFile(f);
+  }
+
+  async function doReplace() {
+    if (!file || !confirmed || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      // 1. Upload to storage at the curriculum's existing path prefix.
+      const docId = crypto.randomUUID();
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `${organizationId}/${curriculumId}/${docId}-${safeName}`;
+      const { error: upErr } = await supabase.storage
+        .from("curriculum-documents")
+        .upload(path, file, { upsert: false, contentType: file.type || undefined });
+      if (upErr) throw new Error(`Couldn't upload ${file.name}: ${upErr.message}`);
+
+      // 2. Insert curriculum_documents row tied to the existing curriculum.
+      //    Old rows stay (history); the new one becomes the active source.
+      const { data: docRow, error: insErr } = await supabase
+        .from("curriculum_documents")
+        .insert({
+          id: docId,
+          curriculum_id: curriculumId,
+          organization_id: organizationId,
+          doc_type: "instructor_guide",
+          source_type: "upload",
+          storage_path: path,
+          original_filename: file.name,
+          mime_type: file.type || null,
+          extraction_status: "pending",
+        })
+        .select("id")
+        .single();
+      if (insErr || !docRow) {
+        await supabase.storage.from("curriculum-documents").remove([path]).catch(() => {});
+        throw new Error(`Couldn't save ${file.name} record: ${insErr?.message ?? "no row"}`);
+      }
+
+      // 3. Kick off extract-curriculum-details with preserve_name=true so the
+      //    curriculum's existing name (and links) aren't overwritten.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Sign in expired. Reload and try again.");
+      const resp = await fetch(`${API_BASE}/extract-curriculum-details`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ document_id: docRow.id, preserve_name: true }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        throw new Error(text || `Couldn't start extraction (${resp.status}).`);
+      }
+      onStarted?.(docRow.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div style={{ ...modal, maxWidth: 540 }}>
+        <h3 style={{ margin: "0 0 6px", color: INK, fontSize: 20, fontWeight: 700 }}>
+          Replace the source doc for {curriculumName}
+        </h3>
+        <p style={{ color: MUTED, fontSize: 13, margin: "0 0 16px", lineHeight: 1.45 }}>
+          Upload an edited version of your curriculum doc. We'll re-run extraction on the new file.
+          The curriculum name and any programs / camps already linked to it stay attached.
+        </p>
+
+        <label style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          padding: 20,
+          border: `2px dashed ${file ? PLUM : RULE}`,
+          borderRadius: 8,
+          background: file ? PLUM_SOFT : "#fafaf3",
+          cursor: "pointer",
+          marginBottom: 14,
+        }}>
+          <input
+            type="file"
+            accept=".pdf,.docx,.txt,.md,.xlsx"
+            onChange={(e) => pickFile(e.target.files?.[0])}
+            style={{ display: "none" }}
+          />
+          {file ? (
+            <>
+              <div style={{ fontSize: 24 }}>📄</div>
+              <div style={{ fontWeight: 600, color: INK, fontSize: 14 }}>{file.name}</div>
+              <div style={{ color: MUTED, fontSize: 12 }}>{(file.size / 1024 / 1024).toFixed(2)} MB · click to replace</div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 24, color: MUTED }}>⬆</div>
+              <div style={{ fontWeight: 600, color: INK, fontSize: 14 }}>Pick a file</div>
+              <div style={{ color: MUTED, fontSize: 12 }}>.pdf, .docx, .xlsx, .txt, .md · up to 25 MB</div>
+            </>
+          )}
+        </label>
+
+        <div style={{
+          background: "#fff5f5",
+          border: "1px solid #f0c4c4",
+          borderLeft: "3px solid #a13a3a",
+          borderRadius: 4,
+          padding: "12px 14px",
+          marginBottom: 14,
+        }}>
+          <strong style={{ color: "#7a1a1a", display: "block", marginBottom: 6 }}>Heads up — this overwrites your edits</strong>
+          <div style={{ color: INK, fontSize: 13, lineHeight: 1.5, marginBottom: 10 }}>
+            All current sessions, recap templates, skill lists, and extracted fields will be replaced with whatever the new doc produces. Linked programs / camps + the curriculum name stay.
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, color: INK, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(e) => setConfirmed(e.target.checked)}
+              style={{ width: 16, height: 16 }}
+            />
+            I understand. Replace it.
+          </label>
+        </div>
+
+        {error && <div style={{ ...errorBox, marginBottom: 12 }}>{error}</div>}
+
+        <div style={modalActions}>
+          <button onClick={onClose} style={tertiaryBtn} disabled={busy}>Cancel</button>
+          <button
+            onClick={doReplace}
+            disabled={!file || !confirmed || busy}
+            style={{ ...primaryBtn, opacity: !file || !confirmed || busy ? 0.5 : 1, cursor: !file || !confirmed || busy ? "not-allowed" : "pointer" }}
+          >
+            {busy ? "Starting…" : "Replace and re-extract →"}
+          </button>
+        </div>
       </div>
     </div>
   );
