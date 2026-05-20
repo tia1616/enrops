@@ -866,7 +866,7 @@ export default function CurriculumReview() {
             <div style={{ display: "flex", gap: 10 }}>
               <Link to="/admin/curricula" style={tertiaryBtn}>← Back to library</Link>
               {curriculum.status === "published" ? (
-                <button onClick={() => setLinkModalOpen(true)} style={secondaryBtn}>Link existing programs</button>
+                <button onClick={() => setLinkModalOpen(true)} style={secondaryBtn}>Manage program links</button>
               ) : (
                 <>
                   <button onClick={saveAsDraft} style={secondaryBtn}>Save as draft</button>
@@ -2112,7 +2112,7 @@ function PublishModal({
                     }}
                     style={primaryBtn}
                   >
-                    {recommendation.variant === "link_existing" ? "Link existing programs →" : recommendation.primary_cta}
+                    {recommendation.variant === "link_existing" ? "Manage program links →" : recommendation.primary_cta}
                   </button>
                 )}
                 {!recommendation?.primary_cta && (
