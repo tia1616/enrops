@@ -3772,10 +3772,14 @@ function ModalShell({ title, children, onClose }) {
       <div onClick={(e) => e.stopPropagation()} style={{
         width: "100%",
         maxWidth: 480,
+        maxHeight: "90vh",
         background: "#fff",
         border: `1px solid ${RULE}`,
         borderRadius: 10,
         boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
       }}>
         <div style={{
           padding: "14px 20px",
@@ -3783,11 +3787,15 @@ function ModalShell({ title, children, onClose }) {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          flexShrink: 0,
+          background: "#fff",
         }}>
           <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: INK }}>{title}</h2>
           <button type="button" onClick={onClose} aria-label="Close" style={{ background: "transparent", border: "none", fontSize: 22, color: MUTED, cursor: "pointer", lineHeight: 1, padding: 4 }}>×</button>
         </div>
-        {children}
+        <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
+          {children}
+        </div>
       </div>
     </div>
   );
