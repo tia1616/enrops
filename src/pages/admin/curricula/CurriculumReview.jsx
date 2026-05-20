@@ -77,6 +77,21 @@ function matchScore(a, b) {
   return overlap / Math.max(aw.size, bw.size);
 }
 
+// Human-readable session_type for the match + link modals. The schedule's
+// raw values are "afternoon" / "morning" / "full_day" / etc. (J2S-shaped);
+// the label distinguishes half-day from full-day so the operator doesn't
+// bundle them under the same curriculum.
+function sessionTypeLabel(sessionType) {
+  switch (sessionType) {
+    case "afternoon": return "half-day PM camp";
+    case "morning": return "half-day AM camp";
+    case "full_day": return "full-day camp";
+    case "half_day_am": return "half-day AM camp";
+    case "half_day_pm": return "half-day PM camp";
+    default: return "camp session";
+  }
+}
+
 // Top-level field-name in curriculum_extracted_fields → which curricula column
 // (or pair of columns) it maps to. Used to read confidence + decide flags.
 function isFieldFlagged({ curriculum, fieldName, extractedRow }) {
@@ -491,7 +506,7 @@ export default function CurriculumReview() {
         .is("curriculum_id", null),
       supabase
         .from("camp_sessions")
-        .select("id, curriculum_name")
+        .select("id, curriculum_name, session_type")
         .eq("organization_id", org.id)
         .is("curriculum_id", null),
       supabase
@@ -521,8 +536,12 @@ export default function CurriculumReview() {
     }
     for (const c of campRows ?? []) {
       const name = c.curriculum_name || "";
-      const key = `camp_sessions::${name}`;
-      if (!groups.has(key)) groups.set(key, { source: "camp_sessions", name, ids: [], runCount: 0, key });
+      // Camp_sessions: group by name AND session_type so half-day (afternoon /
+      // morning) and full_day sessions don't bundle together. They're typically
+      // different curricula even when scheduled under the same brand name.
+      const sessionType = c.session_type || "unknown";
+      const key = `camp_sessions::${name}::${sessionType}`;
+      if (!groups.has(key)) groups.set(key, { source: "camp_sessions", name, sessionType, ids: [], runCount: 0, key });
       const g = groups.get(key);
       g.ids.push(c.id);
       g.runCount += 1;
@@ -1562,7 +1581,7 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
           .is("curriculum_id", null),
         supabase
           .from("camp_sessions")
-          .select("id, curriculum_name")
+          .select("id, curriculum_name, session_type")
           .eq("organization_id", organizationId)
           .is("curriculum_id", null),
       ]);
@@ -1580,8 +1599,12 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
       for (const c of campRows ?? []) {
         const name = (c.curriculum_name || "").trim();
         if (!name) continue;
-        const key = `camp_sessions::${name}`;
-        if (!groups.has(key)) groups.set(key, { source: "camp_sessions", name, ids: [], runCount: 0, key });
+        // Camp_sessions: group by name AND session_type so half-day (afternoon /
+        // morning) and full_day sessions don't bundle together. They're typically
+        // different curricula even when scheduled under the same brand name.
+        const sessionType = c.session_type || "unknown";
+        const key = `camp_sessions::${name}::${sessionType}`;
+        if (!groups.has(key)) groups.set(key, { source: "camp_sessions", name, sessionType, ids: [], runCount: 0, key });
         const g = groups.get(key);
         g.ids.push(c.id);
         g.runCount += 1;
@@ -1669,7 +1692,9 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
   const selectedCount = selectedKeys.size;
 
   function MatchRow({ m }) {
-    const kindLabel = m.source === "camp_sessions" ? "camp session" : "program run";
+    const kindLabel = m.source === "camp_sessions"
+      ? sessionTypeLabel(m.sessionType)
+      : "program run";
     const scorePct = Math.round(m.score * 100);
     const isStrong = m.score >= 0.5;
     return (
@@ -2008,6 +2033,8 @@ function PublishModal({
               // Group matches by source so the operator can see at a glance
               // whether the suggestion is for summer camps or afterschool
               // programs. The kindLabel text alone was too easy to miss.
+              // Camp groups also separate by session_type so half-day and
+              // full-day camps aren't bundled into one suggestion.
               const campMatches = programMatches.filter((m) => m.source === "camp_sessions");
               const programMatchesAfter = programMatches.filter((m) => m.source === "programs");
               const renderGroup = (label, group) => group.length === 0 ? null : (
@@ -2016,7 +2043,9 @@ function PublishModal({
                     {label}
                   </div>
                   {group.map((m) => {
-                    const kindLabel = m.source === "camp_sessions" ? "camp session" : "program run";
+                    const kindLabel = m.source === "camp_sessions"
+                      ? sessionTypeLabel(m.sessionType)
+                      : "program run";
                     return (
                       <label key={m.key} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", fontSize: 13, cursor: "pointer" }}>
                         <input
