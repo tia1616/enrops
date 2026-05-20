@@ -1689,8 +1689,10 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
     }
     const totalChanges = linkProgramIds.length + linkCampIds.length + unlinkProgramIds.length + unlinkCampIds.length;
     if (totalChanges === 0) {
-      setError("No changes to save. Tick to link or untick a currently-linked row to unlink.");
-      setSaving(false);
+      // Save with no changes is a no-op -- just close. The operator pressed
+      // Save deliberately; don't force them to remember which rows they
+      // touched.
+      onClose();
       return;
     }
     try {
@@ -1763,10 +1765,19 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
     const kindLabel = m.source === "camp_sessions"
       ? sessionTypeLabel(m.sessionType)
       : "program run";
-    const scorePct = Math.round(m.score * 100);
-    const isStrong = m.score >= 0.5;
     return (
-      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "7px 0", fontSize: 13, cursor: "pointer", borderBottom: `1px solid ${RULE}`, background: m.linked ? "rgba(105, 29, 57, 0.04)" : "transparent" }}>
+      <label
+        title={m.linked
+          ? "Already part of this curriculum. Untick to remove."
+          : "Tick to add to this curriculum."}
+        style={{
+          display: "flex", alignItems: "flex-start", gap: 8,
+          padding: "8px 10px", fontSize: 13, cursor: "pointer",
+          borderBottom: `1px solid ${RULE}`,
+          background: m.linked ? "rgba(105, 29, 57, 0.05)" : "transparent",
+          borderLeft: m.linked ? `3px solid ${PLUM}` : "3px solid transparent",
+        }}
+      >
         <input
           type="checkbox"
           checked={selectedKeys.has(m.key)}
@@ -1774,88 +1785,36 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
           style={{ marginTop: 3 }}
         />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            <strong>{m.name}</strong>
-            {m.linked ? (
-              <span style={{
-                fontSize: 10,
-                fontWeight: 600,
-                padding: "2px 7px",
-                borderRadius: 8,
-                background: PLUM_SOFT,
-                color: PLUM,
-                border: `1px solid ${PLUM}55`,
-                textTransform: "uppercase",
-                letterSpacing: 0.4,
-              }}>
-                Currently linked
-              </span>
-            ) : m.score > 0 ? (
-              <span style={{
-                fontSize: 10,
-                fontWeight: 600,
-                padding: "2px 7px",
-                borderRadius: 8,
-                background: isStrong ? "rgba(78, 145, 78, 0.12)" : "#f3f0e6",
-                color: isStrong ? "#2d5a2d" : MUTED,
-                border: `1px solid ${isStrong ? "rgba(78, 145, 78, 0.35)" : RULE}`,
-              }}>
-                {isStrong ? `≈${scorePct}% match` : "manual"}
-              </span>
-            ) : null}
-          </div>
+          <div style={{ fontWeight: 600, color: INK }}>{m.name}</div>
           <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
             {m.runCount} {kindLabel}{m.runCount === 1 ? "" : "s"}
-            {m.linked && <span style={{ marginLeft: 8, color: MUTED }}>· untick to unlink</span>}
           </div>
         </div>
       </label>
     );
   }
 
-  // Compute the diff for the save-button label, so the operator sees what
-  // they're about to change before clicking.
-  let pendingLinkCount = 0;
-  let pendingUnlinkCount = 0;
-  for (const m of matches) {
-    const selected = selectedKeys.has(m.key);
-    const was = initialLinkedKeys.has(m.key);
-    if (selected && !was) pendingLinkCount++;
-    else if (!selected && was) pendingUnlinkCount++;
-  }
-  const noChanges = pendingLinkCount === 0 && pendingUnlinkCount === 0;
-  const initialLinkedCount = initialLinkedKeys.size;
-
   return (
     <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget && !saving) onClose(); }}>
       <div style={{ ...modal, maxWidth: 640 }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
-          <div>
-            <h3 style={{ margin: "0 0 4px", color: INK, fontSize: 20, fontWeight: 700 }}>
-              Manage links for {curriculumName}
-            </h3>
-            <p style={{ color: MUTED, fontSize: 13, margin: 0, lineHeight: 1.45 }}>
-              Currently linked rows are pre-checked (plum row, "Currently linked" pill). Untick to unlink.
-              Strong unlinked matches are pre-checked too — tick or untick anything before saving.
-            </p>
-          </div>
+        <div style={{ marginBottom: 14 }}>
+          <h3 style={{ margin: "0 0 4px", color: INK, fontSize: 20, fontWeight: 700 }}>
+            Programs and camps for {curriculumName}
+          </h3>
+          <p style={{ color: MUTED, fontSize: 13, margin: 0, lineHeight: 1.45 }}>
+            Tick the ones that belong to this curriculum. Rows in plum are already part of it — untick to remove.
+          </p>
         </div>
-
-        {!loading && initialLinkedCount > 0 && (
-          <div style={{ background: GOLD_SOFT, border: `1px solid ${GOLD_BORDER}`, borderRadius: 6, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: INK }}>
-            <strong style={{ color: "#7a5a00" }}>Currently linked:</strong> {initialLinkedCount} group{initialLinkedCount === 1 ? "" : "s"} (shown with the plum pill below)
-          </div>
-        )}
 
         {loading && (
           <div style={{ padding: "30px 0", color: MUTED, fontSize: 13, textAlign: "center" }}>
-            Loading current + unlinked programs and camp sessions…
+            Loading…
           </div>
         )}
 
         {!loading && matches.length === 0 && (
           <div style={{ background: "#f6f4ec", border: `1px solid ${RULE}`, borderRadius: 6, padding: 14, fontSize: 13, color: MUTED }}>
-            Nothing to link or unlink. No programs or camp sessions are currently linked to this curriculum, and no unlinked rows are in your library. If you schedule a new program later, it'll show up here.
+            Nothing scheduled yet. Once you schedule programs or camps, they'll show up here to tick.
           </div>
         )}
 
@@ -1886,18 +1845,10 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
           <button onClick={onClose} style={tertiaryBtn} disabled={saving}>Cancel</button>
           <button
             onClick={doSave}
-            disabled={saving || noChanges}
-            style={{ ...primaryBtn, opacity: saving || noChanges ? 0.5 : 1, cursor: saving || noChanges ? "not-allowed" : "pointer" }}
+            disabled={saving}
+            style={{ ...primaryBtn, opacity: saving ? 0.5 : 1, cursor: saving ? "not-allowed" : "pointer" }}
           >
-            {saving
-              ? "Saving…"
-              : noChanges
-                ? "No changes"
-                : pendingUnlinkCount === 0
-                  ? `Link ${pendingLinkCount} group${pendingLinkCount === 1 ? "" : "s"} →`
-                  : pendingLinkCount === 0
-                    ? `Unlink ${pendingUnlinkCount} group${pendingUnlinkCount === 1 ? "" : "s"} →`
-                    : `Link ${pendingLinkCount}, unlink ${pendingUnlinkCount} →`}
+            {saving ? "Saving…" : "Save"}
           </button>
         </div>
       </div>
