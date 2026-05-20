@@ -11,7 +11,6 @@ import PolicyPage from './pages/PolicyPage.jsx';
 import AdminLayout from './layouts/AdminLayout.jsx';
 import AdminLogin from './pages/admin/AdminLogin.jsx';
 import AdminOverview from './pages/admin/AdminOverview.jsx';
-import MarketingShell from './pages/admin/marketing/MarketingShell.jsx';
 import AICampaignBuilder from './pages/admin/marketing-v2/AICampaignBuilder.jsx';
 import Schedule from './pages/admin/Schedule.jsx';
 import ExtractionTest from './pages/admin/dev/ExtractionTest.jsx';
@@ -49,7 +48,6 @@ export default function App() {
       <Route path="/admin/login" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<AdminOverview />} />
-        <Route path="marketing" element={<MarketingShell />} />
         <Route path="marketing-v2" element={<AICampaignBuilder />} />
         <Route path="schedule" element={<Schedule />} />
         <Route path="curricula" element={<CurriculaList />} />
