@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
+import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 
 const PLUM = "#691D39";
 const GOLD = "#CFB12F";
@@ -54,6 +55,8 @@ export default function InstructorPortal() {
   const [changeFor, setChangeFor] = useState(null); // assignment object pending request-change message
   const [changeText, setChangeText] = useState("");
   const [impersonating, setImpersonating] = useState(null); // { asEmail, signedInEmail } when admin is viewing as instructor
+  const [cycles, setCycles] = useState([]); // open cycles for this org with survey status
+  const [editingCycleId, setEditingCycleId] = useState(null); // when set, render the availability form for this cycle
 
   useEffect(() => {
     let mounted = true;
@@ -93,7 +96,13 @@ export default function InstructorPortal() {
             last_name: target.last_name,
           });
           setImpersonating({ asEmail: target.email, signedInEmail: session.user.email });
-          await loadAssignments(target.id);
+          const targetInst = {
+            instructor_id: target.id,
+            organization_id: target.organization_id,
+            first_name: target.first_name,
+            last_name: target.last_name,
+          };
+          await Promise.all([loadAssignments(target.id), loadCycles(targetInst)]);
           setPhase("ready");
           return;
         }
@@ -121,7 +130,7 @@ export default function InstructorPortal() {
         throw new Error(linkData?.error ?? linkErr?.message ?? "Couldn't find your instructor record.");
       }
       setInstructor(linkData);
-      await loadAssignments(linkData.instructor_id);
+      await Promise.all([loadAssignments(linkData.instructor_id), loadCycles(linkData)]);
       setPhase("ready");
     } catch (err) {
       setError(err.message ?? "Couldn't link your account.");
@@ -138,6 +147,37 @@ export default function InstructorPortal() {
       .order("camp_sessions(starts_on)", { ascending: true });
     if (aErr) throw aErr;
     setAssignments(data ?? []);
+  }
+
+  // Load any open cycles (not archived) for this instructor's org plus a flag
+  // for whether they've already filled out their availability for each. Used
+  // to surface "Set up your availability" / "Update availability" banners.
+  async function loadCycles(loadedInstructor) {
+    if (!loadedInstructor?.organization_id || !loadedInstructor?.instructor_id) return;
+    const { data: cycleRows, error: cErr } = await supabase
+      .from("scheduling_cycles")
+      .select("id, name, cycle_type, starts_on, ends_on, weeks, status")
+      .eq("organization_id", loadedInstructor.organization_id)
+      .neq("status", "archived")
+      .order("starts_on", { ascending: true });
+    if (cErr) {
+      console.warn("Couldn't load cycles for availability survey:", cErr);
+      return;
+    }
+    const ids = (cycleRows ?? []).map((c) => c.id);
+    let submittedMap = {};
+    if (ids.length > 0) {
+      const { data: availRows } = await supabase
+        .from("instructor_availability")
+        .select("cycle_id, submitted_at")
+        .eq("instructor_id", loadedInstructor.instructor_id)
+        .in("cycle_id", ids);
+      for (const r of availRows ?? []) submittedMap[r.cycle_id] = r.submitted_at;
+    }
+    setCycles((cycleRows ?? []).map((c) => ({
+      ...c,
+      submitted_at: submittedMap[c.id] ?? null,
+    })));
   }
 
   async function handleSignIn(e) {
@@ -354,6 +394,43 @@ export default function InstructorPortal() {
   const accepted = assignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
   const changeRequested = assignments.filter((a) => a.status === "change_requested");
 
+  // Cycles that are open + the instructor hasn't filled out availability yet,
+  // or has but might want to update. We surface a banner per cycle.
+  const editingCycle = editingCycleId ? cycles.find((c) => c.id === editingCycleId) : null;
+  const needsSurvey = cycles.filter((c) => !c.submitted_at);
+  const updatableSurveys = cycles.filter((c) => !!c.submitted_at && c.status !== "archived");
+
+  // While editing availability for a cycle, hide the assignment list entirely.
+  if (editingCycle) {
+    return (
+      <Shell instructorName={instructor.first_name} onSignOut={signOut}>
+        {impersonating && (
+          <div style={{
+            background: `${GOLD}1F`,
+            border: `1px solid ${GOLD}`,
+            borderRadius: 8,
+            padding: "10px 14px",
+            marginBottom: 14,
+            fontSize: 13,
+            color: INK,
+            lineHeight: 1.5,
+          }}>
+            <strong>Admin preview</strong> — saving will write to <em>{impersonating.asEmail}</em>'s availability.
+          </div>
+        )}
+        <InstructorAvailabilityForm
+          instructor={instructor}
+          cycle={editingCycle}
+          onSaved={async () => {
+            setEditingCycleId(null);
+            await loadCycles(instructor);
+          }}
+          onCancel={() => setEditingCycleId(null)}
+        />
+      </Shell>
+    );
+  }
+
   return (
     <Shell instructorName={instructor.first_name} onSignOut={signOut}>
       {impersonating && (
@@ -386,6 +463,18 @@ export default function InstructorPortal() {
         </div>
       )}
 
+      {needsSurvey.length > 0 && (
+        <div style={{ marginBottom: 18, display: "flex", flexDirection: "column", gap: 10 }}>
+          {needsSurvey.map((c) => (
+            <SurveyBanner
+              key={c.id}
+              cycle={c}
+              onStart={() => setEditingCycleId(c.id)}
+            />
+          ))}
+        </div>
+      )}
+
       {pending.length > 0 && (
         <Section title="To review">
           {pending.map((a) => (
@@ -412,9 +501,33 @@ export default function InstructorPortal() {
         </Section>
       )}
 
-      {totalCount === 0 && (
+      {totalCount === 0 && needsSurvey.length === 0 && (
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, color: MUTED, textAlign: "center" }}>
           No schedule yet. Your admin will email you when it's ready.
+        </div>
+      )}
+
+      {updatableSurveys.length > 0 && (
+        <div style={{ marginTop: 24, paddingTop: 18, borderTop: `1px solid ${RULE}` }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>
+            Your availability
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {updatableSurveys.map((c) => (
+              <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, fontSize: 13, color: INK }}>
+                <span>
+                  {cycleLabel(c)} <span style={{ color: MUTED }}>· submitted {fmtShort(c.submitted_at?.slice(0, 10))}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setEditingCycleId(c.id)}
+                  style={{ background: "transparent", color: PLUM, border: `1px solid ${PLUM}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}
+                >
+                  Update availability
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -429,6 +542,61 @@ export default function InstructorPortal() {
         />
       )}
     </Shell>
+  );
+}
+
+function cycleLabel(cycle) {
+  if (!cycle?.name) return "Cycle";
+  const m = /^(SU|FA|WI|SP)(\d{2})$/.exec(cycle.name);
+  if (!m) return cycle.name;
+  const terms = { SU: "Summer", FA: "Fall", WI: "Winter", SP: "Spring" };
+  return `${terms[m[1]]} 20${m[2]}`;
+}
+
+function SurveyBanner({ cycle, onStart }) {
+  const title = cycleLabel(cycle);
+  return (
+    <div style={{
+      background: `${GOLD}1F`,
+      border: `1px solid ${GOLD}`,
+      borderRadius: 10,
+      padding: "14px 16px",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 12,
+      flexWrap: "wrap",
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.6 }}>
+          New: set up your availability
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginTop: 2 }}>
+          Tell us when you can work this {title}
+        </div>
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 2, lineHeight: 1.4 }}>
+          {fmtShort(cycle.starts_on)} – {fmtShort(cycle.ends_on)} · ~2 minutes
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onStart}
+        style={{
+          padding: "9px 14px",
+          background: PLUM,
+          color: "#fff",
+          border: "none",
+          borderRadius: 6,
+          fontSize: 13,
+          fontWeight: 600,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          whiteSpace: "nowrap",
+        }}
+      >
+        Start
+      </button>
+    </div>
   );
 }
 

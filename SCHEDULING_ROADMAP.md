@@ -4,7 +4,7 @@ Snapshot of what works end-to-end on the Schedule page today, what's still
 missing for J2S's future cycles, and what blocks a fresh tenant from
 self-serving.
 
-Written 2026-05-19. Last updated 2026-05-20. Last cycle worked through: SU26.
+Written 2026-05-19. Last updated 2026-05-21. Last cycle worked through: SU26.
 
 ---
 
@@ -111,27 +111,29 @@ Recommend adding `programs.cycle_id` for consistency.
 
 **Scope:** ~3-5 sessions.
 
-### 5. In-portal availability survey — high impact
+### 5. ~~In-portal availability survey~~ — ✓ shipped 2026-05-21
 
-**Today:** Google Form → manual transcription
-([drift memory](.claude/projects/.../project_enrops_drive_supabase_drift.md)).
-**Needed:** Instructor portal page where they:
-- See cycle dates
-- Check which weeks they're available
-- Check session types (Morning / Afternoon / Full Day)
-- Set location preferences per venue (Highly preferred / Preferred / Not
-  preferred / Unavailable)
-- Set curriculum category prefs (LEGO / Coding / Robotics)
-- Mark specific dates as unavailable (date picker — see
-  [survey import gap memory](.claude/projects/.../project_enrops_survey_import_gap.md))
-- Pick role preference (Lead only / Both / Developing only)
-- Saturday availability toggle
-- Notes textarea
+Lives in the instructor portal at `/j2s/instructor`. When an instructor signs
+in and the org has an open cycle they haven't filled out, a gold banner
+("Tell us when you can work this Fall 2026 · ~2 minutes") sits above their
+schedule. Form covers weeks, session types (Morning / Afternoon / Full day),
+location preferences per venue (highly_preferred / preferred / not_preferred
+/ unavailable), curriculum category prefs (LEGO / Coding / Robotics), role
+preference (Lead only / Either / Developing only), Saturday toggle,
+specific-dates-can't-work textarea, free notes. Writes to existing tables:
+`instructor_availability` (upsert on `instructor_id,cycle_id`),
+`instructor_location_preferences` (delete+insert), and
+`instructor_curriculum_preferences` (delete+insert). Pre-fills from any
+existing rows so instructors can update later — the "Your availability"
+section at the bottom of the portal lists submitted surveys with an
+"Update availability" button. Admin impersonation (`?as=`) works the same
+way and writes to the impersonated instructor's row.
 
-Writes to existing tables: `instructor_availability`,
-`instructor_location_preferences`, `instructor_curriculum_preferences`.
-
-**Scope:** ~2-3 sessions. Big screen but straightforward CRUD.
+Remaining nit: still uses a free-text field for specific dates — see
+[survey import gap memory](.claude/projects/.../project_enrops_survey_import_gap.md).
+A real date picker that writes to a structured `unavailable_dates` array
+would let the match agent honor "out June 22" without parsing prose.
+Punt to FA26 if SU26 instructors don't hit it.
 
 ### 6. Instructors management page — medium impact
 
@@ -260,7 +262,7 @@ Mapped to Jessica's July 31, 2026 launch date for Tenant #2:
 1. **Now → mid-June:** Tenant-2 setup UIs in this order:
    - ~~program_locations CRUD~~ ✓ shipped 2026-05-20
    - ~~scheduling_cycles create~~ ✓ shipped 2026-05-20
-   - In-portal availability survey (#5, needed for FA26 anyway)
+   - ~~In-portal availability survey~~ ✓ shipped 2026-05-21
 
 2. **Mid-June → mid-July:** Programs tab build (#3 + #4 combined)
 
