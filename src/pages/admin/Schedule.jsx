@@ -1642,6 +1642,7 @@ export default function Schedule() {
           orgName={org?.name ?? "Journey to STEAM"}
           assignments={state.assignments}
           sessions={state.sessions}
+          instructors={state.instructors}
           onClose={() => setEmailActivityOpen(false)}
         />
       )}
@@ -1660,6 +1661,7 @@ export default function Schedule() {
           assignment={changeRequestFor.assignment}
           cycle={cycle}
           orgName={org?.name ?? "Journey to STEAM"}
+          instructors={state.instructors}
           onClose={() => {
             setChangeRequestFor(null);
             skippedThisWalkRef.current = new Set();
@@ -2723,7 +2725,7 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
   );
 }
 
-function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onUnassign, onReassign, onSkip }) {
+function ChangeRequestReview({ session, assignment, cycle, orgName, instructors = [], onClose, onUnassign, onReassign, onSkip }) {
   const [busy, setBusy] = useState(false);
   const [unassignArmed, setUnassignArmed] = useState(false);
   const [replyOpen, setReplyOpen] = useState(false);
@@ -2745,7 +2747,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
     (async () => {
       const { data } = await supabase
         .from("instructor_offer_messages")
-        .select("id, sender_role, message, created_at")
+        .select("id, sender_role, sender_instructor_id, message, created_at")
         .eq("camp_assignment_id", assignment.id)
         .order("created_at", { ascending: true });
       if (alive) setThread(data ?? []);
@@ -2820,6 +2822,24 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
             {thread.map((m) => {
               const isInstructor = m.sender_role === "instructor";
               const isSystem = m.sender_role === "system";
+              // Attribute instructor messages by actual sender (sender_instructor_id).
+              // Historical messages without it (pre-fix) render as "Prior instructor"
+              // so a reassigned row doesn't mislead admin about who said what.
+              let label;
+              if (isInstructor) {
+                if (m.sender_instructor_id === assignment?.instructor_id) {
+                  label = firstName;
+                } else if (m.sender_instructor_id) {
+                  const sender = instructors.find((i) => i.id === m.sender_instructor_id);
+                  label = sender ? sender.first_name : "Instructor";
+                } else {
+                  label = "Prior instructor";
+                }
+              } else if (isSystem) {
+                label = "System";
+              } else {
+                label = "You";
+              }
               return (
                 <div key={m.id} style={{
                   padding: "8px 10px",
@@ -2831,7 +2851,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, onClose, onU
                   lineHeight: 1.45,
                 }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
-                    {isInstructor ? firstName : isSystem ? "System" : "You"} · {new Date(m.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                    {label} · {new Date(m.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                   </div>
                   <div style={{ whiteSpace: "pre-wrap" }}>{m.message}</div>
                 </div>
@@ -3350,7 +3370,12 @@ function renderReminderEmailHtml({ instructorCamps, locationsById, cycle, orgNam
 // any assignment in this cycle. Reads directly from instructor_offer_messages —
 // send-offers, send-patch-offer, offer-reminders-cron, and offer-message-reply all
 // write to that table now, so the timeline is complete without JS-side synthesis.
-function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, sessions, onClose }) {
+function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, sessions, instructors, onClose }) {
+  const instructorsById = useMemo(() => {
+    const m = new Map();
+    for (const i of instructors ?? []) m.set(i.id, i);
+    return m;
+  }, [instructors]);
   const [rows, setRows] = useState([]);
   const [locationsById, setLocationsById] = useState(new Map());
   const [loaded, setLoaded] = useState(false);
@@ -3376,7 +3401,7 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
       const [msgRes, locRes] = await Promise.all([
         supabase
           .from("instructor_offer_messages")
-          .select("id, camp_assignment_id, sender_role, message, created_at")
+          .select("id, camp_assignment_id, sender_role, sender_instructor_id, message, created_at")
           .in("camp_assignment_id", ids)
           .order("created_at", { ascending: false }),
         (async () => {
@@ -3416,6 +3441,7 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
         id: m.id,
         kind,
         sender: role,
+        sender_instructor_id: m.sender_instructor_id,
         created_at: m.created_at,
         camp_assignment_id: m.camp_assignment_id,
         message: m.message,
@@ -3522,7 +3548,21 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
             filtered.map((e) => {
               const a = assignmentsById.get(e.camp_assignment_id);
               const s = a ? sessionsById.get(a.camp_session_id) : null;
-              const who = a ? `${a.instructor_first ?? ""}${a.instructor_last ? " " + a.instructor_last : ""}`.trim() : "(unknown instructor)";
+              // For instructor replies, attribute to the actual sender (looked up via
+              // sender_instructor_id). For everything else, show the assignment's
+              // current holder. Historical instructor replies without a sender_instructor_id
+              // render as "Prior instructor" so they're not falsely attributed.
+              let who;
+              if (e.kind === "instructor_reply") {
+                if (e.sender_instructor_id) {
+                  const sender = instructorsById.get(e.sender_instructor_id);
+                  who = sender ? `${sender.first_name ?? ""}${sender.last_name ? " " + sender.last_name : ""}`.trim() : "Instructor";
+                } else {
+                  who = "Prior instructor";
+                }
+              } else {
+                who = a ? `${a.instructor_first ?? ""}${a.instructor_last ? " " + a.instructor_last : ""}`.trim() : "(unknown instructor)";
+              }
               const where = s ? `${s.curriculum_name ?? "—"} · ${s.location_name ?? "—"} · Wk ${s.week_num}` : "—";
               const previewable = e.kind === "offer" || e.kind === "patch" || e.kind === "reminder";
               const expanded = expandedRowId === e.id;
@@ -3847,7 +3887,7 @@ function CandidatePicker({
     (async () => {
       const { data } = await supabase
         .from("instructor_offer_messages")
-        .select("id, sender_role, message, created_at")
+        .select("id, sender_role, sender_instructor_id, message, created_at")
         .eq("camp_assignment_id", currentAssignment.id)
         .order("created_at", { ascending: true });
       if (alive) setThread(data ?? []);
@@ -4186,6 +4226,24 @@ function CandidatePicker({
                 {thread.map((m) => {
                   const isInstructor = m.sender_role === "instructor";
                   const isSystem = m.sender_role === "system";
+                  // Attribute by actual sender when possible. Historical instructor
+                  // messages (no sender_instructor_id) on a reassigned row would
+                  // otherwise be falsely attributed to the new instructor.
+                  let label;
+                  if (isInstructor) {
+                    if (m.sender_instructor_id === currentAssignment?.instructor_id) {
+                      label = currentFirstName;
+                    } else if (m.sender_instructor_id) {
+                      const sender = instructors.find((i) => i.id === m.sender_instructor_id);
+                      label = sender ? sender.first_name : "Instructor";
+                    } else {
+                      label = "Prior instructor";
+                    }
+                  } else if (isSystem) {
+                    label = "System";
+                  } else {
+                    label = "You";
+                  }
                   return (
                     <div key={m.id} style={{
                       padding: "8px 10px",
@@ -4197,7 +4255,7 @@ function CandidatePicker({
                       lineHeight: 1.45,
                     }}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
-                        {isInstructor ? currentFirstName : isSystem ? "System" : "You"} · {new Date(m.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                        {label} · {new Date(m.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                       </div>
                       <div style={{ whiteSpace: "pre-wrap" }}>{m.message}</div>
                     </div>

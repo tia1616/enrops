@@ -218,6 +218,7 @@ export default function InstructorPortal() {
         organization_id: instructor.organization_id,
         camp_assignment_id: changeFor.id,
         sender_role: "instructor",
+        sender_instructor_id: instructor.instructor_id,
         message: changeText.trim(),
       });
       setChangeFor(null);
