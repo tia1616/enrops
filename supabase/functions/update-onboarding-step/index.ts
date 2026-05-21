@@ -1,0 +1,355 @@
+// update-onboarding-step — generic step advancer for the wizard's non-legal-record steps.
+//
+// The legal records (acks, agreements, ORS cert) have their own dedicated
+// functions because the data they write is large and has specific validation.
+// This function handles everything else:
+//
+//   step_name = 'welcome'             — Screen 1: update phone + photo_url
+//   step_name = 'checkr_submitted'    — Screen 2: marker only (Function 9 makes the actual Checkr call)
+//   step_name = 'stripe_submitted'    — Screen 7: marker only, set ONLY on Stripe successful return
+//   step_name = 'emergency_and_prefs' — Screen 8: emergency contacts, site_preferences,
+//                                       availability, CPR cert. Runs the final gate check.
+//
+// The Screen 8 handler is the largest: it deletes existing emergency contacts
+// (chunk 1 has a partial unique index that makes UPSERT awkward) and inserts
+// the new set with is_primary derived from array position. After saving it
+// runs the gate check that decides overall_status (complete / pending_background_check
+// / pending_stripe).
+
+import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
+import {
+  corsHeaders,
+  json,
+  resolveInstructor,
+  adminClient,
+  clientIp,
+} from '../_shared/instructor.ts';
+import { advanceOnboardingStep, StepKey } from '../_shared/onboardingStep.ts';
+import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+
+interface UpdateStepBody {
+  step_name?: string;
+  step_data?: Record<string, unknown>;
+}
+
+// step_name → next current_step
+const NEXT_STEP: Record<string, number> = {
+  welcome: 2,
+  checkr_submitted: 3,
+  stripe_submitted: 8,
+  emergency_and_prefs: 8, // last step; gate check decides overall_status
+};
+
+serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+
+  try {
+    const { instructor, error } = await resolveInstructor(req);
+    if (error) return error;
+    const me = instructor!;
+
+    let body: UpdateStepBody;
+    try {
+      body = (await req.json()) as UpdateStepBody;
+    } catch {
+      return json({ error: 'invalid_json' }, 400);
+    }
+
+    const stepName = body.step_name?.trim();
+    if (!stepName || !(stepName in NEXT_STEP)) {
+      return json(
+        { error: 'invalid_step_name', expected: Object.keys(NEXT_STEP) },
+        400,
+      );
+    }
+
+    const supabase = adminClient();
+    const ip = clientIp(req);
+    const data = (body.step_data ?? {}) as Record<string, unknown>;
+
+    // Dispatch on step_name
+    if (stepName === 'welcome') {
+      const welcomeRes = await handleWelcome(supabase, me.id, data);
+      if (welcomeRes.error) return welcomeRes.error;
+    } else if (stepName === 'emergency_and_prefs') {
+      const emergencyRes = await handleEmergencyAndPrefs(supabase, me.id, me.organization_id, data);
+      if (emergencyRes.error) return emergencyRes.error;
+    }
+    // 'checkr_submitted' and 'stripe_submitted' are pure markers — no data to write.
+
+    // Advance the step in contractor_onboarding_status.
+    const stepKeyForOnboarding = stepName as StepKey;
+    const { error: stepErr } = await advanceOnboardingStep(supabase, {
+      instructorId: me.id,
+      orgId: me.organization_id,
+      stepKey: stepKeyForOnboarding,
+      nextStep: NEXT_STEP[stepName],
+      ip,
+    });
+    if (stepErr) {
+      console.error('onboarding step advance failed:', stepErr);
+      return json({ error: 'step_advance_failed' }, 500);
+    }
+
+    // After Screen 8 we run the gate check that decides overall_status.
+    if (stepName === 'emergency_and_prefs') {
+      const gateRes = await runGateCheck(supabase, me.id);
+      return json({ success: true, gate: gateRes });
+    }
+
+    return json({ success: true });
+  } catch (err) {
+    console.error('update-onboarding-step fatal:', err);
+    return json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Screen 1: welcome — update instructors.phone, photo_url
+// ────────────────────────────────────────────────────────────────────────────
+
+async function handleWelcome(
+  supabase: SupabaseClient,
+  instructorId: string,
+  data: Record<string, unknown>,
+): Promise<{ error?: Response }> {
+  const phone = sanitizeString(data.phone);
+  const photoUrl = sanitizeString(data.photo_url);
+
+  if (!phone) return { error: json({ error: 'phone_required' }, 400) };
+
+  const updates: Record<string, unknown> = {
+    phone,
+    updated_at: new Date().toISOString(),
+  };
+  if (photoUrl) updates.photo_url = photoUrl;
+
+  const { error: updErr } = await supabase
+    .from('instructors')
+    .update(updates)
+    .eq('id', instructorId);
+
+  if (updErr) {
+    console.error('welcome instructor update failed:', updErr);
+    return { error: json({ error: 'update_failed' }, 500) };
+  }
+  return {};
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Screen 8: emergency_and_prefs — the big one.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface EmergencyContactInput {
+  contact_name?: string;
+  relationship?: string;
+  phone?: string;
+}
+
+async function handleEmergencyAndPrefs(
+  supabase: SupabaseClient,
+  instructorId: string,
+  orgId: string,
+  data: Record<string, unknown>,
+): Promise<{ error?: Response }> {
+  // ─── emergency_contacts validation ───
+  const rawContacts = Array.isArray(data.emergency_contacts) ? data.emergency_contacts : [];
+  if (rawContacts.length === 0) {
+    return { error: json({ error: 'emergency_contact_required' }, 400) };
+  }
+
+  const contacts = rawContacts.map((c) => {
+    const obj = c as EmergencyContactInput;
+    return {
+      contact_name: sanitizeString(obj.contact_name),
+      relationship: sanitizeString(obj.relationship),
+      phone: sanitizeString(obj.phone),
+    };
+  });
+
+  const malformedContact = contacts.find(
+    (c) => !c.contact_name || !c.relationship || !c.phone,
+  );
+  if (malformedContact) {
+    return {
+      error: json({ error: 'contact_fields_required', detail: 'name, relationship, phone' }, 400),
+    };
+  }
+
+  // ─── DELETE existing emergency contacts, then INSERT the new set ───
+  // (chunk 1's partial unique index makes UPSERT impractical; DELETE-then-INSERT
+  // is the documented pattern in chunk 3.)
+  const { error: delErr } = await supabase
+    .from('contractor_emergency_contacts')
+    .delete()
+    .eq('instructor_id', instructorId);
+  if (delErr) {
+    console.error('emergency contacts delete failed:', delErr);
+    return { error: json({ error: 'contacts_delete_failed' }, 500) };
+  }
+
+  const insertRows = contacts.map((c, idx) => ({
+    instructor_id: instructorId,
+    organization_id: orgId,
+    contact_name: c.contact_name,
+    relationship: c.relationship,
+    phone: c.phone,
+    is_primary: idx === 0, // first contact in array is the primary
+  }));
+
+  const { error: insErr } = await supabase
+    .from('contractor_emergency_contacts')
+    .insert(insertRows);
+  if (insErr) {
+    console.error('emergency contacts insert failed:', insErr);
+    return { error: json({ error: 'contacts_insert_failed' }, 500) };
+  }
+
+  // ─── site_preferences (districts), availability, CPR cert ───
+  const sitePrefs = sanitizeSitePreferences(data.site_preferences);
+  const availability = sanitizeAvailability(data.availability);
+  const cprUrl = sanitizeString(data.first_aid_cpr_url);
+  const cprExpiresAt = sanitizeDate(data.first_aid_cpr_expires_at);
+
+  const instructorUpdates: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+  if (sitePrefs !== null) instructorUpdates.site_preferences = sitePrefs;
+  if (availability !== null) instructorUpdates.availability = availability;
+  if (cprUrl !== null) instructorUpdates.first_aid_cpr_url = cprUrl;
+  if (cprExpiresAt !== null) instructorUpdates.first_aid_cpr_expires_at = cprExpiresAt;
+
+  if (Object.keys(instructorUpdates).length > 1) {
+    const { error: updErr } = await supabase
+      .from('instructors')
+      .update(instructorUpdates)
+      .eq('id', instructorId);
+    if (updErr) {
+      console.error('instructor prefs update failed:', updErr);
+      return { error: json({ error: 'prefs_update_failed' }, 500) };
+    }
+  }
+
+  return {};
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Gate check — runs after Screen 8 (or after a webhook that might unblock).
+// Reads steps_completed + checkr_status + stripe_payouts_enabled and decides
+// the final overall_status.
+// ────────────────────────────────────────────────────────────────────────────
+
+const ALL_STEPS: StepKey[] = [
+  'welcome',
+  'checkr_submitted',
+  'ors_certification',
+  'agreement_signed',
+  'policies_acknowledged',
+  'additional_acks',
+  'stripe_submitted',
+  'emergency_and_prefs',
+];
+
+interface GateResult {
+  overall_status: string;
+  all_steps_done: boolean;
+  checkr_clear: boolean;
+  stripe_ready: boolean;
+}
+
+async function runGateCheck(
+  supabase: SupabaseClient,
+  instructorId: string,
+): Promise<GateResult | null> {
+  const { data: row, error } = await supabase
+    .from('contractor_onboarding_status')
+    .select('steps_completed, checkr_status, stripe_payouts_enabled, overall_status')
+    .eq('instructor_id', instructorId)
+    .maybeSingle();
+  if (error || !row) {
+    console.error('gate check fetch failed:', error);
+    return null;
+  }
+
+  const steps = (row.steps_completed as Record<string, unknown>) ?? {};
+  const allStepsDone = ALL_STEPS.every((k) => steps[k]);
+  const checkrClear = row.checkr_status === 'clear';
+  const stripeReady = row.stripe_payouts_enabled === true;
+
+  let nextStatus = row.overall_status as string;
+  let completedAt: string | null = null;
+
+  if (allStepsDone && checkrClear && stripeReady) {
+    nextStatus = 'complete';
+    completedAt = new Date().toISOString();
+  } else if (allStepsDone && !checkrClear) {
+    nextStatus = 'pending_background_check';
+  } else if (allStepsDone && checkrClear && !stripeReady) {
+    nextStatus = 'pending_stripe';
+  }
+
+  if (nextStatus !== row.overall_status || (nextStatus === 'complete' && completedAt)) {
+    const updates: Record<string, unknown> = {
+      overall_status: nextStatus,
+      updated_at: new Date().toISOString(),
+    };
+    if (completedAt) updates.completed_at = completedAt;
+    const { error: updErr } = await supabase
+      .from('contractor_onboarding_status')
+      .update(updates)
+      .eq('instructor_id', instructorId);
+    if (updErr) {
+      console.error('gate check status update failed:', updErr);
+    }
+  }
+
+  return {
+    overall_status: nextStatus,
+    all_steps_done: allStepsDone,
+    checkr_clear: checkrClear,
+    stripe_ready: stripeReady,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sanitizers
+// ────────────────────────────────────────────────────────────────────────────
+
+function sanitizeString(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  if (!t) return null;
+  return t.length > 1000 ? t.slice(0, 1000) : t;
+}
+
+function sanitizeDate(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  // Expect YYYY-MM-DD. Lightweight regex check; Postgres will error on
+  // anything malformed if it slips through.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
+  return t;
+}
+
+function sanitizeSitePreferences(v: unknown): { districts: string[] } | null {
+  if (!v || typeof v !== 'object') return null;
+  const obj = v as Record<string, unknown>;
+  const districts = Array.isArray(obj.districts) ? obj.districts : [];
+  const clean = districts
+    .map((d) => (typeof d === 'string' ? d.trim() : ''))
+    .filter(Boolean);
+  return { districts: clean };
+}
+
+function sanitizeAvailability(v: unknown): { day_defaults: Record<string, boolean> } | null {
+  if (!v || typeof v !== 'object') return null;
+  const obj = v as Record<string, unknown>;
+  const dd = (obj.day_defaults ?? {}) as Record<string, unknown>;
+  const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const day_defaults: Record<string, boolean> = {};
+  for (const d of days) {
+    day_defaults[d] = dd[d] === true;
+  }
+  return { day_defaults };
+}
