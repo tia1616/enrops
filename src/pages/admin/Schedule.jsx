@@ -3380,6 +3380,7 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
   const [locationsById, setLocationsById] = useState(new Map());
   const [loaded, setLoaded] = useState(false);
   const [filter, setFilter] = useState("all"); // all | offers | patches | reminders | replies
+  const [searchText, setSearchText] = useState("");
   const [expandedRowId, setExpandedRowId] = useState(null);
 
   const sessionsById = useMemo(() => {
@@ -3424,7 +3425,9 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
     return () => { alive = false; };
   }, [assignments, sessions]);
 
-  // Classify each message row into a kind (offer / patch / reminder / reply / flag).
+  // Classify each message row into a kind (offer / patch / reminder / reply / flag)
+  // and compute the instructor name to display (varies for instructor_reply events
+  // tagged with a real sender_instructor_id vs the current assignment holder).
   const events = useMemo(() => {
     return rows.map((m) => {
       const role = m.sender_role;
@@ -3437,6 +3440,20 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
       else if (role === "instructor") kind = "instructor_reply";
       else if (role === "admin") kind = "admin_reply";
       else kind = "system_other";
+
+      // Attribute instructor replies to the actual sender (if tagged); for everything
+      // else use the current assignment holder so the search box behaves intuitively.
+      let displayedName = "";
+      if (kind === "instructor_reply" && m.sender_instructor_id) {
+        const sender = instructorsById.get(m.sender_instructor_id);
+        displayedName = sender ? `${sender.first_name ?? ""}${sender.last_name ? " " + sender.last_name : ""}`.trim() : "";
+      } else if (kind === "instructor_reply") {
+        displayedName = ""; // historical — render as "Prior instructor" later
+      } else {
+        const a = assignmentsById.get(m.camp_assignment_id);
+        displayedName = a ? `${a.instructor_first ?? ""}${a.instructor_last ? " " + a.instructor_last : ""}`.trim() : "";
+      }
+
       return {
         id: m.id,
         kind,
@@ -3445,28 +3462,42 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
         created_at: m.created_at,
         camp_assignment_id: m.camp_assignment_id,
         message: m.message,
+        displayedName,
       };
     });
-  }, [rows]);
+  }, [rows, instructorsById, assignmentsById]);
+
+  const searchNeedle = searchText.trim().toLowerCase();
+  const matchesSearch = (e) => !searchNeedle || (e.displayedName || "").toLowerCase().includes(searchNeedle);
 
   const filtered = useMemo(() => {
-    if (filter === "all") return events;
-    const allowed = {
-      offers:    new Set(["offer"]),
-      patches:   new Set(["patch"]),
-      reminders: new Set(["reminder"]),
-      replies:   new Set(["admin_reply", "instructor_reply"]),
-    }[filter] ?? new Set();
-    return events.filter((e) => allowed.has(e.kind));
-  }, [events, filter]);
+    const kindAllowed = (e) => {
+      if (filter === "all") return true;
+      const allowed = {
+        offers:    new Set(["offer"]),
+        patches:   new Set(["patch"]),
+        reminders: new Set(["reminder"]),
+        replies:   new Set(["admin_reply", "instructor_reply"]),
+      }[filter] ?? new Set();
+      return allowed.has(e.kind);
+    };
+    return events.filter((e) => kindAllowed(e) && matchesSearch(e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events, filter, searchNeedle]);
 
-  const counts = useMemo(() => ({
-    all: events.length,
-    offers: events.filter((e) => e.kind === "offer").length,
-    patches: events.filter((e) => e.kind === "patch").length,
-    reminders: events.filter((e) => e.kind === "reminder").length,
-    replies: events.filter((e) => e.kind === "admin_reply" || e.kind === "instructor_reply").length,
-  }), [events]);
+  // Counts reflect the current search — chips show how many of each kind match
+  // the typed name, so admin can scan "Tiffany has 4 offers, 0 patches" at a glance.
+  const counts = useMemo(() => {
+    const pool = events.filter(matchesSearch);
+    return {
+      all: pool.length,
+      offers: pool.filter((e) => e.kind === "offer").length,
+      patches: pool.filter((e) => e.kind === "patch").length,
+      reminders: pool.filter((e) => e.kind === "reminder").length,
+      replies: pool.filter((e) => e.kind === "admin_reply" || e.kind === "instructor_reply").length,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events, searchNeedle]);
 
   function kindPill(kind) {
     const map = {
@@ -3508,33 +3539,78 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
           <button type="button" onClick={onClose} aria-label="Close" style={{ background: "transparent", border: "none", fontSize: 22, color: MUTED, cursor: "pointer", padding: 4, lineHeight: 1 }}>×</button>
         </div>
 
-        <div style={{ padding: "10px 20px", borderBottom: `1px solid ${RULE}`, display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {[
-            { key: "all",       label: `All (${counts.all})` },
-            { key: "offers",    label: `Offers (${counts.offers})` },
-            { key: "patches",   label: `Add-on offers (${counts.patches})` },
-            { key: "reminders", label: `Reminders (${counts.reminders})` },
-            { key: "replies",   label: `Replies (${counts.replies})` },
-          ].map((f) => (
-            <button
-              key={f.key}
-              type="button"
-              onClick={() => setFilter(f.key)}
+        <div style={{ padding: "10px 20px", borderBottom: `1px solid ${RULE}`, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ position: "relative", display: "flex" }}>
+            <input
+              type="text"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder="Search by instructor name…"
+              autoComplete="off"
+              name="email-activity-search"
               style={{
-                padding: "5px 10px",
-                fontSize: 12,
-                fontWeight: 600,
+                flex: 1,
+                padding: "8px 32px 8px 12px",
+                fontSize: 13,
                 fontFamily: "inherit",
-                border: `1px solid ${filter === f.key ? PLUM : RULE}`,
-                background: filter === f.key ? PLUM : "#fff",
-                color: filter === f.key ? "#fff" : INK,
-                borderRadius: 999,
-                cursor: "pointer",
+                color: INK,
+                background: "#fff",
+                border: `1px solid ${RULE}`,
+                borderRadius: 6,
+                outline: "none",
+                boxSizing: "border-box",
               }}
-            >
-              {f.label}
-            </button>
-          ))}
+            />
+            {searchText && (
+              <button
+                type="button"
+                onClick={() => setSearchText("")}
+                aria-label="Clear search"
+                title="Clear search"
+                style={{
+                  position: "absolute",
+                  right: 6,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "transparent",
+                  border: "none",
+                  fontSize: 16,
+                  color: MUTED,
+                  cursor: "pointer",
+                  padding: "0 6px",
+                  lineHeight: 1,
+                }}
+              >×</button>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {[
+              { key: "all",       label: `All (${counts.all})` },
+              { key: "offers",    label: `Offers (${counts.offers})` },
+              { key: "patches",   label: `Add-on offers (${counts.patches})` },
+              { key: "reminders", label: `Reminders (${counts.reminders})` },
+              { key: "replies",   label: `Replies (${counts.replies})` },
+            ].map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => setFilter(f.key)}
+                style={{
+                  padding: "5px 10px",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  border: `1px solid ${filter === f.key ? PLUM : RULE}`,
+                  background: filter === f.key ? PLUM : "#fff",
+                  color: filter === f.key ? "#fff" : INK,
+                  borderRadius: 999,
+                  cursor: "pointer",
+                }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "10px 20px 20px" }}>
@@ -3542,7 +3618,9 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
             <div style={{ padding: 24, textAlign: "center", color: MUTED, fontSize: 13 }}>Loading…</div>
           ) : filtered.length === 0 ? (
             <div style={{ padding: 24, textAlign: "center", color: MUTED, fontSize: 13 }}>
-              No email activity {filter !== "all" ? "in this filter" : "yet"}.
+              {searchNeedle
+                ? `No email activity matching "${searchText}"${filter !== "all" ? " in this filter" : ""}.`
+                : (filter !== "all" ? "No email activity in this filter." : "No email activity yet.")}
             </div>
           ) : (
             filtered.map((e) => {
