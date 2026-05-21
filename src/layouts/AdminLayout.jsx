@@ -28,6 +28,7 @@ const NAV = [
     children: [
       { to: "/admin/curricula", label: "Curricula" },
       { to: "/admin/programs", label: "Scheduled programs" },
+      { to: "/admin/locations", label: "Locations" },
     ],
   },
   { to: "/admin/contacts", label: "Contacts", soon: true },
