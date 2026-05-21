@@ -35,6 +35,15 @@ already loaded, the Schedule page runs a cycle without admin SQL:
 - Term/cycle picker in header (when multiple cycles exist)
 - ModalShell scrolls body when content overflows — the close X stays
   reachable on any screen height
+- **DB-level trigger guards every camp_assignments write** for instructor
+  double-bookings + same-day-different-location travel conflicts. The
+  UI's validateDrop runs the same logic for real-time drag feedback, but
+  the trigger is the safety net for SQL bypasses, future automations,
+  and any new write path. Cleared one historical conflict (Michele's
+  Wk5 Happy Valley collision) during install
+- **Locations admin page** (`/admin/locations`) — add/edit venues
+  without SQL. Address, room, contact, arrival, food/drink, notes all
+  land in instructor emails. Closes tenant-2 blocker #1
 
 ---
 
@@ -43,16 +52,14 @@ already loaded, the Schedule page runs a cycle without admin SQL:
 Things that today require Jessica + Claude to do SQL. Tenant #2 cannot
 self-serve onboard until these have admin UIs.
 
-### 1. `program_locations` CRUD UI — high impact
+### 1. ~~`program_locations` CRUD UI~~ — ✓ shipped 2026-05-20
 
-**Today:** Jessica gives me an address, I run `UPDATE program_locations`.
-**Needed:** A "Locations" admin page where the tenant can:
-- Add a venue (name, address, room number, contact name/phone/email)
-- Edit existing (we did Forest Grove this way)
-- Set arrival_instructions, food_drink_policy, notes — all instructor-facing
-- Mark inactive
-
-**Scope:** ~1 session. Simple table + edit modal. Schema already in place.
+Lives at `/admin/locations`. Add new venue, edit any field, see how many
+camps reference each venue. Every instructor-facing field carries a
+"Visible to instructors" pill so admin knows what lands in emails.
+Remaining nit: no "Mark inactive" toggle — would need an `is_active`
+column on `program_locations` (not added yet). Low priority; venues
+stay around even if no camps reference them.
 
 ### 2. `scheduling_cycles` create UI — high impact
 
