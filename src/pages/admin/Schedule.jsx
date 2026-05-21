@@ -325,6 +325,7 @@ export default function Schedule() {
   // candidate-picker's onPick can auto-advance to the next change request afterward.
   const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
   const [emailActivityOpen, setEmailActivityOpen] = useState(false);
+  const [newCycleOpen, setNewCycleOpen] = useState(false);
   // Term/cycle picker — list of all non-archived cycles for this org + the currently
   // viewed one. selectedCycleId=null means "use the latest one I find" (default).
   const [allCycles, setAllCycles] = useState([]);
@@ -806,7 +807,22 @@ export default function Schedule() {
   }, [enriched, focusedWeek, searchText, selectedInstructors, selectedLocations, selectedStatuses]);
 
   if (state.status === "loading") return <div style={{ color: MUTED, fontSize: 14 }}>Loading schedule…</div>;
-  if (state.status === "empty") return <Empty title="No active cycle" body="Create a scheduling cycle to begin assigning instructors to camps or classes." />;
+  if (state.status === "empty") return (
+    <>
+      <Empty
+        title="No active cycle yet"
+        body="A scheduling cycle is one term of camps or classes (e.g. SU26, FA26). Create one to start matching instructors to programs."
+        action={{ label: "+ Create your first cycle", onClick: () => setNewCycleOpen(true) }}
+      />
+      {newCycleOpen && (
+        <NewCycleModal
+          orgId={org?.id}
+          onClose={() => setNewCycleOpen(false)}
+          onCreated={(newId) => { setNewCycleOpen(false); setSelectedCycleId(newId); }}
+        />
+      )}
+    </>
+  );
   if (state.status === "error") return <Empty title="Couldn't load schedule" body={state.message} tone="error" />;
 
   const { cycle } = state;
@@ -1520,6 +1536,7 @@ export default function Schedule() {
         cycle={cycle}
         allCycles={allCycles}
         onSwitchCycle={setSelectedCycleId}
+        onOpenNewCycle={() => setNewCycleOpen(true)}
         phaseLabel={derivedPhase}
         counts={counts}
         missingSurveys={state.missingSurveys}
@@ -1635,6 +1652,13 @@ export default function Schedule() {
           remindersBusy={busy === "reminders"}
         />
       )}
+      {newCycleOpen && (
+        <NewCycleModal
+          orgId={org?.id}
+          onClose={() => setNewCycleOpen(false)}
+          onCreated={(newId) => { setNewCycleOpen(false); setSelectedCycleId(newId); }}
+        />
+      )}
       {emailActivityOpen && (
         <EmailActivityModal
           cycleDisplay={`${cycleDisplayName(cycle.name)} · ${cycle.status}`}
@@ -1733,7 +1757,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, allCycles, onSwitchCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity }) {
+function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity }) {
   const otherCycles = (allCycles ?? []).filter((c) => c.id !== cycle.id);
   return (
     <header style={{
@@ -1793,6 +1817,26 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, phaseLabel, counts, miss
             padding: "3px 8px",
             borderRadius: 999,
           }}>{phaseLabel || cycle.status}</span>
+          {onOpenNewCycle && (
+            <button
+              type="button"
+              onClick={onOpenNewCycle}
+              title="Set up a new term cycle (e.g. FA26)"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: PLUM,
+                fontSize: 13,
+                fontWeight: 500,
+                fontFamily: "inherit",
+                cursor: "pointer",
+                padding: "2px 4px",
+                textDecoration: "underline",
+              }}
+            >
+              + New cycle
+            </button>
+          )}
         </div>
         <div style={{ color: MUTED, marginTop: 4, fontSize: 14 }}>{fmtRange(cycle.starts_on, cycle.ends_on)}</div>
         <div style={{ marginTop: 8, fontSize: 13, color: MUTED, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
@@ -3366,6 +3410,224 @@ function renderReminderEmailHtml({ instructorCamps, locationsById, cycle, orgNam
 
 // ---- end email preview renderers ------------------------------------------
 
+// Modal for creating a new scheduling cycle. Replaces "Claude inserts a row by SQL"
+// with a self-serve form: term + year + cycle type + date range. Weeks (Mon-Fri)
+// are auto-derived from the date range so admin doesn't have to think about them.
+// On save: INSERT scheduling_cycles, return new id so the parent can switch to it.
+function NewCycleModal({ orgId, onClose, onCreated }) {
+  // Smart default for term: pick the next likely term based on today's month.
+  // Apr-Aug → Fall; Sep-Oct → Winter; Nov-Jan → Spring; Feb-Mar → Summer.
+  const todaysMonth = new Date().getMonth(); // 0=Jan
+  const defaultTerm = todaysMonth >= 3 && todaysMonth <= 7 ? "FA"
+                    : todaysMonth >= 8 && todaysMonth <= 9 ? "WI"
+                    : (todaysMonth >= 10 || todaysMonth <= 0) ? "SP"
+                    : "SU";
+  const defaultYearTwoDigit = String((new Date().getFullYear() + (todaysMonth >= 10 ? 1 : 0)) % 100).padStart(2, "0");
+
+  const [term, setTerm] = useState(defaultTerm);
+  const [year, setYear] = useState(defaultYearTwoDigit);
+  const [cycleType, setCycleType] = useState("summer_camp");
+  const [startsOn, setStartsOn] = useState("");
+  const [endsOn, setEndsOn] = useState("");
+  const [autoReminders, setAutoReminders] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const cycleName = `${term}${year}`;
+
+  // Compute derived weeks (Mon-Fri spans) for the preview chip.
+  const derivedWeeks = useMemo(() => {
+    if (!startsOn || !endsOn) return [];
+    return computeWeeks(startsOn, endsOn);
+  }, [startsOn, endsOn]);
+
+  async function save() {
+    setError(null);
+    if (!/^(SU|FA|WI|SP)$/.test(term)) { setError("Pick a term."); return; }
+    if (!/^\d{2}$/.test(year)) { setError("Year should be 2 digits (e.g. 27)."); return; }
+    if (!startsOn || !endsOn) { setError("Pick both a start date and an end date."); return; }
+    if (startsOn >= endsOn) { setError("End date has to be after start date."); return; }
+    if (derivedWeeks.length === 0) { setError("Date range doesn't include any full Mon–Fri weeks."); return; }
+
+    setSaving(true);
+    try {
+      const { data, error: insErr } = await supabase
+        .from("scheduling_cycles")
+        .insert({
+          organization_id: orgId,
+          name: cycleName,
+          cycle_type: cycleType,
+          starts_on: startsOn,
+          ends_on: endsOn,
+          status: "collecting",
+          weeks: derivedWeeks,
+          auto_reminders_enabled: autoReminders,
+        })
+        .select("id")
+        .single();
+      if (insErr) throw insErr;
+      onCreated?.(data.id);
+    } catch (err) {
+      console.error("Create cycle failed:", err);
+      const msg = err.message || "Couldn't create cycle.";
+      if (msg.toLowerCase().includes("unique") || msg.toLowerCase().includes("duplicate")) {
+        setError(`A cycle named "${cycleName}" already exists. Pick a different term or year.`);
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const fieldStyle = {
+    padding: "8px 10px",
+    border: `1px solid ${RULE}`,
+    borderRadius: 6,
+    fontSize: 14,
+    fontFamily: "inherit",
+    color: INK,
+    background: "#fff",
+    outline: "none",
+    boxSizing: "border-box",
+    width: "100%",
+  };
+
+  return (
+    <ModalShell onClose={onClose} title="Set up a new cycle">
+      <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+          A cycle is one term — a block of camps or after-school classes. Once you set
+          one up, you can collect availability surveys, run the matching agent, and
+          send offers from the schedule page.
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>Term</label>
+            <select value={term} onChange={(e) => setTerm(e.target.value)} style={fieldStyle}>
+              <option value="SU">Summer</option>
+              <option value="FA">Fall</option>
+              <option value="WI">Winter</option>
+              <option value="SP">Spring</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>Year (2-digit)</label>
+            <input type="text" inputMode="numeric" maxLength={2} value={year} onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 2))} placeholder="27" style={fieldStyle} />
+          </div>
+        </div>
+
+        <div style={{ fontSize: 12, color: MUTED }}>
+          Cycle code will be <strong style={{ color: INK }}>{cycleName}</strong> — what instructors see in their offer emails.
+        </div>
+
+        <div>
+          <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>What kind of cycle</label>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[
+              { value: "summer_camp", label: "Summer / break camps", hint: "Week-long camps, Mon–Fri" },
+              { value: "afterschool",  label: "After-school classes",  hint: "Weekly recurring classes" },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setCycleType(opt.value)}
+                style={{
+                  flex: 1,
+                  padding: "10px 12px",
+                  background: cycleType === opt.value ? `${PLUM}10` : "#fff",
+                  border: `1px solid ${cycleType === opt.value ? PLUM : RULE}`,
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontFamily: "inherit",
+                }}
+              >
+                <div style={{ fontSize: 14, fontWeight: 600, color: cycleType === opt.value ? PLUM : INK }}>{opt.label}</div>
+                <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{opt.hint}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>First day of the term</label>
+            <input type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} style={fieldStyle} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>Last day of the term</label>
+            <input type="date" value={endsOn} onChange={(e) => setEndsOn(e.target.value)} style={fieldStyle} />
+          </div>
+        </div>
+
+        {derivedWeeks.length > 0 && (
+          <div style={{ background: CHALK, border: `1px solid ${RULE}`, borderRadius: 6, padding: 10, fontSize: 12, color: INK, lineHeight: 1.5 }}>
+            <strong>Auto-derived:</strong> {derivedWeeks.length} week{derivedWeeks.length === 1 ? "" : "s"} (Mon–Fri)
+            {" — "}
+            Week 1: {fmtShort(derivedWeeks[0].starts_on)} – {fmtShort(derivedWeeks[0].ends_on)}
+            {derivedWeeks.length > 1 && (
+              <>
+                {" "}…{" "}
+                Week {derivedWeeks.length}: {fmtShort(derivedWeeks[derivedWeeks.length - 1].starts_on)} – {fmtShort(derivedWeeks[derivedWeeks.length - 1].ends_on)}
+              </>
+            )}
+          </div>
+        )}
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK, cursor: "pointer" }}>
+          <input type="checkbox" checked={autoReminders} onChange={(e) => setAutoReminders(e.target.checked)} />
+          <span>
+            <strong>Auto-send reminders</strong> 3 days before each deadline (recommended)
+          </span>
+        </label>
+
+        {error && (
+          <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, borderRadius: 6, padding: "8px 12px", color: CORAL, fontWeight: 500, fontSize: 13 }}>
+            {error}
+          </div>
+        )}
+      </div>
+      <div style={{ padding: "0 20px 20px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button type="button" onClick={onClose} disabled={saving} style={btn("transparent", MUTED, true, saving)}>Cancel</button>
+        <button type="button" onClick={save} disabled={saving} style={btn(PLUM, "#fff", false, saving)}>
+          {saving ? "Setting up…" : "Create cycle"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+// Given a start + end ISO date, generate the list of Mon-Fri weeks fully contained
+// in that range. Skips a partial last week if the term ends mid-week. Matches the
+// shape stored in scheduling_cycles.weeks (jsonb array of {num, starts_on, ends_on}).
+function computeWeeks(startISO, endISO) {
+  const start = new Date(`${startISO}T00:00:00`);
+  const end = new Date(`${endISO}T00:00:00`);
+  const cursor = new Date(start);
+  const dow = cursor.getDay(); // 0=Sun, 1=Mon, ...
+  const daysToMon = (1 - dow + 7) % 7;
+  cursor.setDate(cursor.getDate() + daysToMon);
+
+  const weeks = [];
+  let num = 1;
+  while (cursor <= end) {
+    const wStart = new Date(cursor);
+    const wEnd = new Date(cursor);
+    wEnd.setDate(wEnd.getDate() + 4);
+    if (wEnd > end) break;
+    weeks.push({
+      num,
+      starts_on: wStart.toISOString().slice(0, 10),
+      ends_on: wEnd.toISOString().slice(0, 10),
+    });
+    num++;
+    cursor.setDate(cursor.getDate() + 7);
+  }
+  return weeks;
+}
+
 // Cycle-wide email activity log: every offer / patch / reminder / reply that touched
 // any assignment in this cycle. Reads directly from instructor_offer_messages —
 // send-offers, send-patch-offer, offer-reminders-cron, and offer-message-reply all
@@ -4546,7 +4808,7 @@ function Badge({ color, children }) {
   );
 }
 
-function Empty({ title, body, tone }) {
+function Empty({ title, body, tone, action }) {
   return (
     <div style={{
       background: "#fff",
@@ -4557,6 +4819,15 @@ function Empty({ title, body, tone }) {
     }}>
       <h2 style={{ fontSize: 18, fontWeight: 600, color: INK, margin: "0 0 6px" }}>{title}</h2>
       <p style={{ color: MUTED, fontSize: 14, margin: 0, lineHeight: 1.5 }}>{body}</p>
+      {action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          style={{ ...btn(PLUM, "#fff"), marginTop: 16 }}
+        >
+          {action.label}
+        </button>
+      )}
     </div>
   );
 }

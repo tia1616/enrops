@@ -61,16 +61,15 @@ Remaining nit: no "Mark inactive" toggle — would need an `is_active`
 column on `program_locations` (not added yet). Low priority; venues
 stay around even if no camps reference them.
 
-### 2. `scheduling_cycles` create UI — high impact
+### 2. ~~`scheduling_cycles` create UI~~ — ✓ shipped 2026-05-20
 
-**Today:** Manual SQL. SU26 was hand-inserted.
-**Needed:** "New cycle" button that walks through:
-- Cycle code (SU27 / FA27 / WI28 / SP28)
-- Cycle type (summer_camp / afterschool)
-- Start + end dates (auto-derive weeks for camps)
-- Defaults: auto_reminders_enabled = true, status = 'collecting'
-
-**Scope:** ~1 session. Form + Supabase insert.
+"+ New cycle" link next to the cycle picker in the Schedule header, plus
+a "Create your first cycle" CTA on the no-cycles empty state. Modal asks
+for: term (Summer / Fall / Winter / Spring), 2-digit year, cycle type
+(camps / afterschool), and date range. Mon–Fri weeks auto-derive from the
+range and preview live. Defaults: status='collecting', auto_reminders=on.
+Detects the unique constraint on cycle name and surfaces a clear error
+("A cycle named SU27 already exists…").
 
 ### 3. `camp_sessions` bulk create + edit UI — medium impact
 
@@ -259,8 +258,8 @@ hitting Reply.
 Mapped to Jessica's July 31, 2026 launch date for Tenant #2:
 
 1. **Now → mid-June:** Tenant-2 setup UIs in this order:
-   - program_locations CRUD (#1, fastest payoff)
-   - scheduling_cycles create (#2)
+   - ~~program_locations CRUD~~ ✓ shipped 2026-05-20
+   - ~~scheduling_cycles create~~ ✓ shipped 2026-05-20
    - In-portal availability survey (#5, needed for FA26 anyway)
 
 2. **Mid-June → mid-July:** Programs tab build (#3 + #4 combined)
