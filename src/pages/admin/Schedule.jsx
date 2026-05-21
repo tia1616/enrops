@@ -326,6 +326,10 @@ export default function Schedule() {
   const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
   const [emailActivityOpen, setEmailActivityOpen] = useState(false);
   const [newCycleOpen, setNewCycleOpen] = useState(false);
+  // Open-survey dialog state. mode 'choose' shows the preview/test/send buttons +
+  // optional deadline picker; mode 'result' shows the send outcome.
+  const [surveyDialog, setSurveyDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
+  const [surveyDeadline, setSurveyDeadline] = useState(() => businessDaysFromToday(10));
   // Term/cycle picker — list of all non-archived cycles for this org + the currently
   // viewed one. selectedCycleId=null means "use the latest one I find" (default).
   const [allCycles, setAllCycles] = useState([]);
@@ -349,7 +353,7 @@ export default function Schedule() {
       // most recently created cycle.
       const { data: cyclesList, error: cyclesErr } = await supabase
         .from("scheduling_cycles")
-        .select("id, name, cycle_type, starts_on, ends_on, status, weeks, auto_reminders_enabled")
+        .select("id, name, cycle_type, starts_on, ends_on, status, weeks, auto_reminders_enabled, availability_survey_opened_at, survey_deadline")
         .eq("organization_id", org.id)
         .neq("status", "archived")
         .order("starts_on", { ascending: false, nullsFirst: false });
@@ -608,7 +612,7 @@ export default function Schedule() {
 
   // Header counters always reflect the full cycle (truth).
   const counts = useMemo(() => {
-    if (state.status !== "ready") return { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0 };
+    if (state.status !== "ready") return { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, activeInstructors: 0 };
     // Per-assignment counters — each lead and developing row counts independently so
     // an accepted lead + awaiting developing reads as 1 accepted + 1 assigned, not 1 accepted.
     let assigned = 0, accepted = 0, flagged = 0, changeRequested = 0;
@@ -626,7 +630,7 @@ export default function Schedule() {
         if (e.status === "needs_hire") needsHire++;
       }
     }
-    return { assigned, accepted, flagged, changeRequested, needsHire };
+    return { assigned, accepted, flagged, changeRequested, needsHire, activeInstructors: state.instructors.length };
   }, [state, enriched]);
 
   // Instructor Hat — "what should I do next?" tips surfaced above the calendar.
@@ -688,6 +692,21 @@ export default function Schedule() {
     if (state.status !== "ready") return [];
     const cycleId = state.cycle.id;
     const tips = [];
+
+    // Tip 0 (highest priority): availability survey hasn't been released yet.
+    // Fires before anything else because no instructor work happens until the
+    // survey goes out. Hides itself once availability_survey_opened_at is set.
+    if (!state.cycle.availability_survey_opened_at && state.instructors.length > 0) {
+      const n = state.instructors.length;
+      tips.push({
+        key: `${cycleId}.openSurvey`,
+        message: `Ready to ask instructors when they can work this ${cycleDisplayName(state.cycle.name)}? Releasing the survey emails ${n} active instructor${n === 1 ? "" : "s"} a link to fill it out.`,
+        primary: {
+          label: `Open survey · ${n} recipient${n === 1 ? "" : "s"}`,
+          onClick: () => setSurveyDialog({ mode: "choose", payload: null }),
+        },
+      });
+    }
 
     // Has the initial bulk send happened yet? If any row has email_sent_at, yes.
     // Used to distinguish "first-time bulk send" from "patch a few rows after bulk."
@@ -1113,6 +1132,22 @@ export default function Schedule() {
   async function handleRerunAgent() {
     if (state.status !== "ready") return;
     if (state.cycle.status !== "collecting") return;
+
+    // Soft guard: if fewer than half the active instructors have submitted
+    // availability, warn the admin before running. They can still proceed —
+    // some cycles deliberately match on early returns — but it surfaces a
+    // common "I forgot to wait for surveys" mistake.
+    const total = state.instructors.length;
+    const submitted = state.availability.filter((a) => !a.needs_confirmation).length;
+    if (total > 0 && submitted / total < 0.5) {
+      const proceed = window.confirm(
+        `Only ${submitted} of ${total} instructors have submitted availability so far. ` +
+        `Running the match agent now means the draft will only consider those ${submitted}. ` +
+        `Continue anyway?`
+      );
+      if (!proceed) return;
+    }
+
     const ok = window.confirm(
       "Re-run the matching agent for this cycle? This wipes existing proposed assignments and generates fresh ones from instructor surveys."
     );
@@ -1277,6 +1312,44 @@ export default function Schedule() {
     } catch (err) {
       console.error("Reminders failed:", err);
       setSaveError(`Couldn't run reminders: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 8000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Release the availability survey to instructors. mode 'preview' returns the
+  // rendered email for review without sending; mode 'send' actually emails every
+  // active instructor and flips availability_survey_opened_at on the cycle so
+  // the portal banner unlocks. Deadline (optional) writes to survey_deadline.
+  async function handleSendSurvey(mode) {
+    if (state.status !== "ready") return;
+    setBusy("sending_survey");
+    setSaveError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-availability-survey", {
+        body: {
+          cycle_id: state.cycle.id,
+          mode,
+          deadline: surveyDeadline || null,
+        },
+      });
+      if (error) {
+        let realMsg = error.message ?? "function error";
+        try { const body = await error.context?.json?.(); if (body?.error) realMsg = body.error; } catch {}
+        throw new Error(realMsg);
+      }
+      if (data?.error) throw new Error(data.error);
+      if (mode === "preview") {
+        // Show the first rendered email in the existing PreviewViewer.
+        setPreviewData(data);
+      } else {
+        await loadAll();
+        setSurveyDialog({ mode: "result", payload: { mode, ...data } });
+      }
+    } catch (err) {
+      console.error("Send availability survey failed:", err);
+      setSaveError(`Couldn't send survey: ${err.message ?? "unknown error"}`);
       setTimeout(() => setSaveError(null), 8000);
     } finally {
       setBusy(null);
@@ -1659,6 +1732,18 @@ export default function Schedule() {
           onCreated={(newId) => { setNewCycleOpen(false); setSelectedCycleId(newId); }}
         />
       )}
+      {surveyDialog && (
+        <SurveyDialog
+          dialog={surveyDialog}
+          cycleDisplay={cycleDisplayName(cycle.name)}
+          recipientCount={state.instructors.length}
+          deadline={surveyDeadline}
+          onDeadlineChange={setSurveyDeadline}
+          busy={busy === "sending_survey"}
+          onChoose={(mode) => handleSendSurvey(mode)}
+          onClose={() => setSurveyDialog(null)}
+        />
+      )}
       {emailActivityOpen && (
         <EmailActivityModal
           cycleDisplay={`${cycleDisplayName(cycle.name)} · ${cycle.status}`}
@@ -1874,7 +1959,16 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
         <Counter label="Flagged" value={counts.flagged} tone="flagged" />
         <Counter label="Change req." value={counts.changeRequested} tone="change_requested" />
         <Counter label="Needs hire" value={counts.needsHire} tone="needs_hire" />
-        <Counter label="Surveys out" value={missingSurveys} tone="muted" />
+        {cycle.availability_survey_opened_at ? (
+          <Counter
+            label="Surveys in"
+            value={(counts.activeInstructors ?? 0) - missingSurveys}
+            suffix={` / ${counts.activeInstructors ?? 0}`}
+            tone="muted"
+          />
+        ) : (
+          <Counter label="Survey" value="—" hint="Not sent" tone="muted" />
+        )}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         {lastOp && (
@@ -1947,7 +2041,7 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
   );
 }
 
-function Counter({ label, value, tone }) {
+function Counter({ label, value, tone, suffix, hint }) {
   const color =
     tone === "assigned" ? PLUM :
     tone === "accepted" ? OK_GREEN :
@@ -1956,8 +2050,13 @@ function Counter({ label, value, tone }) {
     tone === "needs_hire" ? CORAL : MUTED;
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
-      <div style={{ fontSize: 22, fontWeight: 700, color, lineHeight: 1.1 }}>{value}</div>
-      <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color, lineHeight: 1.1 }}>
+        {value}
+        {suffix && <span style={{ fontSize: 14, fontWeight: 500, color: MUTED }}>{suffix}</span>}
+      </div>
+      <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 }}>
+        {label}{hint && <span style={{ textTransform: "none", marginLeft: 4, fontStyle: "italic" }}>· {hint}</span>}
+      </div>
     </div>
   );
 }
@@ -3246,6 +3345,90 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
         <DialogChoice
           title="Send to all instructors"
           subtitle="Delivers each instructor's offer to their real email. They'll show on this page as awaiting response. Re-sending won't email anyone who's already received their offer."
+          disabled={busy}
+          onClick={() => onChoose("send")}
+          tone="danger"
+        />
+        {busy && <div style={{ color: MUTED, fontSize: 12 }}>Working…</div>}
+      </div>
+    </ModalShell>
+  );
+}
+
+// SurveyDialog: lets the admin release the availability survey to instructors.
+// 'preview' opens the rendered email in PreviewViewer; 'test' routes every send
+// to the test inbox without flipping the cycle's opened_at; 'send' actually
+// emails every active instructor and unlocks the portal banner.
+function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadlineChange, busy, onChoose, onClose }) {
+  if (dialog.mode === "result") {
+    const p = dialog.payload;
+    return (
+      <ModalShell onClose={onClose} title={p.mode === "send" ? "Survey released" : "Test send complete"}>
+        <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
+          <div><strong>{p.sent}</strong> of {p.recipient_count ?? "?"} email{p.sent === 1 ? "" : "s"} delivered.</div>
+          {p.mode === "send" && p.sent > 0 && (
+            <div style={{ marginTop: 10, padding: 10, background: `#3a7c3a1A`, borderRadius: 6, fontSize: 13, color: INK }}>
+              The portal banner is now live for instructors. They can submit their availability any time before the deadline.
+            </div>
+          )}
+          {p.mode === "test" && p.sent > 0 && (
+            <div style={{ marginTop: 10, padding: 10, background: `${GOLD}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
+              All emails went to <strong>jessica@journeytosteam.com</strong> only — the survey hasn't actually been released yet.
+            </div>
+          )}
+          {p.failed && p.failed.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 600, color: CORAL, marginBottom: 4 }}>Failures ({p.failed.length}):</div>
+              <ul style={{ margin: 0, paddingLeft: 18, color: MUTED, fontSize: 12 }}>
+                {p.failed.map((f, i) => <li key={i}>{f.instructor_id.slice(0, 8)}… — {f.reason}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+        <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>OK</button>
+        </div>
+      </ModalShell>
+    );
+  }
+  return (
+    <ModalShell
+      onClose={busy ? undefined : onClose}
+      title={`Open ${cycleDisplay} availability survey`}
+    >
+      <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+          Emails {recipientCount} active instructor{recipientCount === 1 ? "" : "s"} a link to /j2s/instructor where they'll fill out which weeks, locations, and subjects they want to work.
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: INK }}>
+          <span style={{ minWidth: 110 }}>Submit by (optional):</span>
+          <input
+            type="date"
+            value={deadline ?? ""}
+            onChange={(e) => onDeadlineChange(e.target.value)}
+            style={{ flex: 1, padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 13, fontFamily: "inherit" }}
+          />
+        </label>
+        <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.45, marginTop: -4 }}>
+          Shown in the email and the portal banner. Leave blank for no deadline.
+        </div>
+        <DialogChoice
+          title="Preview the email"
+          subtitle="Renders what one instructor would see. No emails are sent and the survey stays closed."
+          disabled={busy}
+          onClick={() => onChoose("preview")}
+          tone="neutral"
+        />
+        <DialogChoice
+          title="Send to me first (recommended)"
+          subtitle="Every instructor's email arrives in your inbox so you can read exactly what they'll see. Survey stays closed — re-run as many times as you want."
+          disabled={busy}
+          onClick={() => onChoose("test")}
+          tone="warn"
+        />
+        <DialogChoice
+          title="Open survey to all instructors"
+          subtitle={`Emails ${recipientCount} active instructor${recipientCount === 1 ? "" : "s"} for real and unlocks the portal banner. They can update their answers any time before the deadline.`}
           disabled={busy}
           onClick={() => onChoose("send")}
           tone="danger"

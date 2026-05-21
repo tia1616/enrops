@@ -154,11 +154,14 @@ export default function InstructorPortal() {
   // to surface "Set up your availability" / "Update availability" banners.
   async function loadCycles(loadedInstructor) {
     if (!loadedInstructor?.organization_id || !loadedInstructor?.instructor_id) return;
+    // Only surface cycles where the admin has actually opened the survey to
+    // instructors. NULL availability_survey_opened_at = admin hasn't released
+    // it yet, so the portal stays quiet about that cycle.
     const { data: cycleRows, error: cErr } = await supabase
       .from("scheduling_cycles")
-      .select("id, name, cycle_type, starts_on, ends_on, weeks, status")
+      .select("id, name, cycle_type, starts_on, ends_on, weeks, status, availability_survey_opened_at, survey_deadline")
       .eq("organization_id", loadedInstructor.organization_id)
-      .neq("status", "archived")
+      .not("availability_survey_opened_at", "is", null)
       .order("starts_on", { ascending: true });
     if (cErr) {
       console.warn("Couldn't load cycles for availability survey:", cErr);
@@ -576,6 +579,9 @@ function SurveyBanner({ cycle, onStart }) {
         </div>
         <div style={{ fontSize: 13, color: MUTED, marginTop: 2, lineHeight: 1.4 }}>
           {fmtShort(cycle.starts_on)} – {fmtShort(cycle.ends_on)} · ~2 minutes
+          {cycle.survey_deadline && (
+            <> · <span style={{ color: CORAL, fontWeight: 600 }}>please submit by {fmtShort(cycle.survey_deadline.slice(0, 10))}</span></>
+          )}
         </div>
       </div>
       <button

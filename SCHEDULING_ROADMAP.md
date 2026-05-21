@@ -6,6 +6,13 @@ self-serving.
 
 Written 2026-05-19. Last updated 2026-05-21. Last cycle worked through: SU26.
 
+**2026-05-21 addendum:** Survey-release control shipped. The portal banner now
+only shows when admin clicks "Open survey" in Schedule. Hat tip surfaces the
+release CTA; clicking it shows a preview/test/send dialog with optional deadline.
+Match agent has a soft guard ("Only X of N instructors have submitted — continue
+anyway?") if &lt; 50% have responded. New column `scheduling_cycles.availability_survey_opened_at`
++ existing `survey_deadline` are the gates. New edge function `send-availability-survey`.
+
 ---
 
 ## ✓ Works end-to-end now (J2S, mid-cycle)
