@@ -25,6 +25,7 @@ import {
   clientIp,
 } from '../_shared/instructor.ts';
 import { advanceOnboardingStep, StepKey } from '../_shared/onboardingStep.ts';
+import { runGateCheck } from '../_shared/gateCheck.ts';
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 
 interface UpdateStepBody {
@@ -232,84 +233,6 @@ async function handleEmergencyAndPrefs(
   }
 
   return {};
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Gate check — runs after Screen 8 (or after a webhook that might unblock).
-// Reads steps_completed + checkr_status + stripe_payouts_enabled and decides
-// the final overall_status.
-// ────────────────────────────────────────────────────────────────────────────
-
-const ALL_STEPS: StepKey[] = [
-  'welcome',
-  'checkr_submitted',
-  'ors_certification',
-  'agreement_signed',
-  'policies_acknowledged',
-  'additional_acks',
-  'stripe_submitted',
-  'emergency_and_prefs',
-];
-
-interface GateResult {
-  overall_status: string;
-  all_steps_done: boolean;
-  checkr_clear: boolean;
-  stripe_ready: boolean;
-}
-
-async function runGateCheck(
-  supabase: SupabaseClient,
-  instructorId: string,
-): Promise<GateResult | null> {
-  const { data: row, error } = await supabase
-    .from('contractor_onboarding_status')
-    .select('steps_completed, checkr_status, stripe_payouts_enabled, overall_status')
-    .eq('instructor_id', instructorId)
-    .maybeSingle();
-  if (error || !row) {
-    console.error('gate check fetch failed:', error);
-    return null;
-  }
-
-  const steps = (row.steps_completed as Record<string, unknown>) ?? {};
-  const allStepsDone = ALL_STEPS.every((k) => steps[k]);
-  const checkrClear = row.checkr_status === 'clear';
-  const stripeReady = row.stripe_payouts_enabled === true;
-
-  let nextStatus = row.overall_status as string;
-  let completedAt: string | null = null;
-
-  if (allStepsDone && checkrClear && stripeReady) {
-    nextStatus = 'complete';
-    completedAt = new Date().toISOString();
-  } else if (allStepsDone && !checkrClear) {
-    nextStatus = 'pending_background_check';
-  } else if (allStepsDone && checkrClear && !stripeReady) {
-    nextStatus = 'pending_stripe';
-  }
-
-  if (nextStatus !== row.overall_status || (nextStatus === 'complete' && completedAt)) {
-    const updates: Record<string, unknown> = {
-      overall_status: nextStatus,
-      updated_at: new Date().toISOString(),
-    };
-    if (completedAt) updates.completed_at = completedAt;
-    const { error: updErr } = await supabase
-      .from('contractor_onboarding_status')
-      .update(updates)
-      .eq('instructor_id', instructorId);
-    if (updErr) {
-      console.error('gate check status update failed:', updErr);
-    }
-  }
-
-  return {
-    overall_status: nextStatus,
-    all_steps_done: allStepsDone,
-    checkr_clear: checkrClear,
-    stripe_ready: stripeReady,
-  };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
