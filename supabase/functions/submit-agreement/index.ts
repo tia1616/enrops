@@ -20,6 +20,7 @@ import {
   userAgent,
 } from '../_shared/instructor.ts';
 import { advanceOnboardingStep } from '../_shared/onboardingStep.ts';
+import { buildAgreementVars, renderAgreementText } from '../_shared/agreementTemplate.ts';
 
 interface SubmitAgreementBody {
   agreement_version?: string;
@@ -95,6 +96,16 @@ serve(async (req: Request) => {
     const ip = clientIp(req);
     const ua = userAgent(req);
 
+    // Substitute template tokens BEFORE snapshotting so the stored
+    // agreement_text_snapshot reflects the actual signed text (contractor's
+    // legal name, signing date, audit-trail IP + timestamp).
+    const vars = buildAgreementVars({
+      firstName: me.first_name,
+      lastName: me.last_name,
+      ip,
+    });
+    const renderedBody = renderAgreementText(doc.body_text, vars);
+
     // INSERT with ON CONFLICT DO NOTHING + RETURNING id. If a row already
     // exists for (instructor_id, agreement_version), insert is a no-op and
     // returns no rows; we then SELECT the existing id and return it as if
@@ -105,7 +116,7 @@ serve(async (req: Request) => {
         instructor_id: me.id,
         organization_id: me.organization_id,
         agreement_version: agreementVersion,
-        agreement_text_snapshot: doc.body_text,
+        agreement_text_snapshot: renderedBody,
         typed_signature: typedSignature,
         ip_address: ip,
         user_agent: ua,

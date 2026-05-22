@@ -15,7 +15,9 @@ import {
   json,
   resolveInstructor,
   adminClient,
+  clientIp,
 } from '../_shared/instructor.ts';
+import { buildAgreementVars, renderAgreementText } from '../_shared/agreementTemplate.ts';
 
 interface GetLegalDocumentBody {
   document_key?: string;
@@ -64,9 +66,22 @@ serve(async (req: Request) => {
       return json({ error: 'document_not_found' }, 404);
     }
 
+    // For the contractor agreement, substitute template tokens so the
+    // text the contractor reads matches what submit-agreement will snapshot.
+    // Other doc types (acknowledgments) are returned verbatim.
+    let bodyText = doc.body_text;
+    if (documentKey === 'contractor_agreement') {
+      const vars = buildAgreementVars({
+        firstName: me.first_name,
+        lastName: me.last_name,
+        ip: clientIp(req),
+      });
+      bodyText = renderAgreementText(doc.body_text, vars);
+    }
+
     return json({
       title: doc.title,
-      body_text: doc.body_text,
+      body_text: bodyText,
       document_version: doc.document_version,
     });
   } catch (err) {
