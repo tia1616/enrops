@@ -3,10 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { STEP_KEYS, STEP_ORDER, stepIndex } from '../../lib/onboardingSteps.js';
 import Screen1Welcome from './screens/Screen1Welcome.jsx';
+import Screen2BackgroundCheck from './screens/Screen2BackgroundCheck.jsx';
 import Screen3ORS from './screens/Screen3ORS.jsx';
+import Screen4Agreement from './screens/Screen4Agreement.jsx';
+import Screen5Policies from './screens/Screen5Policies.jsx';
+import Screen6Additional from './screens/Screen6Additional.jsx';
+import Screen7StripeStub from './screens/Screen7StripeStub.jsx';
 import Screen8EmergencyAndPrefs from './screens/Screen8EmergencyAndPrefs.jsx';
 import CompletionScreen from './CompletionScreen.jsx';
-import WizardLayout, { PrimaryButton } from './WizardLayout.jsx';
 
 // Dispatches to the right screen based on currentStep and re-fetches
 // contractor_onboarding_status after every advance so the wizard sees any
@@ -78,40 +82,22 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
   switch (currentStep) {
     case STEP_KEYS.WELCOME:
       return <Screen1Welcome {...common} />;
+    case STEP_KEYS.CHECKR_SUBMITTED:
+      return <Screen2BackgroundCheck {...common} />;
     case STEP_KEYS.ORS_CERTIFICATION:
       return <Screen3ORS {...common} />;
+    case STEP_KEYS.AGREEMENT_SIGNED:
+      return <Screen4Agreement {...common} />;
+    case STEP_KEYS.POLICIES_ACKNOWLEDGED:
+      return <Screen5Policies {...common} />;
+    case STEP_KEYS.ADDITIONAL_ACKS:
+      return <Screen6Additional {...common} />;
+    case STEP_KEYS.STRIPE_SUBMITTED:
+      return <Screen7StripeStub {...common} />;
     case STEP_KEYS.EMERGENCY_AND_PREFS:
       return <Screen8EmergencyAndPrefs {...common} />;
-    case STEP_KEYS.CHECKR_SUBMITTED:
-    case STEP_KEYS.AGREEMENT_SIGNED:
-    case STEP_KEYS.POLICIES_ACKNOWLEDGED:
-    case STEP_KEYS.ADDITIONAL_ACKS:
-    case STEP_KEYS.STRIPE_SUBMITTED:
-      return <ComingSoonStep step={currentStep} {...common} />;
     default:
-      return <ComingSoonStep step={currentStep} {...common} />;
+      // Unknown step — fall back to the first screen.
+      return <Screen1Welcome {...common} />;
   }
-}
-
-// Temporary placeholder for screens not yet built (waves 4 + 5). Lets the
-// wizard run end-to-end so Screen 1 → 3 → 8 → completion can be tested while
-// 2/4/5/6/7 are still being built.
-function ComingSoonStep({ step, slug, instructor, onboarding, onAdvance }) {
-  return (
-    <WizardLayout
-      slug={slug}
-      currentStep={step}
-      stepsCompleted={onboarding?.steps_completed}
-      title="Screen coming soon"
-      subtitle={`This step (${step}) is being built. Click below to skip it for now.`}
-    >
-      <p className="text-sm text-neutral-600">
-        Hi {instructor.first_name || 'there'} — Phase B-3 finishes this screen in
-        the next commit wave.
-      </p>
-      <PrimaryButton type="button" onClick={onAdvance}>
-        Skip for now →
-      </PrimaryButton>
-    </WizardLayout>
-  );
 }
