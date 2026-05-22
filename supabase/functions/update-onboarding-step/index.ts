@@ -117,6 +117,7 @@ async function handleWelcome(
 ): Promise<{ error?: Response }> {
   const phone = sanitizeString(data.phone);
   const photoUrl = sanitizeString(data.photo_url);
+  const preferredName = sanitizeString(data.preferred_name);
 
   if (!phone) return { error: json({ error: 'phone_required' }, 400) };
 
@@ -125,6 +126,11 @@ async function handleWelcome(
     updated_at: new Date().toISOString(),
   };
   if (photoUrl) updates.photo_url = photoUrl;
+  // preferred_name is nullable — empty string clears it. We treat null
+  // (field not sent) as "don't touch" and explicit empty string as "clear".
+  if (typeof data.preferred_name === 'string') {
+    updates.preferred_name = preferredName; // null if blank
+  }
 
   const { error: updErr } = await supabase
     .from('instructors')
@@ -207,11 +213,12 @@ async function handleEmergencyAndPrefs(
     return { error: json({ error: 'contacts_insert_failed' }, 500) };
   }
 
-  // ─── site_preferences (districts), availability, CPR cert ───
+  // ─── site_preferences (districts), availability, CPR cert, shirt size ───
   const sitePrefs = sanitizeSitePreferences(data.site_preferences);
   const availability = sanitizeAvailability(data.availability);
   const cprUrl = sanitizeString(data.first_aid_cpr_url);
   const cprExpiresAt = sanitizeDate(data.first_aid_cpr_expires_at);
+  const shirtSize = sanitizeShirtSize(data.shirt_size);
 
   const instructorUpdates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
@@ -220,6 +227,10 @@ async function handleEmergencyAndPrefs(
   if (availability !== null) instructorUpdates.availability = availability;
   if (cprUrl !== null) instructorUpdates.first_aid_cpr_url = cprUrl;
   if (cprExpiresAt !== null) instructorUpdates.first_aid_cpr_expires_at = cprExpiresAt;
+  // shirt_size is nullable; explicit empty string clears it.
+  if (typeof data.shirt_size === 'string') {
+    instructorUpdates.shirt_size = shirtSize; // null if blank or invalid
+  }
 
   if (Object.keys(instructorUpdates).length > 1) {
     const { error: updErr } = await supabase
@@ -263,6 +274,17 @@ function sanitizeSitePreferences(v: unknown): { districts: string[] } | null {
     .map((d) => (typeof d === 'string' ? d.trim() : ''))
     .filter(Boolean);
   return { districts: clean };
+}
+
+const SHIRT_SIZES = new Set(['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL']);
+
+function sanitizeShirtSize(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim().toUpperCase();
+  if (!t) return null;
+  // Reject anything not in the allowed set so the DB CHECK constraint never
+  // throws on a typo from the client.
+  return SHIRT_SIZES.has(t) ? t : null;
 }
 
 function sanitizeAvailability(v: unknown): { day_defaults: Record<string, boolean> } | null {

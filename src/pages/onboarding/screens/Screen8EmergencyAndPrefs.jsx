@@ -21,6 +21,8 @@ const DAYS = [
   ['sunday', 'Sun'],
 ];
 
+const SHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
+
 const ALLOWED_CERT_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
@@ -54,6 +56,7 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
   const [cprFile, setCprFile] = useState(null);
   const [cprFileError, setCprFileError] = useState('');
   const [cprExpires, setCprExpires] = useState('');
+  const [shirtSize, setShirtSize] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [contactsError, setContactsError] = useState('');
   const [cprExpiryError, setCprExpiryError] = useState('');
@@ -105,12 +108,15 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
       if (instructor.first_aid_cpr_expires_at) {
         setCprExpires(instructor.first_aid_cpr_expires_at);
       }
+      if (instructor.shirt_size) {
+        setShirtSize(instructor.shirt_size);
+      }
     }
     load().catch((err) => console.error('[Screen8] load failed', err));
     return () => {
       cancelled = true;
     };
-  }, [instructor.id, instructor.organization_id, instructor.site_preferences, instructor.availability, instructor.first_aid_cpr_expires_at]);
+  }, [instructor.id, instructor.organization_id, instructor.site_preferences, instructor.availability, instructor.first_aid_cpr_expires_at, instructor.shirt_size]);
 
   function setContact(i, field, value) {
     setContacts((arr) => arr.map((c, idx) => (idx === i ? { ...c, [field]: value } : c)));
@@ -215,6 +221,7 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
             availability: { day_defaults: days },
             first_aid_cpr_url,
             first_aid_cpr_expires_at: cprExpires || null,
+            shirt_size: shirtSize,
           },
         },
         { navigate }
@@ -314,6 +321,42 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
                 {label}
               </label>
             ))}
+          </div>
+        </section>
+
+        <section className="mt-6">
+          <SectionLabel>T-shirt size (optional)</SectionLabel>
+          <p className="mb-2 text-xs text-neutral-500">For J2S camp shirts and apparel.</p>
+          <div className="flex flex-wrap gap-2">
+            {SHIRT_SIZES.map((s) => (
+              <label
+                key={s}
+                className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${
+                  shirtSize === s
+                    ? 'border-neutral-900 bg-neutral-900 text-white'
+                    : 'border-neutral-300 bg-white text-neutral-700'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="shirt-size"
+                  value={s}
+                  checked={shirtSize === s}
+                  onChange={() => setShirtSize(s)}
+                  className="sr-only"
+                />
+                {s}
+              </label>
+            ))}
+            {shirtSize && (
+              <button
+                type="button"
+                onClick={() => setShirtSize('')}
+                className="text-xs font-semibold uppercase tracking-wide text-neutral-500 hover:text-neutral-800"
+              >
+                Clear
+              </button>
+            )}
           </div>
         </section>
 

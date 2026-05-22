@@ -30,6 +30,7 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
   const navigate = useNavigate();
   const [firstName, setFirstName] = useState(instructor.first_name || '');
   const [lastName, setLastName] = useState(instructor.last_name || '');
+  const [preferredName, setPreferredName] = useState(instructor.preferred_name || '');
   const [phone, setPhone] = useState(instructor.phone || '');
   const [photoFile, setPhotoFile] = useState(null);
   const [photoError, setPhotoError] = useState('');
@@ -111,6 +112,7 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
             photo_url,
             first_name: firstName.trim() || null,
             last_name: lastName.trim() || null,
+            preferred_name: preferredName.trim(),
           },
         },
         { navigate }
@@ -140,13 +142,29 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
       <form onSubmit={handleSubmit} noValidate>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <Label>First name</Label>
+            <Label>Legal first name</Label>
             <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} autoComplete="given-name" />
           </div>
           <div>
-            <Label>Last name</Label>
+            <Label>Legal last name</Label>
             <Input value={lastName} onChange={(e) => setLastName(e.target.value)} autoComplete="family-name" />
           </div>
+        </div>
+        <p className="mt-1 text-xs text-neutral-500">
+          Legal name is used on your contractor agreement and tax forms.
+        </p>
+
+        <div className="mt-4">
+          <Label>Preferred name (optional)</Label>
+          <Input
+            value={preferredName}
+            onChange={(e) => setPreferredName(e.target.value)}
+            autoComplete="nickname"
+            placeholder="What you go by — e.g. Bo"
+          />
+          <p className="mt-1 text-xs text-neutral-500">
+            What you go by day-to-day. We&rsquo;ll use this on your schedule and in messages.
+          </p>
         </div>
 
         <div className="mt-4">

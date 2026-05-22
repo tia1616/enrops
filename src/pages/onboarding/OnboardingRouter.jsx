@@ -74,7 +74,7 @@ export default function OnboardingRouter() {
       // 3. Instructor record.
       const { data: instructor, error: instErr } = await supabase
         .from('instructors')
-        .select('id, organization_id, is_active, date_of_birth, first_name, last_name, email')
+        .select('id, organization_id, is_active, date_of_birth, first_name, last_name, preferred_name, email, phone, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at, shirt_size')
         .eq('auth_user_id', session.user.id)
         .maybeSingle();
 
