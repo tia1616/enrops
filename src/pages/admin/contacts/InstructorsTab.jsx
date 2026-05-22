@@ -187,7 +187,7 @@ export default function InstructorsTab({ org }) {
         .eq('instructor_id', instructorId)
         .maybeSingle();
       if (fresh) {
-        setStatusByInstructor((s) => ({ ...s, [instructorId]: fresh }));
+        setRows((rs) => (rs ?? []).map((r) => (r.id === instructorId ? { ...r, status: fresh } : r)));
       }
       setInviteResult((s) => ({
         ...s,
@@ -294,7 +294,7 @@ export default function InstructorsTab({ org }) {
           onUploaded={(updatedRow) => {
             // Reflect the new status on the row immediately.
             if (updatedRow?.instructor_id) {
-              setStatusByInstructor((s) => ({ ...s, [updatedRow.instructor_id]: updatedRow }));
+              setRows((rs) => (rs ?? []).map((r) => (r.id === updatedRow.instructor_id ? { ...r, status: updatedRow } : r)));
             }
           }}
         />
