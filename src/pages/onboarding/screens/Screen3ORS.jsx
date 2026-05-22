@@ -5,7 +5,7 @@ import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
 // Screen 3 — Business Eligibility (ORS 670.600). Contractor must self-certify
-// at least 3 of 5 criteria. Each checked box requires a free-text "describe
+// at least 3 of the displayed criteria. Each checked box requires a free-text "describe
 // how" answer. Anyone who can't meet 3 confirms via modal and the wizard
 // calls submit-onboarding-declined (terminal — overall_status flips to
 // 'declined' and they land on /:slug/onboarding/declined).
@@ -135,7 +135,7 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
       stepsCompleted={onboarding?.steps_completed}
       onBack={onBack}
       title="Business eligibility"
-      subtitle="Oregon law requires independent contractors to meet at least 3 of 5 criteria. Check each that applies and briefly describe how."
+      subtitle="Oregon law requires independent contractors to meet at least 3 of the criteria below. Check each that applies and briefly describe how."
     >
       <form onSubmit={handleSubmit} noValidate>
         <div className="space-y-4">
@@ -171,11 +171,11 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
         </div>
 
         <div className="mt-4 text-sm text-neutral-600">
-          {checkedCount} of 5 selected {meetsThreshold && <span className="text-green-700">✓</span>}
+          {checkedCount} of {CRITERIA.length} selected {meetsThreshold && <span className="text-green-700">✓</span>}
         </div>
 
         {checkedCount < 3 && checkedCount > 0 && (
-          <p className="mt-3 text-sm text-amber-800">You need at least 3 of 5 criteria.</p>
+          <p className="mt-3 text-sm text-amber-800">You need at least 3 to qualify.</p>
         )}
 
         <ScreenError>{submitError}</ScreenError>
