@@ -67,6 +67,8 @@ export default function InstructorsTab({ org }) {
   const [expanded, setExpanded] = useState(() => new Set());
   const [showInactive, setShowInactive] = useState(false);
   const [error, setError] = useState('');
+  const [inviteBusyId, setInviteBusyId] = useState(null);
+  const [inviteResult, setInviteResult] = useState({}); // { instructor_id: { type: 'ok'|'err', message } }
 
   useEffect(() => {
     if (!org?.id) return;
@@ -159,6 +161,46 @@ export default function InstructorsTab({ org }) {
     });
   }
 
+  async function sendInvite(instructorId) {
+    if (inviteBusyId) return;
+    setInviteBusyId(instructorId);
+    setInviteResult((s) => ({ ...s, [instructorId]: null }));
+    try {
+      const { data, error: fnErr } = await supabase.functions.invoke('contractor-invite', {
+        body: { instructor_id: instructorId },
+      });
+      if (fnErr || data?.error) {
+        setInviteResult((s) => ({
+          ...s,
+          [instructorId]: { type: 'err', message: data?.error || fnErr?.message || 'Failed to send invite.' },
+        }));
+        return;
+      }
+      // Refresh this instructor's onboarding status so the button label flips
+      // from "Send invite" to "Resend".
+      const { data: fresh } = await supabase
+        .from('contractor_onboarding_status')
+        .select('instructor_id, overall_status, current_step, checkr_status, stripe_payouts_enabled, background_check_source')
+        .eq('instructor_id', instructorId)
+        .maybeSingle();
+      if (fresh) {
+        setStatusByInstructor((s) => ({ ...s, [instructorId]: fresh }));
+      }
+      setInviteResult((s) => ({
+        ...s,
+        [instructorId]: { type: 'ok', message: 'Invite sent ✓' },
+      }));
+    } catch (err) {
+      console.error('[admin/contacts] send invite failed', err);
+      setInviteResult((s) => ({
+        ...s,
+        [instructorId]: { type: 'err', message: 'Something went wrong sending the invite.' },
+      }));
+    } finally {
+      setInviteBusyId(null);
+    }
+  }
+
   if (error) {
     return (
       <div style={{ background: `${RED}1A`, color: RED, padding: 12, borderRadius: 6, fontSize: 13 }}>
@@ -231,6 +273,9 @@ export default function InstructorsTab({ org }) {
             row={r}
             expanded={expanded.has(r.id)}
             onToggle={() => toggleExpand(r.id)}
+            onSendInvite={() => sendInvite(r.id)}
+            inviteBusy={inviteBusyId === r.id}
+            inviteResult={inviteResult[r.id]}
           />
         ))}
       </div>
@@ -238,7 +283,7 @@ export default function InstructorsTab({ org }) {
   );
 }
 
-function InstructorRow({ row, expanded, onToggle }) {
+function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult }) {
   const displayName =
     row.preferred_name?.trim() ||
     `${row.first_name ?? ''} ${row.last_name ?? ''}`.trim() ||
@@ -249,6 +294,16 @@ function InstructorRow({ row, expanded, onToggle }) {
   const statusColor = STATUS_COLOR[status] ?? MUTED;
   const age = ageFromDob(row.date_of_birth);
   const isMinor = age !== null && age < 18;
+
+  // Invite button visible for adults who haven't completed onboarding and
+  // aren't in a terminal state. Hidden for minors (they don't go through
+  // the wizard) and for complete/declined/abandoned/pending_* statuses.
+  const inviteState =
+    !row.is_active || isMinor || ['complete', 'declined', 'abandoned', 'pending_background_check', 'pending_stripe', 'payouts_disabled'].includes(status)
+      ? null
+      : status === 'not_invited' || !row.status
+      ? 'first'
+      : 'resend';
 
   return (
     <div
@@ -325,6 +380,54 @@ function InstructorRow({ row, expanded, onToggle }) {
         </span>
         <span style={{ color: MUTED, fontSize: 12 }}>{expanded ? '▾' : '▸'}</span>
       </button>
+
+      {inviteState && (
+        <div
+          style={{
+            marginTop: 10,
+            paddingTop: 10,
+            borderTop: `1px solid ${RULE}`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            flexWrap: 'wrap',
+          }}
+        >
+          <button
+            type="button"
+            onClick={onSendInvite}
+            disabled={inviteBusy}
+            style={{
+              padding: '6px 12px',
+              background: inviteState === 'first' ? PLUM : 'transparent',
+              color: inviteState === 'first' ? '#fff' : PLUM,
+              border: `1px solid ${PLUM}`,
+              borderRadius: 6,
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: 'inherit',
+              cursor: inviteBusy ? 'wait' : 'pointer',
+              opacity: inviteBusy ? 0.6 : 1,
+            }}
+          >
+            {inviteBusy
+              ? 'Sending…'
+              : inviteState === 'first'
+              ? 'Send onboarding invite'
+              : 'Resend invite'}
+          </button>
+          {inviteResult && (
+            <span
+              style={{
+                fontSize: 12,
+                color: inviteResult.type === 'ok' ? OK : RED,
+              }}
+            >
+              {inviteResult.message}
+            </span>
+          )}
+        </div>
+      )}
 
       {expanded && <InstructorDetail row={row} age={age} />}
     </div>
