@@ -74,8 +74,23 @@ serve(async (req: Request) => {
           },
         });
       } catch (err) {
-        console.error('stripe.accounts.create failed:', err);
-        return json({ error: 'stripe_account_create_failed' }, 502);
+        // Surface the Stripe error message in the response so the wizard can
+        // show a useful message instead of a generic "failed". Common causes:
+        //   - "Your platform isn't yet able to create connected accounts..."
+        //     -> platform setup incomplete in Stripe dashboard
+        //   - "You must add at least one capability..."
+        //     -> needs card_payments AND transfers in some setups
+        //   - "Your account does not have Connect enabled..."
+        //     -> Connect product not actually active for this key's account
+        const stripeErr = err as { message?: string; raw?: { message?: string; code?: string; type?: string } };
+        const errMsg = stripeErr.raw?.message ?? stripeErr.message ?? 'unknown';
+        const errCode = stripeErr.raw?.code ?? stripeErr.raw?.type ?? 'unknown';
+        console.error('stripe.accounts.create failed:', errCode, errMsg, err);
+        return json({
+          error: 'stripe_account_create_failed',
+          stripe_code: errCode,
+          stripe_message: errMsg,
+        }, 502);
       }
       accountId = account.id;
 

@@ -83,10 +83,19 @@ export default function Screen7Stripe({ slug, instructor, onboarding, onAdvance,
         { navigate }
       );
       if (error || !data?.onboarding_url) {
-        setSubmitError(
-          (error && error.message) ||
-            "Couldn't start Stripe setup. Please try again in a minute."
-        );
+        // The edge function passes the actual Stripe error in
+        // data.stripe_message / data.stripe_code when account creation
+        // fails. Show that so platform-setup issues surface clearly
+        // instead of a generic "try again."
+        const stripeMsg = data?.stripe_message;
+        if (stripeMsg) {
+          setSubmitError(`Stripe: ${stripeMsg}`);
+        } else {
+          setSubmitError(
+            (error && error.message) ||
+              "Couldn't start Stripe setup. Please try again in a minute."
+          );
+        }
         setBusy(false);
         return;
       }
