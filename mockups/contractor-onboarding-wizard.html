@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Contractor Onboarding Wizard — Mockup</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .screen { max-width: 420px; margin: 0 auto; background: white; border: 1px solid #e5e7eb; border-radius: 16px; }
+  .screen-shell { background: #f3f4f6; padding: 24px; min-height: 100vh; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .legal-text { font-size: 13px; color: #4b5563; line-height: 1.6; max-height: 220px; overflow-y: auto; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; }
+  .progress-bar { display: flex; gap: 4px; margin-bottom: 24px; }
+  .progress-segment { flex: 1; height: 4px; background: #e5e7eb; border-radius: 2px; }
+  .progress-segment.done { background: #10b981; }
+  .progress-segment.current { background: #3b82f6; }
+  .input { width: 100%; border: 1px solid #d1d5db; border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+  .input:focus { outline: 2px solid #3b82f6; outline-offset: -1px; }
+  .btn-primary { background: #1f2937; color: white; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14px; width: 100%; }
+  .btn-secondary { background: white; color: #1f2937; border: 1px solid #d1d5db; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14px; width: 100%; }
+  .checkbox-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; }
+  .checkbox-row input[type="checkbox"] { width: 18px; height: 18px; margin-top: 2px; flex-shrink: 0; }
+  .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #6b7280; letter-spacing: 1px; margin-bottom: 8px; }
+  .anchor { color: #3b82f6; text-decoration: none; font-size: 14px; }
+  .anchor:hover { text-decoration: underline; }
+  details > summary { cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; font-weight: 600; font-size: 14px; }
+  details[open] > summary { background: #eff6ff; }
+  details > div { padding: 12px; }
+  .label-tag { background: #f3f4f6; color: #6b7280; padding: 2px 8px; font-size: 11px; border-radius: 4px; font-family: monospace; }
+</style>
+</head>
+<body class="bg-gray-100">
+
+<div class="max-w-5xl mx-auto p-6">
+  <h1 class="text-3xl font-bold mb-2">Contractor onboarding wizard</h1>
+  <p class="text-gray-600 mb-8">Mockup of all screens for chunk 3 build. Scroll through each screen as it would appear on mobile. Not interactive — visual reference only.</p>
+
+  <p class="mb-2 text-sm text-gray-500">Quick jump:</p>
+  <div class="flex flex-wrap gap-2 mb-12 text-sm">
+    <a href="#screen-1" class="anchor">1. Welcome</a> ·
+    <a href="#screen-2" class="anchor">2. Background check</a> ·
+    <a href="#screen-3" class="anchor">3. ORS eligibility</a> ·
+    <a href="#screen-4" class="anchor">4. Agreement</a> ·
+    <a href="#screen-5" class="anchor">5. Policies</a> ·
+    <a href="#screen-6" class="anchor">6. Additional acks</a> ·
+    <a href="#screen-7" class="anchor">7. Payment</a> ·
+    <a href="#screen-8" class="anchor">8. Almost done</a> ·
+    <a href="#completion" class="anchor">Completion states</a> ·
+    <a href="#declined" class="anchor">Declined</a> ·
+    <a href="#abandoned" class="anchor">Abandoned</a> ·
+    <a href="#error-routes" class="anchor">/error</a> ·
+    <a href="#magic-link" class="anchor">Magic-link resend</a>
+  </div>
+</div>
+
+<!-- ============== SCREEN 1: WELCOME ============== -->
+<div id="screen-1" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Screen 1: Welcome + Identity <span class="label-tag">step_name = welcome</span></h2>
+<p class="text-sm text-gray-600 mb-6">Pre-filled from instructors table. Phone is required; photo is optional (max 2MB; HEIC auto-converted to JPG).</p>
+</div>
+<div class="screen p-6">
+<div class="progress-bar">
+  <div class="progress-segment current"></div>
+  <div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div>
+  <div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div>
+</div>
+<p class="text-xs text-gray-500 mb-6">Step 1 of 8</p>
+
+<h1 class="text-2xl font-bold mb-2">Welcome to enrops</h1>
+<p class="text-sm text-gray-500 mb-6">Journey to STEAM's contractor platform</p>
+
+<p class="text-sm text-gray-700 mb-6">Journey to STEAM is your client. enrops is the platform we use for paperwork, scheduling, communication, and payments. You will no longer use Gusto.</p>
+
+<div class="space-y-4 mb-6">
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">First name</label>
+    <input type="text" class="input" value="Skyler" />
+  </div>
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Last name</label>
+    <input type="text" class="input" value="Calender" />
+  </div>
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-xs text-gray-500">(read-only)</span></label>
+    <input type="email" class="input bg-gray-50" value="skyler@example.com" readonly />
+  </div>
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Phone <span class="text-red-500">*</span></label>
+    <input type="tel" class="input" placeholder="(555) 123-4567" />
+  </div>
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Photo <span class="text-xs text-gray-500">(optional · max 2MB)</span></label>
+    <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+      <p class="text-sm text-gray-500">Tap to upload<br/><span class="text-xs">JPG, PNG, WebP, HEIC</span></p>
+    </div>
+  </div>
+</div>
+
+<button class="btn-primary">Continue →</button>
+</div>
+</div>
+
+<!-- ============== SCREEN 2: BACKGROUND CHECK ============== -->
+<div id="screen-2" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Screen 2: Background Check <span class="label-tag">create-checkr-candidate</span></h2>
+<p class="text-sm text-gray-600 mb-6">Two-state screen. Initial (left): start the check. Return state (right): show pending/clear status from contractor_onboarding_status.checkr_status.</p>
+</div>
+<div class="screen p-6">
+<div class="progress-bar">
+  <div class="progress-segment done"></div><div class="progress-segment current"></div>
+  <div class="progress-segment"></div><div class="progress-segment"></div>
+  <div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div>
+</div>
+<p class="text-xs text-gray-500 mb-6">Step 2 of 8</p>
+
+<h1 class="text-2xl font-bold mb-4">Background check</h1>
+<p class="text-sm text-gray-700 mb-2">J2S requires a background check for all contractors who work with children.</p>
+<p class="text-sm text-gray-700 mb-6">You'll be redirected to our partner Checkr to complete a short form. This runs in the background while you continue.</p>
+
+<div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+  <p class="text-xs text-blue-700 font-semibold mb-1">PRIVACY</p>
+  <p class="text-sm text-blue-800">Checkr collects your SSN, DOB, address, and consent. enrops never sees this data.</p>
+</div>
+
+<button class="btn-primary mb-3">Start background check →</button>
+<p class="text-center text-xs text-gray-500">Opens in a new tab</p>
+</div>
+
+<div class="screen p-6 mt-6">
+<div class="progress-bar">
+  <div class="progress-segment done"></div><div class="progress-segment current"></div>
+  <div class="progress-segment"></div><div class="progress-segment"></div>
+  <div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div>
+</div>
+<p class="text-xs text-gray-500 mb-6">Step 2 of 8 — return state</p>
+
+<h1 class="text-2xl font-bold mb-4">Background check</h1>
+<div class="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+  <p class="text-sm text-green-800">✓ Background check submitted</p>
+  <p class="text-xs text-green-700 mt-1">Status: <strong>pending</strong> — we'll email when it clears</p>
+</div>
+
+<button class="btn-primary">Continue →</button>
+</div>
+</div>
+
+<!-- ============== SCREEN 3: ORS ELIGIBILITY ============== -->
+<div id="screen-3" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Screen 3: Business Eligibility <span class="label-tag">submit-ors-certification</span></h2>
+<p class="text-sm text-gray-600 mb-6">Must check ≥3 boxes and add text for each. If &lt;3 → confirmation modal → optionally decline.</p>
+</div>
+<div class="screen p-6">
+<div class="progress-bar">
+  <div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment current"></div>
+  <div class="progress-segment"></div>
+  <div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div>
+</div>
+<p class="text-xs text-gray-500 mb-6">Step 3 of 8</p>
+
+<h1 class="text-2xl font-bold mb-2">Business eligibility</h1>
+<p class="text-sm text-gray-700 mb-6">Oregon law requires independent contractors to meet at least 3 of 5 criteria. Check each that applies and briefly describe how.</p>
+
+<div class="space-y-4">
+  <div class="border border-gray-200 rounded-lg p-3">
+    <div class="checkbox-row">
+      <input type="checkbox" checked />
+      <label class="text-sm text-gray-800">I maintain a business location separate from J2S, or use a portion of my home primarily for business</label>
+    </div>
+    <textarea class="input mt-2" rows="2" placeholder="Describe how">I run tutoring sessions out of my home office.</textarea>
+  </div>
+
+  <div class="border border-gray-200 rounded-lg p-3">
+    <div class="checkbox-row">
+      <input type="checkbox" />
+      <label class="text-sm text-gray-800">I bear the risk of loss in providing services</label>
+    </div>
+  </div>
+
+  <div class="border border-gray-200 rounded-lg p-3">
+    <div class="checkbox-row">
+      <input type="checkbox" checked />
+      <label class="text-sm text-gray-800">I provide services to 2+ clients in a 12-month period, or routinely market to obtain new contracts</label>
+    </div>
+    <textarea class="input mt-2" rows="2">I also teach at XYZ Learning Lab and run weekend STEM clubs.</textarea>
+  </div>
+
+  <div class="border border-gray-200 rounded-lg p-3">
+    <div class="checkbox-row">
+      <input type="checkbox" checked />
+      <label class="text-sm text-gray-800">I have made a significant investment in my business</label>
+    </div>
+    <textarea class="input mt-2" rows="2">iPad, projector, lesson supplies, professional development courses.</textarea>
+  </div>
+
+  <div class="border border-gray-200 rounded-lg p-3">
+    <div class="checkbox-row">
+      <input type="checkbox" />
+      <label class="text-sm text-gray-800">I have the authority to hire others to provide or assist in providing services</label>
+    </div>
+  </div>
+</div>
+
+<p class="text-sm text-green-700 font-semibold mt-4">3 of 5 selected ✓</p>
+
+<button class="btn-primary mt-6">Continue →</button>
+</div>
+</div>
+
+<!-- ============== SCREEN 4: AGREEMENT ============== -->
+<div id="screen-4" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Screen 4: Contractor Agreement <span class="label-tag">submit-agreement</span></h2>
+<p class="text-sm text-gray-600 mb-6">Body_text fetched from <code>get-legal-document</code>. "Jump to signature" appears after 30s. Client never sends agreement text — server snapshots from legal_documents.</p>
+</div>
+<div class="screen p-6">
+<div class="progress-bar">
+  <div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment current"></div>
+  <div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div>
+</div>
+<p class="text-xs text-gray-500 mb-6">Step 4 of 8</p>
+
+<h1 class="text-2xl font-bold mb-2">Contractor Agreement</h1>
+<p class="text-xs text-gray-500 mb-4">Version 2.0 · Effective June 15, 2026</p>
+
+<div class="legal-text mb-4">
+<strong>INDEPENDENT CONTRACTOR AGREEMENT</strong><br/><br/>
+Journey to STEAM LLC Version 2.0 (June 2026) — supersedes the April 2025 revision and any prior versions<br/><br/>
+This Independent Contractor Agreement is entered into between Journey to STEAM LLC and you ("Contractor"). Journey to STEAM is the Contractor's client. enrops is the platform Journey to STEAM uses to administer this engagement…<br/><br/>
+<strong>1. Scope of Services</strong><br/>
+Journey to STEAM may offer the Contractor specific engagements to provide one or more of the following types of services…<br/><br/>
+<em>[full body_text scrolls here — pulled from legal_documents.body_text via get-legal-document edge function]</em>
+</div>
+
+<button class="text-sm text-blue-600 mb-6">↓ Jump to signature</button>
+
+<hr class="my-6"/>
+
+<p class="section-label">Signature</p>
+<p class="text-sm text-gray-700 mb-4">By signing below, you confirm:</p>
+
+<div class="space-y-1 mb-4">
+  <div class="checkbox-row"><input type="checkbox" /><label class="text-sm">I have read this Agreement and the documents it incorporates</label></div>
+  <div class="checkbox-row"><input type="checkbox" /><label class="text-sm">I agree to the compensation and deduction structure</label></div>
+  <div class="checkbox-row"><input type="checkbox" /><label class="text-sm">I confirm my status as an independent contractor under ORS 670.600</label></div>
+  <div class="checkbox-row"><input type="checkbox" /><label class="text-sm">I reaffirm the confidentiality, IP, and non-solicitation obligations</label></div>
+  <div class="checkbox-row"><input type="checkbox" /><label class="text-sm">My prior agreement with J2S is superseded</label></div>
+</div>
+
+<label class="block text-sm font-medium text-gray-700 mb-1">Type your full legal name</label>
+<input type="text" class="input mb-3" placeholder="Skyler Calender" />
+<p class="text-xs text-gray-500 mb-6">Today's date and IP address will be recorded for legal purposes.</p>
+
+<button class="btn-primary">Sign and continue →</button>
+</div>
+</div>
+
+<!-- ============== SCREEN 5: POLICIES ============== -->
+<div id="screen-5" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Screen 5: Policy Acknowledgments <span class="label-tag">submit-acknowledgments step=policies</span></h2>
+<p class="text-sm text-gray-600 mb-6">Three accordions. Body fetched from <code>get-legal-document</code>. All 3 checkboxes required.</p>
+</div>
+<div class="screen p-6">
+<div class="progress-bar">
+  <div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div>
+  <div class="progress-segment current"></div><div class="progress-segment"></div><div class="progress-segment"></div><div class="progress-segment"></div>
+</div>
+<p class="text-xs text-gray-500 mb-6">Step 5 of 8</p>
+
+<h1 class="text-2xl font-bold mb-2">Review policies</h1>
+<p class="text-sm text-gray-700 mb-6">Tap each to read, then check the box.</p>
+
+<div class="space-y-3">
+  <details>
+    <summary>Pay & Deductions Schedule (v3.0)</summary>
+    <div class="legal-text" style="max-height:160px;"><em>body_text from get-legal-document: pay_schedule</em></div>
+    <div class="checkbox-row pt-3"><input type="checkbox" /><label class="text-sm">I acknowledge I have received and read the Pay Schedule</label></div>
+  </details>
+
+  <details>
+    <summary>Attendance & Punctuality Policy (v3.0)</summary>
+    <div class="legal-text" style="max-height:160px;"><em>body_text from get-legal-document: attendance_policy</em></div>
+    <div class="checkbox-row pt-3"><input type="checkbox" /><label class="text-sm">I acknowledge I have received and read the Attendance Policy</label></div>
+  </details>
+
+  <details>
+    <summary>Code of Conduct & Safety Standards (v1.0)</summary>
+    <div class="legal-text" style="max-height:160px;"><em>body_text from get-legal-document: code_of_conduct</em></div>
+    <div class="checkbox-row pt-3"><input type="checkbox" /><label class="text-sm">I acknowledge I have received and read the Code of Conduct</label></div>
+  </details>
+</div>
+
+<button class="btn-primary mt-6">Continue →</button>
+</div>
+</div>
+
+<!-- ============== SCREEN 6: ADDITIONAL ACKS ============== -->
+<div id="screen-6" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Screen 6: Additional Acknowledgments <span class="label-tag">submit-acknowledgments step=additional</span></h2>
+<p class="text-sm text-gray-600 mb-6">Mandatory reporter rendered inline (short text); photo/video and vehicle have multiple checkboxes each.</p>
+</div>
+<div class="screen p-6">
+<div class="progress-bar">
+  <div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div>
+  <div class="progress-segment done"></div><div class="progress-segment current"></div><div class="progress-segment"></div><div class="progress-segment"></div>
+</div>
+<p class="text-xs text-gray-500 mb-6">Step 6 of 8</p>
+
+<h1 class="text-2xl font-bold mb-6">Additional acknowledgments</h1>
+
+<p class="section-label">Mandatory Reporting</p>
+<div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-gray-800 mb-4">
+  As a J2S contractor working with children, I am expected to follow Oregon mandatory reporting requirements… If I suspect abuse, I will call <strong>1-855-503-SAFE</strong> and notify Arielle Hammond at (503) 489-8445.
+</div>
+<div class="checkbox-row mb-6"><input type="checkbox" /><label class="text-sm">I have completed or will complete the mandatory reporting training and will comply with reporting requirements</label></div>
+
+<p class="section-label">Photo / Video Release</p>
+<details class="mb-2"><summary>Read full release</summary><div class="legal-text"><em>body_text from get-legal-document: photo_video_release</em></div></details>
+<div class="checkbox-row"><input type="checkbox" /><label class="text-sm">I consent to J2S photographing/recording me at program sites</label></div>
+<div class="checkbox-row"><input type="checkbox" /><label class="text-sm">I consent to use of my likeness in marketing materials</label></div>
+<div class="checkbox-row"><input type="checkbox" /><label class="text-sm">I understand consent is ongoing and revocable in writing</label></div>
+<div class="checkbox-row mb-6"><input type="checkbox" /><label class="text-sm">I understand I won't receive additional compensation</label></div>
+
+<p class="section-label">Vehicle and Driving</p>
+<details class="mb-2"><summary>Read full acknowledgment</summary><div class="legal-text"><em>body_text from get-legal-document: vehicle_driving_ack</em></div></details>
+<div class="checkbox-row"><input type="checkbox" /><label class="text-sm">I am responsible for my own transportation</label></div>
+<div class="checkbox-row"><input type="checkbox" /><label class="text-sm">I maintain valid auto insurance</label></div>
+<div class="checkbox-row"><input type="checkbox" /><label class="text-sm">I will not transport students in my vehicle</label></div>
+
+<button class="btn-primary mt-6">Continue →</button>
+</div>
+</div>
+
+<!-- ============== SCREEN 7: PAYMENT ============== -->
+<div id="screen-7" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Screen 7: Payment Setup <span class="label-tag">create-stripe-connect-account</span></h2>
+<p class="text-sm text-gray-600 mb-6">Redirects to Stripe Connect Express. Step is marked only on ?return=true. Mid-Stripe bailout sends user back to this screen. NOTE: Stripe integration deferred — Function 10 not yet built.</p>
+</div>
+<div class="screen p-6">
+<div class="progress-bar">
+  <div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div>
+  <div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment current"></div><div class="progress-segment"></div>
+</div>
+<p class="text-xs text-gray-500 mb-6">Step 7 of 8</p>
+
+<h1 class="text-2xl font-bold mb-4">Payment setup</h1>
+<p class="text-sm text-gray-700 mb-2">You'll be redirected to Stripe to verify your identity, provide tax information, and connect your bank account.</p>
+<p class="text-sm text-gray-700 mb-6">Stripe handles all sensitive financial information — enrops never sees your SSN or bank details.</p>
+
+<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800 mb-6">
+  <p>Stripe takes ~10 minutes. You can save and come back if needed.</p>
+</div>
+
+<button class="btn-primary">Set up payment →</button>
+</div>
+
+<div class="screen p-6 mt-6">
+<div class="progress-bar">
+  <div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div>
+  <div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment current"></div><div class="progress-segment"></div>
+</div>
+<p class="text-xs text-gray-500 mb-6">Step 7 of 8 — pending state</p>
+
+<h1 class="text-2xl font-bold mb-4">Payment setup</h1>
+<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+  <p class="text-sm text-yellow-900">Payment setup in progress.</p>
+  <p class="text-xs text-yellow-800 mt-1">Stripe may need additional verification. We'll email when it's ready.</p>
+</div>
+<button class="btn-secondary mb-3">Check current status</button>
+<a href="#" class="text-sm text-blue-600 block text-center mb-4">→ Check status on Stripe</a>
+<button class="btn-primary">Continue →</button>
+</div>
+</div>
+
+<!-- ============== SCREEN 8: ALMOST DONE ============== -->
+<div id="screen-8" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Screen 8: Emergency + Preferences <span class="label-tag">update-onboarding-step step_name=emergency_and_prefs</span></h2>
+<p class="text-sm text-gray-600 mb-6">Always re-editable. Edge function deletes existing emergency contacts and re-inserts with is_primary = (index === 0). Districts come from program_locations cleaned-up data (15 distinct after the 2026-05-21 cleanup).</p>
+</div>
+<div class="screen p-6">
+<div class="progress-bar">
+  <div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div>
+  <div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment done"></div><div class="progress-segment current"></div>
+</div>
+<p class="text-xs text-gray-500 mb-6">Step 8 of 8</p>
+
+<h1 class="text-2xl font-bold mb-6">Almost done</h1>
+
+<p class="section-label">Emergency contact (required)</p>
+<div class="space-y-3 mb-4">
+  <input type="text" class="input" placeholder="Full name" />
+  <input type="text" class="input" placeholder="Relationship" />
+  <input type="tel" class="input" placeholder="Phone" />
+</div>
+<button class="text-sm text-blue-600 mb-6">+ Add second contact</button>
+
+<p class="section-label">Site preferences</p>
+<p class="text-xs text-gray-500 mb-3">Which districts can you drive to?</p>
+<div class="grid grid-cols-2 gap-2 mb-6 text-sm">
+  <label><input type="checkbox" /> Beaverton</label>
+  <label><input type="checkbox" /> Camas</label>
+  <label><input type="checkbox" /> Charter/Private</label>
+  <label><input type="checkbox" /> Corbett</label>
+  <label><input type="checkbox" /> Forest Grove</label>
+  <label><input type="checkbox" /> Happy Valley</label>
+  <label><input type="checkbox" /> Hillsboro</label>
+  <label><input type="checkbox" /> LOSD</label>
+  <label><input type="checkbox" /> NCSD</label>
+  <label><input type="checkbox" /> Newberg</label>
+  <label><input type="checkbox" /> Oregon City</label>
+  <label><input type="checkbox" /> Portland</label>
+  <label><input type="checkbox" /> TTSD</label>
+  <label><input type="checkbox" /> Vancouver</label>
+  <label><input type="checkbox" /> West Linn</label>
+</div>
+
+<p class="section-label">Availability</p>
+<p class="text-xs text-gray-500 mb-3">Which days are you generally available?</p>
+<div class="flex gap-2 mb-6 text-xs">
+  <label class="flex flex-col items-center gap-1"><input type="checkbox" /> Mon</label>
+  <label class="flex flex-col items-center gap-1"><input type="checkbox" /> Tue</label>
+  <label class="flex flex-col items-center gap-1"><input type="checkbox" /> Wed</label>
+  <label class="flex flex-col items-center gap-1"><input type="checkbox" /> Thu</label>
+  <label class="flex flex-col items-center gap-1"><input type="checkbox" /> Fri</label>
+  <label class="flex flex-col items-center gap-1"><input type="checkbox" /> Sat</label>
+  <label class="flex flex-col items-center gap-1"><input type="checkbox" /> Sun</label>
+</div>
+
+<p class="section-label">First Aid / CPR <span class="font-normal normal-case">(optional)</span></p>
+<div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center mb-3">
+  <p class="text-sm text-gray-500">Upload certificate (PDF or image)</p>
+</div>
+<input type="date" class="input mb-6" placeholder="Expires" />
+
+<button class="btn-primary">Complete onboarding →</button>
+</div>
+</div>
+
+<!-- ============== COMPLETION STATES ============== -->
+<div id="completion" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Completion states</h2>
+<p class="text-sm text-gray-600 mb-6">Shown after Screen 8 based on gate-check result: overall_status decides which variant.</p>
+</div>
+
+<div class="screen p-6 mb-6">
+<p class="pill bg-green-100 text-green-800 mb-4">overall_status = complete</p>
+<h1 class="text-2xl font-bold mb-3">You're fully onboarded ✓</h1>
+<p class="text-sm text-gray-700 mb-6">Your summer camp assignments are waiting for you in enrops.</p>
+<button class="btn-primary">Go to my portal →</button>
+</div>
+
+<div class="screen p-6 mb-6">
+<p class="pill bg-amber-100 text-amber-800 mb-4">overall_status = pending_background_check</p>
+<h1 class="text-2xl font-bold mb-3">Paperwork complete ✓</h1>
+<p class="text-sm text-gray-700 mb-6">Your background check is still processing. We'll email you when it clears.</p>
+<button class="btn-primary">Go to my portal →</button>
+</div>
+
+<div class="screen p-6 mb-6">
+<p class="pill bg-amber-100 text-amber-800 mb-4">overall_status = pending_stripe</p>
+<h1 class="text-2xl font-bold mb-3">Paperwork complete ✓</h1>
+<p class="text-sm text-gray-700 mb-3">Your payment setup is still being verified by Stripe. We'll email you when it's ready.</p>
+<a href="#" class="text-sm text-blue-600 block mb-6">→ Check status on Stripe</a>
+<button class="btn-primary">Go to my portal →</button>
+</div>
+
+<div class="screen p-6">
+<p class="pill bg-red-100 text-red-800 mb-4">stripe_connect_status = payouts_disabled</p>
+<h1 class="text-2xl font-bold mb-3">Action needed — payment setup</h1>
+<p class="text-sm text-gray-700 mb-6">Stripe disabled your account's payout capability. This usually means they need updated verification info.</p>
+<button class="btn-primary">Update on Stripe →</button>
+</div>
+</div>
+
+<!-- ============== DECLINED ============== -->
+<div id="declined" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Declined state <span class="label-tag">/&lt;slug&gt;/onboarding/declined</span></h2>
+<p class="text-sm text-gray-600 mb-6">Reached when overall_status = 'declined'. Dead-end page.</p>
+</div>
+<div class="screen p-6">
+<h1 class="text-2xl font-bold mb-4">Your onboarding could not be completed.</h1>
+<p class="text-sm text-gray-700">Please contact Arielle at <a href="mailto:arielle@journeytosteam.com" class="anchor">arielle@journeytosteam.com</a> if you'd like to discuss.</p>
+</div>
+</div>
+
+<!-- ============== ABANDONED ============== -->
+<div id="abandoned" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Abandoned state <span class="label-tag">/&lt;slug&gt;/onboarding/abandoned</span></h2>
+<p class="text-sm text-gray-600 mb-6">Admin-marked. Request-to-resume button calls request-resume-onboarding (Function 15) with optional note. 24h rate limit.</p>
+</div>
+<div class="screen p-6">
+<h1 class="text-2xl font-bold mb-4">Your onboarding was marked inactive.</h1>
+<p class="text-sm text-gray-700 mb-6">If you'd like to resume, contact Jessica.</p>
+<label class="block text-sm font-medium text-gray-700 mb-1">Optional message</label>
+<textarea class="input mb-4" rows="3" placeholder="Add any context for the admin (optional)"></textarea>
+<button class="btn-primary">Request to resume →</button>
+</div>
+</div>
+
+<!-- ============== /ERROR ROUTES ============== -->
+<div id="error-routes" class="screen-shell border-t">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">/error route <span class="label-tag">/error?reason=&lt;reason&gt;</span></h2>
+<p class="text-sm text-gray-600 mb-6">Generic non-tenant-scoped route. No logo, no tenant colors. Renders different copy by ?reason= query param.</p>
+</div>
+
+<div class="screen p-6 mb-6">
+<p class="pill bg-gray-100 text-gray-700 mb-4">?reason=org_misconfigured</p>
+<h1 class="text-2xl font-bold mb-3">Something's wrong with your account setup.</h1>
+<p class="text-sm text-gray-700">Please contact Jessica.</p>
+</div>
+
+<div class="screen p-6 mb-6">
+<p class="pill bg-gray-100 text-gray-700 mb-4">?reason=deactivated</p>
+<h1 class="text-2xl font-bold mb-3">Your account has been deactivated.</h1>
+<p class="text-sm text-gray-700">Please contact Jessica to discuss.</p>
+</div>
+
+<div class="screen p-6">
+<p class="pill bg-gray-100 text-gray-700 mb-4">?reason=link_expired (see Magic-link resend below)</p>
+<p class="text-sm text-gray-700">Renders the magic-link resend form (next section).</p>
+</div>
+</div>
+
+<!-- ============== MAGIC LINK RESEND ============== -->
+<div id="magic-link" class="screen-shell border-t pb-12">
+<div class="max-w-5xl mx-auto px-6 pt-6">
+<h2 class="text-xl font-bold mb-2">Magic-link resend <span class="label-tag">resend-onboarding-invite</span></h2>
+<p class="text-sm text-gray-600 mb-6">Reached when an expired magic link is clicked. Anti-enumeration: always shows the same success message regardless of whether the email matches.</p>
+</div>
+<div class="screen p-6">
+<h1 class="text-2xl font-bold mb-2">This link has expired.</h1>
+<p class="text-sm text-gray-700 mb-6">Enter your email to get a new one.</p>
+<input type="email" class="input mb-4" placeholder="you@example.com" />
+<button class="btn-primary mb-6">Send new link →</button>
+<div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+  <strong>Sent.</strong> If your email is registered, we've sent a new link. Check your inbox.
+</div>
+</div>
+</div>
+
+</body>
+</html>
