@@ -280,6 +280,7 @@ export default function InstructorsTab({ org }) {
             onSendInvite={() => sendInvite(r.id)}
             inviteBusy={inviteBusyId === r.id}
             inviteResult={inviteResult[r.id]}
+            onUploadBg={() => { setBgUploadInstructorId(r.id); setBgUploadOpen(true); }}
           />
         ))}
       </div>
@@ -301,7 +302,7 @@ export default function InstructorsTab({ org }) {
   );
 }
 
-function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult }) {
+function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg }) {
   const displayName =
     row.preferred_name?.trim() ||
     `${row.first_name ?? ''} ${row.last_name ?? ''}`.trim() ||
@@ -447,12 +448,12 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
         </div>
       )}
 
-      {expanded && <InstructorDetail row={row} age={age} />}
+      {expanded && <InstructorDetail row={row} age={age} onUploadBg={onUploadBg} />}
     </div>
   );
 }
 
-function InstructorDetail({ row, age }) {
+function InstructorDetail({ row, age, onUploadBg }) {
   const sitePrefs = row.site_preferences?.districts ?? [];
   const dayDefaults = row.availability?.day_defaults ?? {};
   const activeDays = DAY_INITIALS.filter(([k]) => dayDefaults[k]).map(([, label]) => label);
@@ -499,6 +500,27 @@ function InstructorDetail({ row, age }) {
           </>
         ) : (
           <Em>not started</Em>
+        )}
+        {onUploadBg && (
+          <button
+            type="button"
+            onClick={onUploadBg}
+            style={{
+              display: 'block',
+              marginTop: 4,
+              background: 'transparent',
+              border: 'none',
+              color: PLUM,
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              padding: 0,
+              textDecoration: 'underline',
+            }}
+          >
+            {checkr === 'clear' ? 'Replace BG report →' : 'Upload prior BG report →'}
+          </button>
         )}
       </DetailItem>
       <DetailItem label="Stripe payouts">
