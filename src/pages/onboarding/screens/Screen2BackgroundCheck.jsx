@@ -80,6 +80,7 @@ export default function Screen2BackgroundCheck({ slug, instructor, onboarding, o
         slug={slug}
         currentStep={STEP_KEYS.CHECKR_SUBMITTED}
         stepsCompleted={onboarding?.steps_completed}
+      onBack={onBack}
         title="Background check"
       >
         <p className="text-sm text-neutral-700">
@@ -101,6 +102,7 @@ export default function Screen2BackgroundCheck({ slug, instructor, onboarding, o
       slug={slug}
       currentStep={STEP_KEYS.CHECKR_SUBMITTED}
       stepsCompleted={onboarding?.steps_completed}
+      onBack={onBack}
       title="Background check"
       subtitle="J2S requires a background check for all contractors who work with children. You'll be redirected to our partner to complete a short form. This runs in the background while you continue."
     >

@@ -45,7 +45,7 @@ function contactFilled(c) {
   );
 }
 
-export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding, onAdvance }) {
+export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [contacts, setContacts] = useState([emptyContact()]);
   const [districts, setDistricts] = useState([]); // canonical list from DB
@@ -249,6 +249,7 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
       slug={slug}
       currentStep={STEP_KEYS.EMERGENCY_AND_PREFS}
       stepsCompleted={onboarding?.steps_completed}
+      onBack={onBack}
       title="Almost done"
       subtitle="One last step. You can come back and update this anytime."
     >

@@ -18,7 +18,7 @@ import WizardLayout, { PrimaryButton, ScreenError, SecondaryButton } from '../Wi
 // We never call the Stripe JS SDK from the browser — Function 10 is the
 // authorized path to talk to the Stripe API.
 
-export default function Screen7Stripe({ slug, instructor, onboarding, onAdvance }) {
+export default function Screen7Stripe({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [busy, setBusy] = useState(false);
@@ -137,6 +137,7 @@ export default function Screen7Stripe({ slug, instructor, onboarding, onAdvance 
         slug={slug}
         currentStep={STEP_KEYS.STRIPE_SUBMITTED}
         stepsCompleted={onboarding?.steps_completed}
+        onBack={onBack}
         title="Payment setup"
         subtitle="Stripe needs to re-verify your account. Click below to update your info."
       >
@@ -155,6 +156,7 @@ export default function Screen7Stripe({ slug, instructor, onboarding, onAdvance 
         slug={slug}
         currentStep={STEP_KEYS.STRIPE_SUBMITTED}
         stepsCompleted={onboarding?.steps_completed}
+        onBack={onBack}
         title="Payment setup"
         subtitle="Payment setup in progress. Stripe may need additional info."
       >
@@ -191,6 +193,7 @@ export default function Screen7Stripe({ slug, instructor, onboarding, onAdvance 
         slug={slug}
         currentStep={STEP_KEYS.STRIPE_SUBMITTED}
         stepsCompleted={onboarding?.steps_completed}
+        onBack={onBack}
         title="Payment setup"
       >
         <p className="text-sm text-neutral-700">Payment setup submitted ✓</p>

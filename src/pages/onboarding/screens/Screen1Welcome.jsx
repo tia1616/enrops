@@ -1,115 +1,53 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../../../lib/supabase.js';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
-import { ensureBrowserSafeImage, extensionFor } from '../../../lib/heicConvert.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
-// Screen 1 — Welcome + Identity. Phone is required, photo is optional.
-// Photo: HEIC -> JPEG client-side via heic2any, then max 2MB post-conversion,
-// uploaded to private contractor-documents bucket before edge-function POST.
-
-const ALLOWED_PHOTO_TYPES = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-  'image/heif',
-]);
-const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
+// Screen 1 — Welcome + Identity. Phone is required; legal + preferred name
+// are pre-filled and editable. Real-photo upload was removed when the
+// avatar picker on the profile screen replaced it as the canonical photo
+// source for v1 (instructor portal v1 §3.2 amended spec).
 
 function phoneIsValid(s) {
   if (!s) return false;
   const digits = s.replace(/\D/g, '');
-  // US phone numbers: 10 digits, or 11 with leading 1.
   return digits.length === 10 || (digits.length === 11 && digits.startsWith('1'));
 }
 
-export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance }) {
+export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [firstName, setFirstName] = useState(instructor.first_name || '');
   const [lastName, setLastName] = useState(instructor.last_name || '');
   const [preferredName, setPreferredName] = useState(instructor.preferred_name || '');
   const [phone, setPhone] = useState(instructor.phone || '');
-  const [photoFile, setPhotoFile] = useState(null);
-  const [photoError, setPhotoError] = useState('');
   const [phoneError, setPhoneError] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  async function onPhotoChange(e) {
-    const file = e.target.files?.[0];
-    setPhotoError('');
-    if (!file) {
-      setPhotoFile(null);
-      return;
-    }
-    if (!ALLOWED_PHOTO_TYPES.has((file.type || '').toLowerCase())) {
-      // Some browsers don't tag .heic — fall back to extension.
-      const name = (file.name || '').toLowerCase();
-      if (!name.endsWith('.heic') && !name.endsWith('.heif')) {
-        setPhotoError('Photo must be JPG, PNG, WebP, or HEIC.');
-        setPhotoFile(null);
-        return;
-      }
-    }
-    try {
-      const safe = await ensureBrowserSafeImage(file);
-      if (safe.size > MAX_PHOTO_BYTES) {
-        setPhotoError('Photo must be 2MB or smaller.');
-        setPhotoFile(null);
-        return;
-      }
-      setPhotoFile(safe);
-    } catch (err) {
-      console.error('[Screen1] HEIC conversion failed', err);
-      setPhotoError("Couldn't process that image. Please try a different photo.");
-      setPhotoFile(null);
-    }
-  }
-
-  async function uploadPhoto(file) {
-    const ext = extensionFor(file);
-    const path = `${instructor.id}/photo_${Date.now()}.${ext}`;
-    const { error: upErr } = await supabase.storage
-      .from('contractor-documents')
-      .upload(path, file, { contentType: file.type, upsert: false });
-    if (upErr) throw upErr;
-    return path;
-  }
-
   async function handleSubmit(e) {
     e.preventDefault();
     if (busy) return;
-    let valid = true;
 
     if (!phone.trim()) {
       setPhoneError('Phone is required.');
-      valid = false;
-    } else if (!phoneIsValid(phone)) {
-      setPhoneError('Enter a valid phone number.');
-      valid = false;
-    } else {
-      setPhoneError('');
+      return;
     }
-    if (!valid) return;
+    if (!phoneIsValid(phone)) {
+      setPhoneError('Enter a valid phone number.');
+      return;
+    }
+    setPhoneError('');
 
     setBusy(true);
     setSubmitError('');
     try {
-      let photo_url = instructor.photo_url || null;
-      if (photoFile) {
-        photo_url = await uploadPhoto(photoFile);
-      }
-
       const { error } = await invokeOnboardingFn(
         'update-onboarding-step',
         {
           step_name: STEP_KEYS.WELCOME,
           step_data: {
             phone: phone.trim(),
-            photo_url,
             first_name: firstName.trim() || null,
             last_name: lastName.trim() || null,
             preferred_name: preferredName.trim(),
@@ -136,6 +74,7 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
       slug={slug}
       currentStep={STEP_KEYS.WELCOME}
       stepsCompleted={onboarding?.steps_completed}
+      onBack={onBack}
       title="Welcome to enrops"
       subtitle="Journey to STEAM is your client. enrops is the platform we use for paperwork, scheduling, communication, and payments. You will no longer use Gusto."
     >
@@ -182,22 +121,6 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
             placeholder="(503) 555-0123"
           />
           <FieldError>{phoneError}</FieldError>
-        </div>
-
-        <div className="mt-4">
-          <Label>Photo (optional)</Label>
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
-            onChange={onPhotoChange}
-            className="mt-1 block w-full text-sm text-neutral-700 file:mr-3 file:rounded-md file:border-0 file:bg-neutral-200 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-neutral-800 hover:file:bg-neutral-300"
-          />
-          {photoFile && (
-            <p className="mt-1 text-xs text-neutral-500">
-              {photoFile.name} · {(photoFile.size / 1024).toFixed(0)} KB
-            </p>
-          )}
-          <FieldError>{photoError}</FieldError>
         </div>
 
         <ScreenError>{submitError}</ScreenError>

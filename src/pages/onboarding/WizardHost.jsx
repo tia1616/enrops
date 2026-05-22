@@ -37,6 +37,18 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
       : STEP_KEYS.WELCOME;
   });
 
+  // Local back-nav: just shows the prior screen without writing to the DB.
+  // If the contractor edits and submits on the prior screen, that submit
+  // path overwrites; if they don't, they can advance again without any
+  // state churn. Disabled on Screen 1 (no prior) and on terminal-status
+  // completion (currentStep is null).
+  const onBack = useCallback(() => {
+    if (!currentStep) return;
+    const idx = stepIndex(currentStep);
+    if (idx <= 0) return;
+    setCurrentStep(STEP_ORDER[idx - 1]);
+  }, [currentStep]);
+
   const onAdvance = useCallback(async () => {
     // After any screen submits, re-read the onboarding row so we pick up
     // gate-check side effects (the edge function may have moved current_step
@@ -78,7 +90,9 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
     return <CompletionScreen slug={slug} onboarding={onboarding} />;
   }
 
-  const common = { slug, instructor, onboarding, onAdvance };
+  // Only expose onBack when there's a prior step to go to.
+  const canGoBack = stepIndex(currentStep) > 0;
+  const common = { slug, instructor, onboarding, onAdvance, onBack: canGoBack ? onBack : undefined };
   switch (currentStep) {
     case STEP_KEYS.WELCOME:
       return <Screen1Welcome {...common} />;

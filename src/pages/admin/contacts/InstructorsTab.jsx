@@ -339,6 +339,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
       <button
         type="button"
         onClick={onToggle}
+        title={expanded ? 'Click to collapse' : 'Click to see full details'}
         style={{
           display: 'flex',
           width: '100%',
@@ -354,7 +355,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
       >
         <PhotoThumb url={row.photo_url} name={displayName} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: INK, lineHeight: 1.3 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: INK, lineHeight: 1.3, textDecoration: 'underline', textDecorationColor: RULE, textDecorationThickness: 1, textUnderlineOffset: 3 }}>
             {displayName}
             {hasPreferred && legalName && (
               <span style={{ color: MUTED, marginLeft: 6, fontSize: 12, fontWeight: 400 }}>
@@ -398,7 +399,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
         >
           {status.replace(/_/g, ' ')}
         </span>
-        <span style={{ color: MUTED, fontSize: 12 }}>{expanded ? '▾' : '▸'}</span>
+        <span style={{ color: PLUM, fontSize: 14, fontWeight: 700 }}>{expanded ? '▾' : '▸'}</span>
       </button>
 
       {inviteState && (

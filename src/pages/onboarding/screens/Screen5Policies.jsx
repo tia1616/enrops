@@ -107,6 +107,7 @@ export default function Screen5Policies({ slug, instructor, onboarding, onAdvanc
       slug={slug}
       currentStep={STEP_KEYS.POLICIES_ACKNOWLEDGED}
       stepsCompleted={onboarding?.steps_completed}
+      onBack={onBack}
       title="Review policies"
       subtitle="Tap each to read, then check the box."
     >

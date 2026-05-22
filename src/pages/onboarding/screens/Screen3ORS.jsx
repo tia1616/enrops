@@ -118,6 +118,7 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance }) 
       slug={slug}
       currentStep={STEP_KEYS.ORS_CERTIFICATION}
       stepsCompleted={onboarding?.steps_completed}
+      onBack={onBack}
       title="Business eligibility"
       subtitle="Oregon law requires independent contractors to meet at least 3 of 5 criteria. Check each that applies and briefly describe how."
     >

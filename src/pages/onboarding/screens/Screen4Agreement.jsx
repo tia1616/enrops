@@ -169,6 +169,7 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
       slug={slug}
       currentStep={STEP_KEYS.AGREEMENT_SIGNED}
       stepsCompleted={onboarding?.steps_completed}
+      onBack={onBack}
       title="Contractor agreement"
       subtitle="Please read carefully. You'll confirm and sign at the bottom."
     >

@@ -138,6 +138,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
       slug={slug}
       currentStep={STEP_KEYS.ADDITIONAL_ACKS}
       stepsCompleted={onboarding?.steps_completed}
+      onBack={onBack}
       title="Additional acknowledgments"
     >
       {loadError ? (

@@ -12,6 +12,7 @@ export default function WizardLayout({
   subtitle,
   children,
   slug,
+  onBack,
 }) {
   const num = stepNumber(currentStep);
 
@@ -28,6 +29,15 @@ export default function WizardLayout({
         </div>
         <ProgressBar currentStep={currentStep} stepsCompleted={stepsCompleted} />
         <div className="mt-6 rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              className="mb-3 inline-flex items-center text-xs font-semibold text-neutral-500 hover:text-neutral-900"
+            >
+              ← Back
+            </button>
+          )}
           <h1 className="text-xl font-semibold text-neutral-900">{title}</h1>
           {subtitle && (
             <p className="mt-2 text-sm leading-relaxed text-neutral-600">{subtitle}</p>
