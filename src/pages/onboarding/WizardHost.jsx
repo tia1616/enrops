@@ -27,7 +27,7 @@ const TERMINAL_STATUSES = new Set([
   'payouts_disabled',
 ]);
 
-export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep }) {
+export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, onDismiss }) {
   const navigate = useNavigate();
   const [onboarding, setOnboarding] = useState(initialOnboarding);
   const [currentStep, setCurrentStep] = useState(() => {
@@ -87,7 +87,7 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
   }, [instructor.id, navigate, slug, currentStep]);
 
   if (!currentStep || TERMINAL_STATUSES.has(onboarding?.overall_status)) {
-    return <CompletionScreen slug={slug} onboarding={onboarding} />;
+    return <CompletionScreen slug={slug} onboarding={onboarding} onDismiss={onDismiss} />;
   }
 
   // Only expose onBack when there's a prior step to go to.

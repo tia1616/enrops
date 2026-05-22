@@ -9,8 +9,13 @@ import { Link } from 'react-router-dom';
 //
 // Other statuses (in_progress, declined, abandoned) are handled by the router
 // and never land here.
+//
+// onDismiss: when this screen is mounted inside the unified instructor portal
+// (same URL as the schedule view), clicking the CTA can't navigate via Link
+// because the URL is already the target. The parent instead passes onDismiss
+// to flip its phase state out of 'onboarding' so the schedule view renders.
 
-export default function CompletionScreen({ slug, onboarding }) {
+export default function CompletionScreen({ slug, onboarding, onDismiss }) {
   const status = onboarding?.overall_status;
   const portalHref = `/${slug}/instructor`;
 
@@ -38,12 +43,22 @@ export default function CompletionScreen({ slug, onboarding }) {
             </a>
           )}
 
-          <Link
-            to={portalHref}
-            className="mt-6 inline-block w-full rounded-md bg-neutral-900 px-4 py-2.5 text-center text-sm font-semibold text-white transition hover:bg-neutral-800"
-          >
-            {variant.cta}
-          </Link>
+          {onDismiss ? (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="mt-6 inline-block w-full rounded-md bg-neutral-900 px-4 py-2.5 text-center text-sm font-semibold text-white transition hover:bg-neutral-800"
+            >
+              {variant.cta}
+            </button>
+          ) : (
+            <Link
+              to={portalHref}
+              className="mt-6 inline-block w-full rounded-md bg-neutral-900 px-4 py-2.5 text-center text-sm font-semibold text-white transition hover:bg-neutral-800"
+            >
+              {variant.cta}
+            </Link>
+          )}
         </div>
       </div>
     </div>

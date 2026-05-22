@@ -540,6 +540,13 @@ export default function InstructorPortal() {
           instructor={{ ...instructor, id: instructor.id ?? instructor.instructor_id }}
           onboarding={onboarding}
           onComplete={refetchOnboardingStatus}
+          onDismiss={async () => {
+            // Pending_* and payouts_disabled statuses won't flip to 'complete',
+            // but the contractor still wants out of the completion card and
+            // into the schedule view. Load schedule data and switch phases.
+            await Promise.all([loadAssignments(instructor.id), loadCycles(instructor)]);
+            setPhase("ready");
+          }}
         />
       </Shell>
     );
