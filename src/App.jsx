@@ -21,6 +21,10 @@ import CurriculumReview from './pages/admin/curricula/CurriculumReview.jsx';
 import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
 import LocationsList from './pages/admin/LocationsList.jsx';
 import InstructorPortal from './pages/j2s/InstructorPortal.jsx';
+import ErrorPage from './pages/error/ErrorPage.jsx';
+import OnboardingRouter from './pages/onboarding/OnboardingRouter.jsx';
+import DeclinedPage from './pages/onboarding/DeclinedPage.jsx';
+import AbandonedPage from './pages/onboarding/AbandonedPage.jsx';
 import { CartProvider } from './context/CartContext.jsx';
 
 export default function App() {
@@ -46,6 +50,10 @@ export default function App() {
         <Route path="terms" element={<PolicyPage policyType="terms" orgSlug="j2s" />} />
       </Route>
       <Route path="/j2s/instructor" element={<InstructorPortal />} />
+      <Route path="/error" element={<ErrorPage />} />
+      <Route path="/:slug/onboarding" element={<OnboardingRouter />} />
+      <Route path="/:slug/onboarding/declined" element={<DeclinedPage />} />
+      <Route path="/:slug/onboarding/abandoned" element={<AbandonedPage />} />
       <Route path="/admin/login" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<AdminOverview />} />
