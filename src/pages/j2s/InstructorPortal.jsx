@@ -174,7 +174,7 @@ export default function InstructorPortal() {
     // assignments (matters once FA26 lands; SU26-only today).
     const { data, error: aErr } = await supabase
       .from("camp_assignments")
-      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, start_time, end_time, class_days, cycle_id, scheduling_cycles:cycle_id(status))")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, start_time, end_time, class_days, cycle_id, scheduling_cycles:cycle_id(status)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
       .eq("instructor_id", instructorId)
       .not("published_at", "is", null)
       .in("status", ["published", "change_requested", "confirmed"])
@@ -264,14 +264,33 @@ export default function InstructorPortal() {
     setPhase("login");
   }
 
+  // Chunk F: Accept + Request Change now route through respond-to-assignment.
+  // Direct UPDATE on camp_assignments is being removed once this UI ships —
+  // the edge function is the sole instructor write path going forward.
   async function handleAccept(assignment) {
     setActingOn(assignment.id);
+    setError("");
     try {
-      const { error: updErr } = await supabase
-        .from("camp_assignments")
-        .update({ status: "confirmed", instructor_response_at: new Date().toISOString() })
-        .eq("id", assignment.id);
-      if (updErr) throw updErr;
+      const { data, error: fnErr } = await supabase.functions.invoke(
+        "respond-to-assignment",
+        { body: { camp_assignment_id: assignment.id, action: "accept" } }
+      );
+      if (fnErr || data?.error) {
+        // already_confirmed is treated as success — admin or another tab
+        // beat us to it. Refetch and move on.
+        if (data?.error === "already_confirmed") {
+          await loadAssignments(instructor.instructor_id);
+          return;
+        }
+        if (data?.error === "assignment_closed" || data?.error === "forbidden") {
+          // Admin withdrew it (or reassigned). Quiet refetch so the stale
+          // card disappears with a small note.
+          setError("That assignment is no longer available — your coordinator may have made a change.");
+          await loadAssignments(instructor.instructor_id);
+          return;
+        }
+        throw new Error(data?.error || fnErr?.message || "Couldn't accept.");
+      }
       await loadAssignments(instructor.instructor_id);
     } catch (err) {
       setError(err.message ?? "Couldn't accept.");
@@ -283,24 +302,37 @@ export default function InstructorPortal() {
   async function submitChangeRequest() {
     if (!changeFor || !changeText.trim()) return;
     setActingOn(changeFor.id);
+    setError("");
     try {
-      const { error: updErr } = await supabase
-        .from("camp_assignments")
-        .update({
-          status: "change_requested",
-          change_request_message: changeText.trim(),
-          instructor_response_at: new Date().toISOString(),
-        })
-        .eq("id", changeFor.id);
-      if (updErr) throw updErr;
-      // Also append to the message thread for admin visibility.
-      await supabase.from("instructor_offer_messages").insert({
-        organization_id: instructor.organization_id,
-        camp_assignment_id: changeFor.id,
-        sender_role: "instructor",
-        sender_instructor_id: instructor.instructor_id,
-        message: changeText.trim(),
-      });
+      const { data, error: fnErr } = await supabase.functions.invoke(
+        "respond-to-assignment",
+        {
+          body: {
+            camp_assignment_id: changeFor.id,
+            action: "request_change",
+            message: changeText.trim(),
+          },
+        }
+      );
+      if (fnErr || data?.error) {
+        if (data?.error === "already_confirmed") {
+          // Stale tab — they confirmed in another tab, then tried to
+          // request change here. Treat as "actually you already accepted."
+          setError("You already accepted this — refresh and you'll see it confirmed.");
+          setChangeFor(null);
+          setChangeText("");
+          await loadAssignments(instructor.instructor_id);
+          return;
+        }
+        if (data?.error === "assignment_closed" || data?.error === "forbidden") {
+          setError("That assignment is no longer available — your coordinator may have made a change.");
+          setChangeFor(null);
+          setChangeText("");
+          await loadAssignments(instructor.instructor_id);
+          return;
+        }
+        throw new Error(data?.error || fnErr?.message || "Couldn't send your request.");
+      }
       setChangeFor(null);
       setChangeText("");
       await loadAssignments(instructor.instructor_id);
@@ -430,9 +462,13 @@ export default function InstructorPortal() {
 
   // ready
   const totalCount = assignments.length;
-  const pending = assignments.filter((a) => a.status === "published");
+  // Amended spec §2.1: 'published' and 'change_requested' both go in the
+  // "Needs your response" section. The change_requested cards retain their
+  // message-thread display and disable Request Change until admin replies.
+  const needsResponse = assignments.filter(
+    (a) => a.status === "published" || a.status === "change_requested"
+  );
   const accepted = assignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
-  const changeRequested = assignments.filter((a) => a.status === "change_requested");
 
   // Cycles that are open + the instructor hasn't filled out availability yet,
   // or has but might want to update. We surface a banner per cycle.
@@ -557,12 +593,13 @@ export default function InstructorPortal() {
         </div>
       )}
 
-      {pending.length > 0 && (
-        <Section title="To review">
-          {pending.map((a) => (
+      {needsResponse.length > 0 && (
+        <Section title="Needs your response">
+          {needsResponse.map((a) => (
             <AssignmentCard
               key={a.id}
               assignment={a}
+              messages={a.instructor_offer_messages || []}
               busy={actingOn === a.id}
               onAccept={() => handleAccept(a)}
               onRequestChange={() => { setChangeFor(a); setChangeText(""); }}
@@ -572,14 +609,8 @@ export default function InstructorPortal() {
       )}
 
       {accepted.length > 0 && (
-        <Section title="Accepted">
+        <Section title="Confirmed schedule">
           {accepted.map((a) => <AssignmentCard key={a.id} assignment={a} readOnly />)}
-        </Section>
-      )}
-
-      {changeRequested.length > 0 && (
-        <Section title="Change requested">
-          {changeRequested.map((a) => <AssignmentCard key={a.id} assignment={a} readOnly showChangeMessage />)}
         </Section>
       )}
 
@@ -723,7 +754,7 @@ function Section({ title, children }) {
   );
 }
 
-function AssignmentCard({ assignment, busy, onAccept, onRequestChange, readOnly, showChangeMessage }) {
+function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestChange, readOnly }) {
   const s = assignment.camp_sessions;
   if (!s) return null;
   const role = assignment.role === "developing" ? "Developing" : "Lead";
@@ -732,9 +763,24 @@ function AssignmentCard({ assignment, busy, onAccept, onRequestChange, readOnly,
     assignment.status === "change_requested" ? GOLD :
     PLUM;
   const statusLabel =
-    assignment.status === "confirmed" ? "✓ Accepted" :
-    assignment.status === "change_requested" ? "Change requested" :
-    "Awaiting response";
+    assignment.status === "confirmed" ? "Confirmed ✓" :
+    assignment.status === "change_requested" ? "Change requested — waiting on admin" :
+    "Awaiting your response";
+
+  // Per amended spec §4.4: when status is change_requested, look at the
+  // newest message in the thread. If it's from admin (sender_role='admin'),
+  // the instructor's "Request change" button re-enables — they can send
+  // another change request OR accept the original offer. If the newest
+  // message is the instructor's own (or there's no admin reply yet), the
+  // Request Change button is disabled.
+  const sortedMsgs = [...messages].sort(
+    (a, b) => new Date(b.created_at) - new Date(a.created_at)
+  );
+  const latestMsg = sortedMsgs[0];
+  const awaitingAdminReply =
+    assignment.status === "change_requested" &&
+    latestMsg?.sender_role === "instructor";
+  const requestChangeDisabled = busy || awaitingAdminReply;
 
   return (
     <div style={{
@@ -757,7 +803,7 @@ function AssignmentCard({ assignment, busy, onAccept, onRequestChange, readOnly,
             {s.location_name} · {titleCase(s.session_type)} {fmtTime(s.start_time)}–{fmtTime(s.end_time)}
           </div>
         </div>
-        <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap", textAlign: "right", maxWidth: 140 }}>
           {statusLabel}
         </span>
       </div>
@@ -768,15 +814,30 @@ function AssignmentCard({ assignment, busy, onAccept, onRequestChange, readOnly,
         </div>
       ) : null}
 
-      {showChangeMessage && assignment.change_request_message && (
-        <div style={{ fontSize: 13, color: INK, background: `${GOLD}1A`, border: `1px solid ${GOLD}`, padding: 8, borderRadius: 6, marginTop: 4 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Your message</div>
-          {assignment.change_request_message}
+      {/* Message thread renders on change_requested cards. Read-only on
+          instructor side; admin replies via offer-message-reply elsewhere. */}
+      {assignment.status === "change_requested" && messages.length > 0 && (
+        <div style={{ marginTop: 4, padding: 10, background: `${GOLD}10`, border: `1px solid ${GOLD}`, borderRadius: 6 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+            Messages
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {[...messages]
+              .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+              .map((m) => (
+                <div key={m.id} style={{ fontSize: 13, color: INK, lineHeight: 1.4 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: m.sender_role === "admin" ? PLUM : MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 6 }}>
+                    {m.sender_role === "admin" ? "Admin" : "You"}
+                  </span>
+                  {m.message}
+                </div>
+              ))}
+          </div>
         </div>
       )}
 
       {!readOnly && (
-        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
           <button
             type="button"
             onClick={onAccept}
@@ -799,7 +860,8 @@ function AssignmentCard({ assignment, busy, onAccept, onRequestChange, readOnly,
           <button
             type="button"
             onClick={onRequestChange}
-            disabled={busy}
+            disabled={requestChangeDisabled}
+            title={awaitingAdminReply ? "You already requested a change — wait for your coordinator to reply, then you can send another." : ""}
             style={{
               padding: "8px 14px",
               background: "transparent",
@@ -809,11 +871,11 @@ function AssignmentCard({ assignment, busy, onAccept, onRequestChange, readOnly,
               fontSize: 13,
               fontWeight: 500,
               fontFamily: "inherit",
-              cursor: busy ? "wait" : "pointer",
-              opacity: busy ? 0.6 : 1,
+              cursor: requestChangeDisabled ? "not-allowed" : "pointer",
+              opacity: requestChangeDisabled ? 0.5 : 1,
             }}
           >
-            Request change
+            {assignment.status === "change_requested" ? "Send another change request" : "Request change"}
           </button>
         </div>
       )}
