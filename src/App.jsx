@@ -20,6 +20,7 @@ import CurriculumExtracting from './pages/admin/curricula/CurriculumExtracting.j
 import CurriculumReview from './pages/admin/curricula/CurriculumReview.jsx';
 import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
 import LocationsList from './pages/admin/LocationsList.jsx';
+import AdminBackgroundCheckUpload from './pages/admin/contractors/AdminBackgroundCheckUpload.jsx';
 import InstructorPortal from './pages/j2s/InstructorPortal.jsx';
 import ErrorPage from './pages/error/ErrorPage.jsx';
 import OnboardingRouter from './pages/onboarding/OnboardingRouter.jsx';
@@ -66,6 +67,7 @@ export default function App() {
         <Route path="curricula/:id/edit" element={<CurriculumReview />} />
         <Route path="programs" element={<ProgramsCalendar />} />
         <Route path="locations" element={<LocationsList />} />
+        <Route path="contractors/background-check-upload" element={<AdminBackgroundCheckUpload />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
