@@ -36,6 +36,7 @@ type AssignmentRow = {
   role: string;
   status: string;
   distance_bonus_cents: number | null;
+  flags: string[] | null;
   deadline: string | null;
 };
 
@@ -186,7 +187,7 @@ serve(async (req: Request) => {
     const statusFilter = mode === 'send' ? ['confirmed'] : ['confirmed', 'published'];
     let assignmentsQuery = supabase
       .from('camp_assignments')
-      .select('id, camp_session_id, instructor_id, role, status, distance_bonus_cents, deadline')
+      .select('id, camp_session_id, instructor_id, role, status, distance_bonus_cents, flags, deadline')
       .in('status', statusFilter)
       .in('camp_session_id', (
         await supabase
@@ -404,9 +405,17 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
     if (!s) return '';
     const loc = s.location_id ? locationById.get(s.location_id) : undefined;
     const venue = renderVenueDetailsHtml(loc);
+    // location_override (instructor marked this region 'unavailable') is the
+    // only flag that carries a bonus today. Surface the WHY in the email so
+    // the instructor sees the bonus isn't arbitrary.
+    const hasOverride = Array.isArray(a.flags) && a.flags.includes('location_override');
+    const bonusReason = hasOverride
+      ? `<div style="margin-top:2px;font-size:12px;color:${MUTED};font-weight:400;">A hardship bonus because this is a location you marked unavailable. Thanks for covering it.</div>`
+      : '';
     const bonus = a.distance_bonus_cents ? `
       <div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">
         Includes a ${dollars(a.distance_bonus_cents)} distance bonus
+        ${bonusReason}
       </div>
     ` : '';
     const role = a.role === 'developing' ? '<span style="font-size:11px;color:' + MUTED + ';text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-left:6px;">Developing</span>' : '';
@@ -510,7 +519,11 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline, locati
     lines.push(`  Week ${s.week_num} · ${fmt(s.starts_on)} – ${fmt(s.ends_on)} · ${classDaysSummary(s.class_days)}`);
     lines.push(`  ${s.location_name ?? ''} · ${titleCase(s.session_type)} ${fmtTime(s.start_time)}–${fmtTime(s.end_time)}`);
     for (const v of renderVenueDetailsText(loc)) lines.push(v);
-    if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} distance bonus`);
+    if (a.distance_bonus_cents) {
+      const hasOverride = Array.isArray(a.flags) && a.flags.includes('location_override');
+      lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} distance bonus`);
+      if (hasOverride) lines.push(`  (A hardship bonus because this is a location you marked unavailable.)`);
+    }
     lines.push('');
   }
   lines.push(`Review and respond: ${portalUrl}`);

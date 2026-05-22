@@ -378,7 +378,7 @@ export default function Schedule() {
         sessionIds.length
           ? supabase
               .from("camp_assignments")
-              .select("id, camp_session_id, status, role, change_request_message, distance_bonus_cents, instructor_response_at, flagged_reason, email_sent_at, instructor:instructors(id, first_name, last_name, email)")
+              .select("id, camp_session_id, status, role, change_request_message, distance_bonus_cents, flags, instructor_response_at, flagged_reason, email_sent_at, instructor:instructors(id, first_name, last_name, email)")
               .in("camp_session_id", sessionIds)
           : Promise.resolve({ data: [], error: null }),
         supabase
@@ -418,6 +418,7 @@ export default function Schedule() {
         role: a.role,
         change_request_message: a.change_request_message ?? null,
         distance_bonus_cents: a.distance_bonus_cents ?? null,
+        flags: Array.isArray(a.flags) ? a.flags : [],
         instructor_response_at: a.instructor_response_at ?? null,
         flagged_reason: a.flagged_reason ?? null,
         email_sent_at: a.email_sent_at ?? null,
@@ -507,6 +508,7 @@ export default function Schedule() {
               role: payload.new.role,
               change_request_message: payload.new.change_request_message ?? null,
               distance_bonus_cents: payload.new.distance_bonus_cents ?? null,
+              flags: Array.isArray(payload.new.flags) ? payload.new.flags : [],
               instructor_response_at: payload.new.instructor_response_at ?? null,
               instructor_id: payload.new.instructor_id,
               // Realtime payloads don't include joined data — preserve our prior
@@ -2793,11 +2795,23 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
   // Survey-level "maybe" flag — only relevant before the instructor explicitly accepts the offer.
   // Once accepted, the survey uncertainty is moot, so we drop the ? badge.
   const tentative = !!assignment.instructor_needs_confirmation && !accepted;
+  // Matcher flags persisted on the row by compute_distance_bonus() trigger:
+  // location_override = instructor marked this region 'unavailable' (carries $50 bonus)
+  // location_low_pref = instructor marked this region 'not_preferred' (no bonus, but worth surfacing)
+  const flagsArr = Array.isArray(assignment.flags) ? assignment.flags : [];
+  const hasOverride = flagsArr.includes("location_override");
+  const hasLowPref = flagsArr.includes("location_low_pref");
+  const flagBadgeKind = hasOverride ? "override" : hasLowPref ? "low_pref" : null;
   const baseTitle = draggable ? "Click to reassign · drag to move" : "Click to reassign";
   const tentativeTitle = tentative
     ? `Tentative — survey unconfirmed${assignment.instructor_notes ? `: "${assignment.instructor_notes}"` : ""}`
     : "";
   const acceptedTitle = accepted ? "Accepted by instructor" : "";
+  const flagTitle = hasOverride
+    ? `Not-preferred / unavailable location — $${(assignment.distance_bonus_cents ?? 5000) / 100} hardship bonus added`
+    : hasLowPref
+    ? "Assigned to a not-preferred location"
+    : "";
 
   return (
     <span
@@ -2821,7 +2835,7 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
         cursor: onClick ? "pointer" : (draggable ? "grab" : "default"),
         userSelect: "none",
       }}
-      title={[baseTitle, acceptedTitle, tentativeTitle].filter(Boolean).join(" · ")}
+      title={[baseTitle, acceptedTitle, tentativeTitle, flagTitle].filter(Boolean).join(" · ")}
     >
       {draggable && <span aria-hidden="true" style={{ color: MUTED, fontSize: 10, lineHeight: 1 }}>⋮⋮</span>}
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{assignment.instructor_first}</span>
@@ -2862,6 +2876,25 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
             flexShrink: 0,
           }}
         >?</span>
+      )}
+      {flagBadgeKind && (
+        <span
+          aria-hidden="true"
+          style={{
+            fontSize: 9,
+            fontWeight: 800,
+            color: "#fff",
+            background: flagBadgeKind === "override" ? CORAL : GOLD,
+            borderRadius: "50%",
+            width: 13,
+            height: 13,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            lineHeight: 1,
+            flexShrink: 0,
+          }}
+        >{flagBadgeKind === "override" ? "$" : "!"}</span>
       )}
       {extraCount > 0 && <span style={{ color: MUTED }}>+{extraCount}</span>}
     </span>
