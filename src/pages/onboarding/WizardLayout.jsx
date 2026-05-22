@@ -50,19 +50,23 @@ export default function WizardLayout({
 }
 
 function ProgressBar({ currentStep, stepsCompleted }) {
+  // Three visual states, with the current step ringed so it's distinct even
+  // when the step has also been completed (a contractor revisiting via the
+  // Back button is on a step that's both 'current' and 'done').
   return (
     <div className="flex gap-1" role="list" aria-label="Onboarding progress">
       {STEP_ORDER.map((key, i) => {
         const done = Boolean(stepsCompleted?.[key]);
         const current = key === currentStep;
+        const ariaLabel = `Step ${i + 1} ${done ? 'complete' : 'upcoming'}${current ? ' (current)' : ''}`;
         return (
           <div
             key={key}
             role="listitem"
-            aria-label={`Step ${i + 1} ${done ? 'complete' : current ? 'current' : 'upcoming'}`}
+            aria-label={ariaLabel}
             className={`h-1.5 flex-1 rounded-full ${
-              done ? 'bg-neutral-900' : current ? 'bg-neutral-400' : 'bg-neutral-200'
-            }`}
+              done ? 'bg-neutral-900' : 'bg-neutral-200'
+            } ${current ? 'ring-2 ring-offset-2 ring-neutral-900/40' : ''}`}
           />
         );
       })}
