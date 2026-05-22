@@ -6,20 +6,14 @@ import { extensionFor } from '../../../lib/heicConvert.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
-// Screen 8 — Emergency Contact + Site/Availability/CPR preferences. Always
-// re-editable per spec. Sends an ordered emergency_contacts array to the
-// edge function; the function assigns is_primary from position (index 0 =
-// primary), so we never send is_primary from the client.
-
-const DAYS = [
-  ['monday', 'Mon'],
-  ['tuesday', 'Tue'],
-  ['wednesday', 'Wed'],
-  ['thursday', 'Thu'],
-  ['friday', 'Fri'],
-  ['saturday', 'Sat'],
-  ['sunday', 'Sun'],
-];
+// Screen 8 — Emergency Contact + Shirt size + CPR cert. Always re-editable
+// per spec. Sends an ordered emergency_contacts array to the edge function;
+// the function assigns is_primary from position (index 0 = primary), so we
+// never send is_primary from the client.
+//
+// Site/district preferences and day-of-week availability live in the
+// separate per-cycle availability survey, NOT in onboarding -- onboarding
+// is a one-time setup, availability changes term to term.
 
 const SHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
 
@@ -48,11 +42,6 @@ function contactFilled(c) {
 export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [contacts, setContacts] = useState([emptyContact()]);
-  const [districts, setDistricts] = useState([]); // canonical list from DB
-  const [selectedDistricts, setSelectedDistricts] = useState(() => new Set());
-  const [days, setDays] = useState(() =>
-    Object.fromEntries(DAYS.map(([k]) => [k, false]))
-  );
   const [cprFile, setCprFile] = useState(null);
   const [cprFileError, setCprFileError] = useState('');
   const [cprExpires, setCprExpires] = useState('');
@@ -62,22 +51,15 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
   const [cprExpiryError, setCprExpiryError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Initial load: existing contacts + district list + prefill prefs.
+  // Initial load: existing emergency contacts + prefill CPR/shirt fields.
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [{ data: existingContacts }, { data: locations }] = await Promise.all([
-        supabase
-          .from('contractor_emergency_contacts')
-          .select('contact_name, relationship, phone, is_primary')
-          .eq('instructor_id', instructor.id)
-          .order('is_primary', { ascending: false }),
-        supabase
-          .from('program_locations')
-          .select('district')
-          .eq('organization_id', instructor.organization_id)
-          .not('district', 'is', null),
-      ]);
+      const { data: existingContacts } = await supabase
+        .from('contractor_emergency_contacts')
+        .select('contact_name, relationship, phone, is_primary')
+        .eq('instructor_id', instructor.id)
+        .order('is_primary', { ascending: false });
       if (cancelled) return;
 
       if (existingContacts && existingContacts.length > 0) {
@@ -90,21 +72,6 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
         );
       }
 
-      const unique = Array.from(
-        new Set((locations || []).map((r) => r.district).filter(Boolean))
-      ).sort();
-      setDistricts(unique);
-
-      const sitePrefs = instructor.site_preferences?.districts || [];
-      setSelectedDistricts(new Set(sitePrefs));
-
-      const dayDefaults = instructor.availability?.day_defaults || {};
-      setDays((d) => {
-        const out = { ...d };
-        for (const k of Object.keys(out)) out[k] = Boolean(dayDefaults[k]);
-        return out;
-      });
-
       if (instructor.first_aid_cpr_expires_at) {
         setCprExpires(instructor.first_aid_cpr_expires_at);
       }
@@ -116,7 +83,7 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
     return () => {
       cancelled = true;
     };
-  }, [instructor.id, instructor.organization_id, instructor.site_preferences, instructor.availability, instructor.first_aid_cpr_expires_at, instructor.shirt_size]);
+  }, [instructor.id, instructor.first_aid_cpr_expires_at, instructor.shirt_size]);
 
   function setContact(i, field, value) {
     setContacts((arr) => arr.map((c, idx) => (idx === i ? { ...c, [field]: value } : c)));
@@ -127,14 +94,6 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
   }
   function removeContact(i) {
     setContacts((arr) => (arr.length <= 1 ? arr : arr.filter((_, idx) => idx !== i)));
-  }
-  function toggleDistrict(name) {
-    setSelectedDistricts((s) => {
-      const next = new Set(s);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
   }
 
   function onCprChange(e) {
@@ -217,8 +176,6 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
               relationship: c.relationship.trim(),
               phone: c.phone.trim(),
             })),
-            site_preferences: { districts: Array.from(selectedDistricts) },
-            availability: { day_defaults: days },
             first_aid_cpr_url,
             first_aid_cpr_expires_at: cprExpires || null,
             shirt_size: shirtSize,
@@ -279,55 +236,7 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
         </section>
 
         <section className="mt-6">
-          <SectionLabel>Site preferences</SectionLabel>
-          <p className="mb-2 text-xs text-neutral-500">Which areas are you available to work in?</p>
-          {districts.length === 0 ? (
-            <p className="text-sm text-neutral-500">Loading districts…</p>
-          ) : (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {districts.map((d) => (
-                <label key={d} className="flex items-center gap-2 text-sm text-neutral-800">
-                  <input
-                    type="checkbox"
-                    checked={selectedDistricts.has(d)}
-                    onChange={() => toggleDistrict(d)}
-                    className="h-4 w-4 rounded border-neutral-400"
-                  />
-                  {d}
-                </label>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="mt-6">
-          <SectionLabel>Availability</SectionLabel>
-          <p className="mb-2 text-xs text-neutral-500">Which days are you generally available?</p>
-          <div className="flex flex-wrap gap-2">
-            {DAYS.map(([key, label]) => (
-              <label
-                key={key}
-                className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${
-                  days[key]
-                    ? 'border-neutral-900 bg-neutral-900 text-white'
-                    : 'border-neutral-300 bg-white text-neutral-700'
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={days[key]}
-                  onChange={(e) => setDays((d) => ({ ...d, [key]: e.target.checked }))}
-                  className="sr-only"
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-        </section>
-
-        <section className="mt-6">
-          <SectionLabel>T-shirt size (optional)</SectionLabel>
-          <p className="mb-2 text-xs text-neutral-500">For J2S camp shirts and apparel.</p>
+          <SectionLabel>Shirt size (optional)</SectionLabel>
           <div className="flex flex-wrap gap-2">
             {SHIRT_SIZES.map((s) => (
               <label

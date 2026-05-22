@@ -7,8 +7,11 @@
 //   step_name = 'welcome'             — Screen 1: update phone + photo_url
 //   step_name = 'checkr_submitted'    — Screen 2: marker only (Function 9 makes the actual Checkr call)
 //   step_name = 'stripe_submitted'    — Screen 7: marker only, set ONLY on Stripe successful return
-//   step_name = 'emergency_and_prefs' — Screen 8: emergency contacts, site_preferences,
-//                                       availability, CPR cert. Runs the final gate check.
+//   step_name = 'emergency_and_prefs' — Screen 8: emergency contacts, CPR cert,
+//                                       shirt size. Runs the final gate check.
+//                                       (Site/district preferences + day-of-week
+//                                       availability are collected in the separate
+//                                       per-cycle availability survey, not here.)
 //
 // The Screen 8 handler is the largest: it deletes existing emergency contacts
 // (chunk 1 has a partial unique index that makes UPSERT awkward) and inserts
@@ -213,9 +216,11 @@ async function handleEmergencyAndPrefs(
     return { error: json({ error: 'contacts_insert_failed' }, 500) };
   }
 
-  // ─── site_preferences (districts), availability, CPR cert, shirt size ───
-  const sitePrefs = sanitizeSitePreferences(data.site_preferences);
-  const availability = sanitizeAvailability(data.availability);
+  // ─── CPR cert + shirt size ───
+  // Site/district preferences and day-of-week availability are intentionally
+  // not handled here -- they belong to the per-cycle availability survey,
+  // not to one-time onboarding. Ignore those fields silently if the client
+  // sends them.
   const cprUrl = sanitizeString(data.first_aid_cpr_url);
   const cprExpiresAt = sanitizeDate(data.first_aid_cpr_expires_at);
   const shirtSize = sanitizeShirtSize(data.shirt_size);
@@ -223,8 +228,6 @@ async function handleEmergencyAndPrefs(
   const instructorUpdates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
-  if (sitePrefs !== null) instructorUpdates.site_preferences = sitePrefs;
-  if (availability !== null) instructorUpdates.availability = availability;
   if (cprUrl !== null) instructorUpdates.first_aid_cpr_url = cprUrl;
   if (cprExpiresAt !== null) instructorUpdates.first_aid_cpr_expires_at = cprExpiresAt;
   // shirt_size is nullable; explicit empty string clears it.
@@ -266,16 +269,6 @@ function sanitizeDate(v: unknown): string | null {
   return t;
 }
 
-function sanitizeSitePreferences(v: unknown): { districts: string[] } | null {
-  if (!v || typeof v !== 'object') return null;
-  const obj = v as Record<string, unknown>;
-  const districts = Array.isArray(obj.districts) ? obj.districts : [];
-  const clean = districts
-    .map((d) => (typeof d === 'string' ? d.trim() : ''))
-    .filter(Boolean);
-  return { districts: clean };
-}
-
 const SHIRT_SIZES = new Set(['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL']);
 
 function sanitizeShirtSize(v: unknown): string | null {
@@ -285,16 +278,4 @@ function sanitizeShirtSize(v: unknown): string | null {
   // Reject anything not in the allowed set so the DB CHECK constraint never
   // throws on a typo from the client.
   return SHIRT_SIZES.has(t) ? t : null;
-}
-
-function sanitizeAvailability(v: unknown): { day_defaults: Record<string, boolean> } | null {
-  if (!v || typeof v !== 'object') return null;
-  const obj = v as Record<string, unknown>;
-  const dd = (obj.day_defaults ?? {}) as Record<string, unknown>;
-  const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-  const day_defaults: Record<string, boolean> = {};
-  for (const d of days) {
-    day_defaults[d] = dd[d] === true;
-  }
-  return { day_defaults };
 }
