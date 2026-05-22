@@ -54,10 +54,13 @@ serve(async (req: Request) => {
     if (!agreementVersion) return json({ error: 'agreement_version_required' }, 400);
     if (!typedSignature) return json({ error: 'typed_signature_required' }, 400);
 
-    // All 5 confirms must be true. Reject if any is missing or false.
+    // Required confirms must all be true. confirm_pay_structure was removed
+    // from Screen 4 (Pay Schedule is acknowledged separately on Screen 5);
+    // the DB column stays NOT NULL with default false, so the row will
+    // record false for it -- harmless, since the explicit acknowledgment
+    // lives in contractor_acknowledgments via submit-acknowledgments.
     const confirms = {
       confirm_read: body.confirm_read === true,
-      confirm_pay_structure: body.confirm_pay_structure === true,
       confirm_contractor_status: body.confirm_contractor_status === true,
       confirm_confidentiality_ip: body.confirm_confidentiality_ip === true,
       confirm_supersedes_prior: body.confirm_supersedes_prior === true,
@@ -121,7 +124,9 @@ serve(async (req: Request) => {
         ip_address: ip,
         user_agent: ua,
         confirm_read: confirms.confirm_read,
-        confirm_pay_structure: confirms.confirm_pay_structure,
+        // confirm_pay_structure left to its column default (false). Pay
+        // Schedule acknowledgment is captured separately in
+        // contractor_acknowledgments by submit-acknowledgments.
         confirm_contractor_status: confirms.confirm_contractor_status,
         confirm_confidentiality_ip: confirms.confirm_confidentiality_ip,
         confirm_supersedes_prior: confirms.confirm_supersedes_prior,

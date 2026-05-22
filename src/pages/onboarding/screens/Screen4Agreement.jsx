@@ -21,7 +21,9 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 
 const CONFIRMS = [
   { key: 'confirm_read', label: 'I have read this Agreement and the documents it incorporates' },
-  { key: 'confirm_pay_structure', label: 'I agree to the compensation and deduction structure' },
+  // confirm_pay_structure intentionally removed -- the Pay & Deductions
+  // policy is on Screen 5 and the contractor explicitly acknowledges it
+  // there. Asking on this screen put the agreement before the document.
   { key: 'confirm_contractor_status', label: 'I confirm my status as an independent contractor under ORS 670.600' },
   { key: 'confirm_confidentiality_ip', label: 'I reaffirm the confidentiality, IP, and non-solicitation obligations' },
   { key: 'confirm_supersedes_prior', label: 'My prior agreement with J2S is superseded' },
