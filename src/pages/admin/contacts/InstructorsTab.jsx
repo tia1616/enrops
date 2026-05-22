@@ -7,7 +7,6 @@
 // Each row is collapsed to a one-liner; click to expand and see everything.
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
 import { avatarUrl, isValidAvatarKey } from '../../../lib/avatars';
 
@@ -70,6 +69,8 @@ export default function InstructorsTab({ org }) {
   const [error, setError] = useState('');
   const [inviteBusyId, setInviteBusyId] = useState(null);
   const [inviteResult, setInviteResult] = useState({}); // { instructor_id: { type: 'ok'|'err', message } }
+  const [bgUploadOpen, setBgUploadOpen] = useState(false);
+  const [bgUploadInstructorId, setBgUploadInstructorId] = useState(null); // pre-selected when opened from a row
 
   useEffect(() => {
     if (!org?.id) return;
@@ -240,8 +241,9 @@ export default function InstructorsTab({ org }) {
           />
           Show inactive
         </label>
-        <Link
-          to="/admin/contractors/background-check-upload"
+        <button
+          type="button"
+          onClick={() => { setBgUploadInstructorId(null); setBgUploadOpen(true); }}
           style={{
             padding: '7px 12px',
             background: '#fff',
@@ -250,12 +252,13 @@ export default function InstructorsTab({ org }) {
             borderRadius: 6,
             fontSize: 12,
             fontWeight: 600,
-            textDecoration: 'none',
+            fontFamily: 'inherit',
+            cursor: 'pointer',
             whiteSpace: 'nowrap',
           }}
         >
-          Upload prior BG check →
-        </Link>
+          Upload prior BG check
+        </button>
       </div>
 
       <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
@@ -280,6 +283,20 @@ export default function InstructorsTab({ org }) {
           />
         ))}
       </div>
+
+      {bgUploadOpen && (
+        <BackgroundCheckUploadModal
+          instructors={rows}
+          initialInstructorId={bgUploadInstructorId}
+          onClose={() => { setBgUploadOpen(false); setBgUploadInstructorId(null); }}
+          onUploaded={(updatedRow) => {
+            // Reflect the new status on the row immediately.
+            if (updatedRow?.instructor_id) {
+              setStatusByInstructor((s) => ({ ...s, [updatedRow.instructor_id]: updatedRow }));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -621,4 +638,288 @@ function DetailItem({ label, children }) {
 
 function Em({ children }) {
   return <span style={{ color: MUTED, fontStyle: 'italic' }}>{children}</span>;
+}
+
+// Modal for the admin BG-check upload flow. Replaces the standalone
+// /admin/contractors/background-check-upload page so the affordance lives
+// inside the Instructors tab where it belongs IA-wise.
+function BackgroundCheckUploadModal({ instructors, initialInstructorId, onClose, onUploaded }) {
+  const [search, setSearch] = useState('');
+  const [selectedId, setSelectedId] = useState(initialInstructorId || '');
+  const [file, setFile] = useState(null);
+  const [fileError, setFileError] = useState('');
+  const [completedOn, setCompletedOn] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null); // { type: 'ok'|'err', message }
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return instructors;
+    return instructors.filter((i) => {
+      const blob = `${i.first_name ?? ''} ${i.last_name ?? ''} ${i.preferred_name ?? ''} ${i.email ?? ''}`.toLowerCase();
+      return blob.includes(q);
+    });
+  }, [instructors, search]);
+
+  const selected = instructors.find((i) => i.id === selectedId);
+
+  function onFileChange(e) {
+    const f = e.target.files?.[0];
+    setFileError('');
+    if (!f) { setFile(null); return; }
+    if (f.type !== 'application/pdf' && !f.name.toLowerCase().endsWith('.pdf')) {
+      setFileError('File must be a PDF.');
+      setFile(null);
+      return;
+    }
+    if (f.size > 10 * 1024 * 1024) {
+      setFileError('PDF must be 10MB or smaller.');
+      setFile(null);
+      return;
+    }
+    setFile(f);
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (busy || !selected || !file || !completedOn) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const path = `${selected.id}/bg_check_uploaded_${Date.now()}.pdf`;
+      const { error: upErr } = await supabase.storage
+        .from('contractor-documents')
+        .upload(path, file, { contentType: 'application/pdf', upsert: false });
+      if (upErr) {
+        setResult({ type: 'err', message: `Upload failed: ${upErr.message}` });
+        setBusy(false);
+        return;
+      }
+
+      const { data, error: fnErr } = await supabase.functions.invoke('admin-upload-background-check', {
+        body: { instructor_id: selected.id, file_url: path, completed_on: completedOn },
+      });
+      if (fnErr || data?.error) {
+        setResult({ type: 'err', message: data?.error || fnErr?.message || "Couldn't save the background check." });
+        setBusy(false);
+        return;
+      }
+
+      // Refresh this row's status so the badge flips immediately.
+      const { data: fresh } = await supabase
+        .from('contractor_onboarding_status')
+        .select('instructor_id, checkr_status, overall_status, background_check_source')
+        .eq('instructor_id', selected.id)
+        .single();
+      if (fresh && onUploaded) onUploaded(fresh);
+
+      setResult({ type: 'ok', message: `Cleared ${selected.first_name} ${selected.last_name} ✓` });
+      // Auto-close after a brief delay so user sees the success.
+      setTimeout(() => { onClose && onClose(); }, 1200);
+    } catch (err) {
+      console.error('[BgUploadModal] failed', err);
+      setResult({ type: 'err', message: 'Something went wrong. Please try again.' });
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.45)',
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        padding: '40px 16px',
+        zIndex: 100,
+        overflowY: 'auto',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#fff',
+          width: '100%',
+          maxWidth: 520,
+          border: `1px solid ${RULE}`,
+          borderRadius: 10,
+          padding: 22,
+          boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+          <div>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: INK, margin: 0 }}>Upload prior background check</h2>
+            <p style={{ color: MUTED, fontSize: 12, marginTop: 4, lineHeight: 1.4 }}>
+              Marks an instructor as cleared without going through Checkr — for contractors who already have a valid report on file.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ background: 'transparent', border: 'none', color: MUTED, fontSize: 18, cursor: 'pointer', padding: 0, lineHeight: 1 }}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.6, display: 'block', marginBottom: 4 }}>
+            Instructor
+          </label>
+          {selected ? (
+            <div style={{ padding: 10, background: CHALK, borderRadius: 6, fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>
+                <strong>{selected.first_name} {selected.last_name}</strong>
+                <span style={{ color: MUTED, marginLeft: 8 }}>{selected.email}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedId('')}
+                style={{ background: 'transparent', border: 'none', color: PLUM, fontSize: 11, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'inherit' }}
+              >
+                Change
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search name or email"
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                  background: '#fff',
+                  color: INK,
+                  boxSizing: 'border-box',
+                }}
+              />
+              <div style={{ maxHeight: 180, overflowY: 'auto', border: `1px solid ${RULE}`, borderRadius: 6, marginTop: 6 }}>
+                {filtered.length === 0 && (
+                  <div style={{ padding: 10, color: MUTED, fontSize: 12 }}>No matches.</div>
+                )}
+                {filtered.map((i) => (
+                  <button
+                    key={i.id}
+                    type="button"
+                    onClick={() => setSelectedId(i.id)}
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '6px 10px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderBottom: `1px solid ${RULE}`,
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      fontSize: 13,
+                    }}
+                  >
+                    {i.first_name} {i.last_name}
+                    <span style={{ color: MUTED, marginLeft: 6, fontSize: 11 }}>{i.email}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div style={{ marginTop: 14 }}>
+            <label style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.6, display: 'block', marginBottom: 4 }}>
+              Report PDF
+            </label>
+            <input type="file" accept="application/pdf,.pdf" onChange={onFileChange} style={{ fontSize: 13 }} />
+            {file && (
+              <div style={{ color: MUTED, fontSize: 11, marginTop: 4 }}>
+                {file.name} · {(file.size / 1024).toFixed(0)} KB
+              </div>
+            )}
+            {fileError && <div style={{ color: RED, fontSize: 11, marginTop: 4 }}>{fileError}</div>}
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <label style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.6, display: 'block', marginBottom: 4 }}>
+              Date of original check
+            </label>
+            <input
+              type="date"
+              value={completedOn}
+              onChange={(e) => setCompletedOn(e.target.value)}
+              style={{
+                padding: '8px 12px',
+                border: `1px solid ${RULE}`,
+                borderRadius: 6,
+                fontSize: 13,
+                fontFamily: 'inherit',
+                width: 180,
+              }}
+            />
+          </div>
+
+          {result && (
+            <div
+              style={{
+                marginTop: 14,
+                padding: 10,
+                background: result.type === 'ok' ? `${OK}1A` : `${RED}1A`,
+                color: result.type === 'ok' ? OK : RED,
+                borderRadius: 6,
+                fontSize: 13,
+              }}
+            >
+              {result.message}
+            </div>
+          )}
+
+          <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              style={{
+                padding: '8px 14px',
+                background: 'transparent',
+                color: MUTED,
+                border: `1px solid ${RULE}`,
+                borderRadius: 6,
+                fontSize: 13,
+                fontFamily: 'inherit',
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={busy || !selected || !file || !completedOn}
+              style={{
+                padding: '8px 16px',
+                background: PLUM,
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 13,
+                fontWeight: 600,
+                fontFamily: 'inherit',
+                cursor: busy ? 'wait' : 'pointer',
+                opacity: busy || !selected || !file || !completedOn ? 0.5 : 1,
+              }}
+            >
+              {busy ? 'Saving…' : 'Mark as cleared'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
 }
