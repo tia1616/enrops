@@ -185,7 +185,11 @@ serve(async (req: Request) => {
     }
 
     // 8. Generate magic link via Supabase auth admin.
-    const redirectTo = `https://enrops.com/${org.slug}/onboarding`;
+    // Unified instructor portal — onboarding lives inside /:slug/instructor.
+    // InstructorPortal detects unfinished onboarding and renders the wizard
+    // inline. Old /:slug/onboarding URL still routes through OnboardingRouter
+    // for backward compatibility with magic links generated before this change.
+    const redirectTo = `https://enrops.com/${org.slug}/instructor`;
     const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({
       type: 'magiclink',
       email: instructorRow.email,

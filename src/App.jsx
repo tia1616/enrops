@@ -52,7 +52,15 @@ export default function App() {
         <Route path="terms" element={<PolicyPage policyType="terms" orgSlug="j2s" />} />
       </Route>
       <Route path="/j2s/instructor" element={<InstructorPortal />} />
+      {/* /:slug/instructor for multi-tenant — currently J2S only but the
+          pattern is consistent with /:slug/onboarding so contractor-invite
+          can use the slug from the tenant's org row. */}
+      <Route path="/:slug/instructor" element={<InstructorPortal />} />
       <Route path="/error" element={<ErrorPage />} />
+      {/* Onboarding is now part of the instructor portal at /j2s/instructor.
+          /:slug/onboarding still resolves for backward compat with old magic
+          links — OnboardingRouter detects the unified state and either
+          renders inline or redirects to the portal. */}
       <Route path="/:slug/onboarding" element={<OnboardingRouter />} />
       <Route path="/:slug/onboarding/declined" element={<DeclinedPage />} />
       <Route path="/:slug/onboarding/abandoned" element={<AbandonedPage />} />

@@ -3,11 +3,13 @@
 // Accept or Request Change per camp. Class detail + My Availability are v2.
 
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { displayFirstName } from "../../lib/instructorName";
 import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import InstructorProfile from "./InstructorProfile.jsx";
+import WizardHost from "../onboarding/WizardHost.jsx";
 
 const PLUM = "#691D39";
 const GOLD = "#CFB12F";
@@ -47,20 +49,31 @@ function dollars(cents) {
 }
 
 export default function InstructorPortal() {
-  const [phase, setPhase] = useState("loading"); // loading | login | linking | ready | error
+  // Unified home for everything instructor: sign-in, onboarding wizard,
+  // schedule, profile. The phase machine routes between sub-states.
+  //
+  //   loading      -> initial render before session check
+  //   login        -> not signed in; render sign-in surface
+  //   linking      -> session exists; fetching instructor + onboarding rows
+  //   onboarding   -> overall_status indicates wizard needed; render WizardHost
+  //   ready        -> onboarded contractor; render schedule + profile
+  //   error        -> unrecoverable load failure
+  const navigate = useNavigate();
+  const [phase, setPhase] = useState("loading");
   const [email, setEmail] = useState("");
   const [sendBusy, setSendBusy] = useState(false);
   const [sendMsg, setSendMsg] = useState("");
   const [error, setError] = useState("");
   const [instructor, setInstructor] = useState(null);
+  const [onboarding, setOnboarding] = useState(null);
   const [assignments, setAssignments] = useState([]);
-  const [actingOn, setActingOn] = useState(null); // assignment id currently being acted on
-  const [changeFor, setChangeFor] = useState(null); // assignment object pending request-change message
+  const [actingOn, setActingOn] = useState(null);
+  const [changeFor, setChangeFor] = useState(null);
   const [changeText, setChangeText] = useState("");
-  const [impersonating, setImpersonating] = useState(null); // { asEmail, signedInEmail } when admin is viewing as instructor
-  const [cycles, setCycles] = useState([]); // open cycles for this org with survey status
-  const [editingCycleId, setEditingCycleId] = useState(null); // when set, render the availability form for this cycle
-  const [view, setView] = useState("schedule"); // "schedule" | "profile"
+  const [impersonating, setImpersonating] = useState(null);
+  const [cycles, setCycles] = useState([]);
+  const [editingCycleId, setEditingCycleId] = useState(null);
+  const [view, setView] = useState("schedule");
   const [showPast, setShowPast] = useState(false);
 
   useEffect(() => {
@@ -137,19 +150,75 @@ export default function InstructorPortal() {
         throw new Error(linkData?.error ?? linkErr?.message ?? "Couldn't find your instructor record.");
       }
       // Fetch the full instructor row for profile fields (RLS self-read).
-      // link-instructor only returns id/org/name/email; profile needs phone,
-      // photo_url, shirt_size, CPR, etc.
       const { data: full } = await supabase
         .from("instructors")
-        .select("id, first_name, last_name, preferred_name, email, phone, photo_url, shirt_size, first_aid_cpr_url, first_aid_cpr_expires_at, contractor_tier")
+        .select("id, first_name, last_name, preferred_name, email, phone, photo_url, shirt_size, first_aid_cpr_url, first_aid_cpr_expires_at, contractor_tier, organization_id")
         .eq("id", linkData.instructor_id)
         .maybeSingle();
-      setInstructor({ ...linkData, ...(full ?? {}) });
+      const fullInstructor = { ...linkData, ...(full ?? {}) };
+      setInstructor(fullInstructor);
+
+      // Check onboarding status. If they're an unfinished contractor invite,
+      // render the wizard inline instead of the schedule view.
+      const { data: onboardingRow } = await supabase
+        .from("contractor_onboarding_status")
+        .select("overall_status, current_step, steps_completed, checkr_status, stripe_connect_status, stripe_payouts_enabled, stripe_connect_account_id")
+        .eq("instructor_id", linkData.instructor_id)
+        .maybeSingle();
+
+      if (onboardingRow?.overall_status === "declined") {
+        navigate(`/j2s/onboarding/declined`, { replace: true });
+        return;
+      }
+      if (onboardingRow?.overall_status === "abandoned") {
+        navigate(`/j2s/onboarding/abandoned`, { replace: true });
+        return;
+      }
+
+      // Statuses that render the wizard or its completion variant:
+      // invited, in_progress, pending_background_check, pending_stripe,
+      // payouts_disabled. The wizard's CompletionScreen handles the
+      // pending_* and payouts_disabled states. 'complete' falls through to
+      // the schedule view.
+      const wizardStatuses = new Set([
+        "invited",
+        "in_progress",
+        "pending_background_check",
+        "pending_stripe",
+        "payouts_disabled",
+      ]);
+      if (onboardingRow && wizardStatuses.has(onboardingRow.overall_status)) {
+        setOnboarding(onboardingRow);
+        setPhase("onboarding");
+        return;
+      }
+
+      // No onboarding row OR overall_status='complete' OR 'not_invited':
+      // they're a regular onboarded instructor; render the schedule.
       await Promise.all([loadAssignments(linkData.instructor_id), loadCycles(linkData)]);
       setPhase("ready");
     } catch (err) {
       setError(err.message ?? "Couldn't link your account.");
       setPhase("error");
+    }
+  }
+
+  // Called when the wizard completes a step or status flips. Re-read
+  // onboarding so phase can flip to 'ready' (showing the schedule) if
+  // overall_status is now 'complete'.
+  async function refetchOnboardingStatus() {
+    if (!instructor?.id) return;
+    const { data: row } = await supabase
+      .from("contractor_onboarding_status")
+      .select("overall_status, current_step, steps_completed, checkr_status, stripe_connect_status, stripe_payouts_enabled, stripe_connect_account_id")
+      .eq("instructor_id", instructor.id)
+      .maybeSingle();
+    if (!row) return;
+    setOnboarding(row);
+    if (row.overall_status === "complete") {
+      // Drop into the schedule view.
+      await Promise.all([loadAssignments(instructor.id), loadCycles(instructor)]);
+      setPhase("ready");
     }
   }
 
@@ -456,6 +525,22 @@ export default function InstructorPortal() {
             Sign out and try again
           </button>
         </div>
+      </Shell>
+    );
+  }
+
+  // Wizard inline — unfinished contractor onboarding lives at this same
+  // URL so it's one home for everything instructor-side. WizardHost dispatches
+  // to the right screen (or the completion variant for pending_* statuses).
+  if (phase === "onboarding") {
+    return (
+      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+        <WizardHost
+          slug="j2s"
+          instructor={{ ...instructor, id: instructor.id ?? instructor.instructor_id }}
+          onboarding={onboarding}
+          onComplete={refetchOnboardingStatus}
+        />
       </Shell>
     );
   }
