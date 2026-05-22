@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
+import { displayFirstName } from "../../lib/instructorName";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 
 const PLUM = "#691D39";
@@ -79,7 +80,7 @@ export default function InstructorPortal() {
           setPhase("linking");
           const { data: target, error: targetErr } = await supabase
             .from("instructors")
-            .select("id, organization_id, first_name, last_name, email")
+            .select("id, organization_id, first_name, last_name, preferred_name, email")
             .ilike("email", asEmail)
             .eq("is_active", true)
             .maybeSingle();
@@ -94,6 +95,7 @@ export default function InstructorPortal() {
             organization_id: target.organization_id,
             first_name: target.first_name,
             last_name: target.last_name,
+            preferred_name: target.preferred_name,
           });
           setImpersonating({ asEmail: target.email, signedInEmail: session.user.email });
           const targetInst = {
@@ -101,6 +103,7 @@ export default function InstructorPortal() {
             organization_id: target.organization_id,
             first_name: target.first_name,
             last_name: target.last_name,
+            preferred_name: target.preferred_name,
           };
           await Promise.all([loadAssignments(target.id), loadCycles(targetInst)]);
           setPhase("ready");
@@ -406,7 +409,7 @@ export default function InstructorPortal() {
   // While editing availability for a cycle, hide the assignment list entirely.
   if (editingCycle) {
     return (
-      <Shell instructorName={instructor.first_name} onSignOut={signOut}>
+      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         {impersonating && (
           <div style={{
             background: `${GOLD}1F`,
@@ -435,7 +438,7 @@ export default function InstructorPortal() {
   }
 
   return (
-    <Shell instructorName={instructor.first_name} onSignOut={signOut}>
+    <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
       {impersonating && (
         <div style={{
           background: `${GOLD}1F`,
@@ -452,7 +455,7 @@ export default function InstructorPortal() {
       )}
       <header style={{ marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: INK, letterSpacing: -0.3 }}>
-          Hi {instructor.first_name ?? "there"} 👋
+          Hi {displayFirstName(instructor)} 👋
         </h1>
         <p style={{ color: MUTED, margin: "4px 0 0", fontSize: 14 }}>
           You have {totalCount} camp{totalCount === 1 ? "" : "s"} on your schedule

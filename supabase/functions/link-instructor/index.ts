@@ -37,7 +37,7 @@ serve(async (req: Request) => {
 
     const { data: instructor, error: lookupErr } = await supabase
       .from('instructors')
-      .select('id, organization_id, auth_user_id, first_name, last_name, email, is_active')
+      .select('id, organization_id, auth_user_id, first_name, last_name, preferred_name, email, is_active')
       .ilike('email', email)
       .eq('is_active', true)
       .maybeSingle();
@@ -59,6 +59,7 @@ serve(async (req: Request) => {
       organization_id: instructor.organization_id,
       first_name: instructor.first_name,
       last_name: instructor.last_name,
+      preferred_name: instructor.preferred_name,
     });
   } catch (err: any) {
     console.error('link-instructor fatal:', err);

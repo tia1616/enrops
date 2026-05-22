@@ -66,7 +66,7 @@ type LocationDetails = {
   notes: string | null;
 };
 
-type InstructorRow = { id: string; first_name: string | null; last_name: string | null; email: string | null };
+type InstructorRow = { id: string; first_name: string | null; last_name: string | null; preferred_name: string | null; email: string | null };
 
 type Cycle = { id: string; name: string; cycle_type: string | null; starts_on: string | null; ends_on: string | null; organization_id: string };
 
@@ -231,7 +231,7 @@ serve(async (req: Request) => {
 
     const { data: instructors } = await supabase
       .from('instructors')
-      .select('id, first_name, last_name, email')
+      .select('id, first_name, last_name, preferred_name, email')
       .in('id', instructorIds);
     const instructorById = new Map<string, InstructorRow>((instructors ?? []).map((i) => [i.id, i as InstructorRow]));
 
@@ -396,7 +396,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
   locationById: Map<string, LocationDetails>;
 }) {
   const primary = branding.primary_color ?? DEFAULT_PRIMARY;
-  const firstName = instructor.first_name ?? 'there';
+  const firstName = instructor.preferred_name ?? instructor.first_name ?? 'there';
   const campCount = camps.length;
   const cycleRange = (cycle.starts_on && cycle.ends_on) ? `${fmt(cycle.starts_on)} – ${fmt(cycle.ends_on)}` : '';
 
@@ -491,7 +491,7 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline, locati
   deadline: string | null;
   locationById: Map<string, LocationDetails>;
 }) {
-  const firstName = instructor.first_name ?? 'there';
+  const firstName = instructor.preferred_name ?? instructor.first_name ?? 'there';
   const cycleRange = (cycle.starts_on && cycle.ends_on) ? ` (${fmt(cycle.starts_on)} – ${fmt(cycle.ends_on)})` : '';
   const lines: string[] = [];
   lines.push(`Hi ${firstName},`);
