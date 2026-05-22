@@ -43,18 +43,27 @@ serve(async (req: Request) => {
 
     const documentKey = body.document_key?.trim();
     const documentVersion = body.document_version?.trim();
-    if (!documentKey || !documentVersion) {
-      return json({ error: 'document_key_and_version_required' }, 400);
+    if (!documentKey) {
+      return json({ error: 'document_key_required' }, 400);
     }
 
     const supabase = adminClient();
-    const { data: doc, error: docErr } = await supabase
+    // If document_version is provided, fetch that exact version. If not,
+    // fetch the most recent row for the (org, document_key) pair. Today the
+    // table has exactly one version per key so this trivially returns it;
+    // when we add a v2 alongside a v1, the latest-created wins. (We can
+    // swap to an explicit "active" flag if/when versioned drafts are needed.)
+    let query = supabase
       .from('legal_documents')
       .select('title, body_text, document_version')
       .eq('organization_id', me.organization_id)
-      .eq('document_key', documentKey)
-      .eq('document_version', documentVersion)
-      .maybeSingle();
+      .eq('document_key', documentKey);
+    if (documentVersion) {
+      query = query.eq('document_version', documentVersion);
+    } else {
+      query = query.order('created_at', { ascending: false }).limit(1);
+    }
+    const { data: doc, error: docErr } = await query.maybeSingle();
 
     if (docErr) {
       console.error('legal_documents lookup error:', docErr);
