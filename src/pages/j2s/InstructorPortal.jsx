@@ -5,7 +5,9 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { displayFirstName } from "../../lib/instructorName";
+import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
+import InstructorProfile from "./InstructorProfile.jsx";
 
 const PLUM = "#691D39";
 const GOLD = "#CFB12F";
@@ -58,6 +60,7 @@ export default function InstructorPortal() {
   const [impersonating, setImpersonating] = useState(null); // { asEmail, signedInEmail } when admin is viewing as instructor
   const [cycles, setCycles] = useState([]); // open cycles for this org with survey status
   const [editingCycleId, setEditingCycleId] = useState(null); // when set, render the availability form for this cycle
+  const [view, setView] = useState("schedule"); // "schedule" | "profile"
 
   useEffect(() => {
     let mounted = true;
@@ -132,7 +135,15 @@ export default function InstructorPortal() {
       if (linkErr || linkData?.error) {
         throw new Error(linkData?.error ?? linkErr?.message ?? "Couldn't find your instructor record.");
       }
-      setInstructor(linkData);
+      // Fetch the full instructor row for profile fields (RLS self-read).
+      // link-instructor only returns id/org/name/email; profile needs phone,
+      // photo_url, shirt_size, CPR, etc.
+      const { data: full } = await supabase
+        .from("instructors")
+        .select("id, first_name, last_name, preferred_name, email, phone, photo_url, shirt_size, first_aid_cpr_url, first_aid_cpr_expires_at, contractor_tier")
+        .eq("id", linkData.instructor_id)
+        .maybeSingle();
+      setInstructor({ ...linkData, ...(full ?? {}) });
       await Promise.all([loadAssignments(linkData.instructor_id), loadCycles(linkData)]);
       setPhase("ready");
     } catch (err) {
@@ -141,15 +152,38 @@ export default function InstructorPortal() {
     }
   }
 
+  // Re-fetch the instructor row (used after Profile saves changes so the
+  // schedule view reflects updated avatar / preferred name without a full
+  // page reload).
+  async function refetchInstructor() {
+    if (!instructor?.instructor_id && !instructor?.id) return;
+    const id = instructor.instructor_id ?? instructor.id;
+    const { data: full } = await supabase
+      .from("instructors")
+      .select("id, first_name, last_name, preferred_name, email, phone, photo_url, shirt_size, first_aid_cpr_url, first_aid_cpr_expires_at, contractor_tier")
+      .eq("id", id)
+      .maybeSingle();
+    if (full) setInstructor((cur) => ({ ...cur, ...full }));
+  }
+
   async function loadAssignments(instructorId) {
+    // Per amended spec §2.2: filter to active cycles + non-terminal statuses.
+    // `published_at IS NOT NULL` already excludes 'proposed'; we additionally
+    // exclude 'withdrawn'/'declined' so admin-removed rows don't linger on
+    // the instructor's schedule. Cycle filter excludes archived prior-term
+    // assignments (matters once FA26 lands; SU26-only today).
     const { data, error: aErr } = await supabase
       .from("camp_assignments")
-      .select("id, status, role, distance_bonus_cents, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, start_time, end_time, class_days)")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, start_time, end_time, class_days, cycle_id, scheduling_cycles:cycle_id(status))")
       .eq("instructor_id", instructorId)
       .not("published_at", "is", null)
+      .in("status", ["published", "change_requested", "confirmed"])
       .order("camp_sessions(starts_on)", { ascending: true });
     if (aErr) throw aErr;
-    setAssignments(data ?? []);
+    const filtered = (data ?? []).filter(
+      (a) => a.camp_sessions?.scheduling_cycles?.status !== "archived"
+    );
+    setAssignments(filtered);
   }
 
   // Load any open cycles (not archived) for this instructor's org plus a flag
@@ -437,6 +471,18 @@ export default function InstructorPortal() {
     );
   }
 
+  if (view === "profile") {
+    return (
+      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+        <InstructorProfile
+          instructor={{ ...instructor, id: instructor.id ?? instructor.instructor_id }}
+          onBack={() => setView("schedule")}
+          onSaved={refetchInstructor}
+        />
+      </Shell>
+    );
+  }
+
   return (
     <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
       {impersonating && (
@@ -453,14 +499,44 @@ export default function InstructorPortal() {
           <strong>Admin preview</strong> — you're signed in as <em>{impersonating.signedInEmail}</em> and viewing <em>{impersonating.asEmail}</em>'s portal. Accept and Request change actions will fire on this instructor's behalf.
         </div>
       )}
-      <header style={{ marginBottom: 18 }}>
-        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: INK, letterSpacing: -0.3 }}>
-          Hi {displayFirstName(instructor)} 👋
-        </h1>
-        <p style={{ color: MUTED, margin: "4px 0 0", fontSize: 14 }}>
-          You have {totalCount} camp{totalCount === 1 ? "" : "s"} on your schedule
-          {pending.length > 0 && ` · ${pending.length} awaiting your response`}.
-        </p>
+      <header style={{ marginBottom: 18, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+          {instructor.photo_url && (
+            <img
+              src={avatarUrl(instructor.photo_url)}
+              alt=""
+              style={{ width: 44, height: 44, borderRadius: "50%", flexShrink: 0 }}
+            />
+          )}
+          <div style={{ minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: INK, letterSpacing: -0.3 }}>
+              Hi {displayFirstName(instructor)} 👋
+            </h1>
+            <p style={{ color: MUTED, margin: "4px 0 0", fontSize: 14 }}>
+              You have {totalCount} camp{totalCount === 1 ? "" : "s"} on your schedule
+              {pending.length > 0 && ` · ${pending.length} awaiting your response`}.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setView("profile")}
+          style={{
+            background: "transparent",
+            border: `1px solid ${PLUM}`,
+            color: PLUM,
+            borderRadius: 6,
+            padding: "6px 12px",
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: "inherit",
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+          }}
+        >
+          My profile →
+        </button>
       </header>
 
       {error && (

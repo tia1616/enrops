@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
+import { avatarUrl, isValidAvatarKey } from '../../../lib/avatars';
 
 const PLUM = '#691D39';
 const GOLD = '#CFB12F';
@@ -551,7 +552,9 @@ function InstructorDetail({ row, age }) {
 }
 
 function PhotoThumb({ url, name }) {
-  const [signedUrl, setSignedUrl] = useState(null);
+  // instructors.photo_url stores an avatar key (e.g. "bottts-1") since
+  // portal v1, not a URL. Resolve via avatarUrl(). Falls back to initials
+  // if the key is missing/invalid (instructor hasn't picked yet).
   const initials = (name ?? '?')
     .split(/\s+/)
     .map((p) => p[0])
@@ -559,28 +562,10 @@ function PhotoThumb({ url, name }) {
     .join('')
     .toUpperCase();
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!url) {
-      setSignedUrl(null);
-      return;
-    }
-    supabase.storage
-      .from('contractor-documents')
-      .createSignedUrl(url, 60 * 60)
-      .then(({ data }) => {
-        if (!cancelled) setSignedUrl(data?.signedUrl ?? null);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [url]);
-
-  if (signedUrl) {
+  if (isValidAvatarKey(url)) {
     return (
       <img
-        src={signedUrl}
+        src={avatarUrl(url)}
         alt=""
         style={{
           width: 40,
