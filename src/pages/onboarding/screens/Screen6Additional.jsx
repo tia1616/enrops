@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { fetchLegalDocument } from '../../../lib/legalDoc.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
+import { linkifyText } from '../../../lib/linkifyText.jsx';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
 // Screen 6 — Additional Acknowledgments. Three documents, but the
@@ -154,7 +155,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
               <div className="mt-2 text-sm leading-relaxed text-neutral-800">
                 {(docs[MANDATORY_KEY].body_text || '').split(/\n\s*\n/).map((para, i) => (
                   <p key={i} className="mb-2 whitespace-pre-wrap">
-                    {para}
+                    {linkifyText(para)}
                   </p>
                 ))}
               </div>
@@ -245,7 +246,7 @@ function MultiAckAccordion({
           <div className="max-h-[40vh] overflow-y-auto text-sm leading-relaxed text-neutral-800">
             {(bodyText || '').split(/\n\s*\n/).map((para, i) => (
               <p key={i} className="mb-2 whitespace-pre-wrap">
-                {para}
+                {linkifyText(para)}
               </p>
             ))}
           </div>
