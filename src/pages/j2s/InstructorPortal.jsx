@@ -553,12 +553,12 @@ export default function InstructorPortal() {
   }
 
   // ready
-  const totalCount = currentAssignments.length;
   // Split current (cycle not archived) vs past (cycle archived).
   // Within current: needsResponse (published/change_requested) vs confirmed.
   const isArchived = (a) => a.camp_sessions?.scheduling_cycles?.status === "archived";
   const currentAssignments = assignments.filter((a) => !isArchived(a));
   const pastAssignments = assignments.filter(isArchived);
+  const totalCount = currentAssignments.length;
   const needsResponse = currentAssignments.filter(
     (a) => a.status === "published" || a.status === "change_requested"
   );
