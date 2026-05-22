@@ -38,7 +38,7 @@ const VEHICLE_ACKS = [
   { key: 'vehicle_no_transport_students', label: 'I will not transport students in my vehicle' },
 ];
 
-export default function Screen6Additional({ slug, instructor, onboarding, onAdvance }) {
+export default function Screen6Additional({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [docs, setDocs] = useState({});
   const [loadError, setLoadError] = useState('');

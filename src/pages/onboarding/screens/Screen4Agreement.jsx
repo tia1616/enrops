@@ -27,7 +27,7 @@ const CONFIRMS = [
   { key: 'confirm_supersedes_prior', label: 'My prior agreement with J2S is superseded' },
 ];
 
-export default function Screen4Agreement({ slug, instructor, onboarding, onAdvance }) {
+export default function Screen4Agreement({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [docState, setDocState] = useState({ phase: 'loading' });
   const [confirms, setConfirms] = useState(() =>

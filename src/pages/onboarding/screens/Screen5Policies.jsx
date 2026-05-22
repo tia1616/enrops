@@ -15,7 +15,7 @@ const DOCS = [
   { key: 'code_of_conduct', ack: 'I acknowledge I have received and read the Code of Conduct' },
 ];
 
-export default function Screen5Policies({ slug, instructor, onboarding, onAdvance }) {
+export default function Screen5Policies({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [docs, setDocs] = useState({}); // { key: { title, body_text, version } }
   const [loadError, setLoadError] = useState('');

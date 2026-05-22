@@ -24,7 +24,7 @@ const STATUS_LABEL = {
   consider: 'consider',
 };
 
-export default function Screen2BackgroundCheck({ slug, instructor, onboarding, onAdvance }) {
+export default function Screen2BackgroundCheck({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [submitError, setSubmitError] = useState('');

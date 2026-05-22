@@ -65,9 +65,13 @@ export default function OnboardingRouter() {
       const { data: sessionRes } = await supabase.auth.getSession();
       const session = sessionRes?.session;
       if (!session?.user) {
-        // No session — back to the instructor login. Preserve where they
-        // were headed so post-login redirect can return them.
-        navigate('/j2s/instructor', { replace: true });
+        // No session — show the inline sign-in panel right here on the
+        // onboarding URL. Google OAuth + magic-link-by-email options.
+        // Keeps the user on /:slug/onboarding so the post-auth redirect
+        // takes them straight into the wizard.
+        if (!cancelled) {
+          setState({ phase: 'signin', urlSlug: urlSlug ?? null });
+        }
         return;
       }
 
@@ -184,6 +188,10 @@ export default function OnboardingRouter() {
     );
   }
 
+  if (state.phase === 'signin') {
+    return <SignInPanel slug={state.urlSlug} />;
+  }
+
   return (
     <WizardHost
       slug={state.slug}
@@ -191,5 +199,113 @@ export default function OnboardingRouter() {
       onboarding={state.onboarding}
       initialStep={state.initialStep}
     />
+  );
+}
+
+// Inline sign-in surface shown when someone hits /:slug/onboarding without
+// an active session. Mirrors the InstructorPortal login UI: Google OAuth as
+// the primary CTA, magic-link-by-email as the fallback. After successful
+// auth the redirect lands back at the same /:slug/onboarding URL and
+// OnboardingRouter resolves into the wizard.
+function SignInPanel({ slug }) {
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [linkSent, setLinkSent] = useState(false);
+  const [error, setError] = useState('');
+
+  const redirectTo = slug
+    ? `${window.location.origin}/${slug}/onboarding`
+    : `${window.location.origin}${window.location.pathname}`;
+
+  async function handleGoogle() {
+    setError('');
+    setBusy(true);
+    const { error: err } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo },
+    });
+    if (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
+  async function handleMagic(e) {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setError('');
+    setBusy(true);
+    const { error: err } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { emailRedirectTo: redirectTo },
+    });
+    setBusy(false);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    setLinkSent(true);
+  }
+
+  return (
+    <div className="min-h-screen bg-neutral-50 px-4 py-16">
+      <div className="mx-auto max-w-md rounded-lg border border-neutral-200 bg-white p-7 shadow-sm">
+        <div className="mb-1 text-xs font-semibold uppercase tracking-widest text-neutral-400">
+          {slug ? `${slug} · onboarding` : 'onboarding'}
+        </div>
+        <h1 className="text-xl font-semibold text-neutral-900">Sign in to continue</h1>
+        <p className="mt-2 text-sm leading-relaxed text-neutral-600">
+          Use the same email your invite was sent to. Google sign-in is fastest if your work email is a Google account.
+        </p>
+
+        <button
+          type="button"
+          onClick={handleGoogle}
+          disabled={busy}
+          className="mt-5 flex w-full items-center justify-center gap-2 rounded-md border border-neutral-300 bg-white px-4 py-2.5 text-sm font-semibold text-neutral-800 transition hover:bg-neutral-50 disabled:opacity-60"
+        >
+          <span aria-hidden="true">G</span>
+          Continue with Google
+        </button>
+
+        <div className="my-5 flex items-center gap-3 text-xs text-neutral-400">
+          <span className="h-px flex-1 bg-neutral-200" />
+          OR
+          <span className="h-px flex-1 bg-neutral-200" />
+        </div>
+
+        {linkSent ? (
+          <div className="rounded-md bg-green-50 p-3 text-sm text-green-900">
+            Check your inbox — we sent a sign-in link to <strong>{email}</strong>.
+          </div>
+        ) : (
+          <form onSubmit={handleMagic}>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              Email
+            </label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+              placeholder="you@example.com"
+              className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={busy || !email}
+              className="mt-3 w-full rounded-md bg-neutral-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:opacity-60"
+            >
+              {busy ? 'Sending…' : 'Email me a sign-in link'}
+            </button>
+          </form>
+        )}
+
+        {error && (
+          <div className="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-900">{error}</div>
+        )}
+      </div>
+    </div>
   );
 }

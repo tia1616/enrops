@@ -36,7 +36,7 @@ const CRITERIA = [
   },
 ];
 
-export default function Screen3ORS({ slug, instructor, onboarding, onAdvance }) {
+export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [checked, setChecked] = useState(() =>
     Object.fromEntries(CRITERIA.map((c) => [c.key, false]))
