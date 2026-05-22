@@ -8,7 +8,7 @@ import Screen3ORS from './screens/Screen3ORS.jsx';
 import Screen4Agreement from './screens/Screen4Agreement.jsx';
 import Screen5Policies from './screens/Screen5Policies.jsx';
 import Screen6Additional from './screens/Screen6Additional.jsx';
-import Screen7StripeStub from './screens/Screen7StripeStub.jsx';
+import Screen7Stripe from './screens/Screen7Stripe.jsx';
 import Screen8EmergencyAndPrefs from './screens/Screen8EmergencyAndPrefs.jsx';
 import CompletionScreen from './CompletionScreen.jsx';
 
@@ -93,7 +93,7 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
     case STEP_KEYS.ADDITIONAL_ACKS:
       return <Screen6Additional {...common} />;
     case STEP_KEYS.STRIPE_SUBMITTED:
-      return <Screen7StripeStub {...common} />;
+      return <Screen7Stripe {...common} />;
     case STEP_KEYS.EMERGENCY_AND_PREFS:
       return <Screen8EmergencyAndPrefs {...common} />;
     default:
