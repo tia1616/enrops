@@ -426,7 +426,6 @@ export default function Schedule() {
         instructor_first: a.instructor?.first_name ?? null,
         instructor_last: a.instructor?.last_name ?? null,
         instructor_email: a.instructor?.email ?? null,
-        flags: [],
       }));
       const instructors = instructorsRes.data ?? [];
       const availability = availabilityRes.data ?? [];
@@ -517,7 +516,6 @@ export default function Schedule() {
               instructor_first: s.assignments.find((a) => a.id === payload.new.id)?.instructor_first ?? null,
               instructor_last: s.assignments.find((a) => a.id === payload.new.id)?.instructor_last ?? null,
               instructor_email: s.assignments.find((a) => a.id === payload.new.id)?.instructor_email ?? null,
-              flags: [],
             };
             const existingIdx = s.assignments.findIndex((a) => a.id === updated.id);
             const nextAssignments = existingIdx >= 0
