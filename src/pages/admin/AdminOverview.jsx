@@ -26,30 +26,31 @@ export default function AdminOverview() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
         <Card
           title="Marketing"
-          body="Preview, schedule, and send campaigns. Wave 2 is queued for May 12."
-          to="/admin/marketing"
+          body="Preview, schedule, and send campaigns."
+          to="/admin/marketing-v2"
           cta="Open Marketing"
           ready
         />
         <Card
-          title="Programs"
-          body="Manage program catalog, locations, status (draft / open / cancelled)."
-          soon
-        />
-        <Card
           title="Contacts"
-          body="Partners, instructors, and parents — group emails and CSV import."
-          soon
+          body="Instructors, partners, parents. Send onboarding invites, view rosters, upload prior background checks."
+          to="/admin/contacts"
+          cta="Open Contacts"
+          ready
         />
         <Card
           title="Schedule"
-          body="Assign instructors to camps and afterschool classes. Subbing workflow."
-          soon
+          body="Assign instructors to camps and afterschool classes. Manage offers, archive past cycles."
+          to="/admin/schedule"
+          cta="Open Schedule"
+          ready
         />
         <Card
-          title="Instructors"
-          body="Roster, availability surveys, payroll, training tracking."
-          soon
+          title="Programs"
+          body="Curricula, scheduled programs, locations."
+          to="/admin/curricula"
+          cta="Open Programs"
+          ready
         />
         <Card
           title="Settings"
