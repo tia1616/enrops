@@ -219,6 +219,7 @@ export default function Screen7Stripe({ slug, instructor, onboarding, onAdvance,
       slug={slug}
       currentStep={STEP_KEYS.STRIPE_SUBMITTED}
       stepsCompleted={onboarding?.steps_completed}
+      onBack={onBack}
       title="Payment setup"
       subtitle="You'll be redirected to Stripe to verify your identity, provide tax information, and connect your bank account. Stripe handles all sensitive financial information — enrops never sees your SSN or bank details."
     >
