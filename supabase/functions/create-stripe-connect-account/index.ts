@@ -15,7 +15,10 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, resolveInstructor, adminClient } from '../_shared/instructor.ts';
 
-const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
+// Instructor Connect platform = new J2S Stripe account (paying instructors).
+// Distinct from STRIPE_SECRET_KEY which is the old J2S account for parent
+// registration payments. Don't conflate them.
+const stripe = new Stripe(Deno.env.get('STRIPE_INSTRUCTOR_PLATFORM_KEY')!, {
   apiVersion: '2023-10-16',
   httpClient: Stripe.createFetchHttpClient(),
 });

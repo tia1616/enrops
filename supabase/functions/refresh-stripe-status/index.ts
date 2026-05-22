@@ -16,7 +16,9 @@ import { corsHeaders, json, resolveInstructor, adminClient } from '../_shared/in
 import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
 
-const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
+// New J2S Stripe account that pays instructors. See create-stripe-connect-
+// account for the env-var split rationale.
+const stripe = new Stripe(Deno.env.get('STRIPE_INSTRUCTOR_PLATFORM_KEY')!, {
   apiVersion: '2023-10-16',
   httpClient: Stripe.createFetchHttpClient(),
 });

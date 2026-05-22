@@ -17,7 +17,10 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
 
-const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
+// Instructor Connect platform = new J2S Stripe account. STRIPE_INSTRUCTOR_
+// PLATFORM_KEY is the API key for that account; the webhook signature is
+// verified against STRIPE_CONNECT_WEBHOOK_SECRET (also new-account scoped).
+const stripe = new Stripe(Deno.env.get('STRIPE_INSTRUCTOR_PLATFORM_KEY')!, {
   apiVersion: '2023-10-16',
   httpClient: Stripe.createFetchHttpClient(),
 });
