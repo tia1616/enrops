@@ -10,29 +10,36 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 // calls submit-onboarding-declined (terminal — overall_status flips to
 // 'declined' and they land on /:slug/onboarding/declined).
 
+// ORS 670.600 contractor criteria — wording is J2S-instructor-specific
+// for clarity. Legal text is captured in the contractor agreement; this UI
+// is just the self-attestation surface. Authority-to-hire is omitted from
+// the UI because it doesn't apply to J2S instructors (the agreement
+// doesn't grant subcontracting rights). Sent to the edge function as
+// false in the payload below.
+//
+// Keys here match the column names the submit-ors-certification edge
+// function expects (separate_business_location, multiple_clients, etc.).
+// Text companion fields are sent as `<key>_text`.
 const CRITERIA = [
   {
-    key: 'has_business_location',
+    key: 'separate_business_location',
     label:
       'I have a workspace at home (or elsewhere) where I prepare lessons and handle business-related work for my instructional services.',
   },
   {
     key: 'bears_risk_of_loss',
-    label: 'I bear the risk of loss in providing services.',
+    label:
+      'If I lose or damage my own teaching supplies, miss a session I agreed to teach, or need to redo work, I cover that cost myself — not Journey to STEAM.',
   },
   {
-    key: 'multiple_clients_or_marketing',
+    key: 'multiple_clients',
     label:
       'I provide services to 2+ clients in a 12-month period, or routinely market to obtain new contracts.',
   },
   {
     key: 'significant_investment',
-    label: 'I have made a significant investment in my business.',
-  },
-  {
-    key: 'authority_to_hire',
     label:
-      'I have the authority to hire others to provide or assist in providing services.',
+      'I use my own car to get to teaching locations and pay for my own auto insurance — Journey to STEAM does not reimburse those costs.',
   },
 ];
 
@@ -67,10 +74,18 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
     setBusy(true);
     setSubmitError('');
     try {
-      const payload = {};
+      const payload = {
+        // authority_to_hire is intentionally hardcoded false. The criterion
+        // doesn't apply to J2S instructors (no subcontracting rights granted
+        // by the contractor agreement). The function still expects the field;
+        // sending false here doesn't change the criteria_met count since the
+        // instructor didn't check it.
+        authority_to_hire: false,
+        authority_to_hire_text: null,
+      };
       for (const c of CRITERIA) {
         payload[c.key] = checked[c.key];
-        payload[`${c.key}_description`] = checked[c.key] ? descriptions[c.key].trim() : null;
+        payload[`${c.key}_text`] = checked[c.key] ? descriptions[c.key].trim() : null;
       }
       const { error } = await invokeOnboardingFn('submit-ors-certification', payload, {
         navigate,
