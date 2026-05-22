@@ -196,6 +196,71 @@ Pending from Arielle (deferred): `STRIPE_CONNECT_WEBHOOK_SECRET`. Not needed for
 - **Screen 7 (Stripe) interim behavior** — render disabled-with-message, or render a stub that lets the wizard progress past it for testing?
 - **Auth callback page** — Supabase magic links land somewhere. Is there an existing auth callback handler? If yes, modify it to route instructors into the wizard. If no, build one.
 - **Photo display location** — never specified. Where will the photo eventually surface (admin roster? engagement letters?)? Doesn't block chunk 3 but informs whether HEIC handling is the right call vs. just rejecting HEIC.
+- **Screen 3 ORS criterion #1 — mockup uses friendlier wording than the legal text.** The seeded contractor agreement says "maintains a business location separate from J2S, or maintains a portion of the Contractor's home used primarily for business." The wizard mockup now says "I have a workspace at home (or elsewhere) where I prepare lessons and handle business-related work for my instructional services." If a lawyer ever audits, they'll see the agreement says one thing and the UI showed another. Jessica accepted the wizard wording for clarity but a legal review of the agreement language is a real follow-up.
+
+---
+
+## NEW SCOPE added 2026-05-22 — must build in chunk 3
+
+Two scope additions Jessica confirmed after walking the mockup. Both are real features, not copy changes.
+
+### A. Admin uploads background checks for existing instructors
+
+Most current J2S instructors already have completed background checks on file from prior years. Re-running them through Checkr costs $ per report. **Admin needs to mark an instructor as background-check-cleared without going through Checkr.**
+
+**Required:**
+
+1. **DB additions** — new columns on `contractor_onboarding_status` (or a separate `instructor_background_checks` table if you'd rather; ask Jessica):
+   - `background_check_source TEXT` with CHECK in (`'checkr'`, `'admin_uploaded'`), default `'checkr'`
+   - `background_check_file_url TEXT` — path inside `contractor-documents/{instructor_id}/`
+   - `background_check_uploaded_by UUID REFERENCES auth.users(id)` — admin who marked it
+   - `background_check_completed_on DATE` — date of the original check (per the uploaded record)
+2. **New edge function** `admin-upload-background-check` — admin-only (caller must be owner/admin in instructor's org). Takes `{ instructor_id, file_url, completed_on }`. Sets `checkr_status = 'clear'`, `checkr_completed_at = now()`, source fields above, and `steps_completed.checkr_submitted = { admin_uploaded_by, ... }`. Runs the gate check.
+3. **New admin UI** — a screen in `src/pages/admin/contractors/` (or wherever existing admin pages live) to pick an instructor, upload a PDF, set completion date, submit. The PDF goes into `contractor-documents/{instructor_id}/bg_check_uploaded_{timestamp}.pdf`.
+4. **Wizard routing** — if an instructor's `checkr_status === 'clear'` AND `steps_completed.checkr_submitted` is present, Screen 2 already short-circuits to the "submitted ✓" state (existing logic). No change needed in the wizard if Step 3 above sets the right fields.
+
+### B. Minor instructors (Finn, August) — schedule + roster view only
+
+Earlier scope: "minors are W-2 in Gusto, NOT in the portal" (per memory `project_enrops_instructor_portal_scope.md`). Jessica revised on 2026-05-22: **minors stay W-2 in Gusto for payroll, but ALSO use the portal to view their schedule and rosters. They skip the entire onboarding wizard.**
+
+**Required:**
+
+1. **DB additions** — at minimum a way to identify minor instructors:
+   - **Option A (recommended):** `instructors.date_of_birth DATE` — compute is_minor in code from DOB. More accurate, future-proof.
+   - **Option B:** `instructors.is_minor BOOLEAN DEFAULT FALSE` — admin manually flips. Less accurate but cheaper to manage.
+   - Ask Jessica.
+2. **Routing change** — at the top of OnboardingRouter (before the contractor_onboarding_status check), detect minors. If minor → navigate to `/${slug}/instructor` (or wherever the schedule view lives — not the wizard). Minors get no contractor_onboarding_status row, no contractor agreement, no ORS cert, no Stripe.
+3. **New page** `src/pages/instructor/Schedule.jsx` (or similar) — shows the instructor's `camp_assignments` joined with `camp_sessions`. Date, site, role, hours, notes. Maybe later: ability to confirm session delivery (chunk 4 territory; out of scope for now).
+4. **Roster page** `src/pages/instructor/Roster.jsx` — shows the student list for a given camp_session. Reads from the registrations or students table linked to camp_sessions. **NOTE:** This is technically info that exists in the parent portal too, but instructors need a focused view. Verify what student-data they can see (FERPA + tenant scoping — read the existing parent portal code to understand the permissions model).
+5. **The minor flow does not touch the wizard at all.** Don't put Finn and August through Screen 1-8. Make sure your routing branch is explicit.
+
+**Schema migrations to add (run via apply_migration once Jessica picks option A vs B):**
+
+```sql
+-- For feature A (admin BG check upload)
+ALTER TABLE contractor_onboarding_status
+  ADD COLUMN background_check_source TEXT DEFAULT 'checkr'
+    CHECK (background_check_source IN ('checkr', 'admin_uploaded')),
+  ADD COLUMN background_check_file_url TEXT,
+  ADD COLUMN background_check_uploaded_by UUID REFERENCES auth.users(id),
+  ADD COLUMN background_check_completed_on DATE;
+
+-- For feature B (minor detection) — assuming option A
+ALTER TABLE instructors ADD COLUMN date_of_birth DATE;
+-- Backfill from current records or admin-set via UI.
+```
+
+**Don't run these without Jessica's explicit go-ahead — she should approve the schema additions before they go live.**
+
+### Memory updates needed
+
+Update `project_enrops_instructor_portal_scope.md`:
+- Minors are still W-2 in Gusto for payroll
+- But minors NOW use the portal for schedule + roster viewing
+- The wizard remains adult-only
+
+Update `project_enrops_contractor_portal_deploy_status.md`:
+- Note the two new chunk-3 scope items + the schema additions needed
 
 ---
 
