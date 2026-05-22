@@ -1,58 +1,117 @@
-import React from 'react';
-import { STEP_ORDER, STEP_LABELS, TOTAL_STEPS, stepNumber } from '../../lib/onboardingSteps.js';
+import React, { useCallback, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { supabase } from '../../lib/supabase.js';
+import { STEP_KEYS, STEP_ORDER, stepIndex } from '../../lib/onboardingSteps.js';
+import Screen1Welcome from './screens/Screen1Welcome.jsx';
+import Screen3ORS from './screens/Screen3ORS.jsx';
+import Screen8EmergencyAndPrefs from './screens/Screen8EmergencyAndPrefs.jsx';
+import CompletionScreen from './CompletionScreen.jsx';
+import WizardLayout, { PrimaryButton } from './WizardLayout.jsx';
 
-// Phase B-2 placeholder. Phase B-3 will fill this in with the real Screen 1-8
-// components (Welcome, BackgroundCheck, ORS, Agreement, Policies, Additional,
-// Stripe, EmergencyAndPrefs) and the completion screen.
+// Dispatches to the right screen based on currentStep and re-fetches
+// contractor_onboarding_status after every advance so the wizard sees any
+// gate-check side effects the edge functions wrote (e.g. overall_status
+// flipping to pending_background_check when Screen 8 completes).
 //
-// The shape (slug + instructor + onboarding + initialStep props) is the
-// public contract OnboardingRouter relies on; that won't change in B-3.
+// Terminal statuses (complete, pending_background_check, pending_stripe,
+// payouts_disabled) short-circuit to the completion screen variants.
 
-export default function WizardHost({ slug, instructor, onboarding, initialStep }) {
-  const step = initialStep || STEP_ORDER[0];
-  const num = stepNumber(step);
+const TERMINAL_STATUSES = new Set([
+  'complete',
+  'pending_background_check',
+  'pending_stripe',
+  'payouts_disabled',
+]);
 
-  return (
-    <div className="min-h-screen bg-neutral-50 px-4 py-8">
-      <div className="mx-auto max-w-xl">
-        <div className="mb-4 text-xs font-semibold uppercase tracking-widest text-neutral-400">
-          {slug} · onboarding
-        </div>
-        <ProgressBar currentStep={step} stepsCompleted={onboarding?.steps_completed || {}} />
-        <div className="mt-6 rounded-lg border border-neutral-200 bg-white p-6">
-          <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-            Step {num} of {TOTAL_STEPS}
-          </div>
-          <h1 className="mt-1 text-xl font-semibold text-neutral-900">
-            {STEP_LABELS[step] || 'Onboarding'}
-          </h1>
-          <p className="mt-4 text-sm text-neutral-600">
-            Hi {instructor?.first_name || 'there'} — this screen will be built in
-            Phase B-3. Routing, slug resolution, deactivation handling, and
-            minor detection are working.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
+export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep }) {
+  const navigate = useNavigate();
+  const [onboarding, setOnboarding] = useState(initialOnboarding);
+  const [currentStep, setCurrentStep] = useState(() => {
+    if (initialStep && STEP_ORDER.includes(initialStep)) return initialStep;
+    return onboarding?.current_step && STEP_ORDER.includes(onboarding.current_step)
+      ? onboarding.current_step
+      : STEP_KEYS.WELCOME;
+  });
+
+  const onAdvance = useCallback(async () => {
+    // After any screen submits, re-read the onboarding row so we pick up
+    // gate-check side effects (the edge function may have moved current_step
+    // forward, or flipped overall_status to one of the terminal values).
+    const { data: fresh } = await supabase
+      .from('contractor_onboarding_status')
+      .select(
+        'overall_status, current_step, steps_completed, checkr_status, stripe_connect_status, stripe_payouts_enabled'
+      )
+      .eq('instructor_id', instructor.id)
+      .single();
+    if (!fresh) return;
+    setOnboarding(fresh);
+
+    if (TERMINAL_STATUSES.has(fresh.overall_status)) {
+      // Render the completion variant — currentStep no longer matters.
+      setCurrentStep(null);
+      return;
+    }
+    if (fresh.overall_status === 'declined') {
+      navigate(`/${slug}/onboarding/declined`, { replace: true });
+      return;
+    }
+    if (fresh.overall_status === 'abandoned') {
+      navigate(`/${slug}/onboarding/abandoned`, { replace: true });
+      return;
+    }
+
+    if (fresh.current_step && STEP_ORDER.includes(fresh.current_step)) {
+      setCurrentStep(fresh.current_step);
+    } else {
+      const idx = stepIndex(currentStep);
+      const next = STEP_ORDER[idx + 1];
+      if (next) setCurrentStep(next);
+    }
+  }, [instructor.id, navigate, slug, currentStep]);
+
+  if (!currentStep || TERMINAL_STATUSES.has(onboarding?.overall_status)) {
+    return <CompletionScreen slug={slug} onboarding={onboarding} />;
+  }
+
+  const common = { slug, instructor, onboarding, onAdvance };
+  switch (currentStep) {
+    case STEP_KEYS.WELCOME:
+      return <Screen1Welcome {...common} />;
+    case STEP_KEYS.ORS_CERTIFICATION:
+      return <Screen3ORS {...common} />;
+    case STEP_KEYS.EMERGENCY_AND_PREFS:
+      return <Screen8EmergencyAndPrefs {...common} />;
+    case STEP_KEYS.CHECKR_SUBMITTED:
+    case STEP_KEYS.AGREEMENT_SIGNED:
+    case STEP_KEYS.POLICIES_ACKNOWLEDGED:
+    case STEP_KEYS.ADDITIONAL_ACKS:
+    case STEP_KEYS.STRIPE_SUBMITTED:
+      return <ComingSoonStep step={currentStep} {...common} />;
+    default:
+      return <ComingSoonStep step={currentStep} {...common} />;
+  }
 }
 
-function ProgressBar({ currentStep, stepsCompleted }) {
+// Temporary placeholder for screens not yet built (waves 4 + 5). Lets the
+// wizard run end-to-end so Screen 1 → 3 → 8 → completion can be tested while
+// 2/4/5/6/7 are still being built.
+function ComingSoonStep({ step, slug, instructor, onboarding, onAdvance }) {
   return (
-    <div className="flex gap-1">
-      {STEP_ORDER.map((key, i) => {
-        const done = Boolean(stepsCompleted[key]);
-        const current = key === currentStep;
-        return (
-          <div
-            key={key}
-            className={`h-1.5 flex-1 rounded-full ${
-              done ? 'bg-neutral-900' : current ? 'bg-neutral-400' : 'bg-neutral-200'
-            }`}
-            aria-label={`Step ${i + 1} ${done ? 'complete' : current ? 'current' : 'upcoming'}`}
-          />
-        );
-      })}
-    </div>
+    <WizardLayout
+      slug={slug}
+      currentStep={step}
+      stepsCompleted={onboarding?.steps_completed}
+      title="Screen coming soon"
+      subtitle={`This step (${step}) is being built. Click below to skip it for now.`}
+    >
+      <p className="text-sm text-neutral-600">
+        Hi {instructor.first_name || 'there'} — Phase B-3 finishes this screen in
+        the next commit wave.
+      </p>
+      <PrimaryButton type="button" onClick={onAdvance}>
+        Skip for now →
+      </PrimaryButton>
+    </WizardLayout>
   );
 }
