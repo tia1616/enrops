@@ -145,6 +145,48 @@ export default function Screen5Policies({ slug, instructor, onboarding, onAdvanc
   );
 }
 
+// Renders a paragraph of body_text with bare http/https URLs converted to
+// clickable anchors. Used by both Screen 5 (policies) and Screen 6 (acks)
+// via the shared DocAccordion component. The mandatory_reporter_ack doc
+// links to Oregon's PACE training catalog; the photo_video_release links
+// to opt-out instructions; these need to be clickable in the wizard.
+function linkifyText(text) {
+  const urlRegex = /(https?:\/\/[^\s)]+)/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+  while ((match = urlRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    // Strip a trailing punctuation char (period, comma, paren) that's
+    // commonly attached to a URL in prose but isn't part of the URL itself.
+    let url = match[0];
+    let trailing = '';
+    while (/[.,;:)]$/.test(url)) {
+      trailing = url.slice(-1) + trailing;
+      url = url.slice(0, -1);
+    }
+    parts.push(
+      <a
+        key={match.index}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-neutral-900 underline underline-offset-2 hover:text-neutral-700"
+      >
+        {url}
+      </a>
+    );
+    if (trailing) parts.push(trailing);
+    lastIndex = urlRegex.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts.length > 0 ? parts : text;
+}
+
 export function DocAccordion({
   title,
   version,
@@ -176,7 +218,7 @@ export function DocAccordion({
           <div className="max-h-[40vh] overflow-y-auto text-sm leading-relaxed text-neutral-800">
             {(bodyText || '').split(/\n\s*\n/).map((para, i) => (
               <p key={i} className="mb-2 whitespace-pre-wrap">
-                {para}
+                {linkifyText(para)}
               </p>
             ))}
           </div>
