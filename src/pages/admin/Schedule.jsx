@@ -1179,6 +1179,75 @@ export default function Schedule() {
     }
   }
 
+  async function handleArchiveCycle() {
+    if (!state?.cycle?.id) return;
+    if (state.cycle.status === "archived") return;
+    const confirmed = window.confirm(
+      `Archive ${cycleDisplayName(state.cycle.name)}?\n\n` +
+      `Instructors will no longer see this term on their schedules. ` +
+      `Past assignments stay in the database for reporting and payroll. ` +
+      `You can unarchive later if needed.`
+    );
+    if (!confirmed) return;
+    setBusy("archiving");
+    setSaveError(null);
+    try {
+      const prevCycleStatus = state.cycle.status;
+      const { error: updErr } = await supabase
+        .from("scheduling_cycles")
+        .update({ status: "archived" })
+        .eq("id", state.cycle.id);
+      if (updErr) throw updErr;
+      setLastOp({
+        type: "archive_cycle",
+        cycleId: state.cycle.id,
+        prevCycleStatus,
+        label: `Archived ${cycleDisplayName(state.cycle.name)}`,
+      });
+      await loadAll();
+    } catch (err) {
+      console.error("Archive cycle failed:", err);
+      setSaveError(`Couldn't archive: ${err.message ?? "unknown error"}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleUnarchiveCycle() {
+    if (!state?.cycle?.id) return;
+    if (state.cycle.status !== "archived") return;
+    const confirmed = window.confirm(
+      `Unarchive ${cycleDisplayName(state.cycle.name)}?\n\n` +
+      `Instructors will see this term on their schedules again.`
+    );
+    if (!confirmed) return;
+    setBusy("archiving");
+    setSaveError(null);
+    try {
+      // Restore to 'published' — that's the safe default for a previously-
+      // active cycle. If we wanted to remember the exact prior state we'd
+      // need to persist it; simpler to default and let admin re-publish if
+      // needed.
+      const { error: updErr } = await supabase
+        .from("scheduling_cycles")
+        .update({ status: "published" })
+        .eq("id", state.cycle.id);
+      if (updErr) throw updErr;
+      setLastOp({
+        type: "unarchive_cycle",
+        cycleId: state.cycle.id,
+        prevCycleStatus: "archived",
+        label: `Unarchived ${cycleDisplayName(state.cycle.name)}`,
+      });
+      await loadAll();
+    } catch (err) {
+      console.error("Unarchive cycle failed:", err);
+      setSaveError(`Couldn't unarchive: ${err.message ?? "unknown error"}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleApprove() {
     if (state.status !== "ready") return;
     setBusy("approving");
@@ -1629,6 +1698,8 @@ export default function Schedule() {
         onRemindersClick={() => setOfferDialog({ mode: "reminders_choose", payload: null })}
         nextReminders={nextRemindersForecast}
         onOpenEmailActivity={() => setEmailActivityOpen(true)}
+        onArchiveCycle={handleArchiveCycle}
+        onUnarchiveCycle={handleUnarchiveCycle}
       />
       {saveError && (
         <div style={{
@@ -1844,7 +1915,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity }) {
+function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
   const otherCycles = (allCycles ?? []).filter((c) => c.id !== cycle.id);
   return (
     <header style={{
@@ -1923,6 +1994,47 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
             >
               + New cycle
             </button>
+          )}
+          {cycle.status === "archived" ? (
+            onUnarchiveCycle && (
+              <button
+                type="button"
+                onClick={onUnarchiveCycle}
+                title="Restore this cycle from archived to its prior status"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: MUTED,
+                  fontSize: 12,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  padding: "2px 4px",
+                  textDecoration: "underline",
+                }}
+              >
+                Unarchive
+              </button>
+            )
+          ) : (
+            onArchiveCycle && (
+              <button
+                type="button"
+                onClick={onArchiveCycle}
+                title="Archive this cycle. Hides it from instructors' schedules; admin can still see it. Use after the term is over."
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: MUTED,
+                  fontSize: 12,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  padding: "2px 4px",
+                  textDecoration: "underline",
+                }}
+              >
+                Archive cycle
+              </button>
+            )
           )}
         </div>
         <div style={{ color: MUTED, marginTop: 4, fontSize: 14 }}>{fmtRange(cycle.starts_on, cycle.ends_on)}</div>

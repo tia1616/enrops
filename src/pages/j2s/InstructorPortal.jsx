@@ -61,6 +61,7 @@ export default function InstructorPortal() {
   const [cycles, setCycles] = useState([]); // open cycles for this org with survey status
   const [editingCycleId, setEditingCycleId] = useState(null); // when set, render the availability form for this cycle
   const [view, setView] = useState("schedule"); // "schedule" | "profile"
+  const [showPast, setShowPast] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -180,10 +181,9 @@ export default function InstructorPortal() {
       .in("status", ["published", "change_requested", "confirmed"])
       .order("camp_sessions(starts_on)", { ascending: true });
     if (aErr) throw aErr;
-    const filtered = (data ?? []).filter(
-      (a) => a.camp_sessions?.scheduling_cycles?.status !== "archived"
-    );
-    setAssignments(filtered);
+    // Load everything; we partition into current vs archived at render time
+    // so a "Show past camps" toggle can pull them in without a re-fetch.
+    setAssignments(data ?? []);
   }
 
   // Load any open cycles (not archived) for this instructor's org plus a flag
@@ -461,14 +461,16 @@ export default function InstructorPortal() {
   }
 
   // ready
-  const totalCount = assignments.length;
-  // Amended spec §2.1: 'published' and 'change_requested' both go in the
-  // "Needs your response" section. The change_requested cards retain their
-  // message-thread display and disable Request Change until admin replies.
-  const needsResponse = assignments.filter(
+  const totalCount = currentAssignments.length;
+  // Split current (cycle not archived) vs past (cycle archived).
+  // Within current: needsResponse (published/change_requested) vs confirmed.
+  const isArchived = (a) => a.camp_sessions?.scheduling_cycles?.status === "archived";
+  const currentAssignments = assignments.filter((a) => !isArchived(a));
+  const pastAssignments = assignments.filter(isArchived);
+  const needsResponse = currentAssignments.filter(
     (a) => a.status === "published" || a.status === "change_requested"
   );
-  const accepted = assignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
+  const accepted = currentAssignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
 
   // Cycles that are open + the instructor hasn't filled out availability yet,
   // or has but might want to update. We surface a banner per cycle.
@@ -614,9 +616,39 @@ export default function InstructorPortal() {
         </Section>
       )}
 
-      {totalCount === 0 && needsSurvey.length === 0 && (
+      {currentAssignments.length === 0 && needsSurvey.length === 0 && pastAssignments.length === 0 && (
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, color: MUTED, textAlign: "center" }}>
           No schedule yet. Your admin will email you when it's ready.
+        </div>
+      )}
+
+      {pastAssignments.length > 0 && (
+        <div style={{ marginTop: 24, paddingTop: 18, borderTop: `1px solid ${RULE}` }}>
+          <button
+            type="button"
+            onClick={() => setShowPast((v) => !v)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: MUTED,
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              textTransform: "uppercase",
+              letterSpacing: 0.6,
+              padding: 0,
+            }}
+          >
+            {showPast ? "▾" : "▸"} Past camps ({pastAssignments.length})
+          </button>
+          {showPast && (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+              {pastAssignments.map((a) => (
+                <AssignmentCard key={a.id} assignment={a} readOnly />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
