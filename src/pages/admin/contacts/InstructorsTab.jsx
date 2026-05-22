@@ -12,6 +12,7 @@ import { avatarUrl, isValidAvatarKey } from '../../../lib/avatars';
 
 const PLUM = '#691D39';
 const GOLD = '#CFB12F';
+const CHALK = '#EAEADD';
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
