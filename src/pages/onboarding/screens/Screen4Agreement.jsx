@@ -85,7 +85,14 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
   }, []);
 
   const allConfirmed = CONFIRMS.every((c) => confirms[c.key]);
-  const canSubmit = allConfirmed && signature.trim().length > 0 && docState.phase === 'ready';
+  // Legal signature must match the instructor's registered legal name.
+  // Whitespace-collapsed, case-insensitive — typos in capitalization or
+  // spacing don't trip people up, but typing the wrong name does.
+  const expectedName = `${instructor?.first_name ?? ''} ${instructor?.last_name ?? ''}`.trim();
+  const normalize = (s) => (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const signatureMatchesName = expectedName.length > 0 &&
+    normalize(signature) === normalize(expectedName);
+  const canSubmit = allConfirmed && signatureMatchesName && docState.phase === 'ready';
 
   async function generateAndUploadPdf(bodyText, typedSignature, signedAt) {
     // Best-effort. Failure must not block onboarding completion.
@@ -122,6 +129,13 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
     }
     if (!signature.trim()) {
       setSignatureError('Type your full legal name to sign.');
+      valid = false;
+    } else if (!signatureMatchesName) {
+      setSignatureError(
+        expectedName
+          ? `Please type your full legal name exactly as registered: ${expectedName}`
+          : 'We couldn’t verify your registered name — refresh the page and try again.'
+      );
       valid = false;
     } else {
       setSignatureError('');
@@ -226,10 +240,18 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
               <label className="block text-xs font-semibold uppercase tracking-wide text-neutral-500">
                 Type your full legal name
               </label>
+              {expectedName && (
+                <p className="mt-1 text-xs text-neutral-500">
+                  Sign as registered: <span className="font-semibold text-neutral-700">{expectedName}</span>
+                </p>
+              )}
               <input
                 type="text"
                 value={signature}
                 onChange={(e) => setSignature(e.target.value)}
+                placeholder={expectedName || ''}
+                autoComplete="off"
+                spellCheck={false}
                 className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-900 focus:border-neutral-500 focus:outline-none"
               />
               <FieldError>{signatureError}</FieldError>
