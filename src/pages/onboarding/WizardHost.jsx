@@ -27,15 +27,33 @@ const TERMINAL_STATUSES = new Set([
   'payouts_disabled',
 ]);
 
+// Resolve which step the wizard should mount on. The DB's current_step is
+// an INTEGER (1..8); STEP_ORDER is an array of step-key STRINGS. Naively
+// checking STEP_ORDER.includes(currentStep) when currentStep is an integer
+// always returns false, which used to drop a returning contractor back to
+// Screen 1 every time the page reloaded (notably after the Stripe redirect).
+// Resume rule: first step that isn't marked complete in steps_completed.
+// If everything's done, return the last step — the terminal-status guard
+// in render will route to CompletionScreen anyway.
+function resolveInitialStep(initialStep, onboarding) {
+  // 1. Explicit URL param wins (already a string).
+  if (typeof initialStep === 'string' && STEP_ORDER.includes(initialStep)) {
+    return initialStep;
+  }
+  // 2. First step not present in steps_completed.
+  const stepsCompleted = onboarding?.steps_completed || {};
+  const firstIncomplete = STEP_ORDER.find((key) => !stepsCompleted[key]);
+  if (firstIncomplete) return firstIncomplete;
+  // 3. Everything done — fall through; render guard handles it.
+  return STEP_ORDER[STEP_ORDER.length - 1];
+}
+
 export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, onDismiss }) {
   const navigate = useNavigate();
   const [onboarding, setOnboarding] = useState(initialOnboarding);
-  const [currentStep, setCurrentStep] = useState(() => {
-    if (initialStep && STEP_ORDER.includes(initialStep)) return initialStep;
-    return onboarding?.current_step && STEP_ORDER.includes(onboarding.current_step)
-      ? onboarding.current_step
-      : STEP_KEYS.WELCOME;
-  });
+  const [currentStep, setCurrentStep] = useState(() =>
+    resolveInitialStep(initialStep, onboarding)
+  );
 
   // Local back-nav: just shows the prior screen without writing to the DB.
   // If the contractor edits and submits on the prior screen, that submit
