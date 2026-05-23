@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
+import { AVATARS, avatarUrl, DEFAULT_AVATAR } from '../../../lib/avatars.js';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
 // Screen 1 — Welcome + Identity. Phone is required; legal + preferred name
-// are pre-filled and editable. Real-photo upload was removed when the
-// avatar picker on the profile screen replaced it as the canonical photo
-// source for v1 (instructor portal v1 §3.2 amended spec).
+// are pre-filled and editable. Avatar picker is optional but encouraged so
+// the contractor leaves onboarding with a populated profile. The DB column
+// is photo_url (misnomer post-v1; stores an avatar KEY, not a URL — see
+// lib/avatars.js).
 
 function phoneIsValid(s) {
   if (!s) return false;
@@ -21,6 +23,7 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
   const [lastName, setLastName] = useState(instructor.last_name || '');
   const [preferredName, setPreferredName] = useState(instructor.preferred_name || '');
   const [phone, setPhone] = useState(instructor.phone || '');
+  const [avatarKey, setAvatarKey] = useState(instructor.photo_url || '');
   const [phoneError, setPhoneError] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -51,6 +54,7 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
             first_name: firstName.trim() || null,
             last_name: lastName.trim() || null,
             preferred_name: preferredName.trim(),
+            photo_url: avatarKey || null,
           },
         },
         { navigate }
@@ -121,6 +125,36 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
             placeholder="(503) 555-0123"
           />
           <FieldError>{phoneError}</FieldError>
+        </div>
+
+        <div className="mt-6">
+          <Label>Pick an avatar (optional)</Label>
+          <p className="mt-1 text-xs text-neutral-500">
+            Shown next to your name on the schedule and in messages.
+          </p>
+          <div className="mt-2 grid grid-cols-4 gap-2 sm:grid-cols-8">
+            {AVATARS.map((a) => {
+              const selected = avatarKey === a.key;
+              return (
+                <button
+                  key={a.key}
+                  type="button"
+                  onClick={() => setAvatarKey(selected ? '' : a.key)}
+                  title={a.label}
+                  className={`flex flex-col items-center rounded-md border-2 bg-white p-1.5 transition ${
+                    selected ? 'border-neutral-900 bg-neutral-100' : 'border-neutral-200 hover:border-neutral-400'
+                  }`}
+                >
+                  <img
+                    src={avatarUrl(a.key)}
+                    alt={a.label}
+                    onError={(e) => { e.currentTarget.src = avatarUrl(DEFAULT_AVATAR.key); }}
+                    className="block h-12 w-12"
+                  />
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <ScreenError>{submitError}</ScreenError>
