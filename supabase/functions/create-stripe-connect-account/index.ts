@@ -47,11 +47,15 @@ serve(async (req: Request) => {
 
     const supabase = adminClient();
 
-    // Look up existing stripe_connect_account_id + the org's website/name so
-    // we can pre-fill the Express business_profile (contractors mostly don't
-    // have their own websites; passing the org's URL + a description keeps
-    // Stripe from asking them).
-    const [{ data: existing, error: fetchErr }, { data: org }] = await Promise.all([
+    // Look up existing stripe_connect_account_id, the org's website/name, and
+    // the instructor's date_of_birth (the resolveInstructor result doesn't
+    // include dob). We pre-fill as much of the Stripe Express form as we
+    // already have on file so contractors aren't re-typing data we know.
+    const [
+      { data: existing, error: fetchErr },
+      { data: org },
+      { data: instructorExtras },
+    ] = await Promise.all([
       supabase
         .from('contractor_onboarding_status')
         .select('stripe_connect_account_id')
@@ -61,6 +65,11 @@ serve(async (req: Request) => {
         .from('organizations')
         .select('name, website')
         .eq('id', me.organization_id)
+        .maybeSingle(),
+      supabase
+        .from('instructors')
+        .select('date_of_birth')
+        .eq('id', me.id)
         .maybeSingle(),
     ]);
     if (fetchErr) {
@@ -72,6 +81,17 @@ serve(async (req: Request) => {
 
     // Create a new Express account if needed.
     if (!accountId) {
+      // Build the individual block from instructor data we already have.
+      // Stripe still requires the contractor to confirm/complete (and add SSN
+      // + address + bank), but every pre-filled field is one fewer question.
+      const individual: Record<string, unknown> = {};
+      if (me.first_name) individual.first_name = me.first_name;
+      if (me.last_name) individual.last_name = me.last_name;
+      if (me.email) individual.email = me.email;
+      if (me.phone) individual.phone = me.phone;
+      const dob = parseDob(instructorExtras?.date_of_birth as string | null | undefined);
+      if (dob) individual.dob = dob;
+
       let account;
       try {
         account = await stripe.accounts.create({
@@ -102,6 +122,7 @@ serve(async (req: Request) => {
               ? `Teaching enrichment classes through ${org.name}`
               : 'Teaching enrichment classes',
           },
+          ...(Object.keys(individual).length > 0 ? { individual } : {}),
           metadata: {
             instructor_id: me.id,
             organization_id: me.organization_id,
@@ -183,6 +204,20 @@ serve(async (req: Request) => {
     return json({ error: 'internal_error' }, 500);
   }
 });
+
+// instructors.date_of_birth is a DATE column (YYYY-MM-DD). Stripe's
+// individual.dob wants { day, month, year } as ints. Returns null if the
+// input is missing or malformed so we just skip the field.
+function parseDob(s: string | null | undefined): { day: number; month: number; year: number } | null {
+  if (!s) return null;
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const year = parseInt(m[1], 10);
+  const month = parseInt(m[2], 10);
+  const day = parseInt(m[3], 10);
+  if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { day, month, year };
+}
 
 function sanitizeOrigin(v: unknown): string | null {
   if (typeof v !== 'string') return null;

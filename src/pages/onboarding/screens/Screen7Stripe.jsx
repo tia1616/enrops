@@ -221,8 +221,26 @@ export default function Screen7Stripe({ slug, instructor, onboarding, onAdvance,
       stepsCompleted={onboarding?.steps_completed}
       onBack={onBack}
       title="Payment setup"
-      subtitle="You'll be redirected to Stripe to verify your identity, provide tax information, and connect your bank account. Stripe handles all sensitive financial information — enrops never sees your SSN or bank details."
+      subtitle="You'll be redirected to Stripe to verify your identity, set up tax forms, and connect your bank account so you can be paid."
     >
+      <div className="mb-4 rounded-md border border-neutral-200 bg-neutral-50 p-4 text-sm leading-relaxed text-neutral-700">
+        <p className="font-semibold text-neutral-900">Before you click — this takes about 5–10 minutes.</p>
+        <p className="mt-3 font-semibold text-neutral-900">Have these ready:</p>
+        <ul className="mt-1 ml-5 list-disc space-y-1">
+          <li>A photo of your driver's license or state ID</li>
+          <li>Your Social Security number (or last 4 digits — Stripe will tell you which)</li>
+          <li>Your bank routing and account numbers (for direct deposit)</li>
+        </ul>
+        <p className="mt-3 font-semibold text-neutral-900">A few tips:</p>
+        <ul className="mt-1 ml-5 list-disc space-y-1">
+          <li>Stripe may ask you to take a photo with your phone — easiest done on mobile.</li>
+          <li>If you need to stop, your progress is saved. Come back here and click the button again.</li>
+          <li>Most of the form is already filled in for you. Just review and confirm.</li>
+        </ul>
+        <p className="mt-3 text-xs text-neutral-500">
+          Stripe handles all sensitive info — enrops never sees your SSN or bank details. Stripe also sends your year-end 1099 tax form.
+        </p>
+      </div>
       <ScreenError>{submitError}</ScreenError>
       <PrimaryButton type="button" onClick={() => redirectToStripe()} disabled={busy}>
         {busy ? 'Loading…' : 'Set up payment →'}
