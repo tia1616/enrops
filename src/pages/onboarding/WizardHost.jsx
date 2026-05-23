@@ -87,7 +87,17 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
   }, [instructor.id, navigate, slug, currentStep]);
 
   if (!currentStep || TERMINAL_STATUSES.has(onboarding?.overall_status)) {
-    return <CompletionScreen slug={slug} onboarding={onboarding} onDismiss={onDismiss} />;
+    // onAdvance does the re-fetch + re-evaluation work the refresh button
+    // needs, so we pass it as onRefresh. Pending variants of CompletionScreen
+    // call onRefresh; the complete variant uses onDismiss / Link instead.
+    return (
+      <CompletionScreen
+        slug={slug}
+        onboarding={onboarding}
+        onDismiss={onDismiss}
+        onRefresh={onAdvance}
+      />
+    );
   }
 
   // Only expose onBack when there's a prior step to go to.

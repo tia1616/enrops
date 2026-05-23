@@ -564,6 +564,20 @@ export default function InstructorPortal() {
   );
   const accepted = currentAssignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
 
+  // CPR cert expiry nudge: render a clickable pill if the cert is expired or
+  // within 60 days of expiring. Tap → opens the profile screen where the
+  // upload + expiry field live.
+  const cprExpiresAt = instructor?.first_aid_cpr_expires_at;
+  const cprPill = (() => {
+    if (!cprExpiresAt) return null;
+    const expiry = new Date(`${cprExpiresAt}T00:00:00`);
+    const today = new Date(new Date().toDateString());
+    const daysUntil = Math.floor((expiry - today) / 86_400_000);
+    if (daysUntil < 0) return { label: "CPR expired — update", expired: true };
+    if (daysUntil <= 60) return { label: `CPR expires in ${daysUntil}d`, expired: false };
+    return null;
+  })();
+
   // Cycles that are open + the instructor hasn't filled out availability yet,
   // or has but might want to update. We surface a banner per cycle.
   const editingCycle = editingCycleId ? cycles.find((c) => c.id === editingCycleId) : null;
@@ -673,6 +687,30 @@ export default function InstructorPortal() {
         <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
           {error}
         </div>
+      )}
+
+      {cprPill && (
+        <button
+          type="button"
+          onClick={() => setView("profile")}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            marginBottom: 14,
+            padding: "6px 12px",
+            background: cprPill.expired ? `${CORAL}1F` : `${GOLD}1F`,
+            border: `1px solid ${cprPill.expired ? CORAL : GOLD}`,
+            borderRadius: 999,
+            color: cprPill.expired ? CORAL : INK,
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: "inherit",
+            cursor: "pointer",
+          }}
+        >
+          {cprPill.label} →
+        </button>
       )}
 
       {needsSurvey.length > 0 && (
