@@ -164,12 +164,7 @@ export function DocAccordion({
         onClick={onToggle}
         className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-neutral-900 hover:bg-neutral-50"
       >
-        <span>
-          {title}
-          {version && (
-            <span className="ml-2 text-xs font-normal text-neutral-400">{version}</span>
-          )}
-        </span>
+        <span>{title}</span>
         <span className="text-neutral-500">{isExpanded ? '▾' : '▸'}</span>
       </button>
       {isExpanded && (
