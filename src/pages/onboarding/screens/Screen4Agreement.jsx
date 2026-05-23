@@ -20,7 +20,7 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 // the legal record exists in the DB; the PDF is just a convenience copy.
 
 const CONFIRMS = [
-  { key: 'confirm_read', label: 'I have read this Agreement and the documents it incorporates' },
+  { key: 'confirm_read', label: 'I have read this Agreement' },
   // confirm_pay_structure intentionally removed -- the Pay & Deductions
   // policy is on Screen 5 and the contractor explicitly acknowledges it
   // there. Asking on this screen put the agreement before the document.
