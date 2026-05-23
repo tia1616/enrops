@@ -113,15 +113,6 @@ serve(async (req: Request) => {
 // Screen 1: welcome — update instructors.phone, photo_url
 // ────────────────────────────────────────────────────────────────────────────
 
-// Canonical avatar key set. MUST stay in sync with src/lib/avatars.js
-// (Deno cannot import from src/, so each side keeps its own copy). The
-// list is short and stable; a comment on the JS side flags the same drift
-// risk.
-const AVATAR_KEYS = new Set([
-  'bottts-1', 'bottts-2', 'bottts-3', 'bottts-4',
-  'bottts-5', 'bottts-6', 'bottts-7', 'bottts-8',
-]);
-
 async function handleWelcome(
   supabase: SupabaseClient,
   instructorId: string,
@@ -132,13 +123,6 @@ async function handleWelcome(
   const preferredName = sanitizeString(data.preferred_name);
 
   if (!phone) return { error: json({ error: 'phone_required' }, 400) };
-
-  // photo_url is a misnomer — it stores an avatar KEY post-portal-v1.
-  // Reject anything not in the allowlist so a typo'd client can't poison
-  // the column. null/empty = "don't touch".
-  if (photoUrl && !AVATAR_KEYS.has(photoUrl)) {
-    return { error: json({ error: 'invalid_avatar_key' }, 400) };
-  }
 
   const updates: Record<string, unknown> = {
     phone,
