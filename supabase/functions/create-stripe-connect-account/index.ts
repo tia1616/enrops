@@ -47,12 +47,22 @@ serve(async (req: Request) => {
 
     const supabase = adminClient();
 
-    // Look up existing stripe_connect_account_id on the onboarding row.
-    const { data: existing, error: fetchErr } = await supabase
-      .from('contractor_onboarding_status')
-      .select('stripe_connect_account_id')
-      .eq('instructor_id', me.id)
-      .maybeSingle();
+    // Look up existing stripe_connect_account_id + the org's website/name so
+    // we can pre-fill the Express business_profile (contractors mostly don't
+    // have their own websites; passing the org's URL + a description keeps
+    // Stripe from asking them).
+    const [{ data: existing, error: fetchErr }, { data: org }] = await Promise.all([
+      supabase
+        .from('contractor_onboarding_status')
+        .select('stripe_connect_account_id')
+        .eq('instructor_id', me.id)
+        .maybeSingle(),
+      supabase
+        .from('organizations')
+        .select('name, website')
+        .eq('id', me.organization_id)
+        .maybeSingle(),
+    ]);
     if (fetchErr) {
       console.error('onboarding fetch failed:', fetchErr);
       return json({ error: 'lookup_failed' }, 500);
@@ -77,6 +87,20 @@ serve(async (req: Request) => {
           capabilities: {
             transfers: { requested: true },
             card_payments: { requested: true },
+          },
+          // business_type: 'individual' — contractors are individuals, not
+          // registered businesses. Pre-selecting it removes one form question.
+          business_type: 'individual',
+          // Pre-fill business_profile with the org's data so contractors
+          // (who don't have their own websites or MCC codes) aren't asked.
+          // Stripe still lets the contractor edit these fields if they want.
+          // mcc 8299 = Schools/Educational Services - Other.
+          business_profile: {
+            ...(org?.website ? { url: org.website } : {}),
+            mcc: '8299',
+            product_description: org?.name
+              ? `Teaching enrichment classes through ${org.name}`
+              : 'Teaching enrichment classes',
           },
           metadata: {
             instructor_id: me.id,
