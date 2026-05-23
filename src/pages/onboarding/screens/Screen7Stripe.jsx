@@ -77,23 +77,23 @@ export default function Screen7Stripe({ slug, instructor, onboarding, onAdvance,
     setBusy(true);
     setSubmitError('');
     try {
-      const { data, error } = await invokeOnboardingFn(
+      const { data, error, body } = await invokeOnboardingFn(
         'create-stripe-connect-account',
         { origin: window.location.origin },
         { navigate }
       );
       if (error || !data?.onboarding_url) {
-        // The edge function passes the actual Stripe error in
-        // data.stripe_message / data.stripe_code when account creation
-        // fails. Show that so platform-setup issues surface clearly
-        // instead of a generic "try again."
-        const stripeMsg = data?.stripe_message;
+        // On error, invokeOnboardingFn returns data=null and puts the parsed
+        // response body on `body`. The edge function returns
+        // { error, stripe_code, stripe_message } when account creation fails;
+        // surface the human-readable stripe_message so platform-setup issues
+        // are visible instead of just a code.
+        const stripeMsg = body?.stripe_message;
         if (stripeMsg) {
-          setSubmitError(`Stripe: ${stripeMsg}`);
+          setSubmitError(`We couldn't set up your Stripe account: ${stripeMsg}`);
         } else {
           setSubmitError(
-            (error && error.message) ||
-              "Couldn't start Stripe setup. Please try again in a minute."
+            "We couldn't start Stripe setup right now. Please try again in a minute, or email your coordinator if it keeps happening."
           );
         }
         setBusy(false);
