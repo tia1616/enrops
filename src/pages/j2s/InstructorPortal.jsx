@@ -644,7 +644,7 @@ export default function InstructorPortal() {
             </h1>
             <p style={{ color: MUTED, margin: "4px 0 0", fontSize: 14 }}>
               You have {totalCount} camp{totalCount === 1 ? "" : "s"} on your schedule
-              {pending.length > 0 && ` · ${pending.length} awaiting your response`}.
+              {needsResponse.length > 0 && ` · ${needsResponse.length} awaiting your response`}.
             </p>
           </div>
         </div>
