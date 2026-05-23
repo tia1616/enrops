@@ -67,7 +67,17 @@ serve(async (req: Request) => {
         account = await stripe.accounts.create({
           type: 'express',
           email: me.email,
-          capabilities: { transfers: { requested: true } },
+          // We only USE transfers (paying contractors out), but Stripe doesn't
+          // approve transfers-only Express accounts for new platforms without
+          // a manual review process. Requesting card_payments alongside is the
+          // standard Express pattern — it stays dormant since we never charge
+          // through these accounts, and Stripe doesn't bill for unused
+          // capabilities. Removing card_payments would require getting
+          // platform approval from Stripe Support first.
+          capabilities: {
+            transfers: { requested: true },
+            card_payments: { requested: true },
+          },
           metadata: {
             instructor_id: me.id,
             organization_id: me.organization_id,
