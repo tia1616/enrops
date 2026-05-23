@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
-import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
+import WizardLayout, { PrimaryButton, ScreenError } from '../WizardLayout.jsx';
 
 // Screen 3 — Business Eligibility (ORS 670.600). Contractor must self-certify
-// at least 3 of the displayed criteria. Each checked box requires a free-text "describe
-// how" answer. Anyone who can't meet 3 confirms via modal and the wizard
-// calls submit-onboarding-declined (terminal — overall_status flips to
-// 'declined' and they land on /:slug/onboarding/declined).
+// at least 3 of the displayed criteria. The attestation itself is the legal
+// record; we don't ask for per-criterion explanations. Anyone who can't meet
+// 3 confirms via modal and the wizard calls submit-onboarding-declined
+// (terminal — overall_status flips to 'declined' and they land on
+// /:slug/onboarding/declined).
 
 // ORS 670.600 contractor criteria — wording is J2S-instructor-specific
 // for clarity. Legal text is captured in the contractor agreement; this UI
@@ -48,24 +49,15 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
   const [checked, setChecked] = useState(() =>
     Object.fromEntries(CRITERIA.map((c) => [c.key, false]))
   );
-  const [descriptions, setDescriptions] = useState(() =>
-    Object.fromEntries(CRITERIA.map((c) => [c.key, '']))
-  );
   const [submitError, setSubmitError] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmDecline, setConfirmDecline] = useState(false);
 
   const checkedCount = Object.values(checked).filter(Boolean).length;
-  const allCheckedHaveText = CRITERIA.every(
-    (c) => !checked[c.key] || descriptions[c.key].trim().length > 0
-  );
-  const meetsThreshold = checkedCount >= 3 && allCheckedHaveText;
+  const meetsThreshold = checkedCount >= 3;
 
   function setOne(key, value) {
     setChecked((s) => ({ ...s, [key]: value }));
-    if (!value) {
-      setDescriptions((d) => ({ ...d, [key]: '' }));
-    }
   }
 
   async function handleSubmit(e) {
@@ -74,18 +66,15 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
     setBusy(true);
     setSubmitError('');
     try {
-      const payload = {
-        // authority_to_hire is intentionally hardcoded false. The criterion
-        // doesn't apply to J2S instructors (no subcontracting rights granted
-        // by the contractor agreement). The function still expects the field;
-        // sending false here doesn't change the criteria_met count since the
-        // instructor didn't check it.
-        authority_to_hire: false,
-        authority_to_hire_text: null,
-      };
+      // authority_to_hire is hardcoded false. The criterion doesn't apply to
+      // J2S instructors (no subcontracting rights granted by the contractor
+      // agreement). The function still expects the field; sending false here
+      // doesn't change the criteria_met count since the instructor didn't
+      // check it. The *_text fields are intentionally omitted — the
+      // attestation itself is the legal record.
+      const payload = { authority_to_hire: false };
       for (const c of CRITERIA) {
         payload[c.key] = checked[c.key];
-        payload[`${c.key}_text`] = checked[c.key] ? descriptions[c.key].trim() : null;
       }
       const { error } = await invokeOnboardingFn('submit-ors-certification', payload, {
         navigate,
@@ -135,38 +124,20 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
       stepsCompleted={onboarding?.steps_completed}
       onBack={onBack}
       title="Business eligibility"
-      subtitle="Oregon law requires independent contractors to meet at least 3 of the criteria below. Check each that applies and briefly describe how."
+      subtitle="Oregon law requires independent contractors to meet at least 3 of the criteria below. Check each that applies."
     >
       <form onSubmit={handleSubmit} noValidate>
-        <div className="space-y-4">
+        <div className="space-y-3">
           {CRITERIA.map((c) => (
-            <div key={c.key} className="rounded-md border border-neutral-200 p-3">
-              <label className="flex items-start gap-3">
-                <input
-                  type="checkbox"
-                  checked={checked[c.key]}
-                  onChange={(e) => setOne(c.key, e.target.checked)}
-                  className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400"
-                />
-                <span className="text-sm text-neutral-800">{c.label}</span>
-              </label>
-              {checked[c.key] && (
-                <div className="mt-2 pl-7">
-                  <textarea
-                    value={descriptions[c.key]}
-                    onChange={(e) =>
-                      setDescriptions((d) => ({ ...d, [c.key]: e.target.value }))
-                    }
-                    rows={2}
-                    placeholder="Briefly describe how this applies to you."
-                    className="block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-900 focus:border-neutral-500 focus:outline-none"
-                  />
-                  {checked[c.key] && descriptions[c.key].trim().length === 0 && (
-                    <FieldError>Briefly describe how this applies to you.</FieldError>
-                  )}
-                </div>
-              )}
-            </div>
+            <label key={c.key} className="flex items-start gap-3 rounded-md border border-neutral-200 p-3 hover:bg-neutral-50">
+              <input
+                type="checkbox"
+                checked={checked[c.key]}
+                onChange={(e) => setOne(c.key, e.target.checked)}
+                className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400"
+              />
+              <span className="text-sm text-neutral-800">{c.label}</span>
+            </label>
           ))}
         </div>
 
