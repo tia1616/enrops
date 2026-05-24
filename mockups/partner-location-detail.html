@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Partner Location Info — Mockup v2</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .phone { max-width: 420px; margin: 0 auto; background: #EAEADD; border: 1px solid #e5e7eb; border-radius: 16px; padding: 16px; }
+  .desktop { max-width: 720px; margin: 0 auto; background: white; border: 1px solid #e2dfd5; border-radius: 12px; padding: 24px; }
+  .card { background: white; border: 1px solid #e2dfd5; border-radius: 8px; padding: 14px 16px; margin-bottom: 10px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .pill-verified { background: #dcfce7; color: #166534; }
+  .pill-flagged { background: #fef3c7; color: #92400e; }
+  .pill-primary { background: #ede9fe; color: #6d28d9; }
+  .pill-confidence-high { background: #dcfce7; color: #166534; }
+  .pill-confidence-low { background: #fee2e2; color: #b91c1c; }
+  .section-h { font-size: 11px; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
+  .anchor { color: #2563eb; text-decoration: none; font-size: 14px; }
+  .anchor:hover { text-decoration: underline; }
+  .input { width: 100%; border: 1px solid #d1d5db; border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+  .input-flagged { border-color: #fbbf24; background: #fffbeb; }
+  .label { font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 4px; display: block; }
+  .help { font-size: 11px; color: #6b7280; margin-top: 4px; }
+  .autocomplete-dropdown { background: white; border: 1px solid #d1d5db; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-top: -1px; }
+  .autocomplete-item { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; font-size: 13px; cursor: pointer; }
+  .autocomplete-item:hover { background: #f9fafb; }
+  .static-map { width: 100%; height: 140px; background: linear-gradient(135deg, #e0f2fe 0%, #ddd6fe 50%, #fef3c7 100%); border-radius: 8px; position: relative; }
+  .static-map::after { content: '📍'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 32px; }
+  .dora-bubble { background: #faf5ff; border: 1px solid #d8b4fe; border-radius: 12px; padding: 16px; position: relative; }
+  .dora-bubble::before { content: '🎓'; position: absolute; top: -8px; left: 16px; background: #faf5ff; padding: 0 4px; }
+</style>
+</head>
+<body class="bg-gray-50">
+
+<div class="max-w-7xl mx-auto p-6">
+  <h1 class="text-3xl font-bold mb-2">Partner location info — mockup v2</h1>
+  <p class="text-gray-600 mb-6">Updated per your feedback: parking section dropped (out of scope for v1), instructor view simplified to just the main school/secretary phone, multiple-contacts supported in admin form, and a new <strong>AI-assisted import</strong> flow so you don't enter every location by hand.</p>
+
+  <p class="text-sm mb-6">Jump to:
+    <a href="#instructor" class="anchor">Instructor view (simplified)</a> ·
+    <a href="#ai-import" class="anchor">AI-assisted import (NEW)</a> ·
+    <a href="#admin-form" class="anchor">Admin form (with multiple contacts)</a> ·
+    <a href="#verify" class="anchor">Address verification</a> ·
+    <a href="#data" class="anchor">Data model</a>
+  </p>
+
+  <div class="space-y-12">
+
+    <!-- INSTRUCTOR VIEW (SIMPLIFIED) -->
+    <div id="instructor">
+      <h2 class="text-lg font-bold mb-2">1. Instructor view — simplified</h2>
+      <p class="text-sm text-gray-600 mb-3">In the field, instructors really only need: <strong>where am I going</strong>, <strong>one phone number to call if anything goes wrong</strong>, <strong>how do I get in</strong>, and <strong>how do I send kids home</strong>. Everything else is admin's problem. So that's all the instructor sees.</p>
+      <div class="phone">
+        <div class="card">
+          <div class="text-xs text-green-700 font-semibold uppercase tracking-wide">Confirmed</div>
+          <h3 class="font-bold text-xl mt-1 leading-tight">Robotics Camp</h3>
+          <div class="text-xs text-gray-500 mt-2 leading-relaxed">
+            Week 3 · Jun 22 – Jun 26<br/>
+            Sloan Elementary · Full day 9am–4pm<br/>
+            Lead instructor · ages 8–11
+          </div>
+        </div>
+
+        <div class="section-h">Location</div>
+        <div class="card">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-bold text-sm">Sloan Elementary</div>
+            <span class="pill pill-verified">✓ Verified</span>
+          </div>
+          <div class="text-xs text-gray-600 mb-3">
+            7400 W Bluemound Rd<br/>
+            Milwaukee, WI 53213
+          </div>
+          <div class="static-map mb-3"></div>
+          <div class="flex gap-2">
+            <a class="text-xs text-white font-semibold px-3 py-2 rounded text-center flex-1" style="background: #691D39;" href="#">Get directions</a>
+            <a class="text-xs text-gray-700 font-semibold px-3 py-2 rounded border border-gray-300 text-center flex-1" href="#">Open in Maps</a>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-h">Phone</div>
+          <a class="text-lg font-bold text-blue-600 underline" href="tel:+14145550100">📞 (414) 555-0100</a>
+          <div class="text-xs text-gray-500 mt-1">Sloan Elementary front desk · ask for the afterschool office if no answer</div>
+        </div>
+
+        <div class="card">
+          <div class="section-h">Arrival</div>
+          <div class="text-sm leading-relaxed">Enter through Door 4 (south side, faces parking lot). Sign in with the front desk between 8:45–9:00am. Kids meet you in the multipurpose room.</div>
+        </div>
+
+        <div class="card">
+          <div class="section-h">Dismissal</div>
+          <div class="text-sm leading-relaxed">Walk kids to the lobby at 3:55pm. Parents sign each child out at the front desk — don't release without a sign-out. Late pickup goes to extended care wing at 4:15.</div>
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-3 max-w-md">Note: the instructor sees <em>one</em> phone number (the location's main line). All the named contacts (afterschool director, principal, facilities) live in the admin DB so you can find the right person — but the instructor doesn't need a contact directory in their pocket.</p>
+    </div>
+
+    <!-- AI-ASSISTED IMPORT (NEW) -->
+    <div id="ai-import">
+      <h2 class="text-lg font-bold mb-2">2. AI-assisted import — NEW</h2>
+      <p class="text-sm text-gray-600 mb-3">Same idea as the curriculum extractor: you drop in whatever the partner sent you (a PDF welcome packet, a copy-pasted email, a screenshot of their site), and Dora the Director extracts structured fields. Anything she's not confident about gets a yellow flag for you to confirm. You never re-type.</p>
+
+      <div class="desktop">
+        <div class="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Add a partner location · Step 1</div>
+        <h3 class="font-bold text-xl mb-4">Paste or upload what the partner sent</h3>
+
+        <div class="grid grid-cols-2 gap-3 mb-5">
+          <div class="border-2 border-dashed border-gray-300 rounded-lg p-5 text-center cursor-pointer hover:bg-gray-50">
+            <div class="text-3xl mb-1">📄</div>
+            <div class="text-sm font-semibold">Upload PDF / image</div>
+            <div class="text-xs text-gray-500 mt-1">Welcome packet, flyer, screenshot</div>
+          </div>
+          <div class="border-2 border-dashed border-gray-300 rounded-lg p-5 text-center cursor-pointer hover:bg-gray-50">
+            <div class="text-3xl mb-1">📋</div>
+            <div class="text-sm font-semibold">Paste an email / message</div>
+            <div class="text-xs text-gray-500 mt-1">Or a URL to their site</div>
+          </div>
+        </div>
+
+        <textarea class="input mb-4" rows="6" placeholder="Paste here..." style="font-family: monospace;">From: marisa.chen@sloanelementary.org
+Subject: Afterschool program — site info for your team
+
+Hi! Here's everything you need to know for the summer Robotics Camp:
+
+Location: Sloan Elementary, 7400 W Bluemound Rd, Milwaukee, WI 53213
+Main phone: (414) 555-0100
+My direct line: (414) 555-0199
+
+Arrival: Enter Door 4 on the south side (faces the lot). Sign in
+between 8:45–9:00am. Kids will meet you in the multipurpose room.
+
+Dismissal: Bring kids to the lobby at 3:55. Parents sign each child
+out at the front desk — please don't release anyone without a sign-out.
+Late pickup goes to extended care at 4:15.
+
+Let me know if you need anything else.
+— Marisa Chen, Afterschool Director</textarea>
+
+        <button class="text-sm text-white font-semibold px-5 py-2 rounded" style="background: #691D39;">Extract with Dora →</button>
+      </div>
+
+      <div class="mt-6">
+        <div class="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Step 2 · Review what Dora extracted</div>
+        <h3 class="font-bold text-xl mb-4">Sloan Elementary</h3>
+
+        <div class="dora-bubble mb-5">
+          <div class="text-sm font-semibold mb-1" style="color: #6d28d9;">Dora here. I pulled this from Marisa's email — looks pretty complete.</div>
+          <div class="text-xs text-gray-700">I flagged two things in yellow that I wasn't 100% sure about. Everything green I'm confident on.</div>
+        </div>
+
+        <div class="desktop" style="padding: 20px;">
+          <div class="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <label class="label flex justify-between"><span>Location name</span><span class="pill pill-confidence-high">High</span></label>
+              <input class="input" value="Sloan Elementary" />
+            </div>
+            <div>
+              <label class="label flex justify-between"><span>Partner organization</span><span class="pill pill-confidence-low">Needs you</span></label>
+              <input class="input input-flagged" value="" placeholder="e.g., Milwaukee Public Schools" />
+              <div class="help text-amber-700">Not in the email — please pick the parent district / org.</div>
+            </div>
+          </div>
+
+          <div class="mb-4">
+            <label class="label flex justify-between"><span>Address</span><span class="pill pill-confidence-high">Verified with Google</span></label>
+            <input class="input" value="7400 W Bluemound Rd, Milwaukee, WI 53213" />
+            <div class="help">📍 Matched a Google place_id · rooftop accuracy</div>
+          </div>
+
+          <div class="mb-4">
+            <label class="label flex justify-between"><span>Main phone (instructor-facing)</span><span class="pill pill-confidence-high">High</span></label>
+            <input class="input" value="(414) 555-0100" />
+            <div class="help">From "Main phone" in the email.</div>
+          </div>
+
+          <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 mb-4">
+            <div class="section-h">Contacts Dora pulled out</div>
+            <div class="text-sm">
+              <div class="mb-2"><span class="pill pill-primary mr-2">Primary</span>Marisa Chen — Afterschool Director · (414) 555-0199 · marisa.chen@sloanelementary.org</div>
+            </div>
+            <button class="text-xs text-blue-600 underline">+ Add another contact</button>
+          </div>
+
+          <div class="mb-4">
+            <label class="label flex justify-between"><span>Arrival policy</span><span class="pill pill-confidence-high">High</span></label>
+            <textarea class="input" rows="2">Enter Door 4 (south side, faces parking lot). Sign in between 8:45–9:00am. Kids meet you in the multipurpose room.</textarea>
+          </div>
+
+          <div class="mb-4">
+            <label class="label flex justify-between"><span>Dismissal policy</span><span class="pill pill-confidence-high">High</span></label>
+            <textarea class="input" rows="2">Walk kids to the lobby at 3:55pm. Parents sign each child out at the front desk — don't release without a sign-out. Late pickup goes to extended care wing at 4:15.</textarea>
+          </div>
+
+          <div class="flex justify-between items-center pt-4 border-t border-gray-100">
+            <div class="text-xs text-gray-500">⏱ Time saved vs typing manually: <strong>~12 min</strong></div>
+            <div class="flex gap-2">
+              <button class="text-sm text-gray-500 font-semibold px-4 py-2">Cancel</button>
+              <button class="text-sm text-gray-700 font-semibold px-4 py-2 border border-gray-300 rounded">Save as draft</button>
+              <button class="text-sm text-white font-semibold px-5 py-2 rounded" style="background: #691D39;">Confirm & save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="text-xs text-gray-500 mt-3 max-w-2xl">Same pattern as your existing curriculum extractor: drop input → Dora extracts → flag-for-review markup on low-confidence fields → you confirm. Reuses the same Anthropic API call pattern + the same UX vocabulary so it feels familiar.</p>
+    </div>
+
+    <!-- ADMIN FORM (MULTI-CONTACT) -->
+    <div id="admin-form">
+      <h2 class="text-lg font-bold mb-2">3. Admin form — full edit, multi-contact</h2>
+      <p class="text-sm text-gray-600 mb-3">Lives at <code>/admin/contacts/partners/:id</code>. After AI extraction (above) saves a location, you can come back here to edit anything. Multiple contacts supported — one marked Primary (= the instructor-facing main phone).</p>
+      <div class="desktop">
+        <div class="flex justify-between items-center mb-5">
+          <div>
+            <div class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Edit partner location</div>
+            <h3 class="font-bold text-xl mt-1">Sloan Elementary</h3>
+          </div>
+          <span class="pill pill-verified">✓ Verified Apr 3, 2026</span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4 mb-5">
+          <div>
+            <label class="label">Partner organization</label>
+            <input class="input" value="Milwaukee Public Schools" />
+            <div class="help">e.g., "YMCA of Greater Milwaukee" for a Y branch</div>
+          </div>
+          <div>
+            <label class="label">Location name</label>
+            <input class="input" value="Sloan Elementary" />
+            <div class="help">The specific site. Match what's on the building.</div>
+          </div>
+        </div>
+
+        <div class="mb-5">
+          <label class="label">Address</label>
+          <input class="input" value="7400 W Bluemound Rd, Milwaukee, WI 53213" />
+          <div class="help">📍 Verified by Google · place_id stored · last checked Apr 3, 2026 · <a class="anchor text-xs" href="#">Re-verify</a></div>
+        </div>
+
+        <div class="mb-5">
+          <label class="label">Main phone (instructor-facing)</label>
+          <input class="input" value="(414) 555-0100" />
+          <div class="help">This is the <strong>only</strong> number instructors see in the portal. Usually the front desk / secretary.</div>
+        </div>
+
+        <!-- Multi-contact list -->
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-5">
+          <div class="flex justify-between items-center mb-3">
+            <div class="section-h" style="margin-bottom: 0;">Contacts</div>
+            <button class="text-xs text-blue-600 underline">+ Add contact</button>
+          </div>
+
+          <div class="bg-white border border-gray-200 rounded p-3 mb-2">
+            <div class="flex justify-between items-start mb-2">
+              <div>
+                <div class="font-semibold text-sm">Marisa Chen <span class="pill pill-primary ml-1">Primary</span></div>
+                <div class="text-xs text-gray-500">Afterschool Director</div>
+              </div>
+              <button class="text-xs text-gray-400 hover:text-red-500">Remove</button>
+            </div>
+            <div class="text-xs text-gray-700">📞 (414) 555-0199 · ✉ marisa.chen@sloanelementary.org</div>
+          </div>
+
+          <div class="bg-white border border-gray-200 rounded p-3 mb-2">
+            <div class="flex justify-between items-start mb-2">
+              <div>
+                <div class="font-semibold text-sm">Tom Rivera</div>
+                <div class="text-xs text-gray-500">Principal</div>
+              </div>
+              <button class="text-xs text-gray-400 hover:text-red-500">Remove</button>
+            </div>
+            <div class="text-xs text-gray-700">📞 (414) 555-0150 · ✉ trivera@sloanelementary.org</div>
+          </div>
+
+          <div class="bg-white border border-gray-200 rounded p-3">
+            <div class="flex justify-between items-start mb-2">
+              <div>
+                <div class="font-semibold text-sm">Brenda Park</div>
+                <div class="text-xs text-gray-500">Facilities / Custodial</div>
+              </div>
+              <button class="text-xs text-gray-400 hover:text-red-500">Remove</button>
+            </div>
+            <div class="text-xs text-gray-700">📞 (414) 555-0167</div>
+          </div>
+        </div>
+
+        <div class="mb-4">
+          <label class="label">Arrival policy</label>
+          <textarea class="input" rows="3">Enter through Door 4 (south side, faces parking lot). Sign in with the front desk between 8:45–9:00am. Kids meet you in the multipurpose room.</textarea>
+        </div>
+
+        <div class="mb-5">
+          <label class="label">Dismissal policy</label>
+          <textarea class="input" rows="3">Walk kids to the lobby at 3:55pm. Parents sign each child out at the front desk — don't release without a sign-out. Late pickup goes to extended care wing at 4:15.</textarea>
+        </div>
+
+        <div class="flex justify-between items-center pt-4 border-t border-gray-100">
+          <div class="text-xs text-gray-500">⏱ Time saved: instructors stop emailing you for the address — <strong>~15 min per camp week</strong></div>
+          <div class="flex gap-2">
+            <button class="text-sm text-gray-500 font-semibold px-4 py-2">Cancel</button>
+            <button class="text-sm text-white font-semibold px-5 py-2 rounded" style="background: #691D39;">Save</button>
+          </div>
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Parking notes deliberately removed for v1. We'll revisit when we have a clearer pattern across location types.</p>
+    </div>
+
+    <!-- VERIFICATION UX -->
+    <div id="verify">
+      <h2 class="text-lg font-bold mb-2">4. Address verification</h2>
+      <p class="text-sm text-gray-600 mb-3">Two flows. <strong>(A)</strong> admin types address → Google Places suggests as they go → they pick one → done. <strong>(B)</strong> admin pastes a known-bad address → we surface a "Did you mean?" card.</p>
+
+      <div class="grid lg:grid-cols-2 gap-6">
+        <div>
+          <h3 class="font-semibold mb-2 text-sm">A. Typing — Places Autocomplete</h3>
+          <div class="desktop" style="padding: 20px;">
+            <label class="label">Address</label>
+            <input class="input" value="7400 W Bluemound" />
+            <div class="autocomplete-dropdown">
+              <div class="autocomplete-item" style="background: #f0f9ff;">
+                <strong>7400 W Bluemound Rd</strong>, Milwaukee, WI 53213
+                <div class="text-xs text-gray-500">📍 Sloan Elementary School</div>
+              </div>
+              <div class="autocomplete-item">
+                7400 W Bluemound Rd, Wauwatosa, WI 53213
+              </div>
+              <div class="autocomplete-item">
+                7400 Bluemound Pl, Milwaukee, WI 53213
+              </div>
+            </div>
+            <div class="help">Pick from the list to verify. Costs ~$0 at your scale.</div>
+          </div>
+        </div>
+
+        <div>
+          <h3 class="font-semibold mb-2 text-sm">B. Pasting — "Did you mean?" card</h3>
+          <div class="desktop" style="padding: 20px;">
+            <label class="label">Address</label>
+            <input class="input input-flagged" value="7400 Bluemount Rd, Milwauke" />
+            <div class="bg-amber-50 border border-amber-300 rounded-lg p-3 mt-3">
+              <div class="text-xs font-semibold text-amber-900 mb-2">⚠ We couldn't fully match this address.</div>
+              <div class="text-sm text-amber-900 mb-3">Did you mean:</div>
+              <div class="bg-white rounded p-2 mb-3 text-sm border border-amber-200">
+                <strong>7400 W Bluemound Rd</strong>, Milwaukee, WI 53213
+                <div class="text-xs text-gray-500">📍 Sloan Elementary School</div>
+              </div>
+              <div class="flex gap-2">
+                <button class="text-xs text-amber-900 font-semibold px-3 py-1.5 border border-amber-400 rounded flex-1">Keep what I typed</button>
+                <button class="text-xs text-white font-semibold px-3 py-1.5 rounded flex-1" style="background: #691D39;">Use Google's version</button>
+              </div>
+            </div>
+            <div class="help">Triggers when Google's match has <code>partial_match: true</code> or low confidence. Never auto-overwrites your input.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DATA MODEL -->
+    <div id="data">
+      <h2 class="text-lg font-bold mb-2">5. Data model</h2>
+      <div class="bg-white border border-gray-200 rounded-lg p-5">
+        <h3 class="font-bold mb-3">New table: <code>partner_locations</code></h3>
+        <ul class="text-sm space-y-1 text-gray-700 mb-5 font-mono">
+          <li><code>partner_name</code> · <code>location_name</code></li>
+          <li><code>street_address</code> · <code>city</code> · <code>state</code> · <code>zip</code></li>
+          <li><code>google_place_id</code> · <code>lat</code> · <code>lng</code> · <code>address_verified_at</code></li>
+          <li><code>main_phone</code> (the one instructors see)</li>
+          <li><code>arrival_policy</code> (text) · <code>dismissal_policy</code> (text)</li>
+          <li><code>extracted_from_source</code> (text — what Dora pulled from; audit field)</li>
+          <li><code>extracted_at</code> · <code>extraction_confidence</code> (jsonb per-field)</li>
+        </ul>
+
+        <h3 class="font-bold mb-3">New table: <code>partner_location_contacts</code></h3>
+        <ul class="text-sm space-y-1 text-gray-700 mb-5 font-mono">
+          <li><code>partner_location_id</code> (FK)</li>
+          <li><code>name</code> · <code>role</code> · <code>phone</code> · <code>email</code></li>
+          <li><code>is_primary</code> (boolean — instructor-facing one)</li>
+          <li><code>order_index</code></li>
+        </ul>
+
+        <h3 class="font-bold mb-3">Linkage</h3>
+        <p class="text-sm text-gray-700">Existing <code>program_locations</code> table gets a new FK column <code>partner_location_id</code> → <code>partner_locations.id</code>. The text <code>district</code> column you cleaned up 2026-05-21 stays for now; we can fold it into <code>partner_locations.partner_name</code> in a later pass.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="mt-12 bg-amber-50 border border-amber-200 rounded-lg p-5 max-w-3xl">
+    <h2 class="font-bold text-lg mb-2">Open questions for you</h2>
+    <ul class="text-sm space-y-2 text-gray-700 list-disc pl-5">
+      <li>Confirm: the AI extractor should accept <strong>PDF, image (OCR), pasted text, and URLs</strong>. Anything else (e.g., live email forward to a special address)?</li>
+      <li>"Primary" contact is what instructors see. Does that always equal the location's main phone, or do we want them as <strong>two separate fields</strong> (main switchboard vs. primary contact person)? Mocked them as separate above.</li>
+      <li>When Dora's confidence is low on an extraction, do you want her to <strong>only flag it</strong>, or also <strong>refuse to save until you confirm</strong>? Currently shown as "flag + still saveable as draft."</li>
+      <li>For the Google Maps API key — when you're ready, here's what to do (whenever you've got 10 min):
+        <ol class="list-decimal pl-6 mt-1 space-y-1">
+          <li>Go to <code>console.cloud.google.com</code>, sign in.</li>
+          <li>Create a new project ("Enrops" or similar).</li>
+          <li>APIs & Services → Library → enable <strong>Places API (New)</strong> + <strong>Geocoding API</strong> + <strong>Maps Static API</strong>.</li>
+          <li>APIs & Services → Credentials → "Create Credentials" → API key. Restrict it: HTTP referrers, allow <code>https://enrops.com/*</code> + <code>https://*.vercel.app/*</code>.</li>
+          <li>Set up billing (required to use the APIs even on the free tier; you won't get charged at this scale).</li>
+          <li>Paste the key to me. I'll add it to Vercel env vars + the Supabase edge function env.</li>
+        </ol>
+      </li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

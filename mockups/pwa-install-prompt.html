@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PWA Install Prompt — Mockup</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .phone { max-width: 380px; margin: 0 auto; background: white; border: 1px solid #e5e7eb; border-radius: 24px; overflow: hidden; box-shadow: 0 6px 30px rgba(0,0,0,0.08); }
+  .phone-bezel { background: #f3f4f6; padding: 32px 0; }
+  .status-bar { height: 28px; background: white; }
+  .header { padding: 14px 16px; border-bottom: 1px solid #f0eee5; display: flex; justify-content: space-between; align-items: center; }
+  .brand { color: #691D39; font-weight: 800; font-size: 18px; }
+  .install-btn { background: transparent; border: 1px solid #691D39; color: #691D39; font-size: 11px; font-weight: 600; padding: 5px 10px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  .content { padding: 16px; background: #EAEADD; min-height: 320px; }
+  .card { background: white; border: 1px solid #e2dfd5; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+  /* Spotlight overlay */
+  .overlay-stage { position: relative; }
+  .overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.75); pointer-events: auto; }
+  .spotlight { position: absolute; background: transparent; border-radius: 8px; box-shadow: 0 0 0 9999px rgba(0,0,0,0.75); pointer-events: none; }
+  .callout { position: absolute; background: white; border-radius: 12px; padding: 16px; max-width: 280px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+  .callout::before { content: ''; position: absolute; width: 12px; height: 12px; background: white; transform: rotate(45deg); }
+  .annotated-icon { display: inline-block; padding: 4px 6px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px; font-family: monospace; font-size: 11px; }
+  h2 { font-weight: 700; }
+</style>
+</head>
+<body class="bg-gray-50">
+
+<div class="max-w-6xl mx-auto p-6">
+  <h1 class="text-3xl font-bold mb-2">PWA install prompt — mockup</h1>
+  <p class="text-gray-600 mb-6">Three screens: <a href="#normal" class="text-blue-600 underline">normal portal header</a> · <a href="#android" class="text-blue-600 underline">Android spotlight</a> · <a href="#ios" class="text-blue-600 underline">iOS spotlight</a>. Behavior: a small <em>"Install on phone"</em> button sits in the portal header on every page. Tapping it fires the spotlight. Already-installed users never see it (we detect <code>display-mode: standalone</code>). One-time dismissal stored in localStorage so they don't get re-prompted on every visit.</p>
+
+  <div class="grid lg:grid-cols-3 gap-8">
+
+    <!-- SCREEN 1: NORMAL HEADER -->
+    <div id="normal">
+      <h2 class="text-lg mb-2">1. Normal portal header</h2>
+      <p class="text-sm text-gray-600 mb-3">Small button next to "My profile" — discoverable, not intrusive. Same affordance on instructor / parent / provider portals.</p>
+      <div class="phone-bezel">
+        <div class="phone">
+          <div class="status-bar"></div>
+          <div class="header">
+            <span class="brand">Enrops</span>
+            <div class="flex gap-1">
+              <button class="install-btn">📱 Install</button>
+              <button class="install-btn">Documents</button>
+              <button class="install-btn">Profile →</button>
+            </div>
+          </div>
+          <div class="content">
+            <div class="card">
+              <div class="text-xs uppercase tracking-wide text-gray-500 font-semibold mb-1">Confirmed schedule</div>
+              <div class="font-semibold text-sm">Robotics Camp — Week 3</div>
+              <div class="text-xs text-gray-500">Sloan Elementary · Jun 22–26</div>
+            </div>
+            <div class="card">
+              <div class="font-semibold text-sm">Marine Bio Camp — Week 5</div>
+              <div class="text-xs text-gray-500">YMCA East · Jul 6–10</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Notes: the install button hides automatically once the app is installed. We also detect already-installed Android via <code>getInstalledRelatedApps()</code> and don't render it.</p>
+    </div>
+
+    <!-- SCREEN 2: ANDROID SPOTLIGHT -->
+    <div id="android">
+      <h2 class="text-lg mb-2">2. Android — tap fires native install</h2>
+      <p class="text-sm text-gray-600 mb-3">On Chromium browsers (Chrome, Edge, Samsung Internet), tapping our button calls the captured <code>beforeinstallprompt</code> event. The browser shows its own native sheet — we don't need to draw one. Our spotlight is just the brief affirmation card.</p>
+      <div class="phone-bezel">
+        <div class="phone overlay-stage" style="height: 580px;">
+          <div class="status-bar"></div>
+          <div class="header">
+            <span class="brand">Enrops</span>
+            <div class="flex gap-1">
+              <button class="install-btn" style="background: white; box-shadow: 0 0 0 4px rgba(207,177,47,0.5);">📱 Install</button>
+              <button class="install-btn">Documents</button>
+              <button class="install-btn">Profile →</button>
+            </div>
+          </div>
+          <div class="content"></div>
+          <!-- Dim overlay -->
+          <div class="overlay"></div>
+          <!-- Spotlight cutout sitting on top of the Install button -->
+          <div class="spotlight" style="top: 36px; right: 96px; width: 86px; height: 28px;"></div>
+          <!-- Native sheet, faked -->
+          <div style="position:absolute; bottom: 0; left: 0; right: 0; background: white; border-radius: 16px 16px 0 0; padding: 20px; box-shadow: 0 -4px 20px rgba(0,0,0,0.2);">
+            <div class="flex items-center gap-3 mb-4">
+              <div style="width: 48px; height: 48px; background: #691D39; border-radius: 12px; display:flex; align-items:center; justify-content:center; color: white; font-weight: 800;">E</div>
+              <div>
+                <div class="font-semibold text-sm">Install Enrops</div>
+                <div class="text-xs text-gray-500">enrops.com</div>
+              </div>
+            </div>
+            <p class="text-xs text-gray-600 mb-4">Add this app to your home screen for quick access to your schedule and materials.</p>
+            <div class="flex gap-2 justify-end">
+              <button class="text-sm text-gray-500 font-semibold px-3 py-2">Cancel</button>
+              <button class="text-sm bg-blue-600 text-white font-semibold px-4 py-2 rounded">Install</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">After install: app launches into <code>/j2s/instructor</code> (or whatever portal the user was on). Header install button hides.</p>
+    </div>
+
+    <!-- SCREEN 3: iOS SPOTLIGHT -->
+    <div id="ios">
+      <h2 class="text-lg mb-2">3. iOS — manual Share → Add to Home Screen</h2>
+      <p class="text-sm text-gray-600 mb-3">iOS Safari doesn't expose a programmatic install. We detect iOS user-agent + <code>navigator.standalone === false</code> and render a card with the two-step instructions and an annotated arrow pointing at the Share icon.</p>
+      <div class="phone-bezel">
+        <div class="phone overlay-stage" style="height: 580px;">
+          <div class="status-bar"></div>
+          <div class="header">
+            <span class="brand">Enrops</span>
+            <div class="flex gap-1">
+              <button class="install-btn">📱 Install</button>
+              <button class="install-btn">Documents</button>
+              <button class="install-btn">Profile →</button>
+            </div>
+          </div>
+          <div class="content"></div>
+          <!-- Dim overlay -->
+          <div class="overlay"></div>
+          <!-- Card -->
+          <div style="position:absolute; top: 80px; left: 16px; right: 16px; background: white; border-radius: 16px; padding: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.3);">
+            <div class="text-xs uppercase tracking-wide text-gray-500 font-semibold mb-2">Install Enrops</div>
+            <h3 class="font-bold text-lg mb-4" style="color: #691D39;">Two steps — takes 10 seconds.</h3>
+
+            <div class="flex items-start gap-3 mb-4">
+              <div style="background: #691D39; color: white; width: 24px; height: 24px; border-radius: 12px; display:flex; align-items:center; justify-content:center; font-size: 12px; font-weight: 700; flex-shrink: 0;">1</div>
+              <div class="text-sm">
+                Tap the Share icon
+                <span class="annotated-icon">⬆</span>
+                at the bottom of Safari.
+              </div>
+            </div>
+
+            <div class="flex items-start gap-3 mb-5">
+              <div style="background: #691D39; color: white; width: 24px; height: 24px; border-radius: 12px; display:flex; align-items:center; justify-content:center; font-size: 12px; font-weight: 700; flex-shrink: 0;">2</div>
+              <div class="text-sm">Scroll down, tap <strong>Add to Home Screen</strong>, then tap <strong>Add</strong>.</div>
+            </div>
+
+            <!-- Annotated screenshot placeholder -->
+            <div class="bg-gray-100 rounded-lg p-3 mb-4 border border-gray-200">
+              <div class="text-xs text-gray-500 mb-2">↓ The Share menu looks like this:</div>
+              <div class="bg-white rounded p-2 text-xs text-gray-700 flex justify-between border border-gray-200">
+                <span>📋 Copy</span>
+                <span style="background: #fef3c7; padding: 2px 6px; border-radius: 4px; font-weight: 600;">📲 Add to Home Screen</span>
+              </div>
+            </div>
+
+            <div class="flex gap-2">
+              <button class="text-xs text-gray-500 font-semibold flex-1 py-2 border border-gray-300 rounded">Not now</button>
+              <button class="text-xs text-white font-semibold flex-1 py-2 rounded" style="background: #691D39;">Got it</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">"Not now" stores a dismissal flag — we re-prompt after 14 days. "Got it" stores a permanent dismissal (they've seen the steps). The header "Install" button stays visible so they can re-trigger if they want.</p>
+    </div>
+
+  </div>
+
+  <div class="mt-12 bg-amber-50 border border-amber-200 rounded-lg p-5 max-w-3xl">
+    <h2 class="font-bold text-lg mb-2">Behavior summary</h2>
+    <ul class="text-sm space-y-2 text-gray-700">
+      <li><strong>Trigger</strong>: header "Install on phone" button (no auto-fire on first visit).</li>
+      <li><strong>Hide automatically</strong> when app is already installed (<code>display-mode: standalone</code>).</li>
+      <li><strong>iOS path</strong>: spotlight card with annotated Share-icon steps.</li>
+      <li><strong>Android / Chrome path</strong>: native install sheet via <code>beforeinstallprompt</code>.</li>
+      <li><strong>Service worker update</strong> (separate from install): when a new version deploys, a small toast appears at the bottom: "New version available — Tap to update." One tap reloads. Never auto-reloads mid-session.</li>
+      <li><strong>Scope</strong>: manifest at <code>/manifest.webmanifest</code>, scope <code>/</code>, start URL <code>/</code>. Same install works for any portal (instructor / parent / provider / admin).</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

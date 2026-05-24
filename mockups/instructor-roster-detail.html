@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Instructor Roster — Mockup (today's stub + future state)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .phone { max-width: 420px; margin: 0 auto; background: #EAEADD; border: 1px solid #e5e7eb; border-radius: 16px; padding: 16px; }
+  .card { background: white; border: 1px solid #e2dfd5; border-radius: 8px; padding: 14px 16px; margin-bottom: 10px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .pill-allergy { background: #fee2e2; color: #b91c1c; }
+  .pill-meds { background: #fef3c7; color: #92400e; }
+  .pill-asthma { background: #ede9fe; color: #6d28d9; }
+  .pill-okay { background: #dcfce7; color: #166534; }
+  .section-h { font-size: 11px; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
+  .row-tap { cursor: pointer; }
+  .row-tap:hover { background: #f9fafb; }
+  details[open] > summary { border-bottom: 1px solid #e2dfd5; padding-bottom: 12px; margin-bottom: 12px; }
+  details summary { list-style: none; cursor: pointer; }
+  details summary::-webkit-details-marker { display: none; }
+  .anchor { color: #2563eb; text-decoration: none; font-size: 14px; }
+  .anchor:hover { text-decoration: underline; }
+  .input { width: 100%; border: 1px solid #d1d5db; border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+</style>
+</head>
+<body class="bg-gray-50">
+
+<div class="max-w-7xl mx-auto p-6">
+  <h1 class="text-3xl font-bold mb-2">Instructor roster — mockup</h1>
+  <p class="text-gray-600 mb-6">Today the roster section is a stub (it lives under the new "Assignment detail" view I just built). This mockup shows what it'll look like once Squarespace registration data flows into the DB.</p>
+
+  <p class="text-sm mb-6">Jump to: <a href="#stub" class="anchor">Stub (shipping today)</a> · <a href="#real" class="anchor">Future state (with Squarespace data)</a> · <a href="#expanded" class="anchor">Expanded camper</a> · <a href="#admin-sync" class="anchor">Admin sync flow</a></p>
+
+  <div class="grid lg:grid-cols-2 gap-8">
+
+    <!-- STUB -->
+    <div id="stub">
+      <h2 class="text-lg font-bold mb-2">1. Stub — what shipped today</h2>
+      <p class="text-sm text-gray-600 mb-3">Shows aggregate count from <code>camp_sessions.current_enrollment</code> plus a "real roster lands closer to start date" line. Honest, no fake data.</p>
+      <div class="phone">
+        <div class="section-h">Roster</div>
+        <div class="card">
+          <div class="text-sm"><strong>12 campers</strong> registered so far.</div>
+          <div class="text-xs text-gray-500 mt-2 leading-relaxed">The full roster (names, ages, allergies, emergency contacts) lands here closer to Jun 22 — your admin will let you know when it's ready.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- REAL -->
+    <div id="real">
+      <h2 class="text-lg font-bold mb-2">2. Future state — with Squarespace data</h2>
+      <p class="text-sm text-gray-600 mb-3">Once parent registration data is in the DB, the section unlocks. One row per camper. Health/allergy pills surface what matters at-a-glance.</p>
+      <div class="phone">
+        <div class="section-h">Roster · 12 campers</div>
+
+        <div class="card row-tap">
+          <div class="flex justify-between items-start">
+            <div>
+              <div class="font-semibold text-sm">Aiden K.</div>
+              <div class="text-xs text-gray-500 mt-0.5">Age 9 · Grade 4</div>
+            </div>
+            <div class="flex gap-1 flex-wrap justify-end" style="max-width: 140px;">
+              <span class="pill pill-allergy">Peanuts</span>
+              <span class="pill pill-asthma">Asthma</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card row-tap">
+          <div class="flex justify-between items-start">
+            <div>
+              <div class="font-semibold text-sm">Maya L.</div>
+              <div class="text-xs text-gray-500 mt-0.5">Age 8 · Grade 3</div>
+            </div>
+            <span class="pill pill-okay">No issues</span>
+          </div>
+        </div>
+
+        <div class="card row-tap">
+          <div class="flex justify-between items-start">
+            <div>
+              <div class="font-semibold text-sm">Theo S.</div>
+              <div class="text-xs text-gray-500 mt-0.5">Age 10 · Grade 5</div>
+            </div>
+            <div class="flex gap-1 flex-wrap justify-end" style="max-width: 140px;">
+              <span class="pill pill-meds">EpiPen on file</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="text-xs text-center text-gray-500 mt-3">Tap any camper to see emergency contacts, pickup-authorized people, allergy details.</div>
+      </div>
+    </div>
+
+    <!-- EXPANDED CAMPER -->
+    <div id="expanded">
+      <h2 class="text-lg font-bold mb-2">3. Expanded camper card</h2>
+      <p class="text-sm text-gray-600 mb-3">Tapping a row opens a drawer with everything parents filled out at registration. Phone numbers are tappable to call/text from a phone.</p>
+      <div class="phone">
+        <div class="card">
+          <div class="flex justify-between items-start mb-3">
+            <div>
+              <div class="font-bold text-base">Aiden K.</div>
+              <div class="text-xs text-gray-500">Age 9 · Grade 4 entering fall · Lincoln Elementary</div>
+            </div>
+            <button class="text-xs text-gray-400">✕ close</button>
+          </div>
+
+          <div class="mb-4">
+            <div class="section-h">Health & allergies</div>
+            <div class="flex gap-1 flex-wrap mb-2">
+              <span class="pill pill-allergy">Peanuts — anaphylaxis</span>
+              <span class="pill pill-asthma">Asthma</span>
+            </div>
+            <div class="text-xs text-gray-600 leading-relaxed">Carries inhaler. Mom says: "No tree nuts but peanuts are the main one. He knows to flag it."</div>
+          </div>
+
+          <div class="mb-4">
+            <div class="section-h">Emergency contact</div>
+            <div class="text-sm">Sarah K. (Mom)</div>
+            <div class="text-sm text-blue-600 underline">📞 (414) 555-0142</div>
+            <div class="text-xs text-gray-500 mt-1">Backup: Mike K. (Dad) — (414) 555-0143</div>
+          </div>
+
+          <div class="mb-4">
+            <div class="section-h">Pickup authorized</div>
+            <ul class="text-sm space-y-1">
+              <li>· Sarah K. (Mom)</li>
+              <li>· Mike K. (Dad)</li>
+              <li>· Linda K. (Grandma)</li>
+            </ul>
+          </div>
+
+          <div>
+            <div class="section-h">Notes from parent</div>
+            <div class="text-xs text-gray-600 leading-relaxed">"Aiden is shy the first day but warms up by day 2. Loves Legos!"</div>
+          </div>
+
+          <div class="mt-4 pt-3 border-t border-gray-100 text-xs text-gray-400">
+            Registered Mar 14, 2026 · Last updated Apr 3, 2026
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADMIN SYNC -->
+    <div id="admin-sync">
+      <h2 class="text-lg font-bold mb-2">4. Admin "Sync registrations" flow</h2>
+      <p class="text-sm text-gray-600 mb-3">Until Squarespace MCP is fully wired in Claude Code (or we hit Core plan limits), this is the manual fallback: you drop a Squarespace export CSV and we diff/import.</p>
+      <div class="phone" style="max-width: 560px;">
+        <div class="bg-white rounded-lg border border-gray-200 p-4">
+          <div class="section-h">Sync Squarespace registrations</div>
+          <h3 class="font-bold mb-3">Robotics Camp — Week 3 (Jun 22–26)</h3>
+
+          <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center mb-4">
+            <div class="text-4xl mb-2">📄</div>
+            <div class="text-sm font-semibold mb-1">Drop your Squarespace export here</div>
+            <div class="text-xs text-gray-500">CSV from Squarespace → Commerce → Orders → Export</div>
+          </div>
+
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+            <div class="text-xs font-semibold text-blue-900 mb-1">Preview before write</div>
+            <div class="text-xs text-blue-800">
+              <strong>4 new</strong> registrations · <strong>1 updated</strong> (Theo's pickup list changed) · <strong>0 cancelled</strong>
+            </div>
+          </div>
+
+          <div class="text-xs text-gray-700 space-y-1 mb-4 max-h-32 overflow-y-auto bg-gray-50 p-3 rounded border border-gray-100">
+            <div>+ Aiden K. (age 9) — allergies: peanuts; asthma</div>
+            <div>+ Maya L. (age 8) — no health flags</div>
+            <div>+ Theo S. (age 10) — EpiPen on file</div>
+            <div>+ Jordan P. (age 9) — no health flags</div>
+            <div>~ Theo S. — added "Linda K. (Grandma)" to pickup list</div>
+          </div>
+
+          <div class="flex justify-end gap-2">
+            <button class="text-xs text-gray-500 font-semibold px-3 py-2">Cancel</button>
+            <button class="text-xs text-white font-semibold px-4 py-2 rounded" style="background: #691D39;">Apply 5 changes</button>
+          </div>
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Lives at <code>/admin/schedule</code> → camp row → "Sync roster" button. Once Squarespace MCP works in Claude Code OR we upgrade to a webhook-capable plan, the drop-zone is replaced by a "Last synced 2 min ago" badge and the import runs automatically when parents register.</p>
+    </div>
+
+  </div>
+
+  <div class="mt-12 bg-amber-50 border border-amber-200 rounded-lg p-5 max-w-3xl">
+    <h2 class="font-bold text-lg mb-2">Data model questions to confirm before I build</h2>
+    <ul class="text-sm space-y-2 text-gray-700 list-disc pl-5">
+      <li>Parent registration form on Squarespace today — does it collect <strong>every field I'm showing</strong> (allergies, asthma, EpiPen flag, multiple emergency contacts, pickup-authorized list, free-text "notes from parent")? I need to see one real export to map columns precisely.</li>
+      <li>Do you want the camper expand drawer to be <strong>visible to admin too</strong>, or instructor-only?</li>
+      <li>If a parent updates their kid's allergy info on Squarespace mid-season, we re-import — do we <strong>notify the instructor</strong> (red pill on the roster section) or just silently update?</li>
+      <li>Pickup-authorized list — is there an explicit "I authorize X to pick up my child" field, or do we infer from the emergency-contacts list?</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>
