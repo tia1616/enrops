@@ -10,6 +10,8 @@ import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import InstructorProfile from "./InstructorProfile.jsx";
 import WizardHost from "../onboarding/WizardHost.jsx";
+import { fetchLegalDocument } from "../../lib/legalDoc.js";
+import { linkifyText } from "../../lib/linkifyText.jsx";
 
 const PLUM = "#691D39";
 const GOLD = "#CFB12F";
@@ -75,6 +77,7 @@ export default function InstructorPortal() {
   const [editingCycleId, setEditingCycleId] = useState(null);
   const [view, setView] = useState("schedule");
   const [showPast, setShowPast] = useState(false);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -244,7 +247,7 @@ export default function InstructorPortal() {
     // assignments (matters once FA26 lands; SU26-only today).
     const { data, error: aErr } = await supabase
       .from("camp_assignments")
-      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, start_time, end_time, class_days, cycle_id, scheduling_cycles:cycle_id(status)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, week_num, session_type, curriculum_id, curriculum_name, starts_on, ends_on, start_time, end_time, class_days, current_enrollment, ages_min, ages_max, cycle_id, scheduling_cycles:cycle_id(status)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
       .eq("instructor_id", instructorId)
       .not("published_at", "is", null)
       .in("status", ["published", "change_requested", "confirmed"])
@@ -627,6 +630,32 @@ export default function InstructorPortal() {
     );
   }
 
+  if (view === "documents") {
+    return (
+      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+        <DocumentsView onBack={() => setView("schedule")} />
+      </Shell>
+    );
+  }
+
+  if (view === "assignment-detail") {
+    const selected = assignments.find((a) => a.id === selectedAssignmentId);
+    if (!selected) {
+      // Assignment vanished (cycle archived, admin withdrew). Bounce back.
+      setView("schedule");
+      setSelectedAssignmentId(null);
+      return null;
+    }
+    return (
+      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+        <AssignmentDetailView
+          assignment={selected}
+          onBack={() => { setView("schedule"); setSelectedAssignmentId(null); }}
+        />
+      </Shell>
+    );
+  }
+
   return (
     <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
       {impersonating && (
@@ -662,25 +691,44 @@ export default function InstructorPortal() {
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => setView("profile")}
-          style={{
-            background: "transparent",
-            border: `1px solid ${PLUM}`,
-            color: PLUM,
-            borderRadius: 6,
-            padding: "6px 12px",
-            fontSize: 12,
-            fontWeight: 600,
-            fontFamily: "inherit",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-            flexShrink: 0,
-          }}
-        >
-          My profile →
-        </button>
+        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => setView("documents")}
+            style={{
+              background: "transparent",
+              border: `1px solid ${PLUM}`,
+              color: PLUM,
+              borderRadius: 6,
+              padding: "6px 12px",
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Documents
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("profile")}
+            style={{
+              background: "transparent",
+              border: `1px solid ${PLUM}`,
+              color: PLUM,
+              borderRadius: 6,
+              padding: "6px 12px",
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            My profile →
+          </button>
+        </div>
       </header>
 
       {error && (
@@ -742,7 +790,14 @@ export default function InstructorPortal() {
 
       {accepted.length > 0 && (
         <Section title="Confirmed schedule">
-          {accepted.map((a) => <AssignmentCard key={a.id} assignment={a} readOnly />)}
+          {accepted.map((a) => (
+            <AssignmentCard
+              key={a.id}
+              assignment={a}
+              readOnly
+              onOpen={() => { setSelectedAssignmentId(a.id); setView("assignment-detail"); }}
+            />
+          ))}
         </Section>
       )}
 
@@ -916,7 +971,7 @@ function Section({ title, children }) {
   );
 }
 
-function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestChange, readOnly }) {
+function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestChange, readOnly, onOpen }) {
   const s = assignment.camp_sessions;
   if (!s) return null;
   const role = assignment.role === "developing" ? "Developing" : "Lead";
@@ -995,6 +1050,27 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
                 </div>
               ))}
           </div>
+        </div>
+      )}
+
+      {readOnly && onOpen && (
+        <div style={{ marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={onOpen}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: PLUM,
+              fontSize: 13,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            View details, roster, and materials →
+          </button>
         </div>
       )}
 
@@ -1118,5 +1194,389 @@ function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onCl
         </div>
       </div>
     </div>
+  );
+}
+
+// Documents view: lists the contractor's reference documents.
+//
+// Three doc keys come from `legal_documents` via the existing
+// get-legal-document edge function (RLS hides legal_documents from
+// instructor JWTs, so the wizard helper is reused). W-9 / tax forms are
+// not stored here — Stripe handles them and surfaces them via the Express
+// dashboard, so that row links out instead of opening an inline reader.
+const DRAWER_DOCS = [
+  { key: "contractor_agreement", label: "Independent contractor agreement" },
+  { key: "pay_schedule", label: "Pay schedule" },
+  { key: "attendance_policy", label: "Attendance policy (absence, tardy, pay deductions)" },
+];
+
+function DocumentsView({ onBack }) {
+  const [openKey, setOpenKey] = useState(null);
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onBack}
+        style={{
+          background: "transparent",
+          border: "none",
+          color: PLUM,
+          fontSize: 13,
+          fontWeight: 600,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          padding: 0,
+          marginBottom: 12,
+        }}
+      >
+        ← Back
+      </button>
+      <h1 style={{ margin: "0 0 4px", fontSize: 24, fontWeight: 700, color: INK, letterSpacing: -0.3 }}>
+        Documents
+      </h1>
+      <p style={{ color: MUTED, fontSize: 14, margin: "0 0 18px" }}>
+        Your agreement, pay schedule, attendance policy, and tax forms — all in one place.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {DRAWER_DOCS.map((d) => (
+          <LegalDocRow
+            key={d.key}
+            docKey={d.key}
+            label={d.label}
+            isOpen={openKey === d.key}
+            onToggle={() => setOpenKey((cur) => (cur === d.key ? null : d.key))}
+          />
+        ))}
+        <StripeTaxFormsRow />
+      </div>
+    </div>
+  );
+}
+
+function LegalDocRow({ docKey, label, isOpen, onToggle }) {
+  const [doc, setDoc] = useState(null); // { title, body_text, version }
+  const [loadErr, setLoadErr] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen || doc || loading) return;
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const { data, error } = await fetchLegalDocument(docKey);
+        if (cancelled) return;
+        if (error) {
+          setLoadErr("Couldn't load this document. Try again, or contact your admin.");
+          setLoading(false);
+          return;
+        }
+        setDoc({
+          title: data.title,
+          body_text: data.body_text,
+          version: data.document_version,
+        });
+        setLoading(false);
+      } catch (err) {
+        if (!cancelled) {
+          console.error("[DocumentsView] load failed", err);
+          setLoadErr("Something went wrong.");
+          setLoading(false);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen, docKey, doc, loading]);
+
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8 }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          width: "100%",
+          background: "transparent",
+          border: "none",
+          padding: "14px 16px",
+          textAlign: "left",
+          fontSize: 15,
+          fontWeight: 600,
+          color: INK,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <span>{label}</span>
+        <span style={{ color: MUTED, fontSize: 14 }}>{isOpen ? "▾" : "▸"}</span>
+      </button>
+      {isOpen && (
+        <div style={{ borderTop: `1px solid ${RULE}`, padding: "14px 16px", background: "#fafaf6" }}>
+          {loading && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
+          {loadErr && <div style={{ color: CORAL, fontSize: 13 }}>{loadErr}</div>}
+          {doc && (
+            <div>
+              <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, marginBottom: 8 }}>
+                Version {doc.version}
+              </div>
+              <div style={{ maxHeight: "50vh", overflowY: "auto", fontSize: 14, color: INK, lineHeight: 1.55 }}>
+                {(doc.body_text || "").split(/\n\s*\n/).map((para, i) => (
+                  <p key={i} style={{ margin: "0 0 10px", whiteSpace: "pre-wrap" }}>
+                    {linkifyText(para)}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StripeTaxFormsRow() {
+  // W-9 + 1099 live in Stripe Express. We can't render them inline — Stripe
+  // requires authentication on their domain. Link out to their dashboard.
+  return (
+    <a
+      href="https://dashboard.stripe.com/express"
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        background: "#fff",
+        border: `1px solid ${RULE}`,
+        borderRadius: 8,
+        padding: "14px 16px",
+        textDecoration: "none",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        color: INK,
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>W-9 and 1099 tax forms</div>
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+          Stored by Stripe — opens your Stripe Express dashboard.
+        </div>
+      </div>
+      <span style={{ color: PLUM, fontSize: 13, fontWeight: 600 }}>Open Stripe →</span>
+    </a>
+  );
+}
+
+function AssignmentDetailView({ assignment, onBack }) {
+  const s = assignment.camp_sessions;
+  const role = assignment.role === "developing" ? "Developing" : "Lead";
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onBack}
+        style={{
+          background: "transparent",
+          border: "none",
+          color: PLUM,
+          fontSize: 13,
+          fontWeight: 600,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          padding: 0,
+          marginBottom: 12,
+        }}
+      >
+        ← Back to schedule
+      </button>
+
+      <div style={{
+        background: "#fff",
+        border: `1px solid ${RULE}`,
+        borderLeft: `3px solid ${OK_GREEN}`,
+        borderRadius: 8,
+        padding: "16px 18px",
+        marginBottom: 18,
+      }}>
+        <div style={{ fontSize: 11, color: OK_GREEN, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
+          Confirmed
+        </div>
+        <h1 style={{ margin: "4px 0 0", fontSize: 22, fontWeight: 700, color: INK, letterSpacing: -0.3, lineHeight: 1.25 }}>
+          {s.curriculum_name}
+        </h1>
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
+          Week {s.week_num} · {fmt(s.starts_on)} – {fmt(s.ends_on)}<br />
+          {s.location_name} · {titleCase(s.session_type)} {fmtTime(s.start_time)}–{fmtTime(s.end_time)}<br />
+          {role} instructor
+          {(s.ages_min || s.ages_max) ? ` · ages ${s.ages_min ?? "?"}–${s.ages_max ?? "?"}` : ""}
+        </div>
+        {assignment.distance_bonus_cents ? (
+          <div style={{ marginTop: 8, fontSize: 13, color: PLUM, fontWeight: 600 }}>
+            + {dollars(assignment.distance_bonus_cents)} distance bonus
+          </div>
+        ) : null}
+      </div>
+
+      <RosterStub enrollment={s.current_enrollment} startsOn={s.starts_on} />
+      <LessonsSection curriculumId={s.curriculum_id} curriculumName={s.curriculum_name} />
+    </div>
+  );
+}
+
+function RosterStub({ enrollment, startsOn }) {
+  // Roster isn't in the DB yet — registrations live in Squarespace and are
+  // hand-loaded as aggregate counts on camp_sessions.current_enrollment.
+  // When FA26 makes Enrops the source of truth (per-registrant rows), this
+  // section gets the real list.
+  const count = typeof enrollment === "number" ? enrollment : null;
+  const startTxt = startsOn ? fmtShort(startsOn) : null;
+
+  return (
+    <Section title="Roster">
+      <div style={{
+        background: "#fff",
+        border: `1px solid ${RULE}`,
+        borderRadius: 8,
+        padding: "14px 16px",
+        color: INK,
+        fontSize: 14,
+        lineHeight: 1.5,
+      }}>
+        {count !== null ? (
+          <div>
+            <strong>{count}</strong> camper{count === 1 ? "" : "s"} registered so far.
+          </div>
+        ) : (
+          <div>Enrollment count syncs from Squarespace before camp starts.</div>
+        )}
+        <div style={{ color: MUTED, fontSize: 13, marginTop: 6 }}>
+          The full roster (names, ages, allergies, emergency contacts) lands here
+          {startTxt ? ` closer to ${startTxt}` : " closer to your start date"} — your admin will let you know when it's ready.
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function LessonsSection({ curriculumId, curriculumName }) {
+  const [docs, setDocs] = useState(null); // null = loading, [] = empty
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!curriculumId) {
+      setDocs([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke(
+          "get-instructor-curriculum-docs",
+          { body: { curriculum_id: curriculumId } },
+        );
+        if (cancelled) return;
+        if (error || data?.error) {
+          setErr(data?.error === "not_assigned_to_curriculum"
+            ? "We couldn't find materials for this camp yet."
+            : "Couldn't load materials. Try again later.");
+          setDocs([]);
+          return;
+        }
+        setDocs(data?.documents ?? []);
+      } catch (e) {
+        if (!cancelled) {
+          console.error("[LessonsSection] load failed", e);
+          setErr("Couldn't load materials.");
+          setDocs([]);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [curriculumId]);
+
+  return (
+    <Section title="Lessons & materials">
+      <div style={{
+        background: "#fff",
+        border: `1px solid ${RULE}`,
+        borderRadius: 8,
+        padding: "14px 16px",
+      }}>
+        {docs === null ? (
+          <div style={{ color: MUTED, fontSize: 13 }}>Loading materials…</div>
+        ) : err ? (
+          <div style={{ color: MUTED, fontSize: 13 }}>{err}</div>
+        ) : docs.length === 0 ? (
+          <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
+            No materials uploaded yet for <strong style={{ color: INK }}>{curriculumName}</strong>. Your admin will add the instructor guide and materials list before camp starts.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {DOC_TYPE_ORDER.map((type) => {
+              const inType = docs.filter((d) => d.doc_type === type);
+              if (inType.length === 0) return null;
+              return (
+                <div key={type}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>
+                    {DOC_TYPE_LABEL[type]}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {inType.map((d) => <DocLinkRow key={d.id} doc={d} />)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+const DOC_TYPE_ORDER = ["instructor_guide", "materials_list", "student_materials", "other"];
+const DOC_TYPE_LABEL = {
+  instructor_guide: "Instructor guide",
+  materials_list: "Materials list",
+  student_materials: "Student materials",
+  other: "Other",
+};
+
+function DocLinkRow({ doc }) {
+  const name = doc.original_filename || (doc.source_type === "drive_link" ? "Open in Drive" : "Download");
+  const href = doc.download_url;
+  if (!href) {
+    return (
+      <div style={{ fontSize: 13, color: MUTED, padding: "8px 10px", background: "#fafaf6", border: `1px solid ${RULE}`, borderRadius: 6 }}>
+        {name} — temporarily unavailable.
+      </div>
+    );
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        padding: "10px 12px",
+        background: "#fafaf6",
+        border: `1px solid ${RULE}`,
+        borderRadius: 6,
+        textDecoration: "none",
+        color: INK,
+        fontSize: 13,
+      }}
+    >
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 12 }}>
+        {name}
+      </span>
+      <span style={{ color: PLUM, fontWeight: 600, flexShrink: 0 }}>
+        {doc.source_type === "drive_link" ? "Open →" : "Download →"}
+      </span>
+    </a>
   );
 }
