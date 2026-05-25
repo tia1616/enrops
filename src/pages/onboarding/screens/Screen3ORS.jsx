@@ -87,8 +87,7 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
           <ul className="mt-3 list-disc space-y-1.5 pl-5">
             <li>You're responsible for your own taxes (no withholding).</li>
             <li>
-              You use your own supplies, transportation, and insurance unless
-              you've agreed otherwise in writing.
+              You use your own transportation and carry your own car insurance.
             </li>
             <li>
               You may work with other clients alongside this engagement.
