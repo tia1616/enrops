@@ -345,9 +345,9 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
           )}
         </Card>
 
-        {/* T-shirt size */}
+        {/* Unisex shirt size */}
         <Card>
-          <SectionLabel>T-shirt size (optional)</SectionLabel>
+          <SectionLabel>Unisex shirt size (optional)</SectionLabel>
           <div style={{ color: MUTED, fontSize: 12, marginBottom: 6 }}>For J2S camp apparel.</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {SHIRT_SIZES.map((s) => (

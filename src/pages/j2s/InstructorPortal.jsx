@@ -520,11 +520,28 @@ export default function InstructorPortal() {
   }
 
   if (phase === "error") {
+    // Map raw SDK / edge-function errors to human-readable copy. Per the
+    // "no tech jargon" rule: "Edge Function returned a non-2xx status code"
+    // is meaningless to an instructor. The common cause when an admin/owner
+    // (no instructor row) lands here is just that — no instructor record —
+    // so the friendlier message points them at what to do.
+    const friendly = (() => {
+      const raw = (error || '').toString();
+      if (/non-2xx|edge function|status code/i.test(raw)) {
+        return "Your account isn't fully set up as an instructor yet. If you're a contractor, ask your operator to send you an onboarding invite. If you're the operator, this is the instructor view — the admin tools live at the /admin page.";
+      }
+      if (/no.*instructor.*found|not an instructor/i.test(raw)) {
+        return "We couldn't find an instructor record for you. Your operator may not have invited you yet, or you might be signed in with a different email.";
+      }
+      if (raw && raw.length < 120) return raw;
+      return "Something went wrong loading your schedule. Try signing out and back in.";
+    })();
+
     return (
       <Shell>
-        <div style={{ background: "#fff", border: `1px solid ${CORAL}`, borderRadius: 10, padding: 28, maxWidth: 500 }}>
+        <div style={{ background: "#fff", border: `1px solid ${CORAL}`, borderRadius: 10, padding: 28, maxWidth: 540 }}>
           <h1 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: INK }}>We couldn't load your schedule</h1>
-          <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px", lineHeight: 1.5 }}>{error}</p>
+          <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px", lineHeight: 1.5 }}>{friendly}</p>
           <button type="button" onClick={signOut} style={{ padding: "8px 14px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
             Sign out and try again
           </button>

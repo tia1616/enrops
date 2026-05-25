@@ -236,7 +236,7 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
         </section>
 
         <section className="mt-6">
-          <SectionLabel>Shirt size (optional)</SectionLabel>
+          <SectionLabel>Unisex shirt size (optional)</SectionLabel>
           <div className="flex flex-wrap gap-2">
             {SHIRT_SIZES.map((s) => (
               <label

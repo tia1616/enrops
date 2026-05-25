@@ -489,7 +489,7 @@ function InstructorDetail({ row, age, onUploadBg }) {
           <Em>not set</Em>
         )}
       </DetailItem>
-      <DetailItem label="Shirt size">
+      <DetailItem label="Unisex shirt size">
         {row.shirt_size ?? <Em>not set</Em>}
       </DetailItem>
       <DetailItem label="Background check">

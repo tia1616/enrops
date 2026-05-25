@@ -26,11 +26,14 @@ const DOC_KEYS = [MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
 const MANDATORY_ACK =
   'I have completed or will complete the mandatory reporting training and will comply with reporting requirements';
 
+// "I understand I won't receive additional compensation" used to be the
+// fourth checkbox here. Removed 2026-05-25 per Arielle — compensation
+// terms belong in the agreement / pay schedule, not buried in a photo
+// release ack.
 const PHOTO_ACKS = [
   { key: 'photo_consent_record', label: 'I consent to J2S photographing/recording me at program sites' },
   { key: 'photo_consent_marketing', label: 'I consent to use of my likeness in marketing materials' },
   { key: 'photo_consent_revocable', label: 'I understand consent is ongoing and revocable in writing' },
-  { key: 'photo_consent_no_extra_pay', label: "I understand I won't receive additional compensation" },
 ];
 
 const VEHICLE_ACKS = [
