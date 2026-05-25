@@ -235,13 +235,24 @@ function SignInPanel({ slug }) {
     if (!email.trim()) return;
     setError('');
     setBusy(true);
-    const { error: err } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: { emailRedirectTo: redirectTo },
+    // Route through auth-send-magic-link (not signInWithOtp) so the email gets
+    // the "Continue your onboarding" subject + body instead of the generic
+    // instructor "view your schedule" copy. Function auto-creates the auth.users
+    // row when an instructor row exists but the user hasn't signed in yet.
+    const { data, error: fnErr } = await supabase.functions.invoke('auth-send-magic-link', {
+      body: {
+        email: email.trim(),
+        redirect_to: redirectTo,
+        context: 'onboarding',
+      },
     });
     setBusy(false);
-    if (err) {
-      setError(err.message);
+    if (fnErr) {
+      setError(fnErr.message);
+      return;
+    }
+    if (data?.error) {
+      setError(data.error);
       return;
     }
     setLinkSent(true);

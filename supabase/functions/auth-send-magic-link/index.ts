@@ -5,6 +5,8 @@
 //
 // INPUT:  { email, redirect_to, context? }
 //   context: "parent" (J2S branded) | "admin" (Enrops admin) | "instructor" (J2S instructor)
+//          | "onboarding" (J2S contractor mid-wizard — different subject/body so they don't
+//            see "view your schedule" before they have one)
 // OUTPUT: { sent: true } or { error: "..." }
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
@@ -29,6 +31,11 @@ serve(async (req: Request) => {
 
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
     const isInstructor = context === 'instructor';
+    const isOnboarding = context === 'onboarding';
+    // Onboarding emails are sent to contractors who have an instructors row but may not
+    // yet have an auth.users row (admin invited them but they haven't signed in). Same
+    // auto-create-on-first-sign-in behavior as instructor context.
+    const needsInstructorLookup = isInstructor || isOnboarding;
 
     // Verify the user exists in auth.users
     const { data: userList } = await supabase.auth.admin.listUsers();
@@ -36,7 +43,7 @@ serve(async (req: Request) => {
       (u) => u.email?.toLowerCase() === email.toLowerCase(),
     );
     if (!user) {
-      if (isInstructor) {
+      if (needsInstructorLookup) {
         // For first-time instructor sign-in: if their email matches an active
         // instructor record, auto-create the auth user so they can sign in.
         const { data: instructorRow } = await supabase
@@ -54,7 +61,7 @@ serve(async (req: Request) => {
             throw new Error(`Couldn't create auth user: ${createErr?.message ?? 'unknown error'}`);
           }
           user = created.user;
-          console.log(`Auto-created auth user for instructor ${email}`);
+          console.log(`Auto-created auth user for instructor ${email} (context=${context})`);
         } else {
           // Email isn't a known instructor — silent no-op.
           return json({ sent: true });
@@ -91,11 +98,12 @@ serve(async (req: Request) => {
     // Build email HTML based on context
     const isAdmin = context === 'admin';
 
-    // For instructors, prefer the first_name on their instructors row over auth user metadata.
+    // For instructors / onboarding contractors, prefer the first_name on their
+    // instructors row over auth user metadata.
     let firstName = user.user_metadata?.full_name
       ? user.user_metadata.full_name.split(' ')[0]
       : 'there';
-    if (isInstructor) {
+    if (needsInstructorLookup) {
       const { data: instructorRow } = await supabase
         .from('instructors')
         .select('first_name')
@@ -107,12 +115,16 @@ serve(async (req: Request) => {
 
     const subject = isAdmin
       ? 'Sign in to Enrops Admin'
+      : isOnboarding
+      ? 'Continue your Journey to STEAM onboarding'
       : isInstructor
       ? 'Sign in to view your schedule'
       : 'Sign in to Journey to STEAM';
 
     const html = isAdmin
       ? buildAdminEmail(firstName, signInUrl)
+      : isOnboarding
+      ? buildOnboardingEmail(firstName, signInUrl)
       : isInstructor
       ? buildInstructorEmail(firstName, signInUrl)
       : buildParentEmail(firstName, signInUrl);
@@ -166,6 +178,30 @@ function buildAdminEmail(firstName: string, signInUrl: string): string {
       </a>
     </div>
     <p style="margin:0;font-size:13px;color:#6b6b6b;">This link expires in 24 hours.</p>
+  </div>
+</div>
+</body></html>`;
+}
+
+function buildOnboardingEmail(firstName: string, signInUrl: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#FBFBFB;font-family:'Poppins',system-ui,sans-serif;">
+<div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
+  <div style="background:#1C004F;padding:32px 28px;text-align:center;">
+    <div style="color:#8C88FF;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Journey to STEAM</div>
+    <h1 style="color:#fff;margin:8px 0 0;font-size:24px;font-weight:700;">Continue your onboarding</h1>
+  </div>
+  <div style="padding:28px;">
+    <p style="margin:0 0 16px;font-size:15px;color:#1a1a1a;">Hi ${firstName},</p>
+    <p style="margin:0 0 24px;font-size:15px;color:#1a1a1a;line-height:1.6;">
+      Pick up right where you left off — your progress is saved.
+    </p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${signInUrl}" style="display:inline-block;background:#1C004F;color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
+        Open my onboarding
+      </a>
+    </div>
+    <p style="margin:0;font-size:13px;color:#6b6b6b;">This link expires in 24 hours. Questions? Just reply to this email.</p>
   </div>
 </div>
 </body></html>`;
