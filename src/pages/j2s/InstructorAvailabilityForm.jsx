@@ -14,9 +14,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const CORAL = "#D9694F";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -26,7 +26,7 @@ const OK_GREEN = "#3a7c3a";
 const PREF_OPTIONS = [
   { value: "highly_preferred", label: "Highly preferred", color: OK_GREEN },
   { value: "preferred", label: "Preferred", color: OK_GREEN },
-  { value: "not_preferred", label: "Not preferred", color: GOLD },
+  { value: "not_preferred", label: "Not preferred", color: VIOLET },
   { value: "unavailable", label: "Unavailable", color: CORAL },
 ];
 
@@ -284,17 +284,17 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
                 onClick={() => toggleWeek(w.num)}
                 style={{
                   padding: "10px 12px",
-                  background: on ? `${PLUM}10` : "#fff",
-                  border: `1px solid ${on ? PLUM : RULE}`,
+                  background: on ? `${PURPLE}10` : "#fff",
+                  border: `1px solid ${on ? PURPLE : RULE}`,
                   borderRadius: 6,
                   cursor: "pointer",
                   textAlign: "left",
                   fontFamily: "inherit",
-                  color: on ? PLUM : INK,
+                  color: on ? PURPLE : INK,
                 }}
               >
                 <div style={{ fontSize: 13, fontWeight: 600 }}>Week {w.num}</div>
-                <div style={{ fontSize: 12, color: on ? PLUM : MUTED, marginTop: 2 }}>
+                <div style={{ fontSize: 12, color: on ? PURPLE : MUTED, marginTop: 2 }}>
                   {fmtShort(w.starts_on)} – {fmtShort(w.ends_on)}
                 </div>
               </button>
@@ -314,17 +314,17 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
                 onClick={() => toggleSessionType(s.value)}
                 style={{
                   padding: "12px 14px",
-                  background: on ? `${PLUM}10` : "#fff",
-                  border: `1px solid ${on ? PLUM : RULE}`,
+                  background: on ? `${PURPLE}10` : "#fff",
+                  border: `1px solid ${on ? PURPLE : RULE}`,
                   borderRadius: 6,
                   cursor: "pointer",
                   textAlign: "left",
                   fontFamily: "inherit",
-                  color: on ? PLUM : INK,
+                  color: on ? PURPLE : INK,
                 }}
               >
                 <div style={{ fontSize: 14, fontWeight: 600 }}>{s.label}</div>
-                <div style={{ fontSize: 12, color: on ? PLUM : MUTED, marginTop: 2 }}>{s.hint}</div>
+                <div style={{ fontSize: 12, color: on ? PURPLE : MUTED, marginTop: 2 }}>{s.hint}</div>
               </button>
             );
           })}
@@ -384,16 +384,16 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
                 onClick={() => setRolePref(r.value)}
                 style={{
                   padding: "10px 14px",
-                  background: on ? `${PLUM}10` : "#fff",
-                  border: `1px solid ${on ? PLUM : RULE}`,
+                  background: on ? `${PURPLE}10` : "#fff",
+                  border: `1px solid ${on ? PURPLE : RULE}`,
                   borderRadius: 6,
                   cursor: "pointer",
                   textAlign: "left",
                   fontFamily: "inherit",
                 }}
               >
-                <div style={{ fontSize: 14, fontWeight: 600, color: on ? PLUM : INK }}>{r.label}</div>
-                <div style={{ fontSize: 12, color: on ? PLUM : MUTED, marginTop: 2 }}>{r.hint}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: on ? PURPLE : INK }}>{r.label}</div>
+                <div style={{ fontSize: 12, color: on ? PURPLE : MUTED, marginTop: 2 }}>{r.hint}</div>
               </button>
             );
           })}
@@ -426,7 +426,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
       <div style={{
         position: "sticky",
         bottom: 0,
-        background: CHALK,
+        background: CREAM,
         paddingTop: 12,
         paddingBottom: 8,
         display: "flex",
@@ -518,14 +518,14 @@ const smallBtn = {
   borderRadius: 6,
   fontSize: 12,
   fontFamily: "inherit",
-  color: PLUM,
+  color: PURPLE,
   cursor: "pointer",
 };
 
 function primaryBtn(disabled) {
   return {
     padding: "12px 22px",
-    background: PLUM,
+    background: PURPLE,
     color: "#fff",
     border: "none",
     borderRadius: 6,

@@ -3,7 +3,7 @@
 // Enter (input) saves; Esc cancels. Multiline mode uses textarea + Cmd/Ctrl+Enter.
 
 import { useEffect, useRef, useState } from "react";
-import { INK, MUTED, PLUM, RULE } from "../marketing/tokens.jsx";
+import { INK, MUTED, PURPLE, RULE } from "../marketing/tokens.jsx";
 
 export default function EditableField({
   value,
@@ -48,7 +48,7 @@ export default function EditableField({
             }}
             rows={rows}
             style={{
-              width: "100%", border: `2px solid ${PLUM}`, borderRadius: 6,
+              width: "100%", border: `2px solid ${PURPLE}`, borderRadius: 6,
               padding: 10, fontSize: 13, lineHeight: 1.5,
               fontFamily: "inherit", color: INK, background: "#fff",
               resize: "vertical", outline: "none",
@@ -74,7 +74,7 @@ export default function EditableField({
             if (e.key === "Enter") { e.preventDefault(); commit(); }
           }}
           style={{
-            width: "100%", border: `2px solid ${PLUM}`, borderRadius: 6,
+            width: "100%", border: `2px solid ${PURPLE}`, borderRadius: 6,
             padding: "8px 10px", fontSize: 13, fontFamily: "inherit",
             color: INK, background: "#fff", outline: "none",
           }}

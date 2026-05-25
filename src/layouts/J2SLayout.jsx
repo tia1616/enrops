@@ -116,17 +116,17 @@ export default function J2SLayout() {
             <div>
               <h4
                 className="font-grotesk text-xs uppercase tracking-widest"
-                style={{ color: '#CFB12F' }}
+                style={{ color: '#8C88FF' }}
               >
                 Powered by
               </h4>
               <Link
                 to="/"
                 className="mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 transition hover:opacity-90"
-                style={{ background: '#691D39', color: '#EAEADD' }}
+                style={{ background: '#1C004F', color: '#FBFBFB' }}
               >
                 <span className="font-grotesk text-sm font-bold tracking-tight">Enrops</span>
-                <span className="text-xs" style={{ color: '#CFB12F' }}>→</span>
+                <span className="text-xs" style={{ color: '#8C88FF' }}>→</span>
               </Link>
               <p className="mt-2 text-xs text-white/50">
                 The enrichment operations platform.

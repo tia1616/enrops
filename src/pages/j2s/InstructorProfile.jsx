@@ -13,9 +13,9 @@ import { supabase } from '../../lib/supabase';
 import { AVATARS, DEFAULT_AVATAR, avatarUrl } from '../../lib/avatars';
 import { ensureBrowserSafeImage, extensionFor } from '../../lib/heicConvert';
 
-const PLUM = '#691D39';
-const GOLD = '#CFB12F';
-const CHALK = '#EAEADD';
+const PURPLE = '#1C004F';
+const VIOLET = '#8C88FF';
+const CREAM = '#FBFBFB';
 const CORAL = '#D9694F';
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
@@ -257,7 +257,7 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
             type="button"
             onClick={onBack}
             style={{
-              background: 'transparent', border: `1px solid ${PLUM}`, color: PLUM,
+              background: 'transparent', border: `1px solid ${PURPLE}`, color: PURPLE,
               padding: '6px 12px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', cursor: 'pointer',
             }}
           >
@@ -316,8 +316,8 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
                   title={a.label}
                   style={{
                     padding: 6,
-                    background: selected ? `${PLUM}14` : '#fff',
-                    border: `2px solid ${selected ? PLUM : RULE}`,
+                    background: selected ? `${PURPLE}14` : '#fff',
+                    border: `2px solid ${selected ? PURPLE : RULE}`,
                     borderRadius: 8,
                     cursor: 'pointer',
                     fontFamily: 'inherit',
@@ -355,8 +355,8 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
                 key={s}
                 style={{
                   padding: '6px 12px',
-                  border: `1px solid ${shirtSize === s ? PLUM : RULE}`,
-                  background: shirtSize === s ? PLUM : '#fff',
+                  border: `1px solid ${shirtSize === s ? PURPLE : RULE}`,
+                  background: shirtSize === s ? PURPLE : '#fff',
                   color: shirtSize === s ? '#fff' : INK,
                   borderRadius: 6,
                   fontSize: 13,
@@ -440,7 +440,7 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
                 <button
                   type="button"
                   onClick={addContact}
-                  style={{ marginTop: 4, background: 'transparent', border: 'none', color: PLUM, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                  style={{ marginTop: 4, background: 'transparent', border: 'none', color: PURPLE, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
                 >
                   + Add second contact
                 </button>
@@ -467,7 +467,7 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
             disabled={busy}
             style={{
               padding: '10px 18px',
-              background: PLUM,
+              background: PURPLE,
               color: '#fff',
               border: 'none',
               borderRadius: 6,

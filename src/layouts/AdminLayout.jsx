@@ -9,9 +9,9 @@ import { supabase } from "../lib/supabase";
 import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 
 // Enrops brand tokens
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -165,7 +165,7 @@ export default function AdminLayout() {
 
   if (authState === "loading") {
     return (
-      <div style={{ minHeight: "100vh", background: CHALK, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Space Grotesk', system-ui, sans-serif", color: MUTED }}>
+      <div style={{ minHeight: "100vh", background: CREAM, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Poppins', system-ui, sans-serif", color: MUTED }}>
         Loading admin…
       </div>
     );
@@ -173,9 +173,9 @@ export default function AdminLayout() {
 
   if (authState === "unauthorized") {
     return (
-      <div style={{ minHeight: "100vh", background: CHALK, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Space Grotesk', system-ui, sans-serif", padding: 24 }}>
+      <div style={{ minHeight: "100vh", background: CREAM, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Poppins', system-ui, sans-serif", padding: 24 }}>
         <div style={{ maxWidth: 440, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 32 }}>
-          <div style={{ fontFamily: "'Space Grotesk', system-ui, sans-serif", fontWeight: 700, fontSize: 22, color: PLUM, marginBottom: 8 }}>
+          <div style={{ fontFamily: "'Poppins', system-ui, sans-serif", fontWeight: 700, fontSize: 22, color: PURPLE, marginBottom: 8 }}>
             Enrops Admin
           </div>
           <p style={{ color: INK, fontSize: 15, lineHeight: 1.5, marginTop: 0 }}>
@@ -187,8 +187,8 @@ export default function AdminLayout() {
             </p>
           )}
           <div style={{ marginTop: 20, display: "flex", gap: 8 }}>
-            <Link to="/admin/login" style={btn(PLUM, "#fff")}>Sign in</Link>
-            {user && <button onClick={signOut} style={btn("transparent", PLUM, true)}>Sign out</button>}
+            <Link to="/admin/login" style={btn(PURPLE, "#fff")}>Sign in</Link>
+            {user && <button onClick={signOut} style={btn("transparent", PURPLE, true)}>Sign out</button>}
           </div>
           {debugInfo && (
             <div style={{ marginTop: 16, padding: 10, background: "#f7f6ef", borderRadius: 4, fontSize: 11, color: MUTED, wordBreak: "break-all" }}>
@@ -204,7 +204,7 @@ export default function AdminLayout() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: CHALK, fontFamily: "'Space Grotesk', system-ui, sans-serif", color: INK }}>
+    <div style={{ minHeight: "100vh", background: CREAM, fontFamily: "'Poppins', system-ui, sans-serif", color: INK }}>
       <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
         {/* Sidebar */}
         <aside style={{
@@ -220,7 +220,7 @@ export default function AdminLayout() {
           overflowY: "auto",
         }}>
           <div style={{ padding: "0 20px 18px", borderBottom: `1px solid ${RULE}` }}>
-            <div style={{ fontWeight: 700, fontSize: 22, color: PLUM, letterSpacing: -0.3 }}>
+            <div style={{ fontWeight: 700, fontSize: 22, color: PURPLE, letterSpacing: -0.3 }}>
               Enrops
             </div>
             <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
@@ -261,8 +261,8 @@ export default function AdminLayout() {
                           borderRadius: 6,
                           fontSize: 13,
                           fontWeight: isActive ? 600 : 500,
-                          color: isActive ? PLUM : (child.soon ? MUTED : INK),
-                          background: isActive ? `${GOLD}22` : "transparent",
+                          color: isActive ? PURPLE : (child.soon ? MUTED : INK),
+                          background: isActive ? `${VIOLET}22` : "transparent",
                           textDecoration: "none",
                           cursor: child.soon ? "default" : "pointer",
                           pointerEvents: child.soon ? "none" : "auto",
@@ -309,8 +309,8 @@ export default function AdminLayout() {
                     borderRadius: 6,
                     fontSize: 14,
                     fontWeight: isActive ? 600 : 500,
-                    color: isActive ? PLUM : (item.soon ? MUTED : INK),
-                    background: isActive ? `${GOLD}22` : "transparent",
+                    color: isActive ? PURPLE : (item.soon ? MUTED : INK),
+                    background: isActive ? `${VIOLET}22` : "transparent",
                     textDecoration: "none",
                     cursor: item.soon ? "default" : "pointer",
                     pointerEvents: item.soon ? "none" : "auto",
@@ -369,7 +369,7 @@ export default function AdminLayout() {
                   boxShadow: "0 8px 24px rgba(0, 0, 0, 0.15)",
                   zIndex: 50,
                 }}>
-                  <div style={{ color: PLUM, fontWeight: 700, fontSize: 14, marginBottom: 2 }}>
+                  <div style={{ color: PURPLE, fontWeight: 700, fontSize: 14, marginBottom: 2 }}>
                     Saved you {Math.round(timeSavedTotal)}+ hours
                   </div>
                   <div style={{ color: MUTED, fontSize: 11, marginBottom: 10 }}>
@@ -399,7 +399,7 @@ export default function AdminLayout() {
             </div>
             <div style={{ marginBottom: 6, color: INK, fontWeight: 500 }}>{user?.email}</div>
             <div style={{ marginBottom: 10, textTransform: "capitalize" }}>{orgMember?.role ?? "member"}</div>
-            <button onClick={signOut} style={{ ...btn("transparent", PLUM, true), padding: "5px 10px", fontSize: 12 }}>
+            <button onClick={signOut} style={{ ...btn("transparent", PURPLE, true), padding: "5px 10px", fontSize: 12 }}>
               Sign out
             </button>
           </div>

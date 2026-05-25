@@ -5,8 +5,8 @@ import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -16,7 +16,7 @@ const AMBER = "#b67e00";
 // Bucketed view of contractor_onboarding_status used by the pipeline card.
 // Order matters: rendered top-to-bottom in the card.
 const PIPELINE_BUCKETS = [
-  { key: "in_progress", label: "Filling out the wizard", color: PLUM },
+  { key: "in_progress", label: "Filling out the wizard", color: PURPLE },
   { key: "pending_background_check", label: "Background check pending", color: AMBER },
   { key: "pending_stripe", label: "Payment setup pending", color: AMBER },
   { key: "payouts_disabled", label: "Payouts disabled — needs admin", color: "#b53737" },
@@ -157,7 +157,7 @@ function ContractorPipelineCard({ pipeline, error }) {
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <h2 style={{ fontSize: 17, fontWeight: 600, color: INK, margin: 0 }}>Contractor pipeline</h2>
-        <span style={{ fontSize: 10, color: PLUM, background: `${GOLD}33`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+        <span style={{ fontSize: 10, color: PURPLE, background: `${VIOLET}33`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
           Live
         </span>
       </div>
@@ -219,7 +219,7 @@ function ContractorPipelineCard({ pipeline, error }) {
       <Link to="/admin/instructors" style={{
         display: "inline-block",
         padding: "7px 14px",
-        background: PLUM,
+        background: PURPLE,
         color: "#fff",
         borderRadius: 6,
         fontSize: 13,
@@ -252,7 +252,7 @@ function Card({ title, body, to, cta, ready, soon }) {
           </span>
         )}
         {ready && (
-          <span style={{ fontSize: 10, color: PLUM, background: `${GOLD}33`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+          <span style={{ fontSize: 10, color: PURPLE, background: `${VIOLET}33`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
             Live
           </span>
         )}
@@ -262,7 +262,7 @@ function Card({ title, body, to, cta, ready, soon }) {
         <Link to={to} style={{
           display: "inline-block",
           padding: "7px 14px",
-          background: PLUM,
+          background: PURPLE,
           color: "#fff",
           borderRadius: 6,
           fontSize: 13,

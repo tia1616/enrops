@@ -9,7 +9,7 @@
 import { useEffect } from 'react';
 import { Link, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 
-const PLUM = '#691D39';
+const PURPLE = '#1C004F';
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
@@ -45,7 +45,7 @@ export default function AdminContacts() {
         <p style={{ color: MUTED, marginTop: 6, fontSize: 14 }}>
           Partners and parents connected to {org?.name ?? 'your org'}.{' '}
           Looking for instructors?{' '}
-          <Link to="/admin/instructors" style={{ color: PLUM, textDecoration: 'underline' }}>
+          <Link to="/admin/instructors" style={{ color: PURPLE, textDecoration: 'underline' }}>
             They moved to their own page.
           </Link>
         </p>
@@ -64,8 +64,8 @@ export default function AdminContacts() {
                 padding: '8px 14px',
                 background: 'transparent',
                 border: 'none',
-                borderBottom: active ? `2px solid ${PLUM}` : '2px solid transparent',
-                color: active ? PLUM : t.soon ? '#bbb' : MUTED,
+                borderBottom: active ? `2px solid ${PURPLE}` : '2px solid transparent',
+                color: active ? PURPLE : t.soon ? '#bbb' : MUTED,
                 fontWeight: active ? 700 : 500,
                 fontSize: 13,
                 fontFamily: 'inherit',

@@ -8,11 +8,11 @@ import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { CAPABILITY_ICONS, deriveOrgStatesForCurriculum, isCapabilityUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
 const GOLD_SOFT = "rgba(207, 177, 47, 0.13)";
 const GOLD_BORDER = "rgba(207, 177, 47, 0.55)";
-const CHALK = "#EAEADD";
+const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -194,7 +194,7 @@ export default function CurriculaList() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
         <div>
-          <h1 style={{ margin: 0, color: PLUM, fontSize: 26, fontWeight: 700 }}>Curricula</h1>
+          <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Curricula</h1>
           <div style={{ color: MUTED, fontSize: 13, marginTop: 4 }}>
             Your library of curricula. Add a new one, then schedule it into a term when you're ready.
           </div>
@@ -410,8 +410,8 @@ function ctaForStatus(c, hasDoc = false) {
 function StatusBadge({ status }) {
   const map = {
     draft: { bg: "#f7f6ef", color: MUTED, label: "Draft" },
-    extracted: { bg: `${GOLD}33`, color: "#7a5a00", label: "Extracted" },
-    published: { bg: `${PLUM}1a`, color: PLUM, label: "Published" },
+    extracted: { bg: `${VIOLET}33`, color: "#7a5a00", label: "Extracted" },
+    published: { bg: `${PURPLE}1a`, color: PURPLE, label: "Published" },
   };
   const s = map[status] ?? map.draft;
   return (
@@ -427,7 +427,7 @@ function StatusBadge({ status }) {
 const primaryBtn = {
   display: "inline-block",
   padding: "9px 16px",
-  background: PLUM,
+  background: PURPLE,
   color: "#fff",
   border: "none",
   borderRadius: 6,
@@ -446,7 +446,7 @@ const cardStyle = {
 
 const cardCtaPrimary = {
   padding: "7px 12px",
-  background: PLUM,
+  background: PURPLE,
   color: "#fff",
   border: "none",
   borderRadius: 5,
@@ -458,8 +458,8 @@ const cardCtaPrimary = {
 const cardCtaSecondary = {
   padding: "7px 12px",
   background: "transparent",
-  color: PLUM,
-  border: `1px solid ${PLUM}`,
+  color: PURPLE,
+  border: `1px solid ${PURPLE}`,
   borderRadius: 5,
   fontSize: 13,
   fontWeight: 600,

@@ -6,9 +6,9 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -74,14 +74,14 @@ export default function AdminLogin() {
 
   return (
     <div style={{
-      minHeight: "100vh", background: CHALK, display: "flex", alignItems: "center",
-      justifyContent: "center", fontFamily: "'Space Grotesk', system-ui, sans-serif", padding: 24,
+      minHeight: "100vh", background: CREAM, display: "flex", alignItems: "center",
+      justifyContent: "center", fontFamily: "'Poppins', system-ui, sans-serif", padding: 24,
     }}>
       <div style={{
         width: "100%", maxWidth: 400, background: "#fff",
         border: `1px solid ${RULE}`, borderRadius: 8, padding: 32,
       }}>
-        <div style={{ fontWeight: 700, fontSize: 22, color: PLUM, marginBottom: 4 }}>
+        <div style={{ fontWeight: 700, fontSize: 22, color: PURPLE, marginBottom: 4 }}>
           Enrops Admin
         </div>
         <p style={{ color: MUTED, fontSize: 14, margin: "0 0 24px" }}>
@@ -159,7 +159,7 @@ export default function AdminLogin() {
             type="submit"
             disabled={loading || !email || !password}
             style={{
-              width: "100%", padding: "10px 14px", background: PLUM, color: "#fff",
+              width: "100%", padding: "10px 14px", background: PURPLE, color: "#fff",
               border: "none", borderRadius: 6, fontSize: 14, fontWeight: 600,
               fontFamily: "inherit", cursor: loading ? "wait" : "pointer",
               opacity: loading ? 0.7 : 1,
@@ -177,7 +177,7 @@ export default function AdminLogin() {
             onClick={handleMagicLink}
             disabled={loading || !email}
             style={{
-              background: "none", border: "none", color: PLUM,
+              background: "none", border: "none", color: PURPLE,
               fontSize: 13, cursor: "pointer", fontFamily: "inherit",
               textDecoration: "underline", opacity: !email ? 0.4 : 1,
             }}

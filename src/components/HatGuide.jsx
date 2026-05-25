@@ -19,8 +19,8 @@
 
 import { useEffect, useState } from "react";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -69,7 +69,7 @@ export default function HatGuide({ character = "instructor", tip }) {
         alignItems: "flex-start",
         background: "#fff",
         border: `1px solid ${RULE}`,
-        borderLeft: `4px solid ${GOLD}`,
+        borderLeft: `4px solid ${VIOLET}`,
         borderRadius: 8,
         padding: "16px 20px",
       }}
@@ -81,7 +81,7 @@ export default function HatGuide({ character = "instructor", tip }) {
           width: 44,
           height: 44,
           borderRadius: "50%",
-          background: `${GOLD}22`,
+          background: `${VIOLET}22`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -114,7 +114,7 @@ export default function HatGuide({ character = "instructor", tip }) {
                 disabled={tip.primary.disabled}
                 style={{
                   padding: "9px 16px",
-                  background: PLUM,
+                  background: PURPLE,
                   color: "#fff",
                   border: "none",
                   borderRadius: 6,
@@ -135,8 +135,8 @@ export default function HatGuide({ character = "instructor", tip }) {
                 style={{
                   padding: "9px 16px",
                   background: "transparent",
-                  color: PLUM,
-                  border: `1px solid ${PLUM}`,
+                  color: PURPLE,
+                  border: `1px solid ${PURPLE}`,
                   borderRadius: 6,
                   cursor: "pointer",
                   fontSize: 14,

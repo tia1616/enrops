@@ -9,7 +9,7 @@
 // loosely aligned with what's actually happening server-side.
 
 import { useEffect, useState } from "react";
-import { INK, MUTED, PLUM, RULE, GOLD } from "../marketing/tokens.jsx";
+import { INK, MUTED, PURPLE, RULE, VIOLET } from "../marketing/tokens.jsx";
 
 const STEPS = [
   { at: 0,  label: "Finding the parents you asked for…" },
@@ -36,7 +36,7 @@ export default function DraftingScreen() {
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto", padding: "32px 16px 48px", textAlign: "center" }}>
-      <h1 style={{ margin: 0, color: PLUM, fontSize: 28, fontWeight: 700 }}>
+      <h1 style={{ margin: 0, color: PURPLE, fontSize: 28, fontWeight: 700 }}>
         Don's drafting your campaign…
       </h1>
       <p style={{ margin: "10px 0 0", fontSize: 14, color: MUTED, lineHeight: 1.5 }}>
@@ -61,14 +61,14 @@ export default function DraftingScreen() {
             >
               <span style={{
                 width: 18, fontWeight: 700,
-                color: isDone ? GOLD : isCurrent ? PLUM : MUTED,
+                color: isDone ? VIOLET : isCurrent ? PURPLE : MUTED,
               }}>
                 {isDone ? "✓" : isCurrent ? "→" : "·"}
               </span>
               <span style={{
                 fontSize: 15,
                 fontWeight: isCurrent ? 600 : 400,
-                color: isCurrent ? PLUM : isDone ? INK : MUTED,
+                color: isCurrent ? PURPLE : isDone ? INK : MUTED,
               }}>
                 {step.label}
               </span>

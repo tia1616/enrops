@@ -9,9 +9,9 @@ import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const CORAL = "#D9694F";
 const OK_GREEN = "#3a7c3a";
 const INK = "#1a1a1a";
@@ -106,7 +106,7 @@ export default function TeamPage() {
   return (
     <div>
       <div style={{ marginBottom: 18 }}>
-        <h1 style={{ fontSize: 26, fontWeight: 700, color: PLUM, margin: 0 }}>Team</h1>
+        <h1 style={{ fontSize: 26, fontWeight: 700, color: PURPLE, margin: 0 }}>Team</h1>
         <div style={{ color: MUTED, fontSize: 14, marginTop: 4 }}>
           Owners and admins for {org?.name ?? "this organization"}.
         </div>
@@ -205,7 +205,7 @@ export default function TeamPage() {
             display: "grid",
             gridTemplateColumns: "1fr 140px 160px",
             padding: "10px 16px",
-            background: CHALK,
+            background: CREAM,
             fontSize: 11,
             fontWeight: 600,
             color: MUTED,
@@ -242,7 +242,7 @@ export default function TeamPage() {
               </div>
               <div style={{ textTransform: "capitalize", color: INK }}>{m.role ?? "—"}</div>
               <div style={{ color: MUTED, fontSize: 13 }}>
-                {m.accepted_at ? formatDate(m.accepted_at) : <span style={{ color: GOLD }}>Pending</span>}
+                {m.accepted_at ? formatDate(m.accepted_at) : <span style={{ color: VIOLET }}>Pending</span>}
               </div>
             </div>
           ))
@@ -265,7 +265,7 @@ function primaryBtn(disabled = false) {
   return {
     display: "inline-block",
     padding: "9px 16px",
-    background: disabled ? MUTED : PLUM,
+    background: disabled ? MUTED : PURPLE,
     color: "#fff",
     border: "none",
     borderRadius: 6,
@@ -281,8 +281,8 @@ function ghostBtn() {
     display: "inline-block",
     padding: "9px 14px",
     background: "transparent",
-    color: PLUM,
-    border: `1px solid ${PLUM}`,
+    color: PURPLE,
+    border: `1px solid ${PURPLE}`,
     borderRadius: 6,
     fontWeight: 500,
     fontSize: 14,

@@ -9,9 +9,9 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import HatGuide from "../../components/HatGuide";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const CORAL = "#D9694F";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -161,10 +161,10 @@ function deriveStatus(session, assignments) {
 
 function statusColor(status) {
   if (status === "needs_hire") return CORAL;
-  if (status === "flagged") return GOLD;
+  if (status === "flagged") return VIOLET;
   if (status === "change_requested") return CHANGE_REQ;
   if (status === "accepted") return OK_GREEN;
-  return PLUM;
+  return PURPLE;
 }
 
 function enrollmentTone(n) {
@@ -1965,8 +1965,8 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
           )}
           <span style={{
             fontSize: 11,
-            color: PLUM,
-            background: `${GOLD}22`,
+            color: PURPLE,
+            background: `${VIOLET}22`,
             textTransform: "uppercase",
             letterSpacing: 0.6,
             fontWeight: 700,
@@ -1981,7 +1981,7 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
               style={{
                 background: "transparent",
                 border: "none",
-                color: PLUM,
+                color: PURPLE,
                 fontSize: 13,
                 fontWeight: 500,
                 fontFamily: "inherit",
@@ -2051,7 +2051,7 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
               style={{
                 background: "transparent",
                 border: "none",
-                color: PLUM,
+                color: PURPLE,
                 fontSize: 13,
                 fontWeight: 500,
                 fontFamily: "inherit",
@@ -2088,7 +2088,7 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
             type="button"
             onClick={onUndo}
             title={lastOp.label}
-            style={{ ...btn("transparent", PLUM, true), padding: "7px 12px", fontSize: 13 }}
+            style={{ ...btn("transparent", PURPLE, true), padding: "7px 12px", fontSize: 13 }}
           >
             ↶ Undo
           </button>
@@ -2099,7 +2099,7 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
             onClick={onRerunAgent}
             disabled={busy === "rematching"}
             title="Re-run the matching agent on this cycle's surveys to regenerate a fresh draft of proposed assignments"
-            style={btn("transparent", PLUM, true, busy === "rematching")}
+            style={btn("transparent", PURPLE, true, busy === "rematching")}
           >
             {busy === "rematching" ? "Re-running…" : "Re-run matching"}
           </button>
@@ -2110,7 +2110,7 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
             onClick={onApprove}
             disabled={busy === "approving"}
             title="Lock in the AI's draft assignments — flips every proposed row to confirmed so you can send offers. This is the draft-approval gate, not instructor acceptances."
-            style={btn("transparent", PLUM, true, busy === "approving")}
+            style={btn("transparent", PURPLE, true, busy === "approving")}
           >
             {busy === "approving" ? "Approving…" : "Approve draft"}
           </button>
@@ -2122,7 +2122,7 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
               onClick={onPreviewClick}
               disabled={busy === "previewing"}
               title="Render every offer email so you can review before sending — no real sends, no DB changes"
-              style={btn("transparent", PLUM, true, busy === "previewing")}
+              style={btn("transparent", PURPLE, true, busy === "previewing")}
             >
               {busy === "previewing" ? "Loading…" : "Preview offers"}
             </button>
@@ -2131,7 +2131,7 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
               onClick={onSendClick}
               disabled={busy === "sending"}
               title="Send the confirmed offers to every assigned instructor"
-              style={btn(PLUM, "#fff", false, busy === "sending")}
+              style={btn(PURPLE, "#fff", false, busy === "sending")}
             >
               Send offers
             </button>
@@ -2143,7 +2143,7 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
             onClick={onRemindersClick}
             disabled={busy === "reminders"}
             title="Fire reminder emails right now to anyone whose response is still pending (the cron auto-fires 2–3 days before each deadline — this is for manual nudges)"
-            style={btn("transparent", PLUM, true, busy === "reminders")}
+            style={btn("transparent", PURPLE, true, busy === "reminders")}
           >
             {busy === "reminders" ? "Working…" : "Send reminders now"}
           </button>
@@ -2155,9 +2155,9 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
 
 function Counter({ label, value, tone, suffix, hint }) {
   const color =
-    tone === "assigned" ? PLUM :
+    tone === "assigned" ? PURPLE :
     tone === "accepted" ? OK_GREEN :
-    tone === "flagged" ? GOLD :
+    tone === "flagged" ? VIOLET :
     tone === "change_requested" ? CHANGE_REQ :
     tone === "needs_hire" ? CORAL : MUTED;
   return (
@@ -2284,13 +2284,13 @@ function MultiSelect({ label, options, selected, onToggle }) {
           display: "inline-flex",
           alignItems: "center",
           gap: 6,
-          borderColor: count > 0 ? PLUM : RULE,
+          borderColor: count > 0 ? PURPLE : RULE,
         }}
       >
         <span>{label}</span>
         {count > 0 && (
           <span style={{
-            background: PLUM,
+            background: PURPLE,
             color: "#fff",
             borderRadius: 999,
             padding: "0 7px",
@@ -2329,7 +2329,7 @@ function MultiSelect({ label, options, selected, onToggle }) {
                   width: "100%",
                   textAlign: "left",
                   padding: "7px 10px",
-                  background: isOn ? `${GOLD}1A` : "transparent",
+                  background: isOn ? `${VIOLET}1A` : "transparent",
                   border: "none",
                   borderRadius: 4,
                   cursor: "pointer",
@@ -2343,8 +2343,8 @@ function MultiSelect({ label, options, selected, onToggle }) {
               >
                 <span style={{
                   width: 14, height: 14, borderRadius: 3,
-                  border: `1.5px solid ${isOn ? PLUM : RULE}`,
-                  background: isOn ? PLUM : "#fff",
+                  border: `1.5px solid ${isOn ? PURPLE : RULE}`,
+                  background: isOn ? PURPLE : "#fff",
                   display: "inline-flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -2391,7 +2391,7 @@ function ActivePills({
           alignItems: "center",
           gap: 6,
           padding: "3px 4px 3px 10px",
-          background: `${GOLD}1A`,
+          background: `${VIOLET}1A`,
           border: `1px solid ${RULE}`,
           borderRadius: 999,
           fontSize: 12,
@@ -2427,8 +2427,8 @@ function TermOverview({ weeks, weekBuckets, focusedWeek, onFocus }) {
               onClick={() => onFocus(isFocused ? null : w.num)}
               style={{
                 textAlign: "left",
-                background: isFocused ? `${GOLD}1A` : CHALK,
-                border: isFocused ? `2px solid ${PLUM}` : `0.5px solid ${RULE}`,
+                background: isFocused ? `${VIOLET}1A` : CREAM,
+                border: isFocused ? `2px solid ${PURPLE}` : `0.5px solid ${RULE}`,
                 borderRadius: 6,
                 padding: "10px 10px 12px",
                 cursor: "pointer",
@@ -2461,10 +2461,10 @@ function TermOverview({ weeks, weekBuckets, focusedWeek, onFocus }) {
 function Dot({ kind }) {
   const color =
     kind === "needs_hire" ? CORAL :
-    kind === "flagged" ? GOLD :
+    kind === "flagged" ? VIOLET :
     kind === "change_requested" ? CHANGE_REQ :
     kind === "accepted" ? OK_GREEN :
-    PLUM;
+    PURPLE;
   return <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: "50%", background: color, display: "inline-block" }} />;
 }
 
@@ -2555,7 +2555,7 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, getValidationFor,
                 {newGroup && (
                   <div style={{
                     height: 0,
-                    borderTop: `2px solid ${GOLD}66`,
+                    borderTop: `2px solid ${VIOLET}66`,
                     margin: "4px 0",
                   }} />
                 )}
@@ -2621,7 +2621,7 @@ function ProgramCard({ item, cardBg, flash, getValidationFor, dragStateRef, onDr
   const enrollTone = enrollmentTone(session.current_enrollment);
   const enrollColor =
     enrollTone === "danger" ? CORAL :
-    enrollTone === "warn" ? GOLD :
+    enrollTone === "warn" ? VIOLET :
     enrollTone === "ok" ? OK_GREEN : MUTED;
 
   function evaluate() {
@@ -2664,14 +2664,14 @@ function ProgramCard({ item, cardBg, flash, getValidationFor, dragStateRef, onDr
 
   const borderColor =
     dropEffect === "ok" ? OK_GREEN :
-    dropEffect === "warn" ? GOLD :
+    dropEffect === "warn" ? VIOLET :
     dropEffect === "block" ? CORAL :
     dropEffect === "self" ? MUTED :
     RULE;
   const baseBg = cardBg ?? LOCATION_PALETTE[0];
   const bgColor =
     dropEffect === "ok" ? `${OK_GREEN}33` :
-    dropEffect === "warn" ? `${GOLD}33` :
+    dropEffect === "warn" ? `${VIOLET}33` :
     dropEffect === "block" ? `${CORAL}33` :
     baseBg;
 
@@ -2693,7 +2693,7 @@ function ProgramCard({ item, cardBg, flash, getValidationFor, dragStateRef, onDr
       style={{
         position: "relative",
         background: bgColor,
-        border: `1px solid ${flash ? GOLD : borderColor}`,
+        border: `1px solid ${flash ? VIOLET : borderColor}`,
         borderLeft: `3px solid ${color}`,
         borderRadius: 6,
         padding: "10px 12px",
@@ -2702,7 +2702,7 @@ function ProgramCard({ item, cardBg, flash, getValidationFor, dragStateRef, onDr
         gap: 6,
         cursor: (isNeedsHire || isChangeRequested || isDeadlinePassed) ? "pointer" : "default",
         transition: "background 600ms ease, border-color 600ms ease, box-shadow 600ms ease",
-        boxShadow: flash ? `0 0 0 3px ${GOLD}55` : "none",
+        boxShadow: flash ? `0 0 0 3px ${VIOLET}55` : "none",
       }}
       title={
         isChangeRequested ? "Click to review the instructor's change request" :
@@ -2721,7 +2721,7 @@ function ProgramCard({ item, cardBg, flash, getValidationFor, dragStateRef, onDr
       </div>
       <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.3 }}>{session.location_name}</div>
       {cdLabel && (
-        <div style={{ fontSize: 10, color: PLUM, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>
+        <div style={{ fontSize: 10, color: PURPLE, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>
           {cdLabel}
         </div>
       )}
@@ -2836,7 +2836,7 @@ function SlotRow({ label, assignment, session, role, dragStateRef, onClick, righ
 
 function DragHoverPopup({ kind, warnings, hardBlocks }) {
   const isBlock = kind === "block";
-  const color = isBlock ? CORAL : GOLD;
+  const color = isBlock ? CORAL : VIOLET;
   const items = isBlock ? hardBlocks : warnings;
   return (
     <div style={{
@@ -2934,8 +2934,8 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
       style={{
         fontSize: 11,
         color: INK,
-        background: accepted ? `${OK_GREEN}26` : tentative ? `${GOLD}33` : CHALK,
-        border: accepted ? `1px solid ${OK_GREEN}` : tentative ? `1px solid ${GOLD}` : "none",
+        background: accepted ? `${OK_GREEN}26` : tentative ? `${VIOLET}33` : CREAM,
+        border: accepted ? `1px solid ${OK_GREEN}` : tentative ? `1px solid ${VIOLET}` : "none",
         padding: "3px 8px",
         borderRadius: 999,
         display: "inline-flex",
@@ -2974,8 +2974,8 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
           style={{
             fontSize: 10,
             fontWeight: 800,
-            color: PLUM,
-            background: GOLD,
+            color: PURPLE,
+            background: VIOLET,
             borderRadius: "50%",
             width: 13,
             height: 13,
@@ -2994,7 +2994,7 @@ function InstructorChip({ assignment, extraCount, needsHire, sourceSession, drag
             fontSize: 9,
             fontWeight: 800,
             color: "#fff",
-            background: flagBadgeKind === "override" ? CORAL : GOLD,
+            background: flagBadgeKind === "override" ? CORAL : VIOLET,
             borderRadius: "50%",
             width: 13,
             height: 13,
@@ -3085,8 +3085,8 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
         </div>
 
         <div style={{
-          background: isDeadlinePassed ? `${GOLD}1A` : `${CHANGE_REQ}14`,
-          border: `1px solid ${isDeadlinePassed ? GOLD : CHANGE_REQ}66`,
+          background: isDeadlinePassed ? `${VIOLET}1A` : `${CHANGE_REQ}14`,
+          border: `1px solid ${isDeadlinePassed ? VIOLET : CHANGE_REQ}66`,
           borderRadius: 6,
           padding: 12,
           fontSize: 14,
@@ -3129,8 +3129,8 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
               return (
                 <div key={m.id} style={{
                   padding: "8px 10px",
-                  background: isSystem ? "#f5f3ed" : (isInstructor ? `${CHANGE_REQ}10` : `${PLUM}10`),
-                  border: `1px solid ${isSystem ? RULE : (isInstructor ? `${CHANGE_REQ}40` : `${PLUM}40`)}`,
+                  background: isSystem ? "#f5f3ed" : (isInstructor ? `${CHANGE_REQ}10` : `${PURPLE}10`),
+                  border: `1px solid ${isSystem ? RULE : (isInstructor ? `${CHANGE_REQ}40` : `${PURPLE}40`)}`,
                   borderRadius: 6,
                   fontSize: 13,
                   color: INK,
@@ -3226,7 +3226,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
               disabled={busy}
             />
           ) : (
-            <div style={{ border: `1px solid ${PLUM}`, borderRadius: 6, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ border: `1px solid ${PURPLE}`, borderRadius: 6, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>Reply to {firstName}</div>
               {replySent ? (
                 <div style={{ fontSize: 13, color: OK_GREEN, fontWeight: 500 }}>
@@ -3257,7 +3257,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
                     <button type="button" onClick={() => { setReplyOpen(false); setReplyText(""); setReplyError(""); }} disabled={replyBusy} style={{ ...btn("transparent", MUTED, true), padding: "6px 10px", fontSize: 12 }}>
                       Cancel
                     </button>
-                    <button type="button" onClick={sendReply} disabled={replyBusy || !replyText.trim()} style={{ ...btn(PLUM, "#fff", false, replyBusy || !replyText.trim()), padding: "6px 12px", fontSize: 12 }}>
+                    <button type="button" onClick={sendReply} disabled={replyBusy || !replyText.trim()} style={{ ...btn(PURPLE, "#fff", false, replyBusy || !replyText.trim()), padding: "6px 12px", fontSize: 12 }}>
                       {replyBusy ? "Sending…" : "Send"}
                     </button>
                   </div>
@@ -3277,7 +3277,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
             style={{
               padding: "8px 14px",
               background: "transparent",
-              color: PLUM,
+              color: PURPLE,
               border: "none",
               borderRadius: 6,
               cursor: busy ? "default" : "pointer",
@@ -3305,7 +3305,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           You can now send offers.
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>OK</button>
+          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>OK</button>
         </div>
       </ModalShell>
     );
@@ -3328,12 +3328,12 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
             </div>
           )}
           {p.mode === "test" && p.sent > 0 && (
-            <div style={{ marginTop: 12, padding: 10, background: `${GOLD}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
+            <div style={{ marginTop: 12, padding: 10, background: `${VIOLET}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
               All emails went to <strong>jessica@journeytosteam.com</strong> only — your instructors didn't receive anything. Check your inbox.
             </div>
           )}
           {showRollback && (
-            <div style={{ marginTop: 14, padding: 12, background: `${GOLD}1A`, border: `1px solid ${GOLD}66`, borderRadius: 6 }}>
+            <div style={{ marginTop: 14, padding: 12, background: `${VIOLET}1A`, border: `1px solid ${VIOLET}66`, borderRadius: 6 }}>
               <div style={{ fontSize: 13, color: INK, marginBottom: 8 }}>
                 <strong>{publishedCount}</strong> {publishedCount === 1 ? "instructor has" : "instructors have"} already been sent their offer. If you need to send again (after fixing something), reset them here first.
               </div>
@@ -3341,7 +3341,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
                 type="button"
                 onClick={onRollback}
                 disabled={rollingBack}
-                style={{ ...btn(GOLD, INK, false, rollingBack), padding: "7px 12px", fontSize: 13 }}
+                style={{ ...btn(VIOLET, INK, false, rollingBack), padding: "7px 12px", fontSize: 13 }}
               >
                 {rollingBack ? "Resetting…" : `Reset ${publishedCount} already-sent ${publishedCount === 1 ? "offer" : "offers"}`}
               </button>
@@ -3349,7 +3349,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           )}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>
+          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>Close</button>
         </div>
       </ModalShell>
     );
@@ -3403,7 +3403,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
             </>
           )}
           {upcoming.length > 0 && (
-            <div style={{ marginTop: 16, padding: 12, background: `${GOLD}1A`, border: `1px solid ${GOLD}66`, borderRadius: 6 }}>
+            <div style={{ marginTop: 16, padding: 12, background: `${VIOLET}1A`, border: `1px solid ${VIOLET}66`, borderRadius: 6 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
                 Auto-scheduled
               </div>
@@ -3428,7 +3428,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           )}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>
+          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>Close</button>
         </div>
       </ModalShell>
     );
@@ -3441,7 +3441,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           <strong>{dialog.payload.count}</strong> {dialog.payload.count === 1 ? "offer is" : "offers are"} ready to be sent again. Distance bonuses are still there. Click <strong>Send offers</strong> when you're ready.
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>OK</button>
+          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>OK</button>
         </div>
       </ModalShell>
     );
@@ -3515,7 +3515,7 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
             </div>
           )}
           {p.mode === "test" && p.sent > 0 && (
-            <div style={{ marginTop: 10, padding: 10, background: `${GOLD}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
+            <div style={{ marginTop: 10, padding: 10, background: `${VIOLET}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
               All emails went to <strong>jessica@journeytosteam.com</strong> only — the survey hasn't actually been released yet.
             </div>
           )}
@@ -3529,7 +3529,7 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
           )}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>OK</button>
+          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>OK</button>
         </div>
       </ModalShell>
     );
@@ -3589,8 +3589,8 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
 // diverge later — keep in sync if you change the server templates.
 
 const EMAIL_BRAND = {
-  primary: "#691D39",
-  pageBg: "#EAEADD",
+  primary: "#1C004F",
+  pageBg: "#FBFBFB",
   text: "#1a1a1a",
   muted: "#6b6b6b",
   border: "#e2dfd5",
@@ -3862,15 +3862,15 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
                 style={{
                   flex: 1,
                   padding: "10px 12px",
-                  background: cycleType === opt.value ? `${PLUM}10` : "#fff",
-                  border: `1px solid ${cycleType === opt.value ? PLUM : RULE}`,
+                  background: cycleType === opt.value ? `${PURPLE}10` : "#fff",
+                  border: `1px solid ${cycleType === opt.value ? PURPLE : RULE}`,
                   borderRadius: 6,
                   cursor: "pointer",
                   textAlign: "left",
                   fontFamily: "inherit",
                 }}
               >
-                <div style={{ fontSize: 14, fontWeight: 600, color: cycleType === opt.value ? PLUM : INK }}>{opt.label}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: cycleType === opt.value ? PURPLE : INK }}>{opt.label}</div>
                 <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{opt.hint}</div>
               </button>
             ))}
@@ -3889,7 +3889,7 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
         </div>
 
         {derivedWeeks.length > 0 && (
-          <div style={{ background: CHALK, border: `1px solid ${RULE}`, borderRadius: 6, padding: 10, fontSize: 12, color: INK, lineHeight: 1.5 }}>
+          <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 10, fontSize: 12, color: INK, lineHeight: 1.5 }}>
             <strong>Auto-derived:</strong> {derivedWeeks.length} week{derivedWeeks.length === 1 ? "" : "s"} (Mon–Fri)
             {" — "}
             Week 1: {fmtShort(derivedWeeks[0].starts_on)} – {fmtShort(derivedWeeks[0].ends_on)}
@@ -3917,7 +3917,7 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
       </div>
       <div style={{ padding: "0 20px 20px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
         <button type="button" onClick={onClose} disabled={saving} style={btn("transparent", MUTED, true, saving)}>Cancel</button>
-        <button type="button" onClick={save} disabled={saving} style={btn(PLUM, "#fff", false, saving)}>
+        <button type="button" onClick={save} disabled={saving} style={btn(PURPLE, "#fff", false, saving)}>
           {saving ? "Setting up…" : "Create cycle"}
         </button>
       </div>
@@ -4089,14 +4089,14 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
 
   function kindPill(kind) {
     const map = {
-      offer:             { label: "Offer",            bg: PLUM,        fg: "#fff" },
-      patch:             { label: "Add-on offer",     bg: GOLD,        fg: PLUM   },
-      reminder:          { label: "Reminder",         bg: `${PLUM}33`, fg: PLUM   },
+      offer:             { label: "Offer",            bg: PURPLE,        fg: "#fff" },
+      patch:             { label: "Add-on offer",     bg: VIOLET,        fg: PURPLE   },
+      reminder:          { label: "Reminder",         bg: `${PURPLE}33`, fg: PURPLE   },
       admin_reply:       { label: "Your message",     bg: `${OK_GREEN}22`, fg: OK_GREEN },
       instructor_reply:  { label: "Instructor reply", bg: `${CHANGE_REQ}22`, fg: CHANGE_REQ },
       flag:              { label: "Deadline flag",    bg: `${CORAL}22`, fg: CORAL },
-      system_other:      { label: "System",           bg: CHALK,       fg: MUTED  },
-    }[kind] ?? { label: kind, bg: CHALK, fg: MUTED };
+      system_other:      { label: "System",           bg: CREAM,       fg: MUTED  },
+    }[kind] ?? { label: kind, bg: CREAM, fg: MUTED };
     return (
       <span style={{ background: map.bg, color: map.fg, fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 999, whiteSpace: "nowrap" }}>
         {map.label}
@@ -4188,8 +4188,8 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
                   fontSize: 12,
                   fontWeight: 600,
                   fontFamily: "inherit",
-                  border: `1px solid ${filter === f.key ? PLUM : RULE}`,
-                  background: filter === f.key ? PLUM : "#fff",
+                  border: `1px solid ${filter === f.key ? PURPLE : RULE}`,
+                  background: filter === f.key ? PURPLE : "#fff",
                   color: filter === f.key ? "#fff" : INK,
                   borderRadius: 999,
                   cursor: "pointer",
@@ -4256,7 +4256,7 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
                       {new Date(e.created_at).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
                     </span>
                     {previewable && (
-                      <span style={{ fontSize: 12, color: PLUM, fontWeight: 500 }}>
+                      <span style={{ fontSize: 12, color: PURPLE, fontWeight: 500 }}>
                         {expanded ? "Hide email ▲" : "View email ▼"}
                       </span>
                     )}
@@ -4294,7 +4294,7 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
 function EmailPreviewPanel({ event, assignment, session, assignments, sessions, sessionsById, locationsById, cycle, orgName }) {
   if (!assignment || !session || !cycle) {
     return (
-      <div style={{ marginTop: 8, padding: 12, border: `1px solid ${RULE}`, borderRadius: 6, background: CHALK, fontSize: 12, color: MUTED }}>
+      <div style={{ marginTop: 8, padding: 12, border: `1px solid ${RULE}`, borderRadius: 6, background: CREAM, fontSize: 12, color: MUTED }}>
         Couldn't load the camp this email was tied to (the assignment or session was removed).
       </div>
     );
@@ -4347,7 +4347,7 @@ function EmailPreviewPanel({ event, assignment, session, assignments, sessions, 
   else html = "";
 
   return (
-    <div style={{ marginTop: 8, border: `1px solid ${RULE}`, borderRadius: 6, overflow: "hidden", background: CHALK }}>
+    <div style={{ marginTop: 8, border: `1px solid ${RULE}`, borderRadius: 6, overflow: "hidden", background: CREAM }}>
       <iframe
         title="Email preview"
         srcDoc={html}
@@ -4367,7 +4367,7 @@ function PreviewViewer({ data, onClose, onSend, sendLabel, sending }) {
           {data?.note ?? "No confirmed assignments to preview yet. Click Approve first."}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>
+          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>Close</button>
         </div>
       </ModalShell>
     );
@@ -4413,18 +4413,18 @@ function PreviewViewer({ data, onClose, onSend, sendLabel, sending }) {
             <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginTop: 2 }}>{cur?.subject}</div>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <button type="button" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} style={btn("transparent", PLUM, true, idx === 0)}>‹ Prev</button>
-            <button type="button" onClick={() => setIdx((i) => Math.min(previews.length - 1, i + 1))} disabled={idx === previews.length - 1} style={btn("transparent", PLUM, true, idx === previews.length - 1)}>Next ›</button>
-            <button type="button" onClick={onClose} disabled={sending} style={btn("transparent", PLUM, true, sending)}>Cancel</button>
+            <button type="button" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} style={btn("transparent", PURPLE, true, idx === 0)}>‹ Prev</button>
+            <button type="button" onClick={() => setIdx((i) => Math.min(previews.length - 1, i + 1))} disabled={idx === previews.length - 1} style={btn("transparent", PURPLE, true, idx === previews.length - 1)}>Next ›</button>
+            <button type="button" onClick={onClose} disabled={sending} style={btn("transparent", PURPLE, true, sending)}>Cancel</button>
             {onSend && (
-              <button type="button" onClick={onSend} disabled={sending} style={btn(PLUM, "#fff", false, sending)}>
+              <button type="button" onClick={onSend} disabled={sending} style={btn(PURPLE, "#fff", false, sending)}>
                 {sending ? "Sending…" : (sendLabel ?? "Send")}
               </button>
             )}
-            {!onSend && <button type="button" onClick={onClose} style={btn(PLUM, "#fff")}>Close</button>}
+            {!onSend && <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>Close</button>}
           </div>
         </div>
-        <div style={{ flex: 1, overflow: "hidden", background: CHALK, padding: 0 }}>
+        <div style={{ flex: 1, overflow: "hidden", background: CREAM, padding: 0 }}>
           <iframe
             title="Offer preview"
             srcDoc={cur?.html ?? ""}
@@ -4437,7 +4437,7 @@ function PreviewViewer({ data, onClose, onSend, sendLabel, sending }) {
 }
 
 function DialogChoice({ title, subtitle, onClick, disabled, tone }) {
-  const border = tone === "danger" ? CORAL : tone === "warn" ? GOLD : RULE;
+  const border = tone === "danger" ? CORAL : tone === "warn" ? VIOLET : RULE;
   return (
     <button
       type="button"
@@ -4725,7 +4725,7 @@ function CandidatePicker({
 
         {isReassign && (
           <div style={{
-            background: CHALK,
+            background: CREAM,
             borderBottom: `1px solid ${RULE}`,
           }}>
             <div style={{
@@ -4748,7 +4748,7 @@ function CandidatePicker({
                     type="button"
                     onClick={() => { setMsgOpen((v) => !v); setMsgSent(false); setMsgError(""); }}
                     title={`Send ${currentFirstName} a message — emails them and saves a copy to the conversation thread`}
-                    style={{ ...btn("transparent", PLUM, true), padding: "5px 10px", fontSize: 12 }}
+                    style={{ ...btn("transparent", PURPLE, true), padding: "5px 10px", fontSize: 12 }}
                   >
                     {msgOpen ? "Cancel message" : `Message ${currentFirstName}`}
                   </button>
@@ -4759,7 +4759,7 @@ function CandidatePicker({
                     onClick={() => setResendArmed(true)}
                     disabled={resendArmed || resendBusy}
                     title={`Resend the offer email for this ${role === "developing" ? "developing slot" : "camp"} — opens preview before sending`}
-                    style={{ ...btn("transparent", PLUM, true), padding: "5px 10px", fontSize: 12, opacity: (resendArmed || resendBusy) ? 0.6 : 1 }}
+                    style={{ ...btn("transparent", PURPLE, true), padding: "5px 10px", fontSize: 12, opacity: (resendArmed || resendBusy) ? 0.6 : 1 }}
                   >
                     Resend offer email
                   </button>
@@ -4769,7 +4769,7 @@ function CandidatePicker({
                     type="button"
                     onClick={onResetAcceptance}
                     title="Set back to 'awaiting response' (use this to clear a test-accept you made via Admin preview)"
-                    style={{ ...btn("transparent", GOLD, true), padding: "5px 10px", fontSize: 12, borderColor: GOLD }}
+                    style={{ ...btn("transparent", VIOLET, true), padding: "5px 10px", fontSize: 12, borderColor: VIOLET }}
                   >
                     Reset acceptance
                   </button>
@@ -4788,8 +4788,8 @@ function CandidatePicker({
               <div style={{
                 margin: "0 20px 12px",
                 padding: 10,
-                background: `${GOLD}1A`,
-                border: `1px solid ${GOLD}`,
+                background: `${VIOLET}1A`,
+                border: `1px solid ${VIOLET}`,
                 borderRadius: 6,
                 display: "flex",
                 flexDirection: "column",
@@ -4806,7 +4806,7 @@ function CandidatePicker({
                     type="button"
                     onClick={async () => { setResendBusy(true); try { await onResendOffer(); } finally { setResendBusy(false); } }}
                     disabled={resendBusy}
-                    style={{ ...btn(PLUM, "#fff", false, resendBusy), padding: "6px 12px", fontSize: 12 }}
+                    style={{ ...btn(PURPLE, "#fff", false, resendBusy), padding: "6px 12px", fontSize: 12 }}
                   >
                     {resendBusy ? "Preparing preview…" : `Yes, resend to ${currentFirstName}`}
                   </button>
@@ -4827,7 +4827,7 @@ function CandidatePicker({
                 margin: "0 20px 12px",
                 padding: 10,
                 background: "#fff",
-                border: `1px solid ${PLUM}`,
+                border: `1px solid ${PURPLE}`,
                 borderRadius: 6,
                 display: "flex",
                 flexDirection: "column",
@@ -4874,7 +4874,7 @@ function CandidatePicker({
                         type="button"
                         onClick={handleSendMessageClick}
                         disabled={msgBusy || !msgText.trim()}
-                        style={{ ...btn(PLUM, "#fff", false, msgBusy || !msgText.trim()), padding: "6px 12px", fontSize: 12 }}
+                        style={{ ...btn(PURPLE, "#fff", false, msgBusy || !msgText.trim()), padding: "6px 12px", fontSize: 12 }}
                       >
                         {msgBusy ? "Sending…" : "Send message"}
                       </button>
@@ -4913,8 +4913,8 @@ function CandidatePicker({
                   return (
                     <div key={m.id} style={{
                       padding: "8px 10px",
-                      background: isSystem ? "#f5f3ed" : (isInstructor ? `${CHANGE_REQ}10` : `${PLUM}10`),
-                      border: `1px solid ${isSystem ? RULE : (isInstructor ? `${CHANGE_REQ}40` : `${PLUM}40`)}`,
+                      background: isSystem ? "#f5f3ed" : (isInstructor ? `${CHANGE_REQ}10` : `${PURPLE}10`),
+                      border: `1px solid ${isSystem ? RULE : (isInstructor ? `${CHANGE_REQ}40` : `${PURPLE}40`)}`,
                       borderRadius: 6,
                       fontSize: 13,
                       color: INK,
@@ -4959,16 +4959,16 @@ function CandidatePicker({
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
                     {locPref === "preferred" && <Badge color={OK_GREEN}>Prefers location</Badge>}
                     {curPref === "preferred" && <Badge color={OK_GREEN}>Prefers curriculum</Badge>}
-                    {locPref === "not_preferred" && <Badge color={GOLD}>Location: not preferred</Badge>}
-                    {curPref === "not_preferred" && <Badge color={GOLD}>Curriculum: not preferred</Badge>}
-                    {fullDayCapable && (session.session_type === "morning" || session.session_type === "afternoon") && <Badge color={GOLD}>Full-day capable</Badge>}
-                    {needsConfirmation && <Badge color={GOLD}>Unconfirmed availability</Badge>}
+                    {locPref === "not_preferred" && <Badge color={VIOLET}>Location: not preferred</Badge>}
+                    {curPref === "not_preferred" && <Badge color={VIOLET}>Curriculum: not preferred</Badge>}
+                    {fullDayCapable && (session.session_type === "morning" || session.session_type === "afternoon") && <Badge color={VIOLET}>Full-day capable</Badge>}
+                    {needsConfirmation && <Badge color={VIOLET}>Unconfirmed availability</Badge>}
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => onPick(instructor.id, warningsForBanner)}
-                  style={{ ...btn(PLUM, "#fff"), padding: "7px 12px", fontSize: 13 }}
+                  style={{ ...btn(PURPLE, "#fff"), padding: "7px 12px", fontSize: 13 }}
                 >
                   {isReassign ? "Reassign" : "Assign"}
                 </button>
@@ -5020,7 +5020,7 @@ function CandidatePicker({
                         <button
                           type="button"
                           onClick={() => onUndecline(inst.id)}
-                          style={{ ...btn("transparent", PLUM, true), padding: "4px 10px", fontSize: 11 }}
+                          style={{ ...btn("transparent", PURPLE, true), padding: "4px 10px", fontSize: 11 }}
                         >
                           Re-suggest
                         </button>
@@ -5038,7 +5038,7 @@ function CandidatePicker({
             <button
               type="button"
               onClick={() => setAddOpen(true)}
-              style={{ ...btn("transparent", PLUM, true), width: "100%", padding: "8px 12px", fontSize: 13 }}
+              style={{ ...btn("transparent", PURPLE, true), width: "100%", padding: "8px 12px", fontSize: 13 }}
             >
               + Add new instructor
             </button>
@@ -5094,7 +5094,7 @@ function CandidatePicker({
                   type="button"
                   onClick={submitNewInstructor}
                   disabled={addBusy || !addForm.firstName.trim() || !addForm.email.trim()}
-                  style={{ ...btn(PLUM, "#fff", false, addBusy), padding: "6px 12px", fontSize: 13 }}
+                  style={{ ...btn(PURPLE, "#fff", false, addBusy), padding: "6px 12px", fontSize: 13 }}
                 >
                   {addBusy ? "Adding…" : "Add & Assign"}
                 </button>
@@ -5149,7 +5149,7 @@ function Empty({ title, body, tone, action }) {
         <button
           type="button"
           onClick={action.onClick}
-          style={{ ...btn(PLUM, "#fff"), marginTop: 16 }}
+          style={{ ...btn(PURPLE, "#fff"), marginTop: 16 }}
         >
           {action.label}
         </button>

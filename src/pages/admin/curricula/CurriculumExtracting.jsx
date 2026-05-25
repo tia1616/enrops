@@ -16,9 +16,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { supabase, API_BASE } from "../../../lib/supabase.js";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -191,7 +191,7 @@ export default function CurriculumExtracting() {
       </div>
 
       <div style={centerPanel}>
-        <h1 style={{ margin: 0, color: PLUM, fontSize: 28, fontWeight: 700, textAlign: "center" }}>
+        <h1 style={{ margin: 0, color: PURPLE, fontSize: 28, fontWeight: 700, textAlign: "center" }}>
           {isDone ? "All set." : isFailed ? "Something went wrong." : "Extracting your curriculum…"}
         </h1>
         <p style={subline}>
@@ -212,14 +212,14 @@ export default function CurriculumExtracting() {
                 <li key={i} style={{ ...messageItem, opacity: isCurrent ? 1 : isCompleted ? 0.85 : 1 }}>
                   <span style={{
                     width: 16,
-                    color: isCompleted ? GOLD : PLUM,
+                    color: isCompleted ? VIOLET : PURPLE,
                     fontWeight: 700,
                   }}>
                     {isCurrent ? "→" : "✓"}
                   </span>
                   <span style={{
                     fontSize: 15,
-                    color: isCurrent ? PLUM : INK,
+                    color: isCurrent ? PURPLE : INK,
                     fontWeight: isCurrent ? 600 : 400,
                   }}>
                     {m}
@@ -229,7 +229,7 @@ export default function CurriculumExtracting() {
             })}
             {isDone && messages[messages.length - 1] !== "Done!" && (
               <li style={messageItem}>
-                <span style={{ width: 16, color: GOLD, fontWeight: 700 }}>✓</span>
+                <span style={{ width: 16, color: VIOLET, fontWeight: 700 }}>✓</span>
                 <span style={{ fontSize: 15, color: INK }}>Done!</span>
               </li>
             )}
@@ -271,7 +271,7 @@ export default function CurriculumExtracting() {
 
 const crumbs = { fontSize: 13, color: MUTED, marginBottom: 16 };
 const crumbLink = { color: MUTED, textDecoration: "none" };
-const linkStyle = { color: PLUM, fontSize: 13, fontWeight: 600, textDecoration: "none" };
+const linkStyle = { color: PURPLE, fontSize: 13, fontWeight: 600, textDecoration: "none" };
 
 const centerPanel = {
   background: PANEL,
@@ -325,7 +325,7 @@ const failBox = {
 
 const primaryBtn = {
   padding: "11px 20px",
-  background: PLUM,
+  background: PURPLE,
   color: "#fff",
   border: "none",
   borderRadius: 6,
@@ -338,8 +338,8 @@ const primaryBtnDisabled = { ...primaryBtn, background: "#c8c4b7", cursor: "not-
 const secondaryBtn = {
   padding: "11px 20px",
   background: "transparent",
-  color: PLUM,
-  border: `1px solid ${PLUM}`,
+  color: PURPLE,
+  border: `1px solid ${PURPLE}`,
   borderRadius: 6,
   fontFamily: "inherit",
   fontSize: 14,

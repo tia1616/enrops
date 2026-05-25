@@ -10,7 +10,7 @@
 import { useReducer, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
-import { PLUM, RULE, INK, MUTED, OK } from "../marketing/tokens.jsx";
+import { PURPLE, RULE, INK, MUTED, OK } from "../marketing/tokens.jsx";
 import Q1_What from "./questions/Q1_What.jsx";
 import Q2_Who from "./questions/Q2_Who.jsx";
 import Q3_Duration from "./questions/Q3_Duration.jsx";
@@ -292,11 +292,11 @@ function ProgressHeader({ step }) {
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: MUTED }}>
-        <span style={{ color: PLUM, fontWeight: 600 }}>Question {stepNum}</span>
+        <span style={{ color: PURPLE, fontWeight: 600 }}>Question {stepNum}</span>
         <span>of 4</span>
       </div>
       <div style={{ marginTop: 6, height: 4, background: RULE, borderRadius: 999, overflow: "hidden" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: PLUM, transition: "width 0.18s ease" }} />
+        <div style={{ width: `${pct}%`, height: "100%", background: PURPLE, transition: "width 0.18s ease" }} />
       </div>
     </div>
   );
@@ -309,7 +309,7 @@ function CelebrationScreen({ draft, onReset }) {
   return (
     <div style={{ maxWidth: 640, margin: "0 auto", paddingTop: 24, textAlign: "center" }}>
       <div style={{ fontSize: 56 }}>🎉</div>
-      <h2 style={{ margin: "8px 0 4px", fontSize: 28, color: PLUM }}>Huzzah!</h2>
+      <h2 style={{ margin: "8px 0 4px", fontSize: 28, color: PURPLE }}>Huzzah!</h2>
       <p style={{ margin: 0, color: INK, fontSize: 15 }}>
         {count} touchpoint{count === 1 ? "" : "s"} scheduled for {recipientCount} recipient{recipientCount === 1 ? "" : "s"}. Don will take it from here.
       </p>
@@ -343,7 +343,7 @@ function CelebrationScreen({ draft, onReset }) {
         <button
           onClick={onReset}
           style={{
-            padding: "10px 16px", background: PLUM, color: "#fff",
+            padding: "10px 16px", background: PURPLE, color: "#fff",
             border: "none", borderRadius: 6, cursor: "pointer",
             fontSize: 14, fontFamily: "inherit", fontWeight: 600,
           }}

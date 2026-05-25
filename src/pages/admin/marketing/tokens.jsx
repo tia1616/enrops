@@ -4,8 +4,8 @@
 // file -- not bringing back any of the v1 UI.
 
 // Enrops brand
-export const PLUM = "#691D39";
-export const GOLD = "#CFB12F";
+export const PURPLE = "#1C004F";
+export const VIOLET = "#8C88FF";
 export const INK = "#1a1a1a";
 export const MUTED = "#6b6b6b";
 export const RULE = "#e2dfd5";

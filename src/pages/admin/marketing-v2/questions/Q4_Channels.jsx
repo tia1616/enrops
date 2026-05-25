@@ -5,7 +5,7 @@
 
 import { useNavigate } from "react-router-dom";
 import QuestionStep from "../QuestionStep.jsx";
-import { PLUM, RULE, INK, MUTED, WARN } from "../../marketing/tokens.jsx";
+import { PURPLE, RULE, INK, MUTED, WARN } from "../../marketing/tokens.jsx";
 
 const CHANNELS = [
   { key: "email", label: "Email + parent portal", icon: "✉️", helper: "Personalized per recipient." },
@@ -64,7 +64,7 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
                 opacity: c.disabled ? 0.55 : 1,
                 padding: 12,
                 background: checked ? "#faf7ed" : "#fff",
-                border: `2px solid ${checked ? PLUM : RULE}`,
+                border: `2px solid ${checked ? PURPLE : RULE}`,
                 borderRadius: 8,
               }}
             >

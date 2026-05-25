@@ -17,9 +17,9 @@ import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom
 import { supabase, API_BASE } from "../../../lib/supabase.js";
 import { CAPABILITY_ICONS as SHARED_CAPABILITY_ICONS, deriveOrgStatesForCurriculum as sharedDeriveStates, isCapabilityUnlocked as sharedIsUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 
-const PLUM = "#691D39";
+const PURPLE = "#1C004F";
 const PLUM_SOFT = "rgba(105, 29, 57, 0.08)";
-const GOLD = "#CFB12F";
+const VIOLET = "#8C88FF";
 const GOLD_SOFT = "rgba(207, 177, 47, 0.13)";
 const GOLD_BORDER = "rgba(207, 177, 47, 0.55)";
 const INK = "#1a1a1a";
@@ -90,6 +90,35 @@ function sessionTypeLabel(sessionType) {
     case "half_day_pm": return "half-day PM camp";
     default: return "camp session";
   }
+}
+
+// Short day-type label for the new group label format (no "camp" suffix —
+// the prefix already says "Camp ·").
+function dayTypeLabel(sessionType) {
+  switch (sessionType) {
+    case "afternoon":
+    case "half_day_pm": return "half-day PM";
+    case "morning":
+    case "half_day_am": return "half-day AM";
+    case "full_day": return "full-day";
+    default: return "";
+  }
+}
+
+// Renders the muted suffix for a match/link row.
+// Examples:
+//   Afterschool · 6 sessions
+//   Camp · half-day PM · 4 sessions
+//   Camp · full-day · 1 session
+function formatGroupLabel(m) {
+  const word = m.runCount === 1 ? "session" : "sessions";
+  if (m.source === "camp_sessions") {
+    const day = dayTypeLabel(m.sessionType);
+    return day
+      ? `Camp · ${day} · ${m.runCount} ${word}`
+      : `Camp · ${m.runCount} ${word}`;
+  }
+  return `Afterschool · ${m.runCount} ${word}`;
 }
 
 // Top-level field-name in curriculum_extracted_fields → which curricula column
@@ -657,7 +686,7 @@ export default function CurriculumReview() {
 
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, marginBottom: 4 }}>
         <div>
-          <h1 style={{ margin: 0, color: PLUM, fontSize: 26, fontWeight: 700 }}>{curriculum.name}</h1>
+          <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>{curriculum.name}</h1>
           <p style={{ color: MUTED, fontSize: 14, margin: "6px 0 22px", maxWidth: 720 }}>
             We pulled out the structure. Look it over, edit anything, then publish so it's ready to schedule into a term.
           </p>
@@ -674,7 +703,7 @@ export default function CurriculumReview() {
           )}
           {docs.map((d, idx) => (
             <div key={d.id} style={{ ...docRow, borderTop: idx === 0 ? 0 : `1px solid ${RULE}`, paddingTop: idx === 0 ? 0 : 10 }}>
-              <span style={{ color: PLUM, flexShrink: 0 }}>📄</span>
+              <span style={{ color: PURPLE, flexShrink: 0 }}>📄</span>
               <div style={{ flex: 1, fontSize: 13, minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" }}>
                 {d.original_filename || "(unnamed)"}<br />
                 <span style={{ color: MUTED, fontSize: 11 }}>{prettyDocType(d.doc_type)}</span>
@@ -693,9 +722,9 @@ export default function CurriculumReview() {
               width: "100%",
               padding: "8px 12px",
               background: "transparent",
-              border: `1px dashed ${PLUM}66`,
+              border: `1px dashed ${PURPLE}66`,
               borderRadius: 6,
-              color: PLUM,
+              color: PURPLE,
               fontSize: 12,
               fontWeight: 600,
               cursor: "pointer",
@@ -1024,13 +1053,13 @@ function DoraBanner({ flagCount, onJump }) {
     <section style={calm ? doraBannerCalm : doraBanner}>
       <DoraAvatar calm={calm} />
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 700, color: calm ? INK : PLUM, fontSize: 14 }}>
+        <div style={{ fontWeight: 700, color: calm ? INK : PURPLE, fontSize: 14 }}>
           Dora <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your Director</span>
         </div>
         <div style={{ fontSize: 14, color: INK, marginTop: 2, lineHeight: 1.45 }}>
           {calm
             ? <>All caught up. ✓ Ready to publish whenever you are.</>
-            : <>I flagged <strong style={{ color: PLUM }}>{flagCount} field{flagCount === 1 ? "" : "s"}</strong> below worth a look — they're outlined in gold. Edit any of them to clear the flag.</>}
+            : <>I flagged <strong style={{ color: PURPLE }}>{flagCount} field{flagCount === 1 ? "" : "s"}</strong> below worth a look — they're outlined in gold. Edit any of them to clear the flag.</>}
         </div>
       </div>
       {!calm && (
@@ -1044,7 +1073,7 @@ function StatusPill({ status }) {
   const map = {
     draft: { bg: "#f7f6ef", color: MUTED, label: "Draft" },
     extracted: { bg: GOLD_SOFT, color: "#7a5a00", label: "Extracted" },
-    published: { bg: PLUM_SOFT, color: PLUM, label: "Published" },
+    published: { bg: PLUM_SOFT, color: PURPLE, label: "Published" },
   };
   const s = map[status] ?? map.draft;
   return (
@@ -1071,7 +1100,7 @@ function FlagBadge() {
 }
 
 function SavedTick({ on }) {
-  return <span style={{ marginLeft: 6, fontSize: 12, color: GOLD, opacity: on ? 1 : 0, transition: "opacity 0.2s" }}>✓</span>;
+  return <span style={{ marginLeft: 6, fontSize: 12, color: VIOLET, opacity: on ? 1 : 0, transition: "opacity 0.2s" }}>✓</span>;
 }
 
 function FieldText({ label, inlineHelp, help, value, onChange, flagged, saved, placeholder, ...rest }) {
@@ -1324,7 +1353,7 @@ function SessionRow({ session, open, onToggle, onSave, savingField, onPolishSkil
   return (
     <div style={{ borderTop: `1px solid ${RULE}` }}>
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 0", cursor: "pointer", userSelect: "none" }}>
-        <span style={{ width: 26, height: 26, borderRadius: "50%", background: PLUM_SOFT, color: PLUM, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{session.session_number}</span>
+        <span style={{ width: 26, height: 26, borderRadius: "50%", background: PLUM_SOFT, color: PURPLE, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{session.session_number}</span>
         <span style={{ flex: 1, fontWeight: 600, color: INK, fontSize: 14 }}>{session.title || "(untitled)"}</span>
         <span style={{ color: MUTED, transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▶</span>
       </div>
@@ -1477,7 +1506,7 @@ function PolishModal({ curriculumId, config, onClose }) {
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
           <DoraAvatar size={54} />
           <div>
-            <div style={{ fontWeight: 700, color: PLUM, fontSize: 15 }}>
+            <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>
               Dora<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your Director</span>
             </div>
           </div>
@@ -1566,7 +1595,7 @@ function PolishModal({ curriculumId, config, onClose }) {
                   <button
                     type="button"
                     onClick={addListItem}
-                    style={{ alignSelf: "flex-start", background: "transparent", border: "none", color: PLUM, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: "4px 0", marginTop: 2 }}
+                    style={{ alignSelf: "flex-start", background: "transparent", border: "none", color: PURPLE, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: "4px 0", marginTop: 2 }}
                   >
                     + Add another
                   </button>
@@ -1722,7 +1751,7 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
           justifyContent: "center",
           gap: 8,
           padding: 20,
-          border: `2px dashed ${file ? PLUM : RULE}`,
+          border: `2px dashed ${file ? PURPLE : RULE}`,
           borderRadius: 8,
           background: file ? PLUM_SOFT : "#fafaf3",
           cursor: "pointer",
@@ -2008,9 +2037,6 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
   }
 
   function MatchRow({ m }) {
-    const kindLabel = m.source === "camp_sessions"
-      ? sessionTypeLabel(m.sessionType)
-      : "program run";
     return (
       <label
         title={m.linked
@@ -2021,7 +2047,7 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
           padding: "8px 10px", fontSize: 13, cursor: "pointer",
           borderBottom: `1px solid ${RULE}`,
           background: m.linked ? "rgba(105, 29, 57, 0.05)" : "transparent",
-          borderLeft: m.linked ? `3px solid ${PLUM}` : "3px solid transparent",
+          borderLeft: m.linked ? `3px solid ${PURPLE}` : "3px solid transparent",
         }}
       >
         <input
@@ -2033,7 +2059,7 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 600, color: INK }}>{m.name}</div>
           <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
-            {m.runCount} {kindLabel}{m.runCount === 1 ? "" : "s"}
+            {formatGroupLabel(m)}
           </div>
         </div>
       </label>
@@ -2067,7 +2093,7 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
         {!loading && matches.length > 0 && (
           <>
             <div style={{ marginBottom: 18 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 4 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 4 }}>
                 Linked programs ({linkedRows.reduce((s, m) => s + m.runCount, 0)})
               </div>
               {linkedRows.length === 0 ? (
@@ -2080,7 +2106,7 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
             </div>
 
             <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 4 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 4 }}>
                 Unlinked programs ({unlinkedRows.reduce((s, m) => s + m.runCount, 0)})
               </div>
               {unlinkedRows.length === 0 ? (
@@ -2163,7 +2189,7 @@ function PublishModal({
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
           <DoraAvatar size={isCelebration ? 72 : 54} />
           <div>
-            <div style={{ fontWeight: 700, color: PLUM, fontSize: isCelebration ? 16 : 15 }}>
+            <div style={{ fontWeight: 700, color: PURPLE, fontSize: isCelebration ? 16 : 15 }}>
               Dora<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your Director</span>
             </div>
             {isCelebration && (
@@ -2211,7 +2237,7 @@ function PublishModal({
           }));
           return (
             <>
-              <h3 style={{ margin: "0 0 6px", color: PLUM, fontSize: 22, fontWeight: 700 }}>
+              <h3 style={{ margin: "0 0 6px", color: PURPLE, fontSize: 22, fontWeight: 700 }}>
                 {curriculum?.name} is live.
               </h3>
               <p style={{ color: INK, fontSize: 14, margin: "0 0 18px", lineHeight: 1.5 }}>
@@ -2283,7 +2309,7 @@ function PublishModal({
               {recommendation && (
                 <div style={{
                   background: PLUM_SOFT,
-                  border: `1px solid ${PLUM}33`,
+                  border: `1px solid ${PURPLE}33`,
                   borderRadius: 8,
                   padding: 14,
                   marginTop: 14,
@@ -2294,7 +2320,7 @@ function PublishModal({
                   <DoraAvatar size={48} />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 11, color: MUTED, marginBottom: 2 }}>
-                      <strong style={{ color: PLUM }}>Dora's recommendation</strong>
+                      <strong style={{ color: PURPLE }}>Dora's recommendation</strong>
                     </div>
                     <div style={{ fontWeight: 700, color: INK, fontSize: 15, lineHeight: 1.35, marginBottom: 4 }}>
                       {recommendation.headline}
@@ -2359,28 +2385,23 @@ function PublishModal({
               const programMatchesAfter = programMatches.filter((m) => m.source === "programs");
               const renderGroup = (label, group) => group.length === 0 ? null : (
                 <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 6 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 6px", borderBottom: `1px solid ${GOLD_BORDER}`, marginBottom: 6 }}>
                     {label}
                   </div>
-                  {group.map((m) => {
-                    const kindLabel = m.source === "camp_sessions"
-                      ? sessionTypeLabel(m.sessionType)
-                      : "program run";
-                    return (
-                      <label key={m.key} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", fontSize: 13, cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={selectedMatchKeys.has(m.key)}
-                          onChange={() => toggleMatch(m.key)}
-                          style={{ marginTop: 3 }}
-                        />
-                        <span>
-                          <strong>{m.name}</strong>
-                          <span style={{ color: MUTED, marginLeft: 6 }}>· {m.runCount} {kindLabel}{m.runCount === 1 ? "" : "s"}</span>
-                        </span>
-                      </label>
-                    );
-                  })}
+                  {group.map((m) => (
+                    <label key={m.key} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", fontSize: 13, cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedMatchKeys.has(m.key)}
+                        onChange={() => toggleMatch(m.key)}
+                        style={{ marginTop: 3 }}
+                      />
+                      <span>
+                        <strong>{m.name}</strong>
+                        <span style={{ color: MUTED, marginLeft: 6 }}>· {formatGroupLabel(m)}</span>
+                      </span>
+                    </label>
+                  ))}
                 </div>
               );
               return (
@@ -2466,7 +2487,7 @@ const docRow = {
 const openLinkBtn = {
   background: "transparent",
   border: "none",
-  color: PLUM,
+  color: PURPLE,
   fontFamily: "inherit",
   fontSize: 12,
   fontWeight: 600,
@@ -2478,7 +2499,7 @@ const openLinkBtn = {
 const doraBanner = {
   background: PANEL,
   border: `1px solid ${GOLD_BORDER}`,
-  borderLeft: `4px solid ${GOLD}`,
+  borderLeft: `4px solid ${VIOLET}`,
   borderRadius: 8,
   padding: "16px 20px",
   display: "flex",
@@ -2492,7 +2513,7 @@ const doraBanner = {
 const doraBannerCalm = { ...doraBanner, borderColor: RULE, borderLeftColor: RULE, background: "#fafaf3" };
 
 const doraActionBtn = {
-  background: PLUM, color: "#fff", border: "none", borderRadius: 5,
+  background: PURPLE, color: "#fff", border: "none", borderRadius: 5,
   padding: "8px 14px", fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer", flexShrink: 0,
 };
 
@@ -2529,11 +2550,11 @@ const ageGradeBtn = {
   background: "transparent", border: "none", padding: "5px 10px",
   fontFamily: "inherit", fontSize: 12, color: MUTED, borderRadius: 3, cursor: "pointer", fontWeight: 600,
 };
-const ageGradeBtnActive = { ...ageGradeBtn, background: "#fff", color: PLUM, boxShadow: "0 1px 2px rgba(0,0,0,0.04)" };
+const ageGradeBtnActive = { ...ageGradeBtn, background: "#fff", color: PURPLE, boxShadow: "0 1px 2px rgba(0,0,0,0.04)" };
 
 const pillOn = {
-  padding: "6px 12px", background: PLUM_SOFT, border: `1px solid ${PLUM}`,
-  borderRadius: 18, fontSize: 13, color: PLUM, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+  padding: "6px 12px", background: PLUM_SOFT, border: `1px solid ${PURPLE}`,
+  borderRadius: 18, fontSize: 13, color: PURPLE, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
 };
 const pillOff = {
   padding: "6px 12px", background: "#fff", border: `1px solid ${RULE}`,
@@ -2556,12 +2577,12 @@ const ctaBar = {
 };
 
 const primaryBtn = {
-  padding: "10px 18px", background: PLUM, color: "#fff", border: "none", borderRadius: 6,
+  padding: "10px 18px", background: PURPLE, color: "#fff", border: "none", borderRadius: 6,
   fontFamily: "inherit", fontSize: 14, fontWeight: 600, cursor: "pointer", textDecoration: "none",
 };
 const primaryBtnDisabled = { ...primaryBtn, background: "#c8c4b7", cursor: "not-allowed" };
 const secondaryBtn = {
-  padding: "10px 18px", background: "transparent", color: PLUM, border: `1px solid ${PLUM}`, borderRadius: 6,
+  padding: "10px 18px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6,
   fontFamily: "inherit", fontSize: 14, fontWeight: 600, cursor: "pointer", textDecoration: "none",
 };
 const tertiaryBtn = {
@@ -2597,7 +2618,7 @@ const unlockItemRow = {
 };
 const unlockCheck = {
   flexShrink: 0, width: 22, height: 22, borderRadius: "50%",
-  background: PLUM_SOFT, color: PLUM, display: "flex",
+  background: PLUM_SOFT, color: PURPLE, display: "flex",
   alignItems: "center", justifyContent: "center", fontWeight: 700,
   fontSize: 13, marginTop: 1,
 };

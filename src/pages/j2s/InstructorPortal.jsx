@@ -14,9 +14,9 @@ import { fetchLegalDocument } from "../../lib/legalDoc.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const CORAL = "#D9694F";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -424,7 +424,7 @@ export default function InstructorPortal() {
     return (
       <Shell>
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, maxWidth: 400 }}>
-          <h1 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, color: PLUM }}>Instructor sign in</h1>
+          <h1 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, color: PURPLE }}>Instructor sign in</h1>
           <p style={{ margin: "0 0 18px", color: MUTED, fontSize: 14 }}>Sign in to view your schedule and respond to offers.</p>
 
           <button
@@ -494,7 +494,7 @@ export default function InstructorPortal() {
                 marginTop: 12,
                 width: "100%",
                 padding: "10px 14px",
-                background: PLUM,
+                background: PURPLE,
                 color: "#fff",
                 border: "none",
                 borderRadius: 6,
@@ -525,7 +525,7 @@ export default function InstructorPortal() {
         <div style={{ background: "#fff", border: `1px solid ${CORAL}`, borderRadius: 10, padding: 28, maxWidth: 500 }}>
           <h1 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: INK }}>We couldn't load your schedule</h1>
           <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px", lineHeight: 1.5 }}>{error}</p>
-          <button type="button" onClick={signOut} style={{ padding: "8px 14px", background: "transparent", color: PLUM, border: `1px solid ${PLUM}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
+          <button type="button" onClick={signOut} style={{ padding: "8px 14px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
             Sign out and try again
           </button>
         </div>
@@ -594,8 +594,8 @@ export default function InstructorPortal() {
       <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         {impersonating && (
           <div style={{
-            background: `${GOLD}1F`,
-            border: `1px solid ${GOLD}`,
+            background: `${VIOLET}1F`,
+            border: `1px solid ${VIOLET}`,
             borderRadius: 8,
             padding: "10px 14px",
             marginBottom: 14,
@@ -661,8 +661,8 @@ export default function InstructorPortal() {
     <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
       {impersonating && (
         <div style={{
-          background: `${GOLD}1F`,
-          border: `1px solid ${GOLD}`,
+          background: `${VIOLET}1F`,
+          border: `1px solid ${VIOLET}`,
           borderRadius: 8,
           padding: "10px 14px",
           marginBottom: 14,
@@ -699,8 +699,8 @@ export default function InstructorPortal() {
             onClick={() => setView("documents")}
             style={{
               background: "transparent",
-              border: `1px solid ${PLUM}`,
-              color: PLUM,
+              border: `1px solid ${PURPLE}`,
+              color: PURPLE,
               borderRadius: 6,
               padding: "6px 12px",
               fontSize: 12,
@@ -717,8 +717,8 @@ export default function InstructorPortal() {
             onClick={() => setView("profile")}
             style={{
               background: "transparent",
-              border: `1px solid ${PLUM}`,
-              color: PLUM,
+              border: `1px solid ${PURPLE}`,
+              color: PURPLE,
               borderRadius: 6,
               padding: "6px 12px",
               fontSize: 12,
@@ -749,8 +749,8 @@ export default function InstructorPortal() {
             gap: 6,
             marginBottom: 14,
             padding: "6px 12px",
-            background: cprPill.expired ? `${CORAL}1F` : `${GOLD}1F`,
-            border: `1px solid ${cprPill.expired ? CORAL : GOLD}`,
+            background: cprPill.expired ? `${CORAL}1F` : `${VIOLET}1F`,
+            border: `1px solid ${cprPill.expired ? CORAL : VIOLET}`,
             borderRadius: 999,
             color: cprPill.expired ? CORAL : INK,
             fontSize: 12,
@@ -853,7 +853,7 @@ export default function InstructorPortal() {
                 <button
                   type="button"
                   onClick={() => setEditingCycleId(c.id)}
-                  style={{ background: "transparent", color: PLUM, border: `1px solid ${PLUM}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}
+                  style={{ background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}
                 >
                   Update availability
                 </button>
@@ -889,8 +889,8 @@ function SurveyBanner({ cycle, onStart }) {
   const title = cycleLabel(cycle);
   return (
     <div style={{
-      background: `${GOLD}1F`,
-      border: `1px solid ${GOLD}`,
+      background: `${VIOLET}1F`,
+      border: `1px solid ${VIOLET}`,
       borderRadius: 10,
       padding: "14px 16px",
       display: "flex",
@@ -900,7 +900,7 @@ function SurveyBanner({ cycle, onStart }) {
       flexWrap: "wrap",
     }}>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.6 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.6 }}>
           New: set up your availability
         </div>
         <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginTop: 2 }}>
@@ -918,7 +918,7 @@ function SurveyBanner({ cycle, onStart }) {
         onClick={onStart}
         style={{
           padding: "9px 14px",
-          background: PLUM,
+          background: PURPLE,
           color: "#fff",
           border: "none",
           borderRadius: 6,
@@ -939,19 +939,19 @@ function Shell({ children, instructorName, onSignOut }) {
   return (
     <div style={{
       minHeight: "100vh",
-      background: CHALK,
-      fontFamily: "'Space Grotesk', system-ui, sans-serif",
+      background: CREAM,
+      fontFamily: "'Poppins', system-ui, sans-serif",
       color: INK,
       padding: "32px 16px",
     }}>
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <span style={{ fontWeight: 800, fontSize: 22, color: PLUM, letterSpacing: -0.3 }}>Enrops</span>
+            <span style={{ fontWeight: 800, fontSize: 22, color: PURPLE, letterSpacing: -0.3 }}>Enrops</span>
             <span style={{ fontSize: 13, color: MUTED }}>Instructor portal</span>
           </div>
           {instructorName && onSignOut && (
-            <button type="button" onClick={onSignOut} style={{ background: "transparent", border: `1px solid ${PLUM}`, color: PLUM, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
+            <button type="button" onClick={onSignOut} style={{ background: "transparent", border: `1px solid ${PURPLE}`, color: PURPLE, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
               Sign out
             </button>
           )}
@@ -979,8 +979,8 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
   const role = assignment.role === "developing" ? "Developing" : "Lead";
   const statusColor =
     assignment.status === "confirmed" ? OK_GREEN :
-    assignment.status === "change_requested" ? GOLD :
-    PLUM;
+    assignment.status === "change_requested" ? VIOLET :
+    PURPLE;
   const statusLabel =
     assignment.status === "confirmed" ? "Confirmed ✓" :
     assignment.status === "change_requested" ? "Change requested — waiting on admin" :
@@ -1028,7 +1028,7 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
       </div>
 
       {assignment.distance_bonus_cents ? (
-        <div style={{ fontSize: 13, color: PLUM, fontWeight: 600 }}>
+        <div style={{ fontSize: 13, color: PURPLE, fontWeight: 600 }}>
           + {dollars(assignment.distance_bonus_cents)} distance bonus
         </div>
       ) : null}
@@ -1036,7 +1036,7 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
       {/* Message thread renders on change_requested cards. Read-only on
           instructor side; admin replies via offer-message-reply elsewhere. */}
       {assignment.status === "change_requested" && messages.length > 0 && (
-        <div style={{ marginTop: 4, padding: 10, background: `${GOLD}10`, border: `1px solid ${GOLD}`, borderRadius: 6 }}>
+        <div style={{ marginTop: 4, padding: 10, background: `${VIOLET}10`, border: `1px solid ${VIOLET}`, borderRadius: 6 }}>
           <div style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
             Messages
           </div>
@@ -1045,7 +1045,7 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
               .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
               .map((m) => (
                 <div key={m.id} style={{ fontSize: 13, color: INK, lineHeight: 1.4 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: m.sender_role === "admin" ? PLUM : MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 6 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: m.sender_role === "admin" ? PURPLE : MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 6 }}>
                     {m.sender_role === "admin" ? "Admin" : "You"}
                   </span>
                   {m.message}
@@ -1063,7 +1063,7 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
             style={{
               background: "transparent",
               border: "none",
-              color: PLUM,
+              color: PURPLE,
               fontSize: 13,
               fontWeight: 600,
               fontFamily: "inherit",
@@ -1084,7 +1084,7 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
             disabled={busy}
             style={{
               padding: "8px 14px",
-              background: PLUM,
+              background: PURPLE,
               color: "#fff",
               border: "none",
               borderRadius: 6,
@@ -1105,8 +1105,8 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
             style={{
               padding: "8px 14px",
               background: "transparent",
-              color: PLUM,
-              border: `1px solid ${PLUM}`,
+              color: PURPLE,
+              border: `1px solid ${PURPLE}`,
               borderRadius: 6,
               fontSize: 13,
               fontWeight: 500,
@@ -1190,7 +1190,7 @@ function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onCl
           <button type="button" onClick={onClose} disabled={busy} style={{ padding: "8px 14px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
             Cancel
           </button>
-          <button type="button" onClick={onSubmit} disabled={busy || !value.trim()} style={{ padding: "8px 14px", background: PLUM, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: (busy || !value.trim()) ? 0.6 : 1 }}>
+          <button type="button" onClick={onSubmit} disabled={busy || !value.trim()} style={{ padding: "8px 14px", background: PURPLE, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: (busy || !value.trim()) ? 0.6 : 1 }}>
             {busy ? "Sending…" : "Send request"}
           </button>
         </div>
@@ -1223,7 +1223,7 @@ function DocumentsView({ onBack }) {
         style={{
           background: "transparent",
           border: "none",
-          color: PLUM,
+          color: PURPLE,
           fontSize: 13,
           fontWeight: 600,
           fontFamily: "inherit",
@@ -1365,7 +1365,7 @@ function StripeTaxFormsRow() {
           Stored by Stripe — opens your Stripe Express dashboard.
         </div>
       </div>
-      <span style={{ color: PLUM, fontSize: 13, fontWeight: 600 }}>Open Stripe →</span>
+      <span style={{ color: PURPLE, fontSize: 13, fontWeight: 600 }}>Open Stripe →</span>
     </a>
   );
 }
@@ -1382,7 +1382,7 @@ function AssignmentDetailView({ assignment, onBack }) {
         style={{
           background: "transparent",
           border: "none",
-          color: PLUM,
+          color: PURPLE,
           fontSize: 13,
           fontWeight: 600,
           fontFamily: "inherit",
@@ -1415,7 +1415,7 @@ function AssignmentDetailView({ assignment, onBack }) {
           {(s.ages_min || s.ages_max) ? ` · ages ${s.ages_min ?? "?"}–${s.ages_max ?? "?"}` : ""}
         </div>
         {assignment.distance_bonus_cents ? (
-          <div style={{ marginTop: 8, fontSize: 13, color: PLUM, fontWeight: 600 }}>
+          <div style={{ marginTop: 8, fontSize: 13, color: PURPLE, fontWeight: 600 }}>
             + {dollars(assignment.distance_bonus_cents)} distance bonus
           </div>
         ) : null}
@@ -1576,7 +1576,7 @@ function DocLinkRow({ doc }) {
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 12 }}>
         {name}
       </span>
-      <span style={{ color: PLUM, fontWeight: 600, flexShrink: 0 }}>
+      <span style={{ color: PURPLE, fontWeight: 600, flexShrink: 0 }}>
         {doc.source_type === "drive_link" ? "Open →" : "Download →"}
       </span>
     </a>

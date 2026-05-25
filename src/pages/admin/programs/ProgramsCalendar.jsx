@@ -13,9 +13,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -113,7 +113,7 @@ export default function ProgramsCalendar() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
         <div>
-          <h1 style={{ margin: 0, color: PLUM, fontSize: 26, fontWeight: 700 }}>Scheduled programs</h1>
+          <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Scheduled programs</h1>
           <div style={{ color: MUTED, fontSize: 13, marginTop: 4 }}>
             What's running this term, by day or by school. Live enrollment numbers.
           </div>
@@ -183,7 +183,7 @@ function CalendarView({ programs, enrollment }) {
             background: "#fafaf5",
             borderTop: dayIdx === 0 ? "none" : `1px solid ${RULE}`,
             borderBottom: `1px solid ${RULE}`,
-            fontSize: 13, fontWeight: 700, color: PLUM,
+            fontSize: 13, fontWeight: 700, color: PURPLE,
             textTransform: "uppercase", letterSpacing: 0.5,
             display: "flex", alignItems: "center", gap: 8,
             position: "sticky", top: 0, zIndex: 1,
@@ -226,7 +226,7 @@ function BySchoolView({ programs, enrollment }) {
             background: "#fafaf5",
             borderTop: idx === 0 ? "none" : `1px solid ${RULE}`,
             borderBottom: `1px solid ${RULE}`,
-            fontSize: 13, fontWeight: 700, color: PLUM,
+            fontSize: 13, fontWeight: 700, color: PURPLE,
             display: "flex", alignItems: "center", gap: 8,
           }}>
             {school}
@@ -249,7 +249,7 @@ function ProgramRow({ program: p, e, showDay = false }) {
   const capacity = p.max_capacity ?? 0;
   const pct = capacity > 0 ? Math.min(1, enrolled / capacity) : 0;
   const isFull = capacity > 0 && enrolled >= capacity;
-  const fillColor = isFull ? PLUM : pct >= 0.7 ? GOLD : "#a8c47f";
+  const fillColor = isFull ? PURPLE : pct >= 0.7 ? VIOLET : "#a8c47f";
 
   const breakdownParts = [];
   if (enr.paid > 0) breakdownParts.push(`${enr.paid} paid`);
@@ -356,7 +356,7 @@ const toggleBtn = {
 
 const toggleBtnActive = {
   ...toggleBtn,
-  background: PLUM,
+  background: PURPLE,
   color: "#fff",
 };
 
@@ -383,7 +383,7 @@ const dayColumn = {
 const dayHeader = {
   fontSize: 13,
   fontWeight: 600,
-  color: PLUM,
+  color: PURPLE,
   textTransform: "uppercase",
   letterSpacing: 0.5,
   marginBottom: 10,
@@ -394,7 +394,7 @@ const dayHeader = {
 const schoolHeader = {
   fontSize: 14,
   fontWeight: 700,
-  color: PLUM,
+  color: PURPLE,
   marginBottom: 8,
 };
 

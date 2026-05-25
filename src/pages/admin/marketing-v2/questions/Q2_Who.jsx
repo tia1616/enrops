@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../../lib/supabase.js";
 import QuestionStep from "../QuestionStep.jsx";
-import { PLUM, RULE, INK, MUTED, WARN } from "../../marketing/tokens.jsx";
+import { PURPLE, RULE, INK, MUTED, WARN } from "../../marketing/tokens.jsx";
 
 const AUDIENCES = [
   {
@@ -117,7 +117,7 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
 
       {who.audience === "parents" && (
         <div style={{ background: "#faf7ed", border: `1px solid #ece1bf`, borderRadius: 8, padding: 14, marginTop: 12 }}>
-          <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, color: PLUM, textTransform: "uppercase", letterSpacing: 0.6 }}>
+          <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.6 }}>
             Narrow it down
           </p>
           <label style={{ display: "block", fontSize: 12, color: MUTED, marginBottom: 4 }}>Scope</label>

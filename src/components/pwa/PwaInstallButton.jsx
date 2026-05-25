@@ -15,12 +15,12 @@
 // variant). Dismissals persist in localStorage so we don't nag — but the
 // button stays visible so users can re-trigger.
 //
-// Visual style matches the Enrops portal (PLUM/GOLD/CHALK tokens).
+// Visual style matches the Enrops portal (PURPLE/VIOLET/CREAM tokens).
 
 import { useEffect, useRef, useState } from 'react';
 
-const PLUM = '#691D39';
-const GOLD = '#CFB12F';
+const PURPLE = '#1C004F';
+const VIOLET = '#8C88FF';
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
@@ -144,7 +144,7 @@ export default function PwaInstallButton({ variant = 'inline' }) {
             alignItems: 'center',
             justifyContent: 'center',
             padding: 16,
-            fontFamily: "'Space Grotesk', system-ui, sans-serif",
+            fontFamily: "'Poppins', system-ui, sans-serif",
           }}
         >
           <div
@@ -188,7 +188,7 @@ export default function PwaInstallButton({ variant = 'inline' }) {
                 style={{
                   flex: 1,
                   padding: '9px 12px',
-                  background: PLUM,
+                  background: PURPLE,
                   color: '#fff',
                   border: 'none',
                   borderRadius: 8,
@@ -211,7 +211,7 @@ export default function PwaInstallButton({ variant = 'inline' }) {
 function IosSteps() {
   return (
     <>
-      <h3 style={{ margin: '0 0 14px', fontSize: 18, fontWeight: 700, color: PLUM, lineHeight: 1.25 }}>
+      <h3 style={{ margin: '0 0 14px', fontSize: 18, fontWeight: 700, color: PURPLE, lineHeight: 1.25 }}>
         Two steps — takes about 10 seconds.
       </h3>
       <Step n={1}>
@@ -240,7 +240,7 @@ function IosSteps() {
 function AndroidFallback() {
   return (
     <>
-      <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700, color: PLUM, lineHeight: 1.25 }}>
+      <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700, color: PURPLE, lineHeight: 1.25 }}>
         Install from your browser menu
       </h3>
       <p style={{ fontSize: 14, color: INK, lineHeight: 1.5, margin: '0 0 12px' }}>
@@ -261,7 +261,7 @@ function Step({ n, children }) {
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
       <div
         style={{
-          background: PLUM,
+          background: PURPLE,
           color: '#fff',
           width: 22,
           height: 22,
@@ -309,8 +309,8 @@ function ShareIconInline() {
 
 const buttonStylesInline = {
   background: 'transparent',
-  border: `1px solid ${PLUM}`,
-  color: PLUM,
+  border: `1px solid ${PURPLE}`,
+  color: PURPLE,
   borderRadius: 6,
   padding: '6px 12px',
   fontSize: 12,
@@ -326,7 +326,7 @@ const buttonStylesInline = {
 const buttonStylesSubtle = {
   background: 'transparent',
   border: 'none',
-  color: PLUM,
+  color: PURPLE,
   fontSize: 12,
   fontWeight: 600,
   fontFamily: 'inherit',

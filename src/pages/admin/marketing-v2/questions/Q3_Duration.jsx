@@ -1,7 +1,7 @@
 // Q3_Duration — radio-card group. Don uses this to space touchpoints.
 
 import QuestionStep from "../QuestionStep.jsx";
-import { PLUM, RULE, INK, MUTED, OK } from "../../marketing/tokens.jsx";
+import { PURPLE, RULE, INK, MUTED, OK } from "../../marketing/tokens.jsx";
 
 const OPTIONS = [
   { value: "2 weeks", label: "2 weeks", hint: "Punchy: kickoff + 2 reminders" },
@@ -28,7 +28,7 @@ export default function Q3_Duration({ inputs, setField, onNext, onBack, canNext 
               style={{
                 cursor: "pointer", padding: 12,
                 background: selected ? "#faf7ed" : "#fff",
-                border: `2px solid ${selected ? PLUM : RULE}`,
+                border: `2px solid ${selected ? PURPLE : RULE}`,
                 borderRadius: 8,
               }}
             >

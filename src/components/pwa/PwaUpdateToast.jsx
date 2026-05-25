@@ -13,7 +13,7 @@
 import { useEffect, useState } from 'react';
 import { registerSW } from 'virtual:pwa-register';
 
-const PLUM = '#691D39';
+const PURPLE = '#1C004F';
 const INK = '#1a1a1a';
 
 export default function PwaUpdateToast() {
@@ -46,7 +46,7 @@ export default function PwaUpdateToast() {
         maxWidth: 420,
         margin: '0 auto',
         background: '#fff',
-        border: `1px solid ${PLUM}`,
+        border: `1px solid ${PURPLE}`,
         borderRadius: 12,
         padding: '12px 16px',
         boxShadow: '0 8px 30px rgba(0,0,0,0.18)',
@@ -55,7 +55,7 @@ export default function PwaUpdateToast() {
         justifyContent: 'space-between',
         gap: 12,
         zIndex: 9998,
-        fontFamily: "'Space Grotesk', system-ui, sans-serif",
+        fontFamily: "'Poppins', system-ui, sans-serif",
       }}
     >
       <div style={{ fontSize: 13, color: INK, lineHeight: 1.4 }}>
@@ -68,7 +68,7 @@ export default function PwaUpdateToast() {
         type="button"
         onClick={() => updateSW(true)}
         style={{
-          background: PLUM,
+          background: PURPLE,
           color: '#fff',
           border: 'none',
           borderRadius: 6,

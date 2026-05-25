@@ -4,7 +4,7 @@
 
 import { useState } from "react";
 import QuestionStep from "../QuestionStep.jsx";
-import { PLUM, RULE, INK, MUTED } from "../../marketing/tokens.jsx";
+import { PURPLE, RULE, INK, MUTED } from "../../marketing/tokens.jsx";
 
 const PRESETS = [
   "Fall 2026 early bird registration",
@@ -49,7 +49,7 @@ export default function Q1_What({ inputs, setField, onNext, canNext }) {
             key={`${t}-${i}`}
             style={{
               display: "inline-flex", alignItems: "center", gap: 6,
-              background: "#f0e3e8", color: PLUM, fontWeight: 500,
+              background: "#f0e3e8", color: PURPLE, fontWeight: 500,
               fontSize: 13, padding: "4px 10px", borderRadius: 999,
             }}
           >
@@ -57,7 +57,7 @@ export default function Q1_What({ inputs, setField, onNext, canNext }) {
             <button
               onClick={() => removeTopic(i)}
               aria-label="Remove topic"
-              style={{ background: "transparent", border: "none", color: PLUM, cursor: "pointer", fontSize: 14, padding: 0, lineHeight: 1 }}
+              style={{ background: "transparent", border: "none", color: PURPLE, cursor: "pointer", fontSize: 14, padding: 0, lineHeight: 1 }}
             >
               ×
             </button>

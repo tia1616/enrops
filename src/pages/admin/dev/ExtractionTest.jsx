@@ -11,9 +11,9 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase, API_BASE } from "../../../lib/supabase.js";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -151,7 +151,7 @@ export default function ExtractionTest() {
   if (adminCheck === "denied") {
     return (
       <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8, padding: 24, maxWidth: 520 }}>
-        <h2 style={{ marginTop: 0, color: PLUM }}>Platform admin only</h2>
+        <h2 style={{ marginTop: 0, color: PURPLE }}>Platform admin only</h2>
         <p style={{ color: INK, fontSize: 14 }}>
           This dev surface is restricted to platform admins. Org-level admin access alone is not enough.
         </p>
@@ -162,7 +162,7 @@ export default function ExtractionTest() {
   return (
     <div>
       <div style={{ marginBottom: 18 }}>
-        <h1 style={{ margin: 0, color: PLUM, fontSize: 26, fontWeight: 700 }}>Extraction Test</h1>
+        <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Extraction Test</h1>
         <div style={{ color: MUTED, fontSize: 13, marginTop: 4 }}>
           Drop a curriculum doc and run the AI extraction. Results live in memory — refresh to clear.
         </div>
@@ -181,7 +181,7 @@ export default function ExtractionTest() {
               borderRadius: 6,
               padding: 28,
               textAlign: "center",
-              background: CHALK,
+              background: CREAM,
               cursor: "pointer",
             }}
             onClick={() => document.getElementById("extraction-file-input")?.click()}
@@ -231,7 +231,7 @@ export default function ExtractionTest() {
               marginTop: 16,
               width: "100%",
               padding: "10px 14px",
-              background: !file || running ? "#c8c4b7" : PLUM,
+              background: !file || running ? "#c8c4b7" : PURPLE,
               color: "#fff",
               border: "none",
               borderRadius: 6,
@@ -259,7 +259,7 @@ export default function ExtractionTest() {
           )}
           <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
             {statusMessages.map((m, i) => (
-              <li key={i} style={{ color: i === statusMessages.length - 1 && running ? PLUM : INK, fontSize: 13, padding: "3px 0" }}>
+              <li key={i} style={{ color: i === statusMessages.length - 1 && running ? PURPLE : INK, fontSize: 13, padding: "3px 0" }}>
                 {i === statusMessages.length - 1 && running ? "→ " : "✓ "}{m}
               </li>
             ))}
@@ -276,7 +276,7 @@ export default function ExtractionTest() {
                 </div>
                 <button
                   onClick={() => navigator.clipboard.writeText(JSON.stringify(result.extracted, null, 2))}
-                  style={{ padding: "5px 10px", fontSize: 12, background: GOLD, color: INK, border: "none", borderRadius: 4, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}
+                  style={{ padding: "5px 10px", fontSize: 12, background: VIOLET, color: INK, border: "none", borderRadius: 4, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}
                 >
                   Copy JSON
                 </button>
@@ -298,7 +298,7 @@ export default function ExtractionTest() {
 
       {history.length === 2 && (
         <div style={{ marginTop: 24 }}>
-          <div style={{ fontWeight: 600, color: PLUM, fontSize: 16, marginBottom: 10 }}>Compare last 2 runs</div>
+          <div style={{ fontWeight: 600, color: PURPLE, fontSize: 16, marginBottom: 10 }}>Compare last 2 runs</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             {history.map((run, i) => (
               <div key={i} style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8, padding: 14 }}>

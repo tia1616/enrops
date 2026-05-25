@@ -10,9 +10,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { avatarUrl, isValidAvatarKey } from '../../../lib/avatars';
 
-const PLUM = '#691D39';
-const GOLD = '#CFB12F';
-const CHALK = '#EAEADD';
+const PURPLE = '#1C004F';
+const VIOLET = '#8C88FF';
+const CREAM = '#FBFBFB';
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
@@ -22,7 +22,7 @@ const AMBER = '#b67e00';
 
 const STATUS_COLOR = {
   complete: OK,
-  in_progress: PLUM,
+  in_progress: PURPLE,
   pending_background_check: AMBER,
   pending_stripe: AMBER,
   payouts_disabled: RED,
@@ -248,8 +248,8 @@ export default function InstructorsTab({ org }) {
           style={{
             padding: '7px 12px',
             background: '#fff',
-            color: PLUM,
-            border: `1px solid ${PLUM}`,
+            color: PURPLE,
+            border: `1px solid ${PURPLE}`,
             borderRadius: 6,
             fontSize: 12,
             fontWeight: 600,
@@ -369,7 +369,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
                   fontSize: 10,
                   fontWeight: 700,
                   color: '#fff',
-                  background: GOLD,
+                  background: VIOLET,
                   padding: '1px 6px',
                   borderRadius: 4,
                   textTransform: 'uppercase',
@@ -399,7 +399,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
         >
           {status.replace(/_/g, ' ')}
         </span>
-        <span style={{ color: PLUM, fontSize: 14, fontWeight: 700 }}>{expanded ? '▾' : '▸'}</span>
+        <span style={{ color: PURPLE, fontSize: 14, fontWeight: 700 }}>{expanded ? '▾' : '▸'}</span>
       </button>
 
       {inviteState && (
@@ -420,9 +420,9 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
             disabled={inviteBusy}
             style={{
               padding: '6px 12px',
-              background: inviteState === 'first' ? PLUM : 'transparent',
-              color: inviteState === 'first' ? '#fff' : PLUM,
-              border: `1px solid ${PLUM}`,
+              background: inviteState === 'first' ? PURPLE : 'transparent',
+              color: inviteState === 'first' ? '#fff' : PURPLE,
+              border: `1px solid ${PURPLE}`,
               borderRadius: 6,
               fontSize: 12,
               fontWeight: 600,
@@ -512,7 +512,7 @@ function InstructorDetail({ row, age, onUploadBg }) {
               marginTop: 4,
               background: 'transparent',
               border: 'none',
-              color: PLUM,
+              color: PURPLE,
               fontSize: 11,
               fontWeight: 600,
               cursor: 'pointer',
@@ -573,7 +573,7 @@ function InstructorDetail({ row, age, onUploadBg }) {
                 <span
                   style={{
                     fontSize: 9,
-                    color: PLUM,
+                    color: PURPLE,
                     fontWeight: 700,
                     textTransform: 'uppercase',
                     letterSpacing: 0.5,
@@ -625,8 +625,8 @@ function PhotoThumb({ url, name }) {
         width: 40,
         height: 40,
         borderRadius: '50%',
-        background: '#EAEADD',
-        color: PLUM,
+        background: '#FBFBFB',
+        color: PURPLE,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -796,7 +796,7 @@ function BackgroundCheckUploadModal({ instructors, initialInstructorId, onClose,
             Instructor
           </label>
           {selected ? (
-            <div style={{ padding: 10, background: CHALK, borderRadius: 6, fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ padding: 10, background: CREAM, borderRadius: 6, fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>
                 <strong>{selected.first_name} {selected.last_name}</strong>
                 <span style={{ color: MUTED, marginLeft: 8 }}>{selected.email}</span>
@@ -804,7 +804,7 @@ function BackgroundCheckUploadModal({ instructors, initialInstructorId, onClose,
               <button
                 type="button"
                 onClick={() => setSelectedId('')}
-                style={{ background: 'transparent', border: 'none', color: PLUM, fontSize: 11, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'inherit' }}
+                style={{ background: 'transparent', border: 'none', color: PURPLE, fontSize: 11, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'inherit' }}
               >
                 Change
               </button>
@@ -928,7 +928,7 @@ function BackgroundCheckUploadModal({ instructors, initialInstructorId, onClose,
               disabled={busy || !selected || !file || !completedOn}
               style={{
                 padding: '8px 16px',
-                background: PLUM,
+                background: PURPLE,
                 color: '#fff',
                 border: 'none',
                 borderRadius: 6,

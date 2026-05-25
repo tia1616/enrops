@@ -6,7 +6,7 @@
 
 import { useNavigate } from "react-router-dom";
 
-const PLUM = "#691D39";
+const PURPLE = "#1C004F";
 const PLUM_SOFT = "rgba(105, 29, 57, 0.08)";
 const GOLD_SOFT = "rgba(207, 177, 47, 0.13)";
 const GOLD_BORDER = "rgba(207, 177, 47, 0.55)";
@@ -153,7 +153,7 @@ export function CapabilityDetailModal({ capability, unlocked, onClose }) {
         {!unlocked && capability.required_states_human && (
           <div style={{
             background: PLUM_SOFT,
-            borderLeft: `3px solid ${PLUM}`,
+            borderLeft: `3px solid ${PURPLE}`,
             borderRadius: 4,
             padding: "10px 12px",
             marginBottom: 14,
@@ -176,7 +176,7 @@ export function CapabilityDetailModal({ capability, unlocked, onClose }) {
             <button
               type="button"
               onClick={() => { onClose(); navigate(ctaTo); }}
-              style={{ background: PLUM, color: "white", border: "none", borderRadius: 6, padding: "8px 14px", cursor: "pointer", fontSize: 14, fontWeight: 600, fontFamily: "inherit" }}
+              style={{ background: PURPLE, color: "white", border: "none", borderRadius: 6, padding: "8px 14px", cursor: "pointer", fontSize: 14, fontWeight: 600, fontFamily: "inherit" }}
             >
               {ctaLabel}
             </button>

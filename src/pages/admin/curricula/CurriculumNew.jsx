@@ -11,9 +11,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useOutletContext, useSearchParams, Link } from "react-router-dom";
 import { supabase, API_BASE } from "../../../lib/supabase.js";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -278,7 +278,7 @@ export default function CurriculumNew() {
         )}
       </div>
 
-      <h1 style={{ margin: 0, color: PLUM, fontSize: 26, fontWeight: 700 }}>
+      <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>
         {attachTarget ? `Add a doc to ${attachTarget.name}` : "Add a curriculum to your library"}
       </h1>
       <p style={{ color: MUTED, fontSize: 14, margin: "6px 0 22px", lineHeight: 1.5 }}>
@@ -293,7 +293,7 @@ export default function CurriculumNew() {
         <ul style={unlockList}>
           {UNLOCK_ITEMS.map((item, i) => (
             <li key={i} style={{ margin: "2px 0" }}>
-              <strong style={{ color: PLUM, fontWeight: 600 }}>{item.strong}</strong>
+              <strong style={{ color: PURPLE, fontWeight: 600 }}>{item.strong}</strong>
               {item.rest}
             </li>
           ))}
@@ -333,7 +333,7 @@ export default function CurriculumNew() {
       {/* Title-match warning (only for new curriculum mode -- attach mode preserves the name) */}
       {!attachTarget && (
         <div style={titleWarning}>
-          <strong style={{ color: PLUM }}>One thing before you upload:</strong>{" "}
+          <strong style={{ color: PURPLE }}>One thing before you upload:</strong>{" "}
           the curriculum title in your doc becomes the public name parents see — on your registration page, flyers, emails, all of it. Make sure it matches the class offering name you market. You'll get to edit on the next screen.
         </div>
       )}
@@ -359,7 +359,7 @@ export default function CurriculumNew() {
           {primary ? (
             <div style={{ display: "flex", gap: 14, alignItems: "center", width: "100%" }}>
               <div style={filePill}>
-                <span style={{ color: PLUM, fontSize: 18 }}>📄</span>
+                <span style={{ color: PURPLE, fontSize: 18 }}>📄</span>
                 <div>
                   <div style={{ fontWeight: 600, fontSize: 14, color: INK }}>{primary.name}</div>
                   <div style={{ color: MUTED, fontSize: 12 }}>{(primary.size / 1024 / 1024).toFixed(2)} MB · curriculum guide</div>
@@ -376,7 +376,7 @@ export default function CurriculumNew() {
             </div>
           ) : (
             <>
-              <div style={{ fontSize: 32, color: PLUM, marginBottom: 10 }}>⬆</div>
+              <div style={{ fontSize: 32, color: PURPLE, marginBottom: 10 }}>⬆</div>
               <div style={{ fontWeight: 600, color: INK, fontSize: 16 }}>Drop your curriculum doc here</div>
               <div style={{ color: MUTED, fontSize: 12, marginTop: 6 }}>or click to browse</div>
             </>
@@ -423,7 +423,7 @@ export default function CurriculumNew() {
         {/* Drive link */}
         <details style={driveSection}>
           <summary style={driveSummary}>
-            <span style={{ marginRight: 8, fontSize: 11, color: PLUM }}>▸</span>
+            <span style={{ marginRight: 8, fontSize: 11, color: PURPLE }}>▸</span>
             Or link a Google Doc
           </summary>
           <div style={{ paddingTop: 14 }}>
@@ -519,14 +519,14 @@ const crumbLink = { color: MUTED, textDecoration: "none" };
 
 const unlockPanel = {
   background: "rgba(207, 177, 47, 0.10)",
-  borderLeft: `3px solid ${GOLD}`,
+  borderLeft: `3px solid ${VIOLET}`,
   borderRadius: 4,
   padding: "16px 18px",
   margin: "0 0 18px",
 };
 const unlockTitle = {
   fontWeight: 700,
-  color: PLUM,
+  color: PURPLE,
   fontSize: 13,
   textTransform: "uppercase",
   letterSpacing: 0.5,
@@ -552,7 +552,7 @@ const unlockReassure = {
 const titleWarning = {
   background: PANEL,
   border: `1px solid ${RULE}`,
-  borderLeft: `3px solid ${PLUM}`,
+  borderLeft: `3px solid ${PURPLE}`,
   borderRadius: 4,
   padding: "12px 14px",
   margin: "0 0 22px",
@@ -581,7 +581,7 @@ const dropBase = {
   border: `2px dashed ${RULE}`,
   borderRadius: 8,
   textAlign: "center",
-  background: CHALK,
+  background: CREAM,
   cursor: "pointer",
   transition: "border-color 0.15s, background 0.15s",
 };
@@ -590,7 +590,7 @@ const dropFilled = {
   ...dropBase,
   background: "#faf8f0",
   borderStyle: "solid",
-  borderColor: GOLD,
+  borderColor: VIOLET,
   padding: 22,
   textAlign: "left",
   cursor: "default",
@@ -612,9 +612,9 @@ const filePill = {
 const replaceBtn = {
   marginLeft: "auto",
   fontSize: 12,
-  color: PLUM,
+  color: PURPLE,
   background: "transparent",
-  border: `1px solid ${PLUM}`,
+  border: `1px solid ${PURPLE}`,
   borderRadius: 5,
   padding: "5px 10px",
   cursor: "pointer",
@@ -626,7 +626,7 @@ const filetypes = { textAlign: "center", color: MUTED, fontSize: 12, marginTop: 
 
 const revealNote = {
   background: "rgba(207, 177, 47, 0.15)",
-  borderLeft: `3px solid ${GOLD}`,
+  borderLeft: `3px solid ${VIOLET}`,
   padding: "10px 14px",
   borderRadius: 4,
   fontSize: 13,
@@ -645,7 +645,7 @@ const dropSmallFilled = {
   ...dropBase,
   background: "#faf8f0",
   borderStyle: "solid",
-  borderColor: GOLD,
+  borderColor: VIOLET,
   padding: 14,
   textAlign: "left",
   cursor: "default",
@@ -658,7 +658,7 @@ const driveSection = {
 };
 const driveSummary = {
   cursor: "pointer",
-  color: PLUM,
+  color: PURPLE,
   fontWeight: 600,
   fontSize: 14,
   listStyle: "none",
@@ -688,7 +688,7 @@ const ctaRow = {
 
 const primaryBtn = {
   padding: "11px 20px",
-  background: PLUM,
+  background: PURPLE,
   color: "#fff",
   border: "none",
   borderRadius: 6,

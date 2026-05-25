@@ -10,9 +10,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 
-const PLUM = "#691D39";
-const GOLD = "#CFB12F";
-const CHALK = "#EAEADD";
+const PURPLE = "#1C004F";
+const VIOLET = "#8C88FF";
+const CREAM = "#FBFBFB";
 const CORAL = "#D9694F";
 const OK_GREEN = "#3a7c3a";
 const INK = "#1a1a1a";
@@ -197,7 +197,7 @@ export default function LocationsList() {
           type="button"
           onClick={startNew}
           disabled={editingId === "new"}
-          style={btn(PLUM, "#fff", false, editingId === "new")}
+          style={btn(PURPLE, "#fff", false, editingId === "new")}
         >
           + Add new venue
         </button>
@@ -316,7 +316,7 @@ function DisplayCard({ loc, campCount, onEdit }) {
           )}
         </div>
       </div>
-      <button type="button" onClick={onEdit} style={btn("transparent", PLUM, true)}>
+      <button type="button" onClick={onEdit} style={btn("transparent", PURPLE, true)}>
         Edit
       </button>
     </div>
@@ -327,7 +327,7 @@ function EditCard({ title, draft, bind, error, saving, onSave, onCancel, isNew }
   return (
     <div style={{
       background: "#fff",
-      border: `2px solid ${PLUM}`,
+      border: `2px solid ${PURPLE}`,
       borderRadius: 8,
       padding: "20px 22px",
       display: "flex",
@@ -390,7 +390,7 @@ function EditCard({ title, draft, bind, error, saving, onSave, onCancel, isNew }
         <button type="button" onClick={onCancel} disabled={saving} style={btn("transparent", MUTED, true, saving)}>
           Cancel
         </button>
-        <button type="button" onClick={onSave} disabled={saving} style={btn(PLUM, "#fff", false, saving)}>
+        <button type="button" onClick={onSave} disabled={saving} style={btn(PURPLE, "#fff", false, saving)}>
           {saving ? "Saving…" : (isNew ? "Add venue" : "Save changes")}
         </button>
       </div>

@@ -89,31 +89,31 @@ export default function EnropsLanding() {
   // typical, much less if the session is empty.
   if (!roleChecked) {
     return (
-      <div className="brand-enrops flex min-h-screen items-center justify-center bg-enrops-chalk text-enrops-ink/60">
+      <div className="brand-enrops flex min-h-screen items-center justify-center bg-enrops-cream text-enrops-ink/60">
         Loading…
       </div>
     );
   }
 
   return (
-    <div className="brand-enrops min-h-screen bg-enrops-chalk">
-      <header className="border-b border-enrops-plum/10 bg-enrops-chalk">
+    <div className="brand-enrops min-h-screen bg-enrops-cream">
+      <header className="border-b border-enrops-purple/10 bg-enrops-cream">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-6 sm:px-6">
           <Link to="/" className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md bg-enrops-plum text-enrops-gold">
+            <span className="flex h-10 w-10 items-center justify-center rounded-md bg-enrops-purple text-enrops-violet">
               <span className="font-grotesk text-xl font-bold">E</span>
             </span>
-            <span className="font-grotesk text-xl font-bold tracking-tight text-enrops-plum">
+            <span className="font-grotesk text-xl font-bold tracking-tight text-enrops-purple">
               Enrops
             </span>
           </Link>
           <nav className="flex items-center gap-6 text-sm font-medium text-enrops-ink">
-            <a href="#features" className="hidden hover:text-enrops-plum sm:inline">
+            <a href="#features" className="hidden hover:text-enrops-purple sm:inline">
               Platform
             </a>
             <Link
               to="/j2s"
-              className="rounded-md border border-enrops-plum px-4 py-2 font-medium text-enrops-plum transition hover:bg-enrops-plum hover:text-enrops-chalk"
+              className="rounded-md border border-enrops-purple px-4 py-2 font-medium text-enrops-purple transition hover:bg-enrops-purple hover:text-enrops-cream"
             >
               Visit J2S
             </Link>
@@ -132,23 +132,23 @@ export default function EnropsLanding() {
             >
               <defs>
                 <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stopColor="#EAEADD" />
+                  <stop offset="0" stopColor="#FBFBFB" />
                   <stop offset="1" stopColor="#F4E9C8" />
                 </linearGradient>
               </defs>
               <rect width="1200" height="600" fill="url(#g1)" />
-              <circle cx="1100" cy="100" r="180" fill="#CFB12F" opacity="0.18" />
-              <circle cx="80" cy="500" r="140" fill="#691D39" opacity="0.10" />
+              <circle cx="1100" cy="100" r="180" fill="#8C88FF" opacity="0.18" />
+              <circle cx="80" cy="500" r="140" fill="#1C004F" opacity="0.10" />
             </svg>
           </div>
 
           <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
             <div className="max-w-3xl">
-              <span className="inline-block rounded-full bg-enrops-plum/10 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-enrops-plum">
+              <span className="inline-block rounded-full bg-enrops-purple/10 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-enrops-purple">
                 The enrichment operations platform
               </span>
               <h1 className="mt-6 font-grotesk text-5xl font-bold leading-[1.05] tracking-tight text-enrops-ink sm:text-7xl">
-                Registration is just the <span className="text-enrops-plum">front door.</span>
+                Registration is just the <span className="text-enrops-purple">front door.</span>
               </h1>
               <p className="mt-6 max-w-2xl font-grotesk text-xl leading-relaxed text-enrops-ink/80">
                 Enrops runs the whole operation. Parent registration, instructor scheduling,
@@ -164,7 +164,7 @@ export default function EnropsLanding() {
                 </a>
                 <Link
                   to="/j2s"
-                  className="inline-flex items-center justify-center gap-2 rounded-md border-2 border-enrops-plum bg-transparent px-6 py-3 font-medium text-enrops-plum transition hover:bg-enrops-plum hover:text-enrops-chalk"
+                  className="inline-flex items-center justify-center gap-2 rounded-md border-2 border-enrops-purple bg-transparent px-6 py-3 font-medium text-enrops-purple transition hover:bg-enrops-purple hover:text-enrops-cream"
                 >
                   See it live at J2S →
                 </Link>
@@ -220,9 +220,9 @@ export default function EnropsLanding() {
             ].map((f) => (
               <div
                 key={f.title}
-                className="group rounded-lg border border-enrops-plum/15 bg-white p-8 transition hover:border-enrops-plum hover:shadow-card"
+                className="group rounded-lg border border-enrops-purple/15 bg-white p-8 transition hover:border-enrops-purple hover:shadow-card"
               >
-                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-enrops-gold/20 font-grotesk font-bold text-enrops-plum">
+                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-enrops-violet/20 font-grotesk font-bold text-enrops-purple">
                   &bull;
                 </div>
                 <h3 className="mt-5 font-grotesk text-xl font-bold text-enrops-ink">
@@ -238,20 +238,20 @@ export default function EnropsLanding() {
         </section>
 
         {/* CTA band */}
-        <section className="bg-enrops-plum text-enrops-chalk">
+        <section className="bg-enrops-purple text-enrops-cream">
           <div className="mx-auto flex max-w-6xl flex-col items-start gap-6 px-4 py-16 sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <div>
               <h2 className="font-grotesk text-3xl font-bold tracking-tight sm:text-4xl">
                 Running an enrichment program?
               </h2>
-              <p className="mt-3 max-w-xl font-grotesk text-enrops-chalk/80">
+              <p className="mt-3 max-w-xl font-grotesk text-enrops-cream/80">
                 We're onboarding our Founding 50 operators now. Keep your current
                 Stripe account, keep your brand, get your evenings back.
               </p>
             </div>
             <a
               href="mailto:hello@enrops.com"
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-enrops-gold px-8 py-4 font-grotesk font-bold text-enrops-ink transition hover:bg-enrops-chalk"
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-enrops-violet px-8 py-4 font-grotesk font-bold text-enrops-ink transition hover:bg-enrops-cream"
             >
               Get early access →
             </a>
@@ -259,25 +259,25 @@ export default function EnropsLanding() {
         </section>
       </main>
 
-      <footer className="bg-enrops-ink text-enrops-chalk/70">
+      <footer className="bg-enrops-ink text-enrops-cream/70">
         <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 font-grotesk text-sm sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div className="flex items-center gap-3">
-            <span className="font-grotesk font-bold text-enrops-chalk">Enrops</span>
-            <span className="text-enrops-chalk/50">
+            <span className="font-grotesk font-bold text-enrops-cream">Enrops</span>
+            <span className="text-enrops-cream/50">
               &copy; {new Date().getFullYear()} &middot; The enrichment operations platform
             </span>
           </div>
           <div className="flex gap-6">
-            <Link to="/j2s" className="hover:text-enrops-chalk">
+            <Link to="/j2s" className="hover:text-enrops-cream">
               Journey to STEAM
             </Link>
-            <Link to="/privacy" className="hover:text-enrops-chalk">
+            <Link to="/privacy" className="hover:text-enrops-cream">
               Privacy
             </Link>
-            <Link to="/terms" className="hover:text-enrops-chalk">
+            <Link to="/terms" className="hover:text-enrops-cream">
               Terms
             </Link>
-            <a href="mailto:hello@enrops.com" className="hover:text-enrops-chalk">
+            <a href="mailto:hello@enrops.com" className="hover:text-enrops-cream">
               Contact
             </a>
           </div>

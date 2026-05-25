@@ -8,11 +8,11 @@
 
 import { useMemo, useState } from "react";
 import TouchpointCard from "./TouchpointCard.jsx";
-import { INK, MUTED, PLUM, RULE, OK, INFO } from "../marketing/tokens.jsx";
+import { INK, MUTED, PURPLE, RULE, OK, INFO } from "../marketing/tokens.jsx";
 
 // Stable color palette for topic chips. Same five we used in the mockup.
 const TOPIC_PALETTE = [
-  { background: "#f0e3e8", color: PLUM },
+  { background: "#f0e3e8", color: PURPLE },
   { background: "#FAEEDA", color: "#854F0B" },
   { background: "#EAF3DE", color: OK },
   { background: "#fce4ec", color: "#ad1457" },
@@ -74,7 +74,7 @@ export default function ScheduleReview({
         background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10,
         padding: "18px 20px", marginBottom: 12,
       }}>
-        <p style={{ fontSize: 11, fontWeight: 700, color: PLUM, textTransform: "uppercase", letterSpacing: 0.5, margin: 0 }}>
+        <p style={{ fontSize: 11, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, margin: 0 }}>
           Draft plan · review &amp; approve
         </p>
         <h2 style={{ margin: "4px 0 6px", fontSize: 22, color: INK }}>
@@ -218,7 +218,7 @@ export default function ScheduleReview({
             onClick={onApprove}
             disabled={busy || touchpoints.length === 0}
             style={{
-              background: busy || touchpoints.length === 0 ? "#cfcfcf" : PLUM,
+              background: busy || touchpoints.length === 0 ? "#cfcfcf" : PURPLE,
               color: "#fff", border: "none",
               padding: "10px 16px", borderRadius: 6,
               cursor: busy || touchpoints.length === 0 ? "not-allowed" : "pointer",

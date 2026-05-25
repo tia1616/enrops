@@ -4,7 +4,7 @@
 
 import { useState } from "react";
 import EditableField from "./EditableField.jsx";
-import { INK, MUTED, PLUM, RULE, OK } from "../marketing/tokens.jsx";
+import { INK, MUTED, PURPLE, RULE, OK } from "../marketing/tokens.jsx";
 
 function fmtScheduled(iso, timezone) {
   if (!iso) return "—";
@@ -63,7 +63,7 @@ export default function TouchpointCard({
       >
         <span style={{
           display: "inline-flex", alignItems: "center", justifyContent: "center",
-          width: 34, height: 34, borderRadius: 6, background: "#f0e3e8", color: PLUM,
+          width: 34, height: 34, borderRadius: 6, background: "#f0e3e8", color: PURPLE,
           fontWeight: 700, fontSize: 16, flexShrink: 0,
         }}>
           {tp.type === "email" ? "✉" : tp.type === "social" ? "📣" : "📄"}
@@ -166,7 +166,7 @@ function stripHtml(html) {
 function highlightTokens(html) {
   if (!html) return "";
   return html.replace(/\{\{(\w+)\}\}/g, (_, name) =>
-    `<span style="display:inline-block;padding:0 6px;border-radius:4px;background:#f0e3e8;color:#691D39;font-size:0.9em;font-weight:600;font-family:ui-monospace,monospace;">{{${name}}}</span>`,
+    `<span style="display:inline-block;padding:0 6px;border-radius:4px;background:#f0e3e8;color:#1C004F;font-size:0.9em;font-weight:600;font-family:ui-monospace,monospace;">{{${name}}}</span>`,
   );
 }
 
@@ -185,7 +185,7 @@ function BodyEditor({ value, onChange }) {
         <button
           onClick={() => setEditing((v) => !v)}
           style={{
-            background: "transparent", border: "none", color: PLUM,
+            background: "transparent", border: "none", color: PURPLE,
             cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: 600,
           }}
         >

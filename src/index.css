@@ -16,7 +16,7 @@
     @apply font-nunito text-j2s-ink;
   }
   .brand-enrops {
-    @apply font-grotesk text-enrops-ink;
+    @apply font-poppins text-enrops-ink;
   }
 }
 
@@ -33,7 +33,7 @@
   }
   /* Enrops buttons */
   .btn-enrops-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-md bg-enrops-plum px-6 py-3 font-medium text-white transition hover:bg-enrops-plum-dark active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-md bg-enrops-purple px-6 py-3 font-medium text-white transition hover:bg-enrops-purple-dark active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50;
   }
   /* Shared inputs */
   .input-field {
