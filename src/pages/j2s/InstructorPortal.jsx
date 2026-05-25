@@ -1279,7 +1279,12 @@ function LegalDocRow({ docKey, label, isOpen, onToggle }) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!isOpen || doc || loading) return;
+    // BUG FIX: `loading` was in the deps array previously, which caused the
+    // setLoading(true) below to trigger a re-render -> the effect's cleanup
+    // cancelled the in-flight fetch -> setDoc/setLoading(false) never ran ->
+    // "Loading…" forever. Removed from deps. The `doc` check is sufficient
+    // to prevent re-fetches after success.
+    if (!isOpen || doc) return;
     let cancelled = false;
     setLoading(true);
     (async () => {
@@ -1306,7 +1311,7 @@ function LegalDocRow({ docKey, label, isOpen, onToggle }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [isOpen, docKey, doc, loading]);
+  }, [isOpen, docKey, doc]);
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8 }}>
