@@ -316,6 +316,13 @@ export default function Schedule() {
   const [saveError, setSaveError] = useState(null); // serious-error banner (DB failures only)
   const [busy, setBusy] = useState(null); // "approving" | "sending" | "previewing" | "rematching" | null
   const [offerDialog, setOfferDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
+  // null = send to everyone with a confirmed/proposed assignment in this cycle.
+  // Set<instructor_id> = restrict the send to only those instructors. The
+  // OfferDialog's choose mode renders an "Advanced: pick instructors" panel
+  // that toggles this. Useful for testing (send only to yourself), staged
+  // rollouts ("just the new hires this week"), or fixing one specific
+  // instructor's offer without re-emailing everyone.
+  const [selectedInstructorIds, setSelectedInstructorIds] = useState(null);
   const [previewData, setPreviewData] = useState(null); // { previews: [...] } from preview mode
   const [offerDeadline, setOfferDeadline] = useState(() => businessDaysFromToday(5));
   const [autoReminders, setAutoReminders] = useState(true);
@@ -1299,8 +1306,12 @@ export default function Schedule() {
           .update({ auto_reminders_enabled: autoReminders })
           .eq("id", state.cycle.id);
       }
+      // selectedInstructorIds: null means "everyone with assignments in this
+      // cycle"; a Set means "only this subset". Convert Set -> array for the
+      // edge function payload.
+      const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode, instructor_ids: null, deadline: offerDeadline },
+        body: { cycle_id: state.cycle.id, mode, instructor_ids: idsPayload, deadline: offerDeadline },
       });
       if (error) {
         let realMsg = error.message ?? "function error";
@@ -1431,8 +1442,9 @@ export default function Schedule() {
     setBusy("previewing");
     setSaveError(null);
     try {
+      const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: null, deadline: offerDeadline },
+        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline },
       });
       if (error) {
         // Read the actual response body so we can see the real error message.
@@ -1784,7 +1796,7 @@ export default function Schedule() {
         <OfferDialog
           dialog={offerDialog}
           onChoose={(mode) => handleSendOffers(mode)}
-          onClose={() => setOfferDialog(null)}
+          onClose={() => { setOfferDialog(null); setSelectedInstructorIds(null); }}
           busy={busy === "sending"}
           deadline={offerDeadline}
           onDeadlineChange={setOfferDeadline}
@@ -1795,6 +1807,28 @@ export default function Schedule() {
           rollingBack={busy === "rolling_back"}
           onRunReminders={handleRunReminders}
           remindersBusy={busy === "reminders"}
+          eligibleInstructors={(() => {
+            // Build a unique, sorted list of instructors who have any
+            // proposed/confirmed assignment in this cycle. These are the
+            // people who'd get an email on a send. Used to render the
+            // "pick instructors" picker.
+            if (!state?.assignments || !state?.instructors) return [];
+            const idsWithAssignments = new Set(
+              state.assignments
+                .filter((a) => ["proposed", "confirmed", "published"].includes(a.status))
+                .map((a) => a.instructor_id)
+            );
+            return state.instructors
+              .filter((i) => idsWithAssignments.has(i.id))
+              .map((i) => ({
+                id: i.id,
+                name: `${i.preferred_name || i.first_name || ""} ${i.last_name || ""}`.trim() || i.email || "Unnamed",
+                email: i.email,
+              }))
+              .sort((a, b) => a.name.localeCompare(b.name));
+          })()}
+          selectedInstructorIds={selectedInstructorIds}
+          onSelectedInstructorIdsChange={setSelectedInstructorIds}
         />
       )}
       {newCycleOpen && (
@@ -3297,7 +3331,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
   );
 }
 
-function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy }) {
+function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange }) {
   if (dialog.mode === "result" && dialog.payload?.kind === "approve") {
     return (
       <ModalShell onClose={onClose} title="Approved">
@@ -3479,23 +3513,136 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
             </span>
           </span>
         </label>
+        <InstructorPickerPanel
+          eligibleInstructors={eligibleInstructors}
+          selectedInstructorIds={selectedInstructorIds}
+          onChange={onSelectedInstructorIdsChange}
+        />
         <DialogChoice
           title="Send to me first (recommended)"
-          subtitle="Every instructor's offer arrives in your inbox so you can read exactly what they'll see. Nothing else changes — run this as many times as you want."
-          disabled={busy}
+          subtitle={selectedInstructorIds
+            ? `Generates only the ${selectedInstructorIds.size} selected instructor${selectedInstructorIds.size === 1 ? "'s" : "s'"} offer${selectedInstructorIds.size === 1 ? "" : "s"} and routes to your inbox. Nothing else changes.`
+            : "Every instructor's offer arrives in your inbox so you can read exactly what they'll see. Nothing else changes — run this as many times as you want."}
+          disabled={busy || (selectedInstructorIds && selectedInstructorIds.size === 0)}
           onClick={() => onChoose("test")}
           tone="warn"
         />
         <DialogChoice
-          title="Send to all instructors"
-          subtitle="Delivers each instructor's offer to their real email. They'll show on this page as awaiting response. Re-sending won't email anyone who's already received their offer."
-          disabled={busy}
+          title={selectedInstructorIds ? `Send to ${selectedInstructorIds.size} selected instructor${selectedInstructorIds.size === 1 ? "" : "s"}` : "Send to all instructors"}
+          subtitle={selectedInstructorIds
+            ? "Delivers only to the instructors you picked above. Others won't receive anything."
+            : "Delivers each instructor's offer to their real email. They'll show on this page as awaiting response. Re-sending won't email anyone who's already received their offer."}
+          disabled={busy || (selectedInstructorIds && selectedInstructorIds.size === 0)}
           onClick={() => onChoose("send")}
           tone="danger"
         />
         {busy && <div style={{ color: MUTED, fontSize: 12 }}>Working…</div>}
       </div>
     </ModalShell>
+  );
+}
+
+// Collapsible "Pick instructors" picker. Default state: "Everyone" (no
+// selection). When the user opens it and picks specific instructors, the
+// parent state flips to a Set<instructor_id>, which both the test and real
+// send paths use to scope the email blast.
+function InstructorPickerPanel({ eligibleInstructors, selectedInstructorIds, onChange }) {
+  const [open, setOpen] = useState(!!selectedInstructorIds);
+  if (eligibleInstructors.length === 0) return null;
+
+  const isSubset = !!selectedInstructorIds;
+  const summary = isSubset
+    ? `${selectedInstructorIds.size} of ${eligibleInstructors.length} selected`
+    : `All ${eligibleInstructors.length} instructors`;
+
+  function toggle(id) {
+    const cur = selectedInstructorIds ?? new Set(eligibleInstructors.map((i) => i.id));
+    const next = new Set(cur);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    // If the user just unchecked one or kept it a real subset, persist as
+    // a Set. If they re-selected everyone, fall back to null (= all).
+    if (next.size === eligibleInstructors.length) onChange(null);
+    else onChange(next);
+  }
+
+  function selectAll() {
+    onChange(null);
+  }
+
+  function selectNone() {
+    onChange(new Set());
+  }
+
+  function selectMyselfOnly() {
+    // "Me" = whatever instructor row matches the most likely current admin.
+    // We don't have the admin's instructor row directly here, but if the
+    // admin is in eligibleInstructors (admin-who-teaches), they'll be
+    // identifiable. For now: just clear to empty so user can tick their
+    // own name. Could be smarter later.
+    onChange(new Set());
+  }
+
+  return (
+    <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: "100%",
+          background: "transparent",
+          border: "none",
+          padding: "10px 12px",
+          textAlign: "left",
+          fontSize: 13,
+          color: INK,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <span><strong>Pick instructors:</strong> {summary}</span>
+        <span style={{ color: MUTED }}>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div style={{ borderTop: `1px solid ${RULE}`, padding: "10px 12px", background: "#fafaf6" }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, fontSize: 11 }}>
+            <button type="button" onClick={selectAll}
+              style={{ background: "transparent", border: `1px solid ${RULE}`, color: PURPLE, borderRadius: 4, padding: "3px 8px", fontFamily: "inherit", cursor: "pointer", fontWeight: 600 }}>
+              All
+            </button>
+            <button type="button" onClick={selectNone}
+              style={{ background: "transparent", border: `1px solid ${RULE}`, color: MUTED, borderRadius: 4, padding: "3px 8px", fontFamily: "inherit", cursor: "pointer", fontWeight: 600 }}>
+              None
+            </button>
+          </div>
+          <div style={{ maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+            {eligibleInstructors.map((i) => {
+              const checked = selectedInstructorIds ? selectedInstructorIds.has(i.id) : true;
+              return (
+                <label key={i.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK, cursor: "pointer", padding: "3px 0" }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggle(i.id)}
+                    style={{ margin: 0 }}
+                  />
+                  <span>{i.name}</span>
+                  {i.email && <span style={{ color: MUTED, fontSize: 11 }}>· {i.email}</span>}
+                </label>
+              );
+            })}
+          </div>
+          {selectedInstructorIds && selectedInstructorIds.size === 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: CORAL }}>
+              Pick at least one instructor to send.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
