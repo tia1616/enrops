@@ -29,9 +29,12 @@ import OnboardingRouter from './pages/onboarding/OnboardingRouter.jsx';
 import DeclinedPage from './pages/onboarding/DeclinedPage.jsx';
 import AbandonedPage from './pages/onboarding/AbandonedPage.jsx';
 import { CartProvider } from './context/CartContext.jsx';
+import PwaUpdateToast from './components/pwa/PwaUpdateToast.jsx';
 
 export default function App() {
   return (
+    <>
+    <PwaUpdateToast />
     <Routes>
       <Route path="/" element={<EnropsLanding />} />
       <Route path="/privacy" element={<PolicyPage policyType="privacy" orgSlug="enrops" />} />
@@ -84,5 +87,6 @@ export default function App() {
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </>
   );
 }

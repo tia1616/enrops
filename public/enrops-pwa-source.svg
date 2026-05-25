@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background: Enrops PLUM. Generous safe-zone padding (~13%) so maskable
+       icon shapes (Android adaptive icons) don't crop the mark. -->
+  <rect width="512" height="512" fill="#691D39"/>
+  <!-- White "E" mark, centered. Stroke width tuned for legibility down to
+       192px. Swap this for the real Enrops/J2S wordmark when artwork lands. -->
+  <g fill="#FFFFFF" font-family="'Space Grotesk', system-ui, -apple-system, sans-serif" font-weight="700">
+    <text
+      x="256"
+      y="356"
+      font-size="320"
+      text-anchor="middle"
+      letter-spacing="-12">
+      E
+    </text>
+  </g>
+  <!-- Small GOLD dot bottom-right as brand accent. Visible at 192px+. -->
+  <circle cx="396" cy="396" r="22" fill="#CFB12F"/>
+</svg>

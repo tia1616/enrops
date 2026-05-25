@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 
 // Enrops brand tokens
 const PLUM = "#691D39";
@@ -393,6 +394,9 @@ export default function AdminLayout() {
           )}
 
           <div style={{ padding: "12px 20px", borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED }}>
+            <div style={{ marginBottom: 10 }}>
+              <PwaInstallButton />
+            </div>
             <div style={{ marginBottom: 6, color: INK, fontWeight: 500 }}>{user?.email}</div>
             <div style={{ marginBottom: 10, textTransform: "capitalize" }}>{orgMember?.role ?? "member"}</div>
             <button onClick={signOut} style={{ ...btn("transparent", PLUM, true), padding: "5px 10px", fontSize: 12 }}>

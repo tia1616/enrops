@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Outlet, Link, useLocation, NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { supabase } from '../lib/supabase.js';
+import PwaInstallButton from '../components/pwa/PwaInstallButton.jsx';
 
 export default function J2SLayout() {
   const { user, signOut } = useAuth();
@@ -41,6 +42,7 @@ export default function J2SLayout() {
             />
           </Link>
           <nav className="flex items-center gap-2 text-sm font-semibold sm:gap-6">
+            <PwaInstallButton />
             {user ? (
               <>
                 <NavLink

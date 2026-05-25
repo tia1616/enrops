@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import PwaInstallButton from '../../components/pwa/PwaInstallButton.jsx';
 
 export default function EnropsLanding() {
   return (
@@ -14,10 +15,11 @@ export default function EnropsLanding() {
               Enrops
             </span>
           </Link>
-          <nav className="flex items-center gap-6 text-sm font-medium text-enrops-ink">
+          <nav className="flex items-center gap-4 text-sm font-medium text-enrops-ink">
             <a href="#features" className="hidden hover:text-enrops-plum sm:inline">
               Platform
             </a>
+            <PwaInstallButton />
             <Link
               to="/j2s"
               className="rounded-md border border-enrops-plum px-4 py-2 font-medium text-enrops-plum transition hover:bg-enrops-plum hover:text-enrops-chalk"

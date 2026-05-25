@@ -12,6 +12,7 @@ import InstructorProfile from "./InstructorProfile.jsx";
 import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
+import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
 
 const PLUM = "#691D39";
 const GOLD = "#CFB12F";
@@ -691,7 +692,8 @@ export default function InstructorPortal() {
             </p>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <PwaInstallButton />
           <button
             type="button"
             onClick={() => setView("documents")}
