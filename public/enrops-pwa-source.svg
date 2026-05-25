@@ -1,20 +1,40 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Enrops brand mark for PWA icons. Generated PNGs land in public/ alongside
+  this source. Edit this file then run `npx pwa-assets-generator` to
+  regenerate every size.
+
+  Colors per the Enrops Brand Guidelines (May 2026):
+    Deep Purple  #1C004F  — primary dark, used as bg
+    Cream        #FBFBFB  — wordmark color
+    Vivid Violet #8C88FF  — accent
+    Mint Green   #26D687  — accent
+
+  The mark is a stylized lowercase "e" — matches the "enrops" wordmark
+  treatment (lowercase, bold). Path-based so it renders the same on every
+  device regardless of installed fonts. Geometry tuned with ~13% safe-zone
+  padding so Android adaptive-icon masks don't crop it.
+-->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Background: Enrops PLUM. Generous safe-zone padding (~13%) so maskable
-       icon shapes (Android adaptive icons) don't crop the mark. -->
-  <rect width="512" height="512" fill="#691D39"/>
-  <!-- White "E" mark, centered. Stroke width tuned for legibility down to
-       192px. Swap this for the real Enrops/J2S wordmark when artwork lands. -->
-  <g fill="#FFFFFF" font-family="'Space Grotesk', system-ui, -apple-system, sans-serif" font-weight="700">
-    <text
-      x="256"
-      y="356"
-      font-size="320"
-      text-anchor="middle"
-      letter-spacing="-12">
-      E
-    </text>
+  <!-- Background -->
+  <rect width="512" height="512" fill="#1C004F"/>
+
+  <!-- Stylized "e" — outer round with the classic horizontal crossbar
+       opening on the right. Drawn at 60% of the canvas, centered.
+       Stroke + fill combined for visual weight at small sizes. -->
+  <g transform="translate(256 256)">
+    <!-- Outer circle, Cream fill -->
+    <circle cx="0" cy="0" r="135" fill="#FBFBFB"/>
+    <!-- Inner cutout (Deep Purple) to form the eye of the e -->
+    <circle cx="0" cy="0" r="78" fill="#1C004F"/>
+    <!-- Crossbar — the horizontal stroke through the middle that defines
+         the e. Cream rectangle spanning the full width of the outer ring. -->
+    <rect x="-135" y="-14" width="270" height="28" fill="#FBFBFB"/>
+    <!-- Right opening — cut a rectangle out of the bottom-right so the e
+         has its characteristic opening. Deep Purple to "erase". -->
+    <rect x="14" y="14" width="135" height="135" fill="#1C004F"/>
+    <!-- Soften the opening corner with a small Vivid Violet accent dot,
+         matching the brand's playful spirit. -->
+    <circle cx="86" cy="86" r="14" fill="#8C88FF"/>
   </g>
-  <!-- Small GOLD dot bottom-right as brand accent. Visible at 192px+. -->
-  <circle cx="396" cy="396" r="22" fill="#CFB12F"/>
 </svg>

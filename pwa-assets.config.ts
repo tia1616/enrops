@@ -12,9 +12,10 @@ export default defineConfig({
   preset: {
     ...minimal2023Preset,
     maskable: {
-      // 10% padding so Android's adaptive-icon mask doesn't crop the "E".
+      // 10% padding so Android's adaptive-icon mask doesn't crop the "e".
+      // Background matches the SVG's Deep Purple.
       padding: 0.1,
-      resizeOptions: { background: '#691D39', fit: 'contain' },
+      resizeOptions: { background: '#1C004F', fit: 'contain' },
       sizes: [512],
     },
   },

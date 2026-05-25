@@ -34,8 +34,11 @@ export default defineConfig({
         display: 'standalone',
         display_override: ['standalone', 'minimal-ui'],
         orientation: 'portrait',
-        theme_color: '#691D39',
-        background_color: '#EAEADD',
+        // theme_color = Android's status bar tint when the PWA is open.
+        // background_color = splash screen behind the icon. Both pulled from
+        // the Enrops Brand Guidelines (May 2026).
+        theme_color: '#1C004F',
+        background_color: '#FBFBFB',
         // Helps the OS file the app under the right category and improves
         // Chrome's installability score.
         categories: ['productivity', 'business', 'education'],
