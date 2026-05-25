@@ -1,12 +1,100 @@
-import React from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { supabase } from '../../lib/supabase.js';
 
 // PwaInstallButton intentionally NOT mounted on the Enrops marketing landing.
 // First-time visitors haven't signed up yet — installing a SaaS app shell
 // they can't actually use is friction without value. The install affordance
 // lives on the authenticated portals (admin, instructor, J2S parent) where
 // the user already has a reason to come back.
+//
+// Smart-redirect: when a signed-in user lands on '/', we route them to the
+// portal that matches their role. PWA-installed users tap their home-screen
+// icon to start working, not to read marketing copy — sending them to '/'
+// (the manifest start_url) and bouncing them to their portal is the cleanest
+// way to make the icon "just work" without per-role manifests.
+//   - org_member (admin/owner)                  -> /admin
+//   - instructor (active in instructors table)  -> /:slug/instructor
+//   - signed-in but neither (parent / family)   -> stay on marketing
+//   - not signed in                             -> stay on marketing
 export default function EnropsLanding() {
+  const navigate = useNavigate();
+  // Track whether we've finished the role check so we don't flash marketing
+  // copy for a split second before the redirect lands.
+  const [roleChecked, setRoleChecked] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (cancelled) return;
+        if (!session?.user) {
+          setRoleChecked(true);
+          return;
+        }
+
+        // Admin check first — owners and admins go to /admin even if they
+        // also happen to be in the instructors table (rare but possible).
+        const { data: member } = await supabase
+          .from('org_members')
+          .select('accepted_at')
+          .eq('auth_user_id', session.user.id)
+          .maybeSingle();
+        if (cancelled) return;
+        if (member?.accepted_at) {
+          navigate('/admin', { replace: true });
+          return;
+        }
+
+        // Instructor check.
+        const { data: instructor } = await supabase
+          .from('instructors')
+          .select('id, organization_id')
+          .eq('auth_user_id', session.user.id)
+          .eq('is_active', true)
+          .maybeSingle();
+        if (cancelled) return;
+        if (instructor) {
+          // Look up the org slug so multi-tenant works. For J2S today the
+          // slug is just 'j2s' but we resolve it dynamically so a second
+          // tenant doesn't require code changes.
+          const { data: org } = await supabase
+            .from('organizations')
+            .select('slug')
+            .eq('id', instructor.organization_id)
+            .maybeSingle();
+          if (cancelled) return;
+          if (org?.slug) {
+            navigate(`/${org.slug}/instructor`, { replace: true });
+            return;
+          }
+        }
+
+        // Signed in but neither admin nor instructor — likely a parent who
+        // signed up via /j2s/login. Don't auto-route; the marketing site is
+        // a fine landing for that case (and they've usually bookmarked /j2s
+        // directly anyway).
+        setRoleChecked(true);
+      } catch (err) {
+        // Auth check failed — show marketing rather than blocking on errors.
+        console.error('[EnropsLanding] role check failed', err);
+        if (!cancelled) setRoleChecked(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [navigate]);
+
+  // Hide the marketing flash while we're still resolving the role. ~100ms
+  // typical, much less if the session is empty.
+  if (!roleChecked) {
+    return (
+      <div className="brand-enrops flex min-h-screen items-center justify-center bg-enrops-chalk text-enrops-ink/60">
+        Loading…
+      </div>
+    );
+  }
+
   return (
     <div className="brand-enrops min-h-screen bg-enrops-chalk">
       <header className="border-b border-enrops-plum/10 bg-enrops-chalk">
