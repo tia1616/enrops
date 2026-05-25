@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 
-// PwaInstallButton intentionally NOT mounted on the Enrops marketing landing.
+// PwaInstallButton intentionally NOT mounted on the Enrops homepage.
 // First-time visitors haven't signed up yet — installing a SaaS app shell
 // they can't actually use is friction without value. The install affordance
 // lives on the authenticated portals (admin, instructor, J2S parent) where
@@ -10,13 +10,14 @@ import { supabase } from '../../lib/supabase.js';
 //
 // Smart-redirect: when a signed-in user lands on '/', we route them to the
 // portal that matches their role. PWA-installed users tap their home-screen
-// icon to start working, not to read marketing copy — sending them to '/'
-// (the manifest start_url) and bouncing them to their portal is the cleanest
-// way to make the icon "just work" without per-role manifests.
+// icon to start working — sending them to '/' (the manifest start_url) and
+// bouncing them to their portal is the cleanest way to make the icon "just
+// work" without per-role manifests.
 //   - org_member (admin/owner)                  -> /admin
 //   - instructor (active in instructors table)  -> /:slug/instructor
-//   - signed-in but neither (parent / family)   -> stay on marketing
-//   - not signed in                             -> stay on marketing
+//   - signed-in but neither (parent / family)   -> /j2s (parent portal)
+//   - not signed in + PWA                       -> /admin/login (universal)
+//   - not signed in + browser                   -> stay on Enrops homepage
 export default function EnropsLanding() {
   const navigate = useNavigate();
   // Track whether we've finished the role check so we don't flash marketing
@@ -87,11 +88,13 @@ export default function EnropsLanding() {
           }
         }
 
-        // Signed in but neither admin nor instructor — likely a parent who
-        // signed up via /j2s/login. Don't auto-route; the marketing site is
-        // a fine landing for that case (and they've usually bookmarked /j2s
-        // directly anyway).
-        setRoleChecked(true);
+        // Signed in but neither admin nor instructor — they're a parent.
+        // Route to /j2s (the J2S parent portal). v1 hardcodes the J2S slug
+        // since J2S is the only tenant; once a second tenant lands we'll
+        // resolve the right parent portal slug from a registrations / users
+        // lookup. For now this gets parents to a useful page reliably.
+        navigate('/j2s', { replace: true });
+        return;
       } catch (err) {
         // Auth check failed — show marketing rather than blocking on errors.
         console.error('[EnropsLanding] role check failed', err);
