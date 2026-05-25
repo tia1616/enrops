@@ -97,9 +97,17 @@ serve(async (req: Request) => {
     const enriched = await Promise.all(
       (docs ?? []).map(async (d) => {
         if (d.source_type === 'upload' && d.storage_path) {
+          // Pass the original filename via the `download` option so the
+          // browser saves the file with a human-readable name instead of
+          // the storage path ({orgId}/{curriculumId}/{docId}-{safeName}).
+          // Supabase translates this into a Content-Disposition header on
+          // the signed URL response.
+          const downloadName = d.original_filename || `${d.doc_type || 'document'}.pdf`;
           const { data: signed, error: signErr } = await supabase.storage
             .from('curriculum-documents')
-            .createSignedUrl(d.storage_path, SIGNED_URL_TTL_SECONDS);
+            .createSignedUrl(d.storage_path, SIGNED_URL_TTL_SECONDS, {
+              download: downloadName,
+            });
           if (signErr || !signed?.signedUrl) {
             console.warn('createSignedUrl failed for', d.id, signErr);
             return { ...d, download_url: null };
