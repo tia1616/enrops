@@ -80,11 +80,25 @@ export default function AdminOverview() {
     };
   }, [org?.id]);
 
+  // Display name: take the bit before the @ in the email and Title-Case it.
+  // Splits on dots/underscores too so "jessica.vorster" -> "Jessica Vorster".
+  // No DB lookup needed for v1; we can move to a stored display_name later if
+  // people want to override (e.g., "Jess" instead of "Jessica").
+  const displayName = (() => {
+    const raw = user?.email?.split("@")[0] ?? "";
+    if (!raw) return "";
+    return raw
+      .split(/[._-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+      .join(" ");
+  })();
+
   return (
     <div>
       <header style={{ marginBottom: 28 }}>
         <h1 style={{ fontSize: 30, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.5 }}>
-          Welcome back{user?.email ? `, ${user.email.split("@")[0]}` : ""}.
+          Welcome back{displayName ? `, ${displayName}` : ""}.
         </h1>
         <p style={{ color: MUTED, marginTop: 6, fontSize: 15 }}>
           {org?.name ? `Operating as ${org.name}.` : "Admin overview."}
