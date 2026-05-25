@@ -12,8 +12,8 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-const DEFAULT_PRIMARY = '#691D39';
-const DEFAULT_PAGE_BG = '#EAEADD';
+const DEFAULT_PRIMARY = '#1C004F';
+const DEFAULT_PAGE_BG = '#FBFBFB';
 const TEXT = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const BORDER = '#e2dfd5';

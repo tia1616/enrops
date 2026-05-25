@@ -555,7 +555,7 @@ async function sendParentDeclineNotice({
   <p>A quick note — the ${installmentLabel} installment for <strong>${escapeHtml(summary)}</strong> didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.</p>
   <p><strong>${childPrograms.length === 1 ? `${escapeHtml(childPrograms[0].name)}'s spot is` : 'Their spots are'} still held</strong> — we won't drop the registration${childPrograms.length === 1 ? '' : 's'} while we sort this out.</p>
   <p>To update your card on file, reply to this email and we'll send you a secure link.</p>
-  <p>Thanks for your patience,<br/>Jessica<br/><span style="color:#666;">Program Manager, Journey to STEAM</span><br/><a href="mailto:hello@updates.journeytosteam.com" style="color:#691D39;">hello@updates.journeytosteam.com</a></p>
+  <p>Thanks for your patience,<br/>Jessica<br/><span style="color:#666;">Program Manager, Journey to STEAM</span><br/><a href="mailto:hello@updates.journeytosteam.com" style="color:#1C004F;">hello@updates.journeytosteam.com</a></p>
 </div>`.trim();
 
   try {

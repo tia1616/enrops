@@ -149,10 +149,10 @@ serve(async (req: Request) => {
 
 function buildAdminEmail(firstName: string, signInUrl: string): string {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:0;background:#EAEADD;font-family:'Space Grotesk',system-ui,sans-serif;">
+<body style="margin:0;padding:0;background:#FBFBFB;font-family:'Poppins',system-ui,sans-serif;">
 <div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
-  <div style="background:#691D39;padding:32px 28px;text-align:center;">
-    <div style="color:#CFB12F;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Enrops</div>
+  <div style="background:#1C004F;padding:32px 28px;text-align:center;">
+    <div style="color:#8C88FF;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Enrops</div>
     <h1 style="color:#fff;margin:8px 0 0;font-size:24px;font-weight:700;">Sign in to Admin</h1>
   </div>
   <div style="padding:28px;">
@@ -161,7 +161,7 @@ function buildAdminEmail(firstName: string, signInUrl: string): string {
       Tap the button below to sign in to your admin dashboard.
     </p>
     <div style="text-align:center;margin:28px 0;">
-      <a href="${signInUrl}" style="display:inline-block;background:#691D39;color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
+      <a href="${signInUrl}" style="display:inline-block;background:#1C004F;color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
         Sign in to dashboard
       </a>
     </div>
@@ -173,10 +173,10 @@ function buildAdminEmail(firstName: string, signInUrl: string): string {
 
 function buildInstructorEmail(firstName: string, signInUrl: string): string {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:0;background:#EAEADD;font-family:'Space Grotesk',system-ui,sans-serif;">
+<body style="margin:0;padding:0;background:#FBFBFB;font-family:'Poppins',system-ui,sans-serif;">
 <div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
-  <div style="background:#691D39;padding:32px 28px;text-align:center;">
-    <div style="color:#CFB12F;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Journey to STEAM</div>
+  <div style="background:#1C004F;padding:32px 28px;text-align:center;">
+    <div style="color:#8C88FF;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Journey to STEAM</div>
     <h1 style="color:#fff;margin:8px 0 0;font-size:24px;font-weight:700;">Sign in</h1>
   </div>
   <div style="padding:28px;">
@@ -185,7 +185,7 @@ function buildInstructorEmail(firstName: string, signInUrl: string): string {
       Tap the button below to view your schedule, accept your camps, or request changes.
     </p>
     <div style="text-align:center;margin:28px 0;">
-      <a href="${signInUrl}" style="display:inline-block;background:#691D39;color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
+      <a href="${signInUrl}" style="display:inline-block;background:#1C004F;color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
         Open my schedule
       </a>
     </div>

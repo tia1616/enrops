@@ -18,7 +18,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 const TEST_INBOX = 'jessica@journeytosteam.com';
-const DEFAULT_PRIMARY = '#691D39';
+const DEFAULT_PRIMARY = '#1C004F';
 const TEXT = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const BORDER = '#e2dfd5';
