@@ -323,6 +323,11 @@ export default function Schedule() {
   // rollouts ("just the new hires this week"), or fixing one specific
   // instructor's offer without re-emailing everyone.
   const [selectedInstructorIds, setSelectedInstructorIds] = useState(null);
+  // Patch-offer preview exclusion. When previewing "5 more camps to send"
+  // and the admin wants to drop one or more instructors from the send,
+  // they tick "Skip this one" on the preview. We track instructor_ids to
+  // exclude. handleConfirmPatchSend filters assignment_ids accordingly.
+  const [excludedInstructorIds, setExcludedInstructorIds] = useState(() => new Set());
   const [previewData, setPreviewData] = useState(null); // { previews: [...] } from preview mode
   const [offerDeadline, setOfferDeadline] = useState(() => businessDaysFromToday(5));
   const [autoReminders, setAutoReminders] = useState(true);
@@ -1565,11 +1570,26 @@ export default function Schedule() {
   async function handleConfirmPatchSend() {
     const ids = previewData?.patchAssignmentIds;
     if (!ids || ids.length === 0) return;
+    // Drop assignments whose instructor is excluded via the preview's
+    // "skip this one" toggle. assignmentInstructorMap is built from
+    // state.assignments which has both ids loaded.
+    const assignmentInstructorMap = new Map(
+      (state?.assignments ?? []).map((a) => [a.id, a.instructor_id])
+    );
+    const filteredIds = ids.filter((id) => {
+      const inst = assignmentInstructorMap.get(id);
+      return inst && !excludedInstructorIds.has(inst);
+    });
+    if (filteredIds.length === 0) {
+      setSaveError("Nothing to send — every preview was skipped.");
+      setTimeout(() => setSaveError(null), 6000);
+      return;
+    }
     setBusy("patching");
     setSaveError(null);
     try {
       const { data, error } = await supabase.functions.invoke("send-patch-offer", {
-        body: { assignment_ids: ids, mode: "send" },
+        body: { assignment_ids: filteredIds, mode: "send" },
       });
       if (error) {
         let real = error.message ?? "send failed";
@@ -1864,9 +1884,24 @@ export default function Schedule() {
       {previewData && (
         <PreviewViewer
           data={previewData}
-          onClose={() => setPreviewData(null)}
+          onClose={() => { setPreviewData(null); setExcludedInstructorIds(new Set()); }}
           onSend={previewData.patchAssignmentIds ? handleConfirmPatchSend : undefined}
-          sendLabel={previewData.patchAssignmentIds ? (previewData.preview?.length === 1 ? "Send this offer" : `Send ${previewData.preview?.length ?? 0} offers`) : undefined}
+          sendLabel={(() => {
+            if (!previewData.patchAssignmentIds) return undefined;
+            const total = previewData.preview?.length ?? 0;
+            const included = Math.max(0, total - excludedInstructorIds.size);
+            if (included === 0) return "Nothing to send";
+            return included === 1 ? "Send this offer" : `Send ${included} offers`;
+          })()}
+          excludedInstructorIds={excludedInstructorIds}
+          onToggleExclude={previewData.patchAssignmentIds ? (instructorId) => {
+            setExcludedInstructorIds((cur) => {
+              const next = new Set(cur);
+              if (next.has(instructorId)) next.delete(instructorId);
+              else next.add(instructorId);
+              return next;
+            });
+          } : undefined}
           sending={busy === "patching"}
         />
       )}
@@ -4510,9 +4545,10 @@ function EmailPreviewPanel({ event, assignment, session, assignments, sessions, 
   );
 }
 
-function PreviewViewer({ data, onClose, onSend, sendLabel, sending }) {
+function PreviewViewer({ data, onClose, onSend, sendLabel, sending, excludedInstructorIds, onToggleExclude }) {
   const previews = data?.preview ?? [];
   const [idx, setIdx] = useState(0);
+  const supportsExclude = !!onToggleExclude;
   if (previews.length === 0) {
     return (
       <ModalShell onClose={onClose} title="Preview">
@@ -4564,16 +4600,36 @@ function PreviewViewer({ data, onClose, onSend, sendLabel, sending }) {
               Preview {idx + 1} of {previews.length} · {cur?.to}
             </div>
             <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginTop: 2 }}>{cur?.subject}</div>
+            {supportsExclude && cur?.instructor_id && (
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, color: excludedInstructorIds?.has(cur.instructor_id) ? CORAL : INK, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={!excludedInstructorIds?.has(cur.instructor_id)}
+                  onChange={() => onToggleExclude(cur.instructor_id)}
+                  style={{ margin: 0 }}
+                />
+                <span>
+                  {excludedInstructorIds?.has(cur.instructor_id) ? (
+                    <strong>Skipped — won't send to {cur?.to}</strong>
+                  ) : (
+                    <span>Include in send</span>
+                  )}
+                </span>
+              </label>
+            )}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button type="button" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} style={btn("transparent", PURPLE, true, idx === 0)}>‹ Prev</button>
             <button type="button" onClick={() => setIdx((i) => Math.min(previews.length - 1, i + 1))} disabled={idx === previews.length - 1} style={btn("transparent", PURPLE, true, idx === previews.length - 1)}>Next ›</button>
             <button type="button" onClick={onClose} disabled={sending} style={btn("transparent", PURPLE, true, sending)}>Cancel</button>
-            {onSend && (
-              <button type="button" onClick={onSend} disabled={sending} style={btn(PURPLE, "#fff", false, sending)}>
-                {sending ? "Sending…" : (sendLabel ?? "Send")}
-              </button>
-            )}
+            {onSend && (() => {
+              const sendDisabled = sending || sendLabel === "Nothing to send";
+              return (
+                <button type="button" onClick={onSend} disabled={sendDisabled} style={btn(PURPLE, "#fff", false, sendDisabled)}>
+                  {sending ? "Sending…" : (sendLabel ?? "Send")}
+                </button>
+              );
+            })()}
             {!onSend && <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>Close</button>}
           </div>
         </div>
