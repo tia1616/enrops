@@ -30,6 +30,22 @@ export default function EnropsLanding() {
         const { data: { session } } = await supabase.auth.getSession();
         if (cancelled) return;
         if (!session?.user) {
+          // PWA-installed user tapped the home-screen icon while signed out.
+          // The marketing page is dead weight for them — bounce to the
+          // sign-in flow. After sign-in we land back on /admin (admin login
+          // default), and from there the layout's auth check routes them
+          // correctly based on org_members / instructor role.
+          //
+          // Detection: display-mode: standalone fires inside an installed
+          // PWA on Android + desktop Chrome; navigator.standalone is the
+          // iOS Safari equivalent.
+          const inPwa =
+            window.matchMedia?.('(display-mode: standalone)').matches ||
+            window.navigator.standalone === true;
+          if (inPwa) {
+            navigate('/admin/login', { replace: true });
+            return;
+          }
           setRoleChecked(true);
           return;
         }

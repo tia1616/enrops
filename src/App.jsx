@@ -67,6 +67,12 @@ export default function App() {
           subdomain split). */}
       <Route path="/instructor" element={<Navigate to="/j2s/instructor" replace />} />
       <Route path="/instructors" element={<Navigate to="/j2s/instructor" replace />} />
+      {/* Same defensive pattern for admin — users type /j2s/admin
+          expecting tenant-scoped paths to work. /admin is the canonical
+          route (org context comes from the signed-in user's org_members
+          row at runtime). */}
+      <Route path="/:slug/admin" element={<Navigate to="/admin" replace />} />
+      <Route path="/:slug/admin/*" element={<Navigate to="/admin" replace />} />
       <Route path="/error" element={<ErrorPage />} />
       {/* Onboarding is now part of the instructor portal at /j2s/instructor.
           /:slug/onboarding still resolves for backward compat with old magic
