@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { defaultTenantSlug } from "../../lib/tenants.js";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -27,6 +28,14 @@ export default function AdminOverview() {
   const { org, user } = useOutletContext() ?? {};
   const [pipeline, setPipeline] = useState(null); // null = loading; {} = loaded
   const [pipelineErr, setPipelineErr] = useState("");
+
+  // "Admins who also teach" — many enrichment operators run the org AND
+  // take a class themselves. If this admin is in the instructors table for
+  // their org, we surface their upcoming teaching schedule as a card. We
+  // load their instructor row + next confirmed assignments in one effect;
+  // both stay null when the admin doesn't teach (most operators).
+  const [teaching, setTeaching] = useState(null);
+  // null = loading, false = not an instructor, object = { instructorId, assignments: [...] }
 
   useEffect(() => {
     if (!org?.id) return;
@@ -80,6 +89,52 @@ export default function AdminOverview() {
     };
   }, [org?.id]);
 
+  // Teaching-schedule load: is this admin also in the instructors table?
+  // If so, fetch their next 2 confirmed assignments to surface in a card.
+  useEffect(() => {
+    if (!user?.id || !org?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: instructorRow } = await supabase
+          .from("instructors")
+          .select("id, organization_id, first_name, preferred_name")
+          .eq("auth_user_id", user.id)
+          .eq("organization_id", org.id)
+          .eq("is_active", true)
+          .maybeSingle();
+        if (cancelled) return;
+        if (!instructorRow) {
+          setTeaching(false);
+          return;
+        }
+
+        // Confirmed, published, not-archived assignments for this admin-as-
+        // instructor. Limit 2; the rest live in the full instructor portal.
+        const { data: assignments } = await supabase
+          .from("camp_assignments")
+          .select(
+            "id, status, role, distance_bonus_cents, camp_sessions(id, location_name, week_num, session_type, curriculum_name, starts_on, ends_on, start_time, end_time, cycle_id, scheduling_cycles:cycle_id(status))"
+          )
+          .eq("instructor_id", instructorRow.id)
+          .eq("status", "confirmed")
+          .not("published_at", "is", null)
+          .order("camp_sessions(starts_on)", { ascending: true })
+          .limit(2);
+        if (cancelled) return;
+        // Filter archived-cycle rows in JS (Supabase can't filter on joined cols here).
+        const active = (assignments ?? []).filter(
+          (a) => a.camp_sessions?.scheduling_cycles?.status !== "archived"
+        );
+        setTeaching({ instructorId: instructorRow.id, assignments: active });
+      } catch (err) {
+        console.error("[admin/overview] teaching load failed", err);
+        if (!cancelled) setTeaching(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.id, org?.id]);
+
   // Display name: take the bit before the @ in the email and Title-Case it.
   // Splits on dots/underscores too so "jessica.vorster" -> "Jessica Vorster".
   // No DB lookup needed for v1; we can move to a stored display_name later if
@@ -106,6 +161,10 @@ export default function AdminOverview() {
       </header>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+        {/* Renders only when this admin is also in the instructors table.
+            Many enrichment operators teach classes themselves — they need
+            their own teaching schedule visible from the admin home. */}
+        {teaching && <TeachingScheduleCard teaching={teaching} />}
         <ContractorPipelineCard pipeline={pipeline} error={pipelineErr} />
         <Card
           title="Marketing"
@@ -148,6 +207,72 @@ export default function AdminOverview() {
           soon
         />
       </div>
+    </div>
+  );
+}
+
+function TeachingScheduleCard({ teaching }) {
+  // teaching = { instructorId, assignments: [...] }. Both upcoming-empty
+  // and upcoming-some states render — the CTA is the same either way.
+  const next = teaching.assignments ?? [];
+  const slug = defaultTenantSlug() ?? "j2s";
+  const portalPath = `/${slug}/instructor`;
+
+  return (
+    <div style={{
+      background: "#fff",
+      border: `1px solid ${RULE}`,
+      borderLeft: `3px solid ${VIOLET}`,
+      borderRadius: 8,
+      padding: 20,
+      display: "flex",
+      flexDirection: "column",
+      minHeight: 150,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <h2 style={{ fontSize: 17, fontWeight: 600, color: INK, margin: 0 }}>Your teaching schedule</h2>
+        <span style={{ fontSize: 10, color: PURPLE, background: `${VIOLET}33`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+          You teach too
+        </span>
+      </div>
+
+      {next.length === 0 ? (
+        <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.5, margin: "0 0 14px", flex: 1 }}>
+          No confirmed assignments coming up for you right now. When your coordinator publishes new offers, you'll see them in the instructor portal.
+        </p>
+      ) : (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+          {next.map((a) => {
+            const s = a.camp_sessions;
+            if (!s) return null;
+            const startTxt = s.starts_on
+              ? new Date(`${s.starts_on}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+              : "";
+            return (
+              <div key={a.id} style={{ fontSize: 13, color: INK, lineHeight: 1.4 }}>
+                <div style={{ fontWeight: 600 }}>{s.curriculum_name}</div>
+                <div style={{ color: MUTED, fontSize: 12 }}>
+                  Week {s.week_num} · {startTxt} · {s.location_name}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <Link to={portalPath} style={{
+        display: "inline-block",
+        padding: "7px 14px",
+        background: PURPLE,
+        color: "#fff",
+        borderRadius: 6,
+        fontSize: 13,
+        fontWeight: 500,
+        textDecoration: "none",
+        alignSelf: "flex-start",
+      }}>
+        Open instructor view →
+      </Link>
     </div>
   );
 }
