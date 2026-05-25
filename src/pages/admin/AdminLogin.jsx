@@ -1,6 +1,10 @@
 // src/pages/admin/AdminLogin.jsx
-// Admin portal login — provider-facing (not parent-facing).
-// Google OAuth, email+password, or magic link. Redirects to /admin on success.
+// Universal Enrops sign-in (provider-facing — admins + contractors land here
+// when their PWA-installed app icon detects no session). Despite the file
+// name and URL path, this is NOT admin-only: after auth we hand off to '/'
+// where EnropsLanding's smart-redirect routes by role (org_member → /admin,
+// instructor → /:slug/instructor). Parents have their own sign-in at
+// /j2s/login since they're tenant-scoped.
 
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -32,7 +36,9 @@ export default function AdminLogin() {
     if (err) {
       setError(err.message);
     } else {
-      navigate("/admin");
+      // Hand off to '/' so EnropsLanding's smart-redirect picks the right
+      // portal based on role. Same for OAuth + magic-link below.
+      navigate("/");
     }
   }
 
@@ -41,7 +47,7 @@ export default function AdminLogin() {
     setError("");
     const { error: err } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/admin` },
+      options: { redirectTo: `${window.location.origin}/` },
     });
     if (err) {
       setError(err.message);
@@ -58,7 +64,7 @@ export default function AdminLogin() {
       const { data, error: fnErr } = await supabase.functions.invoke('auth-send-magic-link', {
         body: {
           email,
-          redirect_to: `${window.location.origin}/admin`,
+          redirect_to: `${window.location.origin}/`,
           context: 'admin',
         },
       });
@@ -82,10 +88,10 @@ export default function AdminLogin() {
         border: `1px solid ${RULE}`, borderRadius: 8, padding: 32,
       }}>
         <div style={{ fontWeight: 700, fontSize: 22, color: PURPLE, marginBottom: 4 }}>
-          Enrops Admin
+          Sign in to Enrops
         </div>
         <p style={{ color: MUTED, fontSize: 14, margin: "0 0 24px" }}>
-          Sign in to manage your programs, marketing, and operations.
+          We'll send you to the right place after you sign in.
         </p>
 
         <button
