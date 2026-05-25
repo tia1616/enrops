@@ -129,7 +129,7 @@ export default function PwaInstallButton({ variant = 'inline' }) {
         title="Install Enrops on your phone"
       >
         <span aria-hidden="true" style={{ fontSize: 13, lineHeight: 1 }}>📱</span>
-        Install
+        Install app
       </button>
 
       {overlayOpen && (

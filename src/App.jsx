@@ -60,6 +60,13 @@ export default function App() {
           pattern is consistent with /:slug/onboarding so contractor-invite
           can use the slug from the tenant's org row. */}
       <Route path="/:slug/instructor" element={<InstructorPortal />} />
+      {/* Tenant-less shortcut: /instructor and /instructors both bounce to
+          the J2S portal. Contractors typed it on their phones expecting it
+          to work; without this the catch-all sent them to the marketing
+          landing. Once we have a second tenant we revisit (probably a
+          subdomain split). */}
+      <Route path="/instructor" element={<Navigate to="/j2s/instructor" replace />} />
+      <Route path="/instructors" element={<Navigate to="/j2s/instructor" replace />} />
       <Route path="/error" element={<ErrorPage />} />
       {/* Onboarding is now part of the instructor portal at /j2s/instructor.
           /:slug/onboarding still resolves for backward compat with old magic

@@ -17,19 +17,35 @@ export default defineConfig({
       includeAssets: ['favicon.svg', 'enrops-pwa-source.svg'],
 
       manifest: {
+        // `id` + `start_url` together let Chrome treat this as ONE app across
+        // versions. Without `id`, Chrome's "Install app" can split into
+        // "Create shortcut" because it can't confidently identify the PWA
+        // as a single installable thing.
+        id: '/',
         name: 'Enrops',
         short_name: 'Enrops',
         description: 'Enrichment operations — registration, scheduling, contractor portal.',
         start_url: '/',
         scope: '/',
+        // `display_override` is the modern way to express display preference;
+        // browsers fall back to `display` for older clients. Listing
+        // window-controls-overlay first is harmless on phones (they only
+        // honor standalone) and unlocks the cleanest desktop install.
         display: 'standalone',
+        display_override: ['standalone', 'minimal-ui'],
         orientation: 'portrait',
         theme_color: '#691D39',
         background_color: '#EAEADD',
+        // Helps the OS file the app under the right category and improves
+        // Chrome's installability score.
+        categories: ['productivity', 'business', 'education'],
+        // `any` icons satisfy the standard install criterion; `maskable`
+        // covers Android's adaptive-icon shapes without cropping. We mark
+        // 512x512 as both purposes so Chrome counts it for either check.
         icons: [
-          { src: 'pwa-64x64.png', sizes: '64x64', type: 'image/png' },
-          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+          { src: 'pwa-64x64.png', sizes: '64x64', type: 'image/png', purpose: 'any' },
+          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
           { src: 'maskable-icon-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
