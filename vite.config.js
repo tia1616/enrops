@@ -51,8 +51,13 @@ export default defineConfig({
       },
 
       workbox: {
-        // Default precache. Don't intercept Supabase calls (the SW would
-        // serve stale schedule data and break magic-link auth callbacks).
+        // Chrome's installability check requires the SW to respond to a
+        // navigation fetch for start_url. Setting navigateFallback makes
+        // workbox claim all SPA routes and serve index.html from cache —
+        // without this Chrome flags the site as only "shortcut-able", not
+        // fully installable, and shows both "Install" and "Create shortcut"
+        // side-by-side in the menu.
+        navigateFallback: '/index.html',
         navigateFallbackDenylist: [
           /^\/auth\//,                 // auth callback paths
           /^\/api\//,                  // any future server functions
@@ -63,9 +68,11 @@ export default defineConfig({
         // the SW skips files >2 MB and instructors hit the network on
         // every reload.
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
-        // Skip the SW while iframe-previewing the dev build so HMR isn't
-        // intercepted.
         cleanupOutdatedCaches: true,
+        // Take control of open clients as soon as the SW activates so the
+        // first install qualifies on the first page load, not the second.
+        clientsClaim: true,
+        skipWaiting: false,           // we still want the update toast UX
       },
 
       // Dev: disabled so HMR works normally. We test PWA via `npm run build
