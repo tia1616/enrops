@@ -1,11 +1,26 @@
 // Shared edge-function fetch wrapper for the contractor onboarding wizard.
 //
-// 401 → /j2s/instructor login (or /error?reason=link_expired upstream from auth callback)
+// 401 → instructor login for the current tenant (or /error?reason=link_expired upstream from auth callback)
 // 403 → /error?reason=deactivated  (re-auth won't help; don't bounce to login)
 // 410 → navigate to body.redirect verbatim (mid-session status flip)
 // 5xx → bubbled to caller as { error } so the screen can show retry UI
 
 import { supabase } from './supabase.js';
+import { defaultTenantSlug } from './tenants.js';
+
+// Derive the current tenant slug from the URL (e.g., /j2s/instructor → "j2s")
+// so the 401 redirect lands on the right tenant's instructor portal in a
+// future multi-tenant world. Falls back to the v1 single-tenant default
+// if the URL doesn't include a slug (shouldn't happen from onboarding
+// surfaces, but safe).
+function currentInstructorLoginPath() {
+  if (typeof window !== 'undefined') {
+    const m = window.location.pathname.match(/^\/([^/]+)\/(?:instructor|onboarding)/);
+    if (m) return `/${m[1]}/instructor`;
+  }
+  const slug = defaultTenantSlug();
+  return slug ? `/${slug}/instructor` : '/admin/login';
+}
 
 class OnboardingNavigated extends Error {
   constructor(target) {
@@ -69,8 +84,9 @@ export async function invokeOnboardingFn(name, body, { navigate } = {}) {
   }
 
   if (status === 401 && navigate) {
-    navigate('/j2s/instructor', { replace: true });
-    throw new OnboardingNavigated('/j2s/instructor');
+    const target = currentInstructorLoginPath();
+    navigate(target, { replace: true });
+    throw new OnboardingNavigated(target);
   }
 
   return {

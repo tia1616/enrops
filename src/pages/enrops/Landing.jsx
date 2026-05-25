@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
+import { parentLandingPath } from '../../lib/tenants.js';
 
 // PwaInstallButton intentionally NOT mounted on the Enrops homepage.
 // First-time visitors haven't signed up yet — installing a SaaS app shell
@@ -89,11 +90,10 @@ export default function EnropsLanding() {
         }
 
         // Signed in but neither admin nor instructor — they're a parent.
-        // Route to /j2s (the J2S parent portal). v1 hardcodes the J2S slug
-        // since J2S is the only tenant; once a second tenant lands we'll
-        // resolve the right parent portal slug from a registrations / users
-        // lookup. For now this gets parents to a useful page reliably.
-        navigate('/j2s', { replace: true });
+        // parentLandingPath() centralizes the v1 single-tenant shortcut
+        // (returns '/j2s' today, will become a real lookup when a second
+        // tenant lands). See lib/tenants.js.
+        navigate(parentLandingPath(session.user.id), { replace: true });
         return;
       } catch (err) {
         // Auth check failed — show marketing rather than blocking on errors.

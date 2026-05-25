@@ -7,6 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { defaultTenantSlug } from "../../lib/tenants.js";
 import HatGuide from "../../components/HatGuide";
 
 const PURPLE = "#1C004F";
@@ -4328,7 +4329,12 @@ function EmailPreviewPanel({ event, assignment, session, assignments, sessions, 
   const deadlineMatch = /deadline\s+(\d{4}-\d{2}-\d{2})/i.exec(event.message || "");
   const deadline = deadlineMatch ? deadlineMatch[1] : assignment.deadline ?? null;
 
-  const portalUrl = `https://enrops.com/j2s/instructor`;
+  // Portal URL embedded in the instructor email. Built from the same tenant
+  // slug the admin's org uses (org info comes via useOutletContext at the
+  // top of the file; threaded down via orgName here -- v1 uses the default
+  // tenant. When multi-tenant lands, plumb orgSlug as a prop alongside
+  // orgName so this string is per-tenant.)
+  const portalUrl = `${window.location.origin}/${defaultTenantSlug()}/instructor`;
   const ctx = {
     assignment,
     instructorCamps,
