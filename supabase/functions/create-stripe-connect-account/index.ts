@@ -78,8 +78,40 @@ serve(async (req: Request) => {
     }
 
     let accountId = existing?.stripe_connect_account_id as string | null;
+    let justCreated = false;
 
     // Create a new Express account if needed.
+    if (!accountId) {
+      // Belt-and-suspenders dedup: before creating, search Stripe for an
+      // account already tagged with this instructor_id. Catches the case where
+      // a prior call created a Stripe account but the DB write failed,
+      // leaving an orphan our existing-row check can't see. Stripe's search
+      // index has a delay (often seconds, sometimes minutes), so this won't
+      // catch same-second retries — delete-on-fail below covers that.
+      try {
+        const search = await stripe.accounts.search({
+          query: `metadata['instructor_id']:'${me.id}'`,
+          limit: 2,
+        });
+        if (search.data.length === 1) {
+          accountId = search.data[0].id;
+          console.warn('recovered orphan stripe account', {
+            instructor_id: me.id,
+            account_id: accountId,
+          });
+        } else if (search.data.length > 1) {
+          const ids = search.data.map((a) => a.id);
+          console.error('multiple stripe accounts for instructor', me.id, ids);
+          return json({ error: 'multiple_stripe_accounts', account_ids: ids }, 409);
+        }
+      } catch (err) {
+        // Search failures are non-fatal — fall through to create. Worst case
+        // we create a duplicate, which delete-on-fail / the next search will
+        // catch.
+        console.warn('stripe.accounts.search failed (non-fatal):', err);
+      }
+    }
+
     if (!accountId) {
       // Build the individual block from instructor data we already have.
       // Stripe still requires the contractor to confirm/complete (and add SSN
@@ -148,37 +180,26 @@ serve(async (req: Request) => {
         }, 502);
       }
       accountId = account.id;
+      justCreated = true;
+    }
 
-      // Persist the account ID. Use update or insert depending on whether
-      // the onboarding row exists yet.
-      if (existing) {
-        const { error: updErr } = await supabase
-          .from('contractor_onboarding_status')
-          .update({
-            stripe_connect_account_id: accountId,
-            stripe_connect_status: 'onboarding_in_progress',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('instructor_id', me.id);
-        if (updErr) {
-          console.error('stripe account id store failed:', updErr);
-          return json({ error: 'update_failed' }, 500);
-        }
-      } else {
-        const { error: insErr } = await supabase
-          .from('contractor_onboarding_status')
-          .insert({
-            instructor_id: me.id,
-            organization_id: me.organization_id,
-            stripe_connect_account_id: accountId,
-            stripe_connect_status: 'onboarding_in_progress',
-            overall_status: 'in_progress',
-          });
-        if (insErr) {
-          console.error('stripe account id insert failed:', insErr);
-          return json({ error: 'insert_failed' }, 500);
+    // Persist the account ID. Use update or insert depending on whether
+    // the onboarding row exists yet. If this write fails AFTER we just
+    // created a Stripe account, delete the Stripe account so we don't leave
+    // an orphan that the next retry will skip past.
+    const persistErr = await persistAccountId(supabase, me, accountId, existing);
+    if (persistErr) {
+      if (justCreated && accountId) {
+        try {
+          await stripe.accounts.del(accountId);
+          console.warn('deleted orphan stripe account after persist failure', accountId);
+        } catch (delErr) {
+          // Account still exists in Stripe; flag for manual cleanup.
+          console.error('failed to delete orphan stripe account', accountId, delErr);
         }
       }
+      console.error('stripe account id persist failed:', persistErr);
+      return json({ error: existing ? 'update_failed' : 'insert_failed' }, 500);
     }
 
     // Always create a fresh account link — old links expire fast.
@@ -204,6 +225,38 @@ serve(async (req: Request) => {
     return json({ error: 'internal_error' }, 500);
   }
 });
+
+// Update or insert the onboarding row to point at the Stripe account.
+// Returns null on success, or the underlying error so the caller can decide
+// whether to clean up a just-created Stripe account.
+async function persistAccountId(
+  supabase: ReturnType<typeof adminClient>,
+  me: { id: string; organization_id: string },
+  accountId: string,
+  existing: { stripe_connect_account_id: string | null } | null,
+): Promise<unknown> {
+  if (existing) {
+    const { error } = await supabase
+      .from('contractor_onboarding_status')
+      .update({
+        stripe_connect_account_id: accountId,
+        stripe_connect_status: 'onboarding_in_progress',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('instructor_id', me.id);
+    return error;
+  }
+  const { error } = await supabase
+    .from('contractor_onboarding_status')
+    .insert({
+      instructor_id: me.id,
+      organization_id: me.organization_id,
+      stripe_connect_account_id: accountId,
+      stripe_connect_status: 'onboarding_in_progress',
+      overall_status: 'in_progress',
+    });
+  return error;
+}
 
 // instructors.date_of_birth is a DATE column (YYYY-MM-DD). Stripe's
 // individual.dob wants { day, month, year } as ints. Returns null if the
