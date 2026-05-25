@@ -223,6 +223,17 @@ export default function Screen7Stripe({ slug, instructor, onboarding, onAdvance,
       title="Payment setup"
       subtitle="You'll be redirected to Stripe to verify your identity, set up tax forms, and connect your bank account so you can be paid."
     >
+      <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-4 text-sm leading-relaxed text-neutral-800">
+        <p className="font-semibold text-neutral-900">Heads up: Stripe will ask you to "verify your business."</p>
+        <p className="mt-2">
+          Don't be thrown off by the word "business" — that's just paperwork-speak.
+          As an independent contractor, <strong>you are the business</strong>. Use{' '}
+          <strong>your own name, SSN, and address</strong>. You do NOT need an LLC,
+          EIN, or a business license. Pick "Individual / Sole proprietor" if Stripe
+          asks for a business type.
+        </p>
+      </div>
+
       <div className="mb-4 rounded-md border border-neutral-200 bg-neutral-50 p-4 text-sm leading-relaxed text-neutral-700">
         <p className="font-semibold text-neutral-900">Before you click — this takes about 5–10 minutes.</p>
         <p className="mt-3 font-semibold text-neutral-900">Have these ready:</p>
