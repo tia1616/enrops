@@ -21,6 +21,7 @@ import CurriculumReview from './pages/admin/curricula/CurriculumReview.jsx';
 import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
 import LocationsList from './pages/admin/LocationsList.jsx';
 import AdminContacts from './pages/admin/contacts/AdminContacts.jsx';
+import InstructorsPage from './pages/admin/instructors/InstructorsPage.jsx';
 import TeamPage from './pages/admin/team/TeamPage.jsx';
 import InstructorPortal from './pages/j2s/InstructorPortal.jsx';
 import ErrorPage from './pages/error/ErrorPage.jsx';
@@ -77,6 +78,7 @@ export default function App() {
         <Route path="programs" element={<ProgramsCalendar />} />
         <Route path="locations" element={<LocationsList />} />
         <Route path="contacts" element={<AdminContacts />} />
+        <Route path="instructors" element={<InstructorsPage />} />
         <Route path="team" element={<TeamPage />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />
       </Route>

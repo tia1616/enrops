@@ -31,6 +31,7 @@ const NAV = [
       { to: "/admin/locations", label: "Locations" },
     ],
   },
+  { to: "/admin/instructors", label: "Instructors" },
   { to: "/admin/contacts", label: "Contacts" },
   { to: "/admin/schedule", label: "Schedule" },
   { to: "/admin/community", label: "Community", soon: true },

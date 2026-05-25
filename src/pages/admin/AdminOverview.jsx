@@ -101,8 +101,15 @@ export default function AdminOverview() {
           ready
         />
         <Card
+          title="Instructors"
+          body="Your contractors. Send onboarding invites, upload prior background checks, view their schedules and statuses."
+          to="/admin/instructors"
+          cta="Open Instructors"
+          ready
+        />
+        <Card
           title="Contacts"
-          body="Instructors, partners, parents. Send onboarding invites, view rosters, upload prior background checks."
+          body="Partner organizations and parent families."
           to="/admin/contacts"
           cta="Open Contacts"
           ready
@@ -209,7 +216,7 @@ function ContractorPipelineCard({ pipeline, error }) {
         </div>
       )}
 
-      <Link to="/admin/contacts" style={{
+      <Link to="/admin/instructors" style={{
         display: "inline-block",
         padding: "7px 14px",
         background: PLUM,
@@ -220,7 +227,7 @@ function ContractorPipelineCard({ pipeline, error }) {
         textDecoration: "none",
         alignSelf: "flex-start",
       }}>
-        Open Contacts
+        Open Instructors
       </Link>
     </div>
   );
