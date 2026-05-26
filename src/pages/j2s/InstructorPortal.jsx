@@ -1840,6 +1840,9 @@ function RosterSection({ campSessionId, enrollment, startsOn }) {
               epipen_required, medications_at_program,
               emergency_contact_name, emergency_contact_phone,
               special_needs_accommodations
+            ),
+            parent:parents (
+              first_name, last_name, email, phone
             )
           `)
           .eq("camp_session_id", campSessionId)
@@ -1915,10 +1918,12 @@ function RosterSection({ campSessionId, enrollment, startsOn }) {
 function CamperRow({ registration }) {
   const s = registration.student;
   if (!s) return null;
+  const p = registration.parent;
   const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed camper";
   const age = ageFromDob(s.birthdate);
   const hasAllergies = (s.allergies ?? "").trim().length > 0;
   const hasMedical = ((s.medical_notes ?? "") + (s.medical_conditions ?? "")).trim().length > 0 || s.epipen_required;
+  const parentName = p ? `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() : "";
 
   return (
     <div
@@ -1947,21 +1952,42 @@ function CamperRow({ registration }) {
         </div>
       </div>
 
+      {/* Parent contact — always show if we have a parent row at all.
+          The instructor calls the parent first for pickup or anything
+          non-emergency; emergency contact is the secondary number. */}
+      {p && (
+        <div style={{ marginTop: 8, padding: "6px 10px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 12, color: INK }}>
+          <strong style={{ color: INK }}>Parent:</strong>{" "}
+          {parentName || <em style={{ color: MUTED }}>name not on file</em>}
+          {p.phone && <> · {p.phone}</>}
+          {p.email && <> · {p.email}</>}
+        </div>
+      )}
+
       {hasAllergies && (
-        <div style={{ marginTop: 8, padding: "6px 10px", background: `${CORAL}1F`, border: `1px solid ${CORAL}55`, borderRadius: 4, fontSize: 12, color: INK }}>
+        <div style={{ marginTop: 6, padding: "6px 10px", background: `${CORAL}1F`, border: `1px solid ${CORAL}55`, borderRadius: 4, fontSize: 12, color: INK }}>
           <strong style={{ color: CORAL }}>Allergies:</strong> {s.allergies}
         </div>
       )}
 
-      {(s.medical_conditions || s.medical_notes || s.epipen_required) && (
-        <div style={{ marginTop: 6, padding: "6px 10px", background: `${CORAL}10`, border: `1px solid ${CORAL}33`, borderRadius: 4, fontSize: 12, color: INK }}>
-          <strong>Medical:</strong>{" "}
-          {s.epipen_required && <span style={{ color: CORAL, fontWeight: 700 }}>EpiPen required. </span>}
-          {[s.medical_conditions, s.medical_notes, s.medications_at_program ? `Meds: ${s.medications_at_program}` : null]
-            .filter(Boolean)
-            .join(" · ")}
-        </div>
-      )}
+      {/* Always show a Medical line. If something's there, render it
+          (with EpiPen flag in coral if applicable). If nothing's there,
+          state "None reported by parent" so the instructor knows the
+          parent affirmatively answered "No"/"None" in the Squarespace
+          health-conditions field. */}
+      <div style={{ marginTop: 6, padding: "6px 10px", background: hasMedical ? `${CORAL}10` : "#fff", border: `1px solid ${hasMedical ? `${CORAL}33` : RULE}`, borderRadius: 4, fontSize: 12, color: INK }}>
+        <strong>Medical:</strong>{" "}
+        {hasMedical ? (
+          <>
+            {s.epipen_required && <span style={{ color: CORAL, fontWeight: 700 }}>EpiPen required. </span>}
+            {[s.medical_conditions, s.medical_notes, s.medications_at_program ? `Meds: ${s.medications_at_program}` : null]
+              .filter(Boolean)
+              .join(" · ") || <em style={{ color: MUTED }}>None reported by parent</em>}
+          </>
+        ) : (
+          <em style={{ color: MUTED }}>None reported by parent</em>
+        )}
+      </div>
 
       {s.dietary_restrictions && (
         <div style={{ marginTop: 6, fontSize: 12, color: INK }}>
