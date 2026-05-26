@@ -72,6 +72,7 @@ export default function InstructorsTab({ org }) {
   const [inviteResult, setInviteResult] = useState({}); // { instructor_id: { type: 'ok'|'err', message } }
   const [bgUploadOpen, setBgUploadOpen] = useState(false);
   const [bgUploadInstructorId, setBgUploadInstructorId] = useState(null); // pre-selected when opened from a row
+  const [addOpen, setAddOpen] = useState(false);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -244,6 +245,24 @@ export default function InstructorsTab({ org }) {
         </label>
         <button
           type="button"
+          onClick={() => setAddOpen(true)}
+          style={{
+            padding: '7px 12px',
+            background: PURPLE,
+            color: '#fff',
+            border: `1px solid ${PURPLE}`,
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: 'inherit',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          + Add instructor
+        </button>
+        <button
+          type="button"
           onClick={() => { setBgUploadInstructorId(null); setBgUploadOpen(true); }}
           style={{
             padding: '7px 12px',
@@ -296,6 +315,22 @@ export default function InstructorsTab({ org }) {
             if (updatedRow?.instructor_id) {
               setRows((rs) => (rs ?? []).map((r) => (r.id === updatedRow.instructor_id ? { ...r, status: updatedRow } : r)));
             }
+          }}
+        />
+      )}
+
+      {addOpen && (
+        <AddInstructorModal
+          org={org}
+          onClose={() => setAddOpen(false)}
+          onAdded={(newRow) => {
+            // Prepend new instructor to the list with empty status + contacts
+            // so it shows up immediately. The Send-invite call (if user picks
+            // it) will refresh status afterwards.
+            setRows((rs) => [
+              { ...newRow, status: null, emergency_contacts: [] },
+              ...(rs ?? []),
+            ]);
           }}
         />
       )}
@@ -945,5 +980,369 @@ function BackgroundCheckUploadModal({ instructors, initialInstructorId, onClose,
         </form>
       </div>
     </div>
+  );
+}
+
+// Modal for manually adding an instructor row. Two phases:
+//   1. Form — collect first/last/email/phone/tier, insert row.
+//   2. Confirm — after insert, ask "Send onboarding invite now?" with
+//      Yes / Not now buttons. Yes fires contractor-invite then closes.
+// Direct insert via supabase client; RLS policy org_admins_write_instructors
+// gates this to owners + admins. No edge function needed.
+function AddInstructorModal({ org, onClose, onAdded }) {
+  const [phase, setPhase] = useState('form'); // 'form' | 'invite'
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [tier, setTier] = useState(''); // '' = not set, 'lead', 'developing'
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [createdInstructor, setCreatedInstructor] = useState(null); // { id, first_name, last_name, email }
+  const [inviteResult, setInviteResult] = useState(null); // { type, message }
+
+  function validateForm() {
+    if (!firstName.trim()) return 'First name is required.';
+    if (!lastName.trim()) return 'Last name is required.';
+    const e = email.trim();
+    if (!e) return 'Email is required.';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return 'That email address does not look valid.';
+    return null;
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (busy) return;
+    setError('');
+    const v = validateForm();
+    if (v) { setError(v); return; }
+    if (!org?.id) { setError('No organization context.'); return; }
+
+    setBusy(true);
+    try {
+      const { data, error: insErr } = await supabase
+        .from('instructors')
+        .insert({
+          organization_id: org.id,
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          email: email.trim().toLowerCase(),
+          phone: phone.trim() || null,
+          contractor_tier: tier || null,
+          is_active: true,
+        })
+        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at')
+        .single();
+
+      if (insErr) {
+        if (insErr.code === '23505') {
+          // UNIQUE (organization_id, email)
+          setError('An instructor with that email already exists in this org.');
+        } else if (/permission denied|policy/i.test(insErr.message ?? '')) {
+          setError('You do not have permission to add instructors.');
+        } else {
+          setError(insErr.message || 'Failed to add the instructor.');
+        }
+        setBusy(false);
+        return;
+      }
+
+      if (onAdded) onAdded(data);
+      setCreatedInstructor(data);
+      setPhase('invite');
+      setBusy(false);
+    } catch (err) {
+      console.error('[AddInstructorModal] insert failed', err);
+      setError('Something went wrong adding the instructor.');
+      setBusy(false);
+    }
+  }
+
+  async function handleSendInvite() {
+    if (!createdInstructor) return;
+    setBusy(true);
+    setInviteResult(null);
+    try {
+      const { data, error: fnErr } = await supabase.functions.invoke('contractor-invite', {
+        body: { instructor_id: createdInstructor.id },
+      });
+      if (fnErr || data?.error) {
+        setInviteResult({
+          type: 'err',
+          message: data?.error || fnErr?.message || 'Failed to send the invite.',
+        });
+        setBusy(false);
+        return;
+      }
+      setInviteResult({ type: 'ok', message: 'Invite sent ✓' });
+      setTimeout(() => { onClose && onClose(); }, 1200);
+    } catch (err) {
+      console.error('[AddInstructorModal] invite failed', err);
+      setInviteResult({ type: 'err', message: 'Something went wrong sending the invite.' });
+      setBusy(false);
+    }
+  }
+
+  const displayName = createdInstructor
+    ? `${createdInstructor.first_name} ${createdInstructor.last_name}`.trim()
+    : '';
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.45)',
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        padding: '40px 16px',
+        zIndex: 100,
+        overflowY: 'auto',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#fff',
+          width: '100%',
+          maxWidth: 520,
+          border: `1px solid ${RULE}`,
+          borderRadius: 10,
+          padding: 22,
+          boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+          <div>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: INK, margin: 0 }}>
+              {phase === 'form' ? 'Add instructor' : `${displayName} added`}
+            </h2>
+            <p style={{ color: MUTED, fontSize: 12, marginTop: 4, lineHeight: 1.4 }}>
+              {phase === 'form'
+                ? 'Creates the contractor record. You can send their onboarding invite right after, or do it later from the row.'
+                : 'Send the onboarding invite now? You can always do it later from the instructor row.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ background: 'transparent', border: 'none', color: MUTED, fontSize: 18, cursor: 'pointer', padding: 0, lineHeight: 1 }}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        {phase === 'form' && (
+          <form onSubmit={handleSubmit}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Field label="First name" required>
+                <input
+                  type="text"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  autoFocus
+                  style={inputStyle}
+                />
+              </Field>
+              <Field label="Last name" required>
+                <input
+                  type="text"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  style={inputStyle}
+                />
+              </Field>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <Field label="Email" required>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  style={inputStyle}
+                />
+              </Field>
+            </div>
+
+            <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Field label="Phone">
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="(optional)"
+                  style={inputStyle}
+                />
+              </Field>
+              <Field label="Tier">
+                <select
+                  value={tier}
+                  onChange={(e) => setTier(e.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="">Not set</option>
+                  <option value="lead">Lead</option>
+                  <option value="developing">Developing</option>
+                </select>
+              </Field>
+            </div>
+
+            {error && (
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: 10,
+                  background: `${RED}1A`,
+                  color: RED,
+                  borderRadius: 6,
+                  fontSize: 13,
+                }}
+              >
+                {error}
+              </div>
+            )}
+
+            <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                style={{
+                  padding: '8px 14px',
+                  background: 'transparent',
+                  color: MUTED,
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={busy}
+                style={{
+                  padding: '8px 16px',
+                  background: PURPLE,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  fontFamily: 'inherit',
+                  cursor: busy ? 'wait' : 'pointer',
+                  opacity: busy ? 0.5 : 1,
+                }}
+              >
+                {busy ? 'Adding…' : 'Add instructor'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {phase === 'invite' && (
+          <div>
+            <div style={{ padding: 10, background: CREAM, borderRadius: 6, fontSize: 13, marginBottom: 14 }}>
+              <strong>{displayName}</strong>
+              <span style={{ color: MUTED, marginLeft: 8 }}>{createdInstructor?.email}</span>
+            </div>
+
+            {inviteResult && (
+              <div
+                style={{
+                  marginBottom: 14,
+                  padding: 10,
+                  background: inviteResult.type === 'ok' ? `${OK}1A` : `${RED}1A`,
+                  color: inviteResult.type === 'ok' ? OK : RED,
+                  borderRadius: 6,
+                  fontSize: 13,
+                }}
+              >
+                {inviteResult.message}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                style={{
+                  padding: '8px 14px',
+                  background: 'transparent',
+                  color: MUTED,
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                  cursor: 'pointer',
+                }}
+              >
+                Not now
+              </button>
+              <button
+                type="button"
+                onClick={handleSendInvite}
+                disabled={busy || inviteResult?.type === 'ok'}
+                style={{
+                  padding: '8px 16px',
+                  background: PURPLE,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  fontFamily: 'inherit',
+                  cursor: busy ? 'wait' : 'pointer',
+                  opacity: busy || inviteResult?.type === 'ok' ? 0.5 : 1,
+                }}
+              >
+                {busy ? 'Sending…' : 'Send onboarding invite'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const inputStyle = {
+  width: '100%',
+  padding: '8px 12px',
+  border: `1px solid ${RULE}`,
+  borderRadius: 6,
+  fontSize: 13,
+  fontFamily: 'inherit',
+  background: '#fff',
+  color: INK,
+  boxSizing: 'border-box',
+};
+
+function Field({ label, required, children }) {
+  return (
+    <label style={{ display: 'block' }}>
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          color: MUTED,
+          textTransform: 'uppercase',
+          letterSpacing: 0.6,
+          display: 'block',
+          marginBottom: 4,
+        }}
+      >
+        {label}
+        {required && <span style={{ color: RED, marginLeft: 3 }}>*</span>}
+      </span>
+      {children}
+    </label>
   );
 }
