@@ -117,10 +117,18 @@ serve(async (req: Request) => {
       return json({ error: 'lookup_failed' }, 500);
     }
 
+    // Venue match: Drive filename uses marketing city ("Portland Summer
+    // Camp") but DB location_name is the specific venue building ("The
+    // Historic Overlook House"). CITY_ALIASES bridges that. If the
+    // filename keyword is in the alias map, accept candidates whose
+    // location_name contains ANY alias for that city. Otherwise fall
+    // back to direct substring match (works for cases where the city
+    // name IS in the venue name, like "Beaverton").
+    const venueKey = match.venueKeyword.toLowerCase().trim();
+    const aliases = CITY_ALIASES[venueKey] ?? [venueKey];
     const filtered = (candidates ?? []).filter((c) => {
-      // Venue keyword must appear somewhere in location_name (case-insensitive).
       const loc = (c.location_name ?? '').toLowerCase();
-      return loc.includes(match.venueKeyword.toLowerCase());
+      return aliases.some((a) => loc.includes(a));
     });
 
     let campSession: typeof filtered[number] | null = null;
@@ -381,6 +389,27 @@ interface ParsedFilename {
   venueKeyword: string;
   curriculumHint: string;
 }
+
+// Marketing city in Drive filename → list of substrings to look for in
+// camp_sessions.location_name. For cities where the city name IS the
+// venue keyword (Beaverton, Happy Valley, Hillsboro, Forest Grove,
+// West Linn), no aliasing needed — they'd fall through to a direct
+// substring match. Listed here only for clarity.
+//
+// J2S-specific. Future tenants would need their own alias map, OR we
+// move this to a per-org JSON column on organizations.
+const CITY_ALIASES: Record<string, string[]> = {
+  'portland': ['historic overlook', 'st. paul', 'st paul', 'community of faith', 'catlin gabel'],
+  'vancouver': ['firstenburg'],
+  'oregon city': ['first congregational'],
+  'camas': ['camas', 'lacamas'],
+  'beaverton': ['beaverton'],
+  'happy valley': ['happy valley'],
+  'hillsboro': ['hillsboro'],
+  'forest grove': ['forest grove'],
+  'west linn': ['west linn'],
+  'corbett': ['corbett'],
+};
 
 function parseFilename(name: string): ParsedFilename | null {
   // "M/D-M/D <session_type> - <venue> Summer Camp: <curriculum>"
