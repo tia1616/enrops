@@ -1576,7 +1576,7 @@ function AssignmentDetailView({ assignment, onBack }) {
         startsOn={s.starts_on}
         endsOn={s.ends_on}
       />
-      <RosterStub enrollment={s.current_enrollment} startsOn={s.starts_on} />
+      <RosterSection campSessionId={s.id} enrollment={s.current_enrollment} startsOn={s.starts_on} />
       <LessonsSection curriculumId={s.curriculum_id} curriculumName={s.curriculum_name} />
     </div>
   );
@@ -1808,39 +1808,205 @@ function humanizeConfirmError(code) {
   return "Couldn't save your check-in. Try again.";
 }
 
-function RosterStub({ enrollment, startsOn }) {
-  // Roster isn't in the DB yet — registrations live in Squarespace and are
-  // hand-loaded as aggregate counts on camp_sessions.current_enrollment.
-  // When FA26 makes Enrops the source of truth (per-registrant rows), this
-  // section gets the real list.
-  const count = typeof enrollment === "number" ? enrollment : null;
+// Real per-camper roster for the camp_session. RLS gates this — the
+// migration `instructors_read_camp_rosters` lets a confirmed instructor
+// read registrations + their linked students for camps they're teaching.
+//
+// Three render states:
+//   1. Loading.
+//   2. We have rows: list them with name, grade/age, allergies (red
+//      if non-empty), emergency contact, dietary, medical notes,
+//      photo-release flag.
+//   3. Nothing in registrations yet for this camp: fall back to the
+//      aggregate enrollment count + "your admin imports the roster
+//      before camp starts" copy.
+function RosterSection({ campSessionId, enrollment, startsOn }) {
+  const [rows, setRows] = useState(null); // null = loading
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!campSessionId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("registrations")
+          .select(`
+            id, status, payment_status, registered_at, notes,
+            authorized_pickup_contacts, photo_release_consent,
+            student:students (
+              id, first_name, last_name, grade, birthdate, pronouns,
+              allergies, dietary_restrictions, medical_notes, medical_conditions,
+              epipen_required, medications_at_program,
+              emergency_contact_name, emergency_contact_phone,
+              special_needs_accommodations
+            )
+          `)
+          .eq("camp_session_id", campSessionId)
+          .order("registered_at", { ascending: true });
+        if (cancelled) return;
+        if (error) {
+          console.error("[RosterSection] load failed", error);
+          setErr("Couldn't load the roster. Refresh to try again.");
+          setRows([]);
+          return;
+        }
+        setRows(data ?? []);
+      } catch (e) {
+        if (!cancelled) {
+          console.error("[RosterSection] load failed", e);
+          setErr("Couldn't load the roster.");
+          setRows([]);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [campSessionId]);
+
+  const aggregateCount = typeof enrollment === "number" ? enrollment : null;
   const startTxt = startsOn ? fmtShort(startsOn) : null;
 
   return (
     <Section title="Roster">
-      <div style={{
-        background: "#fff",
-        border: `1px solid ${RULE}`,
-        borderRadius: 8,
-        padding: "14px 16px",
-        color: INK,
-        fontSize: 14,
-        lineHeight: 1.5,
-      }}>
-        {count !== null ? (
-          <div>
-            <strong>{count}</strong> camper{count === 1 ? "" : "s"} registered so far.
+      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "14px 16px" }}>
+        {err && (
+          <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
+            {err}
           </div>
-        ) : (
-          <div>Enrollment count syncs from Squarespace before camp starts.</div>
         )}
-        <div style={{ color: MUTED, fontSize: 13, marginTop: 6 }}>
-          The full roster (names, ages, allergies, emergency contacts) lands here
-          {startTxt ? ` closer to ${startTxt}` : " closer to your start date"} — your admin will let you know when it's ready.
-        </div>
+
+        {rows === null && !err && (
+          <div style={{ color: MUTED, fontSize: 13 }}>Loading roster…</div>
+        )}
+
+        {rows !== null && rows.length === 0 && !err && (
+          <div style={{ color: INK, fontSize: 14, lineHeight: 1.5 }}>
+            {aggregateCount !== null ? (
+              <div>
+                <strong>{aggregateCount}</strong> camper{aggregateCount === 1 ? "" : "s"} registered so far.
+              </div>
+            ) : (
+              <div>Enrollment count syncs from your registration platform before camp starts.</div>
+            )}
+            <div style={{ color: MUTED, fontSize: 13, marginTop: 6 }}>
+              The full roster (names, ages, allergies, emergency contacts) lands here
+              {startTxt ? ` closer to ${startTxt}` : " closer to your start date"} — your admin will let you know when it's ready.
+            </div>
+          </div>
+        )}
+
+        {rows !== null && rows.length > 0 && (
+          <>
+            <div style={{ color: MUTED, fontSize: 12, marginBottom: 10 }}>
+              {rows.length} camper{rows.length === 1 ? "" : "s"} on the roster
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {rows.map((r) => (
+                <CamperRow key={r.id} registration={r} />
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </Section>
   );
+}
+
+function CamperRow({ registration }) {
+  const s = registration.student;
+  if (!s) return null;
+  const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed camper";
+  const age = ageFromDob(s.birthdate);
+  const hasAllergies = (s.allergies ?? "").trim().length > 0;
+  const hasMedical = ((s.medical_notes ?? "") + (s.medical_conditions ?? "")).trim().length > 0 || s.epipen_required;
+
+  return (
+    <div
+      style={{
+        background: CREAM,
+        border: `1px solid ${RULE}`,
+        borderLeft: hasAllergies || hasMedical ? `3px solid ${CORAL}` : `1px solid ${RULE}`,
+        borderRadius: 6,
+        padding: "10px 12px",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>
+            {displayName}
+            {s.pronouns && (
+              <span style={{ color: MUTED, fontSize: 11, marginLeft: 6, fontWeight: 500 }}>
+                ({s.pronouns})
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+            {age !== null && <>age {age}</>}
+            {s.grade != null && <>{age !== null ? " · " : ""}grade {s.grade}</>}
+          </div>
+        </div>
+      </div>
+
+      {hasAllergies && (
+        <div style={{ marginTop: 8, padding: "6px 10px", background: `${CORAL}1F`, border: `1px solid ${CORAL}55`, borderRadius: 4, fontSize: 12, color: INK }}>
+          <strong style={{ color: CORAL }}>Allergies:</strong> {s.allergies}
+        </div>
+      )}
+
+      {(s.medical_conditions || s.medical_notes || s.epipen_required) && (
+        <div style={{ marginTop: 6, padding: "6px 10px", background: `${CORAL}10`, border: `1px solid ${CORAL}33`, borderRadius: 4, fontSize: 12, color: INK }}>
+          <strong>Medical:</strong>{" "}
+          {s.epipen_required && <span style={{ color: CORAL, fontWeight: 700 }}>EpiPen required. </span>}
+          {[s.medical_conditions, s.medical_notes, s.medications_at_program ? `Meds: ${s.medications_at_program}` : null]
+            .filter(Boolean)
+            .join(" · ")}
+        </div>
+      )}
+
+      {s.dietary_restrictions && (
+        <div style={{ marginTop: 6, fontSize: 12, color: INK }}>
+          <strong>Dietary:</strong> {s.dietary_restrictions}
+        </div>
+      )}
+
+      {s.special_needs_accommodations && (
+        <div style={{ marginTop: 6, fontSize: 12, color: INK }}>
+          <strong>Accommodations:</strong> {s.special_needs_accommodations}
+        </div>
+      )}
+
+      {(s.emergency_contact_name || s.emergency_contact_phone) && (
+        <div style={{ marginTop: 6, fontSize: 12, color: MUTED }}>
+          <strong style={{ color: INK }}>Emergency contact:</strong>{" "}
+          {s.emergency_contact_name}
+          {s.emergency_contact_phone && ` · ${s.emergency_contact_phone}`}
+        </div>
+      )}
+
+      {registration.authorized_pickup_contacts && (
+        <div style={{ marginTop: 6, fontSize: 12, color: MUTED }}>
+          <strong style={{ color: INK }}>Authorized pickup:</strong> {registration.authorized_pickup_contacts}
+        </div>
+      )}
+
+      {registration.notes && (
+        <div style={{ marginTop: 6, fontSize: 12, color: MUTED, fontStyle: "italic" }}>
+          Note: {registration.notes}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ageFromDob(dob) {
+  if (!dob) return null;
+  const d = new Date(`${dob}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age -= 1;
+  return age;
 }
 
 function LessonsSection({ curriculumId, curriculumName }) {
