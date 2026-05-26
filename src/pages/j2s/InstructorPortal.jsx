@@ -1392,32 +1392,130 @@ function LegalDocRow({ docKey, label, isOpen, onToggle }) {
 
 function StripeTaxFormsRow() {
   // W-9 + 1099 live in Stripe Express. We can't render them inline — Stripe
-  // requires authentication on their domain. Link out to their dashboard.
+  // requires authentication on their domain. The signed-in deep link
+  // hands them straight into their own dashboard without a re-login.
   return (
-    <a
-      href="https://dashboard.stripe.com/express"
-      target="_blank"
-      rel="noopener noreferrer"
-      style={{
-        background: "#fff",
-        border: `1px solid ${RULE}`,
-        borderRadius: 8,
-        padding: "14px 16px",
-        textDecoration: "none",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        color: INK,
-      }}
-    >
+    <StripeExpressDeepLink
+      variant="row"
+      title="W-9 and 1099 tax forms"
+      subtitle="Stored by Stripe — opens your Stripe Express dashboard."
+    />
+  );
+}
+
+// Renders a button (or full-width row) that, on click, fetches a fresh
+// signed Stripe Express login link from create-stripe-express-login-link
+// and opens it in a new tab. Two visual variants:
+//   variant="row"     — full-width card matching the legal-doc rows
+//                       (used in DocumentsView).
+//   variant="button"  — compact pill (used in PayView footer).
+//
+// Disables itself + surfaces a "complete Stripe onboarding first" hint
+// when the instructor doesn't have a stripe_connect_account_id yet.
+function StripeExpressDeepLink({ variant = "button", title, subtitle }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function open() {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "create-stripe-express-login-link",
+        { body: {} },
+      );
+      if (error || data?.error) {
+        if (data?.error === "no_stripe_account") {
+          setErr("Finish your Stripe onboarding first — it's in your onboarding wizard.");
+        } else {
+          setErr(data?.stripe_message || data?.error || error?.message || "Couldn't open your Stripe dashboard.");
+        }
+        return;
+      }
+      if (!data?.url) {
+        setErr("Couldn't open your Stripe dashboard.");
+        return;
+      }
+      // Open in a new tab. The link is short-lived (~5 minutes) so the
+      // user should click → open → use immediately. We don't cache.
+      window.open(data.url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      console.error("[StripeExpressDeepLink] failed", e);
+      setErr("Couldn't open your Stripe dashboard. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (variant === "row") {
+    return (
       <div>
-        <div style={{ fontSize: 15, fontWeight: 600 }}>W-9 and 1099 tax forms</div>
-        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-          Stored by Stripe — opens your Stripe Express dashboard.
-        </div>
+        <button
+          type="button"
+          onClick={open}
+          disabled={busy}
+          style={{
+            background: "#fff",
+            border: `1px solid ${RULE}`,
+            borderRadius: 8,
+            padding: "14px 16px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            width: "100%",
+            cursor: busy ? "wait" : "pointer",
+            fontFamily: "inherit",
+            textAlign: "left",
+            color: INK,
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>{title}</div>
+            {subtitle && (
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{subtitle}</div>
+            )}
+          </div>
+          <span style={{ color: PURPLE, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
+            {busy ? "Opening…" : "Open Stripe →"}
+          </span>
+        </button>
+        {err && (
+          <div style={{ marginTop: 6, padding: "8px 12px", background: `${CORAL}1F`, color: CORAL, borderRadius: 6, fontSize: 12 }}>
+            {err}
+          </div>
+        )}
       </div>
-      <span style={{ color: PURPLE, fontSize: 13, fontWeight: 600 }}>Open Stripe →</span>
-    </a>
+    );
+  }
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={open}
+        disabled={busy}
+        style={{
+          padding: "10px 16px",
+          background: "#fff",
+          border: `1px solid ${PURPLE}`,
+          color: PURPLE,
+          borderRadius: 6,
+          fontSize: 13,
+          fontWeight: 600,
+          fontFamily: "inherit",
+          cursor: busy ? "wait" : "pointer",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {busy ? "Opening…" : (title ?? "Open Stripe payouts dashboard →")}
+      </button>
+      {err && (
+        <div style={{ marginTop: 6, padding: "8px 12px", background: `${CORAL}1F`, color: CORAL, borderRadius: 6, fontSize: 12 }}>
+          {err}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2041,6 +2139,18 @@ function PayView({ instructorId, onBack }) {
             ))}
           </div>
         </>
+      )}
+
+      {data !== null && (
+        <div style={{ marginTop: 22, padding: "16px 18px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10 }}>
+          <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginBottom: 4 }}>
+            Manage payouts, bank info, and tax docs
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 1.5 }}>
+            Your Stripe Express dashboard is where actual payouts land and where your W-9 and 1099 live. We&rsquo;ll sign you in automatically.
+          </div>
+          <StripeExpressDeepLink variant="button" title="Open Stripe payouts dashboard →" />
+        </div>
       )}
     </div>
   );
