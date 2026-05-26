@@ -73,6 +73,7 @@ export default function InstructorsTab({ org }) {
   const [bgUploadOpen, setBgUploadOpen] = useState(false);
   const [bgUploadInstructorId, setBgUploadInstructorId] = useState(null); // pre-selected when opened from a row
   const [addOpen, setAddOpen] = useState(false);
+  const [removeRow, setRemoveRow] = useState(null);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -301,6 +302,7 @@ export default function InstructorsTab({ org }) {
             inviteBusy={inviteBusyId === r.id}
             inviteResult={inviteResult[r.id]}
             onUploadBg={() => { setBgUploadInstructorId(r.id); setBgUploadOpen(true); }}
+            onRemove={() => setRemoveRow(r)}
           />
         ))}
       </div>
@@ -334,11 +336,27 @@ export default function InstructorsTab({ org }) {
           }}
         />
       )}
+
+      {removeRow && (
+        <RemoveInstructorModal
+          row={removeRow}
+          onClose={() => setRemoveRow(null)}
+          onRemoved={(id, mode) => {
+            if (mode === 'hard') {
+              setRows((rs) => (rs ?? []).filter((r) => r.id !== id));
+            } else {
+              // soft: flip is_active to false on the row so the UI dims it.
+              // The 'Show inactive' toggle controls visibility.
+              setRows((rs) => (rs ?? []).map((r) => (r.id === id ? { ...r, is_active: false } : r)));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg }) {
+function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg, onRemove }) {
   const displayName =
     row.preferred_name?.trim() ||
     `${row.first_name ?? ''} ${row.last_name ?? ''}`.trim() ||
@@ -485,12 +503,12 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
         </div>
       )}
 
-      {expanded && <InstructorDetail row={row} age={age} onUploadBg={onUploadBg} />}
+      {expanded && <InstructorDetail row={row} age={age} onUploadBg={onUploadBg} onRemove={onRemove} />}
     </div>
   );
 }
 
-function InstructorDetail({ row, age, onUploadBg }) {
+function InstructorDetail({ row, age, onUploadBg, onRemove }) {
   const sitePrefs = row.site_preferences?.districts ?? [];
   const dayDefaults = row.availability?.day_defaults ?? {};
   const activeDays = DAY_INITIALS.filter(([k]) => dayDefaults[k]).map(([, label]) => label);
@@ -621,6 +639,28 @@ function InstructorDetail({ row, age, onUploadBg }) {
               <strong>{c.contact_name}</strong> ({c.relationship}) · {c.phone}
             </div>
           ))}
+        </div>
+      )}
+
+      {row.is_active && onRemove && (
+        <div style={{ gridColumn: '1 / -1', borderTop: `1px solid ${RULE}`, paddingTop: 10, marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={onRemove}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: RED,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              padding: 0,
+              textDecoration: 'underline',
+            }}
+          >
+            Remove this instructor →
+          </button>
         </div>
       )}
     </div>
@@ -1344,5 +1384,275 @@ function Field({ label, required, children }) {
       </span>
       {children}
     </label>
+  );
+}
+
+// Modal for removing an instructor. Decides automatically between two
+// modes:
+//   • soft (deactivate): is_active = false. Used whenever the instructor
+//     has any real history with the org — signed legal docs, confirmed
+//     camp assignments, or session deliveries. Preserves pay + compliance
+//     trail. Reversible via the existing "Show inactive" toggle.
+//   • hard (delete): full cascade delete of the row + light cleanup
+//     tables (emergency_contacts, availability, prefs, onboarding_status).
+//     Only available when ALL of the following are zero:
+//       - contractor_acknowledgments
+//       - contractor_agreements
+//       - contractor_ors_certification
+//       - camp_assignments
+//       - session_delivery_confirmations
+//     AND overall_status is null / 'not_invited' / 'invited' / 'in_progress'.
+//     Auth user (auth.users) is NOT touched — they may be linked to a
+//     parent record etc. The cascade is best-effort on the cleanup tables
+//     (no-ops if rows don't exist) and required on the instructors row.
+function RemoveInstructorModal({ row, onClose, onRemoved }) {
+  const [counts, setCounts] = useState(null); // null = loading
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const tables = [
+          'camp_assignments',
+          'contractor_agreements',
+          'contractor_acknowledgments',
+          'contractor_ors_certification',
+          'session_delivery_confirmations',
+        ];
+        const results = await Promise.all(
+          tables.map((t) =>
+            supabase.from(t).select('*', { count: 'exact', head: true }).eq('instructor_id', row.id)
+          )
+        );
+        if (cancelled) return;
+        const c = {};
+        tables.forEach((t, i) => { c[t] = results[i].count ?? 0; });
+        setCounts(c);
+      } catch (err) {
+        if (!cancelled) setError('Could not check this instructor’s history. Try again.');
+        console.error('[RemoveInstructorModal] count load failed', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [row.id]);
+
+  const onboardingProgress = row.status?.overall_status ?? null;
+  const onboardingIsTerminalOrComplete =
+    onboardingProgress &&
+    !['not_invited', 'invited', 'in_progress'].includes(onboardingProgress);
+
+  const hasAnyHistory =
+    counts &&
+    (
+      counts.camp_assignments > 0 ||
+      counts.contractor_agreements > 0 ||
+      counts.contractor_acknowledgments > 0 ||
+      counts.contractor_ors_certification > 0 ||
+      counts.session_delivery_confirmations > 0 ||
+      onboardingIsTerminalOrComplete
+    );
+
+  const mode = counts ? (hasAnyHistory ? 'soft' : 'hard') : null;
+
+  async function handleConfirm() {
+    if (busy || !mode) return;
+    setBusy(true);
+    setError('');
+    try {
+      if (mode === 'soft') {
+        const { error: updErr } = await supabase
+          .from('instructors')
+          .update({ is_active: false })
+          .eq('id', row.id);
+        if (updErr) throw updErr;
+        if (onRemoved) onRemoved(row.id, 'soft');
+        onClose && onClose();
+      } else {
+        // Hard delete cascade. Order: light tables first (FK to
+        // instructors), then the instructors row itself. Each delete is
+        // best-effort — if the row doesn't exist for a given table, the
+        // .eq() filter just no-ops with 0 rows affected.
+        const cascadeTables = [
+          'contractor_emergency_contacts',
+          'contractor_onboarding_status',
+          'instructor_availability',
+          'instructor_location_preferences',
+          'instructor_curriculum_preferences',
+        ];
+        for (const t of cascadeTables) {
+          const { error: delErr } = await supabase.from(t).delete().eq('instructor_id', row.id);
+          if (delErr) {
+            console.warn(`[RemoveInstructorModal] cascade delete ${t} failed (non-fatal)`, delErr);
+          }
+        }
+        const { error: rowErr } = await supabase.from('instructors').delete().eq('id', row.id);
+        if (rowErr) throw rowErr;
+        if (onRemoved) onRemoved(row.id, 'hard');
+        onClose && onClose();
+      }
+    } catch (err) {
+      console.error('[RemoveInstructorModal] remove failed', err);
+      if (/permission denied|policy/i.test(err.message ?? '')) {
+        setError('You do not have permission to remove instructors.');
+      } else {
+        setError(err.message || 'Something went wrong.');
+      }
+      setBusy(false);
+    }
+  }
+
+  const displayName = `${row.first_name ?? ''} ${row.last_name ?? ''}`.trim() || row.email;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.45)',
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        padding: '40px 16px',
+        zIndex: 100,
+        overflowY: 'auto',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#fff',
+          width: '100%',
+          maxWidth: 480,
+          border: `1px solid ${RULE}`,
+          borderRadius: 10,
+          padding: 22,
+          boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: INK, margin: 0 }}>
+            Remove {displayName}?
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ background: 'transparent', border: 'none', color: MUTED, fontSize: 18, cursor: 'pointer', padding: 0, lineHeight: 1 }}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        {counts === null && !error && (
+          <div style={{ color: MUTED, fontSize: 13 }}>Checking their history…</div>
+        )}
+
+        {error && (
+          <div
+            style={{
+              padding: 10,
+              background: `${RED}1A`,
+              color: RED,
+              borderRadius: 6,
+              fontSize: 13,
+              marginBottom: 14,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {counts && mode === 'soft' && (
+          <>
+            <p style={{ fontSize: 13, color: INK, lineHeight: 1.5, marginTop: 0 }}>
+              They&rsquo;ll be hidden from your active list. Their record stays so your pay and compliance trail is intact. You can reactivate them anytime from the <strong>Show inactive</strong> view.
+            </p>
+            <div style={{ background: CREAM, padding: 12, borderRadius: 6, fontSize: 12, color: INK, marginTop: 10 }}>
+              <div style={{ fontWeight: 700, color: MUTED, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+                What we&rsquo;re preserving
+              </div>
+              <HistoryLine n={counts.camp_assignments} label="camp assignment" />
+              <HistoryLine n={counts.session_delivery_confirmations} label="session taught" />
+              <HistoryLine n={counts.contractor_agreements} label="signed agreement" />
+              <HistoryLine n={counts.contractor_acknowledgments} label="acknowledgment" />
+              <HistoryLine n={counts.contractor_ors_certification} label="ORS certification" />
+              {onboardingIsTerminalOrComplete && (
+                <div style={{ marginBottom: 3 }}>
+                  Onboarding status: <strong>{onboardingProgress.replace(/_/g, ' ')}</strong>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {counts && mode === 'hard' && (
+          <>
+            <p style={{ fontSize: 13, color: INK, lineHeight: 1.5, marginTop: 0 }}>
+              <strong>{displayName}</strong> has no history with you — no assignments, no signed docs, no completed onboarding.
+            </p>
+            <p style={{ fontSize: 13, color: RED, lineHeight: 1.5, marginTop: 8 }}>
+              Their record will be deleted completely. <strong>This can&rsquo;t be undone.</strong>
+            </p>
+          </>
+        )}
+
+        <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            style={{
+              padding: '8px 14px',
+              background: 'transparent',
+              color: MUTED,
+              border: `1px solid ${RULE}`,
+              borderRadius: 6,
+              fontSize: 13,
+              fontFamily: 'inherit',
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirm}
+            disabled={busy || !mode}
+            style={{
+              padding: '8px 16px',
+              background: mode === 'hard' ? RED : PURPLE,
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              fontSize: 13,
+              fontWeight: 600,
+              fontFamily: 'inherit',
+              cursor: busy ? 'wait' : 'pointer',
+              opacity: busy || !mode ? 0.5 : 1,
+            }}
+          >
+            {busy
+              ? 'Removing…'
+              : mode === 'hard'
+              ? 'Delete permanently'
+              : mode === 'soft'
+              ? 'Deactivate'
+              : 'Checking…'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryLine({ n, label }) {
+  if (!n) return null;
+  return (
+    <div style={{ marginBottom: 3 }}>
+      {n} {label}{n === 1 ? '' : 's'}
+    </div>
   );
 }
