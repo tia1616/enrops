@@ -60,7 +60,7 @@ export default function J2SHome() {
 
     const { data: sc } = await supabase
       .from('program_locations')
-      .select('id, name, district, address, arrival_instructions, dismissal_time, organization_id')
+      .select('id, name, district, address, organization_id')
       .eq('organization_id', org.id)
       .order('name');
 
