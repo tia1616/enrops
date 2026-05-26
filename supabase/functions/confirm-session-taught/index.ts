@@ -2,9 +2,9 @@
 //
 // Instructor Portal: closes the schedule loop by letting an instructor
 // mark a specific day of camp as "I taught this." Writes a row into
-// session_delivery_confirmations with confirmed_by='self'. Pay amount
-// is set later by the admin via whatever pay model their org uses; we
-// just set pay_status='pending' here.
+// session_delivery_confirmations with confirmed_by='self', pay_status
+// 'pending', and pay_amount_cents computed from the org's pay-rate
+// config (or null when the tenant hasn't configured rates yet).
 //
 // Body: { camp_assignment_id: string, session_date: 'YYYY-MM-DD' }
 //
@@ -13,6 +13,13 @@
 // no unique index on the table yet, so we check existence first inside
 // a single function call. If two clients race the check, we may briefly
 // produce two rows — acceptable for an MVP; the admin can clean up.
+//
+// Weekly completion bonus: when this insert covers the LAST weekday in
+// the camp's range AND every other weekday is also confirmed for the
+// same instructor, the org's pay_camp_weekly_bonus_cents is written into
+// pay_adjustment_cents on this row with reason "Week completion bonus."
+// Per-tenant config keeps the rule generic — no J2S-specific values
+// hardcoded.
 //
 // Anti-enumeration: missing row + wrong instructor both return identical
 // 403 with no detail.
@@ -108,7 +115,7 @@ serve(async (req: Request) => {
     // Idempotency: do we already have a confirmation for this trio?
     const { data: existing, error: existsErr } = await supabase
       .from('session_delivery_confirmations')
-      .select('id, confirmed_by, confirmed_at, pay_status, pay_amount_cents')
+      .select('id, confirmed_by, confirmed_at, pay_status, pay_amount_cents, pay_adjustment_cents')
       .eq('instructor_id', me.id)
       .eq('camp_session_id', session.id)
       .eq('session_date', sessionDate)
@@ -124,6 +131,17 @@ serve(async (req: Request) => {
       });
     }
 
+    // Pay computation. Reads the org's configured rates; if any are
+    // missing we leave pay_amount_cents null and let the admin set it
+    // manually. This keeps un-configured tenants safe.
+    const { data: orgRow } = await supabase
+      .from('organizations')
+      .select('pay_hourly_cents, pay_camp_morning_hours, pay_camp_full_day_hours, pay_camp_weekly_bonus_cents')
+      .eq('id', assignment.organization_id)
+      .maybeSingle();
+
+    const payAmountCents = computePayAmount(orgRow, session.session_type);
+
     // Insert the new confirmation. session_type mirrors the camp_session's
     // (full_day / morning / afternoon).
     const { data: inserted, error: insErr } = await supabase
@@ -137,17 +155,99 @@ serve(async (req: Request) => {
         confirmed_by: 'self',
         confirmed_at: new Date().toISOString(),
         pay_status: 'pending',
+        pay_amount_cents: payAmountCents,
       })
-      .select('id, confirmed_by, confirmed_at, pay_status, pay_amount_cents')
+      .select('id, confirmed_by, confirmed_at, pay_status, pay_amount_cents, pay_adjustment_cents')
       .single();
     if (insErr) {
       console.error('confirmation insert failed:', insErr);
       return json({ error: 'insert_failed', detail: insErr.message }, 500);
     }
 
-    return json({ confirmation: inserted, already_confirmed: false });
+    // Weekly completion bonus. If this insert covers the FINAL weekday of
+    // the camp AND every other weekday in the range is also confirmed for
+    // this instructor, write the bonus as pay_adjustment_cents on this
+    // row. Reason becomes the audit trail.
+    let bonusApplied = false;
+    if (orgRow?.pay_camp_weekly_bonus_cents && orgRow.pay_camp_weekly_bonus_cents > 0) {
+      const weekdays = weekdayDatesInRange(session.starts_on, session.ends_on);
+      const lastWeekday = weekdays[weekdays.length - 1];
+      if (lastWeekday && sessionDate === lastWeekday) {
+        // Pull all confirmations for this (instructor, camp_session) so we
+        // can check completeness. The just-inserted row is included.
+        const { data: allConfirms } = await supabase
+          .from('session_delivery_confirmations')
+          .select('session_date')
+          .eq('instructor_id', me.id)
+          .eq('camp_session_id', session.id);
+        const confirmedDates = new Set((allConfirms ?? []).map((r) => r.session_date));
+        const allCovered = weekdays.every((d) => confirmedDates.has(d));
+        if (allCovered) {
+          const { error: bonusErr } = await supabase
+            .from('session_delivery_confirmations')
+            .update({
+              pay_adjustment_cents: orgRow.pay_camp_weekly_bonus_cents,
+              pay_adjustment_reason: 'Week completion bonus',
+            })
+            .eq('id', inserted.id);
+          if (bonusErr) {
+            console.warn('weekly bonus apply failed (non-fatal):', bonusErr);
+          } else {
+            bonusApplied = true;
+          }
+        }
+      }
+    }
+
+    return json({
+      confirmation: bonusApplied
+        ? {
+            ...inserted,
+            pay_adjustment_cents: orgRow.pay_camp_weekly_bonus_cents,
+          }
+        : inserted,
+      already_confirmed: false,
+      bonus_applied: bonusApplied,
+    });
   } catch (err) {
     console.error('confirm-session-taught fatal:', err);
     return json({ error: 'internal_error' }, 500);
   }
 });
+
+// Compute pay_amount_cents from the org's configured rates. Returns null
+// if the org hasn't set their rate (so admin fills it in manually).
+function computePayAmount(
+  org:
+    | {
+        pay_hourly_cents: number | null;
+        pay_camp_morning_hours: number | null;
+        pay_camp_full_day_hours: number | null;
+      }
+    | null,
+  sessionType: string,
+): number | null {
+  if (!org || !org.pay_hourly_cents) return null;
+  let hours: number | null = null;
+  if (sessionType === 'morning' || sessionType === 'afternoon') {
+    hours = org.pay_camp_morning_hours ?? null;
+  } else if (sessionType === 'full_day') {
+    hours = org.pay_camp_full_day_hours ?? null;
+  }
+  if (hours === null) return null;
+  return Math.round(org.pay_hourly_cents * Number(hours));
+}
+
+// Generate Mon-Fri date strings between start and end (inclusive), each
+// YYYY-MM-DD. Matches the frontend weekdayRange in InstructorPortal.jsx.
+function weekdayDatesInRange(start: string, end: string): string[] {
+  const out: string[] = [];
+  const s = new Date(`${start}T00:00:00Z`);
+  const e = new Date(`${end}T00:00:00Z`);
+  for (let d = new Date(s); d <= e; d.setUTCDate(d.getUTCDate() + 1)) {
+    const day = d.getUTCDay();
+    if (day === 0 || day === 6) continue;
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}

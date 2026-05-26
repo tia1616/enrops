@@ -22,6 +22,7 @@ import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
 import LocationsList from './pages/admin/LocationsList.jsx';
 import AdminContacts from './pages/admin/contacts/AdminContacts.jsx';
 import InstructorsPage from './pages/admin/instructors/InstructorsPage.jsx';
+import Payroll from './pages/admin/Payroll.jsx';
 import TeamPage from './pages/admin/team/TeamPage.jsx';
 import InstructorPortal from './pages/j2s/InstructorPortal.jsx';
 import ErrorPage from './pages/error/ErrorPage.jsx';
@@ -95,6 +96,7 @@ export default function App() {
         <Route path="locations" element={<LocationsList />} />
         <Route path="contacts" element={<AdminContacts />} />
         <Route path="instructors" element={<InstructorsPage />} />
+        <Route path="payroll" element={<Payroll />} />
         <Route path="team" element={<TeamPage />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />
       </Route>
