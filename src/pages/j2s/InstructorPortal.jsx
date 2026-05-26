@@ -248,7 +248,7 @@ export default function InstructorPortal() {
     // assignments (matters once FA26 lands; SU26-only today).
     const { data, error: aErr } = await supabase
       .from("camp_assignments")
-      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, week_num, session_type, curriculum_id, curriculum_name, starts_on, ends_on, start_time, end_time, class_days, current_enrollment, ages_min, ages_max, cycle_id, scheduling_cycles:cycle_id(status)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, location_id, week_num, session_type, curriculum_id, curriculum_name, starts_on, ends_on, start_time, end_time, class_days, current_enrollment, ages_min, ages_max, cycle_id, scheduling_cycles:cycle_id(status), program_locations:location_id(id, name, address, contact_phone, room_number, arrival_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
       .eq("instructor_id", instructorId)
       .not("published_at", "is", null)
       .in("status", ["published", "change_requested", "confirmed"])
@@ -1570,6 +1570,7 @@ function AssignmentDetailView({ assignment, onBack }) {
         ) : null}
       </div>
 
+      <LocationSection location={s.program_locations} fallbackName={s.location_name} />
       <DailyCheckInSection
         assignmentId={assignment.id}
         campSessionId={s.id}
@@ -1579,6 +1580,109 @@ function AssignmentDetailView({ assignment, onBack }) {
       <RosterSection campSessionId={s.id} enrollment={s.current_enrollment} startsOn={s.starts_on} />
       <LessonsSection curriculumId={s.curriculum_id} curriculumName={s.curriculum_name} />
     </div>
+  );
+}
+
+// Location details: address (Google Maps link), main phone (tel: link),
+// room number, and combined arrival/dismissal instructions. Graceful
+// fallback when address/phone/arrival are still null (TBD camp partners
+// or sites where the partner hasn't sent procedures yet).
+function LocationSection({ location, fallbackName }) {
+  const name = location?.name || fallbackName;
+  const address = location?.address || null;
+  const phone = location?.contact_phone || null;
+  const room = location?.room_number || null;
+  const arrival = location?.arrival_instructions || null;
+  const hasAnyDetails = address || phone || room || arrival;
+
+  const mapsHref = address
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`
+    : null;
+  const telHref = phone ? `tel:${phone.replace(/[^0-9+]/g, "")}` : null;
+
+  return (
+    <section style={{
+      background: "#fff",
+      border: `1px solid ${RULE}`,
+      borderRadius: 8,
+      padding: "14px 16px",
+      marginBottom: 14,
+    }}>
+      <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>
+        Location
+      </div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
+        {name}
+      </div>
+      {room && (
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+          {room}
+        </div>
+      )}
+
+      {address && (
+        <div style={{ marginTop: 10 }}>
+          <a
+            href={mapsHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: PURPLE, fontSize: 14, textDecoration: "underline" }}
+          >
+            {address}
+          </a>
+          <div style={{ marginTop: 6 }}>
+            <a
+              href={mapsHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "inline-block",
+                padding: "6px 12px",
+                background: PURPLE,
+                color: "#fff",
+                borderRadius: 6,
+                fontSize: 13,
+                fontWeight: 600,
+                textDecoration: "none",
+              }}
+            >
+              Open in Maps →
+            </a>
+          </div>
+        </div>
+      )}
+
+      {phone && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 11, color: MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            Main phone
+          </div>
+          <a href={telHref} style={{ color: PURPLE, fontSize: 16, fontWeight: 600, textDecoration: "underline" }}>
+            {phone}
+          </a>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+            Front desk / building main line. Use for anything urgent on-site.
+          </div>
+        </div>
+      )}
+
+      {arrival && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 11, color: MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            Arrival &amp; dismissal
+          </div>
+          <div style={{ fontSize: 14, color: INK, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+            {arrival}
+          </div>
+        </div>
+      )}
+
+      {!hasAnyDetails && (
+        <div style={{ marginTop: 10, fontSize: 13, color: MUTED, fontStyle: "italic" }}>
+          Details coming soon — Jessica is still finalizing this site's info. Email her if you need anything before then.
+        </div>
+      )}
+    </section>
   );
 }
 
