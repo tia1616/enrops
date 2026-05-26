@@ -2133,6 +2133,20 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
               View email activity →
             </button>
           )}
+          <a
+            href={`/admin/schedule/print?cycle=${cycle.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open a printable schedule (browser Save as PDF works) — for emailing to your materials coordinator"
+            style={{
+              color: PURPLE,
+              fontSize: 13,
+              fontWeight: 500,
+              textDecoration: "underline",
+            }}
+          >
+            Print schedule →
+          </a>
         </div>
       </div>
       <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>

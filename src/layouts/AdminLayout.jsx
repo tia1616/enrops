@@ -229,9 +229,9 @@ export default function AdminLayout() {
 
   return (
     <div style={{ minHeight: "100vh", background: CREAM, fontFamily: "'Poppins', system-ui, sans-serif", color: INK }}>
-      <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
+      <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
         {/* Sidebar */}
-        <aside style={{
+        <aside data-admin-sidebar style={{
           background: "#fff",
           borderRight: `1px solid ${RULE}`,
           padding: "20px 0",
@@ -456,7 +456,7 @@ export default function AdminLayout() {
         </aside>
 
         {/* Main */}
-        <main style={{ padding: "28px 36px", maxWidth: 1200 }}>
+        <main data-admin-main style={{ padding: "28px 36px", maxWidth: 1200 }}>
           <Outlet context={{ user, org, orgMember }} />
         </main>
       </div>

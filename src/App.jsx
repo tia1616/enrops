@@ -13,6 +13,7 @@ import AdminLogin from './pages/admin/AdminLogin.jsx';
 import AdminOverview from './pages/admin/AdminOverview.jsx';
 import AICampaignBuilder from './pages/admin/marketing-v2/AICampaignBuilder.jsx';
 import Schedule from './pages/admin/Schedule.jsx';
+import SchedulePrint from './pages/admin/SchedulePrint.jsx';
 import ExtractionTest from './pages/admin/dev/ExtractionTest.jsx';
 import CurriculaList from './pages/admin/curricula/CurriculaList.jsx';
 import CurriculumNew from './pages/admin/curricula/CurriculumNew.jsx';
@@ -88,6 +89,7 @@ export default function App() {
         <Route index element={<AdminOverview />} />
         <Route path="marketing-v2" element={<AICampaignBuilder />} />
         <Route path="schedule" element={<Schedule />} />
+        <Route path="schedule/print" element={<SchedulePrint />} />
         <Route path="curricula" element={<CurriculaList />} />
         <Route path="curricula/new" element={<CurriculumNew />} />
         <Route path="curricula/:id/extracting" element={<CurriculumExtracting />} />
