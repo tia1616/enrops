@@ -36,6 +36,7 @@ const NAV = [
   { to: "/admin/instructors", label: "Instructors" },
   { to: "/admin/contacts", label: "Contacts" },
   { to: "/admin/schedule", label: "Schedule" },
+  { to: "/admin/rosters", label: "Rosters" },
   { to: "/admin/payroll", label: "Payroll" },
   { to: "/admin/community", label: "Community", soon: true },
   { to: "/admin/settings", label: "Settings", soon: true },
