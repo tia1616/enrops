@@ -2119,7 +2119,7 @@ const DOC_TYPE_LABEL = {
 };
 
 function DocLinkRow({ doc }) {
-  const name = doc.original_filename || (doc.source_type === "drive_link" ? "Open in Drive" : "Download");
+  const name = doc.original_filename || (doc.source_type === "drive_link" ? "Open in Drive" : "Open");
   const href = doc.download_url;
   if (!href) {
     return (
@@ -2150,7 +2150,7 @@ function DocLinkRow({ doc }) {
         {name}
       </span>
       <span style={{ color: PURPLE, fontWeight: 600, flexShrink: 0 }}>
-        {doc.source_type === "drive_link" ? "Open →" : "Download →"}
+        Open →
       </span>
     </a>
   );

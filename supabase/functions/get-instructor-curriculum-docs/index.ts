@@ -97,17 +97,15 @@ serve(async (req: Request) => {
     const enriched = await Promise.all(
       (docs ?? []).map(async (d) => {
         if (d.source_type === 'upload' && d.storage_path) {
-          // Pass the original filename via the `download` option so the
-          // browser saves the file with a human-readable name instead of
-          // the storage path ({orgId}/{curriculumId}/{docId}-{safeName}).
-          // Supabase translates this into a Content-Disposition header on
-          // the signed URL response.
-          const downloadName = d.original_filename || `${d.doc_type || 'document'}.pdf`;
+          // Omit the `download` option so Supabase returns the file with
+          // Content-Disposition: inline (browser-default). PDFs render
+          // in the browser's built-in viewer; non-renderable formats
+          // (Word, Excel, etc.) still trigger a download because the
+          // browser doesn't know how to display them. Either way, the
+          // viewer's download button remains available to the user.
           const { data: signed, error: signErr } = await supabase.storage
             .from('curriculum-documents')
-            .createSignedUrl(d.storage_path, SIGNED_URL_TTL_SECONDS, {
-              download: downloadName,
-            });
+            .createSignedUrl(d.storage_path, SIGNED_URL_TTL_SECONDS);
           if (signErr || !signed?.signedUrl) {
             console.warn('createSignedUrl failed for', d.id, signErr);
             return { ...d, download_url: null };
