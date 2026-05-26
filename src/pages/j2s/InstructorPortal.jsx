@@ -2,7 +2,7 @@
 // Minimal instructor portal: magic-link sign-in, list of published assignments,
 // Accept or Request Change per camp. Class detail + My Availability are v2.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { displayFirstName } from "../../lib/instructorName";
@@ -1443,10 +1443,242 @@ function AssignmentDetailView({ assignment, onBack }) {
         ) : null}
       </div>
 
+      <DailyCheckInSection
+        assignmentId={assignment.id}
+        campSessionId={s.id}
+        startsOn={s.starts_on}
+        endsOn={s.ends_on}
+      />
       <RosterStub enrollment={s.current_enrollment} startsOn={s.starts_on} />
       <LessonsSection curriculumId={s.curriculum_id} curriculumName={s.curriculum_name} />
     </div>
   );
+}
+
+// Daily check-in: one row per weekday between camp starts_on and ends_on.
+// Past or today: "Mark taught" button that calls the edge function. Already
+// marked: checkmark + when. Future: dimmed and inert.
+//
+// Assumes weekday-only camps (Mon-Fri). If a tenant ever runs Saturday/
+// Sunday camps, this will hide those days and we need a workdays setting.
+// Same shape as `session_type` on camp_sessions — a v2 enhancement.
+function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn }) {
+  const [confirmations, setConfirmations] = useState(null); // null = loading; Map by date string
+  const [busyDate, setBusyDate] = useState(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!campSessionId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("session_delivery_confirmations")
+          .select("id, session_date, confirmed_by, confirmed_at, pay_status")
+          .eq("camp_session_id", campSessionId);
+        if (cancelled) return;
+        if (error) {
+          console.error("[DailyCheckInSection] load failed", error);
+          setErr("Couldn't load your check-ins. Refresh to try again.");
+          setConfirmations(new Map());
+          return;
+        }
+        const m = new Map();
+        for (const r of data ?? []) m.set(r.session_date, r);
+        setConfirmations(m);
+      } catch (e) {
+        if (!cancelled) {
+          console.error("[DailyCheckInSection] load failed", e);
+          setErr("Couldn't load your check-ins.");
+          setConfirmations(new Map());
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [campSessionId]);
+
+  const days = useMemo(() => weekdayRange(startsOn, endsOn), [startsOn, endsOn]);
+  const todayStr = todayLocalISO();
+
+  async function markTaught(dateStr) {
+    if (busyDate) return;
+    setBusyDate(dateStr);
+    setErr("");
+    try {
+      const { data, error: fnErr } = await supabase.functions.invoke(
+        "confirm-session-taught",
+        { body: { camp_assignment_id: assignmentId, session_date: dateStr } },
+      );
+      if (fnErr || data?.error) {
+        setErr(humanizeConfirmError(data?.error || fnErr?.message));
+        return;
+      }
+      // Update local state with the returned confirmation.
+      setConfirmations((m) => {
+        const next = new Map(m);
+        next.set(dateStr, data.confirmation);
+        return next;
+      });
+    } catch (e) {
+      console.error("[DailyCheckInSection] mark failed", e);
+      setErr("Couldn't save your check-in. Try again.");
+    } finally {
+      setBusyDate(null);
+    }
+  }
+
+  if (days.length === 0) return null;
+
+  const marked = confirmations ? confirmations.size : 0;
+  const total = days.length;
+
+  return (
+    <Section title="Daily check-in">
+      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "14px 16px" }}>
+        <div style={{ fontSize: 13, color: MUTED, marginBottom: 12, lineHeight: 1.5 }}>
+          Mark each day after you teach it. {marked > 0 ? (
+            <span style={{ color: OK_GREEN, fontWeight: 600 }}>{marked} of {total} marked.</span>
+          ) : (
+            <span>This is how your admin knows the session happened.</span>
+          )}
+        </div>
+
+        {err && (
+          <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
+            {err}
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {days.map((d) => {
+            const existing = confirmations?.get(d);
+            const isFuture = d > todayStr;
+            const isToday = d === todayStr;
+            return (
+              <DayRow
+                key={d}
+                date={d}
+                isToday={isToday}
+                isFuture={isFuture}
+                existing={existing}
+                loading={confirmations === null}
+                busy={busyDate === d}
+                onMark={() => markTaught(d)}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function DayRow({ date, isToday, isFuture, existing, loading, busy, onMark }) {
+  const dayLabel = new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  const confirmedAt = existing?.confirmed_at
+    ? new Date(existing.confirmed_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : null;
+  const byAdmin = existing && existing.confirmed_by === "admin";
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "8px 10px",
+        background: existing ? `${OK_GREEN}0F` : isFuture ? "#fafafa" : CREAM,
+        border: `1px solid ${existing ? `${OK_GREEN}55` : RULE}`,
+        borderRadius: 6,
+        opacity: isFuture ? 0.55 : 1,
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>
+          {dayLabel}
+          {isToday && !existing && (
+            <span style={{ marginLeft: 8, fontSize: 10, color: PURPLE, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Today
+            </span>
+          )}
+        </div>
+        {existing && (
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
+            Marked taught{confirmedAt ? ` · ${confirmedAt}` : ""}
+            {byAdmin && " · by admin"}
+          </div>
+        )}
+      </div>
+
+      {existing ? (
+        <span style={{ color: OK_GREEN, fontSize: 18, fontWeight: 700 }} title="Marked taught">✓</span>
+      ) : isFuture ? (
+        <span style={{ color: MUTED, fontSize: 11, fontStyle: "italic" }}>
+          {loading ? "" : "Upcoming"}
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onMark}
+          disabled={busy || loading}
+          style={{
+            padding: "6px 12px",
+            background: PURPLE,
+            color: "#fff",
+            border: "none",
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: "inherit",
+            cursor: busy ? "wait" : "pointer",
+            opacity: busy || loading ? 0.5 : 1,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {busy ? "Saving…" : "Mark taught"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Generate Mon-Fri dates in [start, end] inclusive. Both inputs YYYY-MM-DD.
+// Skips Saturdays (day=6) and Sundays (day=0).
+function weekdayRange(start, end) {
+  if (!start || !end) return [];
+  const out = [];
+  const s = new Date(`${start}T00:00:00`);
+  const e = new Date(`${end}T00:00:00`);
+  for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
+    const day = d.getDay();
+    if (day === 0 || day === 6) continue;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    out.push(`${y}-${m}-${dd}`);
+  }
+  return out;
+}
+
+function todayLocalISO() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+function humanizeConfirmError(code) {
+  if (!code) return "Couldn't save your check-in. Try again.";
+  if (code === "session_date_in_future") return "You can't mark a future day taught yet.";
+  if (code === "session_date_out_of_range") return "That date isn't within this camp's range.";
+  if (code === "assignment_not_confirmed") return "This camp isn't fully confirmed yet — talk to your admin.";
+  if (code === "forbidden") return "You're not assigned to this camp.";
+  return "Couldn't save your check-in. Try again.";
 }
 
 function RosterStub({ enrollment, startsOn }) {
