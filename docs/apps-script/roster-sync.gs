@@ -5,50 +5,17 @@
 // Supabase. The edge function matches each sheet to a camp_session by
 // filename pattern and upserts parents + students + registrations.
 //
-// SETUP (one-time, per tenant):
-//
-//   1. Open https://script.google.com → "New project"
-//      (rename to "Enrops Roster Sync" for clarity)
-//
-//   2. Paste this entire file as Code.gs (replace the default content)
-//
-//   3. Project Settings (gear icon, left sidebar) → "Script Properties" →
-//      "Edit script properties" → Add property:
-//           Property: ROSTER_SYNC_SECRET
-//           Value:    (paste the secret from your Enrops admin — Jessica
-//                      has it for J2S)
-//      Click "Save script properties".
-//
-//   4. Update FOLDER_ID below to the Drive folder that holds your per-camp
-//      Squarespace exports. (For J2S it's already set.)
-//
-//   5. Triggers (clock icon, left sidebar) → "Add Trigger":
-//           Function:      syncAllRosters
-//           Event source:  Time-driven
-//           Type:          Week timer
-//           Day:           Sunday
-//           Time:          11pm to midnight
-//      Save. Google will ask you to authorize the script the first time.
-//
-//   6. Click "Run" on syncAllRosters manually once to authorize and verify
-//      it works. The View → Logs panel shows per-sheet results.
-//
-//   7. OPTIONAL faster sync: install a second trigger
-//           Function:      onAllOrdersChange
-//           Event source:  From spreadsheet
-//           Spreadsheet:   pick "All Orders" (the master sheet in your
-//                          Drive folder)
-//           Event type:    On change
-//      This fires whenever any row anywhere in "All Orders" changes (i.e.
-//      a new registration lands or a refund posts).
-//
-// MAINTENANCE:
-//   - If Squarespace renames a column, update column references in the
-//     edge function (apps-script-roster-sync) NOT this script — this
-//     script just passes raw rows through.
-//   - If you need to rotate the secret, generate a new one in Enrops,
-//     update the ROSTER_SYNC_SECRET property here, run syncAllRosters
-//     once to verify.
+// SCRIPT PROPERTIES (Project Settings → Script properties):
+//   ROSTER_SYNC_SECRET   (required) — tenant secret from Enrops
+//   IGNORE_FILENAMES     (optional) — JSON array of filenames to skip
+//                                     entirely, e.g. cancelled camps whose
+//                                     Drive sheet you want to keep for
+//                                     refund tracking but don't want to
+//                                     warn about every sync. Example:
+//                                     ["7/13-7/17 Morning - West Linn Summer Camp: LEGO Superheroes"]
+//                                     Whitespace is normalized before
+//                                     comparison so extra spaces in the
+//                                     real filename are tolerated.
 
 const SUPABASE_URL = 'https://iuasfpztkmrtagivlhtj.supabase.co';
 const FUNCTION_PATH = '/functions/v1/apps-script-roster-sync';
@@ -56,10 +23,9 @@ const FUNCTION_PATH = '/functions/v1/apps-script-roster-sync';
 // J2S Squarespace export folder. Change per tenant.
 const FOLDER_ID = '1AtX5bmG6Cuhjem0ssiA7VUr0YmvEIFmg';
 
-// --- Main entry points ---
-
 function syncAllRosters() {
   const secret = getSecret();
+  const ignore = getIgnoreList();
   const folder = DriveApp.getFolderById(FOLDER_ID);
   const files = folder.getFiles();
   const summary = [];
@@ -68,10 +34,13 @@ function syncAllRosters() {
     const file = files.next();
     const name = file.getName();
 
-    // Skip the All Orders master + anything that isn't a per-camp sheet.
     if (name === 'All Orders') continue;
     if (file.getMimeType() !== MimeType.GOOGLE_SHEETS) continue;
     if (!/Summer Camp:/i.test(name)) continue;
+    if (ignore.indexOf(normalizeName(name)) !== -1) {
+      summary.push({ name: name, skipped: 'ignored_by_config' });
+      continue;
+    }
 
     try {
       const result = syncSheet(file, secret);
@@ -86,8 +55,6 @@ function syncAllRosters() {
   return summary;
 }
 
-// Bound to "All Orders" via an On-change trigger. Throttled so a flurry
-// of edits doesn't fire many syncs back-to-back.
 function onAllOrdersChange() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;
@@ -99,14 +66,29 @@ function onAllOrdersChange() {
   }
 }
 
-// --- Helpers ---
-
 function getSecret() {
   const s = PropertiesService.getScriptProperties().getProperty('ROSTER_SYNC_SECRET');
   if (!s) {
     throw new Error('ROSTER_SYNC_SECRET not set. Project Settings → Script Properties.');
   }
   return s;
+}
+
+function getIgnoreList() {
+  const raw = PropertiesService.getScriptProperties().getProperty('IGNORE_FILENAMES');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(function (n) { return normalizeName(String(n)); });
+  } catch (e) {
+    console.warn('IGNORE_FILENAMES not valid JSON; ignoring. Value: ' + raw);
+    return [];
+  }
+}
+
+function normalizeName(s) {
+  return String(s).replace(/\s+/g, ' ').trim();
 }
 
 function syncSheet(file, secret) {
