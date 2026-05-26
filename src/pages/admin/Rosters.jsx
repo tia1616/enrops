@@ -216,7 +216,24 @@ export default function Rosters() {
       {camps !== null && camps.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {camps.map((c) => (
-            <CampRow key={c.id} camp={c} onUpload={() => setUploadingFor(c)} />
+            <CampRow
+              key={c.id}
+              camp={c}
+              onUpload={() => setUploadingFor(c)}
+              orgId={org?.id}
+              onRosterChanged={() => {
+                // Re-fetch this camp's roster_count after an edit/delete
+                // by triggering a top-level reload. Cheap and simple.
+                if (!org?.id) return;
+                supabase
+                  .from("registrations")
+                  .select("camp_session_id", { count: "exact", head: true })
+                  .eq("camp_session_id", c.id)
+                  .then(({ count }) => {
+                    setCamps((cs) => (cs ?? []).map((cc) => cc.id === c.id ? { ...cc, roster_count: count ?? 0 } : cc));
+                  });
+              }}
+            />
           ))}
         </div>
       )}
@@ -240,7 +257,8 @@ export default function Rosters() {
   );
 }
 
-function CampRow({ camp, onUpload }) {
+function CampRow({ camp, onUpload, orgId, onRosterChanged }) {
+  const [expanded, setExpanded] = useState(false);
   const gap = (camp.current_enrollment ?? 0) - (camp.roster_count ?? 0);
   return (
     <div
@@ -250,59 +268,423 @@ function CampRow({ camp, onUpload }) {
         borderLeft: camp.roster_count > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`,
         borderRadius: 8,
         padding: "12px 16px",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        gap: 12,
-        flexWrap: "wrap",
       }}
     >
-      <div style={{ minWidth: 0, flex: "1 1 220px" }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: INK, lineHeight: 1.3 }}>
-          {camp.curriculum_name}
-          {camp.week_num && (
-            <span style={{ color: MUTED, marginLeft: 6, fontSize: 12, fontWeight: 400 }}>
-              · Week {camp.week_num}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          style={{
+            minWidth: 0,
+            flex: "1 1 220px",
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            cursor: camp.roster_count > 0 ? "pointer" : "default",
+            textAlign: "left",
+            fontFamily: "inherit",
+          }}
+        >
+          <div style={{ fontSize: 14, fontWeight: 600, color: INK, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 6 }}>
+            {camp.roster_count > 0 && (
+              <span style={{ color: PURPLE, fontSize: 12, fontWeight: 700 }}>{expanded ? "▾" : "▸"}</span>
+            )}
+            <span>
+              {camp.curriculum_name}
+              {camp.week_num && (
+                <span style={{ color: MUTED, marginLeft: 6, fontSize: 12, fontWeight: 400 }}>
+                  · Week {camp.week_num}
+                </span>
+              )}
             </span>
-          )}
-        </div>
-        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-          {fmtDate(camp.starts_on)}–{fmtDate(camp.ends_on)}
-          {camp.location_name && ` · ${camp.location_name}`}
-          {camp.session_type && ` · ${camp.session_type.replace("_", " ")}`}
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 2, paddingLeft: camp.roster_count > 0 ? 18 : 0 }}>
+            {fmtDate(camp.starts_on)}–{fmtDate(camp.ends_on)}
+            {camp.location_name && ` · ${camp.location_name}`}
+            {camp.session_type && ` · ${camp.session_type.replace("_", " ")}`}
+          </div>
+        </button>
+
+        <div style={{ textAlign: "right", minWidth: 180 }}>
+          <div style={{ fontSize: 12, color: INK, lineHeight: 1.4 }}>
+            <strong>{camp.roster_count}</strong> in roster
+            {camp.current_enrollment != null && (
+              <span style={{ color: gap > 0 ? AMBER : MUTED, marginLeft: 6 }}>
+                · {camp.current_enrollment} enrolled
+                {gap > 0 && ` (${gap} missing)`}
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onUpload}
+            style={{
+              marginTop: 6,
+              padding: "6px 12px",
+              background: PURPLE,
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              cursor: "pointer",
+            }}
+          >
+            Upload roster →
+          </button>
         </div>
       </div>
 
-      <div style={{ textAlign: "right", minWidth: 180 }}>
-        <div style={{ fontSize: 12, color: INK, lineHeight: 1.4 }}>
-          <strong>{camp.roster_count}</strong> in roster
-          {camp.current_enrollment != null && (
-            <span style={{ color: gap > 0 ? AMBER : MUTED, marginLeft: 6 }}>
-              · {camp.current_enrollment} enrolled
-              {gap > 0 && ` (${gap} missing)`}
+      {expanded && camp.roster_count > 0 && (
+        <RosterEditor
+          campSessionId={camp.id}
+          orgId={orgId}
+          onChanged={onRosterChanged}
+        />
+      )}
+    </div>
+  );
+}
+
+function RosterEditor({ campSessionId, orgId, onChanged }) {
+  const [campers, setCampers] = useState(null); // null = loading
+  const [editingId, setEditingId] = useState(null);
+  const [err, setErr] = useState("");
+
+  async function load() {
+    setErr("");
+    setCampers(null);
+    const { data, error } = await supabase
+      .from("registrations")
+      .select(`
+        id, status, notes, authorized_pickup_contacts, photo_release_consent,
+        student:students (
+          id, first_name, last_name, grade, birthdate, pronouns,
+          allergies, dietary_restrictions, medical_notes, medical_conditions,
+          epipen_required, medications_at_program,
+          emergency_contact_name, emergency_contact_phone,
+          special_needs_accommodations
+        )
+      `)
+      .eq("camp_session_id", campSessionId)
+      .order("registered_at", { ascending: true });
+    if (error) {
+      console.error("[RosterEditor] load failed", error);
+      setErr("Couldn't load the roster. Refresh.");
+      setCampers([]);
+      return;
+    }
+    setCampers(data ?? []);
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campSessionId]);
+
+  return (
+    <div style={{ marginTop: 12, borderTop: `1px solid ${RULE}`, paddingTop: 10 }}>
+      {err && (
+        <div style={{ background: `${RED}1A`, color: RED, padding: 8, borderRadius: 6, marginBottom: 8, fontSize: 12 }}>
+          {err}
+        </div>
+      )}
+
+      {campers === null && (
+        <div style={{ color: MUTED, fontSize: 12 }}>Loading roster…</div>
+      )}
+
+      {campers !== null && campers.length === 0 && (
+        <div style={{ color: MUTED, fontSize: 12 }}>No campers yet.</div>
+      )}
+
+      {campers !== null && campers.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {campers.map((reg) => (
+            <CamperEditableRow
+              key={reg.id}
+              registration={reg}
+              isEditing={editingId === reg.id}
+              onToggleEdit={() => setEditingId((cur) => (cur === reg.id ? null : reg.id))}
+              orgId={orgId}
+              onSaved={() => {
+                setEditingId(null);
+                load();
+                if (onChanged) onChanged();
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSaved }) {
+  const s = registration.student;
+  if (!s) return null;
+  const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed";
+  const hasAllergies = (s.allergies ?? "").trim().length > 0;
+  const flagged = hasAllergies || s.epipen_required;
+
+  return (
+    <div
+      style={{
+        background: CREAM,
+        border: `1px solid ${RULE}`,
+        borderLeft: flagged ? `3px solid ${RED}` : `1px solid ${RULE}`,
+        borderRadius: 6,
+        padding: isEditing ? "12px 14px" : "8px 12px",
+      }}
+    >
+      {!isEditing && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>
+              {displayName}
+              {s.birthdate && (
+                <span style={{ color: MUTED, fontSize: 11, marginLeft: 6, fontWeight: 500 }}>
+                  · DOB {s.birthdate}
+                </span>
+              )}
+              {s.epipen_required && (
+                <span style={{ marginLeft: 8, fontSize: 10, color: RED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  EpiPen
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
+              {hasAllergies && <span style={{ color: RED, fontWeight: 600 }}>Allergies: {s.allergies}</span>}
+              {!hasAllergies && (s.emergency_contact_name
+                ? <>EC: {s.emergency_contact_name}{s.emergency_contact_phone && ` · ${s.emergency_contact_phone}`}</>
+                : <em>no emergency contact</em>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onToggleEdit}
+            style={{
+              padding: "5px 10px",
+              background: "transparent",
+              color: PURPLE,
+              border: `1px solid ${PURPLE}`,
+              borderRadius: 5,
+              fontSize: 11,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Edit →
+          </button>
+        </div>
+      )}
+
+      {isEditing && (
+        <CamperEditForm
+          registration={registration}
+          orgId={orgId}
+          onCancel={onToggleEdit}
+          onSaved={onSaved}
+        />
+      )}
+    </div>
+  );
+}
+
+function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
+  const s = registration.student;
+  const [form, setForm] = useState({
+    allergies: s.allergies ?? "",
+    dietary_restrictions: s.dietary_restrictions ?? "",
+    medical_notes: s.medical_notes ?? "",
+    medical_conditions: s.medical_conditions ?? "",
+    epipen_required: !!s.epipen_required,
+    medications_at_program: s.medications_at_program ?? "",
+    emergency_contact_name: s.emergency_contact_name ?? "",
+    emergency_contact_phone: s.emergency_contact_phone ?? "",
+    special_needs_accommodations: s.special_needs_accommodations ?? "",
+    authorized_pickup_contacts: registration.authorized_pickup_contacts ?? "",
+    notes: registration.notes ?? "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  function update(k, v) { setForm((f) => ({ ...f, [k]: v })); }
+
+  async function save() {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const studentFields = {
+        allergies: emptyOrNull(form.allergies),
+        dietary_restrictions: emptyOrNull(form.dietary_restrictions),
+        medical_notes: emptyOrNull(form.medical_notes),
+        medical_conditions: emptyOrNull(form.medical_conditions),
+        epipen_required: !!form.epipen_required,
+        medications_at_program: emptyOrNull(form.medications_at_program),
+        emergency_contact_name: emptyOrNull(form.emergency_contact_name),
+        emergency_contact_phone: emptyOrNull(form.emergency_contact_phone),
+        special_needs_accommodations: emptyOrNull(form.special_needs_accommodations),
+      };
+      const regFields = {
+        authorized_pickup_contacts: emptyOrNull(form.authorized_pickup_contacts),
+        notes: emptyOrNull(form.notes),
+      };
+      const { error: sErr } = await supabase
+        .from("students")
+        .update(studentFields)
+        .eq("id", s.id);
+      if (sErr) throw sErr;
+      const { error: rErr } = await supabase
+        .from("registrations")
+        .update(regFields)
+        .eq("id", registration.id);
+      if (rErr) throw rErr;
+      if (onSaved) onSaved();
+    } catch (e) {
+      console.error("[CamperEditForm] save failed", e);
+      if (/permission denied|policy/i.test(e.message ?? "")) {
+        setErr("You don't have permission to edit this camper.");
+      } else {
+        setErr(e.message ?? "Couldn't save.");
+      }
+      setBusy(false);
+    }
+  }
+
+  const name = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed";
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>
+          Editing: {name}
+          {s.birthdate && (
+            <span style={{ color: MUTED, fontSize: 11, marginLeft: 6, fontWeight: 500 }}>
+              · DOB {s.birthdate}
             </span>
           )}
         </div>
         <button
           type="button"
-          onClick={onUpload}
+          onClick={onCancel}
+          disabled={busy}
+          style={{ background: "transparent", border: "none", color: MUTED, fontSize: 14, cursor: "pointer" }}
+          aria-label="Cancel"
+        >
+          ✕
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ background: `${RED}1A`, color: RED, padding: 8, borderRadius: 6, marginBottom: 8, fontSize: 12 }}>
+          {err}
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <FullField label="Allergies (flag for instructor)">
+          <Inp value={form.allergies} onChange={(v) => update("allergies", v)} />
+        </FullField>
+        <Lbl label="Dietary restrictions">
+          <Inp value={form.dietary_restrictions} onChange={(v) => update("dietary_restrictions", v)} />
+        </Lbl>
+        <Lbl label="Medical conditions">
+          <Inp value={form.medical_conditions} onChange={(v) => update("medical_conditions", v)} />
+        </Lbl>
+        <Lbl label="Medical notes">
+          <Inp value={form.medical_notes} onChange={(v) => update("medical_notes", v)} />
+        </Lbl>
+        <Lbl label="Medications at program">
+          <Inp value={form.medications_at_program} onChange={(v) => update("medications_at_program", v)} />
+        </Lbl>
+        <Lbl label="EpiPen required">
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: INK, padding: "5px 0" }}>
+            <input
+              type="checkbox"
+              checked={form.epipen_required}
+              onChange={(e) => update("epipen_required", e.target.checked)}
+            />
+            Yes, instructor should be aware
+          </label>
+        </Lbl>
+        <Lbl label="Emergency contact name">
+          <Inp value={form.emergency_contact_name} onChange={(v) => update("emergency_contact_name", v)} />
+        </Lbl>
+        <Lbl label="Emergency contact phone">
+          <Inp value={form.emergency_contact_phone} onChange={(v) => update("emergency_contact_phone", v)} />
+        </Lbl>
+        <FullField label="Authorized pickup (other than parent)">
+          <Inp value={form.authorized_pickup_contacts} onChange={(v) => update("authorized_pickup_contacts", v)} placeholder="Names + relationships, e.g. 'Aunt Sara, grandparent John'" />
+        </FullField>
+        <FullField label="Accommodations / special needs">
+          <Inp value={form.special_needs_accommodations} onChange={(v) => update("special_needs_accommodations", v)} />
+        </FullField>
+        <FullField label="Notes (admin-only)">
+          <Inp value={form.notes} onChange={(v) => update("notes", v)} />
+        </FullField>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 12 }}>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
           style={{
-            marginTop: 6,
             padding: "6px 12px",
-            background: PURPLE,
-            color: "#fff",
-            border: "none",
-            borderRadius: 6,
+            background: "transparent",
+            color: MUTED,
+            border: `1px solid ${RULE}`,
+            borderRadius: 5,
             fontSize: 12,
-            fontWeight: 600,
             fontFamily: "inherit",
             cursor: "pointer",
           }}
         >
-          Upload roster →
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy}
+          style={{
+            padding: "6px 14px",
+            background: PURPLE,
+            color: "#fff",
+            border: "none",
+            borderRadius: 5,
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: "inherit",
+            cursor: busy ? "wait" : "pointer",
+            opacity: busy ? 0.5 : 1,
+          }}
+        >
+          {busy ? "Saving…" : "Save changes"}
         </button>
       </div>
     </div>
+  );
+}
+
+function emptyOrNull(s) {
+  const t = (s ?? "").trim();
+  return t === "" ? null : t;
+}
+
+function FullField({ label, children }) {
+  return (
+    <label style={{ display: "block", gridColumn: "1 / -1" }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: MUTED, display: "block", marginBottom: 3 }}>
+        {label}
+      </span>
+      {children}
+    </label>
   );
 }
 
