@@ -399,9 +399,9 @@ interface ParsedFilename {
 // J2S-specific. Future tenants would need their own alias map, OR we
 // move this to a per-org JSON column on organizations.
 const CITY_ALIASES: Record<string, string[]> = {
-  'portland': ['historic overlook', 'st. paul', 'st paul', 'community of faith', 'catlin gabel'],
+  'portland': ['historic overlook', 'catlin gabel'],
   'vancouver': ['firstenburg'],
-  'oregon city': ['first congregational'],
+  'oregon city': ['st. paul', 'st paul'],
   'camas': ['camas', 'lacamas'],
   'beaverton': ['beaverton'],
   'happy valley': ['happy valley'],
