@@ -656,6 +656,17 @@ export default function InstructorPortal() {
     );
   }
 
+  if (view === "pay") {
+    return (
+      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+        <PayView
+          instructorId={instructor.id ?? instructor.instructor_id}
+          onBack={() => setView("schedule")}
+        />
+      </Shell>
+    );
+  }
+
   if (view === "assignment-detail") {
     const selected = assignments.find((a) => a.id === selectedAssignmentId);
     if (!selected) {
@@ -711,6 +722,24 @@ export default function InstructorPortal() {
         </div>
         <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <PwaInstallButton />
+          <button
+            type="button"
+            onClick={() => setView("pay")}
+            style={{
+              background: "transparent",
+              border: `1px solid ${PURPLE}`,
+              color: PURPLE,
+              borderRadius: 6,
+              padding: "6px 12px",
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Pay
+          </button>
           <button
             type="button"
             onClick={() => setView("documents")}
@@ -1835,4 +1864,321 @@ function DocLinkRow({ doc }) {
       </span>
     </a>
   );
+}
+
+// PayView: instructor's own pay summary. Groups their
+// session_delivery_confirmations by camp_session and adds distance bonus
+// (from the linked camp_assignment, paid once per camp). Top of page
+// shows season totals.
+//
+// RLS already restricts session_delivery_confirmations to the
+// instructor's own rows via instructor_read_confirmations
+// (instructor_id = private.current_instructor_id()). We pass the
+// explicit .eq() too as defense-in-depth.
+//
+// Status copy is user-friendly, not the raw enum:
+//   pending  -> "Processing"
+//   approved -> "Approved for payout"
+//   adjusted -> "Adjusted"
+//   withheld -> "Held — contact admin"
+function PayView({ instructorId, onBack }) {
+  const [data, setData] = useState(null); // null = loading
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!instructorId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: confs, error: confErr } = await supabase
+          .from("session_delivery_confirmations")
+          .select(
+            `id, camp_session_id, session_date, session_type, confirmed_by,
+             confirmed_at, pay_status, pay_amount_cents,
+             pay_adjustment_cents, pay_adjustment_reason`
+          )
+          .eq("instructor_id", instructorId)
+          .not("camp_session_id", "is", null)
+          .order("session_date", { ascending: false });
+        if (confErr) throw confErr;
+        if (cancelled) return;
+
+        const rows = confs ?? [];
+        if (rows.length === 0) {
+          setData({ camps: [], totals: emptyTotals() });
+          return;
+        }
+
+        const sessionIds = [...new Set(rows.map((r) => r.camp_session_id))];
+
+        const [{ data: sessions }, { data: assignments }] = await Promise.all([
+          supabase
+            .from("camp_sessions")
+            .select("id, curriculum_name, starts_on, ends_on, location_name, week_num, session_type")
+            .in("id", sessionIds),
+          supabase
+            .from("camp_assignments")
+            .select("camp_session_id, role, distance_bonus_cents")
+            .eq("instructor_id", instructorId)
+            .in("camp_session_id", sessionIds),
+        ]);
+
+        const sessionById = new Map((sessions ?? []).map((s) => [s.id, s]));
+        const assignmentBySession = new Map(
+          (assignments ?? []).map((a) => [a.camp_session_id, a])
+        );
+
+        // Group by camp_session.
+        const grouped = new Map();
+        for (const r of rows) {
+          if (!grouped.has(r.camp_session_id)) {
+            const sess = sessionById.get(r.camp_session_id);
+            const assn = assignmentBySession.get(r.camp_session_id);
+            grouped.set(r.camp_session_id, {
+              session: sess,
+              role: assn?.role ?? null,
+              distance_bonus_cents: assn?.distance_bonus_cents ?? 0,
+              confirmations: [],
+            });
+          }
+          grouped.get(r.camp_session_id).confirmations.push(r);
+        }
+
+        const camps = [...grouped.values()]
+          .filter((g) => g.session) // skip rows whose camp_session is missing
+          .sort((a, b) =>
+            (b.session.starts_on ?? "").localeCompare(a.session.starts_on ?? "")
+          );
+
+        // Totals across everything visible to this instructor.
+        const totals = camps.reduce(
+          (acc, c) => {
+            const base = c.confirmations.reduce((s, r) => s + (r.pay_amount_cents ?? 0), 0);
+            const bonus = c.confirmations.reduce((s, r) => s + (r.pay_adjustment_cents ?? 0), 0);
+            const distance = c.distance_bonus_cents ?? 0;
+            const grand = base + bonus + distance;
+            acc.base += base;
+            acc.bonus += bonus;
+            acc.distance += distance;
+            acc.grand += grand;
+            // Stage-by-status totals.
+            for (const r of c.confirmations) {
+              const stage = r.pay_status === "approved" ? "approved"
+                : r.pay_status === "withheld" ? "held"
+                : "processing";
+              acc.byStage[stage] += (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0);
+            }
+            // Distance bonus follows the worst-case status of any confirmation.
+            const worst = worstPayStatus(c.confirmations.map((r) => r.pay_status));
+            const stage = worst === "approved" ? "approved" : worst === "withheld" ? "held" : "processing";
+            acc.byStage[stage] += distance;
+            return acc;
+          },
+          { base: 0, bonus: 0, distance: 0, grand: 0, byStage: { approved: 0, processing: 0, held: 0 } }
+        );
+
+        if (!cancelled) setData({ camps, totals });
+      } catch (e) {
+        console.error("[PayView] load failed", e);
+        if (!cancelled) {
+          setErr("Couldn't load your pay. Try again.");
+          setData({ camps: [], totals: emptyTotals() });
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [instructorId]);
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onBack}
+        style={{
+          background: "transparent",
+          border: "none",
+          color: PURPLE,
+          fontSize: 13,
+          fontWeight: 600,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          padding: 0,
+          marginBottom: 12,
+        }}
+      >
+        ← Back to schedule
+      </button>
+
+      <h1 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 700, color: INK, letterSpacing: -0.3 }}>
+        Your pay
+      </h1>
+      <p style={{ color: MUTED, margin: "0 0 18px", fontSize: 13, lineHeight: 1.5 }}>
+        Earned from camps you marked taught. Updates the moment you check in on the assignment detail.
+      </p>
+
+      {err && (
+        <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+          {err}
+        </div>
+      )}
+
+      {data === null && (
+        <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>
+      )}
+
+      {data !== null && data.camps.length === 0 && !err && (
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, color: MUTED, textAlign: "center", lineHeight: 1.5 }}>
+          You haven't marked any sessions taught yet. Open a confirmed camp, then use <strong>Daily check-in</strong> after each day to start tracking pay.
+        </div>
+      )}
+
+      {data !== null && data.camps.length > 0 && (
+        <>
+          <PayTotalsCard totals={data.totals} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 16 }}>
+            {data.camps.map((c) => (
+              <PayCampCard key={c.session.id} entry={c} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function PayTotalsCard({ totals }) {
+  return (
+    <div style={{ background: PURPLE, color: "#fff", borderRadius: 10, padding: "16px 18px" }}>
+      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, opacity: 0.8 }}>
+        Total earned
+      </div>
+      <div style={{ fontSize: 32, fontWeight: 700, marginTop: 2, letterSpacing: -0.5 }}>
+        {dollars(totals.grand)}
+      </div>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(3, 1fr)",
+        gap: 10,
+        marginTop: 14,
+        fontSize: 11,
+      }}>
+        <StageBlock label="Processing" amount={totals.byStage.processing} />
+        <StageBlock label="Approved" amount={totals.byStage.approved} />
+        <StageBlock label="On hold" amount={totals.byStage.held} />
+      </div>
+    </div>
+  );
+}
+
+function StageBlock({ label, amount }) {
+  return (
+    <div style={{ background: "rgba(255,255,255,0.1)", borderRadius: 6, padding: "8px 10px" }}>
+      <div style={{ opacity: 0.8, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontWeight: 700, fontSize: 14, marginTop: 2 }}>{dollars(amount)}</div>
+    </div>
+  );
+}
+
+function PayCampCard({ entry }) {
+  const s = entry.session;
+  const confs = entry.confirmations.slice().sort((a, b) => (a.session_date ?? "").localeCompare(b.session_date ?? ""));
+  const base = confs.reduce((acc, r) => acc + (r.pay_amount_cents ?? 0), 0);
+  const bonus = confs.reduce((acc, r) => acc + (r.pay_adjustment_cents ?? 0), 0);
+  const distance = entry.distance_bonus_cents ?? 0;
+  const grand = base + bonus + distance;
+  const worst = worstPayStatus(confs.map((r) => r.pay_status));
+  const friendlyStatus = friendlyPayStatus(worst);
+
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "14px 18px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 220px", minWidth: 200 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
+            {s.curriculum_name}
+            {s.week_num && (
+              <span style={{ color: MUTED, marginLeft: 8, fontSize: 12, fontWeight: 400 }}>
+                · Week {s.week_num}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 3, lineHeight: 1.5 }}>
+            {fmtShort(s.starts_on)} – {fmtShort(s.ends_on)}
+            {s.location_name && ` · ${s.location_name}`}
+            {entry.role && ` · ${entry.role}`}
+          </div>
+        </div>
+        <div style={{ textAlign: "right", minWidth: 120 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>
+            {dollars(grand)}
+          </div>
+          <div
+            style={{
+              display: "inline-block",
+              marginTop: 4,
+              padding: "2px 8px",
+              borderRadius: 999,
+              fontSize: 10,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              color: friendlyStatus.color,
+              background: `${friendlyStatus.color}1F`,
+              border: `1px solid ${friendlyStatus.color}55`,
+            }}
+          >
+            {friendlyStatus.label}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED, lineHeight: 1.6 }}>
+        <div>
+          <strong>{confs.length} day{confs.length === 1 ? "" : "s"} marked taught:</strong>{" "}
+          {confs.map((c, i) => (
+            <span key={c.id}>
+              {fmtShort(c.session_date)}
+              {c.confirmed_by === "admin" && (
+                <span style={{ fontStyle: "italic" }}> (by admin)</span>
+              )}
+              {i < confs.length - 1 ? ", " : ""}
+            </span>
+          ))}
+        </div>
+        <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <span>Base: <strong style={{ color: INK }}>{dollars(base)}</strong></span>
+          {bonus > 0 && <span>Bonus: <strong style={{ color: INK }}>{dollars(bonus)}</strong></span>}
+          {distance > 0 && <span>Distance: <strong style={{ color: INK }}>{dollars(distance)}</strong></span>}
+        </div>
+        {confs.some((c) => c.pay_adjustment_reason) && (
+          <div style={{ marginTop: 6, fontStyle: "italic" }}>
+            {confs.filter((c) => c.pay_adjustment_reason).map((c) => c.pay_adjustment_reason).join(" · ")}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function worstPayStatus(statuses) {
+  const order = ["withheld", "adjusted", "pending", "approved"];
+  for (const s of order) if (statuses.includes(s)) return s;
+  return statuses[0] ?? "pending";
+}
+
+function friendlyPayStatus(s) {
+  switch (s) {
+    case "approved":
+      return { label: "Approved for payout", color: OK_GREEN };
+    case "adjusted":
+      return { label: "Adjusted", color: VIOLET };
+    case "withheld":
+      return { label: "Held — contact admin", color: CORAL };
+    case "pending":
+    default:
+      return { label: "Processing", color: "#b67e00" };
+  }
+}
+
+function emptyTotals() {
+  return { base: 0, bonus: 0, distance: 0, grand: 0, byStage: { approved: 0, processing: 0, held: 0 } };
 }
