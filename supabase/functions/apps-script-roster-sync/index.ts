@@ -416,7 +416,9 @@ function parseFilename(name: string): ParsedFilename | null {
   // Tolerate extra spaces, leading/trailing whitespace.
   const trimmed = name.replace(/\s+/g, ' ').trim();
   // Capture start M/D, session_type (text up to " - "), then rest after " - ".
-  const m = trimmed.match(/^(\d{1,2})\/(\d{1,2})\s*[-–]\s*\d{1,2}\/\d{1,2}\s+(Morning|Afternoon|Full-Day|Full Day)\s*-\s*(.*?)\s+Summer Camp:\s*(.*)$/i);
+  // Dash between session_type and venue is optional — some filenames omit it
+  // (e.g. "8/10-8/14 Morning Oregon City Summer Camp: ...").
+  const m = trimmed.match(/^(\d{1,2})\/(\d{1,2})\s*[-–]\s*\d{1,2}\/\d{1,2}\s+(Morning|Afternoon|Full-Day|Full Day)\s*-?\s*(.*?)\s+Summer Camp:\s*(.*)$/i);
   if (!m) return null;
   const month = parseInt(m[1], 10);
   const day = parseInt(m[2], 10);
