@@ -21,6 +21,8 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
   const [lastName, setLastName] = useState(instructor.last_name || '');
   const [preferredName, setPreferredName] = useState(instructor.preferred_name || '');
   const [phone, setPhone] = useState(instructor.phone || '');
+  const [firstNameError, setFirstNameError] = useState('');
+  const [lastNameError, setLastNameError] = useState('');
   const [phoneError, setPhoneError] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -29,15 +31,29 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
     e.preventDefault();
     if (busy) return;
 
+    let valid = true;
+    if (!firstName.trim()) {
+      setFirstNameError('Legal first name is required.');
+      valid = false;
+    } else {
+      setFirstNameError('');
+    }
+    if (!lastName.trim()) {
+      setLastNameError('Legal last name is required.');
+      valid = false;
+    } else {
+      setLastNameError('');
+    }
     if (!phone.trim()) {
       setPhoneError('Phone is required.');
-      return;
-    }
-    if (!phoneIsValid(phone)) {
+      valid = false;
+    } else if (!phoneIsValid(phone)) {
       setPhoneError('Enter a valid phone number.');
-      return;
+      valid = false;
+    } else {
+      setPhoneError('');
     }
-    setPhoneError('');
+    if (!valid) return;
 
     setBusy(true);
     setSubmitError('');
@@ -81,12 +97,14 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
       <form onSubmit={handleSubmit} noValidate>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <Label>Legal first name</Label>
+            <Label>Legal first name <span className="text-red-600">*</span></Label>
             <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} autoComplete="given-name" />
+            <FieldError>{firstNameError}</FieldError>
           </div>
           <div>
-            <Label>Legal last name</Label>
+            <Label>Legal last name <span className="text-red-600">*</span></Label>
             <Input value={lastName} onChange={(e) => setLastName(e.target.value)} autoComplete="family-name" />
+            <FieldError>{lastNameError}</FieldError>
           </div>
         </div>
         <p className="mt-1 text-xs text-neutral-500">
@@ -125,7 +143,7 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
 
         <ScreenError>{submitError}</ScreenError>
 
-        <PrimaryButton disabled={busy || !phone || !phoneIsValid(phone)}>
+        <PrimaryButton disabled={busy || !firstName.trim() || !lastName.trim() || !phone || !phoneIsValid(phone)}>
           {busy ? 'Saving…' : 'Continue →'}
         </PrimaryButton>
       </form>

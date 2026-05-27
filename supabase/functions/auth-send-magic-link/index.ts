@@ -30,8 +30,8 @@ serve(async (req: Request) => {
     if (!email) throw new Error('email is required');
 
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-    const isInstructor = context === 'instructor';
-    const isOnboarding = context === 'onboarding';
+    let isInstructor = context === 'instructor';
+    let isOnboarding = context === 'onboarding';
     // Onboarding emails are sent to contractors who have an instructors row but may not
     // yet have an auth.users row (admin invited them but they haven't signed in). Same
     // auto-create-on-first-sign-in behavior as instructor context.
@@ -106,11 +106,26 @@ serve(async (req: Request) => {
     if (needsInstructorLookup) {
       const { data: instructorRow } = await supabase
         .from('instructors')
-        .select('first_name')
+        .select('id, first_name')
         .ilike('email', email)
         .eq('is_active', true)
         .maybeSingle();
       if (instructorRow?.first_name) firstName = instructorRow.first_name;
+
+      // If signed-in URL targets the instructor portal but the contractor
+      // is still mid-onboarding, switch to onboarding copy so the email
+      // doesn't say "view your schedule" before they have one.
+      if (isInstructor && instructorRow?.id) {
+        const { data: onboardingRow } = await supabase
+          .from('contractor_onboarding_status')
+          .select('overall_status')
+          .eq('instructor_id', instructorRow.id)
+          .maybeSingle();
+        if (onboardingRow && onboardingRow.overall_status !== 'complete') {
+          isInstructor = false;
+          isOnboarding = true;
+        }
+      }
     }
 
     const subject = isAdmin

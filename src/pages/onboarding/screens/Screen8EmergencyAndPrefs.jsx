@@ -39,6 +39,12 @@ function contactFilled(c) {
   );
 }
 
+function phoneIsValid(s) {
+  if (!s) return false;
+  const digits = s.replace(/\D/g, '');
+  return digits.length === 10 || (digits.length === 11 && digits.startsWith('1'));
+}
+
 export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [contacts, setContacts] = useState([emptyContact()]);
@@ -149,6 +155,9 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
     } else if (contacts.some((c, i) => i < filled.length && !contactFilled(c))) {
       // Partial in the middle.
       setContactsError('Name, relationship, and phone are all required.');
+      valid = false;
+    } else if (filled.some((c) => !phoneIsValid(c.phone))) {
+      setContactsError('Enter a valid phone number for each emergency contact.');
       valid = false;
     }
 
