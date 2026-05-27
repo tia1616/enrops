@@ -42,6 +42,11 @@ export default function App() {
       <Route path="/" element={<EnropsLanding />} />
       <Route path="/privacy" element={<PolicyPage policyType="privacy" orgSlug="enrops" />} />
       <Route path="/terms" element={<PolicyPage policyType="terms" orgSlug="enrops" />} />
+      <Route path="/acceptable-use" element={<PolicyPage policyType="acceptable-use" orgSlug="enrops" />} />
+      <Route path="/cookies" element={<PolicyPage policyType="cookies" orgSlug="enrops" />} />
+      <Route path="/data-retention" element={<PolicyPage policyType="data-retention" orgSlug="enrops" />} />
+      <Route path="/subprocessors" element={<PolicyPage policyType="subprocessors" orgSlug="enrops" />} />
+      <Route path="/dpa" element={<PolicyPage policyType="dpa" orgSlug="enrops" />} />
       <Route
         path="/j2s"
         element={

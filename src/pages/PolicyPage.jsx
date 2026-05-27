@@ -8,8 +8,18 @@ import { supabase } from '../lib/supabase.js';
  * Resolves org + policy from DB. Works for any provider without code changes.
  *
  * orgSlug comes from URL (e.g. 'j2s' → resolves Journey to STEAM org row)
- * policyType is 'privacy' or 'terms'
+ * policyType is one of POLICY_TITLES keys below.
  */
+
+const POLICY_TITLES = {
+  privacy: 'Privacy Policy',
+  terms: 'Terms of Service',
+  'acceptable-use': 'Acceptable Use Policy',
+  cookies: 'Cookie & Tracking Technologies Disclosure',
+  'data-retention': 'Data Retention & Deletion Policy',
+  subprocessors: 'Subprocessor Disclosure',
+  dpa: 'Data Processing Agreement',
+};
 export default function PolicyPage({ policyType, orgSlug: orgSlugProp }) {
   const params = useParams();
   const orgSlug = orgSlugProp || params.orgSlug;
@@ -57,7 +67,7 @@ export default function PolicyPage({ policyType, orgSlug: orgSlugProp }) {
     return () => { cancelled = true; };
   }, [orgSlug, policyType]);
 
-  const title = policyType === 'privacy' ? 'Privacy Policy' : 'Terms of Service';
+  const title = POLICY_TITLES[policyType] || 'Policy';
 
   if (loading) {
     return (
@@ -111,6 +121,9 @@ export default function PolicyPage({ policyType, orgSlug: orgSlugProp }) {
       <div className="policy-prose mt-8 text-j2s-ink/90">
         <ReactMarkdown
           components={{
+            // The DB content sometimes starts with a `#` title — hide it
+            // here since we already render the title above.
+            h1: () => null,
             h2: ({ node, ...props }) => (
               <h2 className="mt-8 font-titan text-xl text-j2s-ink" {...props} />
             ),
@@ -123,13 +136,20 @@ export default function PolicyPage({ policyType, orgSlug: orgSlugProp }) {
             ul: ({ node, ...props }) => (
               <ul className="mt-3 list-disc space-y-2 pl-6" {...props} />
             ),
+            ol: ({ node, ...props }) => (
+              <ol className="mt-3 list-decimal space-y-2 pl-6" {...props} />
+            ),
             li: ({ node, ...props }) => <li className="leading-relaxed" {...props} />,
             strong: ({ node, ...props }) => (
               <strong className="font-bold text-j2s-ink" {...props} />
             ),
+            em: ({ node, ...props }) => (
+              <em className="italic" {...props} />
+            ),
             a: ({ node, ...props }) => (
               <a className="text-j2s-purple hover:underline" {...props} />
             ),
+            hr: () => <hr className="mt-8 border-j2s-ink/10" />,
           }}
         >
           {policy.content_markdown}

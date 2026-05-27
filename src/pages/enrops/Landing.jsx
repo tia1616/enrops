@@ -279,26 +279,43 @@ export default function EnropsLanding() {
       </main>
 
       <footer className="bg-enrops-ink text-enrops-cream/70">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 font-grotesk text-sm sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <div className="flex items-center gap-3">
-            <span className="font-grotesk font-bold text-enrops-cream">Enrops</span>
-            <span className="text-enrops-cream/50">
-              &copy; {new Date().getFullYear()} &middot; The enrichment operations platform
-            </span>
+        <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+          <div className="flex flex-col gap-6 font-grotesk text-sm sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex flex-col gap-2">
+              <span className="font-grotesk font-bold text-enrops-cream">Enrops</span>
+              <span className="text-enrops-cream/50">
+                The enrichment operations platform
+              </span>
+              <Link to="/j2s" className="text-enrops-cream/80 hover:text-enrops-cream">
+                Journey to STEAM →
+              </Link>
+              <a href="mailto:hello@enrops.com" className="text-enrops-cream/80 hover:text-enrops-cream">
+                hello@enrops.com
+              </a>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <span className="font-grotesk text-xs font-bold uppercase tracking-widest text-enrops-cream/40">
+                Legal
+              </span>
+              <Link to="/terms" className="hover:text-enrops-cream">Terms of Service</Link>
+              <Link to="/privacy" className="hover:text-enrops-cream">Privacy Policy</Link>
+              <Link to="/acceptable-use" className="hover:text-enrops-cream">Acceptable Use</Link>
+              <Link to="/cookies" className="hover:text-enrops-cream">Cookies</Link>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <span className="font-grotesk text-xs font-bold uppercase tracking-widest text-enrops-cream/40">
+                For operators
+              </span>
+              <Link to="/dpa" className="hover:text-enrops-cream">Data Processing Agreement</Link>
+              <Link to="/data-retention" className="hover:text-enrops-cream">Data Retention & Deletion</Link>
+              <Link to="/subprocessors" className="hover:text-enrops-cream">Subprocessors</Link>
+            </div>
           </div>
-          <div className="flex gap-6">
-            <Link to="/j2s" className="hover:text-enrops-cream">
-              Journey to STEAM
-            </Link>
-            <Link to="/privacy" className="hover:text-enrops-cream">
-              Privacy
-            </Link>
-            <Link to="/terms" className="hover:text-enrops-cream">
-              Terms
-            </Link>
-            <a href="mailto:hello@enrops.com" className="hover:text-enrops-cream">
-              Contact
-            </a>
+
+          <div className="mt-10 border-t border-enrops-cream/10 pt-6 text-xs text-enrops-cream/50">
+            &copy; {new Date().getFullYear()} ENROPS LLC &middot; 4014 NE 13th Terrace, Gresham, OR 97030
           </div>
         </div>
       </footer>
