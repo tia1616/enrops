@@ -4,6 +4,7 @@ import { supabase } from '../../../lib/supabase.js';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { extensionFor } from '../../../lib/heicConvert.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
+import { phoneIsValid, looksLikeName } from '../../../lib/validation.js';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
 // Screen 8 — Emergency Contact + Shirt size + CPR cert. Always re-editable
@@ -39,11 +40,6 @@ function contactFilled(c) {
   );
 }
 
-function phoneIsValid(s) {
-  if (!s) return false;
-  const digits = s.replace(/\D/g, '');
-  return digits.length === 10 || (digits.length === 11 && digits.startsWith('1'));
-}
 
 export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
@@ -155,6 +151,9 @@ export default function Screen8EmergencyAndPrefs({ slug, instructor, onboarding,
     } else if (contacts.some((c, i) => i < filled.length && !contactFilled(c))) {
       // Partial in the middle.
       setContactsError('Name, relationship, and phone are all required.');
+      valid = false;
+    } else if (filled.some((c) => !looksLikeName(c.contact_name))) {
+      setContactsError("That doesn't look like a name — please enter your contact's real name.");
       valid = false;
     } else if (filled.some((c) => !phoneIsValid(c.phone))) {
       setContactsError('Enter a valid phone number for each emergency contact.');

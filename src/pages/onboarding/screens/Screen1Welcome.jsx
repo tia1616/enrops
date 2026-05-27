@@ -2,35 +2,13 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
+import { phoneIsValid, looksLikeName } from '../../../lib/validation.js';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
 // Screen 1 — Welcome + Identity. Phone is required; legal + preferred name
 // are pre-filled and editable. Avatar selection lives on the My Profile
 // view inside the portal -- intentionally not part of onboarding so the
 // wizard stays focused on legal/identity setup.
-
-function phoneIsValid(s) {
-  if (!s) return false;
-  const digits = s.replace(/\D/g, '');
-  return digits.length === 10 || (digits.length === 11 && digits.startsWith('1'));
-}
-
-// Gentle "looks like a real name" check. Catches keyboard mash like
-// "hhhdfhd" or "asdfgh" without blocking real edge cases.
-//  - Letters only (Unicode), plus spaces, hyphens, apostrophes, periods
-//  - At least 2 chars
-//  - Must contain at least one vowel (or be exactly 2 chars, to allow names
-//    like "Ng" or "Le")
-//  - No run of 3+ identical letters in a row (catches "Aaaa" / "hhh...")
-function looksLikeName(s) {
-  if (!s) return false;
-  const trimmed = s.trim();
-  if (trimmed.length < 2) return false;
-  if (!/^[\p{L}\s'.\-]+$/u.test(trimmed)) return false;
-  if (/(\p{L})\1{2,}/u.test(trimmed)) return false;
-  if (trimmed.length > 2 && !/[aeiouyàáâãäåèéêëìíîïòóôõöùúûüýÿ]/i.test(trimmed)) return false;
-  return true;
-}
 
 export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();

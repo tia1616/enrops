@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { avatarUrl, isValidAvatarKey } from '../../../lib/avatars';
+import { phoneIsValid, looksLikeName, emailIsValid } from '../../../lib/validation';
 
 const PURPLE = '#1C004F';
 const VIOLET = '#8C88FF';
@@ -1050,10 +1051,12 @@ function AddInstructorModal({ org, onClose, onAdded }) {
 
   function validateForm() {
     if (!firstName.trim()) return 'First name is required.';
+    if (!looksLikeName(firstName)) return "That doesn't look like a first name.";
     if (!lastName.trim()) return 'Last name is required.';
-    const e = email.trim();
-    if (!e) return 'Email is required.';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return 'That email address does not look valid.';
+    if (!looksLikeName(lastName)) return "That doesn't look like a last name.";
+    if (!email.trim()) return 'Email is required.';
+    if (!emailIsValid(email)) return 'That email address does not look valid.';
+    if (phone.trim() && !phoneIsValid(phone)) return 'That phone number does not look valid.';
     return null;
   }
 
