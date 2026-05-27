@@ -129,12 +129,15 @@ serve(async (req: Request) => {
     // never regresses if the contractor is already further along.
     const newCurrent = Math.max(3, existing?.current_step ?? 1);
 
-    // overall_status: promote 'invited' / 'not_invited' to 'in_progress' on
-    // first save; never downgrade from later states.
-    const nextOverall =
-      existing?.overall_status === 'not_invited' || existing?.overall_status === 'invited'
-        ? 'in_progress'
-        : existing?.overall_status ?? 'in_progress';
+    // overall_status: admin uploading a prior BGC is NOT contractor progress.
+    // If the contractor hasn't been invited yet, leave them at 'not_invited'.
+    // If they've been invited but not started, leave them at 'invited'.
+    // Only promote to 'in_progress' from 'invited' if the contractor themselves
+    // has done something else (other steps_completed entries) — but they can't
+    // have, since contractor-side steps go through update-onboarding-step.
+    // So: keep the existing status unchanged; only initialize to 'not_invited'
+    // when creating the row from scratch (admin BGC before any contractor-invite).
+    const nextOverall = existing?.overall_status ?? 'not_invited';
 
     const updates = {
       steps_completed: mergedSteps,
