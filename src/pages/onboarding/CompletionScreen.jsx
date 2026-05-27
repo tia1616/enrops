@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { invokeOnboardingFn, isHandledRedirect } from '../../lib/onboardingFetch.js';
 
@@ -29,9 +29,20 @@ export default function CompletionScreen({ slug, onboarding, onDismiss, onRefres
   const portalHref = `/${slug}/instructor`;
   const variant = pickVariant(status);
   const isPending = status === 'pending_background_check' || status === 'pending_stripe';
+  const isComplete = status === 'complete';
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState('');
+
+  // Auto-dismiss into the schedule view as soon as the contractor reaches
+  // 'complete'. The success card flashes briefly so they see the 🎉, then
+  // we drop them into their portal without making them click again.
+  useEffect(() => {
+    if (!isComplete) return;
+    if (!onDismiss) return;
+    const t = setTimeout(() => { onDismiss(); }, 1800);
+    return () => clearTimeout(t);
+  }, [isComplete, onDismiss]);
 
   async function handleRefresh() {
     if (refreshing) return;
@@ -122,6 +133,10 @@ export default function CompletionScreen({ slug, onboarding, onDismiss, onRefres
             >
               {variant.cta}
             </Link>
+          )}
+
+          {isComplete && (
+            <p className="mt-3 text-center text-xs text-neutral-500">Taking you to your portal…</p>
           )}
         </div>
       </div>

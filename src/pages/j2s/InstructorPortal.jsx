@@ -166,7 +166,7 @@ export default function InstructorPortal() {
       // render the wizard inline instead of the schedule view.
       const { data: onboardingRow } = await supabase
         .from("contractor_onboarding_status")
-        .select("overall_status, current_step, steps_completed, checkr_status, stripe_connect_status, stripe_payouts_enabled, stripe_connect_account_id")
+        .select("overall_status, current_step, steps_completed, checkr_status, stripe_connect_status, stripe_payouts_enabled, stripe_connect_account_id, completed_at")
         .eq("instructor_id", linkData.instructor_id)
         .maybeSingle();
 
@@ -184,6 +184,12 @@ export default function InstructorPortal() {
       // payouts_disabled. The wizard's CompletionScreen handles the
       // pending_* and payouts_disabled states. 'complete' falls through to
       // the schedule view.
+      //
+      // EXCEPTION: instructors who have ever been complete (completed_at set)
+      // keep schedule access regardless of current status. They earned it
+      // once; a later regression (e.g., Stripe payouts disabled) shouldn't
+      // boot them back into the wizard — they should see their schedule and
+      // be told separately about whatever needs attention.
       const wizardStatuses = new Set([
         "invited",
         "in_progress",
@@ -191,7 +197,8 @@ export default function InstructorPortal() {
         "pending_stripe",
         "payouts_disabled",
       ]);
-      if (onboardingRow && wizardStatuses.has(onboardingRow.overall_status)) {
+      const everCompleted = Boolean(onboardingRow?.completed_at);
+      if (onboardingRow && wizardStatuses.has(onboardingRow.overall_status) && !everCompleted) {
         setOnboarding(onboardingRow);
         setPhase("onboarding");
         return;
@@ -214,13 +221,14 @@ export default function InstructorPortal() {
     if (!instructor?.id) return;
     const { data: row } = await supabase
       .from("contractor_onboarding_status")
-      .select("overall_status, current_step, steps_completed, checkr_status, stripe_connect_status, stripe_payouts_enabled, stripe_connect_account_id")
+      .select("overall_status, current_step, steps_completed, checkr_status, stripe_connect_status, stripe_payouts_enabled, stripe_connect_account_id, completed_at")
       .eq("instructor_id", instructor.id)
       .maybeSingle();
     if (!row) return;
     setOnboarding(row);
-    if (row.overall_status === "complete") {
-      // Drop into the schedule view.
+    if (row.overall_status === "complete" || row.completed_at) {
+      // Either freshly complete or already-been-complete — drop into the
+      // schedule view immediately.
       await Promise.all([loadAssignments(instructor.id), loadCycles(instructor)]);
       setPhase("ready");
     }
