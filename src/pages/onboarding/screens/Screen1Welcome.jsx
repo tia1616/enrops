@@ -15,6 +15,23 @@ function phoneIsValid(s) {
   return digits.length === 10 || (digits.length === 11 && digits.startsWith('1'));
 }
 
+// Gentle "looks like a real name" check. Catches keyboard mash like
+// "hhhdfhd" or "asdfgh" without blocking real edge cases.
+//  - Letters only (Unicode), plus spaces, hyphens, apostrophes, periods
+//  - At least 2 chars
+//  - Must contain at least one vowel (or be exactly 2 chars, to allow names
+//    like "Ng" or "Le")
+//  - No run of 3+ identical letters in a row (catches "Aaaa" / "hhh...")
+function looksLikeName(s) {
+  if (!s) return false;
+  const trimmed = s.trim();
+  if (trimmed.length < 2) return false;
+  if (!/^[\p{L}\s'.\-]+$/u.test(trimmed)) return false;
+  if (/(\p{L})\1{2,}/u.test(trimmed)) return false;
+  if (trimmed.length > 2 && !/[aeiouyàáâãäåèéêëìíîïòóôõöùúûüýÿ]/i.test(trimmed)) return false;
+  return true;
+}
+
 export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
   const [firstName, setFirstName] = useState(instructor.first_name || '');
@@ -35,11 +52,17 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
     if (!firstName.trim()) {
       setFirstNameError('Legal first name is required.');
       valid = false;
+    } else if (!looksLikeName(firstName)) {
+      setFirstNameError("That doesn't look like a name — please enter your legal first name.");
+      valid = false;
     } else {
       setFirstNameError('');
     }
     if (!lastName.trim()) {
       setLastNameError('Legal last name is required.');
+      valid = false;
+    } else if (!looksLikeName(lastName)) {
+      setLastNameError("That doesn't look like a name — please enter your legal last name.");
       valid = false;
     } else {
       setLastNameError('');
