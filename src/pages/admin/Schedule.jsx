@@ -9,6 +9,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
 import HatGuide from "../../components/HatGuide";
+import NotifyRemovalModal from "./NotifyRemovalModal";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -334,6 +335,7 @@ export default function Schedule() {
   const [lastOp, setLastOp] = useState(null); // { type, ... } — supports a single-step undo
   const [candidatesFor, setCandidatesFor] = useState(null); // { session, currentAssignment | null }
   const [changeRequestFor, setChangeRequestFor] = useState(null); // { session, assignment }
+  const [notifyRemoval, setNotifyRemoval] = useState(null); // { mode, session, assignment, instructor, onProceed }
   // When user reassigns from a change-request modal, we stash the request's id so the
   // candidate-picker's onPick can auto-advance to the next change request afterward.
   const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
@@ -983,6 +985,32 @@ export default function Schedule() {
   }
 
   async function handlePick(targetSession, currentAssignment, instructorId, _warningsIgnored, role = "lead") {
+    // Reassignment of a previously-emailed instructor: pause to let admin
+    // preview a removal notice for the displaced instructor before the UPDATE
+    // (which wipes their email trail). New instructor doesn't change here.
+    if (
+      currentAssignment &&
+      currentAssignment.email_sent_at &&
+      currentAssignment.instructor_id &&
+      currentAssignment.instructor_id !== instructorId
+    ) {
+      const displaced = state.instructors.find((i) => i.id === currentAssignment.instructor_id);
+      setNotifyRemoval({
+        mode: "reassign",
+        session: targetSession,
+        assignment: currentAssignment,
+        instructor: displaced,
+        onProceed: async () => {
+          setNotifyRemoval(null);
+          await doPick(targetSession, currentAssignment, instructorId, role);
+        },
+      });
+      return;
+    }
+    await doPick(targetSession, currentAssignment, instructorId, role);
+  }
+
+  async function doPick(targetSession, currentAssignment, instructorId, role = "lead") {
     try {
       if (currentAssignment) {
         const prevInstructorId = currentAssignment.instructor_id;
@@ -1069,6 +1097,28 @@ export default function Schedule() {
 
   async function handleRemoveAssignment(targetSession, currentAssignment) {
     if (!currentAssignment) return;
+    // If we already informed this instructor (email_sent_at set), pause to let
+    // the admin preview a "no longer on your schedule" notice before deleting.
+    // The deletion is silent at the DB layer (UNIQUE(session,role) forces DELETE
+    // over UPDATE 'withdrawn'), so the instructor only learns via this email.
+    if (currentAssignment.email_sent_at && currentAssignment.instructor_id) {
+      const instructor = state.instructors.find((i) => i.id === currentAssignment.instructor_id);
+      setNotifyRemoval({
+        mode: "remove",
+        session: targetSession,
+        assignment: currentAssignment,
+        instructor,
+        onProceed: async () => {
+          setNotifyRemoval(null);
+          await doRemoveAssignment(targetSession, currentAssignment);
+        },
+      });
+      return;
+    }
+    await doRemoveAssignment(targetSession, currentAssignment);
+  }
+
+  async function doRemoveAssignment(targetSession, currentAssignment) {
     try {
       const snapshot = {
         organization_id: org.id,
@@ -1971,6 +2021,26 @@ export default function Schedule() {
               advanceOrCloseChangeRequest(handledId);
             }
           }}
+        />
+      )}
+      {notifyRemoval && (
+        <NotifyRemovalModal
+          mode={notifyRemoval.mode}
+          instructor={notifyRemoval.instructor}
+          assignment={notifyRemoval.assignment}
+          session={notifyRemoval.session}
+          org={org}
+          remainingActiveCount={
+            state.assignments.filter(
+              (a) =>
+                a.instructor_id === notifyRemoval.assignment.instructor_id &&
+                a.id !== notifyRemoval.assignment.id &&
+                a.status !== "withdrawn" &&
+                a.status !== "declined",
+            ).length
+          }
+          onCancel={() => setNotifyRemoval(null)}
+          onProceed={notifyRemoval.onProceed}
         />
       )}
     </div>
