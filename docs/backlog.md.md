@@ -89,10 +89,10 @@ Default sender display name — confirmed or still open?
 * \- \[ ] In admin sidebar, add "Open my instructor view →" link when admin has an instructor row
 * 
 * \### Admin: add-instructor form (\~1 hr, discovered 2026-05-25 during contractor smoke test)
-* \- \[ ] /admin/instructors lists instructors but has no "Add instructor" button — rows currently only get created via direct SQL or the availability survey signup. Add an "Add instructor" CTA on the Instructors page that opens a small form (first name, last name, email, phone, contractor\_tier) and inserts a row in `instructors`. Follow-up prompt: "Send onboarding invite now?" → fires `contractor-invite` immediately. Until this ships, the only way to onboard a new contractor is for an engineer to insert the row by hand.
+* \- \[x] /admin/contacts Instructors tab Add Instructor modal — form + two-phase "send invite now?" flow shipped. ✅
 * 
 * \### Magic-link email copy: add "onboarding" context (small, discovered 2026-05-25)
-* \- \[ ] `auth-send-magic-link` edge function currently has three branches: admin / instructor / parent. The instructor branch says "Sign in to view your schedule" — wrong copy for a contractor who's mid-onboarding wizard (no schedule yet). Add a fourth `context: 'onboarding'` branch with subject "Continue your onboarding at \[org name\]" and body "Pick up where you left off." Wire the SignInPanel inside OnboardingRouter to pass `context: 'onboarding'` (and/or have client code pass it whenever the email recipient has `overall_status != 'complete'`).
+* \- \[x] Shipped 2026-05-27. `auth-send-magic-link` has the `onboarding` branch; OnboardingRouter passes it; instructor-portal sign-in auto-detects mid-wizard contractors (overall_status != 'complete') and switches to onboarding copy server-side. ✅
 * 
 * \### Screen 3 ORS: supplies bullet rewritten 2026-05-25
 * \- \[x] `src/pages/onboarding/screens/Screen3ORS.jsx` line 89-91 was "You use your own supplies, transportation, and insurance unless you've agreed otherwise in writing." Dropped the supplies clause since J2S provides materials. Now reads "You use your own transportation and carry your own car insurance." ⚠️ Heads-up: provider-supplied materials is one of the IRS factors that pushes toward "employee" classification. If a future tenant ships where the contractor DOES bring their own supplies, this bullet should be made configurable or surfaced in their engagement letter. Worth a CPA review once Enrops has 2+ tenants.
@@ -144,14 +144,14 @@ Default sender display name — confirmed or still open?
 \### Cleanup: `dev-seed-designer-access` edge function (deployed 2026-05-26)
 \- \[ ] One-shot dev function deployed to seed designer test accounts (Sasha + Oleksandra admin invites, 3 fake personas: instructor/parent/contractor). Gated by `x-seed-secret` header, idempotent — re-run any time to refresh magic links. After designers wrap their visual-direction pass, delete the function from Supabase dashboard and remove `supabase/functions/dev-seed-designer-access/` from the repo. Also delete the 3 fake personas from the DB: `designer-instructor@enrops.com`, `designer-parent@enrops.com`, `designer-contractor@enrops.com` (auth.users + instructors/parents/contractor_onboarding_status rows).
 
-\### "Your assignment changed" instructor email (gap found mid-reassignment)
-\- \[ ] Today's `send-patch-offer` only emails instructors who were **newly assigned and not yet emailed**. If an admin reassigns a camp from Instructor A (already emailed, may have accepted) to Instructor B, A is silently bumped — no email, no offer activity log entry, no "your schedule changed" notice. A finds out by realizing their portal no longer shows the camp, or worse, by showing up.
-\- \[ ] Detect the case: on a `camp_assignments` update where `instructor_id` changes AND the row's previous `email_sent_at` is not null, queue a "removed from camp" notice for the previous instructor. Capture `prev_instructor_id` so the notice has a target after the row mutates.
-\- \[ ] Surface as a Schedule tip (same pattern as the existing pending-patches banner): *"You moved [Camp] off [Instructor A]'s schedule — let them know?"* with a "Preview email" → "Send" flow. Don't auto-fire; the admin should see the wording first.
-\- \[ ] Email copy: warm, brief, no blame. State the camp + week is no longer on their schedule, why if a reason was captured (low enrollment, schedule change, etc.), what's still on their schedule, and offer to reach out with questions. **No "cancel" language** (J2S principle applies even though this is internal-facing — it's instructor-facing, not parent-facing, but the tone rule still holds).
-\- \[ ] If their **entire** cycle assignment count just dropped to zero, change the framing — they were de-staffed for the cycle, not just shuffled. Different copy + soft check-in.
-\- \[ ] Write to `instructor_offer_messages` with a new `kind` (e.g. `removal_notice` or `assignment_changed`) so the EmailActivityModal timeline stays complete.
-\- \[ ] Pay reconciliation: if pay rows / Stripe transfers were already created against the removed assignment, flag for admin review in the same tip (don't auto-void).
+\### "Your assignment changed" instructor email (gap found mid-reassignment) — mostly shipped 2026-05-27
+\- \[x] Detection: handleRemoveAssignment + handlePick now gate on `email_sent_at` set and open NotifyRemovalModal before the DELETE/UPDATE fires. ✅
+\- \[x] Admin-preview-before-send modal: subject + editable warm-toned body, Send/Skip/Cancel buttons. New edge function `notify-instructor-removed` handles Resend send. ✅
+\- \[x] Email copy: warm, no "cancel" language, "no longer on your schedule" framing. ✅
+\- \[x] Zero-remaining-assignments detection: modal swaps to softer de-staffed copy when remainingActiveCount is 0. ✅
+\- \[ ] **Still queued:** write to `instructor_offer_messages` with new `kind` for EmailActivityModal timeline. Audit currently only lives in Resend logs (`type=instructor_removed` tag).
+\- \[ ] **Still queued:** pay reconciliation flag — if installments / Stripe transfers exist against the removed assignment, surface for admin review in the modal.
+\- \[ ] **Still queued:** handleDrop (drag-and-drop move) source DELETE doesn't open the modal yet; only Remove from the picker + Reassign via Pick do.
 
 \### Cancel-a-program flow (originally raised 2026-05-20 as a question; now scoped)
 \- \[ ] Programs tab is currently read-only and only shows afterschool (`programs` table, FA26/WI27/SP27). Summer camps live in the Schedule tab (`camp_sessions`, by `cycle_id`). Unify these so cancellation has one home.
@@ -218,4 +218,21 @@ Default sender display name — confirmed or still open?
   - `Camas P&R: Lacamas Lodge` (was `Lacamas Lodge`)
   - `Camas P&R: Camas Community Center` (was `Camas Parks and Rec`)
 - The v2 partner-location mockup ([mockups/partner-location-detail.html](../mockups/partner-location-detail.html)) introduces a proper `partner_locations` table with `partner_name` + `location_name` as separate fields. When that lands, migrate these colon-named rows back to clean schema. Original names are preserved in `name_aliases` so the tracker sync stays unbroken.
+
+- add legal docs to enrops site- local folder in downloads zip
+
+\## 2026-05-27
+
+\### Done this session (pre-invite polish)
+\- ✅ Magic-link onboarding context (server auto-detects mid-wizard contractor on instructor-portal sign-in)
+\- ✅ Onboarding-complete emails — gateCheck.ts fires contractor + admin (`org.alert_email`) on transition to `complete`
+\- ✅ Wizard input validation: Screen 1 legal first + last name required; Screen 8 emergency contact phone format
+\- ✅ Reassignment / unassign notification gap — NotifyRemovalModal + `notify-instructor-removed` edge function
+\- ✅ Jessica's own onboarding reset for end-to-end test (overall_status='invited', steps_completed={}, Stripe/Checkr cleared)
+
+\### Still pending before / during real instructor invites
+\- \[ ] Add enrops legal docs to marketing site (after invites go out — local folder is in downloads zip)
+\- \[ ] Reset full end-to-end test by Jessica (her DB row is reset — walk wizard with magic link)
+\- \[ ] Reassignment v2 (queued): write to instructor_offer_messages with new `kind`, pay reconciliation flag, handleDrop source-delete also gate on modal
+\- \[ ] Dora "newly cleared" homescreen surface (admin email is the placeholder for now)
 

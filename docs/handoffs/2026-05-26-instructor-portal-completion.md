@@ -53,7 +53,7 @@ Pick up where: next session focus is whatever Jessica wants — instructor onboa
 - **#46** Per-location skip dates for FA26 — `program_locations.skipped_dates DATE[]` + admin UI to enter them (teacher planning days, holidays). Session derivation skips these.
 
 **Nice-to-have soon:**
-- **#34** Front-end input validation across instructor portal (phone, names, email, DOB) — needed before real instructors hit the wizard
+- ~~**#34** Front-end input validation across instructor portal~~ — shipped 2026-05-27 (Screen 1 names required, Screen 8 emergency phone format)
 - **#27** Lower curriculum match threshold OR show all unlinked at publish time
 - **#28** LinkExistingModal: optionally rename camp_session.curriculum_name when linking
 - **#29** Backfill ages_min/ages_max on 54 of 57 J2S camps
@@ -69,12 +69,12 @@ Pick up where: next session focus is whatever Jessica wants — instructor onboa
 **Older queued (from prior sessions):**
 - Test-mode Stripe keys (so future contractor smoke tests work)
 - Viewer role on `org_members` (designers, accountants)
-- `/admin/instructors` Add-instructor "send invite now?" flow
-- Dora "newly cleared instructor" homescreen surface
+- ~~`/admin/instructors` Add-instructor "send invite now?" flow~~ — shipped (AddInstructorModal two-phase form → invite, in `/admin/contacts` Instructors tab)
+- Dora "newly cleared instructor" homescreen surface — partial: 2026-05-27 admin email on `complete` transition is the placeholder; Dora UI still queued
 - Real Enrops/J2S logo art (PWA icon)
 - Admin actions on Payroll (approve/withhold/mark paid)
 - Full dismissal flow (reason capture, pay reconciliation, open-assignment handoff)
-- Instructor notification gap on unassign
+- ~~Instructor notification gap on unassign~~ — mostly shipped 2026-05-27 (NotifyRemovalModal + notify-instructor-removed function). Still queued: instructor_offer_messages audit entry, pay reconciliation flag, drag-and-drop source delete
 
 ## Open known limitations (J2S, today)
 
