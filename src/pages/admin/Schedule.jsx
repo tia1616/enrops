@@ -398,7 +398,7 @@ export default function Schedule() {
           : Promise.resolve({ data: [], error: null }),
         supabase
           .from("instructors")
-          .select("id, first_name, last_name")
+          .select("id, first_name, last_name, preferred_name, email")
           .eq("organization_id", org.id)
           .eq("is_active", true)
           .order("first_name", { ascending: true }),
