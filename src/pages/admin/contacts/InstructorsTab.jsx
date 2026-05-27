@@ -85,7 +85,7 @@ export default function InstructorsTab({ org }) {
           .select(
             `id, first_name, last_name, preferred_name, email, phone, is_active,
              contractor_tier, date_of_birth, shirt_size, photo_url,
-             site_preferences, availability,
+             site_preferences, availability, auth_user_id,
              first_aid_cpr_url, first_aid_cpr_expires_at`
           )
           .eq('organization_id', org.id)
@@ -181,15 +181,27 @@ export default function InstructorsTab({ org }) {
         }));
         return;
       }
-      // Refresh this instructor's onboarding status so the button label flips
-      // from "Send invite" to "Resend".
-      const { data: fresh } = await supabase
-        .from('contractor_onboarding_status')
-        .select('instructor_id, overall_status, current_step, checkr_status, stripe_payouts_enabled, background_check_source')
-        .eq('instructor_id', instructorId)
-        .maybeSingle();
-      if (fresh) {
-        setRows((rs) => (rs ?? []).map((r) => (r.id === instructorId ? { ...r, status: fresh } : r)));
+      // Refresh both the onboarding status AND the instructor's auth_user_id —
+      // contractor-invite creates the auth.users row on first send, and the
+      // button label flips from "Send invite" to "Resend" based on auth_user_id.
+      const [{ data: fresh }, { data: freshInst }] = await Promise.all([
+        supabase
+          .from('contractor_onboarding_status')
+          .select('instructor_id, overall_status, current_step, checkr_status, stripe_payouts_enabled, background_check_source')
+          .eq('instructor_id', instructorId)
+          .maybeSingle(),
+        supabase
+          .from('instructors')
+          .select('auth_user_id')
+          .eq('id', instructorId)
+          .maybeSingle(),
+      ]);
+      if (fresh || freshInst) {
+        setRows((rs) => (rs ?? []).map((r) => (
+          r.id === instructorId
+            ? { ...r, ...(freshInst ? { auth_user_id: freshInst.auth_user_id } : {}), ...(fresh ? { status: fresh } : {}) }
+            : r
+        )));
       }
       setInviteResult((s) => ({
         ...s,
@@ -371,10 +383,16 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
   // Invite button visible for adults who haven't completed onboarding and
   // aren't in a terminal state. Hidden for minors (they don't go through
   // the wizard) and for complete/declined/abandoned/pending_* statuses.
+  //
+  // First-vs-Resend is keyed off auth_user_id, not overall_status — admin
+  // actions like Upload BGC can promote status to in_progress without
+  // contractor-invite ever running, leaving auth_user_id null. Showing
+  // "Resend invite" in that case is a lie: no invite was ever sent.
+  const everInvited = Boolean(row.auth_user_id);
   const inviteState =
     !row.is_active || isMinor || ['complete', 'declined', 'abandoned', 'pending_background_check', 'pending_stripe', 'payouts_disabled'].includes(status)
       ? null
-      : status === 'not_invited' || !row.status
+      : !everInvited
       ? 'first'
       : 'resend';
 
@@ -1071,7 +1089,7 @@ function AddInstructorModal({ org, onClose, onAdded }) {
           contractor_tier: tier || null,
           is_active: true,
         })
-        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at')
+        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, auth_user_id, first_aid_cpr_url, first_aid_cpr_expires_at')
         .single();
 
       if (insErr) {
