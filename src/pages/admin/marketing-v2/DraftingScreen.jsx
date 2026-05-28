@@ -13,8 +13,8 @@ import { INK, MUTED, PURPLE, RULE, VIOLET } from "../marketing/tokens.jsx";
 
 const STEPS = [
   { at: 0,  label: "Finding the parents you asked for…" },
-  { at: 6,  label: "Don's planning the schedule…" },
-  { at: 14, label: "Writing each email in Don's voice…" },
+  { at: 6,  label: "Ennie's planning the schedule…" },
+  { at: 14, label: "Writing each email in Ennie's voice…" },
   { at: 38, label: "Checking the copy against your brand rules…" },
 ];
 
@@ -37,7 +37,7 @@ export default function DraftingScreen() {
   return (
     <div style={{ maxWidth: 640, margin: "0 auto", padding: "32px 16px 48px", textAlign: "center" }}>
       <h1 style={{ margin: 0, color: PURPLE, fontSize: 28, fontWeight: 700 }}>
-        Don's drafting your campaign…
+        Ennie's drafting your campaign…
       </h1>
       <p style={{ margin: "10px 0 0", fontSize: 14, color: MUTED, lineHeight: 1.5 }}>
         This usually takes 30–60 seconds. You can stay here or come back later — we'll keep going either way.

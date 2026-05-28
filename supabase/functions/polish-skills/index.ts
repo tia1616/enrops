@@ -4,7 +4,7 @@
 // to polish them into parent-impressive, concept-specific language per the
 // v2 extraction prompt's rule #9 (see ../extract-curriculum-details/prompts.ts).
 //
-// Use case: the "[Polish] Polish with Dora" button on chip fields in
+// Use case: the "[Polish] Polish with Ennie" button on chip fields in
 // CurriculumReview.jsx. Operator clicks -> we re-rank and rewrite the skills
 // list -> operator accepts or edits the preview before saving.
 //

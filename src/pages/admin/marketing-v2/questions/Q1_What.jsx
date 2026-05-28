@@ -33,7 +33,7 @@ export default function Q1_What({ inputs, setField, onNext, canNext }) {
   return (
     <QuestionStep
       title="What are you promoting?"
-      helper="Pick one or more — Don will weave them into a single campaign so families hear about each without overlap."
+      helper="Pick one or more — Ennie will weave them into a single campaign so families hear about each without overlap."
       onNext={onNext}
       canNext={canNext}
     >

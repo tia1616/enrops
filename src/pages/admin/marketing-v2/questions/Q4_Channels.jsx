@@ -28,7 +28,7 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
   return (
     <QuestionStep
       title="How are you reaching them?"
-      helper="Pick any combo — Don will draft each one."
+      helper="Pick any combo — Ennie will draft each one."
       onBack={onBack}
       canNext={canNext}
       isLast

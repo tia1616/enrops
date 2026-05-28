@@ -52,7 +52,7 @@ async function friendlyDraftError(error) {
     return `Your org is missing ${missing}. Add it in Settings, then try again.`;
   }
   if (code === "draft_timeout") {
-    return "Don took too long to draft this one. Try again — usually clears up on a retry.";
+    return "Ennie took too long to draft this one. Try again — usually clears up on a retry.";
   }
   if (typeof code === "string" && code.toLowerCase().includes("forbidden")) {
     return "You don't have admin access to this org's marketing.";
@@ -200,7 +200,7 @@ export default function AICampaignBuilder() {
       return;
     }
     if (!data?.schedule?.touchpoints?.length) {
-      dispatch({ type: "DRAFT_FAILED", error: "Don couldn't draft a schedule. Try again, or simplify the topics." });
+      dispatch({ type: "DRAFT_FAILED", error: "Ennie couldn't draft a schedule. Try again, or simplify the topics." });
       return;
     }
     dispatch({
@@ -311,7 +311,7 @@ function CelebrationScreen({ draft, onReset }) {
       <div style={{ fontSize: 56 }}>🎉</div>
       <h2 style={{ margin: "8px 0 4px", fontSize: 28, color: PURPLE }}>Huzzah!</h2>
       <p style={{ margin: 0, color: INK, fontSize: 15 }}>
-        {count} touchpoint{count === 1 ? "" : "s"} scheduled for {recipientCount} recipient{recipientCount === 1 ? "" : "s"}. Don will take it from here.
+        {count} touchpoint{count === 1 ? "" : "s"} scheduled for {recipientCount} recipient{recipientCount === 1 ? "" : "s"}. Ennie will take it from here.
       </p>
       <div style={{ marginTop: 16, display: "inline-flex", alignItems: "center", gap: 6, background: "#EAF3DE", color: OK, fontWeight: 600, fontSize: 13, padding: "6px 12px", borderRadius: 999, border: `1px solid ${OK}` }}>
         ⏱ Hours of work, done in 90 seconds

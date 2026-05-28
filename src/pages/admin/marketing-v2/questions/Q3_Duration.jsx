@@ -1,4 +1,4 @@
-// Q3_Duration — radio-card group. Don uses this to space touchpoints.
+// Q3_Duration — radio-card group. Ennie uses this to space touchpoints.
 
 import QuestionStep from "../QuestionStep.jsx";
 import { PURPLE, RULE, INK, MUTED, OK } from "../../marketing/tokens.jsx";
@@ -14,7 +14,7 @@ export default function Q3_Duration({ inputs, setField, onNext, onBack, canNext 
   return (
     <QuestionStep
       title="How long should this run?"
-      helper="Don spaces the touchpoints out so they land at the right moments."
+      helper="Ennie spaces the touchpoints out so they land at the right moments."
       onNext={onNext}
       onBack={onBack}
       canNext={canNext}
@@ -48,7 +48,7 @@ export default function Q3_Duration({ inputs, setField, onNext, onBack, canNext 
 
       <div style={{ marginTop: 14, padding: 10, background: "#eaf3de", color: OK, fontSize: 13, borderRadius: 6, display: "flex", gap: 8, alignItems: "flex-start" }}>
         <span>📊</span>
-        <span>1-month windows convert best for early-bird campaigns. Don adds 48h and 24h reminders automatically before each deadline.</span>
+        <span>1-month windows convert best for early-bird campaigns. Ennie adds 48h and 24h reminders automatically before each deadline.</span>
       </div>
     </QuestionStep>
   );

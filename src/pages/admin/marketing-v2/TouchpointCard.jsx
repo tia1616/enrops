@@ -162,7 +162,7 @@ function stripHtml(html) {
 
 // Wraps merge tokens like {{first_name}} in a styled span so operators can
 // see at a glance which bits get personalized at send time. Returns HTML safe
-// to drop into dangerouslySetInnerHTML (input is Don's already-sanitized HTML).
+// to drop into dangerouslySetInnerHTML (input is Ennie's already-sanitized HTML).
 function highlightTokens(html) {
   if (!html) return "";
   return html.replace(/\{\{(\w+)\}\}/g, (_, name) =>

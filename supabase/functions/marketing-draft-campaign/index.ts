@@ -46,7 +46,7 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 const DRAFT_MODEL = Deno.env.get("MARKETING_DRAFT_MODEL") ?? "claude-opus-4-6";
 
 // Multi-touchpoint schedules return ~6-9 emails worth of JSON. 8000 max_tokens
-// fits comfortably; if Don wants more, future chunks can stream or paginate.
+// fits comfortably; if Ennie wants more, future chunks can stream or paginate.
 const MAX_TOKENS = 8000;
 const CLAUDE_TIMEOUT_MS = 120_000;
 const RECIPIENT_HARD_CAP = 5000;
@@ -75,7 +75,7 @@ type WhoInput =
 
 type DraftInputs = {
   // Topics being promoted. Accept either a single string (legacy / quick send)
-  // or a list of topics (multi-topic campaign — Don weaves them into one
+  // or a list of topics (multi-topic campaign — Ennie weaves them into one
   // schedule with topic-tagged touchpoints).
   what: string | string[];
   who: WhoInput;
@@ -340,7 +340,7 @@ function joinWithAnd(items: string[]): string {
 
 // ---------------------------------------------------------------------------
 // Curriculum grounding — match input topics against this org's curricula and
-// inject the matched curriculum's facts into Don's prompt so he writes from
+// inject the matched curriculum's facts into Ennie's prompt so she writes from
 // real data instead of making things up.
 // ---------------------------------------------------------------------------
 

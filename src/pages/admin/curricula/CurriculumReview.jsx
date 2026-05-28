@@ -1,7 +1,7 @@
 // /admin/curricula/:id/review
 //
 // Chunk 3 of the curriculum onboarding flow. Replaces the read-only placeholder.
-// One-screen review: Dora banner (flags fields she's unsure about) above a full
+// One-screen review: Ennie banner (flags fields she's unsure about) above a full
 // editable surface of every extracted curricula + curriculum_sessions field.
 // Save-as-draft keeps status='extracted'; Publish flips to 'published' after a
 // two-step modal (confirm name → optionally link existing program runs).
@@ -10,7 +10,7 @@
 // organization_id. No J2S hardcoding.
 //
 // Memory pointers: feedback_one_place_to_edit, project_enrops_curricula_upstream,
-// feedback_enrops_principles, project_enrops_platform_vision (Dora = Director).
+// feedback_enrops_principles, project_enrops_platform_vision (Ennie = Director).
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
@@ -32,7 +32,7 @@ const PANEL = "#fff";
 // instructor prep docs + structured data for scheduling).
 const TIME_SAVED_HOURS = 10;
 
-// Fields Dora flags when the value is null/empty AND the field is in this list.
+// Fields Ennie flags when the value is null/empty AND the field is in this list.
 // Low-confidence extracted fields are flagged regardless of list membership.
 const FLAG_IF_NULL = new Set([
   "age_range", "grade_range", "class_size", "format",
@@ -193,12 +193,12 @@ export default function CurriculumReview() {
   const [preLinkedProgramCount, setPreLinkedProgramCount] = useState(0);
   const [preLinkedCampSessionCount, setPreLinkedCampSessionCount] = useState(0);
 
-  // Polish with Dora: when set, the modal opens for this field
+  // Polish with Ennie: when set, the modal opens for this field
   const [polishConfig, setPolishConfig] = useState(null);
-  // Chunk 3.5: capability_definitions (14 rows, global) + Dora's Phase 2
+  // Chunk 3.5: capability_definitions (14 rows, global) + Ennie's Phase 2
   // recommendation for the just-published curriculum (fetched after publish).
   const [capabilities, setCapabilities] = useState([]);
-  const [doraRecommendation, setDoraRecommendation] = useState(null);
+  const [ennieRecommendation, setEnnieRecommendation] = useState(null);
   // Link-existing-programs modal: opens from the celebration screen's
   // link_existing recommendation CTA, or from the published-curriculum CTA bar.
   const [linkModalOpen, setLinkModalOpen] = useState(false);
@@ -432,7 +432,7 @@ export default function CurriculumReview() {
     timers.set(key, setTimeout(run, 800));
   }
 
-  // Polish with Dora: open the modal pre-loaded with the right field's context.
+  // Polish with Ennie: open the modal pre-loaded with the right field's context.
   // For curriculum-level skill rollups, the onAccept replaces the field via
   // the same debounced save path. For per-session skills_practiced, it routes
   // through saveSessionField.
@@ -653,15 +653,15 @@ export default function CurriculumReview() {
       });
       if (tsErr) console.warn("time_saved_events insert failed (non-fatal):", tsErr.message);
 
-      // Phase 2 recommendation: ask dora-recommend what the next clear action
+      // Phase 2 recommendation: ask ennie-recommend what the next clear action
       // is. Non-fatal -- the celebration screen has a static fallback CTA.
       try {
-        const { data: recData, error: recErr } = await supabase.functions.invoke("dora-recommend", {
+        const { data: recData, error: recErr } = await supabase.functions.invoke("ennie-recommend", {
           body: { curriculum_id: curriculum.id },
         });
-        if (!recErr && recData) setDoraRecommendation(recData);
+        if (!recErr && recData) setEnnieRecommendation(recData);
       } catch (e) {
-        console.warn("dora-recommend failed (using fallback):", e instanceof Error ? e.message : String(e));
+        console.warn("ennie-recommend failed (using fallback):", e instanceof Error ? e.message : String(e));
       }
       setPublishing(false);
       setPublishStep(3); // celebration
@@ -737,7 +737,7 @@ export default function CurriculumReview() {
 
         {/* RIGHT */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <DoraBanner flagCount={flagCount} onJump={jumpToFirstFlag} />
+          <EnnieBanner flagCount={flagCount} onJump={jumpToFirstFlag} />
 
           <section style={card}>
             <div style={sectionHead}>
@@ -745,7 +745,7 @@ export default function CurriculumReview() {
               <span style={{ color: MUTED, fontSize: 12 }}>Edits save as you go</span>
             </div>
             <p style={sectionBlurb}>
-              Everything below feeds your registration page, marketing emails, instructor portal, and parent recaps. Fields with a gold ring are ones Dora wasn't fully sure about — worth a glance.
+              Everything below feeds your registration page, marketing emails, instructor portal, and parent recaps. Fields with a gold ring are ones Ennie wasn't fully sure about — worth a glance.
             </p>
 
             <FieldText
@@ -950,7 +950,7 @@ export default function CurriculumReview() {
           preLinkedProgramCount={preLinkedProgramCount}
           preLinkedCampSessionCount={preLinkedCampSessionCount}
           capabilities={capabilities}
-          recommendation={doraRecommendation}
+          recommendation={ennieRecommendation}
           onDone={() => navigate("/admin/curricula")}
           onRecommendationCta={(to) => navigate(to)}
           onLinkExisting={() => {
@@ -1025,7 +1025,7 @@ function SaveStateLabel({ state }) {
 
 // --- Subcomponents ---
 
-function DoraAvatar({ size = 38, calm = false }) {
+function EnnieAvatar({ size = 38, calm = false }) {
   return (
     <div style={{
       width: size, height: size, borderRadius: "50%", overflow: "hidden",
@@ -1033,8 +1033,8 @@ function DoraAvatar({ size = 38, calm = false }) {
       border: `1px solid ${calm ? RULE : GOLD_BORDER}`,
     }}>
       <img
-        src="/dora-full.jpg"
-        alt="Dora"
+        src="/ennie-full.jpg"
+        alt="Ennie"
         style={{
           width: "100%", height: "100%",
           objectFit: "cover", objectPosition: "center 18%",
@@ -1047,14 +1047,14 @@ function DoraAvatar({ size = 38, calm = false }) {
   );
 }
 
-function DoraBanner({ flagCount, onJump }) {
+function EnnieBanner({ flagCount, onJump }) {
   const calm = flagCount === 0;
   return (
-    <section style={calm ? doraBannerCalm : doraBanner}>
-      <DoraAvatar calm={calm} />
+    <section style={calm ? ennieBannerCalm : ennieBanner}>
+      <EnnieAvatar calm={calm} />
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700, color: calm ? INK : PURPLE, fontSize: 14 }}>
-          Dora <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your Director</span>
+          Ennie <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
         </div>
         <div style={{ fontSize: 14, color: INK, marginTop: 2, lineHeight: 1.45 }}>
           {calm
@@ -1063,7 +1063,7 @@ function DoraBanner({ flagCount, onJump }) {
         </div>
       </div>
       {!calm && (
-        <button onClick={onJump} style={doraActionBtn}>Jump to first ↓</button>
+        <button onClick={onJump} style={ennieActionBtn}>Jump to first ↓</button>
       )}
     </section>
   );
@@ -1095,7 +1095,7 @@ function FieldLabel({ children, inlineHelp, flagged }) {
 
 function FlagBadge() {
   return (
-    <span title="Double-check this one — Dora wasn't fully sure." style={flagBadge}>◆ Dora flagged</span>
+    <span title="Double-check this one — Ennie wasn't fully sure." style={flagBadge}>◆ Ennie flagged</span>
   );
 }
 
@@ -1140,7 +1140,7 @@ function FieldTextarea({ label, inlineHelp, help, value, onChange, flagged, save
             type="button"
             onClick={() => canPolish && onPolish(value)}
             disabled={!canPolish}
-            title={canPolish ? "Ask Dora to rewrite this into parent-impressive copy" : "Add text first"}
+            title={canPolish ? "Ask Ennie to rewrite this into parent-impressive copy" : "Add text first"}
             style={{
               background: canPolish ? GOLD_SOFT : "transparent",
               border: `1px solid ${canPolish ? GOLD_BORDER : RULE}`,
@@ -1153,7 +1153,7 @@ function FieldTextarea({ label, inlineHelp, help, value, onChange, flagged, save
               whiteSpace: "nowrap",
             }}
           >
-            ✨ Polish with Dora
+            ✨ Polish with Ennie
           </button>
         )}
       </div>
@@ -1312,7 +1312,7 @@ function FieldChips({ label, inlineHelp, help, value, onChange, flagged, saved, 
             type="button"
             onClick={() => canPolish && onPolish(value)}
             disabled={!canPolish}
-            title={canPolish ? "Ask Dora to re-rank and rewrite these as parent-impressive concepts" : "Add at least one skill first"}
+            title={canPolish ? "Ask Ennie to re-rank and rewrite these as parent-impressive concepts" : "Add at least one skill first"}
             style={{
               background: canPolish ? GOLD_SOFT : "transparent",
               border: `1px solid ${canPolish ? GOLD_BORDER : RULE}`,
@@ -1325,7 +1325,7 @@ function FieldChips({ label, inlineHelp, help, value, onChange, flagged, saved, 
               whiteSpace: "nowrap",
             }}
           >
-            ✨ Polish with Dora
+            ✨ Polish with Ennie
           </button>
         )}
       </div>
@@ -1497,17 +1497,17 @@ function PolishModal({ curriculumId, config, onClose }) {
     ? "Rewrite to lead with what kids do + make, drop jargon, and read parent-impressive. Edit anything before accepting."
     : `Rewrite + re-rank into the top ${targetCount} parent-impressive concepts. Edit each line before accepting.`;
   const loadingCopy = mode === "text"
-    ? "Asking Dora to polish this description…"
-    : `Asking Dora to polish these ${current.length} skill${current.length === 1 ? "" : "s"}…`;
+    ? "Asking Ennie to polish this description…"
+    : `Asking Ennie to polish these ${current.length} skill${current.length === 1 ? "" : "s"}…`;
 
   return (
     <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={modal}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-          <DoraAvatar size={54} />
+          <EnnieAvatar size={54} />
           <div>
             <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>
-              Dora<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your Director</span>
+              Ennie<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
             </div>
           </div>
         </div>
@@ -1539,7 +1539,7 @@ function PolishModal({ curriculumId, config, onClose }) {
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Dora</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Ennie</div>
                 <textarea
                   value={polishedText}
                   onChange={(e) => setPolishedText(e.target.value)}
@@ -1554,7 +1554,7 @@ function PolishModal({ curriculumId, config, onClose }) {
                 disabled={acceptDisabled}
                 style={{ ...primaryBtn, opacity: acceptDisabled ? 0.5 : 1, cursor: acceptDisabled ? "not-allowed" : "pointer" }}
               >
-                Use Dora's polish →
+                Use Ennie's polish →
               </button>
             </div>
           </>
@@ -1572,7 +1572,7 @@ function PolishModal({ curriculumId, config, onClose }) {
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Dora</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Ennie</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, background: GOLD_SOFT, border: `1px solid ${GOLD_BORDER}`, borderRadius: 6, padding: 8 }}>
                   {polishedList.map((c, i) => (
                     <div key={`pol-${i}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1609,7 +1609,7 @@ function PolishModal({ curriculumId, config, onClose }) {
                 disabled={acceptDisabled}
                 style={{ ...primaryBtn, opacity: acceptDisabled ? 0.5 : 1, cursor: acceptDisabled ? "not-allowed" : "pointer" }}
               >
-                Use Dora's polish →
+                Use Ennie's polish →
               </button>
             </div>
           </>
@@ -2187,10 +2187,10 @@ function PublishModal({
     >
       <div style={isCelebration ? celebrationModal : modal}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-          <DoraAvatar size={isCelebration ? 72 : 54} />
+          <EnnieAvatar size={isCelebration ? 72 : 54} />
           <div>
             <div style={{ fontWeight: 700, color: PURPLE, fontSize: isCelebration ? 16 : 15 }}>
-              Dora<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your Director</span>
+              Ennie<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
             </div>
             {isCelebration && (
               <div style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>Nice work — here's what you just unlocked.</div>
@@ -2317,10 +2317,10 @@ function PublishModal({
                   gap: 12,
                   alignItems: "flex-start",
                 }}>
-                  <DoraAvatar size={48} />
+                  <EnnieAvatar size={48} />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 11, color: MUTED, marginBottom: 2 }}>
-                      <strong style={{ color: PURPLE }}>Dora's recommendation</strong>
+                      <strong style={{ color: PURPLE }}>Ennie's recommendation</strong>
                     </div>
                     <div style={{ fontWeight: 700, color: INK, fontSize: 15, lineHeight: 1.35, marginBottom: 4 }}>
                       {recommendation.headline}
@@ -2496,7 +2496,7 @@ const openLinkBtn = {
   flexShrink: 0,
 };
 
-const doraBanner = {
+const ennieBanner = {
   background: PANEL,
   border: `1px solid ${GOLD_BORDER}`,
   borderLeft: `4px solid ${VIOLET}`,
@@ -2510,9 +2510,9 @@ const doraBanner = {
   zIndex: 5,
   boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
 };
-const doraBannerCalm = { ...doraBanner, borderColor: RULE, borderLeftColor: RULE, background: "#fafaf3" };
+const ennieBannerCalm = { ...ennieBanner, borderColor: RULE, borderLeftColor: RULE, background: "#fafaf3" };
 
-const doraActionBtn = {
+const ennieActionBtn = {
   background: PURPLE, color: "#fff", border: "none", borderRadius: 5,
   padding: "8px 14px", fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer", flexShrink: 0,
 };
