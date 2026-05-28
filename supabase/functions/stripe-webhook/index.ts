@@ -35,7 +35,13 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+// Primary secret: the "Enrops registration webhook" destination
+// (Your account scope) — handles checkout.session.completed.
 const STRIPE_WEBHOOK_SECRET = Deno.env.get('STRIPE_WEBHOOK_SECRET')!;
+// Secondary secret: the "Connected accounts" scope destination — handles
+// account.updated and account.application.deauthorized for Express
+// connected accounts. Optional; if unset, only the primary secret is tried.
+const STRIPE_WEBHOOK_SECRET_CONNECT = Deno.env.get('STRIPE_WEBHOOK_SECRET_CONNECT') || null;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 // All FROM/reply-to/alert addresses now come from loadOrgBrand(), which
 // cascades tenant -> Enrops -> hardcoded Enrops defaults. No more J2S-baked
@@ -58,9 +64,24 @@ serve(async (req) => {
 
   try {
     event = await stripe.webhooks.constructEventAsync(rawBody, signature, STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.error('Webhook signature failed:', (err as Error).message);
-    return new Response(`Invalid signature: ${(err as Error).message}`, { status: 400 });
+  } catch (primaryErr) {
+    // Try the secondary "Connected accounts" destination secret if configured.
+    // Stripe sends Connect events from a separate destination with its own
+    // signing secret; one of the two secrets will verify any given event.
+    if (STRIPE_WEBHOOK_SECRET_CONNECT) {
+      try {
+        event = await stripe.webhooks.constructEventAsync(rawBody, signature, STRIPE_WEBHOOK_SECRET_CONNECT);
+      } catch (secondaryErr) {
+        console.error('Webhook signature failed against both secrets:', {
+          primary: (primaryErr as Error).message,
+          secondary: (secondaryErr as Error).message,
+        });
+        return new Response(`Invalid signature: ${(secondaryErr as Error).message}`, { status: 400 });
+      }
+    } else {
+      console.error('Webhook signature failed:', (primaryErr as Error).message);
+      return new Response(`Invalid signature: ${(primaryErr as Error).message}`, { status: 400 });
+    }
   }
 
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
