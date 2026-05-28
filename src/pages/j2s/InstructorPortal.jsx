@@ -256,7 +256,7 @@ export default function InstructorPortal() {
     // assignments (matters once FA26 lands; SU26-only today).
     const { data, error: aErr } = await supabase
       .from("camp_assignments")
-      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, location_id, week_num, session_type, curriculum_id, curriculum_name, starts_on, ends_on, start_time, end_time, class_days, current_enrollment, ages_min, ages_max, cycle_id, scheduling_cycles:cycle_id(status), program_locations:location_id(id, name, address, contact_phone, room_number, arrival_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, camp_session_id, camp_sessions(id, location_name, location_id, week_num, session_type, curriculum_id, curriculum_name, starts_on, ends_on, start_time, end_time, class_days, current_enrollment, ages_min, ages_max, cycle_id, scheduling_cycles:cycle_id(status), program_locations:location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
       .eq("instructor_id", instructorId)
       .not("published_at", "is", null)
       .in("status", ["published", "change_requested", "confirmed"])
@@ -1592,16 +1592,17 @@ function AssignmentDetailView({ assignment, onBack }) {
 }
 
 // Location details: address (Google Maps link), main phone (tel: link),
-// room number, and combined arrival/dismissal instructions. Graceful
-// fallback when address/phone/arrival are still null (TBD camp partners
-// or sites where the partner hasn't sent procedures yet).
+// room number, and separately-labeled arrival + dismissal procedures.
+// Graceful fallback when address/phone/procedures are still null (TBD
+// camp partners or sites where the partner hasn't sent procedures yet).
 function LocationSection({ location, fallbackName }) {
   const name = location?.name || fallbackName;
   const address = location?.address || null;
   const phone = location?.contact_phone || null;
   const room = location?.room_number || null;
   const arrival = location?.arrival_instructions || null;
-  const hasAnyDetails = address || phone || room || arrival;
+  const dismissal = location?.dismissal_instructions || null;
+  const hasAnyDetails = address || phone || room || arrival || dismissal;
 
   const mapsHref = address
     ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`
@@ -1677,10 +1678,21 @@ function LocationSection({ location, fallbackName }) {
       {arrival && (
         <div style={{ marginTop: 14 }}>
           <div style={{ fontSize: 11, color: MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-            Arrival &amp; dismissal
+            Arrival
           </div>
           <div style={{ fontSize: 14, color: INK, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
             {arrival}
+          </div>
+        </div>
+      )}
+
+      {dismissal && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 11, color: MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            Dismissal
+          </div>
+          <div style={{ fontSize: 14, color: INK, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+            {dismissal}
           </div>
         </div>
       )}

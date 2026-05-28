@@ -3901,6 +3901,7 @@ function renderVenueDetailsBlockHtml(loc) {
   if (loc.address) lines.push(`<div>${emailEscape(loc.address)}${loc.room_number ? ` · Room ${emailEscape(loc.room_number)}` : ""}</div>`);
   else if (loc.room_number) lines.push(`<div>Room ${emailEscape(loc.room_number)}</div>`);
   if (loc.arrival_instructions) lines.push(`<div><strong>Arrival:</strong> ${emailEscape(loc.arrival_instructions)}</div>`);
+  if (loc.dismissal_instructions) lines.push(`<div><strong>Dismissal:</strong> ${emailEscape(loc.dismissal_instructions)}</div>`);
   if (loc.food_drink_policy) lines.push(`<div><strong>Food/drink:</strong> ${emailEscape(loc.food_drink_policy)}</div>`);
   const contact = [loc.contact_name, loc.contact_phone, loc.contact_email].filter(Boolean).map(emailEscape);
   if (contact.length) lines.push(`<div><strong>Venue contact:</strong> ${contact.join(" · ")}</div>`);
@@ -4265,7 +4266,7 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
           if (locIds.length === 0) return { data: [] };
           return supabase
             .from("program_locations")
-            .select("id, name, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, food_drink_policy, notes")
+            .select("id, name, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, food_drink_policy, notes")
             .in("id", locIds);
         })(),
       ]);

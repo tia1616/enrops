@@ -58,7 +58,7 @@ export default function Dashboard() {
            students(first_name, last_name),
            programs(
              curriculum, day_of_week, start_time, end_time, first_session_date,
-             program_locations(name, arrival_instructions)
+             program_locations(name, arrival_instructions, dismissal_instructions)
            )`,
         )
         .eq('parent_id', parentData.id)
@@ -197,6 +197,7 @@ export default function Dashboard() {
               const program = reg.programs;
               const location = program?.program_locations;
               const arrivalInfo = location?.arrival_instructions;
+              const dismissalInfo = location?.dismissal_instructions;
 
               return (
                 <div
@@ -234,14 +235,26 @@ export default function Dashboard() {
                     </p>
                   )}
 
-                  {/* Arrival & Dismissal */}
+                  {/* Arrival */}
                   {arrivalInfo && (
                     <div className="mt-3 border-t border-j2s-purple/5 pt-3">
                       <p className="text-xs font-bold uppercase tracking-wider text-j2s-ink/50">
-                        Arrival &amp; Dismissal
+                        Arrival
                       </p>
                       <p className="mt-1 text-sm leading-relaxed text-j2s-ink/70">
                         {arrivalInfo}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Dismissal */}
+                  {dismissalInfo && (
+                    <div className={`mt-3 ${arrivalInfo ? '' : 'border-t border-j2s-purple/5 pt-3'}`}>
+                      <p className="text-xs font-bold uppercase tracking-wider text-j2s-ink/50">
+                        Dismissal
+                      </p>
+                      <p className="mt-1 text-sm leading-relaxed text-j2s-ink/70">
+                        {dismissalInfo}
                       </p>
                     </div>
                   )}

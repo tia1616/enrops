@@ -63,6 +63,7 @@ type LocationDetails = {
   contact_phone: string | null;
   contact_email: string | null;
   arrival_instructions: string | null;
+  dismissal_instructions: string | null;
   food_drink_policy: string | null;
   notes: string | null;
 };
@@ -225,7 +226,7 @@ serve(async (req: Request) => {
     const { data: locations } = locationIds.length
       ? await supabase
           .from('program_locations')
-          .select('id, name, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, food_drink_policy, notes')
+          .select('id, name, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, food_drink_policy, notes')
           .in('id', locationIds)
       : { data: [] } as any;
     const locationById = new Map<string, any>((locations ?? []).map((l: any) => [l.id, l]));
@@ -359,6 +360,7 @@ function renderVenueDetailsHtml(loc: LocationDetails | undefined): string {
   if (loc.address) lines.push(`<div>${escape(loc.address)}${loc.room_number ? ` · Room ${escape(loc.room_number)}` : ''}</div>`);
   else if (loc.room_number) lines.push(`<div>Room ${escape(loc.room_number)}</div>`);
   if (loc.arrival_instructions) lines.push(`<div><strong>Arrival:</strong> ${escape(loc.arrival_instructions)}</div>`);
+  if (loc.dismissal_instructions) lines.push(`<div><strong>Dismissal:</strong> ${escape(loc.dismissal_instructions)}</div>`);
   if (loc.food_drink_policy) lines.push(`<div><strong>Food/drink:</strong> ${escape(loc.food_drink_policy)}</div>`);
   const contactParts: string[] = [];
   if (loc.contact_name) contactParts.push(escape(loc.contact_name));
@@ -376,6 +378,7 @@ function renderVenueDetailsText(loc: LocationDetails | undefined): string[] {
   if (loc.address) out.push(`  ${loc.address}${loc.room_number ? ` · Room ${loc.room_number}` : ''}`);
   else if (loc.room_number) out.push(`  Room ${loc.room_number}`);
   if (loc.arrival_instructions) out.push(`  Arrival: ${loc.arrival_instructions}`);
+  if (loc.dismissal_instructions) out.push(`  Dismissal: ${loc.dismissal_instructions}`);
   if (loc.food_drink_policy) out.push(`  Food/drink: ${loc.food_drink_policy}`);
   const contactParts: string[] = [];
   if (loc.contact_name) contactParts.push(loc.contact_name);

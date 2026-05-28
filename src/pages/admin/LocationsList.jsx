@@ -22,7 +22,7 @@ const RULE = "#e2dfd5";
 const FIELDS_INSTRUCTOR_FACING = new Set([
   "address", "room_number",
   "contact_name", "contact_phone", "contact_email",
-  "arrival_instructions", "food_drink_policy", "notes",
+  "arrival_instructions", "dismissal_instructions", "food_drink_policy", "notes",
 ]);
 
 const EMPTY_DRAFT = {
@@ -34,6 +34,7 @@ const EMPTY_DRAFT = {
   contact_phone: "",
   contact_email: "",
   arrival_instructions: "",
+  dismissal_instructions: "",
   food_drink_policy: "",
   notes: "",
 };
@@ -57,7 +58,7 @@ export default function LocationsList() {
     setLoading(true);
     const { data, error: err } = await supabase
       .from("program_locations")
-      .select("id, name, district, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, food_drink_policy, notes, created_at")
+      .select("id, name, district, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, food_drink_policy, notes, created_at")
       .eq("organization_id", org.id)
       .order("name", { ascending: true });
     if (err) {
@@ -103,6 +104,7 @@ export default function LocationsList() {
       contact_phone: loc.contact_phone ?? "",
       contact_email: loc.contact_email ?? "",
       arrival_instructions: loc.arrival_instructions ?? "",
+      dismissal_instructions: loc.dismissal_instructions ?? "",
       food_drink_policy: loc.food_drink_policy ?? "",
       notes: loc.notes ?? "",
     });
@@ -188,9 +190,10 @@ export default function LocationsList() {
           <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>Locations</h1>
           <div style={{ color: MUTED, marginTop: 4, fontSize: 14, maxWidth: 720 }}>
             Venues where your programs run. <strong>Address, room number, arrival
-            instructions, food/drink policy, venue contact, and notes</strong> all show
-            up in every offer, add-on offer, and reminder email instructors get for a
-            camp here — so write them with the instructor in mind.
+            and dismissal instructions, food/drink policy, venue contact, and
+            notes</strong> all show up in every offer, add-on offer, and reminder
+            email instructors get for a camp here — so write them with the instructor
+            in mind.
           </div>
         </div>
         <button
@@ -265,6 +268,7 @@ function DisplayCard({ loc, campCount, onEdit }) {
     { label: "Address", value: loc.address, key: "address" },
     { label: "Room", value: loc.room_number, key: "room_number" },
     { label: "Arrival", value: loc.arrival_instructions, key: "arrival_instructions" },
+    { label: "Dismissal", value: loc.dismissal_instructions, key: "dismissal_instructions" },
     { label: "Food/drink", value: loc.food_drink_policy, key: "food_drink_policy" },
     { label: "Notes", value: loc.notes, key: "notes" },
   ];
@@ -362,6 +366,10 @@ function EditCard({ title, draft, bind, error, saving, onSave, onCancel, isNew }
 
       <Field label="Arrival instructions" hint="Park where? Enter which door? Sign in where?" instructorFacing>
         <textarea {...bind("arrival_instructions")} placeholder="e.g. Park in the back lot, enter through the gym door, sign in at the front desk." rows={3} style={textareaStyle} />
+      </Field>
+
+      <Field label="Dismissal instructions" hint="Where does the instructor walk students to for pickup? Front door? Back parking lot?" instructorFacing>
+        <textarea {...bind("dismissal_instructions")} placeholder="e.g. Walk students out the front doors to the parking lot and wait until each one is picked up." rows={3} style={textareaStyle} />
       </Field>
 
       <Field label="Food / drink policy" instructorFacing>
