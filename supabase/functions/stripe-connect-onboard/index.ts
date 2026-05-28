@@ -136,16 +136,23 @@ serve(async (req: Request) => {
       try {
         const search = await stripe.accounts.search({
           query: `metadata['enrops_org_id']:'${org.id}'`,
-          limit: 2,
+          limit: 5,
         });
-        if (search.data.length === 1) {
-          accountId = search.data[0].id;
+        // Filter out rejected/closed accounts so a stale one from a reset
+        // doesn't get auto-recovered. Stripe sets disabled_reason to
+        // 'rejected.*' on platform-rejected accounts; we skip those.
+        const candidates = search.data.filter((a: Stripe.Account) => {
+          const dr = a.requirements?.disabled_reason || '';
+          return !dr.startsWith('rejected.');
+        });
+        if (candidates.length === 1) {
+          accountId = candidates[0].id;
           console.warn('[connect-onboard] recovered orphan stripe account', {
             org_id: org.id,
             account_id: accountId,
           });
-        } else if (search.data.length > 1) {
-          const ids = search.data.map((a: Stripe.Account) => a.id);
+        } else if (candidates.length > 1) {
+          const ids = candidates.map((a: Stripe.Account) => a.id);
           console.error('[connect-onboard] multiple stripe accounts for org', org.id, ids);
           return json({ error: 'multiple_stripe_accounts', account_ids: ids }, 409);
         }
