@@ -5182,6 +5182,7 @@ function CandidatePicker({
                 <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5 }}>
                   Conversation with {currentFirstName}
                 </div>
+                <div style={{ maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, paddingRight: 4 }}>
                 {thread.map((m) => {
                   const isInstructor = m.sender_role === "instructor";
                   const isSystem = m.sender_role === "system";
@@ -5220,12 +5221,13 @@ function CandidatePicker({
                     </div>
                   );
                 })}
+                </div>
               </div>
             )}
           </div>
         )}
 
-        <div style={{ overflowY: "auto", padding: 12, flex: 1 }}>
+        <div style={{ overflowY: "auto", padding: 12, flex: 1, minHeight: 120 }}>
           <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, padding: "4px 4px 8px" }}>
             Eligible instructors
           </div>
