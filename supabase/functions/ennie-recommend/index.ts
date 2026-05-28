@@ -1,6 +1,6 @@
-// dora-recommend
+// ennie-recommend
 //
-// Picks Dora's "next clear action" for a curriculum the operator just
+// Picks Ennie's "next clear action" for a curriculum the operator just
 // published. Returns one of a small set of recommendation variants based on
 // the tenant's data state. Used by Phase 2 of the celebration screen.
 //
