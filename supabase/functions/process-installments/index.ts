@@ -1,4 +1,19 @@
-// process-installments v5 — daily cron worker that charges due installments off-session.
+// process-installments v6 — daily cron worker that charges due installments off-session.
+//
+// v6 CHANGE (2026-05-27): Stripe Connect destination charges.
+//   When the org has an active connected account, each PaymentIntent now
+//   includes application_fee_amount, transfer_data.destination, and
+//   statement_descriptor_suffix (via shared buildConnectChargeParams helper).
+//   Fee is computed at charge time against current org rate config — NO
+//   snapshot. A rate change between installments will change the parent's
+//   net fee on the remaining installments. Documented v1 risk.
+//
+//   Idempotency note: the idempotency key is unchanged
+//   (installment_group_<sorted_row_ids>). If the cron retries a failed
+//   group AND Jessica changes the platform fee rate between attempts,
+//   Stripe will reject the retry because the amount/fee differs from the
+//   first attempt with the same key. Accept this risk for v1; fix with a
+//   per-charge snapshot if rate changes become common.
 //
 // v5 CHANGE (2026-05-01): Earliest-date grouping. When pending installments span
 // different due_dates within the same parent + installment_number (e.g., 2-child
@@ -37,6 +52,8 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { buildConnectChargeParams, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
+import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -46,7 +63,8 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
-const FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || 'Journey to STEAM <hello@updates.journeytosteam.com>';
+// FROM/reply-to/alert addresses are loaded per-org via loadOrgBrand() with
+// Enrops platform defaults baked in. No more J2S-flavored env-var fallback.
 const PLATFORM_ALERT_DEFAULT = 'alerts@enrops.com';
 const CRON_SECRET = Deno.env.get('CRON_SECRET');
 
@@ -160,12 +178,27 @@ serve(async (req) => {
     const orgIds = [...new Set(dueInstallments.map((r) => r.organization_id))];
     const { data: orgs } = await admin
       .from('organizations')
-      .select('id, alert_email')
+      .select(`
+        id, alert_email, name,
+        stripe_account_id, stripe_charges_enabled,
+        statement_descriptor_suffix,
+        platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents
+      `)
       .in('id', orgIds);
 
     const alertEmailMap = new Map<string, string>();
+    const orgConfigMap = new Map<string, ConnectOrgConfig>();
     for (const org of orgs || []) {
       alertEmailMap.set(org.id, org.alert_email || PLATFORM_ALERT_DEFAULT);
+      orgConfigMap.set(org.id, {
+        stripe_account_id: org.stripe_account_id,
+        stripe_charges_enabled: org.stripe_charges_enabled,
+        statement_descriptor_suffix: org.statement_descriptor_suffix,
+        name: org.name,
+        platform_fee_card_pct: org.platform_fee_card_pct,
+        platform_fee_ach_pct: org.platform_fee_ach_pct,
+        platform_fee_cap_cents: org.platform_fee_cap_cents,
+      });
     }
 
     // STEP 3: Group by (stripe_customer_id, installment_number) — NOT including due_date.
@@ -180,15 +213,30 @@ serve(async (req) => {
     summary.groups = groupMap.size;
     console.log(`Grouped into ${summary.groups} aggregated charges (v5 earliest-date grouping)`);
 
+    // Pre-load brand for every org touched by this cron pass. Cheap (one
+    // pair of queries per org) and lets each group's outgoing emails come
+    // from the right tenant or fall back to Enrops platform defaults.
+    const orgBrandMap = new Map<string, OrgBrand>();
+    for (const oid of orgIds) {
+      orgBrandMap.set(oid, await loadOrgBrand(admin, oid));
+    }
+    // Brand to use when we don't know which org caused a problem (top-level
+    // crash). Loads Enrops defaults via slug='enrops' / hardcoded fallback.
+    const platformBrand = await loadOrgBrand(admin, null);
+
     for (const [groupKey, groupRows] of groupMap.entries()) {
-      const alertEmail = alertEmailMap.get(groupRows[0].organization_id) || PLATFORM_ALERT_DEFAULT;
+      const orgId = groupRows[0].organization_id;
+      const alertEmail = alertEmailMap.get(orgId) || PLATFORM_ALERT_DEFAULT;
+      const orgConfig = orgConfigMap.get(orgId) || null;
+      const brand = orgBrandMap.get(orgId) || platformBrand;
       try {
-        await processGroup(admin, groupRows, summary, alertEmail);
+        await processGroup(admin, groupRows, summary, alertEmail, orgConfig, brand);
       } catch (err) {
         console.error(`Unhandled error for group ${groupKey}:`, err);
         summary.errors++;
         summary.details.push(`ERR group ${groupKey}: ${(err as Error).message}`);
         await sendOperatorAlert({
+          brand,
           to: alertEmail,
           subject: `Cron worker error on installment group`,
           body: `Unhandled error processing group ${groupKey} (${groupRows.length} rows): ${(err as Error).message}\n\nRow IDs: ${groupRows.map((r) => r.id).join(', ')}\n\nGroup will be retried tomorrow.`,
@@ -199,11 +247,16 @@ serve(async (req) => {
     return jsonResp({ ok: true, summary });
   } catch (err) {
     console.error('process-installments fatal error:', err);
-    await sendOperatorAlert({
-      to: PLATFORM_ALERT_DEFAULT,
-      subject: 'Cron worker FATAL error',
-      body: `process-installments crashed: ${(err as Error).message}\n\nNo installments were processed today. Manual investigation required.`,
-    });
+    // No org context at top-level crash — use Enrops platform defaults.
+    const fatalBrand = await loadOrgBrand(admin, null).catch(() => null);
+    if (fatalBrand) {
+      await sendOperatorAlert({
+        brand: fatalBrand,
+        to: PLATFORM_ALERT_DEFAULT,
+        subject: 'Cron worker FATAL error',
+        body: `process-installments crashed: ${(err as Error).message}\n\nNo installments were processed today. Manual investigation required.`,
+      });
+    }
     return jsonResp({ error: (err as Error).message }, 500);
   }
 });
@@ -213,6 +266,8 @@ async function processGroup(
   groupRows: InstallmentRow[],
   summary: any,
   alertEmail: string,
+  orgConfig: ConnectOrgConfig | null,
+  brand: OrgBrand,
 ) {
   // Fetch registration + program + parent data for all rows in the group
   const regIds = groupRows.map((r) => r.registration_id);
@@ -277,6 +332,7 @@ async function processGroup(
     summary.paused_cancelled++;
     summary.details.push(`PAUSED ${row.id}: program ${program.curriculum} cancelled`);
     await sendOperatorAlert({
+      brand,
       to: alertEmail,
       subject: `Installment paused — ${program.curriculum} cancelled`,
       body: buildCancelledAlertBody({ row, program, parent }),
@@ -307,6 +363,18 @@ async function processGroup(
     return `${stu?.first_name || 'child'} (${prog?.curriculum || 'program'})`;
   }).join(', ');
 
+  // v6: Connect destination charge overlay (application_fee_amount,
+  // transfer_data.destination, statement_descriptor_suffix). Spreads into
+  // top-level paymentIntents.create params (NOT under payment_intent_data —
+  // that nesting only applies to Checkout Sessions). Empty {} when the org
+  // is not connected, leaving direct-charge behavior intact.
+  const connectParams = buildConnectChargeParams(
+    totalAmount,
+    'card',
+    orgConfig,
+    activeRows[0].organization_id,
+  );
+
   let paymentIntent: Stripe.PaymentIntent;
   try {
     paymentIntent = await stripe.paymentIntents.create(
@@ -323,6 +391,7 @@ async function processGroup(
           installment_row_ids: sortedRowIds.join(','),
           row_count: String(activeRows.length),
         },
+        ...connectParams,
       },
       { idempotencyKey },
     );
@@ -346,6 +415,7 @@ async function processGroup(
 
     // Operator alert (one per group, not per row)
     await sendOperatorAlert({
+      brand,
       to: alertEmail,
       subject: `Card declined for ${parent?.first_name || ''} ${parent?.last_name || ''} — installment ${installmentNumber}`,
       body: buildDeclineAlertBody({
@@ -363,6 +433,7 @@ async function processGroup(
     const firstRow = activeRows[0];
     if (parent?.email && !firstRow.parent_notified_failed_at) {
       const sent = await sendParentDeclineNotice({
+        brand,
         parent,
         installmentNumber,
         regDataById,
@@ -407,6 +478,7 @@ async function processGroup(
     summary.details.push(`UNUSUAL group ${idempotencyKey}: ${paymentIntent.status}`);
 
     await sendOperatorAlert({
+      brand,
       to: alertEmail,
       subject: `Unusual charge state — installment ${installmentNumber}`,
       body: `Group ${idempotencyKey} (${parent?.email || 'unknown parent'}) returned status="${paymentIntent.status}" instead of "succeeded". Manual review needed. PaymentIntent: ${paymentIntent.id}`,
@@ -478,7 +550,7 @@ function buildCancelledAlertBody({
   ].join('\n');
 }
 
-async function sendOperatorAlert({ to, subject, body }: { to: string; subject: string; body: string }) {
+async function sendOperatorAlert({ brand, to, subject, body }: { brand: OrgBrand; to: string; subject: string; body: string }) {
   try {
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -487,7 +559,7 @@ async function sendOperatorAlert({ to, subject, body }: { to: string; subject: s
         Authorization: `Bearer ${RESEND_API_KEY}`,
       },
       body: JSON.stringify({
-        from: FROM_EMAIL,
+        from: formatFromAddress(brand),
         to,
         subject: `[Enrops Alert] ${subject}`,
         text: body,
@@ -504,8 +576,9 @@ async function sendOperatorAlert({ to, subject, body }: { to: string; subject: s
 }
 
 async function sendParentDeclineNotice({
-  parent, installmentNumber, regDataById, rows,
+  brand, parent, installmentNumber, regDataById, rows,
 }: {
+  brand: OrgBrand;
   parent: ParentRow;
   installmentNumber: number;
   regDataById: Map<string, any>;
@@ -532,6 +605,13 @@ async function sendParentDeclineNotice({
     summary = all.slice(0, -1).join(', ') + ', and ' + all[all.length - 1];
   }
 
+  // Sender-name shorthand for the email signoff — strip "Org Name" suffix when
+  // present so we get just the human's first name (e.g. "Jessica @ Journey to
+  // STEAM" -> "Jessica"). Fallback to the full sender_name if no @ separator.
+  const senderFirst = brand.sender_name.includes('@')
+    ? brand.sender_name.split('@')[0].trim()
+    : brand.sender_name;
+
   const text = [
     `Hi ${parent.first_name},`,
     ``,
@@ -542,20 +622,20 @@ async function sendParentDeclineNotice({
     `To update your card on file, reply to this email and we'll send you a secure link.`,
     ``,
     `Thanks for your patience,`,
-    `Jessica`,
-    `Program Manager, Journey to STEAM`,
-    `hello@updates.journeytosteam.com`,
+    senderFirst,
+    brand.org_name,
+    brand.reply_to,
   ].join('\n');
 
   const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1a1a1a;max-width:560px;margin:0 auto;padding:24px;line-height:1.6;">
-  <div style="color:#F8A638;font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">Journey to STEAM</div>
+  <div style="color:${brand.accent_color};font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">${escapeHtml(brand.org_name)}</div>
   <h2 style="font-size:20px;margin:0 0 16px 0;color:#1a1a1a;">Quick heads-up about your payment</h2>
   <p>Hi ${escapeHtml(parent.first_name)},</p>
   <p>A quick note — the ${installmentLabel} installment for <strong>${escapeHtml(summary)}</strong> didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.</p>
   <p><strong>${childPrograms.length === 1 ? `${escapeHtml(childPrograms[0].name)}'s spot is` : 'Their spots are'} still held</strong> — we won't drop the registration${childPrograms.length === 1 ? '' : 's'} while we sort this out.</p>
   <p>To update your card on file, reply to this email and we'll send you a secure link.</p>
-  <p>Thanks for your patience,<br/>Jessica<br/><span style="color:#666;">Program Manager, Journey to STEAM</span><br/><a href="mailto:hello@updates.journeytosteam.com" style="color:#1C004F;">hello@updates.journeytosteam.com</a></p>
+  <p>Thanks for your patience,<br/>${escapeHtml(senderFirst)}<br/><span style="color:#666;">${escapeHtml(brand.org_name)}</span><br/><a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p>
 </div>`.trim();
 
   try {
@@ -566,9 +646,9 @@ async function sendParentDeclineNotice({
         Authorization: `Bearer ${RESEND_API_KEY}`,
       },
       body: JSON.stringify({
-        from: FROM_EMAIL,
+        from: formatFromAddress(brand),
         to: parent.email,
-        reply_to: 'hello@updates.journeytosteam.com',
+        reply_to: brand.reply_to,
         subject: `Quick heads-up about your payment for ${childPrograms[0].program}${childPrograms.length > 1 ? ' & more' : ''}`,
         text,
         html,

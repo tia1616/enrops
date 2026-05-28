@@ -1,4 +1,15 @@
-// create-checkout v12 — creates a Stripe Checkout session for already-written registrations.
+// create-checkout v13 — creates a Stripe Checkout session for already-written registrations.
+//
+// PATCH 7 (2026-05-27): Stripe Connect destination charges.
+//   Looks up the registration's org and, if it has an active connected
+//   account (stripe_account_id + stripe_charges_enabled), adds:
+//     - application_fee_amount  (computed via shared helper)
+//     - transfer_data.destination = org.stripe_account_id
+//     - statement_descriptor_suffix (from org config; defaults to org.name)
+//   Fallback: orgs without active Connect keep the current direct-charge
+//   behavior. Half-configured orgs (account_id set, charges_enabled=false)
+//   log a WARN and fall through. Both installments and standard paths
+//   covered.
 //
 // PATCH 6 (2026-05-01): Bug A fix — per-child installment attribution.
 //   Schedule shape changed: now accepts { aggregated: [...], per_line: [...] }
@@ -15,6 +26,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { buildConnectChargeParams, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -179,16 +191,32 @@ serve(async (req) => {
         quantity: 1,
       };
 
-      // Look up organization_id for the schedule row (use the first registration)
+      // Look up organization_id + Connect config for the first registration.
+      // Connect overlay (application_fee_amount + transfer_data + descriptor
+      // suffix) is computed against installment 1's amount only — installments
+      // 2 and 3 compute their own fees when process-installments fires.
       const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
         auth: { persistSession: false, autoRefreshToken: false },
       });
       const { data: regForOrg } = await admin
         .from('registrations')
-        .select('organization_id')
+        .select(`
+          organization_id,
+          organizations:organization_id (
+            stripe_account_id,
+            stripe_charges_enabled,
+            statement_descriptor_suffix,
+            name,
+            platform_fee_card_pct,
+            platform_fee_ach_pct,
+            platform_fee_cap_cents
+          )
+        `)
         .eq('id', registration_ids[0])
         .single();
       const orgId = regForOrg?.organization_id || null;
+      const orgConfig = (regForOrg?.organizations ?? null) as ConnectOrgConfig | null;
+      const connectParams = buildConnectChargeParams(firstAmount, 'card', orgConfig, orgId);
 
       // Create the Stripe Checkout session FIRST so we have the session_id to key on
       const session = await stripe.checkout.sessions.create({
@@ -203,6 +231,7 @@ serve(async (req) => {
             installment_number: '1',
             total_amount_cents: String(total_cents),
           },
+          ...connectParams,
         },
         success_url: `${base}${successPath}?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${base}${cancelPath}`,
@@ -239,7 +268,7 @@ serve(async (req) => {
       return json({ url: session.url, sessionId: session.id });
     }
 
-    // STANDARD (NON-INSTALLMENTS) PATH — unchanged from v11
+    // STANDARD (NON-INSTALLMENTS) PATH
     const stripeLineItems = line_items.map((l: any) => ({
       price_data: {
         currency: 'usd',
@@ -259,6 +288,36 @@ serve(async (req) => {
       quantity: 1,
     }));
 
+    // v13: Look up the org's Connect config so we can route the destination
+    // charge correctly. Fee is computed against total_cents (the full cart).
+    const adminStd = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: regForOrgStd } = await adminStd
+      .from('registrations')
+      .select(`
+        organization_id,
+        organizations:organization_id (
+          stripe_account_id,
+          stripe_charges_enabled,
+          statement_descriptor_suffix,
+          name,
+          platform_fee_card_pct,
+          platform_fee_ach_pct,
+          platform_fee_cap_cents
+        )
+      `)
+      .eq('id', registration_ids[0])
+      .single();
+    const orgIdStd = regForOrgStd?.organization_id || null;
+    const orgConfigStd = (regForOrgStd?.organizations ?? null) as ConnectOrgConfig | null;
+    const connectParamsStd = buildConnectChargeParams(total_cents, 'card', orgConfigStd, orgIdStd);
+
+    // Only attach payment_intent_data if we actually have Connect fields to
+    // set. Stripe rejects an empty payment_intent_data object on Checkout
+    // Sessions; passing it conditionally keeps the no-Connect fallback clean.
+    const piData = Object.keys(connectParamsStd).length > 0 ? connectParamsStd : undefined;
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: stripeLineItems,
@@ -271,6 +330,7 @@ serve(async (req) => {
         parent_email,
         parent_name: parent_name || '',
       },
+      ...(piData ? { payment_intent_data: piData } : {}),
     });
 
     return json({ url: session.url, sessionId: session.id });

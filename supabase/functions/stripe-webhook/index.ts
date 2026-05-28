@@ -1,4 +1,15 @@
-// stripe-webhook v17 — PATCH 10 (2026-05-01)
+// stripe-webhook v18 — PATCH 11 (2026-05-27)
+// v18: Operator-side Stripe Connect events.
+//      Adds handlers for account.updated and account.application.deauthorized.
+//      Updates organizations.stripe_charges_enabled / stripe_payouts_enabled /
+//      stripe_account_status based on Stripe's account state. Idempotency via
+//      organizations.stripe_last_account_event_id (mirrors instructor-side
+//      pattern in stripe-connect-instructor-webhook).
+//
+//      IMPORTANT: This webhook endpoint must be configured in the Stripe
+//      Connect platform settings to "listen to events on connected accounts"
+//      in addition to platform events. Otherwise Connect events never arrive.
+//
 // v17: Bug A fix — per-child installment attribution.
 //      Reads schedule from checkout_schedules table (keyed by session_id) and
 //      inserts N×3 installment rows (one per registration × charge), allowing
@@ -15,6 +26,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -25,7 +37,9 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const STRIPE_WEBHOOK_SECRET = Deno.env.get('STRIPE_WEBHOOK_SECRET')!;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
-const FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || 'Journey to STEAM <hello@updates.journeytosteam.com>';
+// All FROM/reply-to/alert addresses now come from loadOrgBrand(), which
+// cascades tenant -> Enrops -> hardcoded Enrops defaults. No more J2S-baked
+// global constant.
 const PLATFORM_ALERT_DEFAULT = 'alerts@enrops.com';
 
 interface PerLineEntry {
@@ -65,14 +79,11 @@ serve(async (req) => {
         return new Response('ok', { status: 200 });
       }
 
-      // Look up org alert_email for error notifications
+      // Look up org and load full brand context (FROM, colors, logo, alert email).
       const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
       const orgId = regForOrg?.organization_id;
-      let alertEmail = PLATFORM_ALERT_DEFAULT;
-      if (orgId) {
-        const { data: orgData } = await admin.from('organizations').select('alert_email').eq('id', orgId).single();
-        alertEmail = orgData?.alert_email || PLATFORM_ALERT_DEFAULT;
-      }
+      const brand = await loadOrgBrand(admin, orgId);
+      const alertEmail = brand.alert_email;
 
       await admin.from('registrations').update({
         status: 'confirmed', payment_status: 'paid',
@@ -89,6 +100,7 @@ serve(async (req) => {
           if (!customerId || !paymentMethodId) {
             console.error('Installments: missing customer or payment_method', { customer: customerId, payment_method: paymentMethodId });
             await sendOperatorAlert({
+              brand,
               to: alertEmail,
               subject: 'Installments queueing failed — manual review needed',
               body: `Session ${session.id} completed with use_installments=true but could not queue installments 2 and 3. customer_id=${customerId} payment_method_id=${paymentMethodId}. Registration IDs: ${regIds.join(', ')}. Charge 1 succeeded; please manually create installment rows or contact parent.`,
@@ -108,6 +120,7 @@ serve(async (req) => {
               if (schedErr || !scheduleRow) {
                 console.error('checkout_schedules lookup failed:', schedErr);
                 await sendOperatorAlert({
+                  brand,
                   to: alertEmail,
                   subject: 'Schedule lookup failed — manual review needed',
                   body: `Session ${session.id}: webhook fired but checkout_schedules row missing or unreadable. Charge 1 succeeded but installments 2 and 3 could not be queued. Error: ${schedErr?.message || 'no row'}.`,
@@ -141,6 +154,7 @@ serve(async (req) => {
                 if (insertError) {
                   console.error('Failed to insert N×3 installment rows:', insertError);
                   await sendOperatorAlert({
+                    brand,
                     to: alertEmail,
                     subject: 'N×3 installment row insert failed — manual review needed',
                     body: `Session ${session.id}: ${installmentRows.length} installment rows could not be inserted. Error: ${insertError.message}. Charge 1 succeeded. Customer ${customerId}, payment method ${paymentMethodId}. Registration IDs: ${regIds.join(', ')}.`,
@@ -170,6 +184,7 @@ serve(async (req) => {
               if (insertError) {
                 console.error('Failed to insert installment rows (legacy path):', insertError);
                 await sendOperatorAlert({
+                  brand,
                   to: alertEmail,
                   subject: 'Installment row insert failed (legacy) — manual review needed',
                   body: `Session ${session.id}: legacy 2-row installment insert failed. Error: ${insertError.message}. Charge 1 succeeded.`,
@@ -190,6 +205,7 @@ serve(async (req) => {
         } catch (instErr) {
           console.error('Installments processing error:', instErr);
           await sendOperatorAlert({
+            brand,
             to: alertEmail,
             subject: 'Installments error — manual review needed',
             body: `Session ${session.id} encountered an error while processing installments: ${(instErr as Error).message}. Charge 1 likely succeeded. Registration IDs: ${regIds.join(', ')}.`,
@@ -199,7 +215,7 @@ serve(async (req) => {
 
       // Confirmation email (unchanged from v16)
       const { data: regs } = await admin.from('registrations').select(
-        `id, amount_cents, programs(curriculum, day_of_week, start_time, end_time, first_session_date, term, program_locations(name, address, arrival_instructions)), students(first_name, last_name)`,
+        `id, amount_cents, programs(curriculum, day_of_week, start_time, end_time, first_session_date, term, program_locations(name, address, arrival_instructions, dismissal_instructions)), students(first_name, last_name)`,
       ).in('id', regIds);
 
       let orgSlug = 'j2s';
@@ -241,6 +257,7 @@ serve(async (req) => {
         }
 
         await sendConfirmationEmail({
+          brand,
           to: parentEmail, parentName, registrations: regs,
           totalCents: session.amount_total || 0, sessionId: session.id, useInstallments,
           installmentInfo,
@@ -250,11 +267,15 @@ serve(async (req) => {
       // Auto-create parent account
       if (parentEmail) {
         try {
-          await autoCreateParentAccount(admin, parentEmail, parentName, orgSlug, alertEmail);
+          await autoCreateParentAccount(admin, brand, parentEmail, parentName, orgSlug, alertEmail);
         } catch (accountErr) {
           console.error('Auto-create parent account failed:', accountErr);
         }
       }
+    } else if (event.type === 'account.updated') {
+      await handleAccountUpdated(admin, event);
+    } else if (event.type === 'account.application.deauthorized') {
+      await handleAccountDeauthorized(admin, event);
     }
 
     return new Response('ok', { status: 200 });
@@ -266,6 +287,7 @@ serve(async (req) => {
 
 async function autoCreateParentAccount(
   admin: ReturnType<typeof createClient>,
+  brand: OrgBrand,
   email: string,
   name: string,
   orgSlug: string,
@@ -278,7 +300,7 @@ async function autoCreateParentAccount(
 
   if (alreadyExists) {
     console.log(`Auth user already exists for ${email}, sending dashboard link email`);
-    await sendAccountReadyEmail(admin, email, name, orgSlug, false);
+    await sendAccountReadyEmail(admin, brand, email, name, orgSlug, false);
     return;
   }
 
@@ -291,11 +313,12 @@ async function autoCreateParentAccount(
   if (createErr) {
     if (createErr.message?.includes('already been registered')) {
       console.log(`Auth user already registered for ${email} (race condition), sending dashboard link`);
-      await sendAccountReadyEmail(admin, email, name, orgSlug, false);
+      await sendAccountReadyEmail(admin, brand, email, name, orgSlug, false);
       return;
     }
     console.error(`Failed to create auth user for ${email}:`, createErr);
     await sendOperatorAlert({
+      brand,
       to: alertEmail,
       subject: `Auto-create account failed for ${email}`,
       body: `Could not create auth user for ${email} after successful payment. Error: ${createErr.message}. The parent can still create an account manually at enrops.com/${orgSlug}/login.`,
@@ -304,10 +327,10 @@ async function autoCreateParentAccount(
   }
 
   console.log(`Auth user created for ${email}: ${newUser?.user?.id}`);
-  await sendAccountReadyEmail(admin, email, name, orgSlug, true);
+  await sendAccountReadyEmail(admin, brand, email, name, orgSlug, true);
 }
 
-async function sendAccountReadyEmail(admin: ReturnType<typeof createClient>, email: string, name: string, orgSlug: string, isNew: boolean) {
+async function sendAccountReadyEmail(admin: ReturnType<typeof createClient>, brand: OrgBrand, email: string, name: string, orgSlug: string, isNew: boolean) {
   const firstName = name ? name.split(' ')[0] : 'there';
   const dashboardUrl = `https://enrops.com/${orgSlug}/dashboard`;
   const loginUrl = `https://enrops.com/${orgSlug}/login`;
@@ -330,17 +353,22 @@ async function sendAccountReadyEmail(admin: ReturnType<typeof createClient>, ema
   }
 
   const subject = isNew
-    ? `Your parent account is ready — Journey to STEAM`
-    : `See your child's program details — Journey to STEAM`;
+    ? `Your parent account is ready — ${brand.org_name}`
+    : `See your child's program details — ${brand.org_name}`;
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Your Account</title></head><body style="margin:0;padding:0;background:#f5f3ff;font-family:'Nunito Sans',Arial,sans-serif;"><div style="max-width:600px;margin:0 auto;background:#fff;"><div style="background:linear-gradient(135deg,#674EE8,#4430AC);padding:40px 30px;text-align:center;"><div style="color:#F8A638;font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Journey to STEAM</div><h1 style="color:#fff;margin:12px 0 0;font-family:'Titan One',Georgia,serif;font-size:28px;">${isNew ? 'Your account is ready!' : 'View your programs'}</h1></div><div style="padding:32px 30px;"><p style="margin:0 0 16px;font-size:16px;color:#1A1530;">Hi ${firstName},</p><p style="margin:0 0 24px;font-size:16px;color:#1A1530;line-height:1.6;">${isNew ? 'We created a parent account for you automatically when you registered. Tap the button below to see your child\'s program schedule and arrival details.' : 'Tap the button below to view your children\'s program details and schedules.'}</p><div style="text-align:center;margin:32px 0;"><a href="${signInUrl}" style="display:inline-block;background:#674EE8;color:#fff;text-decoration:none;padding:16px 40px;border-radius:8px;font-size:16px;font-weight:700;">View my dashboard</a></div><p style="margin:0 0 8px;font-size:14px;color:#6b6880;">This link expires in 24 hours. After that, you can always sign in at <a href="${loginUrl}" style="color:#674EE8;">enrops.com/${orgSlug}/login</a> using the magic link option.</p><p style="margin:24px 0 0;font-size:14px;color:#6b6880;">Questions? Reach us at <a href="mailto:info@journeytosteam.com" style="color:#674EE8;">info@journeytosteam.com</a></p></div><div style="background:#1A1530;padding:20px 30px;text-align:center;color:#fff;opacity:0.6;font-size:12px;">Journey to STEAM &middot; Powered by Enrops &middot; ${new Date().getFullYear()}</div></div></body></html>`;
+  const logoBlock = brand.logo_url
+    ? `<img src="${brand.logo_url}" alt="${escapeHtml(brand.org_name)}" style="max-height:40px;display:block;margin:0 auto 12px;" />`
+    : `<div style="color:${brand.accent_color};font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(brand.org_name)}</div>`;
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Your Account</title></head><body style="margin:0;padding:0;background:${brand.page_bg_color};font-family:'Nunito Sans',Arial,sans-serif;"><div style="max-width:600px;margin:0 auto;background:#fff;"><div style="background:linear-gradient(135deg,${brand.primary_color},${brand.secondary_color});padding:40px 30px;text-align:center;">${logoBlock}<h1 style="color:#fff;margin:12px 0 0;font-family:'Titan One',Georgia,serif;font-size:28px;">${isNew ? 'Your account is ready!' : 'View your programs'}</h1></div><div style="padding:32px 30px;"><p style="margin:0 0 16px;font-size:16px;color:#1A1530;">Hi ${escapeHtml(firstName)},</p><p style="margin:0 0 24px;font-size:16px;color:#1A1530;line-height:1.6;">${isNew ? 'We created a parent account for you automatically when you registered. Tap the button below to see your child\'s program schedule and arrival details.' : 'Tap the button below to view your children\'s program details and schedules.'}</p><div style="text-align:center;margin:32px 0;"><a href="${signInUrl}" style="display:inline-block;background:${brand.primary_color};color:#fff;text-decoration:none;padding:16px 40px;border-radius:8px;font-size:16px;font-weight:700;">View my dashboard</a></div><p style="margin:0 0 8px;font-size:14px;color:#6b6880;">This link expires in 24 hours. After that, you can always sign in at <a href="${loginUrl}" style="color:${brand.primary_color};">enrops.com/${orgSlug}/login</a> using the magic link option.</p><p style="margin:24px 0 0;font-size:14px;color:#6b6880;">Questions? Reach us at <a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p></div><div style="background:#1A1530;padding:20px 30px;text-align:center;color:#fff;opacity:0.6;font-size:12px;">${escapeHtml(brand.org_name)} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}</div></div></body></html>`;
 
   try {
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
       body: JSON.stringify({
-        from: FROM_EMAIL, to: email, subject, html,
+        from: formatFromAddress(brand), to: email, subject, html,
+        reply_to: brand.reply_to,
         tags: [{ name: 'type', value: isNew ? 'account_created' : 'account_reminder' }],
       }),
     });
@@ -355,13 +383,13 @@ async function sendAccountReadyEmail(admin: ReturnType<typeof createClient>, ema
   }
 }
 
-async function sendOperatorAlert({ to, subject, body }: { to: string; subject: string; body: string }) {
+async function sendOperatorAlert({ brand, to, subject, body }: { brand: OrgBrand; to: string; subject: string; body: string }) {
   try {
     await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
       body: JSON.stringify({
-        from: FROM_EMAIL, to,
+        from: formatFromAddress(brand), to,
         subject: `[Enrops Alert] ${subject}`, text: body,
         tags: [{ name: 'type', value: 'operator_alert' }],
       }),
@@ -372,8 +400,9 @@ async function sendOperatorAlert({ to, subject, body }: { to: string; subject: s
 }
 
 async function sendConfirmationEmail({
-  to, parentName, registrations, totalCents, sessionId, useInstallments, installmentInfo,
+  brand, to, parentName, registrations, totalCents, sessionId, useInstallments, installmentInfo,
 }: {
+  brand: OrgBrand;
   to: string; parentName: string; registrations: any[]; totalCents: number; sessionId: string; useInstallments: boolean;
   installmentInfo: { paidToday: number; installment2Amount: number; installment2Date: string; installment3Amount: number; installment3Date: string; } | null;
 }) {
@@ -381,7 +410,7 @@ async function sendConfirmationEmail({
   const fmtDate = (iso: string) => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) : '';
   const greeting = parentName ? `Hi ${parentName.split(' ')[0]}` : 'Hi there';
 
-  const hasAnyArrival = registrations.some((r) => r.programs?.program_locations?.arrival_instructions);
+  const hasAnyArrival = registrations.some((r) => r.programs?.program_locations?.arrival_instructions || r.programs?.program_locations?.dismissal_instructions);
 
   const regRows = registrations.map((r) => {
     const p = r.programs;
@@ -394,18 +423,22 @@ async function sendConfirmationEmail({
       : '';
     const firstDate = p?.first_session_date ? fmtDate(p.first_session_date) : 'Date TBD';
 
-    const arrivalRow = loc?.arrival_instructions
-      ? `<tr><td colspan="2" style="padding:0 16px 16px;"><table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;"><tr><td style="padding:10px 12px;background:#F9F8FE;border-radius:8px;border-left:3px solid #674EE8;font-family:'Nunito Sans',sans-serif;"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#674EE8;margin-bottom:4px;">Arrival &amp; Dismissal</div><div style="font-size:13px;color:#1A1530;line-height:1.6;">${loc.arrival_instructions}</div></td></tr></table></td></tr>`
+    const hasArrival = !!(loc?.arrival_instructions || loc?.dismissal_instructions);
+    const arrivalRow = hasArrival
+      ? (() => {
+          const parts: string[] = [];
+          if (loc.arrival_instructions) parts.push(`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${brand.primary_color};margin-bottom:4px;">Arrival</div><div style="font-size:13px;color:#1A1530;line-height:1.6;">${loc.arrival_instructions}</div>`);
+          if (loc.dismissal_instructions) parts.push(`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${brand.primary_color};margin:${loc.arrival_instructions ? '12px 0 4px' : '0 0 4px'};">Dismissal</div><div style="font-size:13px;color:#1A1530;line-height:1.6;">${loc.dismissal_instructions}</div>`);
+          return `<tr><td colspan="2" style="padding:0 16px 16px;"><table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;"><tr><td style="padding:10px 12px;background:#F9F8FE;border-radius:8px;border-left:3px solid ${brand.primary_color};font-family:'Nunito Sans',sans-serif;">${parts.join('')}</td></tr></table></td></tr>`;
+        })()
       : '';
-
-    const hasArrival = !!loc?.arrival_instructions;
 
     return `<tr>
         <td style="padding:16px 16px ${hasArrival ? '8px' : '16px'};border-bottom:${hasArrival ? 'none' : '1px solid #EDE9FE'};font-family:'Nunito Sans',sans-serif;">
           <div style="font-size:16px;font-weight:700;color:#1A1530;">${programName}</div>
           <div style="font-size:14px;color:#6b6880;margin-top:4px;">${s?.first_name || ''} ${s?.last_name || ''} &middot; ${locationName}</div>
           <div style="font-size:14px;color:#6b6880;margin-top:4px;">${p?.day_of_week || ''}s &middot; ${timeDisplay}</div>
-          <div style="font-size:13px;color:#674EE8;margin-top:8px;font-weight:600;">First session: ${firstDate}</div>
+          <div style="font-size:13px;color:${brand.primary_color};margin-top:8px;font-weight:600;">First session: ${firstDate}</div>
         </td>
         <td style="padding:16px;text-align:right;vertical-align:top;border-bottom:${hasArrival ? 'none' : '1px solid #EDE9FE'};font-family:'Nunito Sans',sans-serif;font-weight:700;color:#1A1530;">
           ${fmt(r.amount_cents)}
@@ -414,20 +447,24 @@ async function sendConfirmationEmail({
   }).join('');
 
   const totalsBlock = useInstallments && installmentInfo
-    ? `<tr><td colspan="2" style="padding:20px 16px;background:#F5F3FF;"><div style="font-family:'Nunito Sans',sans-serif;font-size:15px;font-weight:700;color:#4430AC;margin-bottom:12px;">Your payment plan</div><table cellpadding="0" cellspacing="0" style="width:100%;font-family:'Nunito Sans',sans-serif;font-size:14px;color:#1A1530;"><tr><td style="padding:6px 0;">Today (paid)</td><td style="padding:6px 0;text-align:right;font-weight:700;">${fmt(installmentInfo.paidToday)}</td></tr><tr><td style="padding:6px 0;">Installment 2 &middot; ${fmtDate(installmentInfo.installment2Date)}</td><td style="padding:6px 0;text-align:right;">${fmt(installmentInfo.installment2Amount)}</td></tr><tr><td style="padding:6px 0;">Installment 3 &middot; ${fmtDate(installmentInfo.installment3Date)}</td><td style="padding:6px 0;text-align:right;">${fmt(installmentInfo.installment3Amount)}</td></tr><tr><td style="padding:8px 0 0;border-top:1px solid #DDD8FA;font-weight:700;">Total</td><td style="padding:8px 0 0;border-top:1px solid #DDD8FA;text-align:right;font-weight:700;">${fmt(installmentInfo.paidToday + installmentInfo.installment2Amount + installmentInfo.installment3Amount)}</td></tr></table><div style="font-family:'Nunito Sans',sans-serif;font-size:12px;color:#6b6880;margin-top:10px;">Your card on file will be charged automatically on each date. We'll email you before each charge.</div></td></tr>`
-    : `<tr><td style="padding:20px 16px;font-family:'Nunito Sans',sans-serif;font-size:18px;font-weight:700;color:#1A1530;">Total paid</td><td style="padding:20px 16px;text-align:right;font-family:'Titan One',Georgia,serif;font-size:24px;color:#F8A638;">${fmt(totalCents)}</td></tr>`;
+    ? `<tr><td colspan="2" style="padding:20px 16px;background:#F5F3FF;"><div style="font-family:'Nunito Sans',sans-serif;font-size:15px;font-weight:700;color:${brand.secondary_color};margin-bottom:12px;">Your payment plan</div><table cellpadding="0" cellspacing="0" style="width:100%;font-family:'Nunito Sans',sans-serif;font-size:14px;color:#1A1530;"><tr><td style="padding:6px 0;">Today (paid)</td><td style="padding:6px 0;text-align:right;font-weight:700;">${fmt(installmentInfo.paidToday)}</td></tr><tr><td style="padding:6px 0;">Installment 2 &middot; ${fmtDate(installmentInfo.installment2Date)}</td><td style="padding:6px 0;text-align:right;">${fmt(installmentInfo.installment2Amount)}</td></tr><tr><td style="padding:6px 0;">Installment 3 &middot; ${fmtDate(installmentInfo.installment3Date)}</td><td style="padding:6px 0;text-align:right;">${fmt(installmentInfo.installment3Amount)}</td></tr><tr><td style="padding:8px 0 0;border-top:1px solid #DDD8FA;font-weight:700;">Total</td><td style="padding:8px 0 0;border-top:1px solid #DDD8FA;text-align:right;font-weight:700;">${fmt(installmentInfo.paidToday + installmentInfo.installment2Amount + installmentInfo.installment3Amount)}</td></tr></table><div style="font-family:'Nunito Sans',sans-serif;font-size:12px;color:#6b6880;margin-top:10px;">Your card on file will be charged automatically on each date. We'll email you before each charge.</div></td></tr>`
+    : `<tr><td style="padding:20px 16px;font-family:'Nunito Sans',sans-serif;font-size:18px;font-weight:700;color:#1A1530;">Total paid</td><td style="padding:20px 16px;text-align:right;font-family:'Titan One',Georgia,serif;font-size:24px;color:${brand.accent_color};">${fmt(totalCents)}</td></tr>`;
+
+  const logoBlock = brand.logo_url
+    ? `<img src="${brand.logo_url}" alt="${escapeHtml(brand.org_name)}" style="max-height:48px;display:block;margin:0 auto 12px;" />`
+    : `<div style="color:${brand.accent_color};font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(brand.org_name)}</div>`;
 
   const html = `<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><title>Registration Confirmation</title></head>
-<body style="margin:0;padding:0;background:#f5f3ff;font-family:'Nunito Sans',Arial,sans-serif;">
+<body style="margin:0;padding:0;background:${brand.page_bg_color};font-family:'Nunito Sans',Arial,sans-serif;">
   <div style="max-width:600px;margin:0 auto;background:#fff;">
-    <div style="background:linear-gradient(135deg,#674EE8,#4430AC);padding:40px 30px;text-align:center;">
-      <div style="color:#F8A638;font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Journey to STEAM</div>
+    <div style="background:linear-gradient(135deg,${brand.primary_color},${brand.secondary_color});padding:40px 30px;text-align:center;">
+      ${logoBlock}
       <h1 style="color:#fff;margin:12px 0 0;font-family:'Titan One',Georgia,serif;font-size:32px;">You're registered!</h1>
     </div>
     <div style="padding:32px 30px;">
-      <p style="margin:0 0 16px;font-size:16px;color:#1A1530;">${greeting},</p>
+      <p style="margin:0 0 16px;font-size:16px;color:#1A1530;">${escapeHtml(greeting)},</p>
       <p style="margin:0 0 24px;font-size:16px;color:#1A1530;line-height:1.6;">
         Thanks for signing up! Here's everything you need to know for your child's program.
       </p>
@@ -436,18 +473,17 @@ async function sendConfirmationEmail({
         ${totalsBlock}
       </table>
       <div style="background:#EDE9FE;border-radius:12px;padding:20px;margin-bottom:24px;">
-        <div style="font-weight:700;color:#4430AC;margin-bottom:8px;">What happens next?</div>
+        <div style="font-weight:700;color:${brand.secondary_color};margin-bottom:8px;">What happens next?</div>
         <ul style="margin:0;padding-left:20px;color:#1A1530;font-size:14px;line-height:1.8;">
           <li>We'll send a reminder email before the first session</li>
           ${hasAnyArrival ? '<li>Arrival and dismissal details are listed above for each program</li>' : '<li>We\'ll share arrival and dismissal details before the first session</li>'}
           <li>Check your inbox for a separate email with access to your parent dashboard</li>
         </ul>
       </div>
-      <p style="margin:0 0 8px;font-size:14px;color:#6b6880;">Questions? Reach us at <a href="mailto:info@journeytosteam.com" style="color:#674EE8;">info@journeytosteam.com</a></p>
-      <p style="margin:24px 0 0;font-size:14px;color:#1A1530;font-style:italic;">Future-ready skills, right after school.</p>
+      <p style="margin:0 0 8px;font-size:14px;color:#6b6880;">Questions? Reach us at <a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p>
     </div>
     <div style="background:#1A1530;padding:20px 30px;text-align:center;color:#fff;opacity:0.6;font-size:12px;">
-      Journey to STEAM &middot; Powered by Enrops &middot; ${new Date().getFullYear()}
+      ${escapeHtml(brand.org_name)} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}
     </div>
   </div>
 </body>
@@ -457,8 +493,11 @@ async function sendConfirmationEmail({
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
     body: JSON.stringify({
-      from: FROM_EMAIL, to,
-      subject: useInstallments ? `You're registered! Your payment plan is set — Journey to STEAM` : `You're registered! — Journey to STEAM`,
+      from: formatFromAddress(brand), to,
+      reply_to: brand.reply_to,
+      subject: useInstallments
+        ? `You're registered! Your payment plan is set — ${brand.org_name}`
+        : `You're registered! — ${brand.org_name}`,
       html,
       tags: [
         { name: 'type', value: useInstallments ? 'registration_confirmation_installments' : 'registration_confirmation' },
@@ -471,4 +510,178 @@ async function sendConfirmationEmail({
     const body = await resendResp.text();
     console.error('Resend send failed:', resendResp.status, body);
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// v18 — operator-side Stripe Connect event handlers
+// ───────────────────────────────────────────────────────────────────────────
+
+interface OrgConnectRow {
+  id: string;
+  name: string | null;
+  alert_email: string | null;
+  stripe_account_status: string | null;
+  stripe_last_account_event_id: string | null;
+}
+
+async function handleAccountUpdated(
+  admin: ReturnType<typeof createClient>,
+  event: Stripe.Event,
+): Promise<void> {
+  const account = event.data.object as Stripe.Account;
+  const accountId = account.id;
+
+  // Find the org. No match = event for a different system; 200 anyway.
+  const { data } = await admin
+    .from('organizations')
+    .select('id, name, alert_email, stripe_account_status, stripe_last_account_event_id')
+    .eq('stripe_account_id', accountId)
+    .maybeSingle();
+  const org = data as OrgConnectRow | null;
+
+  if (!org) {
+    console.warn(`[stripe-webhook] account.updated for unknown account ${accountId} — ignoring`);
+    return;
+  }
+
+  // Idempotency.
+  if (org.stripe_last_account_event_id === event.id) {
+    console.log(`[stripe-webhook] account.updated event ${event.id} already processed for org ${org.id}`);
+    return;
+  }
+
+  // Map Stripe state to our enum. 5 buckets:
+  //   active        — charges + payouts both enabled
+  //   restricted    — submitted details but Stripe has disabled with a reason
+  //   onboarding    — submitted details, still verifying (no disabled_reason)
+  //                   OR hasn't completed onboarding form yet
+  //   disconnected  — operator disconnected (handled by deauthorize, not here)
+  //   not_connected — never connected (handled at insert time, not here)
+  const chargesEnabled = account.charges_enabled === true;
+  const payoutsEnabled = account.payouts_enabled === true;
+  const detailsSubmitted = account.details_submitted === true;
+  const disabledReason = account.requirements?.disabled_reason || null;
+  const wasActive = org.stripe_account_status === 'active';
+
+  let nextStatus: 'active' | 'restricted' | 'onboarding';
+  if (chargesEnabled && payoutsEnabled) {
+    nextStatus = 'active';
+  } else if (detailsSubmitted && !chargesEnabled && disabledReason) {
+    nextStatus = 'restricted';
+  } else {
+    nextStatus = 'onboarding';
+  }
+
+  const regressed = wasActive && nextStatus !== 'active';
+
+  const { error: updErr } = await admin
+    .from('organizations')
+    .update({
+      stripe_charges_enabled: chargesEnabled,
+      stripe_payouts_enabled: payoutsEnabled,
+      stripe_account_status: nextStatus,
+      stripe_last_account_event_id: event.id,
+    })
+    .eq('id', org.id);
+
+  if (updErr) {
+    console.error(`[stripe-webhook] failed to update org ${org.id}:`, updErr);
+    return;
+  }
+
+  console.log(
+    `[stripe-webhook] account.updated: org ${org.id} -> ${nextStatus} ` +
+    `(charges=${chargesEnabled}, payouts=${payoutsEnabled}, details=${detailsSubmitted}, disabled=${disabledReason ?? 'none'})`,
+  );
+
+  if (regressed && org.alert_email) {
+    const brand = await loadOrgBrand(admin, org.id);
+    await sendOperatorAlert({
+      brand,
+      to: org.alert_email,
+      subject: `Stripe paused payments for ${org.name || 'your organization'}`,
+      body:
+        `Stripe has paused your ability to receive payments. New state: ${nextStatus}.\n\n` +
+        (disabledReason ? `Reason from Stripe: ${disabledReason}\n\n` : '') +
+        `Open the Finances tab in your Enrops admin portal to continue verification, ` +
+        `or contact Stripe support directly. Until this is resolved, new parent payments ` +
+        `will land in Enrops's platform account rather than yours.`,
+    }).catch((err) => console.warn('regression alert send failed:', err));
+  }
+}
+
+async function handleAccountDeauthorized(
+  admin: ReturnType<typeof createClient>,
+  event: Stripe.Event,
+): Promise<void> {
+  // For account.application.deauthorized, the deauthorized account ID is on
+  // event.account (top-level), NOT in event.data.object.
+  const accountId = (event.account as string | null) ?? null;
+  if (!accountId) {
+    console.warn(`[stripe-webhook] account.application.deauthorized has no event.account`);
+    return;
+  }
+
+  const { data } = await admin
+    .from('organizations')
+    .select('id, name, alert_email, stripe_last_account_event_id')
+    .eq('stripe_account_id', accountId)
+    .maybeSingle();
+  const org = data as Pick<OrgConnectRow, 'id' | 'name' | 'alert_email' | 'stripe_last_account_event_id'> | null;
+
+  if (!org) {
+    console.warn(`[stripe-webhook] deauthorize for unknown account ${accountId}`);
+    return;
+  }
+
+  if (org.stripe_last_account_event_id === event.id) {
+    return;
+  }
+
+  // Note: we deliberately do NOT clear stripe_account_id. Keep it for audit
+  // and so the operator's UI shows "disconnected" rather than reverting to
+  // the never-connected onboarding flow. Reconnecting will issue a fresh
+  // acct_ID anyway (Stripe doesn't reuse deauthorized accounts).
+  const { error: updErr } = await admin
+    .from('organizations')
+    .update({
+      stripe_charges_enabled: false,
+      stripe_payouts_enabled: false,
+      stripe_account_status: 'disconnected',
+      stripe_last_account_event_id: event.id,
+    })
+    .eq('id', org.id);
+
+  if (updErr) {
+    console.error(`[stripe-webhook] failed to flip org ${org.id} to disconnected:`, updErr);
+    return;
+  }
+
+  console.log(`[stripe-webhook] org ${org.id} (${org.name}) disconnected Stripe Connect`);
+
+  if (org.alert_email) {
+    const brand = await loadOrgBrand(admin, org.id);
+    await sendOperatorAlert({
+      brand,
+      to: org.alert_email,
+      subject: `Stripe Connect disconnected for ${org.name || 'your organization'}`,
+      body:
+        `Stripe Connect has been disconnected for your organization.\n\n` +
+        `New parent payments will no longer route to your bank — they will land in ` +
+        `Enrops's platform account until you reconnect. Open the Finances tab in your ` +
+        `Enrops admin portal to reconnect.`,
+    }).catch((err) => console.warn('deauth alert send failed:', err));
+  }
+}
+
+// HTML-escape utility for templated content. Avoid injecting unescaped
+// user data (parent names, org names) into the email HTML.
+function escapeHtml(s: string | undefined | null): string {
+  if (!s) return '';
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

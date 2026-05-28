@@ -133,10 +133,12 @@ function parseCsv(text) {
 }
 
 export default function Rosters() {
-  const { org } = useOutletContext() ?? {};
+  const { org, orgMember } = useOutletContext() ?? {};
   const [camps, setCamps] = useState(null); // null = loading
   const [error, setError] = useState("");
   const [uploadingFor, setUploadingFor] = useState(null); // camp_session row
+  const [refundingFor, setRefundingFor] = useState(null); // { registration, camp }
+  const canRefund = orgMember?.role === "owner" || orgMember?.role === "admin";
 
   useEffect(() => {
     if (!org?.id) return;
@@ -221,6 +223,8 @@ export default function Rosters() {
               camp={c}
               onUpload={() => setUploadingFor(c)}
               orgId={org?.id}
+              canRefund={canRefund}
+              onRefund={(reg) => setRefundingFor({ registration: reg, camp: c })}
               onRosterChanged={() => {
                 // Re-fetch this camp's roster_count after an edit/delete
                 // by triggering a top-level reload. Cheap and simple.
@@ -236,6 +240,26 @@ export default function Rosters() {
             />
           ))}
         </div>
+      )}
+
+      {refundingFor && (
+        <RefundDrawer
+          registration={refundingFor.registration}
+          camp={refundingFor.camp}
+          orgId={org?.id}
+          onClose={() => setRefundingFor(null)}
+          onRefunded={() => {
+            // Bump the affected camp's refresh_token so RosterEditor re-mounts
+            // and re-fetches registrations (which now have updated
+            // payment_status and possibly status='cancelled'). Without this
+            // the row keeps showing the Refund button against stale data.
+            const campId = refundingFor.camp.id;
+            setRefundingFor(null);
+            setCamps((cs) => (cs ?? []).map((c) =>
+              c.id === campId ? { ...c, refresh_token: (c.refresh_token || 0) + 1 } : c
+            ));
+          }}
+        />
       )}
 
       {uploadingFor && (
@@ -257,7 +281,7 @@ export default function Rosters() {
   );
 }
 
-function CampRow({ camp, onUpload, orgId, onRosterChanged }) {
+function CampRow({ camp, onUpload, orgId, onRosterChanged, canRefund, onRefund }) {
   const [expanded, setExpanded] = useState(false);
   const gap = (camp.current_enrollment ?? 0) - (camp.roster_count ?? 0);
   return (
@@ -341,13 +365,16 @@ function CampRow({ camp, onUpload, orgId, onRosterChanged }) {
           campSessionId={camp.id}
           orgId={orgId}
           onChanged={onRosterChanged}
+          canRefund={canRefund}
+          onRefund={onRefund}
+          refreshToken={camp.refresh_token || 0}
         />
       )}
     </div>
   );
 }
 
-function RosterEditor({ campSessionId, orgId, onChanged }) {
+function RosterEditor({ campSessionId, orgId, onChanged, canRefund, onRefund, refreshToken }) {
   const [campers, setCampers] = useState(null); // null = loading
   const [editingId, setEditingId] = useState(null);
   const [err, setErr] = useState("");
@@ -359,6 +386,7 @@ function RosterEditor({ campSessionId, orgId, onChanged }) {
       .from("registrations")
       .select(`
         id, status, notes, authorized_pickup_contacts, photo_release_consent,
+        payment_status, amount_cents, stripe_payment_intent_id, organization_id,
         student:students (
           id, first_name, last_name, grade, birthdate, pronouns,
           allergies, dietary_restrictions, medical_notes, medical_conditions,
@@ -380,8 +408,10 @@ function RosterEditor({ campSessionId, orgId, onChanged }) {
 
   useEffect(() => {
     load();
+    // refreshToken bumps after a refund to force a re-fetch so payment_status
+    // and registration.status are current. campSessionId obviously also.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campSessionId]);
+  }, [campSessionId, refreshToken]);
 
   return (
     <div style={{ marginTop: 12, borderTop: `1px solid ${RULE}`, paddingTop: 10 }}>
@@ -408,6 +438,8 @@ function RosterEditor({ campSessionId, orgId, onChanged }) {
               isEditing={editingId === reg.id}
               onToggleEdit={() => setEditingId((cur) => (cur === reg.id ? null : reg.id))}
               orgId={orgId}
+              canRefund={canRefund}
+              onRefund={onRefund ? () => onRefund(reg) : null}
               onSaved={() => {
                 setEditingId(null);
                 load();
@@ -421,7 +453,7 @@ function RosterEditor({ campSessionId, orgId, onChanged }) {
   );
 }
 
-function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSaved }) {
+function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSaved, canRefund, onRefund }) {
   const s = registration.student;
   if (!s) return null;
   const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed";
@@ -462,24 +494,47 @@ function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSav
               )}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onToggleEdit}
-            style={{
-              padding: "5px 10px",
-              background: "transparent",
-              color: PURPLE,
-              border: `1px solid ${PURPLE}`,
-              borderRadius: 5,
-              fontSize: 11,
-              fontWeight: 600,
-              fontFamily: "inherit",
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            Edit →
-          </button>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {canRefund && onRefund && registration.payment_status === "paid" && registration.status !== "cancelled" && (
+              <button
+                type="button"
+                onClick={onRefund}
+                style={{
+                  padding: "5px 10px",
+                  background: "transparent",
+                  color: MUTED,
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 5,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+                title="Refund this registration"
+              >
+                Refund…
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onToggleEdit}
+              style={{
+                padding: "5px 10px",
+                background: "transparent",
+                color: PURPLE,
+                border: `1px solid ${PURPLE}`,
+                borderRadius: 5,
+                fontSize: 11,
+                fontWeight: 600,
+                fontFamily: "inherit",
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Edit →
+            </button>
+          </div>
         </div>
       )}
 
@@ -1200,4 +1255,351 @@ function Inp({ value, onChange, placeholder, type = "text" }) {
       }}
     />
   );
+}
+
+// ─── Refund drawer ─────────────────────────────────────────────────────────
+// Operator-initiated refund for a registration. Loads paid PIs + prior
+// refunds + the org's withdrawal admin fee, then presents one input and
+// two quick-fill buttons. Calls refund-registration edge fn on submit.
+
+function RefundDrawer({ registration, camp, orgId, onClose, onRefunded }) {
+  const [eligibleCents, setEligibleCents] = useState(null); // null = loading
+  const [paidCents, setPaidCents] = useState(0);
+  const [refundedCents, setRefundedCents] = useState(0);
+  const [adminFeeCents, setAdminFeeCents] = useState(0);
+  const [amountDollars, setAmountDollars] = useState("");
+  const [reason, setReason] = useState("");
+  const [cancelReg, setCancelReg] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [loadErr, setLoadErr] = useState("");
+
+  const student = registration.student;
+  const studentName = student ? `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() : "this camper";
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // Paid PIs: prefer installments table; fall back to registration row.
+        const { data: insts } = await supabase
+          .from("installments")
+          .select("amount_cents, status, stripe_payment_intent_id")
+          .eq("registration_id", registration.id);
+        const paidInsts = (insts ?? []).filter((i) => i.status === "paid" && i.stripe_payment_intent_id);
+
+        let totalPaid = 0;
+        if (paidInsts.length > 0) {
+          totalPaid = paidInsts.reduce((s, i) => s + (i.amount_cents || 0), 0);
+        } else if (registration.payment_status === "paid") {
+          totalPaid = registration.amount_cents || 0;
+        }
+
+        const { data: refunds } = await supabase
+          .from("refunds")
+          .select("amount_cents")
+          .eq("registration_id", registration.id)
+          .eq("status", "succeeded");
+        const totalRefunded = (refunds ?? []).reduce((s, r) => s + (r.amount_cents || 0), 0);
+
+        const { data: orgRow } = await supabase
+          .from("organizations")
+          .select("withdrawal_admin_fee_cents")
+          .eq("id", orgId)
+          .maybeSingle();
+        const adminFee = orgRow?.withdrawal_admin_fee_cents || 0;
+
+        if (cancelled) return;
+        setPaidCents(totalPaid);
+        setRefundedCents(totalRefunded);
+        setEligibleCents(Math.max(0, totalPaid - totalRefunded));
+        setAdminFeeCents(adminFee);
+      } catch (e) {
+        if (!cancelled) {
+          console.error("[RefundDrawer] load failed", e);
+          setLoadErr(e.message || "Couldn't load refund details.");
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [registration.id, orgId, registration.payment_status, registration.amount_cents]);
+
+  function setAmountFromCents(cents) {
+    setAmountDollars((cents / 100).toFixed(2));
+    // Auto-check "also cancel" when amount equals full eligible
+    setCancelReg(cents >= eligibleCents);
+  }
+
+  function fmt(cents) {
+    return `$${((cents || 0) / 100).toFixed(2)}`;
+  }
+
+  async function submit() {
+    setErr("");
+    const numeric = parseFloat(amountDollars);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      setErr("Enter an amount greater than $0.");
+      return;
+    }
+    const cents = Math.round(numeric * 100);
+    if (cents > eligibleCents) {
+      setErr(`Maximum refund is ${fmt(eligibleCents)}.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error("Not signed in.");
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refund-registration`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            registration_id: registration.id,
+            amount_cents: cents,
+            reason: reason.trim() || undefined,
+            cancel_registration: cancelReg,
+          }),
+        }
+      );
+      const json = await resp.json();
+      if (!resp.ok) {
+        const msg = json?.stripe_message || json?.error || `Refund failed (${resp.status}).`;
+        if (json?.eligible_cents != null) {
+          setErr(`${msg} Eligible: ${fmt(json.eligible_cents)}`);
+        } else {
+          setErr(msg);
+        }
+        setBusy(false);
+        return;
+      }
+      // Success — close + notify parent
+      onRefunded();
+    } catch (e) {
+      setErr(e.message || "Refund failed.");
+      setBusy(false);
+    }
+  }
+
+  const withdrawalCents = adminFeeCents > 0 ? Math.max(0, eligibleCents - adminFeeCents) : 0;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(26, 21, 48, 0.45)",
+        display: "flex", alignItems: "flex-start", justifyContent: "center",
+        padding: "5vh 16px", zIndex: 200, fontFamily: "inherit",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 12, maxWidth: 520, width: "100%",
+          padding: 24, maxHeight: "90vh", overflowY: "auto",
+          boxShadow: "0 10px 40px rgba(0,0,0,0.25)",
+        }}
+      >
+        <h2 style={{ margin: "0 0 4px", fontSize: 20, color: PURPLE, fontWeight: 700 }}>
+          Refund — {studentName}
+        </h2>
+        <p style={{ margin: "0 0 16px", fontSize: 13, color: MUTED }}>
+          {camp?.curriculum_name}{camp?.location_name ? ` · ${camp.location_name}` : ""}
+        </p>
+
+        {loadErr && (
+          <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 12 }}>
+            {loadErr}
+          </div>
+        )}
+
+        {eligibleCents !== null && (
+          <>
+            <div style={{ background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13 }}>
+              <Row label="Total paid" value={fmt(paidCents)} />
+              <Row label="Already refunded" value={fmt(refundedCents)} muted={refundedCents === 0} />
+              <Row label="Eligible to refund" value={fmt(eligibleCents)} bold />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: MUTED, display: "block", marginBottom: 6 }}>
+                Amount to refund
+              </label>
+              <div style={{ position: "relative", display: "inline-block", width: "100%" }}>
+                <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: MUTED, fontSize: 14 }}>$</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.01"
+                  max={(eligibleCents / 100).toFixed(2)}
+                  value={amountDollars}
+                  onChange={(e) => {
+                    setAmountDollars(e.target.value);
+                    // Auto-toggle cancel when fully refunded
+                    const cents = Math.round(parseFloat(e.target.value || "0") * 100);
+                    setCancelReg(cents >= eligibleCents && cents > 0);
+                  }}
+                  disabled={busy || eligibleCents === 0}
+                  placeholder="0.00"
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px 10px 26px",
+                    fontSize: 16,
+                    border: `1px solid ${RULE}`,
+                    borderRadius: 6,
+                    fontFamily: "inherit",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+              <button
+                type="button"
+                onClick={() => setAmountFromCents(eligibleCents)}
+                disabled={busy || eligibleCents === 0}
+                style={quickFillBtnStyle(busy || eligibleCents === 0)}
+              >
+                Full refund — {fmt(eligibleCents)}
+              </button>
+              {adminFeeCents > 0 && withdrawalCents > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setAmountFromCents(withdrawalCents)}
+                  disabled={busy}
+                  style={quickFillBtnStyle(busy)}
+                  title={`Withholds ${fmt(adminFeeCents)} admin fee`}
+                >
+                  Withdrawal — {fmt(adminFeeCents)} admin fee — {fmt(withdrawalCents)}
+                </button>
+              )}
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: MUTED, display: "block", marginBottom: 6 }}>
+                Reason (internal note, optional)
+              </label>
+              <input
+                type="text"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                disabled={busy}
+                placeholder="e.g. Family moved out of state"
+                maxLength={500}
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 6,
+                  fontFamily: "inherit",
+                  boxSizing: "border-box",
+                }}
+              />
+              <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
+                Stays in your records. Parent gets Stripe's automatic refund email.
+              </div>
+            </div>
+
+            <label style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 16, cursor: "pointer", fontSize: 13, color: INK }}>
+              <input
+                type="checkbox"
+                checked={cancelReg}
+                onChange={(e) => setCancelReg(e.target.checked)}
+                disabled={busy}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                <strong>Also cancel this registration</strong>
+                <div style={{ color: MUTED, fontSize: 12, marginTop: 2 }}>
+                  Pauses future installments and frees the spot. Auto-checks on full refund.
+                </div>
+              </span>
+            </label>
+
+            {err && (
+              <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 12 }}>
+                {err}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                style={{
+                  padding: "8px 14px",
+                  background: "transparent",
+                  color: MUTED,
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontFamily: "inherit",
+                  cursor: busy ? "wait" : "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submit}
+                disabled={busy || eligibleCents === 0 || !amountDollars}
+                style={{
+                  padding: "8px 16px",
+                  background: PURPLE,
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  cursor: busy ? "wait" : "pointer",
+                  opacity: busy || eligibleCents === 0 || !amountDollars ? 0.5 : 1,
+                }}
+              >
+                {busy ? "Refunding…" : `Refund ${amountDollars ? fmt(Math.round(parseFloat(amountDollars) * 100)) : ""}`}
+              </button>
+            </div>
+          </>
+        )}
+
+        {eligibleCents === null && !loadErr && (
+          <div style={{ color: MUTED, fontSize: 13, padding: "16px 0" }}>Loading payment details…</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value, bold, muted }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
+      <span style={{ color: muted ? MUTED : INK, fontWeight: bold ? 600 : 400 }}>{label}</span>
+      <span style={{ color: muted ? MUTED : INK, fontWeight: bold ? 700 : 500 }}>{value}</span>
+    </div>
+  );
+}
+
+function quickFillBtnStyle(disabled) {
+  return {
+    padding: "8px 12px",
+    background: "transparent",
+    color: disabled ? MUTED : PURPLE,
+    border: `1px solid ${disabled ? RULE : PURPLE}`,
+    borderRadius: 6,
+    fontSize: 12,
+    fontWeight: 600,
+    fontFamily: "inherit",
+    cursor: disabled ? "not-allowed" : "pointer",
+    whiteSpace: "nowrap",
+  };
 }
