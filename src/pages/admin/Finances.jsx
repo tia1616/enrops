@@ -777,9 +777,10 @@ function NotConnectedBody(props) {
   return (
     <>
       <p style={{ margin: "0 0 16px", fontSize: 14, color: INK, lineHeight: 1.6 }}>
-        Connect Stripe to start receiving parent payments. Onboarding is hosted by Stripe — it
-        takes a few minutes and asks for your business details, identity, and bank account.
+        Connect Stripe to start receiving parent payments directly into your bank account.
+        Onboarding is hosted by Stripe — takes about 5–10 minutes.
       </p>
+      <WhatToExpect />
       <BusinessSetupForm {...props} />
       <ConnectButton {...props} label="Connect Stripe" />
     </>
@@ -793,9 +794,62 @@ function DisconnectedBody(props) {
         Stripe is disconnected. New parent payments are landing in Enrops's account until
         you reconnect. We'll transfer them to you once you're set up.
       </Banner>
+      <WhatToExpect />
       <BusinessSetupForm {...props} />
       <ConnectButton {...props} label="Reconnect Stripe" />
     </>
+  );
+}
+
+// Pre-Connect instructions panel. Tenant-agnostic — no J2S strings.
+// Mirrors the style of the instructor portal's Stripe onboarding step:
+// scannable list of what Stripe will ask, then expectations.
+function WhatToExpect() {
+  const itemStyle = { marginBottom: 6, fontSize: 13, color: INK, lineHeight: 1.55 };
+  const labelStyle = { fontWeight: 700, color: PURPLE };
+  return (
+    <div style={{
+      background: "#FBFBFB",
+      border: `1px solid ${RULE}`,
+      borderRadius: 8,
+      padding: "14px 16px",
+      marginBottom: 16,
+    }}>
+      <div style={{ fontWeight: 700, fontSize: 13, color: INK, marginBottom: 10 }}>
+        What Stripe will ask for — have these handy before you start:
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 18 }}>
+        <li style={itemStyle}>
+          <span style={labelStyle}>Your email and phone</span> — Stripe sends verification
+          codes and account notices here. Use a personal address you check regularly.
+        </li>
+        <li style={itemStyle}>
+          <span style={labelStyle}>Business details</span> — legal name, EIN, business address.
+        </li>
+        <li style={itemStyle}>
+          <span style={labelStyle}>Your personal info as account holder</span> — name,
+          date of birth, last 4 of SSN. (Stripe requires this for KYC; it's not stored on
+          our side.)
+        </li>
+        <li style={itemStyle}>
+          <span style={labelStyle}>Bank account</span> — routing and account number, or
+          connect via Plaid. This is where Stripe deposits parent payments.
+        </li>
+      </ul>
+      <div style={{
+        marginTop: 12, paddingTop: 10, borderTop: `1px solid ${RULE}`,
+        fontSize: 12, color: MUTED, lineHeight: 1.55,
+      }}>
+        <strong style={{ color: INK }}>What happens after:</strong> Stripe verifies your
+        info (usually instant; up to a day if they need to review documents). You'll be set
+        to "Active" automatically, and parents start paying through your account on new
+        registrations. Enrops keeps a 2% platform fee (capped at $5 per transaction); the
+        rest lands in your bank.
+        <br /><br />
+        <strong style={{ color: INK }}>Already have a Stripe account?</strong> This creates
+        a separate account just for Enrops. Your existing Stripe account stays untouched.
+      </div>
+    </div>
   );
 }
 
