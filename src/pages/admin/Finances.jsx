@@ -332,10 +332,10 @@ export default function Finances() {
   return (
     <PageShell>
       <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700 }}>
-        Finances
+        Collections
       </h1>
       <p style={{ margin: "0 0 24px", color: MUTED, fontSize: 14 }}>
-        How parents pay you, and how Enrops earns when you earn.
+        Money coming in from parents — setup, fees, refunds.
       </p>
 
       {stripeParam === "return" && (
