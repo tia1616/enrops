@@ -816,7 +816,7 @@ function WhatToExpect() {
       marginBottom: 16,
     }}>
       <div style={{ fontWeight: 700, fontSize: 13, color: INK, marginBottom: 10 }}>
-        What Stripe will ask for — have these handy before you start:
+        What Stripe will ask for — have these handy:
       </div>
       <ul style={{ margin: 0, paddingLeft: 18 }}>
         <li style={itemStyle}>
@@ -942,6 +942,10 @@ function OnboardingBody({ status, onContinue, busy, canManage, chargesEnabled, p
           providing additional info — click below to continue.
         </Banner>
       )}
+      <p style={{ margin: "0 0 16px", fontSize: 14, color: INK, lineHeight: 1.6 }}>
+        Stripe still needs more info before they can verify your account. Pick up where you
+        left off — Stripe remembers what you've already entered.
+      </p>
       <div style={{ marginBottom: 16, fontSize: 14, color: INK }}>
         <div style={{ marginBottom: 4 }}>
           <strong>Charges:</strong>{" "}
@@ -952,6 +956,7 @@ function OnboardingBody({ status, onContinue, busy, canManage, chargesEnabled, p
           <Pill on={payoutsEnabled}>{payoutsEnabled ? "enabled" : "pending"}</Pill>
         </div>
       </div>
+      <WhatToExpect />
       {canManage ? (
         <button onClick={onContinue} disabled={busy} style={btn(PURPLE, "#fff", false, busy)}>
           {busy ? "Loading…" : "Continue setup"}
