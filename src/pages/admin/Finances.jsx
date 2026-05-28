@@ -77,6 +77,12 @@ export default function Finances() {
   const [businessType, setBusinessType] = useState("");
   const [country, setCountry] = useState("US");
   const [savingBiz, setSavingBiz] = useState(false);
+  // Inline tabs (only meaningful when active). Default to Activity.
+  const [tab, setTab] = useState("activity");
+  // Collapsible "Manage setup" banner when active. Collapsed by default —
+  // the operator doesn't need to see fee toggle / descriptor / admin fee
+  // every visit. Click "Manage setup" to expand.
+  const [setupOpen, setSetupOpen] = useState(false);
 
   // Stripe return-from-onboarding banner. Stripe redirects to:
   //   /admin/finances?stripe=return    — operator finished or paused
@@ -332,10 +338,10 @@ export default function Finances() {
   return (
     <PageShell>
       <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700 }}>
-        Collections
+        Receivables
       </h1>
       <p style={{ margin: "0 0 24px", color: MUTED, fontSize: 14 }}>
-        Money coming in from parents — setup, fees, refunds.
+        Money coming in — parent payments, invoices to schools, refunds.
       </p>
 
       {stripeParam === "return" && (
@@ -355,66 +361,85 @@ export default function Finances() {
         <Banner tone="ok">{savedToast}</Banner>
       )}
 
-      {/* Connection card */}
-      <Card>
-        <Section>
-          <Heading>Get paid through Enrops</Heading>
+      {/* When ACTIVE: slim collapsible setup banner + tabs.
+          When NOT active: big setup card (operator has to finish setup before
+          tabs/activity make sense). */}
 
-          {status === "not_connected" && (
-            <NotConnectedBody
-              onConnect={startOnboarding}
-              busy={busy}
-              canManage={canManage}
-              businessType={businessType}
-              setBusinessType={setBusinessType}
-              country={country}
-              setCountry={setCountry}
-              savedBusinessType={config?.stripe_business_type}
-              savedCountry={config?.stripe_country}
-              saveBusinessSetup={saveBusinessSetup}
-              savingBiz={savingBiz}
-            />
-          )}
+      {isActive ? (
+        <SetupBanner
+          accountId={accountId}
+          chargesEnabled={!!config?.stripe_charges_enabled}
+          payoutsEnabled={!!config?.stripe_payouts_enabled}
+          open={setupOpen}
+          onToggle={() => setSetupOpen((v) => !v)}
+          onOpenDashboard={openExpressDashboard}
+          busy={busy}
+        />
+      ) : (
+        <Card>
+          <Section>
+            <Heading>Get paid through Enrops</Heading>
 
-          {isOnboardingOrRestricted && (
-            <OnboardingBody
-              status={status}
-              onContinue={startOnboarding}
-              busy={busy}
-              canManage={canManage}
-              chargesEnabled={!!config?.stripe_charges_enabled}
-              payoutsEnabled={!!config?.stripe_payouts_enabled}
-            />
-          )}
+            {status === "not_connected" && (
+              <NotConnectedBody
+                onConnect={startOnboarding}
+                busy={busy}
+                canManage={canManage}
+                businessType={businessType}
+                setBusinessType={setBusinessType}
+                country={country}
+                setCountry={setCountry}
+                savedBusinessType={config?.stripe_business_type}
+                savedCountry={config?.stripe_country}
+                saveBusinessSetup={saveBusinessSetup}
+                savingBiz={savingBiz}
+              />
+            )}
 
-          {isDisconnected && (
-            <DisconnectedBody
-              onReconnect={startOnboarding}
-              busy={busy}
-              canManage={canManage}
-              businessType={businessType}
-              setBusinessType={setBusinessType}
-              country={country}
-              setCountry={setCountry}
-              savedBusinessType={config?.stripe_business_type}
-              savedCountry={config?.stripe_country}
-              saveBusinessSetup={saveBusinessSetup}
-              savingBiz={savingBiz}
-            />
-          )}
+            {isOnboardingOrRestricted && (
+              <OnboardingBody
+                status={status}
+                onContinue={startOnboarding}
+                busy={busy}
+                canManage={canManage}
+                chargesEnabled={!!config?.stripe_charges_enabled}
+                payoutsEnabled={!!config?.stripe_payouts_enabled}
+              />
+            )}
 
-          {isActive && (
-            <ActiveBody
-              accountId={accountId}
-              onOpenDashboard={openExpressDashboard}
-              busy={busy}
-            />
-          )}
-        </Section>
-      </Card>
+            {isDisconnected && (
+              <DisconnectedBody
+                onReconnect={startOnboarding}
+                busy={busy}
+                canManage={canManage}
+                businessType={businessType}
+                setBusinessType={setBusinessType}
+                country={country}
+                setCountry={setCountry}
+                savedBusinessType={config?.stripe_business_type}
+                savedCountry={config?.stripe_country}
+                saveBusinessSetup={saveBusinessSetup}
+                savingBiz={savingBiz}
+              />
+            )}
+          </Section>
+        </Card>
+      )}
 
-      {/* Fee + descriptor + admin fee cards — only meaningful once active */}
+      {/* Tabs (only when active). Setup-related editable fields are nested
+          under the "Manage setup" banner above. */}
       {isActive && (
+        <>
+          <TabsNav tab={tab} onTab={setTab} />
+          {tab === "activity" && <ActivityTab />}
+          {tab === "invoices" && <InvoicesTab />}
+          {tab === "refunds" && <RefundsTab />}
+        </>
+      )}
+
+      {/* Expanded "Manage setup" detail — fee config, descriptor, admin fee.
+          Only renders when banner is expanded. */}
+      {isActive && setupOpen && (
         <>
           <Card>
             <Section>
@@ -535,6 +560,165 @@ export default function Finances() {
 }
 
 // ───────────────────────────── sub-components ──────────────────────────────
+
+// Slim status banner shown at the top of Receivables when Stripe is active.
+// Shows connection state + a Manage setup ▾ toggle that expands the editable
+// fee / descriptor / admin fee cards.
+function SetupBanner({ accountId, chargesEnabled, payoutsEnabled, open, onToggle, onOpenDashboard, busy }) {
+  return (
+    <div style={{
+      background: "rgba(58, 124, 58, 0.08)",
+      border: `1px solid rgba(58, 124, 58, 0.30)`,
+      borderRadius: 8,
+      padding: "10px 14px",
+      marginBottom: 16,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 12,
+      flexWrap: "wrap",
+      fontSize: 13,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", color: INK }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600, color: OK }}>
+          <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: OK }} />
+          Stripe connected
+        </span>
+        <span style={{ color: MUTED, fontFamily: "monospace", fontSize: 11 }}>{accountId || ""}</span>
+        <span style={{ color: MUTED }}>·</span>
+        <span style={{ color: chargesEnabled ? OK : AMBER }}>
+          Charges {chargesEnabled ? "on" : "off"}
+        </span>
+        <span style={{ color: MUTED }}>·</span>
+        <span style={{ color: payoutsEnabled ? OK : AMBER }}>
+          Payouts {payoutsEnabled ? "on" : "off"}
+        </span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button
+          type="button"
+          onClick={onOpenDashboard}
+          disabled={busy}
+          style={{
+            padding: "5px 10px",
+            background: "transparent",
+            color: PURPLE,
+            border: `1px solid ${PURPLE}`,
+            borderRadius: 5,
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: "inherit",
+            cursor: busy ? "wait" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Stripe Dashboard ↗
+        </button>
+        <button
+          type="button"
+          onClick={onToggle}
+          style={{
+            padding: "5px 10px",
+            background: "transparent",
+            color: INK,
+            border: `1px solid ${RULE}`,
+            borderRadius: 5,
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: "inherit",
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Manage setup {open ? "▴" : "▾"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Horizontal tabs nav inside Receivables.
+function TabsNav({ tab, onTab }) {
+  const items = [
+    { key: "activity", label: "Activity" },
+    { key: "invoices", label: "Invoices" },
+    { key: "refunds",  label: "Refunds" },
+  ];
+  return (
+    <div style={{
+      display: "flex",
+      gap: 4,
+      borderBottom: `1px solid ${RULE}`,
+      marginBottom: 16,
+    }}>
+      {items.map((it) => {
+        const active = tab === it.key;
+        return (
+          <button
+            key={it.key}
+            type="button"
+            onClick={() => onTab(it.key)}
+            style={{
+              padding: "10px 14px",
+              background: "transparent",
+              color: active ? PURPLE : MUTED,
+              border: "none",
+              borderBottom: active ? `2px solid ${PURPLE}` : "2px solid transparent",
+              fontSize: 14,
+              fontWeight: active ? 700 : 500,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              marginBottom: -1,
+            }}
+          >
+            {it.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ActivityTab() {
+  return (
+    <Card>
+      <div style={{ color: MUTED, fontSize: 14, textAlign: "center", padding: "32px 16px" }}>
+        Recent parent payments and refunds will show here.
+        <div style={{ fontSize: 12, marginTop: 8 }}>
+          Coming next — pulls from Stripe Connect activity.
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function InvoicesTab() {
+  return (
+    <Card>
+      <div style={{ color: MUTED, fontSize: 14, textAlign: "center", padding: "32px 16px" }}>
+        Send invoices to schools and partners — track paid, overdue, outstanding.
+        <div style={{ fontSize: 12, marginTop: 8 }}>
+          Coming next — Stripe Invoicing with ACH support.
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function RefundsTab() {
+  return (
+    <Card>
+      <div style={{ color: MUTED, fontSize: 14, textAlign: "center", padding: "32px 16px" }}>
+        Issue refunds and view refund history.
+        <div style={{ fontSize: 12, marginTop: 8 }}>
+          For now, refund a specific registration from the{" "}
+          <a href="/admin/rosters" style={{ color: PURPLE }}>Rosters</a> page →
+          row → Refund…
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 function PageShell({ children }) {
   return <div style={{ maxWidth: 760 }}>{children}</div>;

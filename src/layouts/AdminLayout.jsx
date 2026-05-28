@@ -41,13 +41,12 @@ const NAV = [
     label: "Money",
     group: "money",
     children: [
-      // /admin/finances stays as the route so the Stripe return_url our edge
-      // function builds (/admin/finances?stripe=return) keeps working. The
-      // page-level heading is "Collections" — the URL will follow when we
-      // do the next migration pass.
-      { to: "/admin/finances", label: "Collections" },
-      { to: "/admin/invoicing", label: "Invoicing", soon: true },
-      { to: "/admin/payroll", label: "Payroll" },
+      // /admin/finances = Receivables. URL stays /admin/finances for now so
+      // the Stripe return_url hardcoded in stripe-connect-onboard
+      // (/admin/finances?stripe=return) keeps working. Will rename URL when
+      // we next touch that edge function.
+      { to: "/admin/finances", label: "Receivables" },
+      { to: "/admin/payouts", label: "Payouts" },
     ],
   },
   { to: "/admin/community", label: "Community", soon: true },
