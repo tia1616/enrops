@@ -665,7 +665,7 @@ type Touchpoint = {
 };
 
 // ---------------------------------------------------------------------------
-// Mechanical validation — see docs/don/mechanical-checks.md
+// Mechanical validation — see docs/agents/ennie/mechanical-checks.md
 // ---------------------------------------------------------------------------
 
 const KNOWN_ACRONYMS = new Set([
@@ -685,6 +685,36 @@ const BANNED_CLAIM_PATTERNS: { pattern: RegExp; label: string }[] = [
   { pattern: /\bfilling up\b/i, label: "filling up" },
   { pattern: /\bback by popular demand\b/i, label: "back by popular demand" },
 ];
+
+// Marketer-speak — flag for review. Ennie's voice doc forbids these explicitly.
+// Soft (not hard) because the operator can override with a real reason.
+const MARKETER_SPEAK_PATTERNS: { pattern: RegExp; label: string }[] = [
+  { pattern: /\bleverage\b/i, label: "leverage" },
+  { pattern: /\belevate\b/i, label: "elevate" },
+  { pattern: /\bunlock(?:ing)? (?:your|their)\b/i, label: "unlock your/their" },
+  { pattern: /\bdrive engagement\b/i, label: "drive engagement" },
+  { pattern: /\bsupercharge\b/i, label: "supercharge" },
+  { pattern: /\bnext[-\s]level\b/i, label: "next-level" },
+  { pattern: /\bgame[-\s]changing\b/i, label: "game-changing" },
+  { pattern: /\bactivate your\b/i, label: "activate your" },
+  { pattern: /\bsynergy\b/i, label: "synergy" },
+];
+
+// Outcome promises about a specific child — soft flag. "Your child will master X"
+// is the canonical bad version; describe what kids do, not what they become.
+const OUTCOME_PROMISE_PATTERNS: { pattern: RegExp; label: string }[] = [
+  { pattern: /\byour (?:child|student|kid|kiddo) will (?:become|master|be able to|learn to)\b/i, label: "outcome promise (your child will become/master/be able to)" },
+  { pattern: /\bguaranteed to\b/i, label: "guaranteed to" },
+];
+
+// Hard reject: cancel-style language in parent-facing subject lines. Parents
+// hear "isn't running this term" / "schedule update" / "moved that to next
+// session" — never "cancelled." Operator + partner channels are exempt; this
+// only fires for audience='parents' (the only Mode B audience in v1).
+const PARENT_SUBJECT_CANCEL_PATTERN = /\bcancel(?:l?ed)?\b/i;
+
+// (Instructor subject cancel/removed/terminated rule deferred — will fire
+// once audience='instructors' is wired through Ennie's drafting path.)
 
 const MONTH_DATE_PATTERN = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?\b/i;
 const NUMERIC_DATE_PATTERN = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
@@ -743,6 +773,14 @@ function validateTouchpoint(
     }
   }
 
+  // -------- Hard: "cancel" in parent-facing subject line ----------
+  // v1 audience is always parents; when instructor/partner channels land,
+  // gate this check on audience.
+  const cancelInSubject = subject.match(PARENT_SUBJECT_CANCEL_PATTERN);
+  if (cancelInSubject) {
+    hard.push({ type: "cancel_in_parent_subject", detail: cancelInSubject[0] });
+  }
+
   // -------- Soft: bare dates ----------
   const monthDate = bodyStripped.match(MONTH_DATE_PATTERN);
   const numericDate = bodyStripped.match(NUMERIC_DATE_PATTERN);
@@ -770,6 +808,18 @@ function validateTouchpoint(
   for (const { pattern, label } of BANNED_CLAIM_PATTERNS) {
     const m = combined.match(pattern);
     if (m) warnings.push({ type: "unverifiable_claim", detail: `"${label}" → ${m[0]}` });
+  }
+
+  // -------- Soft: marketer-speak ----------
+  for (const { pattern, label } of MARKETER_SPEAK_PATTERNS) {
+    const m = combined.match(pattern);
+    if (m) warnings.push({ type: "marketer_speak", detail: `"${label}" → ${m[0]}` });
+  }
+
+  // -------- Soft: outcome promises ----------
+  for (const { pattern, label } of OUTCOME_PROMISE_PATTERNS) {
+    const m = combined.match(pattern);
+    if (m) warnings.push({ type: "outcome_promise", detail: `"${label}" → ${m[0]}` });
   }
 
   return { touchpoint_label: tp.label, order_index: tp.order_index, hard, warnings };
