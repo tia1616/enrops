@@ -10,6 +10,7 @@ import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
 import HatGuide from "../../components/HatGuide";
 import NotifyRemovalModal from "./NotifyRemovalModal";
+import AssignSubModal from "./AssignSubModal";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -334,6 +335,7 @@ export default function Schedule() {
   const [autoReminders, setAutoReminders] = useState(true);
   const [lastOp, setLastOp] = useState(null); // { type, ... } — supports a single-step undo
   const [candidatesFor, setCandidatesFor] = useState(null); // { session, currentAssignment | null }
+  const [assignSubFor, setAssignSubFor] = useState(null); // { session, currentAssignment }
   const [changeRequestFor, setChangeRequestFor] = useState(null); // { session, assignment }
   const [notifyRemoval, setNotifyRemoval] = useState(null); // { mode, session, assignment, instructor, onProceed }
   // When user reassigns from a change-request modal, we stash the request's id so the
@@ -2011,6 +2013,11 @@ export default function Schedule() {
           onRemove={() => handleRemoveAssignment(candidatesFor.session, candidatesFor.currentAssignment)}
           onResetAcceptance={() => handleResetAcceptance(candidatesFor.session, candidatesFor.currentAssignment)}
           onResendOffer={() => handleResendOffer(candidatesFor.currentAssignment?.id)}
+          onAssignSub={() => {
+            const armed = { session: candidatesFor.session, currentAssignment: candidatesFor.currentAssignment };
+            setCandidatesFor(null);
+            setAssignSubFor(armed);
+          }}
           onSendMessage={(text) => handleSendInstructorMessage(candidatesFor.currentAssignment?.id, text)}
           onCreateInstructor={async (form) => {
             const newId = await handleCreateInstructor(form, candidatesFor.session);
@@ -2020,6 +2027,27 @@ export default function Schedule() {
               setReassigningChangeRequestId(null);
               advanceOrCloseChangeRequest(handledId);
             }
+          }}
+        />
+      )}
+      {assignSubFor && (
+        <AssignSubModal
+          parentAssignment={assignSubFor.currentAssignment}
+          parentType="camp"
+          sessionInfo={{
+            curriculum_name: assignSubFor.session?.curriculum_name,
+            location_name: assignSubFor.session?.location_name,
+            starts_on: assignSubFor.session?.starts_on,
+            ends_on: assignSubFor.session?.ends_on,
+            week_num: assignSubFor.session?.week_num,
+          }}
+          organizationId={org?.id}
+          instructors={state.instructors}
+          onClose={() => setAssignSubFor(null)}
+          onSubmitted={() => {
+            // No state-refresh action needed for v1 — Schedule view doesn't
+            // surface sub rows directly yet (PR 6 wires that). Modal handles
+            // its own list refresh + success display.
           }}
         />
       )}
@@ -4806,6 +4834,7 @@ function CandidatePicker({
   locPrefLookup, curPrefLookup, allAssignments,
   declinedInstructorIds = new Set(),
   onClose, onPick, onRemove, onResetAcceptance, onResendOffer, onSendMessage, onCreateInstructor, onUndecline,
+  onAssignSub,
 }) {
   const declinedInstructors = useMemo(() => {
     if (!declinedInstructorIds || declinedInstructorIds.size === 0) return [];
@@ -5066,6 +5095,16 @@ function CandidatePicker({
                     style={{ ...btn("transparent", VIOLET, true), padding: "5px 10px", fontSize: 12, borderColor: VIOLET }}
                   >
                     Reset acceptance
+                  </button>
+                )}
+                {onAssignSub && (
+                  <button
+                    type="button"
+                    onClick={onAssignSub}
+                    title="Assign a substitute for a single day in this assignment — the sub gets an offer email"
+                    style={{ ...btn("transparent", PURPLE, true), padding: "5px 10px", fontSize: 12 }}
+                  >
+                    Assign sub for a day
                   </button>
                 )}
                 <button
