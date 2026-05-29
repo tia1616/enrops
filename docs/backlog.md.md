@@ -278,3 +278,33 @@ Programs UI
 \- \[ ] **Option 3 - tenant's own Stripe Connect platform (`legacy_own_platform` mode).** This is what J2S runs today (set up by Jessica, pre-Enrops). For new tenants on this route: tenant must enable Stripe Connect on their account, accept Stripe Connect platform terms, and onboard instructors as Express accounts under their platform. Then we configure their `STRIPE_INSTRUCTOR_PLATFORM_KEY` equivalent (one secret key per tenant — needs proper per-tenant key storage; current code uses a single env var). Heavy lift. Build trigger: a tenant who already has Connect set up and explicitly asks.
 
 \- \[ ] **Trigger to build either option:** first non-J2S tenant signals interest via the mailto CTA. Until then, calculator works and nobody's blocked.
+
+
+### Partner-invoicing (Receivables `Invoices` tab) - target July 2026 beta
+
+\- \[ ] **Use case:** Tenant runs camps/programs at partner locations where the partner handles their own parent registration (Squarespace, their own site, etc.). The partner collects parent payments, then owes the tenant a per-head or per-camp fee. Today J2S does this in QuickBooks — Arielle creates an invoice at the end of each school term (after-school) or end of each camp week (summer), sends to the partner, partner pays.
+
+\- \[ ] **What we want:** Receivables -> Invoices tab becomes real. Tenant picks a partner + a date range (term, week, custom), Enrops computes the amount from enrollment data, renders an invoice with line items, sends it to the partner's billing email, accepts payment via ACH (preferred — fee-free at scale) and card, tracks paid/overdue/outstanding statuses, and shows a list view of all invoices with filters.
+
+\- \[ ] **Cadence:** End of every school term for after-school programs. End of every camp week (or end of summer) for partners running J2S camps at their location. Operator-triggered, not automated send — Arielle reviews before sending.
+
+\- \[ ] **Target date:** In place before first beta tester goes live in July 2026 (Jessica directive 2026-05-29).
+
+\- \[ ] **Multi-tenant from day 1** — partners table is per-org, invoice templates are per-org, branding pulls from orgBrand (the cascade used by parent emails). Never hardcode J2S partner names or invoice numbering.
+
+\- \[ ] **Build scope sketch (subject to change after design):**
+  1. New `partners` table: id, organization_id (FK), name, billing_email, billing_address_json, default_payment_terms_days, default_fee_per_head_cents OR default_flat_fee_cents (one of), notes, created_at.
+  2. New `invoices` table: id, organization_id, partner_id, status (draft/sent/paid/overdue/void), period_start, period_end, line_items_json (camp_session_id + count + amount per line), subtotal_cents, total_cents, stripe_invoice_id, due_date, sent_at, paid_at, created_at.
+  3. Edge function `create-partner-invoice`: takes partner_id + date range, pulls eligible enrollments, computes line items, drafts the Stripe Invoice via stripe.invoices.create (Connect platform's invoicing API), records our row.
+  4. Edge function `send-partner-invoice`: marks Stripe Invoice as sent (stripe.invoices.sendInvoice), flips our row to `sent`, partner gets the Stripe-hosted invoice + payment link via email.
+  5. Stripe webhook handles `invoice.paid` (flip our row to `paid`, send a thank-you, optionally trigger a notification to Arielle).
+  6. UI: InvoicesTab becomes a real list (status filter chips + create button), drawer for create/send.
+  7. **Question: is partner-invoice payment routed through Enrops platform or direct to operator?** If Stripe Connect destination charges are an option for invoices, route 98% to operator and Enrops keeps 2% (same as parent registrations). If not, the invoice payment lands in operator's connected account directly.
+
+\- \[ ] **Open questions to resolve before building:**
+  - Per-head fee or flat-per-camp? Or both as configurable per partner? J2S's actual structure for SU26 partners.
+  - Which partners does J2S currently invoice? (Need names + billing emails to seed.)
+  - Where does enrollment data come from for SU26 (Squarespace export? camp_sessions table after Apps Script sync?) vs FA26+ (Enrops native registrations)?
+  - Should QuickBooks stay the system of record, or does Enrops become primary and we push to QuickBooks? Either is fine; need decision.
+  - ACH vs card vs both? ACH is free above ~\$8\/txn; card is 2.9%. For invoice amounts in the hundreds-to-thousands, ACH-only is probably right.
+  - Notification flow when partner is overdue — auto-remind at +7 days, +14 days, +30?
