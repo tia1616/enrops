@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import ImportContactsModal from './ImportContactsModal';
 import AddPartnerModal from './AddPartnerModal';
+import PartnerListSection from './PartnerListSection';
 
 const PURPLE = '#1C004F';
 const INK = '#1a1a1a';
@@ -94,11 +95,13 @@ export default function PartnersTab({ org }) {
         </div>
       </div>
 
-      <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
+      <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5, marginBottom: 14 }}>
         Bring in your existing partner list (schools, parks &amp; rec, community orgs) and
-        their logistics contacts. Upload a CSV/XLSX from Drive or paste freeform text
-        (e.g. an email thread) — we'll extract structured rows for you to review before saving.
+        their logistics contacts. Upload a CSV/XLSX, add one by hand, or expand any partner
+        below to edit its details and contacts.
       </div>
+
+      <PartnerListSection org={org} refreshKey={refreshKey} onChanged={() => setRefreshKey((k) => k + 1)} />
 
       {importing && (
         <ImportContactsModal
