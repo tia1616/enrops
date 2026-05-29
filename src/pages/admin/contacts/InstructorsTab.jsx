@@ -168,6 +168,19 @@ export default function InstructorsTab({ org }) {
     });
   }
 
+  async function reactivateInstructor(instructorId) {
+    const { error: updErr } = await supabase
+      .from('instructors')
+      .update({ is_active: true })
+      .eq('id', instructorId);
+    if (updErr) {
+      console.error('[admin/contacts] reactivate failed', updErr);
+      setError(updErr.message ?? 'Could not reactivate instructor.');
+      return;
+    }
+    setRows((rs) => (rs ?? []).map((r) => (r.id === instructorId ? { ...r, is_active: true } : r)));
+  }
+
   async function saveName(instructorId, { first_name, last_name, preferred_name }) {
     const payload = {
       first_name: first_name.trim(),
@@ -320,6 +333,7 @@ export default function InstructorsTab({ org }) {
             inviteResult={inviteResult[r.id]}
             onUploadBg={() => { setBgUploadInstructorId(r.id); setBgUploadOpen(true); }}
             onRemove={() => setRemoveRow(r)}
+            onReactivate={() => reactivateInstructor(r.id)}
             isEditingName={editingNameId === r.id}
             onStartEditName={() => { setExpanded((s) => new Set(s).add(r.id)); setEditingNameId(r.id); }}
             onCancelEditName={() => setEditingNameId(null)}
@@ -377,7 +391,7 @@ export default function InstructorsTab({ org }) {
   );
 }
 
-function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg, onRemove, isEditingName, onStartEditName, onCancelEditName, onSaveName }) {
+function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName }) {
   const displayName =
     row.preferred_name?.trim() ||
     `${row.first_name ?? ''} ${row.last_name ?? ''}`.trim() ||
@@ -537,6 +551,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
           age={age}
           onUploadBg={onUploadBg}
           onRemove={onRemove}
+          onReactivate={onReactivate}
           isEditingName={isEditingName}
           onStartEditName={onStartEditName}
           onCancelEditName={onCancelEditName}
@@ -547,7 +562,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
   );
 }
 
-function InstructorDetail({ row, age, onUploadBg, onRemove, isEditingName, onStartEditName, onCancelEditName, onSaveName }) {
+function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName }) {
   const sitePrefs = row.site_preferences?.districts ?? [];
   const dayDefaults = row.availability?.day_defaults ?? {};
   const activeDays = DAY_INITIALS.filter(([k]) => dayDefaults[k]).map(([, label]) => label);
@@ -731,6 +746,31 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, isEditingName, onSta
           >
             Remove this instructor →
           </button>
+        </div>
+      )}
+
+      {!row.is_active && onReactivate && (
+        <div style={{ gridColumn: '1 / -1', borderTop: `1px solid ${RULE}`, paddingTop: 10, marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={onReactivate}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: OK,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              padding: 0,
+              textDecoration: 'underline',
+            }}
+          >
+            Reactivate this instructor →
+          </button>
+          <div style={{ color: MUTED, fontSize: 11, marginTop: 4 }}>
+            They&rsquo;ll show up in your active list again and be included in the next availability survey.
+          </div>
         </div>
       )}
       </div>
