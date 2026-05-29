@@ -139,11 +139,15 @@ serve(async (req: Request) => {
     }
 
     if (existingOnb) {
-      // Resend — keep the existing status (don't demote a contractor who's
-      // already in_progress back to 'invited'). Just refresh invited_at.
+      // Promote 'not_invited' (row pre-created by admin-upload-background-check
+      // before the contractor was invited) → 'invited'. Never demote a
+      // contractor who's already further along (in_progress, pending_*, etc).
+      const promoteStatus = existingOnb.overall_status === 'not_invited' || existingOnb.overall_status == null;
+      const updatePayload: Record<string, unknown> = { invited_at: nowIso, updated_at: nowIso };
+      if (promoteStatus) updatePayload.overall_status = 'invited';
       const { error: updErr } = await supabase
         .from('contractor_onboarding_status')
-        .update({ invited_at: nowIso, updated_at: nowIso })
+        .update(updatePayload)
         .eq('id', existingOnb.id);
       if (updErr) {
         console.error('onboarding update failed:', updErr);
