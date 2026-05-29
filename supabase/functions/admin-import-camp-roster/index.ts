@@ -84,6 +84,7 @@ interface Registrant {
   emergency_contact_name?: string;
   emergency_contact_phone?: string;
   special_needs_accommodations?: string;
+  homeroom_teacher?: string;
   photo_release_consent?: boolean | string;
   authorized_pickup_contacts?: string;
   notes?: string;
@@ -257,6 +258,7 @@ serve(async (req: Request) => {
           emergency_contact_name: emptyToNull(r.emergency_contact_name),
           emergency_contact_phone: emptyToNull(r.emergency_contact_phone),
           special_needs_accommodations: emptyToNull(r.special_needs_accommodations),
+          homeroom_teacher: emptyToNull(r.homeroom_teacher),
         };
 
         if (studentId) {

@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import EmailRosterModal from "./EmailRosterModal";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -60,6 +61,8 @@ const FIELD_DEFS = [
     aliases: ["emergencycontactphone", "emergencyphone"] },
   { key: "special_needs_accommodations", label: "Accommodations", required: false,
     aliases: ["accommodations", "specialneeds", "specialneedsaccommodations"] },
+  { key: "homeroom_teacher", label: "Homeroom teacher", required: false,
+    aliases: ["homeroomteacher", "homeroom", "teacher", "classroomteacher", "homeroomname"] },
   { key: "photo_release_consent", label: "Photo release (Y/N)", required: false,
     aliases: ["photorelease", "photoconsent", "photoreleaseconsent"] },
   { key: "authorized_pickup_contacts", label: "Authorized pickup", required: false,
@@ -137,6 +140,7 @@ export default function Rosters() {
   const [camps, setCamps] = useState(null); // null = loading
   const [error, setError] = useState("");
   const [uploadingFor, setUploadingFor] = useState(null); // camp_session row
+  const [emailingFor, setEmailingFor] = useState(null); // camp_session row
   const [refundingFor, setRefundingFor] = useState(null); // { registration, camp }
   const canRefund = orgMember?.role === "owner" || orgMember?.role === "admin";
 
@@ -152,7 +156,7 @@ export default function Rosters() {
         //    camps if needed.
         const { data: campRows, error: cErr } = await supabase
           .from("camp_sessions")
-          .select("id, curriculum_name, starts_on, ends_on, location_name, week_num, session_type, current_enrollment")
+          .select("id, curriculum_name, starts_on, ends_on, location_id, location_name, week_num, session_type, current_enrollment, start_time, end_time")
           .eq("organization_id", org.id)
           .order("starts_on", { ascending: true });
         if (cErr) throw cErr;
@@ -171,11 +175,28 @@ export default function Rosters() {
           }
         }
 
+        // 3. Most recent successful roster email per camp.
+        const lastEmailed = new Map();
+        if (ids.length > 0) {
+          const { data: emailRows } = await supabase
+            .from("roster_email_sends")
+            .select("camp_session_id, sent_at, status")
+            .in("camp_session_id", ids)
+            .eq("status", "sent")
+            .order("sent_at", { ascending: false });
+          for (const r of emailRows ?? []) {
+            if (!lastEmailed.has(r.camp_session_id)) {
+              lastEmailed.set(r.camp_session_id, r.sent_at);
+            }
+          }
+        }
+
         if (!cancelled) {
           setCamps(
             (campRows ?? []).map((c) => ({
               ...c,
               roster_count: rosterCounts.get(c.id) ?? 0,
+              last_emailed_at: lastEmailed.get(c.id) ?? null,
             }))
           );
         }
@@ -222,6 +243,7 @@ export default function Rosters() {
               key={c.id}
               camp={c}
               onUpload={() => setUploadingFor(c)}
+              onEmail={() => setEmailingFor(c)}
               orgId={org?.id}
               canRefund={canRefund}
               onRefund={(reg) => setRefundingFor({ registration: reg, camp: c })}
@@ -277,13 +299,30 @@ export default function Rosters() {
           }}
         />
       )}
+
+      {emailingFor && (
+        <EmailRosterModal
+          camp={emailingFor}
+          orgId={org?.id}
+          onClose={() => setEmailingFor(null)}
+          onSent={() => {
+            const now = new Date().toISOString();
+            setCamps((cs) => (cs ?? []).map((c) =>
+              c.id === emailingFor.id ? { ...c, last_emailed_at: now } : c
+            ));
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function CampRow({ camp, onUpload, orgId, onRosterChanged, canRefund, onRefund }) {
+function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canRefund, onRefund }) {
   const [expanded, setExpanded] = useState(false);
   const gap = (camp.current_enrollment ?? 0) - (camp.roster_count ?? 0);
+  const lastEmailedLabel = camp.last_emailed_at
+    ? new Date(camp.last_emailed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : null;
   return (
     <div
       style={{
@@ -339,24 +378,50 @@ function CampRow({ camp, onUpload, orgId, onRosterChanged, canRefund, onRefund }
               </span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={onUpload}
-            style={{
-              marginTop: 6,
-              padding: "6px 12px",
-              background: PURPLE,
-              color: "#fff",
-              border: "none",
-              borderRadius: 6,
-              fontSize: 12,
-              fontWeight: 600,
-              fontFamily: "inherit",
-              cursor: "pointer",
-            }}
-          >
-            Upload roster →
-          </button>
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={onUpload}
+              style={{
+                padding: "6px 12px",
+                background: PURPLE,
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                fontFamily: "inherit",
+                cursor: "pointer",
+              }}
+            >
+              Upload roster →
+            </button>
+            {camp.roster_count > 0 && (
+              <button
+                type="button"
+                onClick={onEmail}
+                style={{
+                  padding: "6px 12px",
+                  background: "transparent",
+                  color: PURPLE,
+                  border: `1px solid ${PURPLE}`,
+                  borderRadius: 6,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                }}
+                title="Send a branded PDF roster to this partner's logistics contacts"
+              >
+                Email roster →
+              </button>
+            )}
+          </div>
+          {lastEmailedLabel && (
+            <div style={{ fontSize: 11, color: MUTED, marginTop: 4, textAlign: "right" }}>
+              Last emailed {lastEmailedLabel}
+            </div>
+          )}
         </div>
       </div>
 
@@ -392,7 +457,7 @@ function RosterEditor({ campSessionId, orgId, onChanged, canRefund, onRefund, re
           allergies, dietary_restrictions, medical_notes, medical_conditions,
           epipen_required, medications_at_program,
           emergency_contact_name, emergency_contact_phone,
-          special_needs_accommodations
+          special_needs_accommodations, homeroom_teacher
         )
       `)
       .eq("camp_session_id", campSessionId)
@@ -562,6 +627,7 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
     emergency_contact_name: s.emergency_contact_name ?? "",
     emergency_contact_phone: s.emergency_contact_phone ?? "",
     special_needs_accommodations: s.special_needs_accommodations ?? "",
+    homeroom_teacher: s.homeroom_teacher ?? "",
     authorized_pickup_contacts: registration.authorized_pickup_contacts ?? "",
     notes: registration.notes ?? "",
   });
@@ -585,6 +651,7 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         emergency_contact_name: emptyOrNull(form.emergency_contact_name),
         emergency_contact_phone: emptyOrNull(form.emergency_contact_phone),
         special_needs_accommodations: emptyOrNull(form.special_needs_accommodations),
+        homeroom_teacher: emptyOrNull(form.homeroom_teacher),
       };
       const regFields = {
         authorized_pickup_contacts: emptyOrNull(form.authorized_pickup_contacts),
@@ -673,6 +740,9 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         </Lbl>
         <Lbl label="Emergency contact phone">
           <Inp value={form.emergency_contact_phone} onChange={(v) => update("emergency_contact_phone", v)} />
+        </Lbl>
+        <Lbl label="Homeroom teacher (for after-school release)">
+          <Inp value={form.homeroom_teacher} onChange={(v) => update("homeroom_teacher", v)} placeholder="e.g. Ms. Jones, Room 12" />
         </Lbl>
         <FullField label="Authorized pickup (other than parent)">
           <Inp value={form.authorized_pickup_contacts} onChange={(v) => update("authorized_pickup_contacts", v)} placeholder="Names + relationships, e.g. 'Aunt Sara, grandparent John'" />
@@ -1069,6 +1139,7 @@ function ManualPanel({ campSessionId, busy, setBusy, onSaved, onClose }) {
     medical_notes: "",
     emergency_contact_name: "",
     emergency_contact_phone: "",
+    homeroom_teacher: "",
     parent_first_name: "",
     parent_last_name: "",
     parent_email: "",
@@ -1112,6 +1183,7 @@ function ManualPanel({ campSessionId, busy, setBusy, onSaved, onClose }) {
         medical_notes: "",
         emergency_contact_name: "",
         emergency_contact_phone: "",
+        homeroom_teacher: "",
         parent_first_name: "",
         parent_last_name: "",
         parent_email: "",
@@ -1167,6 +1239,9 @@ function ManualPanel({ campSessionId, busy, setBusy, onSaved, onClose }) {
         </Lbl>
         <Lbl label="Emergency contact phone">
           <Inp value={form.emergency_contact_phone} onChange={(v) => update("emergency_contact_phone", v)} />
+        </Lbl>
+        <Lbl label="Homeroom teacher" full>
+          <Inp value={form.homeroom_teacher} onChange={(v) => update("homeroom_teacher", v)} placeholder="e.g. Ms. Jones, Room 12" />
         </Lbl>
         <Lbl label="Parent first name">
           <Inp value={form.parent_first_name} onChange={(v) => update("parent_first_name", v)} />

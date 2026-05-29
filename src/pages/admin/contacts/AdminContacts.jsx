@@ -8,6 +8,7 @@
 
 import { useEffect } from 'react';
 import { Link, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
+import PartnersTab from './PartnersTab';
 
 const PURPLE = '#1C004F';
 const INK = '#1a1a1a';
@@ -15,7 +16,7 @@ const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
 
 const TABS = [
-  { key: 'partners', label: 'Partners', soon: true },
+  { key: 'partners', label: 'Partners' },
   { key: 'parents', label: 'Parents', soon: true },
 ];
 
@@ -93,7 +94,10 @@ export default function AdminContacts() {
         })}
       </div>
 
-      <div style={{ color: MUTED, fontSize: 13 }}>This tab is coming soon.</div>
+      {tab === 'partners' && <PartnersTab org={org} />}
+      {tab === 'parents' && (
+        <div style={{ color: MUTED, fontSize: 13 }}>This tab is coming soon.</div>
+      )}
     </div>
   );
 }
