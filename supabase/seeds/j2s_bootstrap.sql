@@ -27,5 +27,13 @@ SET
   -- J2S has its own instructor-pay Stripe platform configured
   -- (STRIPE_INSTRUCTOR_PLATFORM_KEY env var points to J2S's platform).
   -- Other tenants stay false until they configure their own.
-  instructor_pay_enabled        = true
+  instructor_pay_enabled        = true,
+  -- J2S is on the legacy architecture: J2S owns its own Stripe Connect
+  -- platform for instructor pay (pre-Enrops, from the J2S-as-standalone-app
+  -- era). All future tenants default to 'enrops_platform' — they sign up,
+  -- connect Stripe for Receivables, invite instructors, and pay routes via
+  -- transfers from the operator's connected account balance to the
+  -- instructor's Express account under Enrops's platform. No developer
+  -- handoff, no second Stripe platform per tenant.
+  instructor_pay_model          = 'legacy_own_platform'
 WHERE id = '1adf10ad-d091-4aa0-82e3-af331468ea2b';

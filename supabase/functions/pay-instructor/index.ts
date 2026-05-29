@@ -1,12 +1,26 @@
 // pay-instructor — operator settles instructor pay for one (effective
-// instructor, camp_session) bucket. Two paths:
+// instructor, camp_session) bucket. Two payment paths × two architectures:
 //
-//   via_stripe=true   → call stripe.transfers.create against the operator's
-//                       instructor-pay Stripe platform (today:
-//                       STRIPE_INSTRUCTOR_PLATFORM_KEY = J2S's).
+//   via_stripe=true   → call stripe.transfers.create. WHICH platform key +
+//                       WHICH balance the transfer comes from depends on
+//                       org.instructor_pay_model:
+//
+//     'legacy_own_platform' (J2S): operator owns their own Stripe Connect
+//       platform; STRIPE_INSTRUCTOR_PLATFORM_KEY points there. Transfer
+//       leaves the operator's platform-balance to the instructor's Express
+//       account (also under that platform). No stripeAccount header.
+//
+//     'enrops_platform' (default): Enrops is the Connect platform.
+//       Operator is a connected account under Enrops; instructor is also a
+//       connected account under Enrops. Transfer is created with the
+//       stripeAccount header set to the operator's Enrops-connected account
+//       — money moves from operator's available balance (post-fee, from
+//       parent payments) to instructor's balance. STRIPE_SECRET_KEY.
+//
 //   via_stripe=false  → no Stripe call; just record what the operator paid
-//                       outside Enrops (Gusto / J2S dashboard / Venmo /
-//                       check / etc). Required: manual_payment_note.
+//                       outside Enrops (Gusto / dashboard / Venmo / check /
+//                       etc). Required: manual_payment_note. Pay-model
+//                       agnostic.
 //
 // Auth: caller is org owner/admin for the EFFECTIVE instructor's org.
 // Multi-tenant gate: org.instructor_pay_enabled MUST be true (locked via
@@ -15,27 +29,39 @@
 // Idempotency: a UNIQUE PARTIAL INDEX on
 // (instructor_id, camp_session_id) WHERE status IN ('pending','succeeded')
 // prevents the double-pay race. Concurrent clicks → second INSERT fails
-// with 23505 → we return 409 cleanly.
+// with 23505 → we return 409 cleanly. Stripe-side idempotency key is
+// `payout_${payoutId}` so retries against either platform stay safe.
 //
 // Resolver-aware: we read from v_effective_pay_lines, which already
 // resolves sub vs regular and exposes effective_instructor_id, effective_
 // tier, source. Distance bonus is paid ONLY when source='regular' AND
 // distance_bonus_paid_at IS NULL AND there's at least one eligible row
 // (subs don't earn distance bonus).
-//
-// Mirrors refund-registration in shape so the patterns are consistent.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 
-// STRIPE_INSTRUCTOR_PLATFORM_KEY = the J2S-owned Stripe platform that runs
-// instructor pay. Distinct from STRIPE_SECRET_KEY (Enrops platform, used
-// for parent payments / Connect Receivables).
-const stripe = new Stripe(Deno.env.get('STRIPE_INSTRUCTOR_PLATFORM_KEY')!, {
-  apiVersion: '2023-10-16',
-  httpClient: Stripe.createFetchHttpClient(),
-});
+type InstructorPayModel = 'legacy_own_platform' | 'enrops_platform';
+
+// Per-request Stripe client. The platform key we use depends on which
+// architecture this org runs. See file header for the full rationale.
+function getInstructorPlatformStripe(model: InstructorPayModel): Stripe {
+  const key = model === 'legacy_own_platform'
+    ? Deno.env.get('STRIPE_INSTRUCTOR_PLATFORM_KEY')
+    : Deno.env.get('STRIPE_SECRET_KEY');
+  if (!key) {
+    throw new Error(
+      `missing Stripe key for instructor_pay_model='${model}' — set ${
+        model === 'legacy_own_platform' ? 'STRIPE_INSTRUCTOR_PLATFORM_KEY' : 'STRIPE_SECRET_KEY'
+      }`,
+    );
+  }
+  return new Stripe(key, {
+    apiVersion: '2023-10-16',
+    httpClient: Stripe.createFetchHttpClient(),
+  });
+}
 
 interface Body {
   effective_instructor_id?: string;
@@ -126,21 +152,45 @@ serve(async (req: Request) => {
       .maybeSingle();
     if (!cm) return FORBIDDEN;
 
-    // ── circuit breaker: instructor_pay_enabled ───────────────────────────
+    // ── circuit breaker + dispatch fields ─────────────────────────────────
     const { data: orgRow, error: orgErr } = await supabase
       .from('organizations')
-      .select('instructor_pay_enabled, alert_email, name')
+      .select('instructor_pay_enabled, instructor_pay_model, stripe_account_id, alert_email, name')
       .eq('id', instructor.organization_id)
       .maybeSingle();
     if (orgErr || !orgRow) {
       console.error('[pay-instructor] org lookup failed:', orgErr);
       return json({ error: 'lookup_failed' }, 500);
     }
-    if (!(orgRow as { instructor_pay_enabled: boolean }).instructor_pay_enabled) {
+    const org = orgRow as {
+      instructor_pay_enabled: boolean;
+      instructor_pay_model: InstructorPayModel | null;
+      stripe_account_id: string | null;
+      alert_email: string | null;
+      name: string | null;
+    };
+    if (!org.instructor_pay_enabled) {
       return json({
         error: 'instructor_pay_not_enabled',
         message: 'Instructor pay via Enrops is not enabled for this organization. Contact support.',
       }, 403);
+    }
+
+    // Default to enrops_platform if column somehow null (NOT NULL DEFAULT in DB).
+    const payModel: InstructorPayModel =
+      org.instructor_pay_model === 'legacy_own_platform' ? 'legacy_own_platform' : 'enrops_platform';
+
+    // Build the Stripe client lazily — only the via_stripe path needs it,
+    // but resolve here so we surface platform misconfig before we touch the DB.
+    let stripe: Stripe | null = null;
+    try {
+      stripe = getInstructorPlatformStripe(payModel);
+    } catch (err) {
+      console.error('[pay-instructor] stripe client init failed:', err);
+      if (body.via_stripe !== false) {
+        return json({ error: 'platform_misconfigured', detail: (err as Error).message }, 500);
+      }
+      // Manual path doesn't need Stripe — keep going with stripe=null.
     }
 
     // ── load eligible pay-lines via the resolver view ─────────────────────
@@ -236,6 +286,16 @@ serve(async (req: Request) => {
       if (!payoutsEnabled) {
         return json({ error: 'instructor_stripe_not_ready', detail: 'Stripe payouts not yet enabled for this instructor.' }, 409);
       }
+      // enrops_platform path: money moves from the operator's Enrops-connected
+      // account balance. If the operator hasn't connected (or their account
+      // was disconnected), we have no source — surface a clear error instead
+      // of a cryptic Stripe failure.
+      if (payModel === 'enrops_platform' && !org.stripe_account_id) {
+        return json({
+          error: 'operator_stripe_not_connected',
+          detail: 'Connect your organization\'s Stripe account before paying instructors.',
+        }, 409);
+      }
     }
 
     // ── pre-insert payout row (status=pending) ────────────────────────────
@@ -277,26 +337,44 @@ serve(async (req: Request) => {
 
     // ── branch on path ────────────────────────────────────────────────────
     if (viaStripe) {
+      if (!stripe) {
+        // Defensive — we returned earlier on init failure for the via_stripe
+        // path, so this is unreachable. Keeps the type checker happy.
+        return json({ error: 'platform_misconfigured' }, 500);
+      }
       let transfer: Stripe.Transfer;
       try {
-        transfer = await stripe.transfers.create(
-          {
-            amount: totalCents,
-            currency: 'usd',
-            destination: stripeDestinationAccountId,
-            transfer_group: `enrops_payout_${payoutId}`,
-            description: `Instructor pay — ${instructor.first_name ?? ''} ${instructor.last_name ?? ''} — camp ${campSessionId.slice(0, 8)}`,
-            metadata: {
-              enrops_payout_id: payoutId,
-              enrops_effective_instructor_id: effectiveInstructorId,
-              enrops_camp_session_id: campSessionId,
-              enrops_org_id: instructor.organization_id,
-              enrops_session_confirmation_count: String(confirmationIds.length),
-              enrops_includes_distance_bonus: includesDistanceBonus ? 'true' : 'false',
-            },
+        const transferParams: Stripe.TransferCreateParams = {
+          amount: totalCents,
+          currency: 'usd',
+          destination: stripeDestinationAccountId,
+          transfer_group: `enrops_payout_${payoutId}`,
+          description: `Instructor pay — ${instructor.first_name ?? ''} ${instructor.last_name ?? ''} — camp ${campSessionId.slice(0, 8)}`,
+          metadata: {
+            enrops_payout_id: payoutId,
+            enrops_effective_instructor_id: effectiveInstructorId,
+            enrops_camp_session_id: campSessionId,
+            enrops_org_id: instructor.organization_id,
+            enrops_session_confirmation_count: String(confirmationIds.length),
+            enrops_includes_distance_bonus: includesDistanceBonus ? 'true' : 'false',
+            enrops_instructor_pay_model: payModel,
           },
-          { idempotencyKey: `payout_${payoutId}` },
-        );
+        };
+        // Dispatch on architecture:
+        //   legacy_own_platform → no stripeAccount header. Transfer leaves
+        //     the operator-owned platform's balance.
+        //   enrops_platform → stripeAccount = operator's Enrops-connected
+        //     account. Transfer is executed AS that account, so funds come
+        //     out of that account's balance and land in the instructor's
+        //     Express account (also under Enrops). Both legs stay tenant-
+        //     scoped: J2S's Stripe can never touch another tenant's account.
+        const requestOptions: Stripe.RequestOptions = {
+          idempotencyKey: `payout_${payoutId}`,
+        };
+        if (payModel === 'enrops_platform') {
+          requestOptions.stripeAccount = org.stripe_account_id!;
+        }
+        transfer = await stripe.transfers.create(transferParams, requestOptions);
       } catch (err) {
         const stripeErr = err as { message?: string; raw?: { message?: string; code?: string } };
         const errMsg = stripeErr.raw?.message ?? stripeErr.message ?? 'unknown';

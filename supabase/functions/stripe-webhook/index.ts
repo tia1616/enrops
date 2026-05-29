@@ -1,4 +1,18 @@
-// stripe-webhook v18 — PATCH 11 (2026-05-27)
+// stripe-webhook v19 — PATCH 12 (2026-05-29)
+// v19: Enrops-as-platform path for instructor pay.
+//      - account.updated: if the connected-account ID doesn't match an
+//        operator (organizations.stripe_account_id), try matching it to an
+//        instructor under the Enrops platform (contractor_onboarding_status.
+//        stripe_connect_account_id WHERE org.instructor_pay_model =
+//        'enrops_platform'). Runs the same status / gate-check logic the
+//        instructor webhook uses for legacy_own_platform.
+//      - transfer.reversed: route to shared handler (covers payouts created
+//        via stripe.transfers.create with stripeAccount=operator_acct).
+//      Together these make new tenants (default 'enrops_platform') run a
+//      self-serve flow with no separate instructor-pay Stripe platform —
+//      Enrops's main Stripe IS the platform. J2S stays on the legacy
+//      route via stripe-connect-instructor-webhook.
+//
 // v18: Operator-side Stripe Connect events.
 //      Adds handlers for account.updated and account.application.deauthorized.
 //      Updates organizations.stripe_charges_enabled / stripe_payouts_enabled /
@@ -27,6 +41,9 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
+import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
+import { runGateCheck } from '../_shared/gateCheck.ts';
+import { handleTransferReversed as sharedHandleTransferReversed } from '../_shared/handleTransferReversed.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -297,6 +314,14 @@ serve(async (req) => {
       await handleAccountUpdated(admin, event);
     } else if (event.type === 'account.application.deauthorized') {
       await handleAccountDeauthorized(admin, event);
+    } else if (event.type === 'transfer.reversed') {
+      // Fires when a Stripe transfer to a connected account is reversed.
+      // For Enrops-platform-routed instructor payouts (operator's stripeAccount
+      // header), this is the only signal we get; flip the payout row to failed
+      // and unwind. If no instructor_payouts row matches the transfer ID, the
+      // helper 200s — it's a transfer from outside our system (e.g. the
+      // transfer_data leg on a Receivables charge).
+      return await sharedHandleTransferReversed(admin, event, '[transfer.reversed enrops]');
     }
 
     return new Response('ok', { status: 200 });
@@ -552,7 +577,8 @@ async function handleAccountUpdated(
   const account = event.data.object as Stripe.Account;
   const accountId = account.id;
 
-  // Find the org. No match = event for a different system; 200 anyway.
+  // Find the org. No match = either an instructor connected account under the
+  // enrops_platform path, or an event for a different system entirely.
   const { data } = await admin
     .from('organizations')
     .select('id, name, alert_email, stripe_account_status, stripe_last_account_event_id')
@@ -561,7 +587,8 @@ async function handleAccountUpdated(
   const org = data as OrgConnectRow | null;
 
   if (!org) {
-    console.warn(`[stripe-webhook] account.updated for unknown account ${accountId} — ignoring`);
+    // Fall through to instructor-account routing.
+    await handleInstructorAccountUpdated(admin, event, account, accountId);
     return;
   }
 
@@ -693,6 +720,145 @@ async function handleAccountDeauthorized(
         `Enrops admin portal to reconnect.`,
     }).catch((err) => console.warn('deauth alert send failed:', err));
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// v19 — instructor connected accounts under the Enrops platform
+// ───────────────────────────────────────────────────────────────────────────
+//
+// When an org is on instructor_pay_model='enrops_platform', its instructors'
+// Express accounts live under Enrops's main Stripe Connect platform — the
+// same platform that hosts operators' Receivables connected accounts. So
+// account.updated events for these instructors arrive HERE, not in the
+// legacy stripe-connect-instructor-webhook (which is wired to J2S's own
+// platform).
+//
+// We gate on org.instructor_pay_model = 'enrops_platform' so a misrouted
+// legacy event (e.g. somebody added the J2S-platform webhook to this
+// endpoint by mistake) can't accidentally rewrite the wrong row.
+
+async function handleInstructorAccountUpdated(
+  admin: ReturnType<typeof createClient>,
+  event: Stripe.Event,
+  account: Stripe.Account,
+  accountId: string,
+): Promise<void> {
+  // Idempotency + routing lookup in one shot.
+  const { data: existing, error: fetchErr } = await admin
+    .from('contractor_onboarding_status')
+    .select('instructor_id, organization_id, stripe_last_webhook_event_id, stripe_payouts_enabled')
+    .eq('stripe_connect_account_id', accountId)
+    .maybeSingle();
+  if (fetchErr) {
+    console.error(`[stripe-webhook] instructor account lookup failed for ${accountId}:`, fetchErr);
+    return;
+  }
+  if (!existing) {
+    // Truly unknown account — neither an operator nor an instructor of ours.
+    // Could be a different environment or a leftover account. 200 anyway.
+    console.warn(`[stripe-webhook] account.updated for unknown account ${accountId} — ignoring`);
+    return;
+  }
+
+  // Gate: only act on instructor accounts whose org is on the enrops_platform
+  // route. Legacy_own_platform instructor events should arrive at the J2S-
+  // platform-scoped stripe-connect-instructor-webhook instead.
+  const { data: orgRow } = await admin
+    .from('organizations')
+    .select('instructor_pay_model')
+    .eq('id', (existing as { organization_id: string }).organization_id)
+    .maybeSingle();
+  const model = (orgRow as { instructor_pay_model?: string } | null)?.instructor_pay_model;
+  if (model !== 'enrops_platform') {
+    console.warn(
+      `[stripe-webhook] instructor account.updated for ${accountId} but org is on '${model}' — ignoring (event should arrive at the legacy webhook)`,
+    );
+    return;
+  }
+
+  if ((existing as { stripe_last_webhook_event_id: string | null }).stripe_last_webhook_event_id === event.id) {
+    // Already processed.
+    return;
+  }
+
+  const result = await applyStripeAccountStatus(admin, accountId, {
+    payouts_enabled: account.payouts_enabled === true,
+    details_submitted: account.details_submitted === true,
+    charges_enabled: account.charges_enabled === true,
+  });
+  if (!result) {
+    console.error(`[stripe-webhook] applyStripeAccountStatus returned null for ${accountId}`);
+    return;
+  }
+
+  await runGateCheck(admin, (existing as { instructor_id: string }).instructor_id);
+
+  const { error: markErr } = await admin
+    .from('contractor_onboarding_status')
+    .update({
+      stripe_last_webhook_event_id: event.id,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('stripe_connect_account_id', accountId);
+  if (markErr) {
+    console.error(`[stripe-webhook] instructor event-id mark failed for ${accountId}:`, markErr);
+    // Non-fatal — the data update already succeeded; the next retry will
+    // detect no-change and mark again.
+  }
+
+  if (result.regressed) {
+    await sendInstructorRegressionAlert(
+      admin,
+      (existing as { instructor_id: string }).instructor_id,
+      (existing as { organization_id: string }).organization_id,
+    ).catch((err) => console.warn('[stripe-webhook] instructor regression alert failed:', err));
+  }
+}
+
+async function sendInstructorRegressionAlert(
+  admin: ReturnType<typeof createClient>,
+  instructorId: string,
+  orgId: string,
+): Promise<void> {
+  if (!RESEND_API_KEY) {
+    console.warn('[stripe-webhook] RESEND_API_KEY not set — skipping instructor regression alert');
+    return;
+  }
+
+  const [{ data: instructor }, brand] = await Promise.all([
+    admin
+      .from('instructors')
+      .select('first_name, last_name, email')
+      .eq('id', instructorId)
+      .maybeSingle(),
+    loadOrgBrand(admin, orgId),
+  ]);
+
+  if (!brand.alert_email) {
+    console.warn(`[stripe-webhook] no alert_email for org ${orgId} — skipping instructor regression alert`);
+    return;
+  }
+
+  const i = instructor as { first_name?: string; last_name?: string; email?: string } | null;
+  const name = `${i?.first_name ?? ''} ${i?.last_name ?? ''}`.trim() || i?.email || 'A contractor';
+  const subject = `[${brand.org_name}] Stripe payouts disabled — ${name}`;
+  const text =
+    `${name}'s Stripe Connect payouts have been disabled by Stripe.\n\n` +
+    `This usually means their verification information has expired. The contractor needs to re-verify in Stripe before the next payroll run.\n\n` +
+    `Contractor email: ${i?.email ?? '(unknown)'}\n\n— enrops`;
+
+  await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
+    body: JSON.stringify({
+      from: formatFromAddress(brand),
+      to: brand.alert_email,
+      reply_to: brand.reply_to,
+      subject,
+      text,
+      tags: [{ name: 'type', value: 'instructor_stripe_regression' }],
+    }),
+  });
 }
 
 // HTML-escape utility for templated content. Avoid injecting unescaped

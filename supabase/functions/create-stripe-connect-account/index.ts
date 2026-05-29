@@ -9,19 +9,43 @@
 // Used to build return_url + refresh_url. Defaults to https://enrops.com
 // when not provided so prod still works if the client forgets to send it.
 //
-// Env vars required: STRIPE_SECRET_KEY.
+// Dispatch on org.instructor_pay_model:
+//   - 'legacy_own_platform' (J2S): instructor's Express account is created
+//     under the operator's OWN Stripe Connect platform.
+//     STRIPE_INSTRUCTOR_PLATFORM_KEY points there.
+//   - 'enrops_platform' (default, future tenants): instructor's Express
+//     account is created under Enrops's main Stripe (which IS the Connect
+//     platform that already hosts the operator's connected account for
+//     Receivables). STRIPE_SECRET_KEY points there.
+//
+// Env vars required: STRIPE_SECRET_KEY (enrops_platform path),
+// STRIPE_INSTRUCTOR_PLATFORM_KEY (legacy_own_platform path).
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, resolveInstructor, adminClient } from '../_shared/instructor.ts';
 
-// Instructor Connect platform = new J2S Stripe account (paying instructors).
-// Distinct from STRIPE_SECRET_KEY which is the old J2S account for parent
-// registration payments. Don't conflate them.
-const stripe = new Stripe(Deno.env.get('STRIPE_INSTRUCTOR_PLATFORM_KEY')!, {
-  apiVersion: '2023-10-16',
-  httpClient: Stripe.createFetchHttpClient(),
-});
+type InstructorPayModel = 'legacy_own_platform' | 'enrops_platform';
+
+// Build the Stripe client for the platform that should host this org's
+// instructor Express accounts. Per-call (not module-level) so the dispatch
+// reads the org row at request time.
+function getInstructorPlatformStripe(model: InstructorPayModel): Stripe {
+  const key = model === 'legacy_own_platform'
+    ? Deno.env.get('STRIPE_INSTRUCTOR_PLATFORM_KEY')
+    : Deno.env.get('STRIPE_SECRET_KEY');
+  if (!key) {
+    throw new Error(
+      `missing Stripe key for instructor_pay_model='${model}' — set ${
+        model === 'legacy_own_platform' ? 'STRIPE_INSTRUCTOR_PLATFORM_KEY' : 'STRIPE_SECRET_KEY'
+      }`,
+    );
+  }
+  return new Stripe(key, {
+    apiVersion: '2023-10-16',
+    httpClient: Stripe.createFetchHttpClient(),
+  });
+}
 
 interface RequestBody {
   origin?: string;
@@ -63,7 +87,7 @@ serve(async (req: Request) => {
         .maybeSingle(),
       supabase
         .from('organizations')
-        .select('name, website')
+        .select('name, website, instructor_pay_model')
         .eq('id', me.organization_id)
         .maybeSingle(),
       supabase
@@ -75,6 +99,21 @@ serve(async (req: Request) => {
     if (fetchErr) {
       console.error('onboarding fetch failed:', fetchErr);
       return json({ error: 'lookup_failed' }, 500);
+    }
+
+    // Dispatch on the org's chosen pay architecture. Default to enrops_platform
+    // if the column is somehow null (shouldn't happen — NOT NULL DEFAULT in DB).
+    const payModel: InstructorPayModel =
+      (org?.instructor_pay_model as InstructorPayModel | undefined) === 'legacy_own_platform'
+        ? 'legacy_own_platform'
+        : 'enrops_platform';
+
+    let stripe: Stripe;
+    try {
+      stripe = getInstructorPlatformStripe(payModel);
+    } catch (err) {
+      console.error('stripe client init failed:', err);
+      return json({ error: 'platform_misconfigured', detail: (err as Error).message }, 500);
     }
 
     let accountId = existing?.stripe_connect_account_id as string | null;
@@ -158,6 +197,9 @@ serve(async (req: Request) => {
           metadata: {
             instructor_id: me.id,
             organization_id: me.organization_id,
+            // Routing hint for webhook handlers — which platform this account
+            // belongs to. Matches organizations.instructor_pay_model.
+            instructor_pay_model: payModel,
           },
         });
       } catch (err) {
