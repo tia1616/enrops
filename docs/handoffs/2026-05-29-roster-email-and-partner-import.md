@@ -286,6 +286,21 @@ Picked up the FA26 work from the prior chat's handoff (`docs/handoffs/2026-05-19
 - **Sub date can be a non-class day.** Example: a camp with `class_days = ['monday','wednesday','friday']`. Modal's date display accepts whatever date the admin clicked the day-tile for. If admin clicks a Tuesday tile (which doesn't exist on that camp's calendar) — actually it can't, the WeeklyGrid only renders cells for valid class_days. So this is a non-issue with the locked-date pattern. ✅
 - **PR 7 not started.** District closure admin UI + Ennie LLM-extract helper + publish-time end-date warning. Last chunk of FA26 work.
 
+### Cross-cutting backlog item Jessica flagged at EOD
+
+- **Google Drive import for curricula.** Open backlog item (`docs/backlog.md.md` line 7). Spec exists at `docs/specs/chunk-2.5-drive-import.md`. Status as of EOD Friday:
+  - ✅ Schema in place: `curriculum_documents` has `drive_url`, `source_type`, `extracted_text`, extraction status columns. Verified via DB query.
+  - ✅ Portal renders `drive_url` rows correctly — `get-instructor-curriculum-docs` passes `drive_url` through as the download_url for `source_type='drive_link'` rows.
+  - ❌ `organization_google_tokens` table does NOT exist (`to_regclass` returned null).
+  - ❌ No OAuth flow built. No Drive API fetch. No text-extraction-from-drive pipeline.
+  - **To do Monday:**
+    1. Jessica's hands required: create the Google Cloud project, configure OAuth consent screen, add the Drive Read-Only + Docs Read-Only scopes, download the client credentials.
+    2. Migration: `organization_google_tokens` table (per-org access + refresh tokens, encrypted at rest if possible).
+    3. Edge function `connect-google-drive` (OAuth start + callback) — stores tokens.
+    4. Edge function `import-drive-curriculum-doc` — takes a Drive URL, validates the org has a connected token, fetches via Drive API, extracts text (Docs API for Google Docs; PDF.js or Tika for PDFs), writes to `curriculum_documents.extracted_text`, sets `extraction_status='complete'`.
+    5. CurriculumNew page: paste-Drive-link affordance + "Connect Google Drive" CTA when no token exists for the org.
+    6. End-to-end test with Jessica's real Drive curriculum library.
+
 ### Decisions deferred (Jessica's call required)
 
 1. **Build `mode='test'` flag on respond-to-sub-offer** so dev can test the coordination email without firing real emails? Jessica said "decide later." Keep this in the back of the head for Monday.
