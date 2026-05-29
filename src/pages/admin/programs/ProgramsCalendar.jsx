@@ -1,17 +1,17 @@
 // /admin/programs
-// Calendar/list view of scheduled programs for a selected term. Read-only.
+// Calendar/list view of scheduled programs for a selected term.
+// Row-level "Change class" affordance lets an admin swap a program's curriculum.
 // Live enrollment count = registrations.payment_status='paid' (excluding cancelled).
 // Multi-tenant: scoped by the caller's organization_id.
 //
 // Two view modes:
 //   - calendar: programs grouped by day-of-week, sorted by start_time (default)
 //   - by_school: programs grouped by program_location, sorted by day/time within school
-//
-// AI-assisted program planning is deferred — this surface is view-only for now.
 
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -41,6 +41,23 @@ export default function ProgramsCalendar() {
   const [error, setError] = useState("");
   const [programs, setPrograms] = useState([]);
   const [enrollmentByProgram, setEnrollmentByProgram] = useState({});
+  const [curricula, setCurricula] = useState([]);
+  const [editingProgram, setEditingProgram] = useState(null);
+
+  useEffect(() => {
+    if (!org?.id) return;
+    let mounted = true;
+    (async () => {
+      const { data: cRows } = await supabase
+        .from("curricula")
+        .select("id, name")
+        .eq("organization_id", org.id)
+        .eq("status", "published")
+        .order("name");
+      if (mounted) setCurricula(cRows ?? []);
+    })();
+    return () => { mounted = false; };
+  }, [org?.id]);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -53,7 +70,7 @@ export default function ProgramsCalendar() {
         const { data: progRows, error: progErr } = await supabase
           .from("programs")
           .select(`
-            id, curriculum, day_of_week, start_time, end_time, room,
+            id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             max_capacity, status, instructor_name, price_cents,
             program_location_id,
             program_locations (id, name, district)
@@ -152,8 +169,26 @@ export default function ProgramsCalendar() {
 
       {!loading && !error && programs.length > 0 && (
         viewMode === "calendar"
-          ? <CalendarView programs={programs} enrollment={enrollmentByProgram} />
-          : <BySchoolView programs={programs} enrollment={enrollmentByProgram} />
+          ? <CalendarView programs={programs} enrollment={enrollmentByProgram} onEdit={setEditingProgram} />
+          : <BySchoolView programs={programs} enrollment={enrollmentByProgram} onEdit={setEditingProgram} />
+      )}
+
+      {editingProgram && (
+        <EditProgramCurriculumModal
+          program={editingProgram}
+          org={org}
+          curricula={curricula}
+          enrollment={enrollmentByProgram[editingProgram.id]}
+          onCancel={() => setEditingProgram(null)}
+          onSaved={({ programId, curriculum_id, curriculum }) => {
+            setPrograms((prev) =>
+              prev.map((p) =>
+                p.id === programId ? { ...p, curriculum_id, curriculum } : p
+              )
+            );
+            setEditingProgram(null);
+          }}
+        />
       )}
     </div>
   );
@@ -161,7 +196,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment }) {
+function CalendarView({ programs, enrollment, onEdit }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -193,14 +228,14 @@ function CalendarView({ programs, enrollment }) {
               · {byDay[day].length} program{byDay[day].length === 1 ? "" : "s"}
             </span>
           </div>
-          {byDay[day].map((p) => <ProgramRow key={p.id} program={p} e={enrollment[p.id]} />)}
+          {byDay[day].map((p) => <ProgramRow key={p.id} program={p} e={enrollment[p.id]} onEdit={onEdit} />)}
         </div>
       ))}
     </div>
   );
 }
 
-function BySchoolView({ programs, enrollment }) {
+function BySchoolView({ programs, enrollment, onEdit }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -234,7 +269,7 @@ function BySchoolView({ programs, enrollment }) {
               · {list.length} program{list.length === 1 ? "" : "s"}
             </span>
           </div>
-          {list.map((p) => <ProgramRow key={p.id} program={p} e={enrollment[p.id]} showDay />)}
+          {list.map((p) => <ProgramRow key={p.id} program={p} e={enrollment[p.id]} onEdit={onEdit} showDay />)}
         </div>
       ))}
     </div>
@@ -243,7 +278,7 @@ function BySchoolView({ programs, enrollment }) {
 
 // ---- Card ----
 
-function ProgramRow({ program: p, e, showDay = false }) {
+function ProgramRow({ program: p, e, onEdit, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -260,7 +295,7 @@ function ProgramRow({ program: p, e, showDay = false }) {
   return (
     <div style={{
       display: "grid",
-      gridTemplateColumns: "70px 1fr 110px 90px",
+      gridTemplateColumns: "70px 1fr 110px 90px 70px",
       gap: 14,
       alignItems: "center",
       padding: "10px 16px",
@@ -305,9 +340,36 @@ function ProgramRow({ program: p, e, showDay = false }) {
           <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{breakdown}</div>
         )}
       </div>
+
+      {/* Edit affordance */}
+      <div style={{ textAlign: "right" }}>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={() => onEdit(p)}
+            style={editLinkStyle}
+            title="Change the class for this program"
+          >
+            Change class
+          </button>
+        )}
+      </div>
     </div>
   );
 }
+
+const editLinkStyle = {
+  background: "transparent",
+  border: "none",
+  color: PURPLE,
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+  padding: "4px 6px",
+  fontFamily: "inherit",
+  textDecoration: "underline",
+  textUnderlineOffset: 2,
+};
 
 function formatTime(t) {
   if (!t) return "";
