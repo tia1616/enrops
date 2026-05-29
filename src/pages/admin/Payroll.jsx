@@ -873,9 +873,131 @@ function WithholdDialog({ payload, onCancel, onConfirm, busy }) {
 
 // ───────────────────────── Pay drawer (Stripe path) ────────────────────────
 
+// Map pay-instructor's error payload to a user-facing { headline, hint } pair.
+// The function returns three fields:
+//   - error          (the wrapping code, e.g. 'stripe_transfer_failed')
+//   - stripe_code    (the Stripe-side code, e.g. 'balance_insufficient')
+//   - stripe_message (Stripe's raw human-ish message)
+// or for some errors:
+//   - error + detail (our own narrative)
+//
+// We want operators to see WHY the pay didn't go through and WHAT to do
+// about it — not just the wrapping code. This helper is the single source
+// of that translation so PayDrawer and MarkPaidDrawer stay consistent.
+function formatPayError(data, status) {
+  const errCode = data?.error ?? `Server returned ${status ?? '?'}`;
+  const stripeCode = data?.stripe_code ?? null;
+  const stripeMsg = data?.stripe_message ?? null;
+  const detail = data?.detail ?? data?.message ?? null;
+
+  // Wrapping-code → human meaning. For 'stripe_transfer_failed' we dig
+  // into stripe_code for the specific Stripe rejection.
+  if (errCode === 'stripe_transfer_failed') {
+    if (stripeCode === 'balance_insufficient') {
+      return {
+        headline: 'Not enough available balance in your Stripe account.',
+        hint:
+          'Stripe may be auto-paying your balance out to your bank before it can be used for instructor pay. Open your Stripe dashboard → Settings → Payouts and switch the schedule to Manual so funds accumulate. The balance settles ~2 days after each parent payment.',
+      };
+    }
+    if (stripeCode === 'insufficient_capabilities_for_transfer') {
+      return {
+        headline: 'This instructor\'s Stripe Express account isn\'t fully set up to receive transfers.',
+        hint:
+          'They need to finish Stripe Express onboarding — add their address, SSN last 4, bank account, and accept the Stripe Connect terms. They can do it from their instructor portal (Pay tab → "Open your Stripe Express").',
+      };
+    }
+    return {
+      headline: stripeMsg || 'Stripe rejected the transfer.',
+      hint: stripeCode ? `Stripe error code: ${stripeCode}.` : null,
+    };
+  }
+
+  if (errCode === 'instructor_stripe_not_configured') {
+    return {
+      headline: 'This instructor hasn\'t started Stripe Express onboarding yet.',
+      hint: 'Have them complete the wizard in the instructor portal, then try Pay again. Or use "Mark paid manually" if you\'re paying them outside Enrops.',
+    };
+  }
+  if (errCode === 'instructor_stripe_not_ready') {
+    return {
+      headline: 'Stripe is still verifying this instructor\'s account.',
+      hint: detail || 'Try again in a few minutes, or use "Mark paid manually."',
+    };
+  }
+  if (errCode === 'pay_route_not_yet_supported') {
+    return {
+      headline: 'Stripe-routed instructor pay isn\'t enabled for your organization yet.',
+      hint: detail || 'For now, use "Mark paid manually" to record what you paid through your existing system.',
+    };
+  }
+  if (errCode === 'operator_stripe_not_connected') {
+    return {
+      headline: 'Your organization\'s Stripe account isn\'t connected.',
+      hint: 'Go to Receivables in the admin portal and finish Stripe Connect onboarding before paying instructors.',
+    };
+  }
+  if (errCode === 'payout_already_in_flight') {
+    return {
+      headline: 'A payout for this instructor + camp is already in progress.',
+      hint: detail || 'Refresh the page and check the current status before retrying.',
+    };
+  }
+  if (errCode === 'nothing_to_pay') {
+    return {
+      headline: 'No approved + unpaid days to pay right now.',
+      hint: detail || null,
+    };
+  }
+  if (errCode === 'instructor_pay_not_enabled') {
+    return {
+      headline: 'Instructor pay via Enrops isn\'t enabled for this organization.',
+      hint: data?.message || 'Contact Enrops support.',
+    };
+  }
+  if (errCode === 'forbidden') {
+    return {
+      headline: 'You don\'t have permission to pay instructors here.',
+      hint: 'Only org owners and admins can pay. Talk to your account owner.',
+    };
+  }
+
+  // Unknown / generic — surface whatever we have.
+  return {
+    headline: detail || stripeMsg || errCode,
+    hint: stripeCode ? `Code: ${stripeCode}.` : null,
+  };
+}
+
+// Compact card showing the formatPayError result inside a drawer.
+function PayErrorCard({ payload }) {
+  if (!payload) return null;
+  return (
+    <div
+      style={{
+        background: 'rgba(181,55,55,0.06)',
+        border: '1px solid rgba(181,55,55,0.30)',
+        borderRadius: 6,
+        padding: '10px 14px',
+        marginBottom: 12,
+      }}
+    >
+      <div style={{ color: RED, fontWeight: 700, fontSize: 13, marginBottom: payload.hint ? 4 : 0 }}>
+        {payload.headline}
+      </div>
+      {payload.hint && (
+        <div style={{ color: INK, fontSize: 12, lineHeight: 1.5 }}>{payload.hint}</div>
+      )}
+    </div>
+  );
+}
+
 function PayDrawer({ group, onClose, onPaid }) {
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
+  // err can be either a string (generic / network failure) or an object
+  // { headline, hint } from formatPayError when the server gave us a
+  // structured error to translate.
+  const [err, setErr] = useState(null);
   const eligibleAmount = group.eligibleRows.reduce(
     (s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0), 0,
   );
@@ -884,7 +1006,7 @@ function PayDrawer({ group, onClose, onPaid }) {
   const stripeReady = group.stripePayoutsEnabled && group.stripeDestination;
 
   async function submit() {
-    setBusy(true); setErr('');
+    setBusy(true); setErr(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
@@ -907,13 +1029,13 @@ function PayDrawer({ group, onClose, onPaid }) {
       );
       const data = await resp.json();
       if (!resp.ok) {
-        setErr(data.message || data.error || `Server returned ${resp.status}`);
+        setErr(formatPayError(data, resp.status));
         setBusy(false);
         return;
       }
       onPaid();
     } catch (e) {
-      setErr(e.message || 'Could not send payment.');
+      setErr({ headline: e.message || 'Could not send payment.', hint: null });
       setBusy(false);
     }
   }
@@ -954,7 +1076,7 @@ function PayDrawer({ group, onClose, onPaid }) {
           complete onboarding via the instructor portal, or use "Mark paid manually."
         </Banner>
       )}
-      {err && <Banner tone="err">{err}</Banner>}
+      <PayErrorCard payload={err} />
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <ActionButton tone="secondary" onClick={onClose} disabled={busy}>Cancel</ActionButton>
         <ActionButton tone="primary" onClick={submit} disabled={busy || !stripeReady || total === 0}>
@@ -978,10 +1100,10 @@ function MarkPaidDrawer({ group, onClose, onMarked }) {
 
   async function submit() {
     if (note.trim().length === 0) {
-      setErr('Note is required — record how you paid (transfer ID, method, etc.)');
+      setErr({ headline: 'Note is required — record how you paid (transfer ID, method, etc.)', hint: null });
       return;
     }
-    setBusy(true); setErr('');
+    setBusy(true); setErr(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
@@ -1005,13 +1127,13 @@ function MarkPaidDrawer({ group, onClose, onMarked }) {
       );
       const data = await resp.json();
       if (!resp.ok) {
-        setErr(data.message || data.error || `Server returned ${resp.status}`);
+        setErr(formatPayError(data, resp.status));
         setBusy(false);
         return;
       }
       onMarked();
     } catch (e) {
-      setErr(e.message || 'Could not record payment.');
+      setErr({ headline: e.message || 'Could not record payment.', hint: null });
       setBusy(false);
     }
   }
@@ -1043,7 +1165,7 @@ function MarkPaidDrawer({ group, onClose, onMarked }) {
         placeholder='e.g., "Stripe dashboard transfer tr_1Abc…", "Gusto run May 30", "Check #1234"'
         style={{ width: '100%', padding: 8, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', fontSize: 13, resize: 'vertical' }}
       />
-      {err && <div style={{ marginTop: 12 }}><Banner tone="err">{err}</Banner></div>}
+      <div style={{ marginTop: err ? 12 : 0 }}><PayErrorCard payload={err} /></div>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
         <ActionButton tone="secondary" onClick={onClose} disabled={busy}>Cancel</ActionButton>
         <ActionButton tone="primary" onClick={submit} disabled={busy || total === 0}>
