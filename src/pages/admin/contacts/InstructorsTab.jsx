@@ -75,6 +75,7 @@ export default function InstructorsTab({ org }) {
   const [bgUploadInstructorId, setBgUploadInstructorId] = useState(null); // pre-selected when opened from a row
   const [addOpen, setAddOpen] = useState(false);
   const [removeRow, setRemoveRow] = useState(null);
+  const [editingNameId, setEditingNameId] = useState(null);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -165,6 +166,21 @@ export default function InstructorsTab({ org }) {
       else next.add(id);
       return next;
     });
+  }
+
+  async function saveName(instructorId, { first_name, last_name, preferred_name }) {
+    const payload = {
+      first_name: first_name.trim(),
+      last_name: last_name.trim(),
+      preferred_name: preferred_name.trim() || null,
+    };
+    const { error: updErr } = await supabase
+      .from('instructors')
+      .update(payload)
+      .eq('id', instructorId);
+    if (updErr) throw updErr;
+    setRows((rs) => (rs ?? []).map((r) => (r.id === instructorId ? { ...r, ...payload } : r)));
+    setEditingNameId(null);
   }
 
   async function sendInvite(instructorId) {
@@ -304,6 +320,10 @@ export default function InstructorsTab({ org }) {
             inviteResult={inviteResult[r.id]}
             onUploadBg={() => { setBgUploadInstructorId(r.id); setBgUploadOpen(true); }}
             onRemove={() => setRemoveRow(r)}
+            isEditingName={editingNameId === r.id}
+            onStartEditName={() => { setExpanded((s) => new Set(s).add(r.id)); setEditingNameId(r.id); }}
+            onCancelEditName={() => setEditingNameId(null)}
+            onSaveName={(vals) => saveName(r.id, vals)}
           />
         ))}
       </div>
@@ -357,7 +377,7 @@ export default function InstructorsTab({ org }) {
   );
 }
 
-function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg, onRemove }) {
+function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg, onRemove, isEditingName, onStartEditName, onCancelEditName, onSaveName }) {
   const displayName =
     row.preferred_name?.trim() ||
     `${row.first_name ?? ''} ${row.last_name ?? ''}`.trim() ||
@@ -511,12 +531,23 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
         </div>
       )}
 
-      {expanded && <InstructorDetail row={row} age={age} onUploadBg={onUploadBg} onRemove={onRemove} />}
+      {expanded && (
+        <InstructorDetail
+          row={row}
+          age={age}
+          onUploadBg={onUploadBg}
+          onRemove={onRemove}
+          isEditingName={isEditingName}
+          onStartEditName={onStartEditName}
+          onCancelEditName={onCancelEditName}
+          onSaveName={onSaveName}
+        />
+      )}
     </div>
   );
 }
 
-function InstructorDetail({ row, age, onUploadBg, onRemove }) {
+function InstructorDetail({ row, age, onUploadBg, onRemove, isEditingName, onStartEditName, onCancelEditName, onSaveName }) {
   const sitePrefs = row.site_preferences?.districts ?? [];
   const dayDefaults = row.availability?.day_defaults ?? {};
   const activeDays = DAY_INITIALS.filter(([k]) => dayDefaults[k]).map(([, label]) => label);
@@ -527,17 +558,48 @@ function InstructorDetail({ row, age, onUploadBg, onRemove }) {
   const bgSource = row.status?.background_check_source;
 
   return (
-    <div
-      style={{
-        marginTop: 12,
-        paddingTop: 12,
-        borderTop: `1px solid ${RULE}`,
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-        gap: 14,
-        fontSize: 13,
-      }}
-    >
+    <div>
+      <div
+        style={{
+          marginTop: 12,
+          paddingTop: 12,
+          borderTop: `1px solid ${RULE}`,
+          display: 'flex',
+          justifyContent: 'flex-end',
+          marginBottom: 10,
+        }}
+      >
+        {!isEditingName && onStartEditName && (
+          <button
+            type="button"
+            onClick={onStartEditName}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: PURPLE,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              padding: 0,
+              textDecoration: 'underline',
+            }}
+          >
+            Edit name →
+          </button>
+        )}
+      </div>
+      {isEditingName && (
+        <EditNameForm row={row} onCancel={onCancelEditName} onSave={onSaveName} />
+      )}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: 14,
+          fontSize: 13,
+        }}
+      >
       <DetailItem label="Date of birth">
         {row.date_of_birth ? (
           <>
@@ -671,7 +733,115 @@ function InstructorDetail({ row, age, onUploadBg, onRemove }) {
           </button>
         </div>
       )}
+      </div>
     </div>
+  );
+}
+
+function EditNameForm({ row, onCancel, onSave }) {
+  const [firstName, setFirstName] = useState(row.first_name ?? '');
+  const [lastName, setLastName] = useState(row.last_name ?? '');
+  const [preferred, setPreferred] = useState(row.preferred_name ?? '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const firstValid = looksLikeName(firstName);
+  const lastValid = looksLikeName(lastName);
+  const canSave = firstValid && lastValid && !busy;
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!canSave) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await onSave({ first_name: firstName, last_name: lastName, preferred_name: preferred });
+    } catch (e2) {
+      console.error('[admin/contacts] save name failed', e2);
+      setErr(e2?.message ?? 'Could not save name.');
+      setBusy(false);
+    }
+  }
+
+  const inputStyle = {
+    width: '100%',
+    padding: '6px 10px',
+    border: `1px solid ${RULE}`,
+    borderRadius: 6,
+    fontSize: 13,
+    fontFamily: 'inherit',
+    background: '#fff',
+    color: INK,
+  };
+  const labelStyle = { fontSize: 11, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4, display: 'block' };
+
+  return (
+    <form
+      onSubmit={submit}
+      style={{
+        background: CREAM,
+        border: `1px solid ${RULE}`,
+        borderRadius: 8,
+        padding: 12,
+        marginBottom: 12,
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+        gap: 10,
+      }}
+    >
+      <div>
+        <label style={labelStyle}>Legal first name</label>
+        <input type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} style={inputStyle} autoFocus />
+      </div>
+      <div>
+        <label style={labelStyle}>Legal last name</label>
+        <input type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} style={inputStyle} />
+      </div>
+      <div>
+        <label style={labelStyle}>Preferred name <span style={{ color: MUTED, fontWeight: 400, textTransform: 'none' }}>(optional)</span></label>
+        <input type="text" value={preferred} onChange={(e) => setPreferred(e.target.value)} style={inputStyle} placeholder={row.first_name ?? ''} />
+      </div>
+      <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
+        <button
+          type="submit"
+          disabled={!canSave}
+          style={{
+            padding: '6px 14px',
+            background: canSave ? PURPLE : '#bbb',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: 'inherit',
+            cursor: canSave ? 'pointer' : 'not-allowed',
+          }}
+        >
+          {busy ? 'Saving…' : 'Save name'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          style={{
+            padding: '6px 12px',
+            background: 'transparent',
+            color: MUTED,
+            border: `1px solid ${RULE}`,
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: 'inherit',
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Cancel
+        </button>
+        {!firstValid && firstName.length > 0 && <span style={{ color: RED, fontSize: 12 }}>First name looks invalid.</span>}
+        {!lastValid && lastName.length > 0 && <span style={{ color: RED, fontSize: 12 }}>Last name looks invalid.</span>}
+        {err && <span style={{ color: RED, fontSize: 12 }}>{err}</span>}
+      </div>
+    </form>
   );
 }
 
