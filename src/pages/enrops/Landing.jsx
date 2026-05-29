@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { parentLandingPath } from '../../lib/tenants.js';
+import EnropsWordmark from '../../components/EnropsWordmark.jsx';
 
 // PwaInstallButton intentionally NOT mounted on the Enrops homepage.
 // First-time visitors haven't signed up yet — installing a SaaS app shell
@@ -118,13 +119,8 @@ export default function EnropsLanding() {
     <div className="brand-enrops min-h-screen bg-enrops-cream">
       <header className="border-b border-enrops-purple/10 bg-enrops-cream">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-6 sm:px-6">
-          <Link to="/" className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md bg-enrops-purple text-enrops-violet">
-              <span className="font-grotesk text-xl font-bold">E</span>
-            </span>
-            <span className="font-grotesk text-xl font-bold tracking-tight text-enrops-purple">
-              Enrops
-            </span>
+          <Link to="/" className="flex items-center">
+            <EnropsWordmark height={36} />
           </Link>
           <nav className="flex items-center gap-6 text-sm font-medium text-enrops-ink">
             <a href="#features" className="hidden hover:text-enrops-purple sm:inline">
@@ -281,8 +277,8 @@ export default function EnropsLanding() {
       <footer className="bg-enrops-ink text-enrops-cream/70">
         <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
           <div className="flex flex-col gap-6 font-grotesk text-sm sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex flex-col gap-2">
-              <span className="font-grotesk font-bold text-enrops-cream">Enrops</span>
+            <div className="flex flex-col gap-3">
+              <EnropsWordmark height={24} color="#FBFBFB" />
               <span className="text-enrops-cream/50">
                 The enrichment operations platform
               </span>

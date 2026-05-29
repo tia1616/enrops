@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
+import EnropsWordmark from "../components/EnropsWordmark.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 
 // Enrops brand tokens
@@ -255,10 +256,8 @@ export default function AdminLayout() {
           overflowY: "auto",
         }}>
           <div style={{ padding: "0 20px 18px", borderBottom: `1px solid ${RULE}` }}>
-            <div style={{ fontWeight: 700, fontSize: 22, color: PURPLE, letterSpacing: -0.3 }}>
-              Enrops
-            </div>
-            <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+            <EnropsWordmark height={26} />
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
               Admin · {org?.name ?? "—"}
             </div>
           </div>

@@ -22,6 +22,7 @@ export default {
         enrops: {
           purple: '#1C004F',           // Deep Purple — primary dark
           'purple-dark': '#0D0024',    // hover / focus
+          'deep-violet': '#6857E1',    // Deep Violet — brand-mark variant
           violet: '#8C88FF',           // Vivid Violet — accent
           'violet-soft': '#F2F0FF',    // Soft Lilac — bg tints, hover
           mint: '#26D687',             // Mint Green — success
