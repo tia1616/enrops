@@ -43,12 +43,13 @@ export default function AssignSubModal({
   parentAssignment,           // { id, instructor_id, role }
   parentType,                 // 'camp' | 'program'
   sessionInfo,                // { curriculum_name, location_name, starts_on, ends_on, week_num } for camp; or { curriculum, school_name, first_session_date } for program
+  defaultDate,                // YYYY-MM-DD; pre-fills the date input when admin clicked a specific day-tile
   organizationId,
   instructors,                // full instructor list for the org
   onClose,
   onSubmitted,                // (substitutionId) => void
 }) {
-  const [date, setDate] = useState('');
+  const [date, setDate] = useState(defaultDate ?? '');
   const [subInstructorId, setSubInstructorId] = useState('');
   const [subTier, setSubTier] = useState(parentAssignment?.role ?? 'lead');
   const [notes, setNotes] = useState('');

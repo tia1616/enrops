@@ -88,6 +88,16 @@ function fmtShort(dateStr) {
   return new Date(`${dateStr}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function addDaysIso(isoDate, n) {
+  if (!isoDate || typeof n !== "number" || n < 0) return null;
+  const d = new Date(`${isoDate}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const da = String(d.getDate()).padStart(2, "0");
+  return `${y}-${mo}-${da}`;
+}
+
 function fmtTime(t) {
   if (!t) return "";
   const [h, m] = t.split(":").map(Number);
@@ -1839,10 +1849,11 @@ export default function Schedule() {
           dragStateRef={dragStateRef}
           onDrop={handleDrop}
           onNeedsHireClick={(session) => setCandidatesFor({ session, currentAssignment: null, role: "lead" })}
-          onInstructorClick={(session, currentAssignment, roleHint) => setCandidatesFor({
+          onInstructorClick={(session, currentAssignment, roleHint, dayDate) => setCandidatesFor({
             session,
             currentAssignment,
             role: currentAssignment?.role ?? roleHint ?? "lead",
+            dayDate: dayDate ?? null,
           })}
           onChangeRequestClick={(session, assignment) => {
             skippedThisWalkRef.current = new Set();
@@ -2014,7 +2025,11 @@ export default function Schedule() {
           onResetAcceptance={() => handleResetAcceptance(candidatesFor.session, candidatesFor.currentAssignment)}
           onResendOffer={() => handleResendOffer(candidatesFor.currentAssignment?.id)}
           onAssignSub={() => {
-            const armed = { session: candidatesFor.session, currentAssignment: candidatesFor.currentAssignment };
+            const armed = {
+              session: candidatesFor.session,
+              currentAssignment: candidatesFor.currentAssignment,
+              defaultDate: candidatesFor.dayDate ?? null,
+            };
             setCandidatesFor(null);
             setAssignSubFor(armed);
           }}
@@ -2041,6 +2056,7 @@ export default function Schedule() {
             ends_on: assignSubFor.session?.ends_on,
             week_num: assignSubFor.session?.week_num,
           }}
+          defaultDate={assignSubFor.defaultDate}
           organizationId={org?.id}
           instructors={state.instructors}
           onClose={() => setAssignSubFor(null)}
@@ -2752,7 +2768,9 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, getValidationFor,
                       dragStateRef={dragStateRef}
                       onDrop={onDrop}
                       onNeedsHireClick={onNeedsHireClick}
-                      onInstructorClick={onInstructorClick}
+                      onInstructorClick={(session, currentAssignment, roleHint) =>
+                        onInstructorClick(session, currentAssignment, roleHint, addDaysIso(week?.starts_on, WEEKDAYS.indexOf(d)))
+                      }
                       onChangeRequestClick={onChangeRequestClick}
                     />
                   ) : (
