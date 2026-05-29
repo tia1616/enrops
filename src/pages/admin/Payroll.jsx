@@ -482,7 +482,7 @@ function PayRoutesCard({ org }) {
           />
           <PayRouteRow
             number={3}
-            title="You already have a Stripe Connect setup (like J2S does)"
+            title="You already have a Stripe Connect setup of your own"
             body={
               <>
                 Your Stripe account is set up to pay contractors directly — you've added
