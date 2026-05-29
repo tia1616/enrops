@@ -28,7 +28,16 @@ const stripe = new Stripe(Deno.env.get('STRIPE_INSTRUCTOR_PLATFORM_KEY')!, {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+// Primary: the original "Instructor Payments" destination, scoped to
+// "Events from: Your account" (J2S's own platform account events).
 const CONNECT_WEBHOOK_SECRET = Deno.env.get('STRIPE_CONNECT_WEBHOOK_SECRET')!;
+// Secondary: the "Connected accounts" scoped destination (instructor Express
+// account events). Optional — if unset, only the primary secret is tried.
+// Set this when Jessica adds the second destination on the J2S instructor
+// Stripe platform so account.updated events from instructor Express accounts
+// actually reach this handler.
+const CONNECT_WEBHOOK_SECRET_CONNECTED =
+  Deno.env.get('STRIPE_CONNECT_WEBHOOK_SECRET_CONNECTED') || null;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
 const FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || 'alerts@enrops.com';
 
@@ -38,15 +47,35 @@ serve(async (req: Request) => {
 
   const rawBody = await req.text();
   let event: Stripe.Event;
+
+  // Try primary secret first, then secondary. Stripe sends Connect-scope
+  // events from a separate destination with its own signing secret; one of
+  // the two will verify any given event.
   try {
     event = await stripe.webhooks.constructEventAsync(
       rawBody,
       signature,
       CONNECT_WEBHOOK_SECRET,
     );
-  } catch (err) {
-    console.error('connect webhook signature failed:', (err as Error).message);
-    return new Response('invalid signature', { status: 401 });
+  } catch (primaryErr) {
+    if (CONNECT_WEBHOOK_SECRET_CONNECTED) {
+      try {
+        event = await stripe.webhooks.constructEventAsync(
+          rawBody,
+          signature,
+          CONNECT_WEBHOOK_SECRET_CONNECTED,
+        );
+      } catch (secondaryErr) {
+        console.error('connect webhook signature failed against both secrets:', {
+          primary: (primaryErr as Error).message,
+          secondary: (secondaryErr as Error).message,
+        });
+        return new Response('invalid signature', { status: 401 });
+      }
+    } else {
+      console.error('connect webhook signature failed:', (primaryErr as Error).message);
+      return new Response('invalid signature', { status: 401 });
+    }
   }
 
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
