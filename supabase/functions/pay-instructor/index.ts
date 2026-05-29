@@ -1,0 +1,379 @@
+// pay-instructor — operator settles instructor pay for one (effective
+// instructor, camp_session) bucket. Two paths:
+//
+//   via_stripe=true   → call stripe.transfers.create against the operator's
+//                       instructor-pay Stripe platform (today:
+//                       STRIPE_INSTRUCTOR_PLATFORM_KEY = J2S's).
+//   via_stripe=false  → no Stripe call; just record what the operator paid
+//                       outside Enrops (Gusto / J2S dashboard / Venmo /
+//                       check / etc). Required: manual_payment_note.
+//
+// Auth: caller is org owner/admin for the EFFECTIVE instructor's org.
+// Multi-tenant gate: org.instructor_pay_enabled MUST be true (locked via
+// trigger so only platform admin can flip it).
+//
+// Idempotency: a UNIQUE PARTIAL INDEX on
+// (instructor_id, camp_session_id) WHERE status IN ('pending','succeeded')
+// prevents the double-pay race. Concurrent clicks → second INSERT fails
+// with 23505 → we return 409 cleanly.
+//
+// Resolver-aware: we read from v_effective_pay_lines, which already
+// resolves sub vs regular and exposes effective_instructor_id, effective_
+// tier, source. Distance bonus is paid ONLY when source='regular' AND
+// distance_bonus_paid_at IS NULL AND there's at least one eligible row
+// (subs don't earn distance bonus).
+//
+// Mirrors refund-registration in shape so the patterns are consistent.
+
+import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
+import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
+import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+
+// STRIPE_INSTRUCTOR_PLATFORM_KEY = the J2S-owned Stripe platform that runs
+// instructor pay. Distinct from STRIPE_SECRET_KEY (Enrops platform, used
+// for parent payments / Connect Receivables).
+const stripe = new Stripe(Deno.env.get('STRIPE_INSTRUCTOR_PLATFORM_KEY')!, {
+  apiVersion: '2023-10-16',
+  httpClient: Stripe.createFetchHttpClient(),
+});
+
+interface Body {
+  effective_instructor_id?: string;
+  camp_session_id?: string;
+  via_stripe?: boolean;
+  manual_payment_note?: string;
+}
+
+interface PayLineRow {
+  confirmation_id: string;
+  effective_instructor_id: string;
+  effective_tier: string | null;
+  source: 'regular' | 'sub';
+  pay_amount_cents: number | null;
+  pay_adjustment_cents: number | null;
+  pay_status: string;
+  instructor_payout_id: string | null;
+  confirmed_by: string | null;
+  camp_assignment_id: string | null;
+  camp_assignment_status: string | null;
+  distance_bonus_cents_if_regular: number | null;
+  distance_bonus_paid_at: string | null;
+  organization_id: string;
+}
+
+interface InstructorOnboardingRow {
+  stripe_connect_account_id: string | null;
+  stripe_payouts_enabled: boolean | null;
+}
+
+const FORBIDDEN = json({ error: 'forbidden' }, 403);
+
+serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+
+  try {
+    // ── auth ──────────────────────────────────────────────────────────────
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) return json({ error: 'auth_required' }, 401);
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    if (!token) return json({ error: 'auth_required' }, 401);
+
+    const supabase = adminClient();
+    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+    if (userErr || !userData?.user) return json({ error: 'invalid_auth' }, 401);
+    const callerAuthId = userData.user.id;
+
+    // ── input ─────────────────────────────────────────────────────────────
+    let body: Body = {};
+    try {
+      body = (await req.json()) as Body;
+    } catch {
+      return json({ error: 'invalid_body' }, 400);
+    }
+    const effectiveInstructorId = (body.effective_instructor_id || '').trim();
+    const campSessionId = (body.camp_session_id || '').trim();
+    const viaStripe = body.via_stripe !== false; // default true
+    const manualNote = (body.manual_payment_note || '').toString().trim();
+
+    if (!effectiveInstructorId) return json({ error: 'missing_effective_instructor_id' }, 400);
+    if (!campSessionId)         return json({ error: 'missing_camp_session_id' }, 400);
+    if (!viaStripe && manualNote.length === 0) {
+      return json({ error: 'manual_payment_note_required' }, 400);
+    }
+
+    // ── load effective instructor + their org ─────────────────────────────
+    const { data: instructorData, error: instErr } = await supabase
+      .from('instructors')
+      .select('id, organization_id, first_name, last_name')
+      .eq('id', effectiveInstructorId)
+      .maybeSingle();
+    if (instErr) {
+      console.error('[pay-instructor] instructor lookup failed:', instErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
+    const instructor = instructorData as { id: string; organization_id: string; first_name: string | null; last_name: string | null } | null;
+    if (!instructor) return json({ error: 'instructor_not_found' }, 404);
+
+    // ── auth scope: caller is owner/admin on this instructor's org ────────
+    const { data: cm } = await supabase
+      .from('org_members')
+      .select('role')
+      .eq('auth_user_id', callerAuthId)
+      .eq('organization_id', instructor.organization_id)
+      .in('role', ['owner', 'admin'])
+      .not('accepted_at', 'is', null)
+      .maybeSingle();
+    if (!cm) return FORBIDDEN;
+
+    // ── circuit breaker: instructor_pay_enabled ───────────────────────────
+    const { data: orgRow, error: orgErr } = await supabase
+      .from('organizations')
+      .select('instructor_pay_enabled, alert_email, name')
+      .eq('id', instructor.organization_id)
+      .maybeSingle();
+    if (orgErr || !orgRow) {
+      console.error('[pay-instructor] org lookup failed:', orgErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
+    if (!(orgRow as { instructor_pay_enabled: boolean }).instructor_pay_enabled) {
+      return json({
+        error: 'instructor_pay_not_enabled',
+        message: 'Instructor pay via Enrops is not enabled for this organization. Contact support.',
+      }, 403);
+    }
+
+    // ── load eligible pay-lines via the resolver view ─────────────────────
+    // The view exposes effective_instructor_id, source, pay_amount_cents,
+    // pay_adjustment_cents, confirmed_by, camp_assignment_status, and
+    // distance_bonus_cents_if_regular (NULL for sub rows by design).
+    const { data: payLinesData, error: linesErr } = await supabase
+      .from('v_effective_pay_lines')
+      .select(`
+        confirmation_id, effective_instructor_id, effective_tier, source,
+        pay_amount_cents, pay_adjustment_cents, pay_status,
+        instructor_payout_id, confirmed_by,
+        camp_assignment_id, camp_assignment_status,
+        distance_bonus_cents_if_regular, distance_bonus_paid_at,
+        organization_id
+      `)
+      .eq('effective_instructor_id', effectiveInstructorId)
+      .eq('camp_session_id', campSessionId);
+    if (linesErr) {
+      console.error('[pay-instructor] pay lines fetch failed:', linesErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
+    const allRows = (payLinesData as PayLineRow[] | null) ?? [];
+
+    // Filter to eligible rows. The view's source filter is informational;
+    // this is the safety filter that decides what actually gets paid.
+    const eligible = allRows.filter((r) =>
+      r.pay_status === 'approved' &&
+      r.instructor_payout_id === null &&
+      r.confirmed_by !== null &&
+      r.confirmed_by !== 'pending' &&
+      r.pay_amount_cents !== null &&
+      r.pay_amount_cents >= 0 &&
+      (r.camp_assignment_status === null || r.camp_assignment_status !== 'cancelled') &&
+      r.organization_id === instructor.organization_id // defensive cross-org check
+    );
+
+    if (eligible.length === 0) {
+      return json({ error: 'nothing_to_pay', detail: 'No approved + un-paid pay lines for this instructor and camp.' }, 400);
+    }
+
+    // ── distance bonus eligibility ────────────────────────────────────────
+    // Pay distance bonus when: source='regular' AND there's at least one
+    // eligible row from this assignment (regular instructor actually taught
+    // something) AND distance_bonus_paid_at IS NULL AND
+    // distance_bonus_cents > 0.
+    // Pick the bonus from any eligible row in the group (they all share the
+    // same camp_assignment_id and thus the same bonus value).
+    const firstRegular = eligible.find((r) => r.source === 'regular');
+    let distanceBonusCents = 0;
+    let includesDistanceBonus = false;
+    let campAssignmentIdForBonus: string | null = null;
+    if (
+      firstRegular &&
+      firstRegular.distance_bonus_paid_at === null &&
+      firstRegular.distance_bonus_cents_if_regular !== null &&
+      firstRegular.distance_bonus_cents_if_regular > 0
+    ) {
+      distanceBonusCents = firstRegular.distance_bonus_cents_if_regular;
+      includesDistanceBonus = true;
+      campAssignmentIdForBonus = firstRegular.camp_assignment_id;
+    }
+
+    // ── sum ───────────────────────────────────────────────────────────────
+    const baseSum = eligible.reduce(
+      (s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0),
+      0,
+    );
+    const totalCents = baseSum + distanceBonusCents;
+
+    if (totalCents <= 0) {
+      return json({ error: 'nothing_to_pay', detail: 'Total amount is zero.' }, 400);
+    }
+
+    // ── look up Stripe destination acct + payouts_enabled (only for via_stripe) ──
+    let stripeDestinationAccountId = ''; // also recorded for manual rows for audit
+    let payoutsEnabled = false;
+    {
+      const { data: onb } = await supabase
+        .from('contractor_onboarding_status')
+        .select('stripe_connect_account_id, stripe_payouts_enabled')
+        .eq('instructor_id', effectiveInstructorId)
+        .maybeSingle();
+      const o = onb as InstructorOnboardingRow | null;
+      stripeDestinationAccountId = o?.stripe_connect_account_id || '';
+      payoutsEnabled = o?.stripe_payouts_enabled === true;
+    }
+
+    if (viaStripe) {
+      if (!stripeDestinationAccountId) {
+        return json({ error: 'instructor_stripe_not_configured' }, 409);
+      }
+      if (!payoutsEnabled) {
+        return json({ error: 'instructor_stripe_not_ready', detail: 'Stripe payouts not yet enabled for this instructor.' }, 409);
+      }
+    }
+
+    // ── pre-insert payout row (status=pending) ────────────────────────────
+    // Unique partial index on (instructor_id, camp_session_id) WHERE
+    // status IN ('pending','succeeded') is the double-pay guard.
+    const confirmationIds = eligible.map((r) => r.confirmation_id);
+    const { data: rowData, error: insErr } = await supabase
+      .from('instructor_payouts')
+      .insert({
+        organization_id: instructor.organization_id,
+        instructor_id: effectiveInstructorId,
+        camp_session_id: campSessionId,
+        stripe_destination_account_id: stripeDestinationAccountId || 'manual',
+        amount_cents: totalCents,
+        session_confirmation_ids: confirmationIds,
+        includes_distance_bonus: includesDistanceBonus,
+        via_stripe: viaStripe,
+        manual_payment_note: viaStripe ? null : manualNote.slice(0, 1000),
+        paid_by_user_id: callerAuthId,
+        status: 'pending',
+      })
+      .select('id')
+      .single();
+    if (insErr || !rowData) {
+      const code = (insErr as { code?: string } | null)?.code;
+      if (code === '23505') {
+        // Unique partial index hit
+        return json({
+          error: 'payout_already_in_flight',
+          detail: 'A pending or succeeded payout already exists for this instructor on this camp. Refresh and try again.',
+        }, 409);
+      }
+      console.error('[pay-instructor] payout row insert failed:', insErr);
+      return json({ error: 'payout_row_insert_failed', detail: insErr?.message }, 500);
+    }
+    const payoutId = (rowData as { id: string }).id;
+
+    const nowIso = new Date().toISOString();
+
+    // ── branch on path ────────────────────────────────────────────────────
+    if (viaStripe) {
+      let transfer: Stripe.Transfer;
+      try {
+        transfer = await stripe.transfers.create(
+          {
+            amount: totalCents,
+            currency: 'usd',
+            destination: stripeDestinationAccountId,
+            transfer_group: `enrops_payout_${payoutId}`,
+            description: `Instructor pay — ${instructor.first_name ?? ''} ${instructor.last_name ?? ''} — camp ${campSessionId.slice(0, 8)}`,
+            metadata: {
+              enrops_payout_id: payoutId,
+              enrops_effective_instructor_id: effectiveInstructorId,
+              enrops_camp_session_id: campSessionId,
+              enrops_org_id: instructor.organization_id,
+              enrops_session_confirmation_count: String(confirmationIds.length),
+              enrops_includes_distance_bonus: includesDistanceBonus ? 'true' : 'false',
+            },
+          },
+          { idempotencyKey: `payout_${payoutId}` },
+        );
+      } catch (err) {
+        const stripeErr = err as { message?: string; raw?: { message?: string; code?: string } };
+        const errMsg = stripeErr.raw?.message ?? stripeErr.message ?? 'unknown';
+        const errCode = stripeErr.raw?.code ?? 'unknown';
+        console.error('[pay-instructor] stripe.transfers.create failed:', errCode, errMsg);
+        await supabase
+          .from('instructor_payouts')
+          .update({ status: 'failed', failure_reason: `${errCode}: ${errMsg}` })
+          .eq('id', payoutId);
+        return json({
+          error: 'stripe_transfer_failed',
+          stripe_code: errCode,
+          stripe_message: errMsg,
+        }, 502);
+      }
+
+      // ── mark payout succeeded + flip confirmations ────────────────────
+      // From here on, money has moved. DB failures get logged loudly but we
+      // return success-ish (and leave the row for manual reconciliation).
+      const { error: updErr } = await supabase
+        .from('instructor_payouts')
+        .update({
+          stripe_transfer_id: transfer.id,
+          status: 'succeeded',
+          succeeded_at: nowIso,
+        })
+        .eq('id', payoutId);
+      if (updErr) {
+        console.error('[pay-instructor] CRITICAL: stripe succeeded but payout row update failed:', updErr);
+        // Don't return error to client — money moved. Flag for manual fix.
+      }
+    } else {
+      // Manual path: just record the payout as succeeded with the note.
+      await supabase
+        .from('instructor_payouts')
+        .update({
+          status: 'succeeded',
+          succeeded_at: nowIso,
+        })
+        .eq('id', payoutId);
+    }
+
+    // ── flip confirmations + distance bonus marker ─────────────────────────
+    const { error: confErr } = await supabase
+      .from('session_delivery_confirmations')
+      .update({
+        pay_status: 'paid',
+        instructor_payout_id: payoutId,
+      })
+      .in('id', confirmationIds);
+    if (confErr) {
+      console.warn('[pay-instructor] confirmations update failed (non-fatal):', confErr);
+    }
+
+    if (includesDistanceBonus && campAssignmentIdForBonus) {
+      const { error: caErr } = await supabase
+        .from('camp_assignments')
+        .update({
+          distance_bonus_paid_at: nowIso,
+          distance_bonus_payout_id: payoutId,
+        })
+        .eq('id', campAssignmentIdForBonus);
+      if (caErr) {
+        console.warn('[pay-instructor] camp_assignments update failed (non-fatal):', caErr);
+      }
+    }
+
+    return json({
+      ok: true,
+      payout_id: payoutId,
+      amount_cents: totalCents,
+      includes_distance_bonus: includesDistanceBonus,
+      session_confirmation_count: confirmationIds.length,
+      via_stripe: viaStripe,
+    });
+  } catch (err) {
+    console.error('[pay-instructor] fatal:', err);
+    return json({ error: 'internal_error' }, 500);
+  }
+});

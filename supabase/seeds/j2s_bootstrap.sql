@@ -23,5 +23,9 @@ SET
   withdrawal_admin_fee_cents    = 3500,   -- $35 withdrawal admin fee
   statement_descriptor_suffix   = 'J2S',  -- parents see "ENROPS J2S"
   stripe_business_type          = 'company',
-  stripe_country                = 'US'
+  stripe_country                = 'US',
+  -- J2S has its own instructor-pay Stripe platform configured
+  -- (STRIPE_INSTRUCTOR_PLATFORM_KEY env var points to J2S's platform).
+  -- Other tenants stay false until they configure their own.
+  instructor_pay_enabled        = true
 WHERE id = '1adf10ad-d091-4aa0-82e3-af331468ea2b';

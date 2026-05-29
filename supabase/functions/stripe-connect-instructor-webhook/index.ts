@@ -48,14 +48,20 @@ serve(async (req: Request) => {
     return new Response('invalid signature', { status: 401 });
   }
 
-  // We only care about account.updated. Other event types: 200 no-op.
-  if (event.type !== 'account.updated') {
-    return new Response('ok', { status: 200 });
-  }
-
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  // Branch by event type. account.updated handled below (original flow);
+  // transfer.reversed handled inline.
+  if (event.type === 'transfer.reversed') {
+    return await handleTransferReversed(admin, event);
+  }
+
+  // Anything other than account.updated → 200 no-op.
+  if (event.type !== 'account.updated') {
+    return new Response('ok', { status: 200 });
+  }
 
   const account = event.data.object as Stripe.Account;
   const accountId = account.id;
@@ -167,6 +173,134 @@ async function sendRegressionAlert(
       to: alertEmail,
       subject,
       text,
+    }),
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// transfer.reversed — operator reversed a payout in Stripe dashboard, or
+// Stripe auto-reversed. Flip our payout row to failed and unwind the
+// linked confirmations + distance bonus marker so the operator can
+// re-pay (or withhold) cleanly.
+// ────────────────────────────────────────────────────────────────────────
+
+async function handleTransferReversed(
+  admin: ReturnType<typeof createClient>,
+  event: Stripe.Event,
+): Promise<Response> {
+  const transfer = event.data.object as Stripe.Transfer;
+  const transferId = transfer.id;
+
+  const { data: payoutData, error: payoutErr } = await admin
+    .from('instructor_payouts')
+    .select('id, organization_id, instructor_id, session_confirmation_ids, includes_distance_bonus, status, amount_cents')
+    .eq('stripe_transfer_id', transferId)
+    .maybeSingle();
+  if (payoutErr) {
+    console.error('[transfer.reversed] payout lookup failed:', payoutErr);
+    return new Response('lookup failed', { status: 500 });
+  }
+  const payout = payoutData as {
+    id: string;
+    organization_id: string;
+    instructor_id: string;
+    session_confirmation_ids: string[];
+    includes_distance_bonus: boolean;
+    status: string;
+    amount_cents: number;
+  } | null;
+
+  if (!payout) {
+    // Could be a transfer from outside our system (manual Stripe dashboard
+    // transfer, etc). 200 so Stripe doesn't retry.
+    console.warn(`[transfer.reversed] no payout row for transfer ${transferId} — ignoring`);
+    return new Response('ok', { status: 200 });
+  }
+  if (payout.status === 'failed') {
+    // Already handled (idempotency).
+    return new Response('ok', { status: 200 });
+  }
+
+  // Flip payout to failed.
+  const reversalReason = (transfer.reversals?.data?.[0] as { reason?: string } | undefined)?.reason ?? 'unspecified';
+  const { error: updErr } = await admin
+    .from('instructor_payouts')
+    .update({
+      status: 'failed',
+      failure_reason: `reversed: ${reversalReason}`,
+    })
+    .eq('id', payout.id);
+  if (updErr) {
+    console.error('[transfer.reversed] payout update failed:', updErr);
+    return new Response('update failed', { status: 500 });
+  }
+
+  // Unwind confirmations: pay_status approved + clear payout link, so the
+  // operator can either re-pay or withhold them.
+  if (payout.session_confirmation_ids && payout.session_confirmation_ids.length > 0) {
+    const { error: confErr } = await admin
+      .from('session_delivery_confirmations')
+      .update({
+        pay_status: 'approved',
+        instructor_payout_id: null,
+      })
+      .in('id', payout.session_confirmation_ids);
+    if (confErr) {
+      console.warn('[transfer.reversed] confirmations unwind failed (non-fatal):', confErr);
+    }
+  }
+
+  // Unwind distance bonus marker if this payout settled it.
+  if (payout.includes_distance_bonus) {
+    const { error: caErr } = await admin
+      .from('camp_assignments')
+      .update({
+        distance_bonus_paid_at: null,
+        distance_bonus_payout_id: null,
+      })
+      .eq('distance_bonus_payout_id', payout.id);
+    if (caErr) {
+      console.warn('[transfer.reversed] camp_assignments unwind failed (non-fatal):', caErr);
+    }
+  }
+
+  // Alert operator (best-effort).
+  await sendPayoutReversalAlert(admin, payout).catch(
+    (err) => console.warn('[transfer.reversed] alert send failed:', err),
+  );
+
+  console.log(`[transfer.reversed] unwound payout ${payout.id} for transfer ${transferId}`);
+  return new Response('ok', { status: 200 });
+}
+
+async function sendPayoutReversalAlert(
+  admin: ReturnType<typeof createClient>,
+  payout: { id: string; organization_id: string; instructor_id: string; amount_cents: number },
+) {
+  if (!RESEND_API_KEY) {
+    console.warn('RESEND_API_KEY not set — skipping reversal alert');
+    return;
+  }
+  const [{ data: instructor }, { data: org }] = await Promise.all([
+    admin.from('instructors').select('first_name, last_name, email').eq('id', payout.instructor_id).maybeSingle(),
+    admin.from('organizations').select('alert_email, name').eq('id', payout.organization_id).maybeSingle(),
+  ]);
+  const alertEmail = (org as { alert_email?: string } | null)?.alert_email;
+  if (!alertEmail) return;
+  const name = `${(instructor as { first_name?: string } | null)?.first_name ?? ''} ${(instructor as { last_name?: string } | null)?.last_name ?? ''}`.trim() || 'an instructor';
+  const amount = `$${(payout.amount_cents / 100).toFixed(2)}`;
+  await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: FROM_EMAIL,
+      to: alertEmail,
+      subject: `[${(org as { name?: string } | null)?.name ?? 'Enrops'}] Instructor payout reversed — ${name}`,
+      text:
+        `A Stripe transfer for ${name} (${amount}) was reversed.\n\n` +
+        `The related session_delivery_confirmations have been flipped back to "approved" so you can re-issue the payment (or withhold) from the Payroll page.\n\n` +
+        `If this was unintended, you can re-pay from the Payroll page now. If you intended to reverse, the operator's records are now consistent.\n\n` +
+        `Payout ID: ${payout.id}\n\n— enrops`,
     }),
   });
 }
