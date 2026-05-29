@@ -307,6 +307,7 @@ export default function Payroll() {
   // ── render ─────────────────────────────────────────────────────────────
   return (
     <div>
+      <PayRoutesCard org={org} />
       <Toolbar
         sinceDate={sinceDate}
         setSinceDate={setSinceDate}
@@ -377,6 +378,216 @@ export default function Payroll() {
 }
 
 // ───────────────────────────── sub-components ──────────────────────────────
+
+// PayRoutesCard
+//
+// Plain-English explainer of the three ways an operator can pay instructors
+// through (or alongside) Enrops. For v1, only Option 1 (manual / calculator)
+// is live for new tenants. J2S is on Option 3 (their own Stripe Connect
+// platform setup, pre-dating Enrops). Option 2 (Enrops routes the money from
+// the tenant's connected account directly to the instructor's bank) is
+// drafted in code but gated behind a safety net in pay-instructor — operators
+// who want it can signal interest via the mailto, and we'll turn it on per-
+// tenant once we've tested it live.
+//
+// Card is collapsible so it doesn't dominate the page once read. State is
+// session-only — re-reads each load. (Local-storage persistence is a nice-
+// to-have we can add when it starts to grate.)
+function PayRoutesCard({ org }) {
+  const [open, setOpen] = useState(false);
+  const orgName = org?.name || 'your organization';
+  const orgSlug = org?.slug || '';
+
+  // Pre-filled mailto for operators who want the v2 routes turned on.
+  function mailtoForOption(optionLabel) {
+    const subject = `Enrops: ${optionLabel}`;
+    const body =
+      `Org: ${orgName}${orgSlug ? ` (${orgSlug})` : ''}\n\n` +
+      `I want to use this option for paying my instructors. Please let me know what's needed to turn it on.`;
+    return `mailto:hello@enrops.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  }
+
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: `1px solid ${RULE}`,
+        borderRadius: 10,
+        padding: '14px 18px',
+        marginBottom: 16,
+      }}
+    >
+      <div
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'pointer',
+          gap: 12,
+        }}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setOpen((v) => !v);
+          }
+        }}
+      >
+        <div>
+          <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>
+            How you can pay your instructors
+          </div>
+          <div style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>
+            Three ways — only some are live right now. {open ? 'Hide' : 'Show'} the details.
+          </div>
+        </div>
+        <div style={{ color: VIOLET, fontSize: 18, lineHeight: 1, userSelect: 'none' }}>
+          {open ? '▴' : '▾'}
+        </div>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 14, display: 'grid', gap: 12 }}>
+          <PayRouteRow
+            number={1}
+            title="You pay them outside Enrops"
+            body={
+              <>
+                You already use <strong>Gusto, ADP, your bank, checks, Venmo,</strong> or
+                something else to pay people. Keep doing that. Enrops shows you exactly
+                what each instructor is owed, and you mark each line "paid" once you've
+                paid them — so your records stay clean and you don't double-pay.
+              </>
+            }
+            status="available"
+            statusLabel="Available now"
+          />
+          <PayRouteRow
+            number={2}
+            title="Enrops moves the money for you"
+            body={
+              <>
+                You click <strong>Pay</strong> next to an instructor and Enrops sends the
+                money straight from your Stripe balance (where parent payments land) to
+                your instructor's bank. No second system, no extra Stripe setup on your
+                side. Your instructor signs up for a quick Stripe payout account (name,
+                SSN, bank) the first time they're paid this way.
+              </>
+            }
+            status="coming"
+            statusLabel="Coming soon"
+            cta={{ label: 'Tell us you want this', href: mailtoForOption('I want option 2 — Enrops routes the pay') }}
+          />
+          <PayRouteRow
+            number={3}
+            title="You already have a Stripe Connect setup (like J2S does)"
+            body={
+              <>
+                Your Stripe account is set up to pay contractors directly — you've added
+                Connect, your instructors are onboarded under your platform, the rails
+                are already there. Enrops plugs into that and pushes Pay clicks through
+                your existing setup. This needs a one-time technical handoff.
+              </>
+            }
+            status="request"
+            statusLabel="Available by request"
+            cta={{ label: 'Tell us you want this', href: mailtoForOption('I want option 3 — plug into my existing Stripe Connect') }}
+          />
+          <div style={{ color: MUTED, fontSize: 12, lineHeight: 1.5, paddingTop: 4 }}>
+            Not sure which fits? Email{' '}
+            <a href="mailto:hello@enrops.com" style={{ color: VIOLET, fontWeight: 600 }}>
+              hello@enrops.com
+            </a>{' '}
+            and we'll walk through it with you.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PayRouteRow({ number, title, body, status, statusLabel, cta }) {
+  const badgeBg =
+    status === 'available' ? 'rgba(58,124,58,0.12)' :
+    status === 'coming' ? 'rgba(140,136,255,0.15)' :
+    'rgba(182,126,0,0.12)';
+  const badgeFg =
+    status === 'available' ? OK :
+    status === 'coming' ? VIOLET :
+    AMBER;
+  return (
+    <div
+      style={{
+        background: CREAM,
+        border: `1px solid ${RULE}`,
+        borderRadius: 8,
+        padding: '12px 14px',
+        display: 'grid',
+        gridTemplateColumns: '28px 1fr',
+        gap: 12,
+      }}
+    >
+      <div
+        style={{
+          width: 26,
+          height: 26,
+          borderRadius: '50%',
+          background: PURPLE,
+          color: '#fff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontWeight: 700,
+          fontSize: 13,
+        }}
+      >
+        {number}
+      </div>
+      <div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 700, color: INK, fontSize: 14 }}>{title}</div>
+          <span
+            style={{
+              background: badgeBg,
+              color: badgeFg,
+              fontSize: 11,
+              fontWeight: 700,
+              padding: '2px 8px',
+              borderRadius: 10,
+              textTransform: 'uppercase',
+              letterSpacing: 0.4,
+            }}
+          >
+            {statusLabel}
+          </span>
+        </div>
+        <div style={{ color: INK, fontSize: 13, lineHeight: 1.55, marginTop: 6 }}>
+          {body}
+        </div>
+        {cta && (
+          <a
+            href={cta.href}
+            style={{
+              display: 'inline-block',
+              marginTop: 10,
+              padding: '6px 12px',
+              border: `1px solid ${VIOLET}`,
+              borderRadius: 6,
+              color: VIOLET,
+              fontSize: 13,
+              fontWeight: 600,
+              textDecoration: 'none',
+            }}
+          >
+            {cta.label} →
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function Toolbar({ sinceDate, setSinceDate, showPaid, setShowPaid }) {
   return (

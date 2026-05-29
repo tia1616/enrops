@@ -236,3 +236,45 @@ Default sender display name — confirmed or still open?
 \- \[ ] Reassignment v2 (queued): write to instructor_offer_messages with new `kind`, pay reconciliation flag, handleDrop source-delete also gate on modal
 \- \[ ] Dora "newly cleared" homescreen surface (admin email is the placeholder for now)
 
+Programs UI
+-be able to filter and view all and by term (summer/fall/etc) -- see all have on file like arrival dismissal an room #, choose to send emails to all or some to confirm logistics still true
+
+\## 2026-05-28
+
+\### Single-day substitute instructor flow (raised by Jessica during instructor-portal status check)
+
+\- \[ ] Current model: `camp_assignments` ties one instructor to a whole camp_session (the week). No way to assign a sub for just Tuesday. Pay calc reads from the assignment row, so a sub today would either need a fake whole-week assignment (wrong) or no record (no pay).
+
+\- \[ ] **Proposed design (bundle with FA26 afterschool work, ~+0.5d on top):**
+  - New table `assignment_substitutions`: `(parent_assignment_id, parent_assignment_type 'camp' | 'program', sub_instructor_id, date, status, sub_tier 'lead' | 'developing', assigned_at, assigned_by, notes)`. Unique on `(parent_assignment_id, parent_assignment_type, date)` — one sub per assignment per day.
+  - `parent_assignment_type` allows the same table to handle camps now and afterschool once `program_assignments` lands — no migration when afterschool subs arrive.
+  - `confirm-session-delivery` updated to check for a sub row on the given date BEFORE crediting pay to the regular instructor. If present, pay flows to sub at their tier rate; original instructor earns zero for that day with no "missed" stigma.
+  - RLS: sub instructor can read camp_session roster + lessons ONLY for dates they have a substitution row for. Existing `registrations` + `students` + `parents` policies need a second pass that unions in sub access.
+  - Admin UI: on a camp/program detail page, "Add sub for [date]" button → pick instructor + tier → sends sub an email (warm Ennie copy: "You're subbing for [camp] on [date] — here's the roster and lesson plan").
+  - Sub portal UX: their "My schedule" shows sub days tagged distinctly ("Sub · [Camp Name] · Tue 7/15"). Mark-taught from their portal works the same as a regular assignment.
+  - Original instructor sees the day as "covered by [sub]" on their schedule — locked from check-in, no pay deduction stigma.
+
+\- \[ ] **Edge cases to handle:**
+  - Sub for an entire week is NOT this flow — that's the existing reassignment (change `camp_assignments.instructor_id`). Sub flow is per-day only.
+  - Sub for a date in the past (after-the-fact, e.g., emergency cover that wasn't logged): allow with admin-only confirmation, audit trail.
+  - Sub declining the offer: status='declined' frees the slot; admin sees they need to find another sub.
+  - Sub flow + assignment cancellation flow need to be aware of each other: if a camp is cancelled, all pending subs auto-decline + get the same "isn't running" copy.
+
+\- \[ ] **Trigger to build:** before camps start (~early July). Realistically the first sub need probably hits in July, so this should land in June.
+
+\- \[ ] **Notification side:** sub assignment is essentially a one-day offer. Reuse the `NotifyRemovalModal` pattern (preview email before send) for sub offers. Original instructor should also get a "your 7/15 is covered" email — quick, no fuss.
+
+### Stripe-integrated instructor pay v2 (deferred 2026-05-29)
+
+\- \[ ] **v1 ships calculator only.** New tenants default to `instructor_pay_enabled=false` so `pay-instructor`'s Stripe path is blocked at the circuit breaker. The Payroll page explainer card lays out three routes; only `Option 1` (manual / calculator) is active. `Options 2` and `3` show `Tell us you want this` CTAs that mailto hello@enrops.com for interest capture.
+
+\- \[ ] **Option 2 - Enrops routes the pay (`enrops_platform` mode).** Code path is drafted in `pay-instructor` (transfers from operator's connected account via `stripeAccount` header), in `create-stripe-connect-account` (instructor Express accounts created under Enrops's main Stripe), and in `stripe-webhook` v19 (instructor `account.updated` + `transfer.reversed` routing). Gated behind a `pay_route_not_yet_supported` safety net (returns 501). To unlock:
+  1. Remove the safety-net refusal in `pay-instructor`.
+  2. Validate end-to-end with a sandbox tenant (small live-mode test).
+  3. Add `transfer.reversed` + `account.updated` subscriptions on the Enrops Connected Accounts webhook destination.
+  4. Set `STRIPE_WEBHOOK_SECRET_CONNECT` env var to the Connected Accounts destination's signing secret.
+  5. Per-tenant: platform admin flips `instructor_pay_enabled=true` + sets `instructor_pay_model='enrops_platform'` after they Connect for Receivables.
+
+\- \[ ] **Option 3 - tenant's own Stripe Connect platform (`legacy_own_platform` mode).** This is what J2S runs today (set up by Jessica, pre-Enrops). For new tenants on this route: tenant must enable Stripe Connect on their account, accept Stripe Connect platform terms, and onboard instructors as Express accounts under their platform. Then we configure their `STRIPE_INSTRUCTOR_PLATFORM_KEY` equivalent (one secret key per tenant — needs proper per-tenant key storage; current code uses a single env var). Heavy lift. Build trigger: a tenant who already has Connect set up and explicitly asks.
+
+\- \[ ] **Trigger to build either option:** first non-J2S tenant signals interest via the mailto CTA. Until then, calculator works and nobody's blocked.

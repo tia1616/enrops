@@ -286,10 +286,23 @@ serve(async (req: Request) => {
       if (!payoutsEnabled) {
         return json({ error: 'instructor_stripe_not_ready', detail: 'Stripe payouts not yet enabled for this instructor.' }, 409);
       }
+      // SAFETY NET (v1): the enrops_platform code path is drafted but not
+      // yet tested end-to-end. Refuse via_stripe for this route until v2.
+      // Only J2S (legacy_own_platform) actually exercises Stripe pay today;
+      // every other tenant uses manual mode (via_stripe=false). If a future
+      // me accidentally flips instructor_pay_enabled=true on a non-J2S tenant,
+      // this stops a cold code path from firing against real money.
+      if (payModel === 'enrops_platform') {
+        return json({
+          error: 'pay_route_not_yet_supported',
+          detail: 'Stripe-routed instructor pay through Enrops\'s platform is on the v2 roadmap. Use manual mode for now: record what you paid through your existing pay system.',
+        }, 501);
+      }
       // enrops_platform path: money moves from the operator's Enrops-connected
       // account balance. If the operator hasn't connected (or their account
       // was disconnected), we have no source — surface a clear error instead
-      // of a cryptic Stripe failure.
+      // of a cryptic Stripe failure. (Unreachable while the safety net above
+      // is in place; kept for when v2 removes it.)
       if (payModel === 'enrops_platform' && !org.stripe_account_id) {
         return json({
           error: 'operator_stripe_not_connected',
