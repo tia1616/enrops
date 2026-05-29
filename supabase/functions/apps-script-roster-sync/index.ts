@@ -105,6 +105,19 @@ serve(async (req: Request) => {
       return json({ error: 'unparseable_filename', filename }, 400);
     }
 
+    // Orphan listing remap: some Squarespace SKUs (e.g. "Bricks & Bots") have
+    // no current tracker curriculum and must fold into the canonical camp at
+    // the same date+venue+session. Rules live in docs/operations/
+    // orphaned-registration-rules.md. We remap the curriculum hint here so
+    // the scorer below picks the right candidate when multiple camps share a
+    // slot. Single-candidate slots already match correctly without this.
+    let orphanRemap: { from: string; to: string } | null = null;
+    const curriculumKey = match.curriculumHint.toLowerCase().trim();
+    if (ORPHAN_LISTINGS[curriculumKey]) {
+      orphanRemap = { from: match.curriculumHint, to: ORPHAN_LISTINGS[curriculumKey] };
+      match.curriculumHint = ORPHAN_LISTINGS[curriculumKey];
+    }
+
     const { data: candidates, error: candErr } = await supabase
       .from('camp_sessions')
       .select('id, starts_on, ends_on, session_type, location_name, curriculum_name')
@@ -161,6 +174,7 @@ serve(async (req: Request) => {
     const results = {
       camp_session_id: campSession.id,
       camp_name: `${campSession.curriculum_name} (${campSession.location_name})`,
+      orphan_remapped: orphanRemap,
       imported: 0,
       updated: 0,
       cancelled: 0,
@@ -409,6 +423,18 @@ const CITY_ALIASES: Record<string, string[]> = {
   'forest grove': ['forest grove'],
   'west linn': ['west linn'],
   'corbett': ['corbett'],
+};
+
+// Orphan listing → canonical target curriculum. Squarespace listing names
+// that have no matching tracker curriculum. The roster builder folds these
+// into the canonical camp at the same date+venue+session. Keys are
+// lowercased; whitespace-trimmed against the parsed curriculum hint. See
+// docs/operations/orphaned-registration-rules.md for the human-readable
+// rules. J2S-specific; future tenants would need their own mapping (move
+// to organizations.orphan_listings JSONB when a second tenant onboards).
+const ORPHAN_LISTINGS: Record<string, string> = {
+  'bricks & bots': 'Minecraft Makers',
+  'bricks and bots': 'Minecraft Makers',
 };
 
 function parseFilename(name: string): ParsedFilename | null {
