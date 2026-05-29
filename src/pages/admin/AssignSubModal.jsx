@@ -201,14 +201,9 @@ export default function AssignSubModal({
           )}
 
           <Field label="Date">
-            <input
-              type="date"
-              value={date}
-              min={minDate || undefined}
-              max={maxDate || undefined}
-              onChange={(e) => setDate(e.target.value)}
-              style={inputStyle}
-            />
+            <div style={{ ...inputStyle, background: CREAM, color: INK, display: "flex", alignItems: "center" }}>
+              {date ? fmtDate(date) : <span style={{ color: MUTED }}>Open the modal from a day tile to set the date.</span>}
+            </div>
           </Field>
 
           <Field label="Sub instructor">

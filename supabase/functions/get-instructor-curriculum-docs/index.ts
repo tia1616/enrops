@@ -56,11 +56,13 @@ serve(async (req: Request) => {
 
     const supabase = adminClient();
 
-    // Ownership check: instructor must be confirmed on at least one
-    // camp_assignment whose camp_session.curriculum_id matches. We bounce
-    // off camp_sessions because curriculum_id lives there, not on the
-    // assignment row.
-    const { data: own, error: ownErr } = await supabase
+    // Ownership check: instructor has a path to this curriculum via either
+    // (a) a confirmed camp_assignment whose camp_session.curriculum_id
+    // matches, OR (b) a confirmed/taught assignment_substitutions row
+    // whose parent camp_assignment's camp_session.curriculum_id matches.
+    // Either grants the same lesson access — a sub teaches the same
+    // material the regular instructor would have.
+    const { data: ownAssignment, error: ownErr } = await supabase
       .from('camp_assignments')
       .select('id, camp_sessions!inner(curriculum_id)')
       .eq('instructor_id', me.id)
@@ -72,9 +74,44 @@ serve(async (req: Request) => {
       console.error('camp_assignments lookup error:', ownErr);
       return json({ error: 'lookup_failed' }, 500);
     }
-    if (!own || own.length === 0) {
+
+    let allowed = !!(ownAssignment && ownAssignment.length > 0);
+
+    if (!allowed) {
+      // Sub path: assignment_substitutions has no FK to camp_assignments
+      // (polymorphic via parent_assignment_type, trigger-validated), so
+      // PostgREST can't join. Two-step lookup: gather the sub's parent
+      // assignment IDs, then check if any of those camp_assignments points
+      // to a camp_session with this curriculum.
+      const { data: subRows, error: subErr } = await supabase
+        .from('assignment_substitutions')
+        .select('parent_assignment_id')
+        .eq('sub_instructor_id', me.id)
+        .eq('parent_assignment_type', 'camp')
+        .in('status', ['confirmed', 'taught']);
+      if (subErr) {
+        console.error('assignment_substitutions lookup error:', subErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      const parentIds = (subRows ?? []).map((r) => r.parent_assignment_id).filter(Boolean);
+      if (parentIds.length > 0) {
+        const { data: parentMatch, error: parentErr } = await supabase
+          .from('camp_assignments')
+          .select('id, camp_sessions!inner(curriculum_id)')
+          .in('id', parentIds)
+          .eq('camp_sessions.curriculum_id', curriculumId)
+          .limit(1);
+        if (parentErr) {
+          console.error('parent camp_assignments lookup error:', parentErr);
+          return json({ error: 'lookup_failed' }, 500);
+        }
+        allowed = !!(parentMatch && parentMatch.length > 0);
+      }
+    }
+
+    if (!allowed) {
       // 403 not 404 — the curriculum may exist, but this caller has no
-      // confirmed assignment that grants them access to it.
+      // confirmed assignment or sub day that grants them access to it.
       return json({ error: 'not_assigned_to_curriculum' }, 403);
     }
 

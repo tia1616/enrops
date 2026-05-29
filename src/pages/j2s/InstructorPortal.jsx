@@ -70,7 +70,9 @@ export default function InstructorPortal() {
   const [instructor, setInstructor] = useState(null);
   const [onboarding, setOnboarding] = useState(null);
   const [assignments, setAssignments] = useState([]);
+  const [subAssignments, setSubAssignments] = useState([]); // assignment_substitutions where I'm the sub
   const [actingOn, setActingOn] = useState(null);
+  const [subActingOn, setSubActingOn] = useState(null); // { id, action } for in-flight Accept/Decline
   const [changeFor, setChangeFor] = useState(null);
   const [changeText, setChangeText] = useState("");
   const [impersonating, setImpersonating] = useState(null);
@@ -126,7 +128,7 @@ export default function InstructorPortal() {
             last_name: target.last_name,
             preferred_name: target.preferred_name,
           };
-          await Promise.all([loadAssignments(target.id), loadCycles(targetInst)]);
+          await Promise.all([loadAssignments(target.id), loadSubAssignments(target.id), loadCycles(targetInst)]);
           setPhase("ready");
           return;
         }
@@ -206,7 +208,7 @@ export default function InstructorPortal() {
 
       // No onboarding row OR overall_status='complete' OR 'not_invited':
       // they're a regular onboarded instructor; render the schedule.
-      await Promise.all([loadAssignments(linkData.instructor_id), loadCycles(linkData)]);
+      await Promise.all([loadAssignments(linkData.instructor_id), loadSubAssignments(linkData.instructor_id), loadCycles(linkData)]);
       setPhase("ready");
     } catch (err) {
       setError(err.message ?? "Couldn't link your account.");
@@ -229,7 +231,7 @@ export default function InstructorPortal() {
     if (row.overall_status === "complete" || row.completed_at) {
       // Either freshly complete or already-been-complete — drop into the
       // schedule view immediately.
-      await Promise.all([loadAssignments(instructor.id), loadCycles(instructor)]);
+      await Promise.all([loadAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor)]);
       setPhase("ready");
     }
   }
@@ -265,6 +267,54 @@ export default function InstructorPortal() {
     // Load everything; we partition into current vs archived at render time
     // so a "Show past camps" toggle can pull them in without a re-fetch.
     setAssignments(data ?? []);
+  }
+
+  // Single-day sub assignments where this instructor is the SUB (not the
+  // regular). Pending rows render as offer cards with Accept/Decline;
+  // confirmed/taught rows render as sub days in the schedule.
+  //
+  // assignment_substitutions has no FK to camp_assignments/program_assignments
+  // (polymorphic via parent_assignment_type, trigger-validated), so the parent
+  // join can't be inlined in the select — we resolve in a second round-trip.
+  async function loadSubAssignments(instructorId) {
+    const { data: rows, error: sErr } = await supabase
+      .from("assignment_substitutions")
+      .select("id, date, status, sub_tier, notes, email_sent_at, parent_assignment_id, parent_assignment_type")
+      .eq("sub_instructor_id", instructorId)
+      .order("date", { ascending: true });
+    if (sErr) {
+      console.warn("[loadSubAssignments] failed:", sErr.message);
+      setSubAssignments([]);
+      return;
+    }
+    const all = rows ?? [];
+    if (all.length === 0) { setSubAssignments([]); return; }
+
+    const campParentIds = all.filter((r) => r.parent_assignment_type === "camp").map((r) => r.parent_assignment_id);
+    const progParentIds = all.filter((r) => r.parent_assignment_type === "program").map((r) => r.parent_assignment_id);
+
+    const [campParents, progParents] = await Promise.all([
+      campParentIds.length === 0
+        ? Promise.resolve({ data: [] })
+        : supabase.from("camp_assignments")
+          .select("id, camp_session_id, camp_sessions(id, curriculum_id, curriculum_name, location_name, location_id, starts_on, ends_on, start_time, end_time, week_num, current_enrollment, program_locations:location_id(name, address, room_number, arrival_instructions, dismissal_instructions))")
+          .in("id", campParentIds),
+      progParentIds.length === 0
+        ? Promise.resolve({ data: [] })
+        : supabase.from("program_assignments")
+          .select("id, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, program_location_id, program_locations:program_location_id(name, address, room_number, arrival_instructions, dismissal_instructions))")
+          .in("id", progParentIds),
+    ]);
+
+    const campParentById = new Map((campParents.data ?? []).map((p) => [p.id, p]));
+    const progParentById = new Map((progParents.data ?? []).map((p) => [p.id, p]));
+
+    const enriched = all.map((r) => ({
+      ...r,
+      camp_parent: r.parent_assignment_type === "camp" ? campParentById.get(r.parent_assignment_id) ?? null : null,
+      program_parent: r.parent_assignment_type === "program" ? progParentById.get(r.parent_assignment_id) ?? null : null,
+    }));
+    setSubAssignments(enriched);
   }
 
   // Load any open cycles (not archived) for this instructor's org plus a flag
@@ -424,6 +474,54 @@ export default function InstructorPortal() {
     }
   }
 
+  async function handleSubMarkTaught(substitutionId) {
+    setSubActingOn({ id: substitutionId, action: "mark" });
+    setError("");
+    try {
+      const { data, error: fnErr } = await supabase.functions.invoke(
+        "confirm-sub-delivery",
+        { body: { substitution_id: substitutionId } },
+      );
+      if (fnErr || data?.error) {
+        throw new Error(data?.detail || data?.error || fnErr?.message || "Couldn't mark this day.");
+      }
+      await loadSubAssignments(instructor.instructor_id);
+    } catch (err) {
+      setError(err.message ?? "Couldn't mark this day.");
+    } finally {
+      setSubActingOn(null);
+    }
+  }
+
+  async function handleSubResponse(substitutionId, action, declineReason) {
+    setSubActingOn({ id: substitutionId, action });
+    setError("");
+    try {
+      const { data, error: fnErr } = await supabase.functions.invoke(
+        "respond-to-sub-offer",
+        { body: { substitution_id: substitutionId, action, decline_reason: declineReason || undefined } },
+      );
+      if (fnErr || data?.error) {
+        if (data?.error === "already_responded") {
+          // Stale tab — refetch and move on.
+          await loadSubAssignments(instructor.instructor_id);
+          return;
+        }
+        if (data?.error === "forbidden") {
+          setError("That sub offer is no longer available.");
+          await loadSubAssignments(instructor.instructor_id);
+          return;
+        }
+        throw new Error(data?.error || fnErr?.message || "Couldn't send your response.");
+      }
+      await loadSubAssignments(instructor.instructor_id);
+    } catch (err) {
+      setError(err.message ?? "Couldn't send your response.");
+    } finally {
+      setSubActingOn(null);
+    }
+  }
+
   if (phase === "loading" || phase === "linking") {
     return <Shell><div style={{ color: MUTED, fontSize: 14, padding: 24 }}>Loading…</div></Shell>;
   }
@@ -573,7 +671,7 @@ export default function InstructorPortal() {
             // Pending_* and payouts_disabled statuses won't flip to 'complete',
             // but the contractor still wants out of the completion card and
             // into the schedule view. Load schedule data and switch phases.
-            await Promise.all([loadAssignments(instructor.id), loadCycles(instructor)]);
+            await Promise.all([loadAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor)]);
             setPhase("ready");
           }}
         />
@@ -829,6 +927,21 @@ export default function InstructorPortal() {
         </div>
       )}
 
+      {subAssignments.filter((s) => s.status === "pending").length > 0 && (
+        <Section title="Sub day offers">
+          {subAssignments.filter((s) => s.status === "pending").map((s) => (
+            <SubOfferCard
+              key={s.id}
+              sub={s}
+              busy={subActingOn?.id === s.id}
+              busyAction={subActingOn?.id === s.id ? subActingOn.action : null}
+              onAccept={() => handleSubResponse(s.id, "accept")}
+              onDecline={(reason) => handleSubResponse(s.id, "decline", reason)}
+            />
+          ))}
+        </Section>
+      )}
+
       {needsResponse.length > 0 && (
         <Section title="Needs your response">
           {needsResponse.map((a) => (
@@ -844,7 +957,7 @@ export default function InstructorPortal() {
         </Section>
       )}
 
-      {accepted.length > 0 && (
+      {(accepted.length > 0 || subAssignments.some((s) => s.status === "confirmed" || s.status === "taught")) && (
         <Section title="Confirmed schedule">
           {accepted.map((a) => (
             <AssignmentCard
@@ -852,6 +965,15 @@ export default function InstructorPortal() {
               assignment={a}
               readOnly
               onOpen={() => { setSelectedAssignmentId(a.id); setView("assignment-detail"); }}
+            />
+          ))}
+          {subAssignments.filter((s) => s.status === "confirmed" || s.status === "taught").map((s) => (
+            <SubOfferCard
+              key={s.id}
+              sub={s}
+              readOnly
+              onMarkTaught={() => handleSubMarkTaught(s.id)}
+              markBusy={subActingOn?.id === s.id && subActingOn?.action === "mark"}
             />
           ))}
         </Section>
@@ -1025,6 +1147,150 @@ function Section({ title, children }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{children}</div>
     </div>
   );
+}
+
+// Sub-day card. Pending rows render Accept/Decline. Confirmed/taught rows
+// render read-only with the day's venue + lesson context + a single-day
+// Mark Taught button (date-of or after). The component reads from either
+// sub.camp_parent (camp sub) or sub.program_parent (afterschool sub) — set
+// by loadSubAssignments.
+function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, onMarkTaught, markBusy, readOnly }) {
+  const [declineOpen, setDeclineOpen] = useState(false);
+  const [reason, setReason] = useState("");
+
+  const isCamp = sub.parent_assignment_type === "camp";
+  const sess = isCamp ? sub.camp_parent?.camp_sessions ?? null : null;
+  const prog = !isCamp ? sub.program_parent?.programs ?? null : null;
+  const loc = isCamp ? sess?.program_locations ?? null : prog?.program_locations ?? null;
+
+  const curriculumName = isCamp ? (sess?.curriculum_name ?? "this camp") : (prog?.curriculum ?? "this program");
+  const venueName = loc?.name ?? (isCamp ? sess?.location_name : null) ?? "";
+  const startTime = isCamp ? sess?.start_time : prog?.start_time;
+  const endTime = isCamp ? sess?.end_time : prog?.end_time;
+  const timeRange = startTime && endTime ? `${fmtTimePretty(startTime)}–${fmtTimePretty(endTime)}` : (startTime ? fmtTimePretty(startTime) : "");
+
+  const friendlyDate = sub.date
+    ? new Date(`${sub.date}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
+    : "";
+
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px", marginBottom: 10 }}>
+      <div style={{ fontSize: 11, color: VIOLET, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700, marginBottom: 4 }}>
+        Sub · {sub.sub_tier === "lead" ? "Lead" : "Developing"}
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>{curriculumName}</div>
+      <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+        {friendlyDate}{timeRange ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
+      </div>
+      {loc?.address && (
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc.address}</div>
+      )}
+      {loc?.arrival_instructions && (
+        <div style={{ fontSize: 13, color: INK, marginTop: 8 }}>
+          <span style={{ color: MUTED, fontWeight: 600 }}>Arrival: </span>{loc.arrival_instructions}
+        </div>
+      )}
+      {loc?.dismissal_instructions && (
+        <div style={{ fontSize: 13, color: INK, marginTop: 4 }}>
+          <span style={{ color: MUTED, fontWeight: 600 }}>Dismissal: </span>{loc.dismissal_instructions}
+        </div>
+      )}
+      {sub.notes && (
+        <div style={{ fontSize: 13, color: INK, marginTop: 8, padding: 10, background: CREAM, borderLeft: `3px solid ${VIOLET}`, borderRadius: 4 }}>
+          <span style={{ color: MUTED, fontWeight: 600 }}>Note: </span>{sub.notes}
+        </div>
+      )}
+
+      {readOnly ? (
+        <>
+          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 12, color: sub.status === "taught" ? OK_GREEN : MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              {sub.status === "taught" ? "✓ Taught" : "✓ Accepted"}
+            </div>
+            {sub.status === "confirmed" && sub.date && sub.date <= todayLocalISO() && onMarkTaught && (
+              <button
+                type="button"
+                onClick={onMarkTaught}
+                disabled={markBusy}
+                style={{ background: PURPLE, color: "#fff", border: `1px solid ${PURPLE}`, padding: "6px 12px", fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: markBusy ? "default" : "pointer", opacity: markBusy ? 0.6 : 1 }}
+              >
+                {markBusy ? "Marking…" : "Mark this day as taught"}
+              </button>
+            )}
+          </div>
+          {isCamp && sub.camp_parent?.camp_session_id && (
+            <div style={{ marginTop: 14 }}>
+              <RosterSection campSessionId={sub.camp_parent.camp_session_id} startsOn={sess?.starts_on} />
+            </div>
+          )}
+          {isCamp && sess?.curriculum_id && (
+            <div style={{ marginTop: 14 }}>
+              <LessonsSection curriculumId={sess.curriculum_id} curriculumName={curriculumName} />
+            </div>
+          )}
+        </>
+      ) : (
+        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={onAccept}
+            disabled={busy}
+            style={{ background: PURPLE, color: "#fff", border: `1px solid ${PURPLE}`, padding: "8px 14px", fontSize: 13, fontWeight: 600, borderRadius: 6, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
+          >
+            {busy && busyAction === "accept" ? "Accepting…" : "Accept"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setDeclineOpen((v) => !v)}
+            disabled={busy}
+            style={{ background: "transparent", color: CORAL, border: `1px solid ${CORAL}`, padding: "8px 14px", fontSize: 13, fontWeight: 600, borderRadius: 6, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
+          >
+            Can't make it
+          </button>
+        </div>
+      )}
+
+      {declineOpen && !readOnly && (
+        <div style={{ marginTop: 10, padding: 12, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6 }}>
+          <div style={{ fontSize: 12, color: MUTED, fontWeight: 600, marginBottom: 6 }}>Anything you want to tell them? (optional)</div>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+            maxLength={1000}
+            placeholder="e.g. I'm out of town that day"
+            style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }}
+          />
+          <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => { setDeclineOpen(false); onDecline(reason.trim()); }}
+              disabled={busy}
+              style={{ background: CORAL, color: "#fff", border: `1px solid ${CORAL}`, padding: "6px 12px", fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
+            >
+              {busy && busyAction === "decline" ? "Sending…" : "Send decline"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setDeclineOpen(false); setReason(""); }}
+              disabled={busy}
+              style={{ background: "transparent", color: MUTED, border: `1px solid ${RULE}`, padding: "6px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer" }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmtTimePretty(t) {
+  if (!t) return "";
+  const [h, m] = t.split(":").map(Number);
+  const hr12 = ((h + 11) % 12) + 1;
+  const ampm = h >= 12 ? "pm" : "am";
+  return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
 function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestChange, readOnly, onOpen }) {
