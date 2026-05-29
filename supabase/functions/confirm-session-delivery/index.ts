@@ -1,11 +1,13 @@
 // confirm-session-delivery — the only path for an instructor to self-confirm
-// they delivered a camp session.
+// they delivered a session.
 //
-// Scope: camps only for v1. After-school confirmation needs a program_assignments
-// table that doesn't exist yet. If camp_assignments has no matching row for
-// (camp_session_id, instructor_id), this function 400s rather than falling
-// back to instructors.contractor_tier — per-engagement role accuracy matters
-// for pay.
+// Handles both camps (camp_session_id set) and afterschool (program_id set).
+// The confirmation row carries one or the other; we branch on which is
+// populated and look up the matching assignment row to read the role.
+//
+// If the assignment row is missing for (instructor_id, parent), this function
+// 400s rather than falling back to instructors.contractor_tier — per-engagement
+// role accuracy matters for pay.
 //
 // Anti-enumeration: a confirmation that belongs to a different instructor
 // returns the same 403 as a missing confirmation, so an attacker can't probe
@@ -26,21 +28,21 @@ interface ConfirmDeliveryBody {
 type Role = 'lead' | 'developing';
 type SessionType = 'morning' | 'afternoon' | 'full_day' | 'after_school';
 
-// Pay table — cents. After-school is intentionally absent: chunk 3 scope is
-// camps-only for v1. If a confirmation row has session_type='after_school'
-// somehow, the lookup below returns undefined and we 400.
-const PAY: Record<Role, Record<SessionType, number | undefined>> = {
+// Pay table — cents. Per pay_schedule v3.0 (legal_documents.body_text):
+//   Camps: $80/$65 half-day, $160/$130 full-day. Flat per-day rate.
+//   After-school: $60 lead / $50 developing per session.
+const PAY: Record<Role, Record<SessionType, number>> = {
   lead: {
     morning: 8000,
     afternoon: 8000,
     full_day: 16000,
-    after_school: undefined,
+    after_school: 6000,
   },
   developing: {
     morning: 6500,
     afternoon: 6500,
     full_day: 13000,
-    after_school: undefined,
+    after_school: 5000,
   },
 };
 
@@ -96,45 +98,73 @@ serve(async (req: Request) => {
       return json({ error: 'future_session', session_date: row.session_date }, 400);
     }
 
-    // Camps only for v1.
-    if (!row.camp_session_id) {
-      return json({ error: 'after_school_not_supported_v1' }, 400);
-    }
-
-    // Find the camp_assignment row for (instructor_id, camp_session_id) → role.
-    const { data: assignment, error: assignErr } = await supabase
-      .from('camp_assignments')
-      .select('role')
-      .eq('camp_session_id', row.camp_session_id)
-      .eq('instructor_id', row.instructor_id)
-      .maybeSingle();
-
-    if (assignErr) {
-      console.error('camp_assignments lookup failed:', assignErr);
-      return json({ error: 'lookup_failed' }, 500);
-    }
-    if (!assignment?.role) {
-      // No matching assignment — likely deleted between scheduling and today,
-      // or the instructor was reassigned. Flag for admin review.
-      console.warn('no camp_assignment for confirmation', {
+    // Branch on whether this is a camp or program (afterschool) confirmation.
+    // The confirmation row has either camp_session_id or program_id populated;
+    // we look up the matching assignment to read the per-engagement role.
+    if (!row.camp_session_id && !row.program_id) {
+      console.warn('confirmation has neither camp_session_id nor program_id', {
         confirmation_id: confirmationId,
-        camp_session_id: row.camp_session_id,
-        instructor_id: row.instructor_id,
       });
-      return json({ error: 'no_assignment_for_session' }, 400);
+      return json({ error: 'invalid_confirmation_no_parent' }, 400);
     }
 
-    const role = assignment.role as Role;
+    let role: Role | null = null;
+
+    if (row.camp_session_id) {
+      const { data: assignment, error: assignErr } = await supabase
+        .from('camp_assignments')
+        .select('role')
+        .eq('camp_session_id', row.camp_session_id)
+        .eq('instructor_id', row.instructor_id)
+        .maybeSingle();
+
+      if (assignErr) {
+        console.error('camp_assignments lookup failed:', assignErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      if (!assignment?.role) {
+        console.warn('no camp_assignment for confirmation', {
+          confirmation_id: confirmationId,
+          camp_session_id: row.camp_session_id,
+          instructor_id: row.instructor_id,
+        });
+        return json({ error: 'no_assignment_for_session' }, 400);
+      }
+      role = assignment.role as Role;
+    } else {
+      // Afterschool path — look up program_assignments instead.
+      const { data: assignment, error: assignErr } = await supabase
+        .from('program_assignments')
+        .select('role')
+        .eq('program_id', row.program_id!)
+        .eq('instructor_id', row.instructor_id)
+        .maybeSingle();
+
+      if (assignErr) {
+        console.error('program_assignments lookup failed:', assignErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      if (!assignment?.role) {
+        console.warn('no program_assignment for confirmation', {
+          confirmation_id: confirmationId,
+          program_id: row.program_id,
+          instructor_id: row.instructor_id,
+        });
+        return json({ error: 'no_assignment_for_session' }, 400);
+      }
+      role = assignment.role as Role;
+    }
+
     const sessionType = row.session_type as SessionType;
 
     if (role !== 'lead' && role !== 'developing') {
-      console.warn('unexpected camp_assignment role', { role, confirmation_id: confirmationId });
+      console.warn('unexpected assignment role', { role, confirmation_id: confirmationId });
       return json({ error: 'unsupported_role', role }, 400);
     }
 
     const payCents = PAY[role]?.[sessionType];
     if (payCents === undefined) {
-      // session_type is after_school (out of scope) or otherwise unmapped.
+      // session_type doesn't map (e.g. unknown enum value from a future migration).
       console.warn('no pay mapping for session', { role, sessionType, confirmation_id: confirmationId });
       return json({ error: 'no_pay_rate_for_session', role, session_type: sessionType }, 400);
     }
