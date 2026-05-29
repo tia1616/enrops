@@ -2463,9 +2463,9 @@ function PayView({ instructorId, onBack }) {
             Manage payouts, bank info, and tax docs
           </div>
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 1.5 }}>
-            Your Stripe Express dashboard is where actual payouts land and where your W-9 and 1099 live. We&rsquo;ll sign you in automatically.
+            Opens your Stripe Express. If your account isn&rsquo;t finished yet, you&rsquo;ll land on the setup form to add your bank, address, and SSN &mdash; Stripe will pick up where you left off. If you&rsquo;re done, you go straight to your payouts dashboard where your W&#8209;9 and 1099 live.
           </div>
-          <StripeExpressDeepLink variant="button" title="Open Stripe payouts dashboard →" />
+          <StripeExpressDeepLink variant="button" title="Open your Stripe Express →" />
         </div>
       )}
     </div>
