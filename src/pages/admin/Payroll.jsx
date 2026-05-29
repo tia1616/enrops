@@ -1,21 +1,20 @@
 // src/pages/admin/Payroll.jsx
-// /admin/payroll — weekly view of instructor session_delivery_confirmations.
+// /admin/payroll — instructor pay management.
 //
-// Default window: last 30 days of confirmed_at. Grouped by camp, then by
-// instructor. Per (camp, instructor) row shows:
-//   - Days marked (e.g. "5 / 5"), with the list of dates
-//   - Base pay (sum of pay_amount_cents across confirmations)
-//   - Week completion bonus (sum of pay_adjustment_cents)
-//   - Distance bonus from the camp_assignments row (paid once per camp)
-//   - Grand total
-//   - pay_status (worst case across confirmations: withheld > adjusted > pending > approved)
+// Read-only summary view replaced by an action-driven workflow:
+//   - Groups by (effective_instructor, camp_session) using v_effective_pay_lines.
+//   - Per-row actions: Approve / Withhold / Re-approve / Pay via Stripe /
+//     Mark paid manually.
+//   - Expand-on-click shows per-day breakdown with per-row controls.
+//   - Covered-day rows display "Covered by [sub] — $0" without paying twice.
+//   - "Show paid" toggle reveals settled groups (default hidden).
 //
-// Read-only this version. Status flips (approve / withhold / mark paid)
-// + per-row adjustments come in a follow-up.
+// Multi-tenant: org from outlet context. All actions gated to owner/admin.
 //
-// Multi-tenant: reads `org` from outlet context. No hardcoded tenant IDs.
-// RLS on session_delivery_confirmations already restricts admin reads to
-// rows in the user's org.
+// Resolver-aware from day 1. When assignment_substitutions table ships
+// (FA26 work in parallel), the view starts surfacing sub-routed pay lines;
+// this page renders them with a 'sub' badge and pays the sub instead of
+// the regular instructor for those days.
 
 import { useEffect, useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
@@ -23,19 +22,30 @@ import { supabase } from '../../lib/supabase';
 
 const PURPLE = '#1C004F';
 const VIOLET = '#8C88FF';
-const CREAM = '#FBFBFB';
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
 const OK = '#3a7c3a';
 const AMBER = '#b67e00';
 const RED = '#b53737';
+const CREAM = '#FBFBFB';
 
 const STATUS_COLOR = {
   pending: AMBER,
   approved: OK,
   adjusted: VIOLET,
   withheld: RED,
+  paid: '#7a7a7a',
+  mixed: AMBER,
+};
+
+const STATUS_LABEL = {
+  pending: 'Pending',
+  approved: 'Approved',
+  adjusted: 'Adjusted',
+  withheld: 'Withheld',
+  paid: 'Paid',
+  mixed: 'Mixed',
 };
 
 function dollars(cents) {
@@ -47,20 +57,15 @@ function dollars(cents) {
 function fmtDate(d) {
   if (!d) return '';
   return new Date(`${d}T00:00:00`).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
+    weekday: 'short', month: 'short', day: 'numeric',
   });
 }
 
-// Cumulative "worst" pay_status across an instructor's confirmations for one
-// camp. We want the operator to see the most-action-needed status first.
-function worstStatus(statuses) {
-  const order = ['withheld', 'adjusted', 'pending', 'approved'];
-  for (const s of order) if (statuses.includes(s)) return s;
-  return statuses[0] ?? 'pending';
+function shortName(i) {
+  if (!i) return '—';
+  return i.preferred_name || `${i.first_name ?? ''} ${i.last_name ?? ''}`.trim() || 'Unknown';
 }
 
-// Last 30 days in YYYY-MM-DD.
 function thirtyDaysAgoISO() {
   const d = new Date();
   d.setDate(d.getDate() - 30);
@@ -68,301 +73,807 @@ function thirtyDaysAgoISO() {
 }
 
 export default function Payroll() {
-  const { org } = useOutletContext() ?? {};
-  const [rows, setRows] = useState(null); // null = loading
-  const [error, setError] = useState('');
-  const [sinceDate, setSinceDate] = useState(thirtyDaysAgoISO());
+  const { org, orgMember } = useOutletContext() ?? {};
+  const canManage = orgMember?.role === 'owner' || orgMember?.role === 'admin';
 
+  const [groups, setGroups] = useState(null);
+  const [error, setError] = useState('');
+  const [savedToast, setSavedToast] = useState(null);
+  const [sinceDate, setSinceDate] = useState(thirtyDaysAgoISO());
+  const [showPaid, setShowPaid] = useState(false);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [expanded, setExpanded] = useState(new Set());
+  const [busy, setBusy] = useState(false);
+
+  const [payingGroup, setPayingGroup] = useState(null);
+  const [markingGroup, setMarkingGroup] = useState(null);
+  const [withholdingRow, setWithholdingRow] = useState(null); // { groupKey, confirmation_id, isGroup?: bool }
+
+  function toggleExpand(key) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function bumpRefresh() {
+    setRefreshToken((t) => t + 1);
+  }
+
+  function toast(msg) {
+    setSavedToast(msg);
+    setTimeout(() => setSavedToast(null), 2000);
+  }
+
+  // ── load ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!org?.id) return;
     let cancelled = false;
     (async () => {
-      setRows(null);
+      setGroups(null);
       setError('');
       try {
-        // 1. Confirmations in window. RLS already org-scopes.
-        const { data: confs, error: cErr } = await supabase
-          .from('session_delivery_confirmations')
-          .select(
-            `id, instructor_id, camp_session_id, session_date, session_type,
-             confirmed_by, confirmed_at, pay_status, pay_amount_cents,
-             pay_adjustment_cents, pay_adjustment_reason`
-          )
-          .gte('session_date', sinceDate)
+        const { data: lines, error: lErr } = await supabase
+          .from('v_effective_pay_lines')
+          .select('*')
+          .eq('organization_id', org.id)
           .not('camp_session_id', 'is', null)
+          .gte('session_date', sinceDate)
           .order('session_date', { ascending: false });
-        if (cErr) throw cErr;
+        if (lErr) throw lErr;
         if (cancelled) return;
 
-        const confRows = confs ?? [];
-        if (confRows.length === 0) {
-          setRows([]);
-          return;
-        }
+        const rows = lines ?? [];
+        if (rows.length === 0) { setGroups([]); return; }
 
-        const instructorIds = [...new Set(confRows.map((r) => r.instructor_id))];
-        const sessionIds = [...new Set(confRows.map((r) => r.camp_session_id))];
+        const instructorIds = [...new Set([
+          ...rows.map((r) => r.effective_instructor_id),
+          ...rows.map((r) => r.original_instructor_id),
+        ].filter(Boolean))];
+        const sessionIds = [...new Set(rows.map((r) => r.camp_session_id).filter(Boolean))];
 
-        // 2. Instructors (names + role tier).
-        const { data: instructors } = await supabase
-          .from('instructors')
-          .select('id, first_name, last_name, preferred_name, contractor_tier')
-          .in('id', instructorIds);
-        const instructorById = new Map((instructors ?? []).map((i) => [i.id, i]));
+        const [instR, sessR, onbR] = await Promise.all([
+          supabase.from('instructors')
+            .select('id, first_name, last_name, preferred_name, contractor_tier')
+            .in('id', instructorIds),
+          supabase.from('camp_sessions')
+            .select('id, curriculum_name, starts_on, ends_on, location_name, week_num')
+            .in('id', sessionIds),
+          supabase.from('contractor_onboarding_status')
+            .select('instructor_id, stripe_payouts_enabled, stripe_connect_account_id')
+            .in('instructor_id', instructorIds),
+        ]);
+        if (cancelled) return;
 
-        // 3. Camp sessions (curriculum name, dates, location).
-        const { data: sessions } = await supabase
-          .from('camp_sessions')
-          .select('id, curriculum_name, starts_on, ends_on, location_name, week_num, session_type')
-          .in('id', sessionIds);
-        const sessionById = new Map((sessions ?? []).map((s) => [s.id, s]));
+        const instById = new Map((instR.data ?? []).map((i) => [i.id, i]));
+        const sessById = new Map((sessR.data ?? []).map((s) => [s.id, s]));
+        const onbByInst = new Map((onbR.data ?? []).map((o) => [o.instructor_id, o]));
 
-        // 4. Camp assignments — pull role + distance_bonus_cents per
-        //    (instructor, camp_session). The assignment row tells us
-        //    'lead' vs 'developing' and the one-time distance bonus.
-        const { data: assignments } = await supabase
-          .from('camp_assignments')
-          .select('instructor_id, camp_session_id, role, distance_bonus_cents')
-          .in('instructor_id', instructorIds)
-          .in('camp_session_id', sessionIds);
-        const assignmentKey = (i, s) => `${i}|${s}`;
-        const assignmentByKey = new Map(
-          (assignments ?? []).map((a) => [assignmentKey(a.instructor_id, a.camp_session_id), a])
-        );
-
-        // 5. Group: { camp_session_id -> { session, perInstructor: Map(instructor_id -> {...}) } }
-        const grouped = new Map();
-        for (const c of confRows) {
-          const sess = sessionById.get(c.camp_session_id);
-          if (!sess) continue;
-          if (!grouped.has(c.camp_session_id)) {
-            grouped.set(c.camp_session_id, {
-              session: sess,
-              perInstructor: new Map(),
-            });
-          }
-          const entry = grouped.get(c.camp_session_id);
-          if (!entry.perInstructor.has(c.instructor_id)) {
-            const inst = instructorById.get(c.instructor_id);
-            const assn = assignmentByKey.get(assignmentKey(c.instructor_id, c.camp_session_id));
-            entry.perInstructor.set(c.instructor_id, {
+        // Group by (effective_instructor, camp_session).
+        const groupMap = new Map();
+        for (const row of rows) {
+          const key = `${row.effective_instructor_id}|${row.camp_session_id}`;
+          if (!groupMap.has(key)) {
+            const inst = instById.get(row.effective_instructor_id);
+            const sess = sessById.get(row.camp_session_id);
+            const onb = onbByInst.get(row.effective_instructor_id);
+            const origInst = instById.get(row.original_instructor_id);
+            groupMap.set(key, {
+              key,
+              effective_instructor_id: row.effective_instructor_id,
+              camp_session_id: row.camp_session_id,
               instructor: inst,
-              role: assn?.role ?? null,
-              distance_bonus_cents: assn?.distance_bonus_cents ?? 0,
-              confirmations: [],
+              originalInstructor: origInst,
+              session: sess,
+              stripePayoutsEnabled: onb?.stripe_payouts_enabled === true,
+              stripeDestination: onb?.stripe_connect_account_id || null,
+              source: row.source,
+              rows: [],
             });
           }
-          entry.perInstructor.get(c.instructor_id).confirmations.push(c);
+          groupMap.get(key).rows.push(row);
         }
 
-        // 6. Flatten to rendered rows, sorted: camp by starts_on desc.
-        const out = [...grouped.values()]
-          .sort((a, b) => (b.session.starts_on ?? '').localeCompare(a.session.starts_on ?? ''))
-          .map((entry) => ({
-            session: entry.session,
-            instructors: [...entry.perInstructor.values()].sort((a, b) => {
-              const an = `${a.instructor?.last_name ?? ''} ${a.instructor?.first_name ?? ''}`.trim();
-              const bn = `${b.instructor?.last_name ?? ''} ${b.instructor?.first_name ?? ''}`.trim();
-              return an.localeCompare(bn);
-            }),
-          }));
+        // Decorate each group with totals + status.
+        const decorated = [...groupMap.values()].map((g) => {
+          g.rows.sort((a, b) => (a.session_date ?? '').localeCompare(b.session_date ?? ''));
 
-        if (!cancelled) setRows(out);
+          // Base sum (rows that aren't withheld and have pay_amount_cents).
+          const totalPayable = g.rows
+            .filter((r) => r.pay_status !== 'withheld' && r.pay_amount_cents != null)
+            .reduce((s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0), 0);
+
+          // Distance bonus (regular only, not yet paid).
+          const sampleForBonus = g.rows.find((r) => r.source === 'regular');
+          const distanceBonusCents = (sampleForBonus && sampleForBonus.distance_bonus_paid_at === null)
+            ? (sampleForBonus.distance_bonus_cents_if_regular ?? 0)
+            : 0;
+          const distanceBonusPaid = sampleForBonus?.distance_bonus_paid_at != null;
+
+          // Aggregate status.
+          const statuses = [...new Set(g.rows.map((r) => r.pay_status))];
+          const groupStatus = statuses.length === 1 ? statuses[0] : 'mixed';
+
+          // Eligibility for the Pay action.
+          const eligibleRows = g.rows.filter((r) =>
+            r.pay_status === 'approved' &&
+            r.instructor_payout_id == null &&
+            r.confirmed_by != null && r.confirmed_by !== 'pending' &&
+            r.pay_amount_cents != null
+          );
+
+          // Counts per status for the aggregate display.
+          const counts = g.rows.reduce((acc, r) => {
+            acc[r.pay_status] = (acc[r.pay_status] || 0) + 1;
+            return acc;
+          }, {});
+
+          return {
+            ...g,
+            totalPayable,
+            distanceBonusCents,
+            distanceBonusPaid,
+            groupStatus,
+            eligibleRows,
+            counts,
+            // Total IF paid now (base + bonus when applicable)
+            payableTotalNow: totalPayable + (g.source === 'regular' ? distanceBonusCents : 0),
+          };
+        });
+
+        // showPaid filter: hide groups whose ALL rows are paid (default).
+        const filtered = showPaid
+          ? decorated
+          : decorated.filter((g) => g.rows.some((r) => r.pay_status !== 'paid'));
+
+        // Sort: session start desc, then instructor name.
+        filtered.sort((a, b) => {
+          const aDate = a.session?.starts_on ?? '';
+          const bDate = b.session?.starts_on ?? '';
+          if (aDate !== bDate) return bDate.localeCompare(aDate);
+          return shortName(a.instructor).localeCompare(shortName(b.instructor));
+        });
+
+        if (!cancelled) setGroups(filtered);
       } catch (err) {
         console.error('[Payroll] load failed', err);
         if (!cancelled) {
-          setError(err.message ?? 'Could not load payroll data.');
-          setRows([]);
+          setError(err.message ?? 'Could not load payroll.');
+          setGroups([]);
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [org?.id, sinceDate]);
+  }, [org?.id, sinceDate, showPaid, refreshToken]);
 
   const noPayConfig = useMemo(() => {
-    // Heuristic for the "your tenant hasn't configured pay rates" banner.
-    // If we have rows but NONE of them have pay_amount_cents set, that's the
-    // most likely cause (the edge function leaves them null when rates are
-    // missing). Clean signal for the operator to go set rates in Settings.
-    if (!rows || rows.length === 0) return false;
-    const allNull = rows.every((r) =>
-      r.instructors.every((i) => i.confirmations.every((c) => c.pay_amount_cents == null))
-    );
-    return allNull;
-  }, [rows]);
+    if (!groups || groups.length === 0) return false;
+    return groups.every((g) => g.rows.every((r) => r.pay_amount_cents == null));
+  }, [groups]);
 
+  // ── row-level actions ──────────────────────────────────────────────────
+  async function approveRow(confirmationId) {
+    if (!canManage) return;
+    setBusy(true);
+    const { error: err } = await supabase
+      .from('session_delivery_confirmations')
+      .update({ pay_status: 'approved' })
+      .eq('id', confirmationId);
+    setBusy(false);
+    if (err) { setError(err.message); return; }
+    toast('Approved');
+    bumpRefresh();
+  }
+
+  async function reapproveRow(confirmationId) {
+    return approveRow(confirmationId);
+  }
+
+  async function submitWithhold(confirmationIds, reason) {
+    if (!canManage) return;
+    setBusy(true);
+    const update = { pay_status: 'withheld' };
+    if (reason) update.pay_adjustment_reason = reason;
+    const { error: err } = await supabase
+      .from('session_delivery_confirmations')
+      .update(update)
+      .in('id', confirmationIds);
+    setBusy(false);
+    if (err) { setError(err.message); return; }
+    toast(`Withheld ${confirmationIds.length} day${confirmationIds.length === 1 ? '' : 's'}`);
+    setWithholdingRow(null);
+    bumpRefresh();
+  }
+
+  async function approveGroup(group) {
+    if (!canManage) return;
+    const ids = group.rows
+      .filter((r) => r.pay_status === 'pending' || r.pay_status === 'adjusted')
+      .map((r) => r.confirmation_id);
+    if (ids.length === 0) return;
+    setBusy(true);
+    const { error: err } = await supabase
+      .from('session_delivery_confirmations')
+      .update({ pay_status: 'approved' })
+      .in('id', ids);
+    setBusy(false);
+    if (err) { setError(err.message); return; }
+    toast(`Approved ${ids.length} day${ids.length === 1 ? '' : 's'}`);
+    bumpRefresh();
+  }
+
+  // ── render ─────────────────────────────────────────────────────────────
   return (
     <div>
-      <header style={{ marginBottom: 18, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.3 }}>
-            Payroll
-          </h1>
-          <p style={{ color: MUTED, marginTop: 6, fontSize: 14 }}>
-            Sessions marked taught by your instructors, grouped by camp. Pay amounts come from your org&rsquo;s configured rates.
-          </p>
-        </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: MUTED }}>
-          Since
-          <input
-            type="date"
-            value={sinceDate}
-            onChange={(e) => setSinceDate(e.target.value)}
-            style={{
-              padding: '6px 10px',
-              border: `1px solid ${RULE}`,
-              borderRadius: 6,
-              fontSize: 12,
-              fontFamily: 'inherit',
-              background: '#fff',
-              color: INK,
-            }}
-          />
-        </label>
-      </header>
+      <Toolbar
+        sinceDate={sinceDate}
+        setSinceDate={setSinceDate}
+        showPaid={showPaid}
+        setShowPaid={setShowPaid}
+      />
 
-      {error && (
-        <div style={{ background: `${RED}1A`, color: RED, padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 14 }}>
-          {error}
-        </div>
-      )}
-
+      {error && <Banner tone="err">{error}</Banner>}
+      {savedToast && <Banner tone="ok">{savedToast}</Banner>}
       {noPayConfig && (
-        <div style={{ background: `${AMBER}1A`, border: `1px solid ${AMBER}55`, color: INK, padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 14 }}>
-          <strong>Pay rates not configured.</strong> Sessions are being marked taught, but pay isn&rsquo;t being computed because your org hasn&rsquo;t set hourly rates yet. (Settings → Pay rates, coming soon.)
-        </div>
+        <Banner tone="warn">
+          None of these days have a pay amount set. Check your organization's pay
+          configuration (Settings → Pay rates) and confirm that
+          confirm-session-taught is computing per-session pay.
+        </Banner>
       )}
 
-      {rows === null && (
-        <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>
-      )}
-
-      {rows !== null && rows.length === 0 && !error && (
-        <div style={{ background: '#fff', border: `1px solid ${RULE}`, borderRadius: 8, padding: 28, color: MUTED, textAlign: 'center' }}>
-          No sessions marked taught since {fmtDate(sinceDate)}. As instructors check in at their camps, rows will show up here.
-        </div>
-      )}
-
-      {rows !== null && rows.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {rows.map((g) => (
-            <CampCard key={g.session.id} session={g.session} instructors={g.instructors} />
+      {groups === null ? (
+        <div style={{ color: MUTED, padding: 24 }}>Loading payroll…</div>
+      ) : groups.length === 0 ? (
+        <EmptyState showPaid={showPaid} sinceDate={sinceDate} />
+      ) : (
+        <div>
+          {groups.map((g) => (
+            <GroupRow
+              key={g.key}
+              group={g}
+              expanded={expanded.has(g.key)}
+              onToggle={() => toggleExpand(g.key)}
+              onApproveGroup={() => approveGroup(g)}
+              onWithholdGroup={() => setWithholdingRow({ groupKey: g.key, confirmation_ids: g.rows.filter((r) => r.pay_status !== 'paid').map((r) => r.confirmation_id), isGroup: true })}
+              onPay={() => setPayingGroup(g)}
+              onMarkPaid={() => setMarkingGroup(g)}
+              onApproveRow={approveRow}
+              onWithholdRow={(cid) => setWithholdingRow({ groupKey: g.key, confirmation_ids: [cid], isGroup: false })}
+              onReapproveRow={reapproveRow}
+              canManage={canManage}
+              busy={busy}
+            />
           ))}
         </div>
       )}
+
+      {payingGroup && (
+        <PayDrawer
+          group={payingGroup}
+          onClose={() => setPayingGroup(null)}
+          onPaid={() => { setPayingGroup(null); bumpRefresh(); toast('Paid'); }}
+        />
+      )}
+      {markingGroup && (
+        <MarkPaidDrawer
+          group={markingGroup}
+          onClose={() => setMarkingGroup(null)}
+          onMarked={() => { setMarkingGroup(null); bumpRefresh(); toast('Marked paid'); }}
+        />
+      )}
+      {withholdingRow && (
+        <WithholdDialog
+          payload={withholdingRow}
+          onCancel={() => setWithholdingRow(null)}
+          onConfirm={(reason) => submitWithhold(withholdingRow.confirmation_ids, reason)}
+          busy={busy}
+        />
+      )}
     </div>
   );
 }
 
-function CampCard({ session, instructors }) {
+// ───────────────────────────── sub-components ──────────────────────────────
+
+function Toolbar({ sinceDate, setSinceDate, showPaid, setShowPaid }) {
   return (
-    <div style={{ background: '#fff', border: `1px solid ${RULE}`, borderRadius: 10, overflow: 'hidden' }}>
-      <div style={{ padding: '14px 18px', borderBottom: `1px solid ${RULE}`, background: CREAM }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
-          {session.curriculum_name}
-          {session.week_num && (
-            <span style={{ color: MUTED, marginLeft: 8, fontSize: 13, fontWeight: 400 }}>
-              · Week {session.week_num}
-            </span>
+    <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: MUTED }}>
+        From:
+        <input
+          type="date"
+          value={sinceDate}
+          onChange={(e) => setSinceDate(e.target.value)}
+          style={{ padding: '5px 8px', border: `1px solid ${RULE}`, borderRadius: 5, fontSize: 13, fontFamily: 'inherit' }}
+        />
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: INK, cursor: 'pointer' }}>
+        <input type="checkbox" checked={showPaid} onChange={(e) => setShowPaid(e.target.checked)} />
+        Show paid
+      </label>
+    </div>
+  );
+}
+
+function Banner({ tone = 'info', children }) {
+  const bg = tone === 'err' ? 'rgba(181,55,55,0.08)' : tone === 'warn' ? 'rgba(182,126,0,0.10)' : tone === 'ok' ? 'rgba(58,124,58,0.10)' : 'rgba(140,136,255,0.10)';
+  const border = tone === 'err' ? 'rgba(181,55,55,0.30)' : tone === 'warn' ? 'rgba(182,126,0,0.30)' : tone === 'ok' ? 'rgba(58,124,58,0.30)' : 'rgba(140,136,255,0.30)';
+  const color = tone === 'err' ? RED : tone === 'warn' ? AMBER : tone === 'ok' ? OK : VIOLET;
+  return (
+    <div style={{
+      background: bg, border: `1px solid ${border}`, color, padding: '10px 14px',
+      borderRadius: 6, marginBottom: 12, fontSize: 14,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function EmptyState({ showPaid, sinceDate }) {
+  return (
+    <div style={{ background: '#fff', border: `1px solid ${RULE}`, borderRadius: 10, padding: 32, textAlign: 'center', color: MUTED, fontSize: 14 }}>
+      No payroll lines since {sinceDate}.
+      <div style={{ fontSize: 12, marginTop: 8 }}>
+        {showPaid
+          ? 'Try widening the date range.'
+          : 'Toggle "Show paid" to see settled payouts, or widen the date range.'}
+      </div>
+    </div>
+  );
+}
+
+function GroupRow({
+  group, expanded, onToggle,
+  onApproveGroup, onWithholdGroup, onPay, onMarkPaid,
+  onApproveRow, onWithholdRow, onReapproveRow,
+  canManage, busy,
+}) {
+  const g = group;
+  const sourceBadge = g.source === 'sub'
+    ? <Badge color={VIOLET}>Sub</Badge>
+    : null;
+
+  const statusBadge = (
+    <span style={{
+      background: 'transparent', color: STATUS_COLOR[g.groupStatus] ?? AMBER,
+      border: `1px solid ${STATUS_COLOR[g.groupStatus] ?? AMBER}`,
+      borderRadius: 12, padding: '2px 10px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4,
+    }}>
+      {STATUS_LABEL[g.groupStatus] ?? g.groupStatus}
+    </span>
+  );
+
+  const hasEligible = g.eligibleRows.length > 0;
+  const hasPending = g.counts.pending > 0 || g.counts.adjusted > 0;
+
+  return (
+    <div style={{ background: '#fff', border: `1px solid ${RULE}`, borderRadius: 10, marginBottom: 12 }}>
+      <div style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={expanded ? 'Collapse' : 'Expand'}
+          style={{
+            width: 24, height: 24, border: 'none', background: 'transparent',
+            color: PURPLE, fontSize: 14, cursor: 'pointer', padding: 0,
+          }}
+        >
+          {expanded ? '▾' : '▸'}
+        </button>
+        <div style={{ flex: '1 1 240px', minWidth: 240 }}>
+          <div style={{ fontWeight: 700, color: INK, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
+            {shortName(g.instructor)} {sourceBadge}
+          </div>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+            {g.session?.curriculum_name ?? 'Camp'} · {g.session?.location_name ?? ''}
+            {g.session?.starts_on && <> · {fmtDate(g.session.starts_on)}</>}
+          </div>
+          {g.source === 'sub' && g.originalInstructor && (
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 2, fontStyle: 'italic' }}>
+              Subbing for {shortName(g.originalInstructor)}
+            </div>
           )}
         </div>
-        <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
-          {fmtDate(session.starts_on)} – {fmtDate(session.ends_on)}
-          {session.location_name && ` · ${session.location_name}`}
-          {session.session_type && ` · ${session.session_type.replace('_', ' ')}`}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontWeight: 700, color: INK, fontSize: 16 }}>{dollars(g.payableTotalNow)}</div>
+            <div style={{ fontSize: 11, color: MUTED }}>
+              {g.rows.length} day{g.rows.length === 1 ? '' : 's'}
+              {g.distanceBonusCents > 0 && ` · +${dollars(g.distanceBonusCents)} bonus`}
+              {g.distanceBonusPaid && ` · bonus paid`}
+            </div>
+          </div>
+          {statusBadge}
         </div>
       </div>
 
-      <div>
-        {instructors.map((entry, idx) => (
-          <InstructorRow
-            key={entry.instructor?.id ?? idx}
-            entry={entry}
-            isLast={idx === instructors.length - 1}
-          />
-        ))}
-      </div>
+      {canManage && (
+        <div style={{ borderTop: `1px solid ${RULE}`, padding: 10, display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', background: CREAM }}>
+          {hasPending && (
+            <ActionButton onClick={onApproveGroup} disabled={busy} tone="primary">Approve all</ActionButton>
+          )}
+          {hasEligible && (
+            <ActionButton onClick={onPay} disabled={busy} tone="primary">Pay via Stripe</ActionButton>
+          )}
+          {hasEligible && (
+            <ActionButton onClick={onMarkPaid} disabled={busy} tone="secondary">Mark paid manually</ActionButton>
+          )}
+          {(hasPending || hasEligible) && (
+            <ActionButton onClick={onWithholdGroup} disabled={busy} tone="danger">Withhold all</ActionButton>
+          )}
+        </div>
+      )}
+
+      {expanded && (
+        <DayBreakdown
+          rows={g.rows}
+          originalInstructor={g.originalInstructor}
+          onApproveRow={onApproveRow}
+          onWithholdRow={onWithholdRow}
+          onReapproveRow={onReapproveRow}
+          canManage={canManage}
+          busy={busy}
+          groupSource={g.source}
+        />
+      )}
     </div>
   );
 }
 
-function InstructorRow({ entry, isLast }) {
-  const inst = entry.instructor;
-  const displayName = inst
-    ? (inst.preferred_name?.trim() || `${inst.first_name ?? ''} ${inst.last_name ?? ''}`.trim() || '—')
-    : '—';
+function DayBreakdown({ rows, originalInstructor, onApproveRow, onWithholdRow, onReapproveRow, canManage, busy, groupSource }) {
+  return (
+    <div style={{ borderTop: `1px solid ${RULE}`, padding: 12, background: '#fafafa' }}>
+      {rows.map((r) => {
+        const isCovered = r.source === 'sub' && groupSource === 'regular';
+        // covered: this view's group is REGULAR but the row's source is SUB.
+        // (Today subs don't appear under regular's group because sub rows are
+        //  routed to the sub's group. This branch is forward-looking for
+        //  when the schema model evolves to show both.)
+        return (
+          <div key={r.confirmation_id} style={{
+            display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0',
+            borderBottom: `1px dashed ${RULE}`, fontSize: 13,
+          }}>
+            <div style={{ flex: '0 0 110px', color: INK }}>{fmtDate(r.session_date)}</div>
+            <div style={{ flex: '0 0 90px', color: MUTED, textTransform: 'capitalize' }}>{r.session_type}</div>
+            <div style={{ flex: '1 1 auto', color: isCovered ? MUTED : INK, fontStyle: isCovered ? 'italic' : 'normal' }}>
+              {isCovered
+                ? `Covered by sub — $0`
+                : dollars((r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0))}
+            </div>
+            <div style={{ flex: '0 0 90px' }}>
+              <span style={{ color: STATUS_COLOR[r.pay_status] ?? AMBER, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                {STATUS_LABEL[r.pay_status] ?? r.pay_status}
+              </span>
+            </div>
+            {canManage && r.pay_status !== 'paid' && (
+              <div style={{ display: 'flex', gap: 6 }}>
+                {(r.pay_status === 'pending' || r.pay_status === 'adjusted') && (
+                  <MicroButton onClick={() => onApproveRow(r.confirmation_id)} disabled={busy}>Approve</MicroButton>
+                )}
+                {r.pay_status === 'approved' && r.instructor_payout_id == null && (
+                  <MicroButton onClick={() => onWithholdRow(r.confirmation_id)} disabled={busy} tone="danger">Withhold</MicroButton>
+                )}
+                {r.pay_status === 'withheld' && (
+                  <MicroButton onClick={() => onReapproveRow(r.confirmation_id)} disabled={busy}>Re-approve</MicroButton>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {rows[0]?.pay_adjustment_reason && (
+        <div style={{ marginTop: 8, fontSize: 12, color: MUTED, fontStyle: 'italic' }}>
+          Note: {rows[0].pay_adjustment_reason}
+        </div>
+      )}
+    </div>
+  );
+}
 
-  const confs = entry.confirmations.slice().sort((a, b) => (a.session_date ?? '').localeCompare(b.session_date ?? ''));
-  const baseTotal = confs.reduce((s, c) => s + (c.pay_amount_cents ?? 0), 0);
-  const bonusTotal = confs.reduce((s, c) => s + (c.pay_adjustment_cents ?? 0), 0);
-  const distanceBonus = entry.distance_bonus_cents ?? 0;
-  const grandTotal = baseTotal + bonusTotal + distanceBonus;
+function ActionButton({ onClick, disabled, tone = 'primary', children }) {
+  const colors = {
+    primary:   { bg: PURPLE,     fg: '#fff', border: PURPLE },
+    secondary: { bg: '#fff',     fg: PURPLE, border: PURPLE },
+    danger:    { bg: '#fff',     fg: RED,    border: RED },
+  };
+  const c = colors[tone] ?? colors.primary;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        background: c.bg, color: c.fg, border: `1px solid ${c.border}`,
+        padding: '6px 12px', borderRadius: 5, fontSize: 13, fontWeight: 600,
+        fontFamily: 'inherit', cursor: disabled ? 'wait' : 'pointer',
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
-  const status = worstStatus(confs.map((c) => c.pay_status));
-  const statusColor = STATUS_COLOR[status] ?? MUTED;
+function MicroButton({ onClick, disabled, tone, children }) {
+  const color = tone === 'danger' ? RED : PURPLE;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        background: 'transparent', color, border: `1px solid ${color}`,
+        padding: '3px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+        fontFamily: 'inherit', cursor: disabled ? 'wait' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
-  const hasAnyPay = confs.some((c) => c.pay_amount_cents != null);
-  const totalToShow = hasAnyPay ? grandTotal : null;
+function Badge({ color, children }) {
+  return (
+    <span style={{
+      background: 'transparent', color, border: `1px solid ${color}`,
+      borderRadius: 10, padding: '1px 8px', fontSize: 10, fontWeight: 700,
+      textTransform: 'uppercase', letterSpacing: 0.4,
+    }}>
+      {children}
+    </span>
+  );
+}
+
+// ───────────────────────── Withhold dialog ────────────────────────────────
+
+function WithholdDialog({ payload, onCancel, onConfirm, busy }) {
+  const [reason, setReason] = useState('');
+  return (
+    <DrawerShell title={payload.isGroup ? 'Withhold all' : 'Withhold day'} onClose={onCancel}>
+      <p style={{ margin: '0 0 12px', color: INK, fontSize: 14 }}>
+        {payload.isGroup
+          ? `Withhold ${payload.confirmation_ids.length} day${payload.confirmation_ids.length === 1 ? '' : 's'} from pay. The instructor will not be paid for these unless you re-approve later.`
+          : 'Withhold this day from pay. The instructor will not be paid for it unless you re-approve later.'}
+      </p>
+      <label style={{ display: 'block', fontSize: 13, color: MUTED, marginBottom: 6 }}>
+        Reason (optional, internal note)
+      </label>
+      <textarea
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        rows={3}
+        placeholder="e.g., No-show, quality issue, instructor request…"
+        style={{ width: '100%', padding: 8, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', fontSize: 13, resize: 'vertical' }}
+      />
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+        <ActionButton tone="secondary" onClick={onCancel} disabled={busy}>Cancel</ActionButton>
+        <ActionButton tone="danger" onClick={() => onConfirm(reason.trim() || null)} disabled={busy}>
+          {busy ? 'Withholding…' : 'Withhold'}
+        </ActionButton>
+      </div>
+    </DrawerShell>
+  );
+}
+
+// ───────────────────────── Pay drawer (Stripe path) ────────────────────────
+
+function PayDrawer({ group, onClose, onPaid }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const eligibleAmount = group.eligibleRows.reduce(
+    (s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0), 0,
+  );
+  const total = eligibleAmount + (group.source === 'regular' && !group.distanceBonusPaid ? group.distanceBonusCents : 0);
+
+  const stripeReady = group.stripePayoutsEnabled && group.stripeDestination;
+
+  async function submit() {
+    setBusy(true); setErr('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error('Not signed in.');
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/pay-instructor`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            effective_instructor_id: group.effective_instructor_id,
+            camp_session_id: group.camp_session_id,
+            via_stripe: true,
+          }),
+        },
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        setErr(data.message || data.error || `Server returned ${resp.status}`);
+        setBusy(false);
+        return;
+      }
+      onPaid();
+    } catch (e) {
+      setErr(e.message || 'Could not send payment.');
+      setBusy(false);
+    }
+  }
 
   return (
-    <div style={{ padding: '12px 18px', borderBottom: isLast ? 'none' : `1px solid ${RULE}` }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14, flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 240px', minWidth: 200 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>
-            {displayName}
-            {entry.role && (
-              <span style={{ color: MUTED, marginLeft: 8, fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                {entry.role}
-              </span>
-            )}
-          </div>
-          <div style={{ fontSize: 12, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
-            {confs.length} day{confs.length === 1 ? '' : 's'} marked taught:{' '}
-            {confs.map((c, i) => (
-              <span key={c.id}>
-                {fmtDate(c.session_date)}
-                {c.confirmed_by === 'admin' && (
-                  <span style={{ color: MUTED, fontStyle: 'italic' }}> (by admin)</span>
-                )}
-                {i < confs.length - 1 ? ', ' : ''}
-              </span>
-            ))}
-          </div>
+    <DrawerShell title={`Pay ${shortName(group.instructor)}`} onClose={onClose}>
+      <div style={{ marginBottom: 10, fontSize: 14, color: INK }}>
+        <strong>{group.session?.curriculum_name ?? 'Camp'}</strong>
+        {group.session?.location_name && <> · {group.session.location_name}</>}
+      </div>
+      <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 12, marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13 }}>
+          <span>Eligible days</span><span>{group.eligibleRows.length}</span>
         </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13 }}>
+          <span>Base pay</span><span>{dollars(eligibleAmount)}</span>
+        </div>
+        {group.source === 'regular' && group.distanceBonusCents > 0 && !group.distanceBonusPaid && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13 }}>
+            <span>Distance bonus</span><span>+{dollars(group.distanceBonusCents)}</span>
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, paddingTop: 8, borderTop: `1px solid ${RULE}`, fontWeight: 700, fontSize: 15 }}>
+          <span>Total</span><span>{dollars(total)}</span>
+        </div>
+      </div>
+      <div style={{ fontSize: 12, color: MUTED, marginBottom: 14 }}>
+        Sending to <span style={{ fontFamily: 'monospace' }}>{group.stripeDestination ?? '—'}</span>
+        <br />
+        Stripe payouts ready:{' '}
+        <span style={{ color: stripeReady ? OK : RED, fontWeight: 600 }}>
+          {stripeReady ? '✓ Yes' : '✗ Not yet'}
+        </span>
+      </div>
+      {!stripeReady && (
+        <Banner tone="warn">
+          This instructor's Stripe Express account isn't fully ready. Have them
+          complete onboarding via the instructor portal, or use "Mark paid manually."
+        </Banner>
+      )}
+      {err && <Banner tone="err">{err}</Banner>}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <ActionButton tone="secondary" onClick={onClose} disabled={busy}>Cancel</ActionButton>
+        <ActionButton tone="primary" onClick={submit} disabled={busy || !stripeReady || total === 0}>
+          {busy ? 'Sending…' : `Send ${dollars(total)}`}
+        </ActionButton>
+      </div>
+    </DrawerShell>
+  );
+}
 
-        <div style={{ textAlign: 'right', minWidth: 160 }}>
-          <div style={{ fontSize: 18, fontWeight: 700, color: hasAnyPay ? INK : MUTED }}>
-            {dollars(totalToShow)}
-          </div>
-          <div style={{ fontSize: 11, color: MUTED, marginTop: 3, lineHeight: 1.5 }}>
-            {hasAnyPay ? (
-              <>
-                Base {dollars(baseTotal)}
-                {bonusTotal > 0 && <> · Bonus {dollars(bonusTotal)}</>}
-                {distanceBonus > 0 && <> · Distance {dollars(distanceBonus)}</>}
-              </>
-            ) : (
-              <span style={{ fontStyle: 'italic' }}>pay not set</span>
-            )}
-          </div>
-          <div
-            style={{
-              display: 'inline-block',
-              marginTop: 6,
-              padding: '2px 8px',
-              borderRadius: 999,
-              fontSize: 10,
-              fontWeight: 700,
-              textTransform: 'uppercase',
-              letterSpacing: 0.5,
-              color: statusColor,
-              background: `${statusColor}1F`,
-              border: `1px solid ${statusColor}55`,
-            }}
-          >
-            {status}
-          </div>
+// ───────────────────────── Mark paid manually drawer ──────────────────────
+
+function MarkPaidDrawer({ group, onClose, onMarked }) {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const eligibleAmount = group.eligibleRows.reduce(
+    (s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0), 0,
+  );
+  const total = eligibleAmount + (group.source === 'regular' && !group.distanceBonusPaid ? group.distanceBonusCents : 0);
+
+  async function submit() {
+    if (note.trim().length === 0) {
+      setErr('Note is required — record how you paid (transfer ID, method, etc.)');
+      return;
+    }
+    setBusy(true); setErr('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error('Not signed in.');
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/pay-instructor`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            effective_instructor_id: group.effective_instructor_id,
+            camp_session_id: group.camp_session_id,
+            via_stripe: false,
+            manual_payment_note: note.trim(),
+          }),
+        },
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        setErr(data.message || data.error || `Server returned ${resp.status}`);
+        setBusy(false);
+        return;
+      }
+      onMarked();
+    } catch (e) {
+      setErr(e.message || 'Could not record payment.');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <DrawerShell title={`Mark paid — ${shortName(group.instructor)}`} onClose={onClose}>
+      <p style={{ margin: '0 0 12px', color: INK, fontSize: 14, lineHeight: 1.5 }}>
+        Record that you paid this instructor outside Enrops (your own Stripe dashboard,
+        Gusto, Venmo, check, etc). No Stripe transfer happens; the days are just
+        marked as settled for record-keeping.
+      </p>
+      <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 12, marginBottom: 14, fontSize: 13 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Marking as paid:</span>
+          <strong>{dollars(total)}</strong>
         </div>
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+          {group.eligibleRows.length} day{group.eligibleRows.length === 1 ? '' : 's'}
+          {group.source === 'regular' && group.distanceBonusCents > 0 && !group.distanceBonusPaid && ' + distance bonus'}
+        </div>
+      </div>
+      <label style={{ display: 'block', fontSize: 13, color: MUTED, marginBottom: 6 }}>
+        How did you pay them? (required)
+      </label>
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={3}
+        placeholder='e.g., "Stripe dashboard transfer tr_1Abc…", "Gusto run May 30", "Check #1234"'
+        style={{ width: '100%', padding: 8, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', fontSize: 13, resize: 'vertical' }}
+      />
+      {err && <div style={{ marginTop: 12 }}><Banner tone="err">{err}</Banner></div>}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+        <ActionButton tone="secondary" onClick={onClose} disabled={busy}>Cancel</ActionButton>
+        <ActionButton tone="primary" onClick={submit} disabled={busy || total === 0}>
+          {busy ? 'Recording…' : `Mark ${dollars(total)} paid`}
+        </ActionButton>
+      </div>
+    </DrawerShell>
+  );
+}
+
+// ───────────────────────── Drawer shell ────────────────────────────────────
+
+function DrawerShell({ title, onClose, children }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(28,0,79,0.45)',
+        display: 'flex', justifyContent: 'flex-end', zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%', maxWidth: 460, background: '#fff', height: '100%',
+          padding: 24, boxShadow: '-4px 0 24px rgba(0,0,0,0.2)', overflowY: 'auto',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+          <h2 style={{ margin: 0, color: PURPLE, fontSize: 18, fontWeight: 700 }}>{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ background: 'transparent', border: 'none', color: MUTED, fontSize: 22, cursor: 'pointer', padding: 4 }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div style={{ flex: 1 }}>{children}</div>
       </div>
     </div>
   );
