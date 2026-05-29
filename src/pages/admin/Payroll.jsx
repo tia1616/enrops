@@ -2,7 +2,9 @@
 // /admin/payroll — instructor pay management.
 //
 // Read-only summary view replaced by an action-driven workflow:
-//   - Groups by (effective_instructor, camp_session) using v_effective_pay_lines.
+//   - Groups by (effective_instructor, camp_session) for camp rows and
+//     (effective_instructor, program) for afterschool rows. Both kinds
+//     come from v_effective_pay_lines and interleave by date.
 //   - Per-row actions: Approve / Withhold / Re-approve / Pay via Stripe /
 //     Mark paid manually.
 //   - Expand-on-click shows per-day breakdown with per-row controls.
@@ -119,7 +121,6 @@ export default function Payroll() {
           .from('v_effective_pay_lines')
           .select('*')
           .eq('organization_id', org.id)
-          .not('camp_session_id', 'is', null)
           .gte('session_date', sinceDate)
           .order('session_date', { ascending: false });
         if (lErr) throw lErr;
@@ -133,40 +134,67 @@ export default function Payroll() {
           ...rows.map((r) => r.original_instructor_id),
         ].filter(Boolean))];
         const sessionIds = [...new Set(rows.map((r) => r.camp_session_id).filter(Boolean))];
+        const programIds = [...new Set(rows.map((r) => r.program_id).filter(Boolean))];
 
-        const [instR, sessR, onbR] = await Promise.all([
+        const [instR, sessR, progR, onbR] = await Promise.all([
           supabase.from('instructors')
             .select('id, first_name, last_name, preferred_name, contractor_tier')
             .in('id', instructorIds),
-          supabase.from('camp_sessions')
-            .select('id, curriculum_name, starts_on, ends_on, location_name, week_num')
-            .in('id', sessionIds),
+          sessionIds.length === 0
+            ? Promise.resolve({ data: [] })
+            : supabase.from('camp_sessions')
+              .select('id, curriculum_name, starts_on, ends_on, location_name, week_num')
+              .in('id', sessionIds),
+          programIds.length === 0
+            ? Promise.resolve({ data: [] })
+            : supabase.from('programs')
+              .select('id, curriculum, day_of_week, first_session_date, session_count, program_location_id')
+              .in('id', programIds),
           supabase.from('contractor_onboarding_status')
             .select('instructor_id, stripe_payouts_enabled, stripe_connect_account_id')
             .in('instructor_id', instructorIds),
         ]);
         if (cancelled) return;
 
+        const locationIds = [...new Set((progR.data ?? []).map((p) => p.program_location_id).filter(Boolean))];
+        const locR = locationIds.length === 0
+          ? { data: [] }
+          : await supabase.from('program_locations').select('id, name').in('id', locationIds);
+        if (cancelled) return;
+
         const instById = new Map((instR.data ?? []).map((i) => [i.id, i]));
         const sessById = new Map((sessR.data ?? []).map((s) => [s.id, s]));
+        const progById = new Map((progR.data ?? []).map((p) => [p.id, p]));
+        const locById  = new Map((locR.data  ?? []).map((l) => [l.id, l]));
         const onbByInst = new Map((onbR.data ?? []).map((o) => [o.instructor_id, o]));
 
-        // Group by (effective_instructor, camp_session).
+        // Group by (effective_instructor, kind, target_id) — kind dispatches
+        // camp_session_id vs program_id. A confirmation row has exactly one
+        // of the two set (DB enforces this on session_delivery_confirmations).
         const groupMap = new Map();
         for (const row of rows) {
-          const key = `${row.effective_instructor_id}|${row.camp_session_id}`;
+          const kind = row.camp_session_id ? 'camp' : 'program';
+          const targetId = kind === 'camp' ? row.camp_session_id : row.program_id;
+          if (!targetId) continue;
+          const key = `${row.effective_instructor_id}|${kind}:${targetId}`;
           if (!groupMap.has(key)) {
             const inst = instById.get(row.effective_instructor_id);
-            const sess = sessById.get(row.camp_session_id);
             const onb = onbByInst.get(row.effective_instructor_id);
             const origInst = instById.get(row.original_instructor_id);
+            const sess = kind === 'camp'    ? sessById.get(targetId) : null;
+            const prog = kind === 'program' ? progById.get(targetId) : null;
+            const school = prog ? locById.get(prog.program_location_id) : null;
             groupMap.set(key, {
               key,
+              kind,
               effective_instructor_id: row.effective_instructor_id,
-              camp_session_id: row.camp_session_id,
+              camp_session_id: kind === 'camp'    ? targetId : null,
+              program_id:      kind === 'program' ? targetId : null,
               instructor: inst,
               originalInstructor: origInst,
               session: sess,
+              program: prog,
+              school,
               stripePayoutsEnabled: onb?.stripe_payouts_enabled === true,
               stripeDestination: onb?.stripe_connect_account_id || null,
               source: row.source,
@@ -228,10 +256,12 @@ export default function Payroll() {
           ? decorated
           : decorated.filter((g) => g.rows.some((r) => r.pay_status !== 'paid'));
 
-        // Sort: session start desc, then instructor name.
+        // Sort: most-recent session desc, then instructor name. For camps
+        // we sort by starts_on; for programs by first_session_date. Newest
+        // rows from either kind interleave correctly.
         filtered.sort((a, b) => {
-          const aDate = a.session?.starts_on ?? '';
-          const bDate = b.session?.starts_on ?? '';
+          const aDate = a.kind === 'camp' ? (a.session?.starts_on ?? '') : (a.program?.first_session_date ?? '');
+          const bDate = b.kind === 'camp' ? (b.session?.starts_on ?? '') : (b.program?.first_session_date ?? '');
           if (aDate !== bDate) return bDate.localeCompare(aDate);
           return shortName(a.instructor).localeCompare(shortName(b.instructor));
         });
@@ -679,8 +709,17 @@ function GroupRow({
             {shortName(g.instructor)} {sourceBadge}
           </div>
           <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
-            {g.session?.curriculum_name ?? 'Camp'} · {g.session?.location_name ?? ''}
-            {g.session?.starts_on && <> · {fmtDate(g.session.starts_on)}</>}
+            {g.kind === 'camp' ? (
+              <>
+                {g.session?.curriculum_name ?? 'Camp'} · {g.session?.location_name ?? ''}
+                {g.session?.starts_on && <> · {fmtDate(g.session.starts_on)}</>}
+              </>
+            ) : (
+              <>
+                {g.program?.curriculum ?? 'Program'} · {g.school?.name ?? ''}
+                {g.program?.session_count && <> · {g.rows.length} of {g.program.session_count} sessions</>}
+              </>
+            )}
           </div>
           {g.source === 'sub' && g.originalInstructor && (
             <div style={{ fontSize: 12, color: MUTED, marginTop: 2, fontStyle: 'italic' }}>
@@ -1022,7 +1061,9 @@ function PayDrawer({ group, onClose, onPaid }) {
           },
           body: JSON.stringify({
             effective_instructor_id: group.effective_instructor_id,
-            camp_session_id: group.camp_session_id,
+            ...(group.kind === 'camp'
+              ? { camp_session_id: group.camp_session_id }
+              : { program_id: group.program_id }),
             via_stripe: true,
           }),
         },
@@ -1043,8 +1084,17 @@ function PayDrawer({ group, onClose, onPaid }) {
   return (
     <DrawerShell title={`Pay ${shortName(group.instructor)}`} onClose={onClose}>
       <div style={{ marginBottom: 10, fontSize: 14, color: INK }}>
-        <strong>{group.session?.curriculum_name ?? 'Camp'}</strong>
-        {group.session?.location_name && <> · {group.session.location_name}</>}
+        {group.kind === 'camp' ? (
+          <>
+            <strong>{group.session?.curriculum_name ?? 'Camp'}</strong>
+            {group.session?.location_name && <> · {group.session.location_name}</>}
+          </>
+        ) : (
+          <>
+            <strong>{group.program?.curriculum ?? 'Program'}</strong>
+            {group.school?.name && <> · {group.school.name}</>}
+          </>
+        )}
       </div>
       <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 12, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13 }}>
@@ -1119,7 +1169,9 @@ function MarkPaidDrawer({ group, onClose, onMarked }) {
           },
           body: JSON.stringify({
             effective_instructor_id: group.effective_instructor_id,
-            camp_session_id: group.camp_session_id,
+            ...(group.kind === 'camp'
+              ? { camp_session_id: group.camp_session_id }
+              : { program_id: group.program_id }),
             via_stripe: false,
             manual_payment_note: note.trim(),
           }),

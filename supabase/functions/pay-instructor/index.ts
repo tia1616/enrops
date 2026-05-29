@@ -66,6 +66,7 @@ function getInstructorPlatformStripe(model: InstructorPayModel): Stripe {
 interface Body {
   effective_instructor_id?: string;
   camp_session_id?: string;
+  program_id?: string;
   via_stripe?: boolean;
   manual_payment_note?: string;
 }
@@ -82,6 +83,8 @@ interface PayLineRow {
   confirmed_by: string | null;
   camp_assignment_id: string | null;
   camp_assignment_status: string | null;
+  program_assignment_id: string | null;
+  program_assignment_status: string | null;
   distance_bonus_cents_if_regular: number | null;
   distance_bonus_paid_at: string | null;
   organization_id: string;
@@ -119,11 +122,19 @@ serve(async (req: Request) => {
     }
     const effectiveInstructorId = (body.effective_instructor_id || '').trim();
     const campSessionId = (body.camp_session_id || '').trim();
+    const programId     = (body.program_id     || '').trim();
     const viaStripe = body.via_stripe !== false; // default true
     const manualNote = (body.manual_payment_note || '').toString().trim();
 
     if (!effectiveInstructorId) return json({ error: 'missing_effective_instructor_id' }, 400);
-    if (!campSessionId)         return json({ error: 'missing_camp_session_id' }, 400);
+    // Exactly one target: camp_session_id (camp) XOR program_id (afterschool).
+    if (!campSessionId && !programId) {
+      return json({ error: 'missing_target', detail: 'Provide either camp_session_id or program_id.' }, 400);
+    }
+    if (campSessionId && programId) {
+      return json({ error: 'ambiguous_target', detail: 'Provide camp_session_id OR program_id, not both.' }, 400);
+    }
+    const kind: 'camp' | 'program' = campSessionId ? 'camp' : 'program';
     if (!viaStripe && manualNote.length === 0) {
       return json({ error: 'manual_payment_note_required' }, 400);
     }
@@ -197,18 +208,21 @@ serve(async (req: Request) => {
     // The view exposes effective_instructor_id, source, pay_amount_cents,
     // pay_adjustment_cents, confirmed_by, camp_assignment_status, and
     // distance_bonus_cents_if_regular (NULL for sub rows by design).
-    const { data: payLinesData, error: linesErr } = await supabase
+    const payLinesBase = supabase
       .from('v_effective_pay_lines')
       .select(`
         confirmation_id, effective_instructor_id, effective_tier, source,
         pay_amount_cents, pay_adjustment_cents, pay_status,
         instructor_payout_id, confirmed_by,
         camp_assignment_id, camp_assignment_status,
+        program_assignment_id, program_assignment_status,
         distance_bonus_cents_if_regular, distance_bonus_paid_at,
         organization_id
       `)
-      .eq('effective_instructor_id', effectiveInstructorId)
-      .eq('camp_session_id', campSessionId);
+      .eq('effective_instructor_id', effectiveInstructorId);
+    const { data: payLinesData, error: linesErr } = kind === 'camp'
+      ? await payLinesBase.eq('camp_session_id', campSessionId)
+      : await payLinesBase.eq('program_id', programId);
     if (linesErr) {
       console.error('[pay-instructor] pay lines fetch failed:', linesErr);
       return json({ error: 'lookup_failed' }, 500);
@@ -229,7 +243,12 @@ serve(async (req: Request) => {
     );
 
     if (eligible.length === 0) {
-      return json({ error: 'nothing_to_pay', detail: 'No approved + un-paid pay lines for this instructor and camp.' }, 400);
+      return json({
+        error: 'nothing_to_pay',
+        detail: kind === 'camp'
+          ? 'No approved + un-paid pay lines for this instructor and camp.'
+          : 'No approved + un-paid pay lines for this instructor and program.',
+      }, 400);
     }
 
     // ── distance bonus eligibility ────────────────────────────────────────
@@ -238,11 +257,13 @@ serve(async (req: Request) => {
     // something) AND distance_bonus_paid_at IS NULL AND
     // distance_bonus_cents > 0.
     // Pick the bonus from any eligible row in the group (they all share the
-    // same camp_assignment_id and thus the same bonus value).
+    // same parent assignment and thus the same bonus value). The parent
+    // assignment id we mark afterward depends on kind.
     const firstRegular = eligible.find((r) => r.source === 'regular');
     let distanceBonusCents = 0;
     let includesDistanceBonus = false;
     let campAssignmentIdForBonus: string | null = null;
+    let programAssignmentIdForBonus: string | null = null;
     if (
       firstRegular &&
       firstRegular.distance_bonus_paid_at === null &&
@@ -251,7 +272,8 @@ serve(async (req: Request) => {
     ) {
       distanceBonusCents = firstRegular.distance_bonus_cents_if_regular;
       includesDistanceBonus = true;
-      campAssignmentIdForBonus = firstRegular.camp_assignment_id;
+      campAssignmentIdForBonus    = firstRegular.camp_assignment_id;
+      programAssignmentIdForBonus = firstRegular.program_assignment_id;
     }
 
     // ── sum ───────────────────────────────────────────────────────────────
@@ -320,7 +342,8 @@ serve(async (req: Request) => {
       .insert({
         organization_id: instructor.organization_id,
         instructor_id: effectiveInstructorId,
-        camp_session_id: campSessionId,
+        camp_session_id: kind === 'camp'    ? campSessionId : null,
+        program_id:      kind === 'program' ? programId     : null,
         stripe_destination_account_id: stripeDestinationAccountId || 'manual',
         amount_cents: totalCents,
         session_confirmation_ids: confirmationIds,
@@ -335,10 +358,12 @@ serve(async (req: Request) => {
     if (insErr || !rowData) {
       const code = (insErr as { code?: string } | null)?.code;
       if (code === '23505') {
-        // Unique partial index hit
+        // Unique partial index hit — one guard for camp, parallel guard for program.
         return json({
           error: 'payout_already_in_flight',
-          detail: 'A pending or succeeded payout already exists for this instructor on this camp. Refresh and try again.',
+          detail: kind === 'camp'
+            ? 'A pending or succeeded payout already exists for this instructor on this camp. Refresh and try again.'
+            : 'A pending or succeeded payout already exists for this instructor on this program. Refresh and try again.',
         }, 409);
       }
       console.error('[pay-instructor] payout row insert failed:', insErr);
@@ -357,16 +382,20 @@ serve(async (req: Request) => {
       }
       let transfer: Stripe.Transfer;
       try {
+        const targetSuffix = kind === 'camp'
+          ? `camp ${campSessionId.slice(0, 8)}`
+          : `program ${programId.slice(0, 8)}`;
         const transferParams: Stripe.TransferCreateParams = {
           amount: totalCents,
           currency: 'usd',
           destination: stripeDestinationAccountId,
           transfer_group: `enrops_payout_${payoutId}`,
-          description: `Instructor pay — ${instructor.first_name ?? ''} ${instructor.last_name ?? ''} — camp ${campSessionId.slice(0, 8)}`,
+          description: `Instructor pay — ${instructor.first_name ?? ''} ${instructor.last_name ?? ''} — ${targetSuffix}`,
           metadata: {
             enrops_payout_id: payoutId,
             enrops_effective_instructor_id: effectiveInstructorId,
-            enrops_camp_session_id: campSessionId,
+            enrops_camp_session_id: kind === 'camp'    ? campSessionId : '',
+            enrops_program_id:      kind === 'program' ? programId     : '',
             enrops_org_id: instructor.organization_id,
             enrops_session_confirmation_count: String(confirmationIds.length),
             enrops_includes_distance_bonus: includesDistanceBonus ? 'true' : 'false',
@@ -442,7 +471,7 @@ serve(async (req: Request) => {
       console.warn('[pay-instructor] confirmations update failed (non-fatal):', confErr);
     }
 
-    if (includesDistanceBonus && campAssignmentIdForBonus) {
+    if (includesDistanceBonus && kind === 'camp' && campAssignmentIdForBonus) {
       const { error: caErr } = await supabase
         .from('camp_assignments')
         .update({
@@ -452,6 +481,18 @@ serve(async (req: Request) => {
         .eq('id', campAssignmentIdForBonus);
       if (caErr) {
         console.warn('[pay-instructor] camp_assignments update failed (non-fatal):', caErr);
+      }
+    }
+    if (includesDistanceBonus && kind === 'program' && programAssignmentIdForBonus) {
+      const { error: paErr } = await supabase
+        .from('program_assignments')
+        .update({
+          distance_bonus_paid_at: nowIso,
+          distance_bonus_payout_id: payoutId,
+        })
+        .eq('id', programAssignmentIdForBonus);
+      if (paErr) {
+        console.warn('[pay-instructor] program_assignments update failed (non-fatal):', paErr);
       }
     }
 
