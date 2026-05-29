@@ -93,7 +93,7 @@ Everything is deployed to prod (Netlify deploy verified on each push, edge funct
 
 ### Real gaps / future work
 
-- **No partner detail view.** Partners tab shows counts + by-type chips but no way to drill into a specific partner and see/edit its contacts. To edit a partner's existing data today, Jessica has to use Supabase Studio. Decision needed: build a partner-detail page or wait until something forces it.
+- **~~No partner detail view.~~ RESOLVED 2026-05-29 evening (commit `95c7fab`).** Partners tab now has `PartnerListSection`: a searchable list of all partners with click-to-expand inline editing. Each row supports editing name/type/area/notes, mark-inactive/reactivate, and view+edit+add+remove contacts inline. Direct supabase writes against RLS-scoped tables (no new edge fn — RLS on `partners` + `partner_contacts` already org-scopes via `check_org_access(organization_id)`). Built on the same branch as the curriculum-change-notify work; ships with that PR. Files: `src/pages/admin/contacts/PartnerListSection.jsx` (new, 569 lines), `src/pages/admin/contacts/PartnersTab.jsx` (modified).
 - **No way to email a roster to a partner *other than* the linked one.** The modal only loads contacts for the location's `partner_id`. If she needs to email a different partner (e.g. district-level operations person who isn't tied to that school), she has to use the "Other emails" field manually. Could add a "change recipients to a different partner" action.
 - **Bulk send rosters to all camps at once doesn't exist.** Each send is per-camp. Realistic ask if she's prepping a fall season — "send all 47 rosters to the right partners in one click". Significant build (preview screen × N campsx confirmation).
 - **No notification when a homeroom_teacher value is missing on after-school rosters.** Once fall after-school exists, schools will expect homeroom info per kid. We should flag students without it. Currently silent.
@@ -385,3 +385,84 @@ ADMIN                                  SUB                              REGULAR
 ```
 
 Decline path: sub clicks "Can't make it" → reason textarea → status='declined', `declined_at` set, decline_reason saved. Admin notification email fires to `organizations.alert_email`. No auto-cascade — admin re-opens AssignSubModal and assigns a different sub manually.
+
+---
+
+# PART 3 — Change-program-curriculum + notifications (evening session)
+
+Triggered by a real partner request: a J2S partner asked Jessica to swap the curriculum on one of their FA26 afterschool programs. `/admin/programs` was view-only before today. Shipped on local branch `fa26-curriculum-change-notify` — **NOT pushed to origin.**
+
+## What shipped today (PART 3)
+
+### Database (live on prod Supabase)
+
+- **`program_curriculum_changes`** — audit table. One row per curriculum swap. Captures `organization_id`, `program_id`, `changed_by_user_id`, from/to curriculum (both FK + name snapshot — survives later curriculum renames/deletes), per-channel notify choice (`sent`/`skipped`/`no_recipients`), per-parent send results in JSONB (parent_id, name, email, resend_message_id, status, failure_reason), singleton instructor result JSONB, send counts, `changed_at`. RLS: org members can SELECT; INSERTs are service-role only via edge fn. Migration: `supabase/migrations/20260529_program_curriculum_changes.sql`. Applied via MCP — additive only.
+
+### Edge functions (deployed, ACTIVE)
+
+| Slug | Version | What it does |
+|------|---------|--------------|
+| `notify-program-curriculum-change` | v1 | Auth-gated (owner/admin). Verifies caller org match, target curriculum org match, then in order: UPDATE `programs.curriculum_id` + `programs.curriculum` (text), fan out one Resend email per non-cancelled registered parent (deduped by parent_id, no cross-disclosure), single Resend to the confirmed-and-already-emailed instructor (status IN ('confirmed','published') AND `email_sent_at IS NOT NULL`), INSERT audit row with all per-recipient results. Uses `_shared/orgBrand.ts` for sender identity. Defense-in-depth `organization_id` filter on every query even though program is already org-verified. Placeholder substitution: `{parent_first_name}`, `{student_first_name}`, `{instructor_first_name}`, `{program_day}`, `{program_location}`, `{program_summary}`, `{from_curriculum}`, `{to_curriculum}`, `{org_name}`, `{reply_to_email}`. |
+
+### Frontend (on branch, NOT pushed)
+
+**`/admin/programs` (ProgramsCalendar.jsx):**
+- Adds curricula fetch (`status='published'`, org-scoped) on org load.
+- Each program row gets a **"Change the class"** link on the right.
+- Renders `<EditProgramCurriculumModal>` when admin clicks; patches local state on save so the new curriculum name appears immediately without a refetch.
+
+**`EditProgramCurriculumModal.jsx` — two-step:**
+- **Step 1:** read-only "Currently" line, curriculum picker (org's published curricula), live impact summary (enrolled families count, instructor confirmations count, past sessions logged), soft amber heads-up when families are already enrolled. Primary button reads **"Next: review notes"** — does NOT write to the DB.
+- **Step 2:** loads recipients (registrations + program_assignments), shows per-channel toggles ("Notify families" / "Notify instructor") with editable subject + body + live preview substituting the first recipient's actual name. Two primary buttons: **"Send notes + save"** (whatever's toggled-on fires) and **"Skip notes + save"** (both toggled-off — DB write + audit only, no emails). Both routes call the same edge fn so the curriculum write, the email fan-out, and the audit row commit together.
+
+**Tone (Jessica-approved copy):** warm subject ("A change to your child's Tuesday class"), effective immediately ("starting at the next session"), refund-via-reply ("email us at <reply_to_email> and we'll take care of it"), no "cancel" language anywhere.
+
+**Late addition — Step 3 success confirmation.** After Jessica's first real save (the partner FA26 swap), she flagged that the modal closed silently with no feedback — she couldn't tell if anything happened. Added a Step 3 view that fires on successful submit: green "✓ Change saved" header, a "Where this shows up now" bulleted list (schedule pages, parent portal, instructor portal, registration page, future marketing), a "Notes" subsection that narrates the actual notification outcomes (sent / skipped / no recipients with counts), and a single **Done** button. Closes the "did anything happen?" ambiguity. Parent state patch (the row showing the new curriculum name in `/admin/programs`) happens on Done OR on X-out from step 3, so the row updates either way.
+
+## What's on the branch but NOT live
+
+Branch `fa26-curriculum-change-notify` has three commits in this order:
+- `9f6e452` — Baseline: silent-save modal (the v1 I built before notifications were scoped).
+- `2c7c77a` — Notifications feature (modal rewrite + edge fn + audit migration).
+- `578ff45` — **WIP HANDOFF — DO NOT MERGE TO MAIN.** Bundles ~290MB of Supabase CLI binaries (`supabase.exe`, `supabase-go.exe`, `supabase.tar.gz`) plus unrelated loose work from other in-flight branches. The other chat session committed this to preserve working-tree state during chat consolidation. **This commit must be excluded from any push.**
+
+## Push plan for Monday (Claude executes; Jessica reviews)
+
+1. From `main`, create `ship-curriculum-change-notify`.
+2. Cherry-pick in this order, skipping `578ff45` (the 290MB CLI-binaries wip-handoff):
+   - `9f6e452` — Baseline silent-save modal
+   - `2c7c77a` — Notifications feature (modal rewrite + edge fn + audit migration)
+   - `95c7fab` — Editable partner list on Partners tab
+   - The EOD evening commit (Step 3 success confirmation + handoff updates) — capture whatever commit SHA we land tonight
+3. Add the CLI binaries (`supabase.exe`, `supabase-go.exe`, `supabase.tar.gz`) and any other 50MB+ artifacts to `.gitignore` in a follow-up commit on the same branch.
+4. `npm run build` to verify nothing breaks.
+5. Push the clean branch, open PR to main, deploy-verify on enrops.com.
+6. The loose unrelated files from `578ff45` (background-check edits, onboarding screens, flash sale edge fns) get triaged separately — ask Jessica which branches they belong on.
+
+## What was tested in localhost today (PART 3)
+
+| Flow | Status |
+|------|--------|
+| v1 silent-save modal (commit 9f6e452) | ❌ Not tested in browser — superseded by the 2-step rewrite before Jessica refreshed. |
+| 2-step modal Step 1 | ⏳ Untested as of this writing. |
+| 2-step modal Step 2 — Skip notes + save | ⏳ Untested. |
+| 2-step modal Step 2 — Send notes + save | ⏳ Untested. **First real use will be the partner's actual FA26 program change.** |
+| Edge function (DB write + audit insert) | ⏳ Untested end-to-end via the modal. Migration + function are deployed and the code reads sound; the audit table is empty as of EOD. |
+
+## Known gaps / punchlist for Monday (PART 3)
+
+### Real gaps
+
+- **Hard-coded sender domain in `_shared/orgBrand.ts`.** Same multi-tenant tech debt called out in PART 2. When a second tenant onboards, the from-address needs to come from `org_branding.email_from_domain` (column doesn't exist yet).
+- **No "change rescinded" path.** Once a curriculum swap fires emails, there's no undo. If admin realizes they picked the wrong target curriculum, they have to swap back and resend — second audit row gets written. Acceptable for v1.
+- **Multi-instructor program edge case logged but not handled UX-side.** If a program somehow has >1 eligible instructor (status confirmed/published AND email_sent_at set), the edge fn emails only the first match, logs a console warning, and the response payload includes `extra_eligible_not_notified: <count>`. The modal doesn't surface this to the admin — they'd see "sent" with no hint that two instructors were eligible. Today's data: every program has exactly one assignment so this never fires. Fix when the data shape changes.
+- **No surface for the partner-contacts gap from PART 1.** See the sharpened "No partner detail view" entry above. Both gaps came up in the same conversation today.
+
+## Files in scope (PART 3 — local branch only, NOT pushed)
+
+```
+src/pages/admin/programs/EditProgramCurriculumModal.jsx                (new in 9f6e452, rewritten in 2c7c77a)
+src/pages/admin/programs/ProgramsCalendar.jsx                          (modified in 9f6e452)
+supabase/functions/notify-program-curriculum-change/index.ts           (new in 2c7c77a)
+supabase/migrations/20260529_program_curriculum_changes.sql            (new in 2c7c77a)
+```

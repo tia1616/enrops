@@ -121,6 +121,10 @@ export default function EditProgramCurriculumModal({
   const [impact, setImpact] = useState({ loading: true, assignments: 0, deliveries: 0 });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Captures the edge fn's payload after a successful save so step 3 can
+  // narrate what happened ("note sent to 4 families", "instructor skipped",
+  // etc.) and the admin gets explicit confirmation the change landed.
+  const [result, setResult] = useState(null);
 
   // ── Step-2 state. Loaded lazily on entering step 2. ──────────────────
   const [recipientsLoading, setRecipientsLoading] = useState(false);
@@ -312,17 +316,31 @@ export default function EditProgramCurriculumModal({
         setBusy(false);
         return;
       }
-      onSaved({
-        programId: program.id,
-        curriculum_id: pickedCurriculum.id,
-        curriculum: pickedCurriculum.name,
-        notify_result: data,
-      });
+      // Show the confirmation step before closing — admin needs to see
+      // what actually happened (DB write + which channels fired + counts).
+      setResult(data ?? {});
+      setStep(3);
+      setBusy(false);
     } catch (err) {
       console.error("[EditProgramCurriculumModal] submit failed", err);
       setError("Something went wrong saving the change.");
       setBusy(false);
     }
+  }
+
+  // Called from Done in step 3 — and as a fallback when the admin X's out
+  // of step 3 — so the parent's row patch lands either way.
+  function finishAndClose() {
+    if (!pickedCurriculum) {
+      onCancel();
+      return;
+    }
+    onSaved({
+      programId: program.id,
+      curriculum_id: pickedCurriculum.id,
+      curriculum: pickedCurriculum.name,
+      notify_result: result,
+    });
   }
 
   // ── Live preview helpers (step 2). Render the template using the FIRST
@@ -356,7 +374,7 @@ export default function EditProgramCurriculumModal({
 
   return (
     <div
-      onClick={busy ? undefined : onCancel}
+      onClick={busy ? undefined : (step === 3 ? finishAndClose : onCancel)}
       style={{
         position: "fixed",
         inset: 0,
@@ -384,17 +402,21 @@ export default function EditProgramCurriculumModal({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: INK, margin: 0 }}>
-              {step === 1 ? "Change the class" : "Send the news"}
+              {step === 1 && "Change the class"}
+              {step === 2 && "Send the news"}
+              {step === 3 && (
+                <span style={{ color: SOFT_GREEN_INK }}>✓ Change saved</span>
+              )}
             </h2>
             <p style={{ color: MUTED, fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
-              {step === 1
-                ? (describeProgram(program) || "this program")
-                : `${describeProgram(program) || "this program"} · ${program.curriculum ?? "(none)"} → ${pickedCurriculum?.name ?? ""}`}
+              {step === 1 && (describeProgram(program) || "this program")}
+              {step === 2 && `${describeProgram(program) || "this program"} · ${program.curriculum ?? "(none)"} → ${pickedCurriculum?.name ?? ""}`}
+              {step === 3 && `${describeProgram(program) || "this program"} · ${result?.from_curriculum_name ?? program.curriculum ?? "(none)"} → ${pickedCurriculum?.name ?? ""}`}
             </p>
           </div>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={step === 3 ? finishAndClose : onCancel}
             disabled={busy}
             style={{
               background: "transparent",
@@ -448,6 +470,14 @@ export default function EditProgramCurriculumModal({
             instructorPreviewVars={instructorPreviewVars}
             busy={busy}
             replyToEmail={replyToEmail}
+          />
+        )}
+
+        {step === 3 && (
+          <Step3
+            result={result}
+            toCurriculumName={pickedCurriculum?.name ?? ""}
+            eligibleInstructor={eligibleInstructor}
           />
         )}
 
@@ -521,6 +551,18 @@ export default function EditProgramCurriculumModal({
                 {busy ? "Saving…" : "Send notes + save"}
               </button>
             </div>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+            <button
+              type="button"
+              onClick={finishAndClose}
+              style={primaryBtnStyle({ busy: false, disabled: false })}
+            >
+              Done
+            </button>
           </div>
         )}
       </div>
@@ -841,6 +883,109 @@ function ChannelBlock({
     </div>
   );
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// Step 3 — saved confirmation
+// ───────────────────────────────────────────────────────────────────────
+//
+// Closes the loop on the admin's action. They picked a new class and
+// hit save; this view tells them exactly what landed: the curriculum
+// write, which surfaces show the new class now, which emails fired (if
+// any), and which were skipped. Removes the "did anything happen?"
+// ambiguity that prompted this build.
+
+function Step3({ result, toCurriculumName, eligibleInstructor }) {
+  const fam = result?.family ?? {};
+  const ins = result?.instructor ?? {};
+
+  function familyLine() {
+    if (fam.choice === "sent") {
+      const sent = fam.sent_count ?? 0;
+      const failed = fam.failed_count ?? 0;
+      if (failed > 0) {
+        return `Note sent to ${sent} famil${sent === 1 ? "y" : "ies"}. ${failed} failed — check your audit log.`;
+      }
+      return `Note sent to ${sent} famil${sent === 1 ? "y" : "ies"}.`;
+    }
+    if (fam.choice === "skipped") return "No note sent to families (you skipped it).";
+    if (fam.choice === "no_recipients") return "No registered families on this program yet — nothing to send.";
+    return "—";
+  }
+
+  function instructorLine() {
+    if (ins.choice === "sent") {
+      const who = eligibleInstructor?.name ?? "the assigned instructor";
+      return `Note sent to ${who}.`;
+    }
+    if (ins.choice === "skipped") return "No note sent to the instructor (you skipped it).";
+    if (ins.choice === "no_recipient") return "No confirmed instructor on this program yet — nothing to send.";
+    return "—";
+  }
+
+  return (
+    <>
+      <div
+        style={{
+          background: SOFT_GREEN_BG,
+          border: `1px solid ${SOFT_GREEN_BORDER}`,
+          color: SOFT_GREEN_INK,
+          borderRadius: 6,
+          padding: "12px 14px",
+          fontSize: 14,
+          lineHeight: 1.5,
+          marginBottom: 18,
+        }}
+      >
+        The class is now <strong>{toCurriculumName}</strong>. Everything below is updated and live.
+      </div>
+
+      <div style={{ marginBottom: 18 }}>
+        <label style={labelStyle}>Where this shows up now</label>
+        <ul style={listStyle}>
+          <li>
+            <strong>Your schedule.</strong> The program in <em>/admin/programs</em>, the by-school view, and the calendar all show <strong>{toCurriculumName}</strong>.
+          </li>
+          <li>
+            <strong>Parent portal.</strong> Families already registered for this program see <strong>{toCurriculumName}</strong> in their account right now — no action on their side.
+          </li>
+          <li>
+            <strong>Instructor portal.</strong> The assigned instructor's schedule shows <strong>{toCurriculumName}</strong> right now.
+          </li>
+          <li>
+            <strong>Registration page.</strong> Anyone signing up from this point sees <strong>{toCurriculumName}</strong>.
+          </li>
+          <li>
+            <strong>Future marketing.</strong> Campaigns generated from now on use <strong>{toCurriculumName}</strong>. Emails that already went out before this save still reference the old class — that's history, not future state.
+          </li>
+        </ul>
+      </div>
+
+      <div style={{ marginBottom: 4 }}>
+        <label style={labelStyle}>Notes</label>
+        <ul style={listStyle}>
+          <li><strong>Families:</strong> {familyLine()}</li>
+          <li><strong>Instructor:</strong> {instructorLine()}</li>
+          {ins.extra_eligible_not_notified > 0 && (
+            <li style={{ color: SOFT_AMBER_INK }}>
+              <strong>Heads up:</strong> {ins.extra_eligible_not_notified} other eligible instructor{ins.extra_eligible_not_notified === 1 ? " was" : "s were"} not notified.
+            </li>
+          )}
+          <li style={{ color: MUTED, fontSize: 12 }}>
+            Logged for the record — visible later in this program's change history.
+          </li>
+        </ul>
+      </div>
+    </>
+  );
+}
+
+const listStyle = {
+  margin: 0,
+  padding: "4px 0 0 18px",
+  color: INK,
+  fontSize: 13,
+  lineHeight: 1.7,
+};
 
 // ───────────────────────────────────────────────────────────────────────
 // Shared styles
