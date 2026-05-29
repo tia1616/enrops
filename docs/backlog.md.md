@@ -8,10 +8,6 @@
 
 \- \[task] delete the 'schedule it' confirmation ask and button in the curricula celebration. change to 'market' or 'check enrollment'
 
-\- \[question] How does a provider cancel a program if it's numbers are too low to run? This should happen in 'programs', then flow to instructor schedule and partner notification. Both need to be notified of cancelled program, and it should be taken off instructor schedules.
-
-
-
 \- \[task] pick back up marketing Don build
 
 
@@ -69,7 +65,6 @@ Default sender display name — confirmed or still open?
 **## 26-05-22**
 
 * need 'engagement letter' with schedule offers
-* test stripe connect to instructor onboarding
 * end to end test for different providor profiles ui- don't have 'preferred/not preferred' on locations in surevey, for example
 * \# Backlog — open items as of 2026-05-25
 * 
@@ -88,14 +83,8 @@ Default sender display name — confirmed or still open?
 * \- \[ ] On /admin overview, add "Your teaching schedule" card if the signed-in admin is ALSO in the instructors table (shows their next 1-2 assignments)
 * \- \[ ] In admin sidebar, add "Open my instructor view →" link when admin has an instructor row
 * 
-* \### Admin: add-instructor form (\~1 hr, discovered 2026-05-25 during contractor smoke test)
-* \- \[x] /admin/contacts Instructors tab Add Instructor modal — form + two-phase "send invite now?" flow shipped. ✅
-* 
-* \### Magic-link email copy: add "onboarding" context (small, discovered 2026-05-25)
-* \- \[x] Shipped 2026-05-27. `auth-send-magic-link` has the `onboarding` branch; OnboardingRouter passes it; instructor-portal sign-in auto-detects mid-wizard contractors (overall_status != 'complete') and switches to onboarding copy server-side. ✅
-* 
-* \### Screen 3 ORS: supplies bullet rewritten 2026-05-25
-* \- \[x] `src/pages/onboarding/screens/Screen3ORS.jsx` line 89-91 was "You use your own supplies, transportation, and insurance unless you've agreed otherwise in writing." Dropped the supplies clause since J2S provides materials. Now reads "You use your own transportation and carry your own car insurance." ⚠️ Heads-up: provider-supplied materials is one of the IRS factors that pushes toward "employee" classification. If a future tenant ships where the contractor DOES bring their own supplies, this bullet should be made configurable or surfaced in their engagement letter. Worth a CPA review once Enrops has 2+ tenants.
+* \### ORS supplies clause — future-tenant configurability
+* \- \[ ] Screen3ORS currently hardcodes "You use your own transportation and carry your own car insurance." (the supplies-bullet was dropped because J2S provides materials). If a future tenant ships where contractors DO bring their own supplies, this bullet should be made configurable per org or surfaced in their engagement letter. Worth a CPA review once Enrops has 2+ tenants — provider-supplied materials is one of the IRS factors that pushes toward "employee" classification.
 * 
 * \### Partner locations (medium chunk)
 * \- \[ ] Build `partner\_locations` + `partner\_location\_contacts` tables (schema in mockups/partner-location-detail.html section 5)
@@ -122,14 +111,6 @@ Default sender display name — confirmed or still open?
 * \- \[ ] Real product screenshots in PWA manifest (`screenshots\[]` array) for Chrome's "rich install UI"
 * \- \[ ] Smoke test PWA install on iPhone (Arielle) + verify update toast behavior on next deploy
 * 
-* \## Done this session (2026-05-25)
-* \- Instructor portal v1 (admin pipeline card, documents view, assignment detail, lessons section, roster stub)
-* \- New edge function `get-instructor-curriculum-docs` (deployed, verify\_jwt: true, ACTIVE)
-* \- Admin nav restructure (Instructors top-level, Team dropped from nav)
-* \- PWA full setup (vite-plugin-pwa, install button on instructor/admin/J2S portals, update toast, manifest, icon, Vercel headers)
-* \- PWA icon swap from placeholder "E" → real Enrops "e" mark in Deep Purple
-* \- Smart-redirect on `/` for signed-in users (admins → /admin, instructors → /:slug/instructor)
-* \- `/instructor` shortcut redirect to `/j2s/instructor`
 * optimize admin for mobile
 * for admin doing onboarding/hiring- add advice 'check with your state's employment laws or a lawyer when deciding to hire contractors or w2 employees'
 
@@ -144,14 +125,10 @@ Default sender display name — confirmed or still open?
 \### Cleanup: `dev-seed-designer-access` edge function (deployed 2026-05-26)
 \- \[ ] One-shot dev function deployed to seed designer test accounts (Sasha + Oleksandra admin invites, 3 fake personas: instructor/parent/contractor). Gated by `x-seed-secret` header, idempotent — re-run any time to refresh magic links. After designers wrap their visual-direction pass, delete the function from Supabase dashboard and remove `supabase/functions/dev-seed-designer-access/` from the repo. Also delete the 3 fake personas from the DB: `designer-instructor@enrops.com`, `designer-parent@enrops.com`, `designer-contractor@enrops.com` (auth.users + instructors/parents/contractor_onboarding_status rows).
 
-\### "Your assignment changed" instructor email (gap found mid-reassignment) — mostly shipped 2026-05-27
-\- \[x] Detection: handleRemoveAssignment + handlePick now gate on `email_sent_at` set and open NotifyRemovalModal before the DELETE/UPDATE fires. ✅
-\- \[x] Admin-preview-before-send modal: subject + editable warm-toned body, Send/Skip/Cancel buttons. New edge function `notify-instructor-removed` handles Resend send. ✅
-\- \[x] Email copy: warm, no "cancel" language, "no longer on your schedule" framing. ✅
-\- \[x] Zero-remaining-assignments detection: modal swaps to softer de-staffed copy when remainingActiveCount is 0. ✅
-\- \[ ] **Still queued:** write to `instructor_offer_messages` with new `kind` for EmailActivityModal timeline. Audit currently only lives in Resend logs (`type=instructor_removed` tag).
-\- \[ ] **Still queued:** pay reconciliation flag — if installments / Stripe transfers exist against the removed assignment, surface for admin review in the modal.
-\- \[ ] **Still queued:** handleDrop (drag-and-drop move) source DELETE doesn't open the modal yet; only Remove from the picker + Reassign via Pick do.
+\### "Your assignment changed" instructor email — queued tail
+\- \[ ] Write to `instructor_offer_messages` with new `kind` for EmailActivityModal timeline. Audit currently only lives in Resend logs (`type=instructor_removed` tag).
+\- \[ ] Pay reconciliation flag — if installments / Stripe transfers exist against the removed assignment, surface for admin review in the modal.
+\- \[ ] handleDrop (drag-and-drop move) source DELETE doesn't open the modal yet; only Remove from the picker + Reassign via Pick do.
 
 \### Cancel-a-program flow (originally raised 2026-05-20 as a question; now scoped)
 \- \[ ] Programs tab is currently read-only and only shows afterschool (`programs` table, FA26/WI27/SP27). Summer camps live in the Schedule tab (`camp_sessions`, by `cycle_id`). Unify these so cancellation has one home.
@@ -222,13 +199,6 @@ Default sender display name — confirmed or still open?
 - add legal docs to enrops site- local folder in downloads zip
 
 \## 2026-05-27
-
-\### Done this session (pre-invite polish)
-\- ✅ Magic-link onboarding context (server auto-detects mid-wizard contractor on instructor-portal sign-in)
-\- ✅ Onboarding-complete emails — gateCheck.ts fires contractor + admin (`org.alert_email`) on transition to `complete`
-\- ✅ Wizard input validation: Screen 1 legal first + last name required; Screen 8 emergency contact phone format
-\- ✅ Reassignment / unassign notification gap — NotifyRemovalModal + `notify-instructor-removed` edge function
-\- ✅ Jessica's own onboarding reset for end-to-end test (overall_status='invited', steps_completed={}, Stripe/Checkr cleared)
 
 \### Still pending before / during real instructor invites
 \- \[ ] Add enrops legal docs to marketing site (after invites go out — local folder is in downloads zip)
