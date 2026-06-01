@@ -41,6 +41,13 @@ export default function CurriculumExtracting() {
   const [retrying, setRetrying] = useState(false);
   const channelRef = useRef(null);
 
+  // Live elapsed-time counter while extraction is in-flight. Per
+  // feedback_ai_wait_ui: every AI wait surface shows recommended duration +
+  // a live m:ss counter. Timer starts when status first transitions into
+  // pending/processing and stops on complete/failed.
+  const [extractStartedAt, setExtractStartedAt] = useState(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
+
   // Initial load: pull curriculum + its primary upload doc
   useEffect(() => {
     if (!curriculumId || !org?.id) return;
@@ -180,6 +187,32 @@ export default function CurriculumExtracting() {
   const isFailed = status === "failed";
   const isWorking = status === "pending" || status === "processing";
 
+  // Start the elapsed timer the first time we observe a working status;
+  // stop and clear when extraction finishes.
+  useEffect(() => {
+    if (isWorking && extractStartedAt == null) {
+      setExtractStartedAt(Date.now());
+      setElapsedSec(0);
+    } else if (!isWorking && extractStartedAt != null) {
+      setExtractStartedAt(null);
+      setElapsedSec(0);
+    }
+  }, [isWorking, extractStartedAt]);
+
+  useEffect(() => {
+    if (!isWorking || extractStartedAt == null) return undefined;
+    const id = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - extractStartedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [isWorking, extractStartedAt]);
+
+  function formatElapsed(sec) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  }
+
   return (
     <div>
       <div style={crumbs}>
@@ -201,6 +234,19 @@ export default function CurriculumExtracting() {
               ? `We had trouble reading ${primaryDoc?.original_filename ?? "this doc"}.`
               : "This usually takes 30–45 seconds. You can stay here or come back later — we'll keep going either way."}
         </p>
+        {isWorking && (
+          <div style={{
+            textAlign: "center",
+            fontSize: 22,
+            fontWeight: 700,
+            color: PURPLE,
+            fontVariantNumeric: "tabular-nums",
+            marginTop: -8,
+            marginBottom: 4,
+          }}>
+            {formatElapsed(elapsedSec)}
+          </div>
+        )}
 
         {/* Message stream */}
         {!isFailed && (
