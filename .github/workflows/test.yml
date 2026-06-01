@@ -1,0 +1,36 @@
+name: Unit tests
+
+# Runs all Deno unit tests in supabase/functions on every push to main
+# and on every pull request. If any test fails, the workflow fails and
+# GitHub emails the repo owner (Jessica) based on her notification
+# settings (Settings → Notifications → Actions → "Send notifications for
+# failed workflows only").
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+
+      - name: Run unit tests
+        # --allow-net is needed because some test files import from
+        # https://deno.land (std lib). No --allow-read/--allow-env so
+        # tests stay pure and can't reach real Supabase or Stripe by
+        # accident.
+        # --no-check matches Supabase Edge Runtime, which doesn't
+        # type-check at deploy time either. Strict type-checking would
+        # flag pre-existing warnings in non-test files and block CI on
+        # unrelated noise.
+        run: deno test --allow-net --no-check supabase/functions/
