@@ -1,10 +1,27 @@
-// AICampaignBuilder — top-level container for the 4-question flow.
-// Chunk 3.6.07 step 1 — real fetch to marketing-draft-campaign.
+// AICampaignBuilder — top-level container for the campaign-builder flow.
 //
-// State is forward-compatible with the deployed `marketing-draft-campaign`:
-//   - inputs.what: string[] (multi-topic) — UI starts with a single chip but the
-//     shape carries the array so chunk 06/07 can add more without state churn.
-//   - inputs.who: structured WhoInput (audience + filter) — same forward-compat.
+// inputs shape (passed to marketing-draft-campaign):
+//   what: {
+//     mode: 'programs' | 'camps' | 'other',
+//     program_ids: uuid[],        // when mode='programs' — selected `programs` rows
+//     camp_session_ids: uuid[],   // when mode='camps' — selected `camp_sessions` rows
+//     topics: string[],           // when mode='other' — free-text fallback (partner notes etc.)
+//   }
+//   who: { audience: 'parents'|'partners'|'instructors', filter: WhoFilter }
+//        — when what.mode='programs'/'camps', filter defaults to 'auto' (derived from picks)
+//   promo: {
+//     early_bird: boolean,           // lead with early-bird savings
+//     vip_option: boolean,           // mention STEAM VIP full-year add-on
+//     multi_camp_discount: boolean,  // applies BUILD10 promo_code when 2+ camps selected
+//     code: string|null,             // optional custom promo_codes.code
+//   }
+//   duration: string
+//   channels: string[]
+//
+// Edge function loads the selected program/camp rows server-side and injects them
+// as KNOWN FACTS into Ennie's prompt — replacing the old fuzzy-string curriculum
+// match for the structured path. Falls back to fuzzy match when mode='other'.
+//
 // All tenant context (org, user) comes from useOutletContext(). No hardcoded ids.
 
 import { useReducer, useState } from "react";
@@ -21,8 +38,19 @@ import DraftingScreen from "./DraftingScreen.jsx";
 const INITIAL = {
   step: 1,
   inputs: {
-    what: [],
-    who: { audience: "parents", filter: { type: "master_list" } },
+    what: {
+      mode: "programs",
+      program_ids: [],
+      camp_session_ids: [],
+      topics: [],
+    },
+    who: { audience: "parents", filter: { type: "auto" } },
+    promo: {
+      early_bird: false,
+      vip_option: false,
+      multi_camp_discount: false,
+      code: null,
+    },
     duration: "",
     channels: ["email"],
   },
@@ -31,6 +59,48 @@ const INITIAL = {
   error: null,
   scheduled: false,
 };
+
+// Translate the new structured `what` shape into the legacy { what: string[],
+// who: { audience, filter } } shape the deployed edge function understands.
+// Removed when the edge function is upgraded to consume program_ids /
+// camp_session_ids natively (next commit in this rewrite).
+async function bridgeInputsToLegacy(inputs, orgId) {
+  const w = inputs.what;
+  let topics = [];
+  let resolvedFilter = inputs.who.filter;
+
+  if (w.mode === "other") {
+    topics = w.topics;
+  } else if (w.mode === "programs" && w.program_ids.length > 0) {
+    const { data } = await supabase
+      .from("programs")
+      .select("curriculum, program_location_id")
+      .in("id", w.program_ids);
+    const rows = data ?? [];
+    topics = [...new Set(rows.map((r) => r.curriculum).filter(Boolean))];
+    if (resolvedFilter?.type === "auto") {
+      const school_ids = [...new Set(rows.map((r) => r.program_location_id).filter(Boolean))];
+      resolvedFilter = school_ids.length > 0
+        ? { type: "school", school_ids }
+        : { type: "master_list" };
+    }
+  } else if (w.mode === "camps" && w.camp_session_ids.length > 0) {
+    const { data } = await supabase
+      .from("camp_sessions")
+      .select("curriculum_name")
+      .in("id", w.camp_session_ids);
+    topics = [...new Set((data ?? []).map((r) => r.curriculum_name).filter(Boolean))];
+    if (resolvedFilter?.type === "auto") {
+      resolvedFilter = { type: "master_list" };
+    }
+  }
+
+  return {
+    ...inputs,
+    what: topics,
+    who: { ...inputs.who, filter: resolvedFilter },
+  };
+}
 
 // supabase-js wraps non-2xx edge-function responses in FunctionsHttpError with
 // the raw Response on `context.response`. Read it to surface the edge function's
@@ -127,12 +197,20 @@ function prevStep(s) {
 
 // Validation — Next disabled until current question has a non-empty answer.
 function isStepValid(step, inputs) {
-  if (step === 1) return inputs.what.length > 0;
+  if (step === 1) {
+    const w = inputs.what;
+    if (!w?.mode) return false;
+    if (w.mode === "programs") return Array.isArray(w.program_ids) && w.program_ids.length > 0;
+    if (w.mode === "camps") return Array.isArray(w.camp_session_ids) && w.camp_session_ids.length > 0;
+    if (w.mode === "other") return Array.isArray(w.topics) && w.topics.length > 0;
+    return false;
+  }
   if (step === 2) {
     if (!inputs.who?.audience) return false;
     if (inputs.who.audience !== "parents") return false; // partners/instructors disabled in v1
     const f = inputs.who.filter;
     if (!f?.type) return false;
+    if (f.type === "auto") return true; // derived from what.mode/picks
     if (f.type === "master_list") return true;
     if (f.type === "school") return Array.isArray(f.school_ids) && f.school_ids.length > 0;
     if (f.type === "area") return typeof f.area === "string" && f.area.length > 0;
@@ -191,8 +269,14 @@ export default function AICampaignBuilder() {
       return;
     }
     dispatch({ type: "START_DRAFTING" });
+
+    // Bridge to the existing edge function (legacy `what: string[]` shape).
+    // Resolve curriculum names + auto-audience from the picked rows. The next
+    // commit moves this lookup server-side and consumes program_ids directly.
+    const inputsForEdge = await bridgeInputsToLegacy(state.inputs, org.id);
+
     const { data, error } = await supabase.functions.invoke("marketing-draft-campaign", {
-      body: { organization_id: org.id, inputs: state.inputs },
+      body: { organization_id: org.id, inputs: inputsForEdge },
     });
     if (error) {
       const msg = await friendlyDraftError(error);
@@ -331,7 +415,7 @@ function CelebrationScreen({ draft, onReset }) {
 
       <div style={{ marginTop: 24, display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
         <button
-          onClick={() => { window.location.href = "/admin/marketing"; }}
+          onClick={() => { window.location.href = "/admin/marketing-v2"; }}
           style={{
             padding: "10px 16px", background: "#fff", color: INK,
             border: `1px solid ${RULE}`, borderRadius: 6, cursor: "pointer",

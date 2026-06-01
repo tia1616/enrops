@@ -131,7 +131,7 @@ In order. Each is a separate commit-able unit.
 | Issue | Notes |
 |---|---|
 | Mobile sign-in returns to enrops.com homepage | `AdminLayout.jsx:123` redirects unauthorized users to `/`. Auth session not persisting on mobile across different origins (192.168.0.5:5173 vs localhost). Defer until chunk 07 done. |
-| Partners + Instructors audiences | Backend returns 501. UI shows "Coming soon." Implement when the Partner Hat / Instructor Hat chunks land. |
+| Partners + Instructors audiences | **SCOPE MOVED 2026-06-01:** Partner + instructor outbound comms now live in the Partners + Instructors tabs respectively, not the Marketing tab. Marketing tab is parent-only. Background tasks spawned 2026-06-01 for the per-tab composers. The 501 path in the edge function becomes dead code for these audiences. |
 | Flyer + social channel generation | Q4 checkboxes are disabled ("Coming soon"). Schema (`marketing_campaign_touchpoints.type IN ('email','flyer','social')`) is ready. Future chunk. |
 | Promo codes | Table exists at `promo_codes` (existing) — extended with `scope_program_ids`, `starts_at`, `stripe_coupon_id`, `created_by`. UI for "suggest a promo code" not built. |
 | `parent_notifications` | Not built — Jessica has a spec for the parent portal push, will hook up later. |
