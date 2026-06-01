@@ -27,7 +27,22 @@ const TERM_OPTIONS = [
   { value: "SP27", label: "Spring 2027 (SP27)" },
 ];
 
+const AMBER = "#a16207";
+
 const DAYS_OF_WEEK = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+// Mirror of the SQL function term_to_school_year() in
+// supabase/migrations/20260601_district_calendars.sql. Update both together
+// if the term naming convention ever changes.
+function termToSchoolYearJs(term) {
+  if (typeof term !== "string" || term.length < 4) return null;
+  const prefix = term.slice(0, 2).toUpperCase();
+  const yy = parseInt(term.slice(2), 10);
+  if (!Number.isFinite(yy)) return null;
+  if (prefix === "FA") return `20${String(yy).padStart(2, "0")}-20${String(yy + 1).padStart(2, "0")}`;
+  if (prefix === "WI" || prefix === "SP") return `20${String(yy - 1).padStart(2, "0")}-20${String(yy).padStart(2, "0")}`;
+  return null;
+}
 const DAY_LABELS = {
   monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday",
   thursday: "Thursday", friday: "Friday", saturday: "Saturday", sunday: "Sunday",
@@ -43,6 +58,37 @@ export default function ProgramsCalendar() {
   const [enrollmentByProgram, setEnrollmentByProgram] = useState({});
   const [curricula, setCurricula] = useState([]);
   const [editingProgram, setEditingProgram] = useState(null);
+  const [sessionDatesByProgram, setSessionDatesByProgram] = useState({});
+  const [expandedDates, setExpandedDates] = useState(() => new Set());
+  // Set of district strings that DO have a saved calendar for this term's
+  // school_year. Used to flag programs in districts where the calendar is
+  // still missing — their derived dates won't skip holidays.
+  const [districtsWithCalendar, setDistrictsWithCalendar] = useState(() => new Set());
+
+  function toggleDatesExpanded(programId) {
+    setExpandedDates((prev) => {
+      const next = new Set(prev);
+      if (next.has(programId)) next.delete(programId);
+      else next.add(programId);
+      return next;
+    });
+  }
+
+  // Expand-all / collapse-all for every program at a single school. Used by
+  // the By-school view header so the operator can pop open every Facilitron
+  // booking at one site without clicking each row.
+  function toggleSchoolExpanded(programIds) {
+    setExpandedDates((prev) => {
+      const next = new Set(prev);
+      const allExpanded = programIds.every((id) => next.has(id));
+      if (allExpanded) {
+        for (const id of programIds) next.delete(id);
+      } else {
+        for (const id of programIds) next.add(id);
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (!org?.id) return;
@@ -72,6 +118,7 @@ export default function ProgramsCalendar() {
           .select(`
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             max_capacity, status, instructor_name, price_cents,
+            first_session_date, session_count,
             program_location_id,
             program_locations (id, name, district)
           `)
@@ -99,9 +146,53 @@ export default function ProgramsCalendar() {
           }
         }
 
+        // Batch-fetch derived session dates for every program in this term.
+        // Wraps derive_program_session_dates() which skips district closures
+        // and location closure_dates. RLS-gated via SECURITY INVOKER.
+        let datesByProgram = {};
+        try {
+          const { data: datesRows, error: datesErr } = await supabase.rpc(
+            "programs_with_session_dates",
+            { p_organization_id: org.id, p_term: term },
+          );
+          if (datesErr) throw datesErr;
+          for (const r of datesRows ?? []) {
+            datesByProgram[r.program_id] = Array.isArray(r.session_dates) ? r.session_dates : [];
+          }
+        } catch (e) {
+          // Don't break the page if dates can't load — the rest of the program
+          // info is still useful. Just log so we notice.
+          console.warn("Couldn't load derived session dates:", e?.message ?? e);
+        }
+
+        // Which districts already have a calendar saved for this term's school
+        // year? Used to flag programs whose dates haven't been holiday-adjusted.
+        // null = term doesn't use district calendars at all (e.g. summer camps),
+        //        so never show the missing-calendar warning.
+        const schoolYearForTerm = termToSchoolYearJs(term);
+        let calendarDistricts = null;
+        if (schoolYearForTerm) {
+          calendarDistricts = new Set();
+          try {
+            const { data: calRows } = await supabase
+              .from("district_calendars")
+              .select("district")
+              .eq("organization_id", org.id)
+              .eq("school_year", schoolYearForTerm);
+            for (const r of calRows ?? []) {
+              if (r.district) calendarDistricts.add(r.district);
+            }
+          } catch (e) {
+            console.warn("Couldn't load district calendars:", e?.message ?? e);
+          }
+        }
+
         if (mounted) {
           setPrograms(progRows ?? []);
           setEnrollmentByProgram(enrollment);
+          setSessionDatesByProgram(datesByProgram);
+          setDistrictsWithCalendar(calendarDistricts);
+          setExpandedDates(new Set()); // collapse all when term changes
         }
       } catch (e) {
         if (mounted) setError(e.message ?? String(e));
@@ -169,8 +260,25 @@ export default function ProgramsCalendar() {
 
       {!loading && !error && programs.length > 0 && (
         viewMode === "calendar"
-          ? <CalendarView programs={programs} enrollment={enrollmentByProgram} onEdit={setEditingProgram} />
-          : <BySchoolView programs={programs} enrollment={enrollmentByProgram} onEdit={setEditingProgram} />
+          ? <CalendarView
+              programs={programs}
+              enrollment={enrollmentByProgram}
+              sessionDatesByProgram={sessionDatesByProgram}
+              districtsWithCalendar={districtsWithCalendar}
+              expandedDates={expandedDates}
+              onToggleDates={toggleDatesExpanded}
+              onEdit={setEditingProgram}
+            />
+          : <BySchoolView
+              programs={programs}
+              enrollment={enrollmentByProgram}
+              sessionDatesByProgram={sessionDatesByProgram}
+              districtsWithCalendar={districtsWithCalendar}
+              expandedDates={expandedDates}
+              onToggleDates={toggleDatesExpanded}
+              onToggleSchool={toggleSchoolExpanded}
+              onEdit={setEditingProgram}
+            />
       )}
 
       {editingProgram && (
@@ -196,7 +304,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, onEdit }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onEdit }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -228,14 +336,25 @@ function CalendarView({ programs, enrollment, onEdit }) {
               · {byDay[day].length} program{byDay[day].length === 1 ? "" : "s"}
             </span>
           </div>
-          {byDay[day].map((p) => <ProgramRow key={p.id} program={p} e={enrollment[p.id]} onEdit={onEdit} />)}
+          {byDay[day].map((p) => (
+            <ProgramRow
+              key={p.id}
+              program={p}
+              e={enrollment[p.id]}
+              sessionDates={sessionDatesByProgram?.[p.id]}
+              districtHasCalendar={districtHasCal(p, districtsWithCalendar)}
+              isDatesExpanded={expandedDates?.has(p.id)}
+              onToggleDates={onToggleDates}
+              onEdit={onEdit}
+            />
+          ))}
         </div>
       ))}
     </div>
   );
 }
 
-function BySchoolView({ programs, enrollment, onEdit }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onToggleSchool, onEdit }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -254,37 +373,131 @@ function BySchoolView({ programs, enrollment, onEdit }) {
 
   return (
     <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8 }}>
-      {bySchool.map(([school, list], idx) => (
-        <div key={school}>
-          <div style={{
-            padding: "10px 16px 8px",
-            background: "#fafaf5",
-            borderTop: idx === 0 ? "none" : `1px solid ${RULE}`,
-            borderBottom: `1px solid ${RULE}`,
-            fontSize: 13, fontWeight: 700, color: PURPLE,
-            display: "flex", alignItems: "center", gap: 8,
-          }}>
-            {school}
-            <span style={{ color: MUTED, fontWeight: 400, fontSize: 12 }}>
-              · {list.length} program{list.length === 1 ? "" : "s"}
-            </span>
+      {bySchool.map(([school, list], idx) => {
+        const summary = summarizeSchool(list, sessionDatesByProgram);
+        const programIds = list.map((p) => p.id);
+        const allExpanded = programIds.length > 0 && programIds.every((id) => expandedDates?.has(id));
+        const hasAnyDates = summary.totalSessions > 0;
+        return (
+          <div key={school}>
+            <div style={{
+              padding: "10px 16px 10px",
+              background: "#fafaf5",
+              borderTop: idx === 0 ? "none" : `1px solid ${RULE}`,
+              borderBottom: `1px solid ${RULE}`,
+              fontSize: 13, fontWeight: 700, color: PURPLE,
+              display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap",
+              justifyContent: "space-between",
+            }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap" }}>
+                <div>
+                  {school}
+                  {list[0]?.program_locations?.district && (
+                    <span style={{ color: MUTED, fontWeight: 400, fontSize: 11, marginLeft: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                      {list[0].program_locations.district}
+                    </span>
+                  )}
+                </div>
+                <div style={{ color: MUTED, fontWeight: 400, fontSize: 12 }}>
+                  <strong style={{ color: INK }}>{list.length}</strong> program{list.length === 1 ? "" : "s"}
+                  {summary.totalSessions > 0 && (
+                    <>
+                      {" · "}
+                      <strong style={{ color: INK }}>{summary.totalSessions}</strong> session{summary.totalSessions === 1 ? "" : "s"} total
+                    </>
+                  )}
+                  {summary.firstDate && summary.lastDate && (
+                    <>
+                      {" · "}
+                      <strong style={{ color: INK }}>{formatFirstSessionDate(summary.firstDate)}</strong>
+                      {" – "}
+                      <strong style={{ color: INK }}>{formatFirstSessionDate(summary.lastDate)}</strong>
+                    </>
+                  )}
+                </div>
+              </div>
+              {hasAnyDates && (
+                <button
+                  type="button"
+                  onClick={() => onToggleSchool?.(programIds)}
+                  style={{
+                    background: "transparent",
+                    border: `1px solid ${PURPLE}`,
+                    color: PURPLE,
+                    padding: "4px 12px",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                  title={allExpanded ? "Collapse every program at this site" : "Open every program's session dates at this site"}
+                >
+                  {allExpanded ? "Hide all dates" : "Show all dates"}
+                </button>
+              )}
+            </div>
+            {list.map((p) => (
+              <ProgramRow
+                key={p.id}
+                program={p}
+                e={enrollment[p.id]}
+                sessionDates={sessionDatesByProgram?.[p.id]}
+                districtHasCalendar={districtHasCal(p, districtsWithCalendar)}
+                isDatesExpanded={expandedDates?.has(p.id)}
+                onToggleDates={onToggleDates}
+                onEdit={onEdit}
+                showDay
+              />
+            ))}
           </div>
-          {list.map((p) => <ProgramRow key={p.id} program={p} e={enrollment[p.id]} onEdit={onEdit} showDay />)}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
+// summarizeSchool — for the By-school view header. Counts total session
+// instances across every program at this site, and finds the overall date
+// range. Used to give the admin a "what am I booking" snapshot before
+// drilling into each program for Facilitron.
+function summarizeSchool(programs, sessionDatesByProgram) {
+  let totalSessions = 0;
+  let firstDate = null;
+  let lastDate = null;
+  for (const p of programs) {
+    const dates = sessionDatesByProgram?.[p.id] ?? [];
+    totalSessions += dates.length;
+    for (const d of dates) {
+      if (!firstDate || d < firstDate) firstDate = d;
+      if (!lastDate || d > lastDate) lastDate = d;
+    }
+  }
+  return { totalSessions, firstDate, lastDate };
+}
+
 // ---- Card ----
 
-function ProgramRow({ program: p, e, onEdit, showDay = false }) {
+// districtHasCal returns:
+//   true  → program's district has a saved calendar for the relevant school_year
+//   false → district is set but no calendar saved yet (warn the admin)
+//   null  → no warning to show. Either the term doesn't use district calendars
+//          (e.g. SU camps), or the program has no district at all.
+function districtHasCal(program, districtsWithCalendar) {
+  if (districtsWithCalendar == null) return null; // term doesn't use district calendars
+  const district = program?.program_locations?.district ?? null;
+  if (!district) return null;
+  return districtsWithCalendar.has(district);
+}
+
+function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
   const pct = capacity > 0 ? Math.min(1, enrolled / capacity) : 0;
   const isFull = capacity > 0 && enrolled >= capacity;
   const fillColor = isFull ? PURPLE : pct >= 0.7 ? VIOLET : "#a8c47f";
+  const isDraft = p.status === "draft";
 
   const breakdownParts = [];
   if (enr.paid > 0) breakdownParts.push(`${enr.paid} paid`);
@@ -292,26 +505,82 @@ function ProgramRow({ program: p, e, onEdit, showDay = false }) {
   if (enr.pending > 0) breakdownParts.push(`+${enr.pending} pending`);
   const breakdown = breakdownParts.join(" · ");
 
+  const datesArr = Array.isArray(sessionDates) ? sessionDates : [];
+  const hasDates = datesArr.length > 0;
+  const dateCountLabel = hasDates
+    ? `${datesArr.length} session${datesArr.length === 1 ? "" : "s"}`
+    : "No dates";
+
   return (
+    <>
     <div style={{
       display: "grid",
-      gridTemplateColumns: "70px 1fr 110px 90px 70px",
+      gridTemplateColumns: "100px 1fr 110px 90px 80px 70px",
       gap: 14,
       alignItems: "center",
       padding: "10px 16px",
-      borderBottom: `1px solid ${RULE}`,
+      borderBottom: isDatesExpanded ? "none" : `1px solid ${RULE}`,
       fontSize: 13,
+      opacity: isDraft ? 0.55 : 1,
+      background: isDraft ? "#fafaf5" : "transparent",
     }}>
-      {/* Time (or day + time when showDay) */}
-      <div style={{ color: INK, fontWeight: 600, fontSize: 13 }}>
-        {showDay && p.day_of_week && <div style={{ fontSize: 11, color: MUTED, fontWeight: 500 }}>{DAY_LABELS[p.day_of_week.toLowerCase()]?.slice(0, 3) ?? p.day_of_week}</div>}
+      {/* Start date + time. By-school view also shows day-of-week. */}
+      <div style={{ color: INK, fontWeight: 600, fontSize: 13, lineHeight: 1.3 }}>
+        {showDay && p.day_of_week && (
+          <div style={{ fontSize: 11, color: MUTED, fontWeight: 500 }}>
+            {DAY_LABELS[p.day_of_week.toLowerCase()]?.slice(0, 3) ?? p.day_of_week}
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: MUTED, fontWeight: 500 }}>
+          {p.first_session_date ? formatFirstSessionDate(p.first_session_date) : <span style={{ color: AMBER, fontWeight: 600 }}>No start</span>}
+        </div>
         {formatTime(p.start_time) || <span style={{ color: MUTED, fontWeight: 400 }}>—</span>}
       </div>
 
       {/* Curriculum + school + instructor */}
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 600, color: INK, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {p.curriculum ?? "Untitled"}
+        <div style={{ fontWeight: 600, color: INK, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>{p.curriculum ?? "Untitled"}</span>
+          {isDraft && (
+            <span style={{
+              fontSize: 10,
+              color: AMBER,
+              background: `${AMBER}1F`,
+              padding: "2px 8px",
+              borderRadius: 999,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              flexShrink: 0,
+            }}>
+              Draft
+            </span>
+          )}
+          {hasDates && (
+            <button
+              type="button"
+              onClick={() => onToggleDates?.(p.id)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px 10px",
+                background: isDatesExpanded ? PURPLE : `${PURPLE}14`,
+                color: isDatesExpanded ? "#fff" : PURPLE,
+                border: `1px solid ${PURPLE}`,
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 600,
+                fontFamily: "inherit",
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+              title="Show / hide session dates and instructor"
+            >
+              <span style={{ fontSize: 9, lineHeight: 1 }}>{isDatesExpanded ? "▴" : "▾"}</span>
+              {isDatesExpanded ? "Hide" : "Expand"}
+            </button>
+          )}
         </div>
         <div style={{ color: MUTED, fontSize: 12, marginTop: 2 }}>
           {!showDay && p.program_locations?.name ? p.program_locations.name : ""}
@@ -341,6 +610,11 @@ function ProgramRow({ program: p, e, onEdit, showDay = false }) {
         )}
       </div>
 
+      {/* Sessions count (plain text) */}
+      <div style={{ textAlign: "right", fontSize: 12, color: hasDates ? INK : MUTED }}>
+        {dateCountLabel}
+      </div>
+
       {/* Edit affordance */}
       <div style={{ textAlign: "right" }}>
         {onEdit && (
@@ -355,7 +629,121 @@ function ProgramRow({ program: p, e, onEdit, showDay = false }) {
         )}
       </div>
     </div>
+    {isDatesExpanded && hasDates && (
+      <SessionDatesPanel program={p} dates={datesArr} districtHasCalendar={districtHasCalendar} />
+    )}
+    </>
   );
+}
+
+function SessionDatesPanel({ program, dates, districtHasCalendar }) {
+  const [copied, setCopied] = useState(false);
+
+  function copyList() {
+    const text = dates.map(formatSessionDate).join("\n");
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => { /* clipboard blocked — ignore */ },
+    );
+  }
+
+  const district = program.program_locations?.district ?? null;
+  const showMissingCalendarWarning = districtHasCalendar === false;
+
+  return (
+    <div style={{
+      padding: "12px 16px 14px 90px", // align under "Curriculum" column
+      background: "#fafaf5",
+      borderBottom: `1px solid ${RULE}`,
+      fontSize: 13,
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5 }}>
+          Session dates · {dates.length}
+        </div>
+        <div style={{ fontSize: 12, color: MUTED }}>
+          Derived from this program's first session, day of week, and the {district || "location"} school calendar.
+        </div>
+        <button
+          type="button"
+          onClick={copyList}
+          style={{
+            ...editLinkStyle,
+            background: copied ? `${VIOLET}33` : "transparent",
+            color: copied ? PURPLE : PURPLE,
+          }}
+          title="Copy the date list to clipboard (one per line)"
+        >
+          {copied ? "✓ Copied" : "Copy list"}
+        </button>
+      </div>
+      <div style={{ fontSize: 13, color: INK, marginBottom: 10, display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <div>
+          <span style={{ color: MUTED, fontWeight: 600 }}>Instructor: </span>
+          {program.instructor_name
+            ? <span>{program.instructor_name}</span>
+            : <span style={{ color: MUTED, fontStyle: "italic" }}>Not assigned yet</span>}
+        </div>
+        {program.room && (
+          <div>
+            <span style={{ color: MUTED, fontWeight: 600 }}>Room: </span>
+            <span>{program.room}</span>
+          </div>
+        )}
+      </div>
+      {showMissingCalendarWarning && (
+        <div style={{
+          background: `${AMBER}1F`,
+          border: `1px solid ${AMBER}66`,
+          borderRadius: 6,
+          padding: "8px 12px",
+          color: AMBER,
+          fontSize: 12,
+          marginBottom: 10,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+        }}>
+          <strong>Heads up:</strong>
+          <span>No calendar saved for {district} — these dates are weekly only, holidays not subtracted.</span>
+          <a
+            href="/admin/calendars"
+            style={{ color: AMBER, fontWeight: 600, textDecoration: "underline" }}
+          >
+            Set up {district} calendar →
+          </a>
+        </div>
+      )}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+        gap: "4px 12px",
+      }}>
+        {dates.map((d) => (
+          <div key={d} style={{ color: INK, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+            {formatSessionDate(d)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function formatSessionDate(iso) {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso ?? "";
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.toLocaleDateString(undefined, {
+    timeZone: "UTC",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 const editLinkStyle = {
@@ -370,6 +758,13 @@ const editLinkStyle = {
   textDecoration: "underline",
   textUnderlineOffset: 2,
 };
+
+function formatFirstSessionDate(iso) {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return "—";
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.toLocaleDateString(undefined, { timeZone: "UTC", month: "short", day: "numeric" });
+}
 
 function formatTime(t) {
   if (!t) return "";

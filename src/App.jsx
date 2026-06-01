@@ -21,6 +21,7 @@ import CurriculumExtracting from './pages/admin/curricula/CurriculumExtracting.j
 import CurriculumReview from './pages/admin/curricula/CurriculumReview.jsx';
 import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
 import LocationsList from './pages/admin/LocationsList.jsx';
+import CalendarsList from './pages/admin/CalendarsList.jsx';
 import AdminContacts from './pages/admin/contacts/AdminContacts.jsx';
 import InstructorsPage from './pages/admin/instructors/InstructorsPage.jsx';
 import Payroll from './pages/admin/Payroll.jsx';
@@ -28,7 +29,9 @@ import Rosters from './pages/admin/Rosters.jsx';
 import Finances from './pages/admin/Finances.jsx';
 import Payouts from './pages/admin/Payouts.jsx';
 import TeamPage from './pages/admin/team/TeamPage.jsx';
+import AdminSettings from './pages/admin/AdminSettings.jsx';
 import InstructorPortal from './pages/j2s/InstructorPortal.jsx';
+import GoogleAuthCallback from './pages/auth/GoogleAuthCallback.jsx';
 import ErrorPage from './pages/error/ErrorPage.jsx';
 import OnboardingRouter from './pages/onboarding/OnboardingRouter.jsx';
 import DeclinedPage from './pages/onboarding/DeclinedPage.jsx';
@@ -83,6 +86,7 @@ export default function App() {
           row at runtime). */}
       <Route path="/:slug/admin" element={<Navigate to="/admin" replace />} />
       <Route path="/:slug/admin/*" element={<Navigate to="/admin" replace />} />
+      <Route path="/auth/google/callback" element={<GoogleAuthCallback />} />
       <Route path="/error" element={<ErrorPage />} />
       {/* Onboarding is now part of the instructor portal at /j2s/instructor.
           /:slug/onboarding still resolves for backward compat with old magic
@@ -104,6 +108,7 @@ export default function App() {
         <Route path="curricula/:id/edit" element={<CurriculumReview />} />
         <Route path="programs" element={<ProgramsCalendar />} />
         <Route path="locations" element={<LocationsList />} />
+        <Route path="calendars" element={<CalendarsList />} />
         <Route path="contacts" element={<AdminContacts />} />
         <Route path="instructors" element={<InstructorsPage />} />
         <Route path="payroll" element={<Payroll />} />
@@ -111,6 +116,7 @@ export default function App() {
         <Route path="finances" element={<Finances />} />
         <Route path="payouts" element={<Payouts />} />
         <Route path="team" element={<TeamPage />} />
+        <Route path="settings" element={<AdminSettings />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

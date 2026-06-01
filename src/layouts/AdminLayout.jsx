@@ -31,6 +31,7 @@ const NAV = [
       { to: "/admin/curricula", label: "Curricula" },
       { to: "/admin/programs", label: "Scheduled programs" },
       { to: "/admin/locations", label: "Locations" },
+      { to: "/admin/calendars", label: "School calendars" },
     ],
   },
   { to: "/admin/instructors", label: "Instructors" },
@@ -50,7 +51,7 @@ const NAV = [
     ],
   },
   { to: "/admin/community", label: "Community", soon: true },
-  { to: "/admin/settings", label: "Settings", soon: true },
+  { to: "/admin/settings", label: "Settings" },
 ];
 
 export default function AdminLayout() {
