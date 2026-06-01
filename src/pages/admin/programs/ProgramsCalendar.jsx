@@ -28,6 +28,7 @@ const TERM_OPTIONS = [
 ];
 
 const AMBER = "#a16207";
+const OK_GREEN = "#3a7c3a";
 
 const DAYS_OF_WEEK = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
@@ -58,6 +59,21 @@ export default function ProgramsCalendar() {
   const [enrollmentByProgram, setEnrollmentByProgram] = useState({});
   const [curricula, setCurricula] = useState([]);
   const [editingProgram, setEditingProgram] = useState(null);
+  const [editingFacility, setEditingFacility] = useState(null); // program object or null
+
+  async function saveFacility({ programId, requested_at, approved_at, notes }) {
+    const payload = {
+      facility_requested_at: requested_at || null,
+      facility_approved_at: approved_at || null,
+      facility_notes: (notes ?? "").trim() || null,
+    };
+    const { error: updErr } = await supabase
+      .from("programs")
+      .update(payload)
+      .eq("id", programId);
+    if (updErr) throw updErr;
+    setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, ...payload } : p)));
+  }
   const [sessionDatesByProgram, setSessionDatesByProgram] = useState({});
   const [expandedDates, setExpandedDates] = useState(() => new Set());
   // Set of district strings that DO have a saved calendar for this term's
@@ -119,6 +135,7 @@ export default function ProgramsCalendar() {
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             max_capacity, status, instructor_name, price_cents,
             first_session_date, session_count,
+            facility_requested_at, facility_approved_at, facility_notes,
             program_location_id,
             program_locations (id, name, district)
           `)
@@ -268,6 +285,7 @@ export default function ProgramsCalendar() {
               expandedDates={expandedDates}
               onToggleDates={toggleDatesExpanded}
               onEdit={setEditingProgram}
+              onEditFacility={setEditingFacility}
             />
           : <BySchoolView
               programs={programs}
@@ -278,7 +296,19 @@ export default function ProgramsCalendar() {
               onToggleDates={toggleDatesExpanded}
               onToggleSchool={toggleSchoolExpanded}
               onEdit={setEditingProgram}
+              onEditFacility={setEditingFacility}
             />
+      )}
+
+      {editingFacility && (
+        <FacilityRequestModal
+          program={editingFacility}
+          onCancel={() => setEditingFacility(null)}
+          onSave={async (vals) => {
+            await saveFacility({ programId: editingFacility.id, ...vals });
+            setEditingFacility(null);
+          }}
+        />
       )}
 
       {editingProgram && (
@@ -304,7 +334,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onEdit }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onEdit, onEditFacility }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -346,6 +376,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWi
               isDatesExpanded={expandedDates?.has(p.id)}
               onToggleDates={onToggleDates}
               onEdit={onEdit}
+              onEditFacility={onEditFacility}
             />
           ))}
         </div>
@@ -354,7 +385,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWi
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onToggleSchool, onEdit }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -414,6 +445,15 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWi
                       <strong style={{ color: INK }}>{formatFirstSessionDate(summary.lastDate)}</strong>
                     </>
                   )}
+                  {list.length > 0 && (
+                    <>
+                      {" · "}
+                      <strong style={{ color: summary.approvedCount === list.length ? OK_GREEN : (summary.approvedCount > 0 ? AMBER : MUTED) }}>
+                        {summary.approvedCount}/{list.length}
+                      </strong>
+                      {" facilities approved"}
+                    </>
+                  )}
                 </div>
               </div>
               {hasAnyDates && (
@@ -447,6 +487,7 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWi
                 isDatesExpanded={expandedDates?.has(p.id)}
                 onToggleDates={onToggleDates}
                 onEdit={onEdit}
+                onEditFacility={onEditFacility}
                 showDay
               />
             ))}
@@ -458,13 +499,15 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWi
 }
 
 // summarizeSchool — for the By-school view header. Counts total session
-// instances across every program at this site, and finds the overall date
-// range. Used to give the admin a "what am I booking" snapshot before
-// drilling into each program for Facilitron.
+// instances across every program at this site, finds the overall date
+// range, and tallies facility-booking progress so the admin can see
+// "3 of 4 approved at Bonny Slope" at a glance.
 function summarizeSchool(programs, sessionDatesByProgram) {
   let totalSessions = 0;
   let firstDate = null;
   let lastDate = null;
+  let requestedCount = 0;
+  let approvedCount = 0;
   for (const p of programs) {
     const dates = sessionDatesByProgram?.[p.id] ?? [];
     totalSessions += dates.length;
@@ -472,8 +515,10 @@ function summarizeSchool(programs, sessionDatesByProgram) {
       if (!firstDate || d < firstDate) firstDate = d;
       if (!lastDate || d > lastDate) lastDate = d;
     }
+    if (p.facility_requested_at) requestedCount++;
+    if (p.facility_approved_at) approvedCount++;
   }
-  return { totalSessions, firstDate, lastDate };
+  return { totalSessions, firstDate, lastDate, requestedCount, approvedCount };
 }
 
 // ---- Card ----
@@ -490,7 +535,7 @@ function districtHasCal(program, districtsWithCalendar) {
   return districtsWithCalendar.has(district);
 }
 
-function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -581,6 +626,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
               {isDatesExpanded ? "Hide" : "Expand"}
             </button>
           )}
+          <FacilityPill program={p} onClick={() => onEditFacility?.(p)} />
         </div>
         <div style={{ color: MUTED, fontSize: 12, marginTop: 2 }}>
           {!showDay && p.program_locations?.name ? p.program_locations.name : ""}
@@ -758,6 +804,220 @@ const editLinkStyle = {
   textDecoration: "underline",
   textUnderlineOffset: 2,
 };
+
+function FacilityPill({ program, onClick }) {
+  const requested = program?.facility_requested_at;
+  const approved = program?.facility_approved_at;
+  let label, fg, bg;
+  if (approved) {
+    label = `Approved ${formatFirstSessionDate(approved)}`;
+    fg = OK_GREEN;
+    bg = `${OK_GREEN}1F`;
+  } else if (requested) {
+    label = `Requested ${formatFirstSessionDate(requested)}`;
+    fg = AMBER;
+    bg = `${AMBER}1F`;
+  } else {
+    label = "Facility not requested";
+    fg = MUTED;
+    bg = `${MUTED}14`;
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "2px 10px",
+        background: bg,
+        color: fg,
+        border: `1px solid ${fg}66`,
+        borderRadius: 999,
+        fontSize: 11,
+        fontWeight: 600,
+        fontFamily: "inherit",
+        cursor: "pointer",
+        flexShrink: 0,
+      }}
+      title="Click to log facility request and approval dates"
+    >
+      {label}
+    </button>
+  );
+}
+
+function FacilityRequestModal({ program, onCancel, onSave }) {
+  const [requested, setRequested] = useState(program.facility_requested_at ?? "");
+  const [approved, setApproved] = useState(program.facility_approved_at ?? "");
+  const [notes, setNotes] = useState(program.facility_notes ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleSave() {
+    setError(null);
+    if (approved && requested && approved < requested) {
+      setError("Approval date can't be before the request date.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave({ requested_at: requested, approved_at: approved, notes });
+    } catch (e) {
+      setError(`Couldn't save: ${e.message ?? "unknown error"}`);
+      setSaving(false);
+    }
+  }
+
+  async function clearAll() {
+    setError(null);
+    setSaving(true);
+    try {
+      await onSave({ requested_at: "", approved_at: "", notes: "" });
+    } catch (e) {
+      setError(`Couldn't clear: ${e.message ?? "unknown error"}`);
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget && !saving) onCancel?.(); }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(28, 0, 79, 0.35)",
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div style={{
+        background: PANEL,
+        border: `1px solid ${RULE}`,
+        borderRadius: 10,
+        maxWidth: 540,
+        width: "100%",
+        padding: "20px 24px",
+        boxShadow: "0 12px 32px rgba(0,0,0,0.15)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+      }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>Facility request</div>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+            {program.curriculum} · {program.program_locations?.name ?? "(no location)"}
+            {program.day_of_week ? ` · ${program.day_of_week}` : ""}
+          </div>
+        </div>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={facLabel}>Request submitted</span>
+          <input
+            type="date"
+            value={requested ?? ""}
+            onChange={(e) => setRequested(e.target.value)}
+            style={facInput}
+          />
+        </label>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={facLabel}>Approved</span>
+          <input
+            type="date"
+            value={approved ?? ""}
+            onChange={(e) => setApproved(e.target.value)}
+            style={facInput}
+          />
+        </label>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={facLabel}>Notes (optional)</span>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder='e.g. "Waiting on PTA approval", "Facilitron request ID 12345"'
+            rows={2}
+            style={{ ...facInput, resize: "vertical", minHeight: 60 }}
+          />
+        </label>
+
+        {error && (
+          <div style={{
+            background: "#fdecea",
+            border: "1px solid #d9694f",
+            color: "#d9694f",
+            borderRadius: 6,
+            padding: "8px 12px",
+            fontSize: 13,
+            fontWeight: 500,
+          }}>{error}</div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={clearAll}
+            disabled={saving || (!program.facility_requested_at && !program.facility_approved_at && !program.facility_notes)}
+            style={{
+              ...facBtn(MUTED, "transparent", true),
+              opacity: (saving || (!program.facility_requested_at && !program.facility_approved_at && !program.facility_notes)) ? 0.4 : 1,
+            }}
+            title="Reset all three fields to empty"
+          >
+            Clear
+          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" onClick={onCancel} disabled={saving} style={facBtn(MUTED, "transparent", true)}>
+              Cancel
+            </button>
+            <button type="button" onClick={handleSave} disabled={saving} style={facBtn("#fff", PURPLE, false)}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const facLabel = {
+  fontSize: 12,
+  fontWeight: 600,
+  color: INK,
+  textTransform: "uppercase",
+  letterSpacing: 0.5,
+};
+
+const facInput = {
+  padding: "8px 10px",
+  border: `1px solid ${RULE}`,
+  borderRadius: 6,
+  fontSize: 14,
+  fontFamily: "inherit",
+  color: INK,
+  background: "#fff",
+  outline: "none",
+  boxSizing: "border-box",
+  width: "100%",
+};
+
+function facBtn(fg, bg, outlined) {
+  return {
+    padding: "8px 16px",
+    background: bg,
+    color: fg,
+    border: outlined ? `1px solid ${fg}` : "none",
+    borderRadius: 6,
+    fontSize: 14,
+    fontWeight: 500,
+    cursor: "pointer",
+    fontFamily: "inherit",
+  };
+}
 
 function formatFirstSessionDate(iso) {
   if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return "—";
