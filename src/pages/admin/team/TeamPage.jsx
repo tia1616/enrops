@@ -242,7 +242,7 @@ export default function TeamPage() {
               </div>
               <div style={{ textTransform: "capitalize", color: INK }}>{m.role ?? "—"}</div>
               <div style={{ color: MUTED, fontSize: 13 }}>
-                {m.accepted_at ? formatDate(m.accepted_at) : <span style={{ color: VIOLET }}>Pending</span>}
+                {m.accepted_at ? formatDate(m.accepted_at) : <span style={{ color: VIOLET }}>Invite not accepted yet</span>}
               </div>
             </div>
           ))
