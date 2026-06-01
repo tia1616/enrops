@@ -73,14 +73,36 @@ type WhoInput =
   | { audience: "partners"; filter: Record<string, unknown> }
   | { audience: "instructors"; filter: Record<string, unknown> };
 
+// Structured `what` shape from the new Q1 catalog picker. Provider picks
+// concrete program/camp rows from their catalog → we load the real rows
+// here and inject them as grounded facts into Ennie's prompt. This replaces
+// the fuzzy-string curriculum match for the structured path. mode='other'
+// falls through to topic strings + fuzzy match for partner notes / general
+// recap content that isn't tied to a scheduled row.
+type StructuredWhat = {
+  mode: "programs" | "camps" | "other";
+  program_ids?: string[];
+  camp_session_ids?: string[];
+  topics?: string[];
+};
+
+type PromoSettings = {
+  early_bird?: boolean;        // lead with early-bird savings
+  vip_option?: boolean;        // mention STEAM VIP full-year add-on
+  multi_camp_discount?: boolean; // reference multi-camp bundle (e.g. BUILD10)
+  code?: string | null;        // optional promo_codes.code
+};
+
 type DraftInputs = {
-  // Topics being promoted. Accept either a single string (legacy / quick send)
-  // or a list of topics (multi-topic campaign — Ennie weaves them into one
-  // schedule with topic-tagged touchpoints).
-  what: string | string[];
+  // Topics being promoted. Accepts:
+  //   string                                        — legacy / quick send
+  //   string[]                                      — multi-topic campaign
+  //   { mode, program_ids?, camp_session_ids?, topics? } — structured catalog picks
+  what: string | string[] | StructuredWhat;
   who: WhoInput;
   duration: string;
   channels: string[];
+  promo?: PromoSettings;
 };
 
 type DraftRequest = {
@@ -173,7 +195,7 @@ async function verifyCaller(
 // ---------------------------------------------------------------------------
 
 function parseRequest(body: unknown):
-  | { ok: true; req: DraftRequest }
+  | { ok: true; req: DraftRequest; derivedTopics: string[]; structuredWhat: StructuredWhat | null }
   | { ok: false; error: string; status: number } {
   if (!body || typeof body !== "object") {
     return { ok: false, error: "request body required", status: 400 };
@@ -186,8 +208,18 @@ function parseRequest(body: unknown):
   if (!inputs || typeof inputs !== "object") {
     return { ok: false, error: "inputs object required", status: 400 };
   }
-  // `what` accepts string OR string[] (multi-topic). Normalize to string[].
+  // `what` accepts:
+  //   string                              — legacy single topic
+  //   string[]                            — legacy multi-topic
+  //   { mode, program_ids|camp_session_ids|topics } — structured catalog picks
+  //
+  // We normalize the structured shape into `topics: string[]` for prompt /
+  // response purposes (Ennie still works in terms of "topics"), AND preserve
+  // the structured what on the request so loadGroundedFacts can use the IDs
+  // to query the real rows server-side.
   let topics: string[];
+  let structuredWhat: StructuredWhat | null = null;
+
   if (typeof inputs.what === "string") {
     if (!inputs.what.trim()) {
       return { ok: false, error: "inputs.what cannot be empty", status: 400 };
@@ -201,10 +233,39 @@ function parseRequest(body: unknown):
       return { ok: false, error: "inputs.what must be non-empty strings", status: 400 };
     }
     topics = inputs.what.map((t) => (t as string).trim());
+  } else if (inputs.what && typeof inputs.what === "object") {
+    const w = inputs.what as Record<string, unknown>;
+    const mode = w.mode;
+    if (mode !== "programs" && mode !== "camps" && mode !== "other") {
+      return { ok: false, error: "inputs.what.mode must be programs | camps | other", status: 400 };
+    }
+    if (mode === "programs") {
+      const ids = Array.isArray(w.program_ids) ? (w.program_ids as unknown[]).filter((x) => typeof x === "string") as string[] : [];
+      if (ids.length === 0) {
+        return { ok: false, error: "inputs.what.program_ids must contain at least one id", status: 400 };
+      }
+      structuredWhat = { mode: "programs", program_ids: ids };
+    } else if (mode === "camps") {
+      const ids = Array.isArray(w.camp_session_ids) ? (w.camp_session_ids as unknown[]).filter((x) => typeof x === "string") as string[] : [];
+      if (ids.length === 0) {
+        return { ok: false, error: "inputs.what.camp_session_ids must contain at least one id", status: 400 };
+      }
+      structuredWhat = { mode: "camps", camp_session_ids: ids };
+    } else {
+      const ts = Array.isArray(w.topics) ? (w.topics as unknown[]).filter((x) => typeof x === "string" && (x as string).trim()).map((x) => (x as string).trim()) : [];
+      if (ts.length === 0) {
+        return { ok: false, error: "inputs.what.topics must contain at least one topic", status: 400 };
+      }
+      structuredWhat = { mode: "other", topics: ts };
+    }
+    // Topics get filled in by loadGroundedFacts for programs/camps modes;
+    // for 'other' we already have them. Placeholder for prompt-builder until
+    // grounded facts resolve.
+    topics = structuredWhat.topics ?? [];
   } else {
-    return { ok: false, error: "inputs.what must be a string or array of strings", status: 400 };
+    return { ok: false, error: "inputs.what must be a string, array of strings, or structured object", status: 400 };
   }
-  (inputs as { what: string[] }).what = topics;
+
   if (typeof inputs.duration !== "string" || !inputs.duration.trim()) {
     return { ok: false, error: "inputs.duration required", status: 400 };
   }
@@ -221,17 +282,40 @@ function parseRequest(body: unknown):
   if (!who.filter || typeof who.filter !== "object") {
     return { ok: false, error: "inputs.who.filter required", status: 400 };
   }
+  // Strip the internal `auto_derived` flag the client sets on auto-resolved
+  // filters — it's not part of the server contract.
+  const filter = who.filter as Record<string, unknown>;
+  if (filter.auto_derived !== undefined) delete filter.auto_derived;
+
+  // Validate promo if present
+  let promo: PromoSettings | undefined;
+  if (inputs.promo !== undefined && inputs.promo !== null) {
+    if (typeof inputs.promo !== "object") {
+      return { ok: false, error: "inputs.promo must be an object", status: 400 };
+    }
+    const p = inputs.promo as Record<string, unknown>;
+    promo = {
+      early_bird: Boolean(p.early_bird),
+      vip_option: Boolean(p.vip_option),
+      multi_camp_discount: Boolean(p.multi_camp_discount),
+      code: typeof p.code === "string" && p.code.trim() ? p.code.trim() : null,
+    };
+  }
+
   return {
     ok: true,
     req: {
       organization_id: b.organization_id,
       inputs: {
-        what: topics,
+        what: structuredWhat ?? topics,
         who: who as unknown as WhoInput,
         duration: inputs.duration as string,
         channels: inputs.channels as string[],
+        promo,
       },
     },
+    derivedTopics: topics,
+    structuredWhat,
   };
 }
 
@@ -446,6 +530,196 @@ function matchCurriculaToTopics(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Grounded facts (structured catalog picks)
+// ---------------------------------------------------------------------------
+
+type ProgramFact = {
+  id: string;
+  curriculum: string;
+  school_name: string;
+  term: string;
+  day_of_week: string;
+  first_session_date: string | null;
+  session_count: number | null;
+  price_cents: number;
+  early_bird_price_cents: number | null;
+  early_bird_deadline: string | null;
+  vip_price_cents: number | null;
+  age_min: number | null;
+  age_max: number | null;
+  short_description: string | null;
+};
+
+type CampFact = {
+  id: string;
+  curriculum_name: string;
+  location_name: string;
+  starts_on: string;
+  ends_on: string;
+  start_time: string;
+  end_time: string;
+  ages_min: number | null;
+  ages_max: number | null;
+  session_type: string;
+  current_enrollment: number;
+  week_num: number;
+};
+
+type GroundedFacts = {
+  programs: ProgramFact[];
+  camps: CampFact[];
+  topics: string[];
+};
+
+async function loadGroundedFacts(
+  supabase: SupabaseClient,
+  orgId: string,
+  structured: StructuredWhat | null,
+  fallbackTopics: string[],
+): Promise<GroundedFacts> {
+  if (!structured || structured.mode === "other") {
+    return { programs: [], camps: [], topics: structured?.topics ?? fallbackTopics };
+  }
+  if (structured.mode === "programs" && (structured.program_ids?.length ?? 0) > 0) {
+    const { data, error } = await supabase
+      .from("programs")
+      .select("id, term, curriculum, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents, age_min, age_max, short_description, program_locations(name)")
+      .eq("organization_id", orgId)
+      .in("id", structured.program_ids ?? []);
+    if (error) {
+      console.error("loadGroundedFacts programs error:", error.message);
+      return { programs: [], camps: [], topics: fallbackTopics };
+    }
+    const programs: ProgramFact[] = (data ?? []).map((r: Record<string, unknown>) => ({
+      id: r.id as string,
+      curriculum: r.curriculum as string,
+      school_name: ((r.program_locations as { name?: string } | null)?.name) ?? "(unknown school)",
+      term: r.term as string,
+      day_of_week: r.day_of_week as string,
+      first_session_date: (r.first_session_date as string | null) ?? null,
+      session_count: (r.session_count as number | null) ?? null,
+      price_cents: r.price_cents as number,
+      early_bird_price_cents: (r.early_bird_price_cents as number | null) ?? null,
+      early_bird_deadline: (r.early_bird_deadline as string | null) ?? null,
+      vip_price_cents: (r.vip_price_cents as number | null) ?? null,
+      age_min: (r.age_min as number | null) ?? null,
+      age_max: (r.age_max as number | null) ?? null,
+      short_description: (r.short_description as string | null) ?? null,
+    }));
+    const topics = [...new Set(programs.map((p) => p.curriculum).filter(Boolean))];
+    return { programs, camps: [], topics };
+  }
+  if (structured.mode === "camps" && (structured.camp_session_ids?.length ?? 0) > 0) {
+    const { data, error } = await supabase
+      .from("camp_sessions")
+      .select("id, week_num, session_type, location_name, curriculum_name, starts_on, ends_on, start_time, end_time, ages_min, ages_max, current_enrollment")
+      .eq("organization_id", orgId)
+      .in("id", structured.camp_session_ids ?? []);
+    if (error) {
+      console.error("loadGroundedFacts camps error:", error.message);
+      return { programs: [], camps: [], topics: fallbackTopics };
+    }
+    const camps: CampFact[] = (data ?? []).map((r: Record<string, unknown>) => ({
+      id: r.id as string,
+      curriculum_name: r.curriculum_name as string,
+      location_name: r.location_name as string,
+      starts_on: r.starts_on as string,
+      ends_on: r.ends_on as string,
+      start_time: r.start_time as string,
+      end_time: r.end_time as string,
+      ages_min: (r.ages_min as number | null) ?? null,
+      ages_max: (r.ages_max as number | null) ?? null,
+      session_type: r.session_type as string,
+      current_enrollment: (r.current_enrollment as number) ?? 0,
+      week_num: r.week_num as number,
+    }));
+    const topics = [...new Set(camps.map((c) => c.curriculum_name).filter(Boolean))];
+    return { programs: [], camps, topics };
+  }
+  return { programs: [], camps: [], topics: fallbackTopics };
+}
+
+function formatGroundedFactsForPrompt(facts: GroundedFacts, promo: PromoSettings | undefined): string {
+  if (facts.programs.length === 0 && facts.camps.length === 0) return "";
+
+  // Group programs by curriculum so Ennie sees "5 schools running Toy Designers"
+  // as one structured fact instead of 5 near-duplicate blocks.
+  const programsByCurriculum = new Map<string, ProgramFact[]>();
+  for (const p of facts.programs) {
+    if (!programsByCurriculum.has(p.curriculum)) programsByCurriculum.set(p.curriculum, []);
+    programsByCurriculum.get(p.curriculum)!.push(p);
+  }
+
+  const blocks: string[] = [];
+
+  for (const [curriculum, rows] of programsByCurriculum) {
+    const schoolList = [...new Set(rows.map((r) => r.school_name))];
+    const r0 = rows[0];
+    const parts = [`PROGRAM: "${curriculum}"`];
+    parts.push(schoolList.length === 1
+      ? `- Running at: ${schoolList[0]}`
+      : `- Running at ${schoolList.length} schools: ${schoolList.join(", ")}`);
+    if (r0.day_of_week) parts.push(`- Day of week: ${r0.day_of_week}`);
+    if (r0.first_session_date) parts.push(`- First session: ${r0.first_session_date}`);
+    if (r0.session_count) parts.push(`- Total sessions: ${r0.session_count}`);
+    if (r0.age_min != null && r0.age_max != null) parts.push(`- Ages: ${r0.age_min}-${r0.age_max}`);
+    parts.push(`- Regular price: $${(r0.price_cents / 100).toFixed(0)}`);
+    if (r0.early_bird_price_cents && r0.early_bird_deadline) {
+      const savings = (r0.price_cents - r0.early_bird_price_cents) / 100;
+      parts.push(`- Early bird price: $${(r0.early_bird_price_cents / 100).toFixed(0)} (save $${savings.toFixed(0)}) - ends ${r0.early_bird_deadline}`);
+    }
+    if (r0.vip_price_cents) parts.push(`- VIP full-year price: $${(r0.vip_price_cents / 100).toFixed(0)}`);
+    if (r0.short_description) parts.push(`- Description: ${r0.short_description}`);
+    blocks.push(parts.join("\n"));
+  }
+
+  const campsByCurriculum = new Map<string, CampFact[]>();
+  for (const c of facts.camps) {
+    if (!campsByCurriculum.has(c.curriculum_name)) campsByCurriculum.set(c.curriculum_name, []);
+    campsByCurriculum.get(c.curriculum_name)!.push(c);
+  }
+  for (const [curriculum, rows] of campsByCurriculum) {
+    const locations = [...new Set(rows.map((r) => r.location_name))];
+    const sorted = [...rows].sort((a, b) => a.starts_on.localeCompare(b.starts_on));
+    const dateRange = sorted.length > 1
+      ? `${sorted[0].starts_on} to ${sorted[sorted.length - 1].ends_on}`
+      : `${sorted[0].starts_on} to ${sorted[0].ends_on}`;
+    const r0 = sorted[0];
+    const parts = [`CAMP: "${curriculum}"`];
+    parts.push(`- Locations: ${locations.join(", ")}`);
+    parts.push(`- Dates: ${dateRange}`);
+    parts.push(`- Daily hours: ${r0.start_time} to ${r0.end_time}`);
+    if (r0.ages_min != null && r0.ages_max != null) parts.push(`- Ages: ${r0.ages_min}-${r0.ages_max}`);
+    if (r0.session_type) parts.push(`- Type: ${r0.session_type}`);
+    blocks.push(parts.join("\n"));
+  }
+
+  let result = `KNOWN PROGRAM DETAILS (factual ground-truth from the provider's actual scheduled catalog. Draw your specifics ONLY from these facts. Do not invent activities, skills, ages, session counts, prices, or dates beyond what is listed. Use approved merge tokens for per-recipient values like {{school}}, {{first_name}}; use these structured facts for content):\n\n${blocks.join("\n\n")}`;
+
+  // Auto-detect active early-bird across picked programs even if promo wasn't
+  // explicitly set — every FA26-style campaign benefits from leading with it.
+  const hasActiveEarlyBird = facts.programs.some((p) => p.early_bird_price_cents && p.early_bird_deadline);
+  const promoLines: string[] = [];
+  if (promo?.early_bird || (hasActiveEarlyBird && promo?.early_bird !== false)) {
+    promoLines.push(`- Lead with early-bird savings. Reference the deadline ({{early_bird_deadline}}) and savings amount ({{savings}}). Include 48h-before AND 24h-before reminder touchpoints.`);
+  }
+  if (promo?.vip_option) {
+    promoLines.push(`- STEAM VIP full-year option: mention it as an upsell in at least one touchpoint (refer to {{vip_price}}).`);
+  }
+  if (promo?.multi_camp_discount) {
+    promoLines.push(`- Multi-camp bundle discount: reference {{promo_code}} (10% off when registering for 2+ camps). Mention in the kickoff and at least one mid-window touchpoint.`);
+  }
+  if (promo?.code) {
+    promoLines.push(`- Custom promo code: reference {{promo_code}} = "${promo.code}". Explain the discount in plain language.`);
+  }
+  if (promoLines.length > 0) {
+    result += `\n\nPROMO GUIDANCE:\n${promoLines.join("\n")}`;
+  }
+
+  return result;
+}
+
 function formatCurriculaForPrompt(matches: CurriculumMatch[]): string {
   const matchedBlocks: string[] = [];
   for (const m of matches) {
@@ -509,7 +783,8 @@ function buildSystemPrompt(
   segmentSummary: string,
   todayIso: string,
   orgTimezone: string,
-  curriculumMatches: CurriculumMatch[],
+  programDetailsBlock: string, // pre-rendered KNOWN PROGRAM DETAILS section — grounded facts OR fuzzy curriculum matches
+  topicsForPrompt: string[],   // explicit topics list (derived from grounded facts when present, else from legacy what)
 ): string {
   const v = (org.brand_voice ?? {}) as {
     audience?: string;
@@ -526,7 +801,7 @@ function buildSystemPrompt(
   const favor = v.do_use?.length ? `\nThis provider reaches for these phrases — favor them when natural: ${v.do_use.join(", ")}` : "";
   const notes = v.additional_notes ? `\nProvider notes: ${v.additional_notes}` : "";
 
-  const topics = Array.isArray(inputs.what) ? inputs.what : [inputs.what];
+  const topics = topicsForPrompt;
   const topicLine = topics.length === 1
     ? `Campaign topic: "${topics[0]}"`
     : `Campaign topics (weave them across the schedule — each touchpoint covers one or more; tag each touchpoint with which topics it covers): ${topics.map((t) => `"${t}"`).join(", ")}`;
@@ -608,7 +883,7 @@ If the tenant has refined your voice over time (their "Ennie's notes" file), tho
 - "2 months": 5-7 emails. Slower build with longer gaps between general sends; ALWAYS the 48h + 24h reminders near deadlines.
 - "custom": pick a reasonable cadence with 6-10 day spacing.`;
 
-  const curriculumBlock = formatCurriculaForPrompt(curriculumMatches);
+  const curriculumBlock = programDetailsBlock;
 
   return [
     personaBlock,
@@ -1003,15 +1278,29 @@ serve(async (req: Request) => {
   // and adjust the filter without re-running the whole question flow.
   const zeroRecipientWarning = recipientCount === 0 ? "no_recipients_matched" : null;
 
-  // ---- Curriculum grounding ----
-  const topicsArr = Array.isArray(inputs.what) ? inputs.what : [inputs.what];
-  const curricula = await loadCurricula(supabase, organization_id);
-  const curriculumMatches = matchCurriculaToTopics(topicsArr, curricula);
+  // ---- Grounded facts (structured catalog picks) OR fuzzy curriculum match (legacy / mode='other') ----
+  const facts = await loadGroundedFacts(supabase, organization_id, parsed.structuredWhat, parsed.derivedTopics);
+  // topicsArr drives the prompt's topic line + the response's curriculum_matches
+  // echo. When grounded facts resolved, facts.topics is the curriculum names of
+  // picked rows; otherwise we keep the operator's typed topics from parseRequest.
+  const topicsArr = facts.topics.length > 0 ? facts.topics : parsed.derivedTopics;
+
+  let programDetailsBlock = "";
+  let curriculumMatches: CurriculumMatch[] = [];
+  if (facts.programs.length > 0 || facts.camps.length > 0) {
+    // Structured picks — use grounded facts. Skip fuzzy curriculum match entirely.
+    programDetailsBlock = formatGroundedFactsForPrompt(facts, inputs.promo);
+  } else {
+    // Legacy / mode='other' — fall back to fuzzy curriculum match against topic strings.
+    const curricula = await loadCurricula(supabase, organization_id);
+    curriculumMatches = matchCurriculaToTopics(topicsArr, curricula);
+    programDetailsBlock = formatCurriculaForPrompt(curriculumMatches);
+  }
 
   // ---- Build prompt + call Claude ----
   const orgTimezone = orgRow.timezone ?? "America/Los_Angeles";
   const todayIso = new Date().toISOString();
-  const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone, curriculumMatches);
+  const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone, programDetailsBlock, topicsArr);
   let claudeResult = await callClaude(systemPrompt, topicsArr);
   if (!claudeResult.ok) return jsonError(claudeResult.error, claudeResult.status);
   let { schedule, model } = claudeResult;
@@ -1128,6 +1417,15 @@ serve(async (req: Request) => {
       score: Number(m.score.toFixed(3)),
       matched: m.match ? { id: m.match.id, name: m.match.name } : null,
     })),
+    grounded_facts: (facts.programs.length > 0 || facts.camps.length > 0) ? {
+      mode: parsed.structuredWhat?.mode ?? null,
+      program_count: facts.programs.length,
+      camp_count: facts.camps.length,
+      curricula: facts.topics,
+      schools: [...new Set(facts.programs.map((p) => p.school_name))],
+      locations: [...new Set(facts.camps.map((c) => c.location_name))],
+      early_bird_active: facts.programs.some((p) => p.early_bird_price_cents && p.early_bird_deadline),
+    } : null,
     model,
     inputs_echo: inputs,
     ...(zeroRecipientWarning ? { warning: zeroRecipientWarning } : {}),

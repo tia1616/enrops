@@ -60,43 +60,20 @@ const INITIAL = {
   scheduled: false,
 };
 
-// Translate the new structured `what` shape into the legacy { what: string[],
-// who: { audience, filter } } shape the deployed edge function understands.
-// Q2 already resolves filter.type='auto' into a concrete scope before the
-// user reaches this code path, so this bridge only needs to derive topics
-// from program/camp picks and strip the internal `auto_derived` flag.
-// Removed entirely when task #7 ships and the edge function consumes
-// program_ids / camp_session_ids natively.
-async function bridgeInputsToLegacy(inputs, orgId) {
-  const w = inputs.what;
-  let topics = [];
-
-  if (w.mode === "other") {
-    topics = w.topics;
-  } else if (w.mode === "programs" && w.program_ids.length > 0) {
-    const { data } = await supabase
-      .from("programs")
-      .select("curriculum")
-      .in("id", w.program_ids);
-    topics = [...new Set((data ?? []).map((r) => r.curriculum).filter(Boolean))];
-  } else if (w.mode === "camps" && w.camp_session_ids.length > 0) {
-    const { data } = await supabase
-      .from("camp_sessions")
-      .select("curriculum_name")
-      .in("id", w.camp_session_ids);
-    topics = [...new Set((data ?? []).map((r) => r.curriculum_name).filter(Boolean))];
-  }
-
-  // Strip internal `auto_derived` flag — the edge function doesn't know about
-  // it. Defensive fallback if filter is still 'auto' for any reason.
+// Final cleanup before sending inputs to the edge function. Q2 already
+// resolves filter.type='auto' into a concrete scope, so this is just
+// belt-and-suspenders: strip the internal `auto_derived` flag and fall
+// back to master_list if filter somehow stayed 'auto'. The structured
+// `what` shape (mode + program_ids / camp_session_ids / topics) and
+// promo are forwarded as-is — the edge function loads the rows
+// server-side and injects grounded facts into Ennie's prompt.
+function prepareInputsForEdge(inputs) {
   const { auto_derived: _drop, ...filterCore } = inputs.who.filter ?? {};
   const cleanFilter = filterCore.type === "auto"
     ? { type: "master_list" }
     : filterCore;
-
   return {
     ...inputs,
-    what: topics,
     who: { ...inputs.who, filter: cleanFilter },
   };
 }
@@ -269,10 +246,10 @@ export default function AICampaignBuilder() {
     }
     dispatch({ type: "START_DRAFTING" });
 
-    // Bridge to the existing edge function (legacy `what: string[]` shape).
-    // Resolve curriculum names + auto-audience from the picked rows. The next
-    // commit moves this lookup server-side and consumes program_ids directly.
-    const inputsForEdge = await bridgeInputsToLegacy(state.inputs, org.id);
+    // Edge function consumes the structured `what` shape directly — loads
+    // program/camp rows server-side and injects grounded facts into Ennie's
+    // prompt. No more client-side bridge / topic derivation.
+    const inputsForEdge = prepareInputsForEdge(state.inputs);
 
     const { data, error } = await supabase.functions.invoke("marketing-draft-campaign", {
       body: { organization_id: org.id, inputs: inputsForEdge },
