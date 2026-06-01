@@ -22,6 +22,9 @@ const PANEL = "#fff";
 const ALLOWED_EXTS = ["pdf", "docx", "txt", "md", "xlsx"];
 const MAX_BYTES = 25 * 1024 * 1024;
 
+const GOOGLE_OAUTH_CLIENT_ID = import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID || "";
+const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
 const UNLOCK_ITEMS = [
   { strong: "parent-facing registration listing", rest: " — title, ages, description, themes, what kids will do" },
   { strong: "marketing flyer", rest: " + welcome emails you can send out to families" },
@@ -52,6 +55,10 @@ export default function CurriculumNew() {
   const [driveUrl, setDriveUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState([]); // [{ zone, message }]
+  // Connection check for the Drive section. null = unchecked, false = not
+  // connected (show "Connect in Settings" CTA), true = connected.
+  const [driveConnected, setDriveConnected] = useState(null);
+  const [driveConnectedEmail, setDriveConnectedEmail] = useState(null);
   const primaryRef = useRef(null);
   const materialsRef = useRef(null);
   const journalRef = useRef(null);
@@ -98,6 +105,75 @@ export default function CurriculumNew() {
     })();
     return () => { mounted = false; };
   }, [attachToId, org?.id]);
+
+  // Check if this org has Google Drive connected. Used to gate the Drive
+  // section's CTA — if not connected, we show "Connect Google Drive" inline.
+  // Re-runs when the user returns from /auth/google/callback with ?google=connected
+  // (the param is stripped after we react to it).
+  const [driveConnectToast, setDriveConnectToast] = useState(null); // 'connected' | 'error' | null
+  const [driveConnectError, setDriveConnectError] = useState(null);
+  useEffect(() => {
+    const googleStatus = searchParams.get("google");
+    if (googleStatus === "connected") {
+      setDriveConnectToast("connected");
+    } else if (googleStatus === "error") {
+      setDriveConnectToast("error");
+      setDriveConnectError(searchParams.get("error_message") || "Connection failed");
+    }
+    if (googleStatus) {
+      // Strip the query so refresh doesn't re-fire the toast.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("google");
+      url.searchParams.delete("error_message");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("organization_google_tokens")
+        .select("google_email")
+        .eq("organization_id", org.id)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (cancelled) return;
+      setDriveConnected(!!data);
+      setDriveConnectedEmail(data?.google_email ?? null);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id, driveConnectToast]);
+
+  // Kicks off the OAuth flow from THIS page so the user lands back here (not
+  // Settings) after connecting. Same machinery as AdminSettings.startConnect
+  // but stashes a `return_to` so the callback knows where to bounce.
+  function startConnectFromHere() {
+    if (!GOOGLE_OAUTH_CLIENT_ID) {
+      setErrors([{ zone: "drive_connect", message: "Google OAuth isn't configured (missing VITE_GOOGLE_OAUTH_CLIENT_ID)." }]);
+      return;
+    }
+    if (!org?.id) return;
+    const state = crypto.randomUUID();
+    const redirectUri = `${window.location.origin}/auth/google/callback`;
+    sessionStorage.setItem("google_oauth_state", state);
+    sessionStorage.setItem("google_oauth_org_id", org.id);
+    sessionStorage.setItem("google_oauth_redirect_uri", redirectUri);
+    sessionStorage.setItem("google_oauth_return_to", window.location.pathname + window.location.search);
+    const params = new URLSearchParams({
+      client_id: GOOGLE_OAUTH_CLIENT_ID,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      scope: ["openid", "email", GOOGLE_DRIVE_SCOPE].join(" "),
+      access_type: "offline",
+      prompt: "consent",
+      include_granted_scopes: "true",
+      state,
+    });
+    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  }
 
   function fileExt(name) {
     const m = /\.([a-z0-9]+)$/i.exec(name || "");
@@ -167,7 +243,11 @@ export default function CurriculumNew() {
   }
 
   async function onSubmit() {
-    if (!primary || busy) return;
+    const trimmedDriveUrl = driveUrl.trim();
+    const hasPrimary = !!primary;
+    const hasDriveUrl = !!trimmedDriveUrl;
+    if (!hasPrimary && !hasDriveUrl) return;
+    if (busy) return;
     if (attachToId && !attachTarget) return; // Attach mode but target not loaded
     setBusy(true);
     setErrors([]);
@@ -181,7 +261,9 @@ export default function CurriculumNew() {
       if (attachTarget) {
         curriculumId = attachTarget.id;
       } else {
-        const placeholderName = primary.name.replace(/\.[^.]+$/, "").slice(0, 200);
+        const placeholderName = hasPrimary
+          ? primary.name.replace(/\.[^.]+$/, "").slice(0, 200)
+          : "New curriculum"; // Replaced by extraction-derived name in step 4
         const { data: curRow, error: curErr } = await supabase
           .from("curricula")
           .insert({
@@ -196,38 +278,77 @@ export default function CurriculumNew() {
         curriculumId = curRow.id;
       }
 
-      // 2. Upload primary + optional secondaries. doc_type values must match
-      //    the curriculum_documents_doc_type_check constraint:
-      //    instructor_guide | materials_list | student_materials | other.
-      const primaryDocId = await uploadOne({
-        file: primary,
-        docType: "instructor_guide",
-        curriculumId,
-        organizationId: org.id,
-      });
-      if (materials) {
-        await uploadOne({ file: materials, docType: "materials_list", curriculumId, organizationId: org.id });
-      }
-      if (journal) {
-        await uploadOne({ file: journal, docType: "student_materials", curriculumId, organizationId: org.id });
-      }
-
-      // 3. Persist optional Drive URL (not extracted until Chunk 2.5)
-      if (driveUrl.trim()) {
-        await supabase.from("curriculum_documents").insert({
-          curriculum_id: curriculumId,
-          organization_id: org.id,
-          doc_type: "instructor_guide",
-          source_type: "drive_link",
-          drive_url: driveUrl.trim(),
-          extraction_status: "pending",
-        });
-      }
-
-      // 4. Kick off the edge function (background; returns immediately)
+      // 2. Get an auth session for the edge function calls (used by both
+      //    Drive-import path and upload path below).
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Sign in expired. Reload and try again.");
 
+      // 3. Pick the "primary" doc that extraction will run on. Upload mode
+      //    creates it via Storage. Drive mode goes through fetch-drive-document
+      //    which fetches the doc text + creates the curriculum_documents row.
+      let primaryDocId;
+      if (hasPrimary) {
+        primaryDocId = await uploadOne({
+          file: primary,
+          docType: "instructor_guide",
+          curriculumId,
+          organizationId: org.id,
+        });
+      } else {
+        const resp = await fetch(`${API_BASE}/fetch-drive-document`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            curriculum_id: curriculumId,
+            organization_id: org.id,
+            drive_url: trimmedDriveUrl,
+            doc_type: "instructor_guide",
+          }),
+        });
+        const json = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          if (json.code === "not_connected") {
+            throw new Error("Google Drive isn't connected for this organization. Go to Settings → Connections and connect it first.");
+          }
+          throw new Error(json.error || `Couldn't fetch the Drive document (${resp.status}).`);
+        }
+        primaryDocId = json.document_id;
+      }
+
+      // Optional secondary uploads (file mode only; Drive secondary attachments
+      // can come later via the curriculum-detail edit page).
+      if (hasPrimary && materials) {
+        await uploadOne({ file: materials, docType: "materials_list", curriculumId, organizationId: org.id });
+      }
+      if (hasPrimary && journal) {
+        await uploadOne({ file: journal, docType: "student_materials", curriculumId, organizationId: org.id });
+      }
+
+      // If the operator both uploaded a file AND pasted a Drive link, record
+      // the Drive link as a secondary (informational) document. Extraction
+      // still runs on the uploaded primary.
+      if (hasPrimary && hasDriveUrl) {
+        await fetch(`${API_BASE}/fetch-drive-document`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            curriculum_id: curriculumId,
+            organization_id: org.id,
+            drive_url: trimmedDriveUrl,
+            doc_type: "other",
+          }),
+        }).catch(() => {});
+      }
+
+      // 4. Kick off the extraction edge function (background; returns immediately)
       const resp = await fetch(`${API_BASE}/extract-curriculum-details`, {
         method: "POST",
         headers: {
@@ -256,7 +377,8 @@ export default function CurriculumNew() {
     }
   }
 
-  const submitDisabled = !primary || busy || (attachExistingWork && !confirmedReplace);
+  const submitDisabled =
+    (!primary && !driveUrl.trim()) || busy || (attachExistingWork && !confirmedReplace);
   const primaryErr = errors.find((e) => e.zone === "primary")?.message;
   const materialsErr = errors.find((e) => e.zone === "materials")?.message;
   const journalErr = errors.find((e) => e.zone === "journal")?.message;
@@ -421,23 +543,57 @@ export default function CurriculumNew() {
         )}
 
         {/* Drive link */}
-        <details style={driveSection}>
+        <details style={driveSection} open={driveConnected === false || (!primary && !!driveUrl)}>
           <summary style={driveSummary}>
             <span style={{ marginRight: 8, fontSize: 11, color: PURPLE }}>▸</span>
-            Or link a Google Doc
+            Or import from Google Drive
           </summary>
           <div style={{ paddingTop: 14 }}>
-            <input
-              type="text"
-              value={driveUrl}
-              onChange={(e) => setDriveUrl(e.target.value)}
-              placeholder="Paste a Google Doc / Drive URL"
-              disabled={true}
-              style={driveInput}
-            />
-            <div style={driveHint}>
-              <strong style={{ color: INK }}>Coming soon:</strong> Drive import is the next thing we're building. For now, please upload a file.
-            </div>
+            {driveConnectToast === "connected" && (
+              <div style={successPill}>
+                ✓ Google Drive connected. Paste a doc link below to import.
+              </div>
+            )}
+            {driveConnectToast === "error" && (
+              <div style={errorPill}>
+                Google Drive connection failed: {driveConnectError}
+              </div>
+            )}
+
+            {driveConnected === false ? (
+              <div style={connectCallout}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, color: INK, fontSize: 14, marginBottom: 4 }}>
+                    Connect Google Drive to import directly
+                  </div>
+                  <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
+                    One-time sign-in with Google. After that, paste any Drive doc link here and we'll pull the content automatically.
+                  </div>
+                </div>
+                <button type="button" onClick={startConnectFromHere} disabled={busy} style={connectBtn}>
+                  Connect Google Drive
+                </button>
+              </div>
+            ) : driveConnected === true ? (
+              <>
+                <input
+                  type="text"
+                  value={driveUrl}
+                  onChange={(e) => setDriveUrl(e.target.value)}
+                  placeholder="Paste a Google Doc / Drive URL"
+                  disabled={busy}
+                  style={{ ...driveInput, background: busy ? "#f5f4ec" : "#fff" }}
+                />
+                <div style={driveHint}>
+                  Connected as <strong style={{ color: INK }}>{driveConnectedEmail}</strong>. Works with Google Docs, Slides, Sheets, PDFs, and Word files in your Drive.
+                </div>
+              </>
+            ) : (
+              <div style={driveHint}>Checking connection…</div>
+            )}
+            {errors.find((e) => e.zone === "drive_connect") && (
+              <div style={inlineError}>{errors.find((e) => e.zone === "drive_connect").message}</div>
+            )}
           </div>
         </details>
 
@@ -445,9 +601,9 @@ export default function CurriculumNew() {
 
         <div style={ctaRow}>
           <div style={{ color: MUTED, fontSize: 13 }}>
-            {primary
+            {primary || driveUrl.trim()
               ? "Takes 30–45 seconds. You'll review everything we found before it goes live."
-              : "Drop a file and we'll get started."}
+              : "Drop a file or paste a Drive link to get started."}
           </div>
           <button
             type="button"
@@ -675,6 +831,47 @@ const driveInput = {
   background: "#f5f4ec",
 };
 const driveHint = { fontSize: 12, color: MUTED, marginTop: 8 };
+const connectCallout = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+  padding: "14px 16px",
+  background: "rgba(140, 136, 255, 0.08)",
+  border: `1px solid ${RULE}`,
+  borderLeft: `3px solid ${VIOLET}`,
+  borderRadius: 6,
+};
+const connectBtn = {
+  padding: "9px 14px",
+  background: PURPLE,
+  color: "#fff",
+  border: "none",
+  borderRadius: 6,
+  fontFamily: "inherit",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
+};
+const successPill = {
+  padding: "8px 12px",
+  background: "#f0f8f0",
+  border: "1px solid #bfd9bf",
+  color: "#2f7d32",
+  borderRadius: 4,
+  fontSize: 13,
+  marginBottom: 12,
+};
+const errorPill = {
+  padding: "8px 12px",
+  background: "#fff5f5",
+  border: "1px solid #f0c4c4",
+  color: "#7a1a1a",
+  borderRadius: 4,
+  fontSize: 13,
+  marginBottom: 12,
+};
 
 const ctaRow = {
   marginTop: 24,

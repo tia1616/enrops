@@ -68,12 +68,15 @@ export default function CurriculumExtracting() {
       }
       setCurriculum(curRow);
 
+      // Match both source types — upload (file dropped on Step 1) and
+      // drive_link (fetched from Drive via fetch-drive-document). Both go
+      // through the same extraction path.
       const { data: docRow, error: docErr } = await supabase
         .from("curriculum_documents")
         .select("id, original_filename, extraction_status, status_message, extraction_error")
         .eq("curriculum_id", curriculumId)
         .eq("doc_type", "instructor_guide")
-        .eq("source_type", "upload")
+        .in("source_type", ["upload", "drive_link"])
         .order("uploaded_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -161,34 +164,16 @@ export default function CurriculumExtracting() {
     navigate(`/admin/curricula/${curriculumId}/review`);
   }
 
-  if (loading) {
-    return <div style={{ color: MUTED, padding: 24 }}>Loading…</div>;
-  }
-  if (loadError) {
-    // Common case for backfilled drafts (no upload doc): nudge to the review
-    // screen where the operator can edit fields manually instead of dead-ending.
-    const noDocCase = /uploaded doc/i.test(loadError);
-    return (
-      <div style={{ ...errorBox, maxWidth: 520 }}>
-        {noDocCase
-          ? "This curriculum doesn't have an uploaded document yet — there's nothing to extract. Edit the details manually, or upload a curriculum doc from the library."
-          : `Couldn't load this curriculum: ${loadError}`}
-        <div style={{ marginTop: 12, display: "flex", gap: 14 }}>
-          {curriculum && noDocCase && (
-            <Link to={`/admin/curricula/${curriculum.id}/review`} style={linkStyle}>Edit details →</Link>
-          )}
-          <Link to="/admin/curricula" style={linkStyle}>← Back to Curricula</Link>
-        </div>
-      </div>
-    );
-  }
-
+  // NOTE: these status derivations + timer hooks MUST live before any early
+  // returns below — React requires a stable hook-call order across renders.
+  // Earlier they sat after `if (loading) return …` which silently worked
+  // when loadError fired (early return on every render), but broke as soon
+  // as a curriculum loaded successfully (first render returned early, second
+  // render ran the hooks, hook count changed → "Rendered more hooks…").
   const isDone = status === "complete";
   const isFailed = status === "failed";
   const isWorking = status === "pending" || status === "processing";
 
-  // Start the elapsed timer the first time we observe a working status;
-  // stop and clear when extraction finishes.
   useEffect(() => {
     if (isWorking && extractStartedAt == null) {
       setExtractStartedAt(Date.now());
@@ -211,6 +196,28 @@ export default function CurriculumExtracting() {
     const m = Math.floor(sec / 60);
     const s = sec % 60;
     return `${m}:${s.toString().padStart(2, "0")}`;
+  }
+
+  if (loading) {
+    return <div style={{ color: MUTED, padding: 24 }}>Loading…</div>;
+  }
+  if (loadError) {
+    // Common case for backfilled drafts (no upload doc): nudge to the review
+    // screen where the operator can edit fields manually instead of dead-ending.
+    const noDocCase = /uploaded doc/i.test(loadError);
+    return (
+      <div style={{ ...errorBox, maxWidth: 520 }}>
+        {noDocCase
+          ? "This curriculum doesn't have an uploaded document yet — there's nothing to extract. Edit the details manually, or upload a curriculum doc from the library."
+          : `Couldn't load this curriculum: ${loadError}`}
+        <div style={{ marginTop: 12, display: "flex", gap: 14 }}>
+          {curriculum && noDocCase && (
+            <Link to={`/admin/curricula/${curriculum.id}/review`} style={linkStyle}>Edit details →</Link>
+          )}
+          <Link to="/admin/curricula" style={linkStyle}>← Back to Curricula</Link>
+        </div>
+      </div>
+    );
   }
 
   return (

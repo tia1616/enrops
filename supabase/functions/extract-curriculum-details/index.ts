@@ -255,29 +255,40 @@ async function processExtractionInBackground(
   try {
     const { data: doc, error: docErr } = await admin
       .from("curriculum_documents")
-      .select("id, curriculum_id, organization_id, storage_path, source_type, original_filename")
+      .select("id, curriculum_id, organization_id, storage_path, source_type, original_filename, extracted_text")
       .eq("id", documentId)
       .single();
     if (docErr || !doc) throw new Error(`Document not found: ${docErr?.message ?? "no row"}`);
-    if (doc.source_type !== "upload" || !doc.storage_path) {
-      throw new Error("Only uploaded documents can be extracted right now (Drive import lands in Chunk 2.5).");
-    }
     curriculumId = doc.curriculum_id;
     organizationId = doc.organization_id;
 
     await markStatus("processing", "Extracting your curriculum...");
 
-    const filename = doc.original_filename ?? doc.storage_path;
-    const ext = detectExt(filename);
-    if (!ext) throw new Error("Unsupported file type. Use .pdf, .docx, .txt, .md, or .xlsx");
+    // Source-type dispatch:
+    //   - upload         → download from storage, parse based on file extension
+    //   - drive_link + extracted_text → Google native doc already exported to text
+    //     by fetch-drive-document; use that text directly
+    //   - drive_link + storage_path   → raw PDF/Word mirrored into our bucket
+    //     by fetch-drive-document; download + parse like an upload
+    //   - else           → unsupported
+    let documentText: string;
+    if (doc.source_type === "upload" || (doc.source_type === "drive_link" && doc.storage_path)) {
+      if (!doc.storage_path) throw new Error("Document is missing its storage path.");
+      const filename = doc.original_filename ?? doc.storage_path;
+      const ext = detectExt(filename);
+      if (!ext) throw new Error("Unsupported file type. Use .pdf, .docx, .txt, .md, or .xlsx");
+      const { data: fileData, error: dlErr } = await admin.storage
+        .from(BUCKET)
+        .download(doc.storage_path);
+      if (dlErr || !fileData) throw new Error(`Could not download document: ${dlErr?.message ?? "no file"}`);
+      const bytes = new Uint8Array(await fileData.arrayBuffer());
+      documentText = await parseDocument(bytes, ext);
+    } else if (doc.source_type === "drive_link" && doc.extracted_text) {
+      documentText = doc.extracted_text;
+    } else {
+      throw new Error("This document has no readable content. Re-import it from Drive or upload directly.");
+    }
 
-    const { data: fileData, error: dlErr } = await admin.storage
-      .from(BUCKET)
-      .download(doc.storage_path);
-    if (dlErr || !fileData) throw new Error(`Could not download document: ${dlErr?.message ?? "no file"}`);
-
-    const bytes = new Uint8Array(await fileData.arrayBuffer());
-    const documentText = await parseDocument(bytes, ext);
     if (!documentText || documentText.trim().length < 20) {
       throw new Error("We couldn't read any text from that document. If it's a scanned PDF, try re-exporting it.");
     }

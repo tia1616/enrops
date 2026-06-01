@@ -2,6 +2,12 @@
 
 
 
+\## 2026-06-01
+
+\- \[task] Set up a customer-support inbox for Enrops (e.g. hello@enrops.com or support@enrops.com). Mailbox must actually receive mail (forward to Jessica or shared inbox), Resend-verify the domain so platform sends from it, and swap into: (1) Google OAuth consent screen → User support email, (2) `_shared/orgBrand.ts` ENROPS_PLATFORM_BRAND defaults, (3) any other places currently using `jessica@journeytosteam.com` as a stand-in for an Enrops platform address.
+
+
+
 \## 2026-05-20
 
 \- \[task] Enable google drive doc and pdf import for curricula
