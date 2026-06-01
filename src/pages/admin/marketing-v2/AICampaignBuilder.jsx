@@ -62,43 +62,42 @@ const INITIAL = {
 
 // Translate the new structured `what` shape into the legacy { what: string[],
 // who: { audience, filter } } shape the deployed edge function understands.
-// Removed when the edge function is upgraded to consume program_ids /
-// camp_session_ids natively (next commit in this rewrite).
+// Q2 already resolves filter.type='auto' into a concrete scope before the
+// user reaches this code path, so this bridge only needs to derive topics
+// from program/camp picks and strip the internal `auto_derived` flag.
+// Removed entirely when task #7 ships and the edge function consumes
+// program_ids / camp_session_ids natively.
 async function bridgeInputsToLegacy(inputs, orgId) {
   const w = inputs.what;
   let topics = [];
-  let resolvedFilter = inputs.who.filter;
 
   if (w.mode === "other") {
     topics = w.topics;
   } else if (w.mode === "programs" && w.program_ids.length > 0) {
     const { data } = await supabase
       .from("programs")
-      .select("curriculum, program_location_id")
+      .select("curriculum")
       .in("id", w.program_ids);
-    const rows = data ?? [];
-    topics = [...new Set(rows.map((r) => r.curriculum).filter(Boolean))];
-    if (resolvedFilter?.type === "auto") {
-      const school_ids = [...new Set(rows.map((r) => r.program_location_id).filter(Boolean))];
-      resolvedFilter = school_ids.length > 0
-        ? { type: "school", school_ids }
-        : { type: "master_list" };
-    }
+    topics = [...new Set((data ?? []).map((r) => r.curriculum).filter(Boolean))];
   } else if (w.mode === "camps" && w.camp_session_ids.length > 0) {
     const { data } = await supabase
       .from("camp_sessions")
       .select("curriculum_name")
       .in("id", w.camp_session_ids);
     topics = [...new Set((data ?? []).map((r) => r.curriculum_name).filter(Boolean))];
-    if (resolvedFilter?.type === "auto") {
-      resolvedFilter = { type: "master_list" };
-    }
   }
+
+  // Strip internal `auto_derived` flag — the edge function doesn't know about
+  // it. Defensive fallback if filter is still 'auto' for any reason.
+  const { auto_derived: _drop, ...filterCore } = inputs.who.filter ?? {};
+  const cleanFilter = filterCore.type === "auto"
+    ? { type: "master_list" }
+    : filterCore;
 
   return {
     ...inputs,
     what: topics,
-    who: { ...inputs.who, filter: resolvedFilter },
+    who: { ...inputs.who, filter: cleanFilter },
   };
 }
 

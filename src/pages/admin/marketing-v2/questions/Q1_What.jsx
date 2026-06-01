@@ -36,7 +36,7 @@ export default function Q1_What({ inputs, setField, onNext, canNext }) {
   return (
     <QuestionStep
       title="What are you marketing?"
-      helper="Pick from your catalog — Ennie writes the campaign from those actual programs."
+      helper="Pick from your catalog — Ennie will use these to plan your campaign."
       onNext={onNext}
       canNext={canNext}
     >
@@ -93,37 +93,60 @@ function ProgramsPicker({ orgId, selected, onChange }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
   const [q, setQ] = useState("");
+  const [lowOnly, setLowOnly] = useState(false);
 
   useEffect(() => {
     if (!orgId) return;
     let alive = true;
     setRows(null);
     setErr(null);
-    supabase
-      .from("programs")
-      .select("id, term, curriculum, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, status, program_location_id, program_locations(name)")
-      .eq("organization_id", orgId)
-      .gte("first_session_date", todayIso())
-      .order("term")
-      .order("first_session_date")
-      .then(({ data, error }) => {
-        if (!alive) return;
-        if (error) { setErr(error.message); return; }
-        setRows(data ?? []);
-      });
+
+    // Fetch programs + confirmed-registration counts in parallel, then merge
+    // client-side. status='open' filter hides drafts; first_session_date
+    // filter hides past programs.
+    Promise.all([
+      supabase
+        .from("programs")
+        .select("id, term, curriculum, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, max_capacity, status, program_location_id, program_locations(name)")
+        .eq("organization_id", orgId)
+        .eq("status", "open")
+        .gte("first_session_date", todayIso())
+        .order("term")
+        .order("first_session_date"),
+      supabase
+        .from("registrations")
+        .select("program_id")
+        .eq("organization_id", orgId)
+        .eq("status", "confirmed")
+        .not("program_id", "is", null),
+    ]).then(([progRes, regRes]) => {
+      if (!alive) return;
+      if (progRes.error) { setErr(progRes.error); return; }
+      // Registrations failure is non-fatal — rows still render without enrollment.
+      const countByProgram = new Map();
+      for (const r of regRes.data ?? []) {
+        countByProgram.set(r.program_id, (countByProgram.get(r.program_id) ?? 0) + 1);
+      }
+      const merged = (progRes.data ?? []).map((p) => ({
+        ...p,
+        enrolled: countByProgram.get(p.id) ?? 0,
+      }));
+      setRows(merged);
+    });
     return () => { alive = false; };
   }, [orgId]);
 
-  // group rows by term
+  // group rows by term — applies search + low-enrollment filter
   const grouped = useMemo(() => {
     if (!rows) return null;
     const needle = q.trim().toLowerCase();
-    const filtered = needle
+    let filtered = needle
       ? rows.filter((r) =>
           (r.curriculum || "").toLowerCase().includes(needle) ||
           (r.program_locations?.name || "").toLowerCase().includes(needle)
         )
       : rows;
+    if (lowOnly) filtered = filtered.filter(isLowEnrollment);
     const groups = new Map();
     for (const r of filtered) {
       const key = r.term || "(no term)";
@@ -131,7 +154,7 @@ function ProgramsPicker({ orgId, selected, onChange }) {
       groups.get(key).push(r);
     }
     return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [rows, q]);
+  }, [rows, q, lowOnly]);
 
   function toggleOne(id) {
     onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
@@ -143,19 +166,38 @@ function ProgramsPicker({ orgId, selected, onChange }) {
   }
 
   if (!orgId) return <Hint>Loading org…</Hint>;
-  if (err) return <ErrorBox msg={err} />;
+  if (err) return <ErrorBox error={err} />;
   if (!rows) return <Hint>Loading your catalog…</Hint>;
   if (rows.length === 0) {
     return (
       <Hint>
-        No upcoming programs in your catalog. Add some under Programs → Curricula + schedule them in Programs → Scheduled programs.
+        No upcoming open programs in your catalog. Add some under Programs → Curricula and schedule them in Programs → Scheduled programs (make sure status is "open").
       </Hint>
     );
   }
 
+  const lowCount = rows.filter(isLowEnrollment).length;
+
   return (
     <div>
       <SearchInput value={q} onChange={setQ} placeholder="Search by curriculum or school…" />
+
+      {/* Filter chip row */}
+      <div style={{
+        display: "flex", gap: 6, padding: "6px 10px", background: "#fff",
+        borderLeft: `1px solid ${RULE}`, borderRight: `1px solid ${RULE}`, borderBottom: `1px solid ${RULE}`,
+        alignItems: "center", flexWrap: "wrap",
+      }}>
+        <FilterChip
+          active={lowOnly}
+          onClick={() => setLowOnly((v) => !v)}
+          label={`Low enrollment only${lowCount > 0 ? ` (${lowCount})` : ""}`}
+          disabled={lowCount === 0}
+        />
+        <span style={{ fontSize: 11, color: MUTED, marginLeft: "auto" }}>
+          Showing only open programs starting today or later
+        </span>
+      </div>
 
       <div style={{ maxHeight: 480, overflowY: "auto", border: `1px solid ${RULE}`, borderTop: "none", borderRadius: "0 0 6px 6px", background: "#fff" }}>
         {grouped.length === 0 && <Hint>No matches.</Hint>}
@@ -201,6 +243,10 @@ function ProgramRow({ row, checked, onToggle }) {
   const ebActive = row.early_bird_price_cents && row.early_bird_deadline && row.early_bird_deadline >= todayIso();
   const ebDate = ebActive ? formatShortDate(row.early_bird_deadline) : null;
   const firstDate = row.first_session_date ? formatShortDate(row.first_session_date) : "TBD";
+  const enrolled = row.enrolled ?? 0;
+  const cap = row.max_capacity;
+  const enrollmentText = cap ? `${enrolled}/${cap} enrolled` : `${enrolled} enrolled`;
+  const low = isLowEnrollment(row);
   return (
     <label style={{
       display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px",
@@ -211,13 +257,44 @@ function ProgramRow({ row, checked, onToggle }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
           <span style={{ fontWeight: 600, color: INK, fontSize: 14 }}>{row.curriculum}</span>
-          {ebActive && <Badge color={OK} bg="#EAF3DE">Early bird · ends {ebDate}</Badge>}
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {ebActive && <Badge color={OK} bg="#EAF3DE">Early bird · ends {ebDate}</Badge>}
+            {low && <Badge color={WARN} bg="#FAEEDA">Low enrollment</Badge>}
+          </div>
         </div>
         <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-          {school} · {row.day_of_week}s · starts {firstDate} · {row.session_count} sessions · ${(row.price_cents / 100).toFixed(0)}
+          {school} · {row.day_of_week}s · starts {firstDate} · {row.session_count} sessions · ${(row.price_cents / 100).toFixed(0)} · {enrollmentText}
         </div>
       </div>
     </label>
+  );
+}
+
+// "Low enrollment" = under half of capacity, OR (when no capacity set) < 6 enrolled.
+// Conservative threshold so we don't false-positive on programs that just opened.
+function isLowEnrollment(row) {
+  const enrolled = row.enrolled ?? 0;
+  const cap = row.max_capacity;
+  if (cap && cap > 0) return enrolled < cap * 0.5;
+  return enrolled > 0 && enrolled < 6;
+}
+
+function FilterChip({ active, onClick, label, disabled }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "4px 10px", borderRadius: 999, fontSize: 11, fontWeight: 600,
+        background: active ? PURPLE : "#fff",
+        color: active ? "#fff" : (disabled ? "#a0a0a0" : INK),
+        border: `1px solid ${active ? PURPLE : RULE}`,
+        cursor: disabled ? "default" : "pointer",
+        fontFamily: "inherit",
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -241,7 +318,7 @@ function CampsPicker({ orgId, selected, onChange }) {
       .order("location_name")
       .then(({ data, error }) => {
         if (!alive) return;
-        if (error) { setErr(error.message); return; }
+        if (error) { setErr(error); return; }
         setRows(data ?? []);
       });
     return () => { alive = false; };
@@ -275,7 +352,7 @@ function CampsPicker({ orgId, selected, onChange }) {
   }
 
   if (!orgId) return <Hint>Loading org…</Hint>;
-  if (err) return <ErrorBox msg={err} />;
+  if (err) return <ErrorBox error={err} />;
   if (!rows) return <Hint>Loading your catalog…</Hint>;
   if (rows.length === 0) {
     return <Hint>No upcoming camps in your catalog.</Hint>;
@@ -459,8 +536,53 @@ function SearchInput({ value, onChange, placeholder }) {
 function Hint({ children }) {
   return <div style={{ padding: 14, fontSize: 12, color: MUTED, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 6 }}>{children}</div>;
 }
-function ErrorBox({ msg }) {
-  return <div style={{ padding: 12, fontSize: 12, color: "#b3261e", background: "#fdecea", border: "1px solid #f5c2c0", borderRadius: 6 }}>Error: {msg}</div>;
+
+// Translates Supabase errors to plain-English copy. The technical detail
+// stays available behind a "show details" toggle for debugging without
+// leaking SQL-speak into the operator-facing surface.
+function ErrorBox({ error }) {
+  const [open, setOpen] = useState(false);
+  const friendly = friendlyErrorMessage(error);
+  const detail = error?.message || error?.error_description || String(error);
+  return (
+    <div style={{ padding: 14, fontSize: 13, color: "#7a2018", background: "#fdecea", border: "1px solid #f5c2c0", borderRadius: 6 }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{friendly}</div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          background: "transparent", border: "none", padding: 0, marginTop: 4,
+          color: "#7a2018", textDecoration: "underline", cursor: "pointer",
+          fontSize: 11, fontFamily: "inherit",
+        }}
+      >
+        {open ? "Hide details" : "Show technical details"}
+      </button>
+      {open && (
+        <div style={{ marginTop: 6, padding: 8, background: "#fbd9d6", borderRadius: 4, fontFamily: "ui-monospace, monospace", fontSize: 11, color: "#5a1a14", wordBreak: "break-word" }}>
+          {detail}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function friendlyErrorMessage(error) {
+  const code = error?.code || "";
+  const msg = (error?.message || "").toLowerCase();
+  if (msg.includes("permission denied") || msg.includes("rls") || code === "42501") {
+    return "We couldn't load your catalog. You may need to sign in again.";
+  }
+  if (msg.includes("jwt") && msg.includes("expired")) {
+    return "Your session expired. Refresh the page to sign back in.";
+  }
+  if (msg.includes("network") || msg.includes("fetch") || msg.includes("failed to fetch")) {
+    return "Lost connection. Try again in a moment.";
+  }
+  if (msg.includes("timeout")) {
+    return "That took too long to load. Try again.";
+  }
+  return "Something went wrong loading your catalog.";
 }
 function Badge({ color, bg, children }) {
   return (
