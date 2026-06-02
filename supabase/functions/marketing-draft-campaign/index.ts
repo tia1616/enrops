@@ -1591,17 +1591,22 @@ serve(async (req: Request) => {
         );
 
         if (excludedEmails.size > 0) {
-          // 3. Filter recipientIds by looking up their emails
-          const { data: rcps } = await supabase
+          // 3. Find the EXCLUDED recipient ids directly — query by email IN
+          // (small set), not by id IN (audience). The earlier shape was
+          // '.in("id", [778 uuids])' which blew past PostgREST's URL length
+          // limit, returned empty, and the filter logic mistakenly treated
+          // every recipient as "already registered." Querying the smaller
+          // side keeps the URL well under any limit.
+          const { data: toExclude } = await supabase
             .from("marketing_recipients")
-            .select("id, email")
-            .in("id", recipientIds);
-          const filtered = ((rcps ?? []) as Array<{ id: string; email: string }>)
-            .filter((r) => !excludedEmails.has((r.email || "").toLowerCase()))
-            .map((r) => r.id);
-          excludedCount = recipientIds.length - filtered.length;
-          recipientIds = filtered;
-          recipientCount = filtered.length;
+            .select("id")
+            .eq("organization_id", organization_id)
+            .in("email", [...excludedEmails]);
+          const excludedIds = new Set(((toExclude ?? []) as Array<{ id: string }>).map((r) => r.id));
+          const before = recipientIds.length;
+          recipientIds = recipientIds.filter((id) => !excludedIds.has(id));
+          excludedCount = before - recipientIds.length;
+          recipientCount = recipientIds.length;
           if (excludedCount > 0) {
             segment_summary = `${segment_summary} (minus ${excludedCount} already registered)`;
           }
