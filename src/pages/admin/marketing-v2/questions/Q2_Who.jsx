@@ -230,57 +230,82 @@ async function deriveScopeFromPicks(orgId, what) {
   }
 
   if (what.mode === "camps" && (what.camp_session_ids?.length ?? 0) > 0) {
+    // Derive area via each camp's location.district (NOT school_name —
+    // camps run at parks / rec centers / libraries, not schools, so the
+    // parent's school_name almost never matches a camp's location_name).
     const { data: camps } = await supabase
       .from("camp_sessions")
-      .select("location_name")
+      .select("location_name, program_locations(district)")
       .in("id", what.camp_session_ids);
-    const locationNames = [...new Set((camps ?? []).map((c) => c.location_name).filter(Boolean))];
-    if (locationNames.length === 0) {
+    const campsByDistrict = new Map();
+    let untaggedCount = 0;
+    for (const c of camps ?? []) {
+      const d = c.program_locations?.district;
+      if (!d) { untaggedCount++; continue; }
+      campsByDistrict.set(d, (campsByDistrict.get(d) ?? 0) + 1);
+    }
+    if (campsByDistrict.size === 0) {
       return {
         filter: { type: "master_list" },
-        info: { headline: "Master list (everyone)", sub: "Camps have no location info — sending to the full list.", tone: "warn" },
+        info: {
+          headline: "Master list (everyone)",
+          sub: "Your picked camps' locations don't have a district set yet. Sending to the full list — set district on the location in Programs → Locations, or pick a specific area below.",
+          tone: "warn",
+        },
       };
     }
-    // Look up parents who registered at any of these locations + their geo_segment
+
+    // Cross-reference districts with recipient geo_segments to find areas that
+    // actually have parents. A district with zero parents is useless to target.
+    const districtList = [...campsByDistrict.keys()];
     const { data: recipients } = await supabase
       .from("marketing_recipients")
       .select("geo_segment")
       .eq("organization_id", orgId)
-      .in("school_name", locationNames)
-      .not("geo_segment", "is", null);
-    const counts = new Map();
+      .in("geo_segment", districtList);
+    const parentsByArea = new Map();
     for (const r of recipients ?? []) {
-      counts.set(r.geo_segment, (counts.get(r.geo_segment) ?? 0) + 1);
+      parentsByArea.set(r.geo_segment, (parentsByArea.get(r.geo_segment) ?? 0) + 1);
     }
-    if (counts.size === 0) {
+    const areasWithParents = [...campsByDistrict.entries()].filter(([d]) => parentsByArea.has(d));
+
+    if (areasWithParents.length === 0) {
+      const districtSummary = districtList.slice(0, 3).join(", ");
       return {
         filter: { type: "master_list" },
-        info: { headline: "Master list (everyone)", sub: "We couldn't match your camps' locations to a parent area — sending to the full list. You can pick a specific area below.", tone: "warn" },
+        info: {
+          headline: "Master list (everyone)",
+          sub: `Your camps are in ${districtSummary}, but no parents in your list are tagged to those areas. Sending to the full list — or pick a specific area below.`,
+          tone: "warn",
+        },
       };
     }
-    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-    const [topArea, topCount] = sorted[0];
-    const totalMatched = sorted.reduce((s, [, n]) => s + n, 0);
-    const dominance = topCount / totalMatched;
-    if (sorted.length === 1 || dominance >= 0.7) {
-      const otherAreas = sorted.length > 1 ? ` (also a few from ${sorted.slice(1, 3).map(([k]) => k).join(", ")})` : "";
+
+    if (areasWithParents.length === 1) {
+      const [area] = areasWithParents[0];
       return {
-        filter: { type: "area", area: topArea },
+        filter: { type: "area", area },
         info: {
-          headline: `Parents in ${topArea}`,
-          sub: `Derived from where parents at your camps' locations live${otherAreas}. Change the scope below to override.`,
+          headline: `Parents in ${area}`,
+          sub: `Derived from your camps' location districts. ${parentsByArea.get(area) ?? 0} parents in this area. Change the scope below to override.`,
           tone: "ok",
         },
       };
     }
-    // Picks spread across areas with no dominant one — fall back to master list with notice
-    const areaList = sorted.slice(0, 3).map(([k, n]) => `${k} (${n})`).join(", ");
+
+    // Multiple areas — pick the one with the most parents to maximize reach,
+    // and surface the alternatives so the operator can override.
+    const sorted = [...areasWithParents]
+      .map(([d, campCount]) => ({ area: d, campCount, parents: parentsByArea.get(d) ?? 0 }))
+      .sort((a, b) => b.parents - a.parents);
+    const top = sorted[0];
+    const others = sorted.slice(1, 4).map((s) => `${s.area} (${s.parents})`).join(", ");
     return {
-      filter: { type: "master_list" },
+      filter: { type: "area", area: top.area },
       info: {
-        headline: "Master list (everyone)",
-        sub: `Your camps span multiple areas (${areaList}). Sending to the full list — pick a single area below to narrow.`,
-        tone: "warn",
+        headline: `Parents in ${top.area}`,
+        sub: `Your camps span ${sorted.length} areas — picked ${top.area} (${top.parents} parents) as the largest. Other options: ${others}. Change below to pick one of those instead, or 'Master list' to send to all.`,
+        tone: "ok",
       },
     };
   }
