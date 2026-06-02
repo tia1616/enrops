@@ -1112,6 +1112,16 @@ async function renderPreview(
   // dropdown UI can show a chip ("VIP shown" / "VIP suppressed for this school").
   const vipBlockShown = (tokens.get("vip_block") ?? "").length > 0;
 
+  // Inject <base target="_blank"> into the preview-only HTML so any link the
+  // operator clicks inside the iframe opens in a new tab instead of trying
+  // to navigate the iframe itself (which goes blank because the iframe is
+  // sandboxed). NOT included in the real-send body — email clients open links
+  // externally by default, so the <base> tag is preview-specific noise.
+  const previewHtml = bodyHtml.replace(
+    /<head>/i,
+    '<head>\n<base target="_blank">',
+  );
+
   return json({
     ok: true,
     mode: "preview",
@@ -1120,7 +1130,7 @@ async function renderPreview(
     preview_location_id: locationId,
     used_school_name: loc.name,
     subject,
-    body_html: bodyHtml,
+    body_html: previewHtml,
     body_text: bodyText,
     vip_block_shown: vipBlockShown,
     program_matched: !!programAtLocation,

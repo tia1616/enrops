@@ -370,11 +370,16 @@ function BodyEditor({ value, onChange, previewHtml, previewSubject, previewSchoo
               Includes the email-shell wrapper + unsubscribe footer the
               parent will actually see. Using an iframe srcDoc isolates
               the rendered HTML from the admin app's stylesheet (the email
-              ships in a fresh document). */}
+              ships in a fresh document).
+              Sandbox grants popup-escape so clicking a link inside the
+              preview opens a new tab. The server-rendered preview HTML
+              injects <base target="_blank"> so every <a> targets _blank
+              by default — without this, clicking a link navigated the
+              iframe itself into a sandboxed-blank state. */}
           <iframe
             title="email preview"
             srcDoc={previewHtml}
-            sandbox=""
+            sandbox="allow-popups allow-popups-to-escape-sandbox"
             style={{
               width: "100%", minHeight: 480,
               border: `1px solid ${RULE}`, borderRadius: 6,
