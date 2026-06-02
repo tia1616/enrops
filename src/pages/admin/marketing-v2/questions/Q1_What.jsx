@@ -91,6 +91,7 @@ function TabBar({ mode, onChange }) {
 // ---------- Programs picker ----------
 function ProgramsPicker({ orgId, selected, onChange }) {
   const [rows, setRows] = useState(null);
+  const [draftCount, setDraftCount] = useState(0);
   const [err, setErr] = useState(null);
   const [q, setQ] = useState("");
   const [lowOnly, setLowOnly] = useState(false);
@@ -101,9 +102,9 @@ function ProgramsPicker({ orgId, selected, onChange }) {
     setRows(null);
     setErr(null);
 
-    // Fetch programs + confirmed-registration counts in parallel, then merge
-    // client-side. status='open' filter hides drafts; first_session_date
-    // filter hides past programs.
+    // Fetch programs + confirmed-registration counts + a draft-count hint in
+    // parallel, then merge client-side. status='open' hides drafts;
+    // first_session_date filter hides past programs.
     Promise.all([
       supabase
         .from("programs")
@@ -119,10 +120,16 @@ function ProgramsPicker({ orgId, selected, onChange }) {
         .eq("organization_id", orgId)
         .eq("status", "confirmed")
         .not("program_id", "is", null),
-    ]).then(([progRes, regRes]) => {
+      supabase
+        .from("programs")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", orgId)
+        .eq("status", "draft")
+        .gte("first_session_date", todayIso()),
+    ]).then(([progRes, regRes, draftRes]) => {
       if (!alive) return;
       if (progRes.error) { setErr(progRes.error); return; }
-      // Registrations failure is non-fatal — rows still render without enrollment.
+      // Registrations + draft-count failures are non-fatal — rows still render.
       const countByProgram = new Map();
       for (const r of regRes.data ?? []) {
         countByProgram.set(r.program_id, (countByProgram.get(r.program_id) ?? 0) + 1);
@@ -132,6 +139,7 @@ function ProgramsPicker({ orgId, selected, onChange }) {
         enrolled: countByProgram.get(p.id) ?? 0,
       }));
       setRows(merged);
+      setDraftCount(draftRes.count ?? 0);
     });
     return () => { alive = false; };
   }, [orgId]);
@@ -180,6 +188,17 @@ function ProgramsPicker({ orgId, selected, onChange }) {
 
   return (
     <div>
+      {/* Hint about hidden drafts — only renders when there are upcoming
+          programs in status='draft' that the operator may have expected to see. */}
+      {draftCount > 0 && (
+        <div style={{
+          marginBottom: 8, padding: "8px 12px", background: "#FAEEDA",
+          border: "1px solid #ece1bf", borderRadius: 6, fontSize: 12, color: "#7a5510",
+        }}>
+          {draftCount} upcoming program{draftCount === 1 ? "" : "s"} {draftCount === 1 ? "is" : "are"} still in <strong>draft</strong> and not shown here. Publish them in <a href="/admin/programs" style={{ color: PURPLE, fontWeight: 600 }}>Programs → Scheduled programs</a> to include in campaigns.
+        </div>
+      )}
+
       <SearchInput value={q} onChange={setQ} placeholder="Search by curriculum or school…" />
 
       {/* Filter chip row */}
@@ -191,7 +210,7 @@ function ProgramsPicker({ orgId, selected, onChange }) {
         <FilterChip
           active={lowOnly}
           onClick={() => setLowOnly((v) => !v)}
-          label={`Low enrollment only${lowCount > 0 ? ` (${lowCount})` : ""}`}
+          label={lowCount > 0 ? `Low enrollment only (${lowCount})` : "Low enrollment only — none right now"}
           disabled={lowCount === 0}
         />
         <span style={{ fontSize: 11, color: MUTED, marginLeft: "auto" }}>
@@ -270,13 +289,21 @@ function ProgramRow({ row, checked, onToggle }) {
   );
 }
 
-// "Low enrollment" = under half of capacity, OR (when no capacity set) < 6 enrolled.
-// Conservative threshold so we don't false-positive on programs that just opened.
+// "Low enrollment" = under half of capacity AND first_session_date within 6 weeks.
+// The proximity gate matters: when registration just opened (3+ months out),
+// EVERY program has near-zero enrollment — flagging them all as "low" is noise.
+// "Low" is only meaningful close to start when an empty roster is a real
+// problem the operator should address with a push campaign.
 function isLowEnrollment(row) {
+  if (!row.first_session_date) return false;
+  const daysUntilStart = Math.ceil(
+    (new Date(row.first_session_date + "T00:00:00").getTime() - new Date().setHours(0, 0, 0, 0)) / 86400000,
+  );
+  if (daysUntilStart > 42) return false; // 6 weeks out — too early to judge
   const enrolled = row.enrolled ?? 0;
   const cap = row.max_capacity;
   if (cap && cap > 0) return enrolled < cap * 0.5;
-  return enrolled > 0 && enrolled < 6;
+  return enrolled < 6;
 }
 
 function FilterChip({ active, onClick, label, disabled }) {
