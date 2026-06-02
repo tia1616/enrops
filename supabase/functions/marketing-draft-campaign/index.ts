@@ -1011,12 +1011,26 @@ When the 'Sending to:' line in this prompt describes an area (e.g. "parents in H
 - Do NOT write the area name literally ("Camps in Hillsboro") — use {{geo_segment}}. If the operator changes the area filter later, the copy still works without a redraft.
 - Subject lines may use {{geo_segment}} but doesn't have to ("Camps near you" works subject-line-wide).
 
-WHEN CURRICULA SPAN MULTIPLE THEMES — STAY UNIVERSAL
-Look at the picked programs in KNOWN PROGRAM DETAILS. If they span multiple themes (e.g. coding, robotics, LEGO engineering, game design, art, science), the BODY must use UNIVERSAL language that fits any of them. Theme-specific verbs/adjectives ("coding", "building", "designing", "robotics", "art") only appear via {{curriculum}} (the program name itself) — never as standalone descriptors elsewhere in the body.
-- BAD: "Your student gets {{session_count}} sessions of hands-on building, coding, and creating…" (a parent in a LEGO program wouldn't see "coding" as relevant; a Robotics parent wouldn't see "designing" as the verb)
-- GOOD: "Your student gets {{session_count}} sessions of hands-on time with real tools and creative challenges…" (works for any curriculum)
-- GOOD: "Every week after school, your student dives into {{curriculum}} — hands-on projects that make them come home buzzing." (the only theme-specific word is {{curriculum}} which resolves to the recipient's program)
-If all picked curricula share a single clear theme (e.g. all 8 are robotics), you may use that theme word ("robotics") freely. Otherwise stay universal.
+WHEN CURRICULA SPAN MULTIPLE THEMES — STAY UNIVERSAL (HARD RULE)
+Look at the picked programs in KNOWN PROGRAM DETAILS. If they span multiple themes (e.g. coding, robotics, LEGO, game design, art, science), the BODY must use UNIVERSAL language that fits any of them.
+
+BANNED in the body as standalone verbs/adjectives (cross-theme campaigns): "code", "coding", "build", "building", "design", "designing", "robotics", "engineer", "engineering", "LEGO", "Minecraft", "Pokémon", "Mario", "art", "art-making". These words may ONLY appear via the {{curriculum}} token (which IS the program name) — never as part of body prose, never in a list like "kids design, kids code, kids build", never as adjectives like "hands-on building" or "creative coding."
+
+UNIVERSAL replacements (use these instead):
+- Instead of "kids code" / "kids build" / "kids design" → "kids create", "kids make", "kids tinker", "kids explore", "kids discover"
+- Instead of "hands-on building" / "hands-on coding" → "hands-on projects", "hands-on time with real tools", "hands-on challenges"
+- Instead of "they design, code, build" → "they tackle real projects", "they make something they're proud of", "they solve creative challenges"
+
+BAD examples (these are violations — do NOT write):
+- "Your student gets {{session_count}} sessions of hands-on building, coding, and creating…"
+- "Each week kids design, kids code, kids build…"
+- "They'll work with real tools, tackle creative challenges, and come home with stories" — this one is FINE because there are no theme-specific verbs.
+
+GOOD examples:
+- "Every week your student dives into {{curriculum}} — hands-on projects, real tools, and the kind of 'I made that' moments they're talking about at dinner."
+- "Your student gets {{session_count}} sessions of creative challenges and real-tool projects."
+
+If all picked curricula share a single clear theme (e.g. all 8 are robotics), you may use that theme word freely. Verify by looking at the curricula list in KNOWN PROGRAM DETAILS — if the names cover multiple themes, stay universal.
 - BODY: treat as if it's about one program — theirs. Use {{curriculum}} where you'd name a program. Use {{school}} where you'd name a school. Never reach for "across our 24 schools" or "all 8 programs" or similar.
 - SUBJECT: can be campaign-wide and not name a specific curriculum ("Fall programs are here", "Early bird ends Friday"). Doesn't need to use {{curriculum}} but can.
 - NOTES_TO_OPERATOR: this is where you list "you picked 8 curricula across 24 schools, here's the breakdown" if useful — that's operator-facing, not parent-facing. The body must not echo that breakdown.
