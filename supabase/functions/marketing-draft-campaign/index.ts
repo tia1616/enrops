@@ -103,6 +103,10 @@ type DraftInputs = {
   duration: string;
   channels: string[];
   promo?: PromoSettings;
+  // Free-text context from the operator for this specific campaign. Overrides
+  // Ennie's defaults when in conflict. Used for things the system can't infer
+  // from the catalog (e.g. tenant-level VIP offers, partner events, copy preferences).
+  operator_notes?: string;
 };
 
 type DraftRequest = {
@@ -287,6 +291,16 @@ function parseRequest(body: unknown):
   const filter = who.filter as Record<string, unknown>;
   if (filter.auto_derived !== undefined) delete filter.auto_derived;
 
+  // Validate operator_notes if present
+  let operator_notes: string | undefined;
+  if (inputs.operator_notes !== undefined && inputs.operator_notes !== null) {
+    if (typeof inputs.operator_notes !== "string") {
+      return { ok: false, error: "inputs.operator_notes must be a string", status: 400 };
+    }
+    const trimmed = inputs.operator_notes.trim().slice(0, 500);
+    if (trimmed.length > 0) operator_notes = trimmed;
+  }
+
   // Validate promo if present
   let promo: PromoSettings | undefined;
   if (inputs.promo !== undefined && inputs.promo !== null) {
@@ -312,6 +326,7 @@ function parseRequest(body: unknown):
         duration: inputs.duration as string,
         channels: inputs.channels as string[],
         promo,
+        operator_notes,
       },
     },
     derivedTopics: topics,
@@ -903,6 +918,13 @@ If the tenant has refined your voice over time (their "Ennie's notes" file), tho
 
   const curriculumBlock = programDetailsBlock;
 
+  // Operator notes — free-text context the operator typed in Q4. Treated as
+  // ground truth and overrides Ennie's defaults when in conflict. Empty when
+  // the operator left the textarea blank.
+  const operatorNotesBlock = inputs.operator_notes
+    ? `OPERATOR NOTES FOR THIS CAMPAIGN (these override your defaults when in conflict — treat as ground truth for this draft):\n${inputs.operator_notes}`
+    : "";
+
   return [
     personaBlock,
     ``,
@@ -913,6 +935,7 @@ If the tenant has refined your voice over time (their "Ennie's notes" file), tho
     channelNote,
     ``,
     curriculumBlock,
+    operatorNotesBlock ? `\n${operatorNotesBlock}` : ``,
     ``,
     cadenceGuidance,
     ``,

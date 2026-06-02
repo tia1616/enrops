@@ -89,6 +89,35 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
           );
         })}
       </div>
+
+      {/* Operator notes — free-form context that overrides Ennie's defaults
+          for this specific campaign. Use cases: tenant-level offers Ennie
+          can't infer (VIP pricing, partner showcase events), tone overrides,
+          things to NOT mention. Promo picker (task #6) will add structured
+          choices alongside. */}
+      <div style={{ marginTop: 20 }}>
+        <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 4 }}>
+          Anything else Ennie should know? <span style={{ color: MUTED, fontWeight: 400 }}>(Optional)</span>
+        </label>
+        <p style={{ fontSize: 12, color: MUTED, margin: "0 0 6px" }}>
+          Free-text context for this campaign — Ennie treats your notes as ground truth and weaves them in.
+          Examples: "Mention our STEAM VIP full-year option, $720 total" · "Lead with the savings, not the program list" · "Don't talk about prices in the kickoff"
+        </p>
+        <textarea
+          value={inputs.operator_notes ?? ""}
+          onChange={(e) => setField("operator_notes", e.target.value.slice(0, 500))}
+          placeholder="Mention our parent showcase event on June 15…"
+          rows={3}
+          style={{
+            width: "100%", padding: 10, fontSize: 13, fontFamily: "inherit",
+            border: `1px solid ${RULE}`, borderRadius: 6, resize: "vertical",
+            color: INK, background: "#fff", boxSizing: "border-box",
+          }}
+        />
+        <div style={{ textAlign: "right", fontSize: 11, color: MUTED, marginTop: 2 }}>
+          {(inputs.operator_notes ?? "").length}/500
+        </div>
+      </div>
     </QuestionStep>
   );
 }

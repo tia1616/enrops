@@ -51,6 +51,7 @@ const INITIAL = {
       multi_camp_discount: false,
       code: null,
     },
+    operator_notes: "",
     duration: "",
     channels: ["email"],
   },
