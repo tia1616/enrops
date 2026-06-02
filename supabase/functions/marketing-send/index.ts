@@ -805,7 +805,7 @@ function renderVipBlock(ctx: SchoolContext, td: Campaign['template_data'], brand
       </td></tr>
       <tr><td style="padding:0 22px 20px;">
         ${pathwayBlocks}
-        <p style="margin:14px 0 0;font-size:12px;color:${MUTED};line-height:1.5;">Returning families: $235/term. Sibling discount: 10% off the second child and beyond.</p>
+        <p style="margin:14px 0 0;font-size:12px;color:${MUTED};line-height:1.5;">Sibling discount: 10% off the second child and beyond.</p>
       </td></tr>
     </table>`;
 }
