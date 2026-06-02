@@ -308,12 +308,17 @@ export default function AICampaignBuilder() {
     if (!confirm(`Approve ${tpCount} touchpoint${tpCount === 1 ? "" : "s"} and schedule to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}? Once approved, Ennie sends each touchpoint at its scheduled time. You can't edit after this.`)) return;
     setActionBusy(true);
     try {
+      // Captures audience at approve time. If parents subscribe/unsubscribe
+      // between draft and send, the approved campaign sends to the
+      // approve-time list. Cron reads this column.
+      const recipientIds = state.draft?.recipients?.ids ?? [];
       const { data, error } = await supabase
         .from("marketing_campaigns")
         .update({
           approved_at: new Date().toISOString(),
           approved_by: user?.id ?? null,
           status: "sending",
+          approved_recipient_ids: recipientIds,
         })
         .eq("id", state.draft.campaign_id)
         .is("approved_at", null) // idempotency guard
