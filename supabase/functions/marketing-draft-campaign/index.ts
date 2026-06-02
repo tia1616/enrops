@@ -871,8 +871,14 @@ ${tokenList}
 
 SCHEDULE-PLANNING RULES (you plan a multi-touchpoint sequence, not a single send)
 - DEFAULT SEND TIMES (org timezone ${orgTimezone}): Tuesday/Thursday 10am for regular sends. Deadline-day reminders at 7am. Welcome notes Monday 9am. NEVER Friday afternoons or weekends.
-- THROTTLE: this org caps at 1 email per parent per 10 days. Space consecutive emails at least 6 days apart.
-- For any topic with a known deadline, include BOTH a 48-hour-before AND a 24-hour-before reminder email.
+- THROTTLE: this org caps at 1 email per parent per 10 days. Space consecutive emails at least 6 days apart (deadline reminders are exempt — see below).
+
+- DEADLINE PROXIMITY (this rule beats the duration-based cadence below):
+  - If a deadline falls within the FIRST 7 DAYS of the campaign window, the campaign IS the deadline push. Plan **2 emails total**: an announce/kickoff that leads with the deadline, and a final reminder 24 hours before the deadline. Skip "mid-window" and "final-call" touchpoints — there is no room, and you would burn the list with content the operator did not ask for.
+  - If a deadline falls 8–14 DAYS into the window, plan 3 emails: announce, then a 48-hours-before reminder, then a 24-hours-before reminder. Still no mid-window topical sends.
+  - If a deadline is 14+ DAYS out, use the full duration-based cadence below AND include both 48h and 24h reminders before the deadline.
+
+- CAMPAIGN ENDS AT THE DEADLINE: when the user-requested duration extends past the deadline, the campaign still ENDS at the deadline reminder. Do not plan post-deadline topical sends — the operator picked the deadline-driven campaign, not a general-content month. If they want post-deadline thank-you / recap sends, they will run a separate campaign for that.
 
 PER-TENANT NOTES
 If the tenant has refined your voice over time (their "Ennie's notes" file), those corrections beat your defaults. None supplied yet for this draft.`;
