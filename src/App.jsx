@@ -20,6 +20,7 @@ import CurriculumNew from './pages/admin/curricula/CurriculumNew.jsx';
 import CurriculumExtracting from './pages/admin/curricula/CurriculumExtracting.jsx';
 import CurriculumReview from './pages/admin/curricula/CurriculumReview.jsx';
 import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
+import ProgramWizardNew from './pages/admin/programs/ProgramWizardNew.jsx';
 import LocationsList from './pages/admin/LocationsList.jsx';
 import CalendarsList from './pages/admin/CalendarsList.jsx';
 import AdminContacts from './pages/admin/contacts/AdminContacts.jsx';
@@ -98,7 +99,12 @@ export default function App() {
       <Route path="/admin/login" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<AdminOverview />} />
-        <Route path="marketing-v2" element={<AICampaignBuilder />} />
+        {/* "Family Comms" — operator-facing name. Internal folder is still
+            marketing-v2/ to avoid touching dozens of imports. The /marketing-v2
+            redirect below preserves any bookmarks / external links pointing
+            at the old URL. */}
+        <Route path="family-comms" element={<AICampaignBuilder />} />
+        <Route path="marketing-v2" element={<Navigate to="/admin/family-comms" replace />} />
         <Route path="schedule" element={<Schedule />} />
         <Route path="schedule/print" element={<SchedulePrint />} />
         <Route path="curricula" element={<CurriculaList />} />
@@ -107,6 +113,7 @@ export default function App() {
         <Route path="curricula/:id/review" element={<CurriculumReview />} />
         <Route path="curricula/:id/edit" element={<CurriculumReview />} />
         <Route path="programs" element={<ProgramsCalendar />} />
+        <Route path="programs/new" element={<ProgramWizardNew />} />
         <Route path="locations" element={<LocationsList />} />
         <Route path="calendars" element={<CalendarsList />} />
         <Route path="contacts" element={<AdminContacts />} />

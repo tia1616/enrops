@@ -167,10 +167,10 @@ export default function AdminOverview() {
         {teaching && <TeachingScheduleCard teaching={teaching} />}
         <ContractorPipelineCard pipeline={pipeline} error={pipelineErr} />
         <Card
-          title="Marketing"
+          title="Family Comms"
           body="Preview, schedule, and send campaigns."
-          to="/admin/marketing-v2"
-          cta="Open Marketing"
+          to="/admin/family-comms"
+          cta="Open Family Comms"
           ready
         />
         <Card
