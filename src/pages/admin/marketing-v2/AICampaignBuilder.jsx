@@ -54,6 +54,7 @@ const INITIAL = {
     operator_notes: "",
     registration_url_override: "",
     duration: "",
+    send_at: "", // one-off send time (ISO string or 'now'). Used when what.mode='other'.
     channels: ["email"],
   },
   draft: null,
@@ -197,6 +198,10 @@ function isStepValid(step, inputs) {
     return false;
   }
   if (step === 3) {
+    // Mode='other' is a one-off send; Q3 collects a send time instead of duration.
+    if (inputs.what?.mode === "other") {
+      return typeof inputs.send_at === "string" && inputs.send_at.length > 0;
+    }
     const d = inputs.duration ?? "";
     if (!d) return false;
     // Custom range: only valid once both start and end dates are filled

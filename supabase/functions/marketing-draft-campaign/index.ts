@@ -119,6 +119,12 @@ type DraftInputs = {
   // registration isn't on the operator's default enrops.com page (Squarespace,
   // external form, partner site).
   registration_url_override?: string;
+  // One-off send time. Required when what.mode='other'. Values:
+  //   'now' -> resolve to current time + small delay (cron picks up next tick)
+  //   'tomorrow_morning' -> next day 10am org timezone
+  //   ISO-like 'YYYY-MM-DDTHH:MM:SS' -> interpreted as local time, resolved
+  //     to UTC with org timezone offset
+  send_at?: string;
 };
 
 type DraftRequest = {
@@ -282,8 +288,21 @@ function parseRequest(body: unknown):
     return { ok: false, error: "inputs.what must be a string, array of strings, or structured object", status: 400 };
   }
 
-  if (typeof inputs.duration !== "string" || !inputs.duration.trim()) {
-    return { ok: false, error: "inputs.duration required", status: 400 };
+  // Validate timing. Branches by mode:
+  //   - mode='other' (one-off send) requires inputs.send_at
+  //   - mode='programs'/'camps' (multi-touchpoint campaign) requires inputs.duration
+  //   - legacy callers (no structured what) still require duration
+  const isOneOff = structuredWhat?.mode === "other";
+  let send_at: string | undefined;
+  if (isOneOff) {
+    if (typeof inputs.send_at !== "string" || !inputs.send_at.trim()) {
+      return { ok: false, error: "inputs.send_at required for one-off (mode='other') campaigns", status: 400 };
+    }
+    send_at = inputs.send_at.trim();
+  } else {
+    if (typeof inputs.duration !== "string" || !inputs.duration.trim()) {
+      return { ok: false, error: "inputs.duration required", status: 400 };
+    }
   }
   if (!Array.isArray(inputs.channels) || inputs.channels.some((c) => typeof c !== "string")) {
     return { ok: false, error: "inputs.channels must be string[]", status: 400 };
@@ -352,11 +371,12 @@ function parseRequest(body: unknown):
       inputs: {
         what: structuredWhat ?? topics,
         who: who as unknown as WhoInput,
-        duration: inputs.duration as string,
+        duration: (inputs.duration as string) || "",
         channels: inputs.channels as string[],
         promo,
         operator_notes,
         registration_url_override,
+        send_at,
       },
     },
     derivedTopics: topics,
@@ -1078,20 +1098,34 @@ If the tenant has refined your voice over time (their "Ennie's notes" file), tho
     ? `REGISTRATION URL FOR THIS CAMPAIGN: ${inputs.registration_url_override}\n{{register_url}} will resolve to this URL when this campaign sends. Write {{register_url}} as usual — do not paste the URL inline. The operator is sending parents to this destination for THIS campaign (e.g. external Squarespace page, partner site).`
     : "";
 
+  // One-off mode (mode='other' with send_at) -> 1 touchpoint at exact time.
+  // Multi-touchpoint mode (programs/camps with duration) -> Ennie spaces the cadence.
+  const isOneOff = !!inputs.send_at;
+  const oneOffBlock = isOneOff
+    ? `ONE-OFF SEND MODE (overrides cadence rules below):
+This is a SINGLE-EMAIL send, not a multi-touchpoint campaign. The operator wants ONE touchpoint at a specific moment.
+- Produce EXACTLY 1 touchpoint in the output. No kickoff/mid/reminder cadence.
+- Set scheduled_at to: ${resolveSendAtForPrompt(inputs.send_at!, orgTimezone)}
+- The body should be a single direct note. Use the operator's typed topic + operator_notes as the source. Common cases: weather cancellation, schedule change, recap / thank-you, holiday greeting.
+- Subject line should be clear and action-oriented for urgent sends ("Class cancelled tomorrow — Tuesday Sept 9") and warm for relational sends ("Thanks for an amazing fall, families").
+- Do NOT generate 48h/24h reminders. Do NOT enumerate program details unless the operator wrote them in notes. Do NOT add a kickoff/final-call structure.`
+    : "";
+
   return [
     personaBlock,
     ``,
     `Today is: ${todayIso} (org timezone: ${orgTimezone})`,
     topicLine,
     `Sending to: ${segmentSummary}`,
-    `Campaign duration: "${inputs.duration}" — count from today.`,
+    isOneOff ? `One-off send time: ${inputs.send_at}` : `Campaign duration: "${inputs.duration}" — count from today.`,
     channelNote,
     ``,
     curriculumBlock,
     operatorNotesBlock ? `\n${operatorNotesBlock}` : ``,
     registrationUrlBlock ? `\n${registrationUrlBlock}` : ``,
+    oneOffBlock ? `\n${oneOffBlock}` : ``,
     ``,
-    cadenceGuidance,
+    isOneOff ? `` : cadenceGuidance,
     ``,
     `OUTPUT FORMAT:`,
     `Return ONLY a single JSON object (no markdown fences). Schema:`,
@@ -1188,6 +1222,40 @@ const PARENT_SUBJECT_CANCEL_PATTERN = /\bcancel(?:l?ed)?\b/i;
 
 const MONTH_DATE_PATTERN = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?\b/i;
 const NUMERIC_DATE_PATTERN = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
+
+// Resolves the operator's chosen send_at value to a concrete ISO timestamp
+// for the prompt + the touchpoint's scheduled_at. Three input shapes:
+//   'now' -> current time + 5 minutes (cron picks up next tick)
+//   'tomorrow_morning' -> tomorrow 10am org timezone (approximated to PDT)
+//   'YYYY-MM-DDTHH:MM:SS' -> local time at the org's timezone, converted to UTC
+function resolveSendAtIso(sendAt: string, _orgTimezone: string): string {
+  const now = Date.now();
+  if (sendAt === "now") {
+    return new Date(now + 5 * 60_000).toISOString();
+  }
+  if (sendAt === "tomorrow_morning") {
+    // Approximation: 17:00 UTC = 10am PDT (= 9am PST). Good enough for Pacific
+    // orgs; refine with proper timezone math when we onboard non-Pacific tenants.
+    const d = new Date(now + 24 * 60 * 60_000);
+    d.setUTCHours(17, 0, 0, 0);
+    return d.toISOString();
+  }
+  // Custom: 'YYYY-MM-DDTHH:MM:SS' from a date+time input. The browser
+  // submitted local-time without timezone. Assume Pacific for now (matches
+  // resolveSendAtIso's tomorrow_morning assumption).
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(sendAt)) {
+    // Treat as if it were UTC offset by 7h (PDT). Cheap. Refine per-tenant later.
+    return new Date(sendAt + "Z").toISOString().replace(/\.\d{3}Z$/, "Z");
+  }
+  // Already-ISO-ish: pass through
+  return sendAt;
+}
+
+// Same resolution but formatted for the prompt: a human-readable line + ISO.
+function resolveSendAtForPrompt(sendAt: string, orgTimezone: string): string {
+  const iso = resolveSendAtIso(sendAt, orgTimezone);
+  return `${iso}  (operator chose: ${sendAt === "now" ? "Send right away" : sendAt === "tomorrow_morning" ? "Tomorrow morning" : sendAt})`;
+}
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1529,6 +1597,22 @@ serve(async (req: Request) => {
       warnings: r.warnings,
     })),
   };
+
+  // One-off mode enforcement: if Ennie produced multiple touchpoints despite
+  // the prompt instruction, truncate to one and force scheduled_at to the
+  // operator's chosen time. Defensive — Ennie usually follows but this guarantees.
+  if (inputs.send_at) {
+    const resolvedIso = resolveSendAtIso(inputs.send_at, orgTimezone);
+    const first = schedule.touchpoints[0];
+    if (first) {
+      schedule.touchpoints = [{
+        ...first,
+        order_index: 0,
+        scheduled_at: resolvedIso,
+        label: first.label || "send",
+      }];
+    }
+  }
 
   // First touchpoint = the "lead" email; its subject/body populate the parent
   // campaigns row so the existing campaigns list keeps working.

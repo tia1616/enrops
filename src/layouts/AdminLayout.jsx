@@ -23,7 +23,7 @@ const RULE = "#e2dfd5";
 // the navigating). A group auto-expands when any of its children is active.
 const NAV = [
   { to: "/admin", label: "Overview", end: true },
-  { to: "/admin/marketing-v2", label: "Marketing v2" },
+  { to: "/admin/marketing-v2", label: "Family Comms" },
   {
     label: "Programs",
     group: "programs",
