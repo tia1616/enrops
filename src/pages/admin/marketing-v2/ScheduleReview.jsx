@@ -328,9 +328,13 @@ function RecipientList({ ids, onRemove }) {
             .select("id, parent_name, email, school_name")
             .in("id", batch);
           if (error) throw error;
+          // eslint-disable-next-line no-console
+          console.log(`[RecipientList] batch ${i}-${i + batch.length}: requested ${batch.length}, got ${(data ?? []).length}`);
           for (const r of (data ?? [])) byId.set(r.id, r);
         }
         if (!alive) return;
+        // eslint-disable-next-line no-console
+        console.log(`[RecipientList] total: requested ${sliced.length}, hydrated ${byId.size}`);
         // Preserve incoming order so the operator sees the same shape they had
         setRows(sliced.map((id) => byId.get(id)).filter(Boolean));
       } catch (e) {
@@ -348,7 +352,11 @@ function RecipientList({ ids, onRemove }) {
     );
   }
   if (err) {
-    return <p style={{ fontSize: 12, color: "#b3261e", margin: "8px 0 0" }}>Couldn't load recipient details. Refresh to retry.</p>;
+    return (
+      <p style={{ fontSize: 12, color: "#b3261e", margin: "8px 0 0" }}>
+        Couldn't load recipient details: <code style={{ fontFamily: "ui-monospace, monospace" }}>{err}</code>. Refresh to retry.
+      </p>
+    );
   }
   if (rows === null) {
     return <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>Loading recipients…</p>;
