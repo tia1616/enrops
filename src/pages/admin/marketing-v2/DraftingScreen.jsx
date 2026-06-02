@@ -15,7 +15,7 @@ const STEPS = [
   { at: 0,  label: "Finding the parents you asked for…" },
   { at: 6,  label: "Ennie's planning the schedule…" },
   { at: 14, label: "Writing each email for you…" },
-  { at: 38, label: "Checking the copy against your brand rules…" },
+  { at: 38, label: "Double-checking the copy…" },
 ];
 
 export default function DraftingScreen() {

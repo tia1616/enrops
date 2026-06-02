@@ -194,7 +194,16 @@ function isStepValid(step, inputs) {
     if (f.type === "person") return !!f.recipient_id;
     return false;
   }
-  if (step === 3) return !!inputs.duration;
+  if (step === 3) {
+    const d = inputs.duration ?? "";
+    if (!d) return false;
+    // Custom range: only valid once both start and end dates are filled
+    if (d.startsWith("custom")) {
+      const m = d.match(/^custom:\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})/);
+      return !!m;
+    }
+    return true;
+  }
   if (step === 4) return inputs.channels.length > 0;
   return false;
 }
