@@ -568,7 +568,14 @@ function CelebrationScreen({ draft, onReset }) {
         <div style={{ textAlign: "left", marginTop: 24, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 16 }}>
           <p style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, margin: 0 }}>Next up</p>
           <p style={{ margin: "4px 0 0", fontSize: 14, color: INK, fontWeight: 600 }}>
-            {first.subject}
+            {/* Subject contains tokens like {{school}} that resolve per-recipient
+                at send time. The success screen has no recipient context, so
+                we replace tokens with friendly placeholders for display only —
+                the real send still resolves them per parent. */}
+            {first.subject?.replace(/\{\{school\}\}/g, "your school")
+                          .replace(/\{\{first_name\}\}/g, "there")
+                          .replace(/\{\{curriculum\}\}/g, "the program")
+                          .replace(/\{\{\w+\}\}/g, "")}
           </p>
           <p style={{ margin: "2px 0 0", fontSize: 12, color: MUTED }}>
             {new Date(first.scheduled_at).toLocaleString(undefined, { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}
@@ -599,9 +606,6 @@ function CelebrationScreen({ draft, onReset }) {
         </button>
       </div>
 
-      <p style={{ marginTop: 20, fontSize: 11, color: MUTED }}>
-        Chunk 06 mock — real approval flow lands in chunk 07.
-      </p>
     </div>
   );
 }
