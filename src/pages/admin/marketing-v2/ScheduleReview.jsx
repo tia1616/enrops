@@ -28,6 +28,13 @@ function fmtDate(iso) {
 
 export default function ScheduleReview({
   draft,
+  // Operator's in-memory question answers (Q1 picks etc). Used to resolve
+  // the picked-schools dropdown for the per-school preview. We could read
+  // them back from marketing_campaigns.draft_inputs, but RLS doesn't grant
+  // the creating user a SELECT on rows that the service-role-backed draft
+  // endpoint wrote — so reading the campaign row 403s. The in-memory shape
+  // is equivalent and avoids the round-trip.
+  inputs,
   org,
   onBack,
   onReset,
@@ -51,33 +58,21 @@ export default function ScheduleReview({
   const timezone = org?.timezone ?? "America/Los_Angeles";
 
   // Picked schools for the per-school preview dropdown in TouchpointCard.
-  // Loaded once per draft: query the campaign's program_ids -> distinct
-  // program_locations. Empty when the campaign is a one-off or camps-only.
+  // Loaded from inputs.what.program_ids (the operator's in-memory picks)
+  // — not from marketing_campaigns, because that table currently 403s on
+  // SELECT for the campaign-creating user (service-role wrote, RLS hasn't
+  // been granted to the creator yet). Query path is the public `programs`
+  // table which DOES allow tenant admins to read their own.
   const [pickedLocations, setPickedLocations] = useState([]); // [{id, name}, ...]
+  const programIdsKey = (inputs?.what?.program_ids ?? []).join(",");
   useEffect(() => {
-    if (!draft?.campaign_id) { setPickedLocations([]); return; }
+    const programIds = inputs?.what?.program_ids ?? [];
+    if (!Array.isArray(programIds) || programIds.length === 0) {
+      setPickedLocations([]);
+      return;
+    }
     let alive = true;
     (async () => {
-      // Pull the campaign's draft_inputs to get program_ids (don't re-trust
-      // the in-memory `inputs` from the parent — the campaign row is the
-      // source of truth for what was actually picked).
-      const { data: c, error: cErr } = await supabase
-        .from("marketing_campaigns")
-        .select("draft_inputs")
-        .eq("id", draft.campaign_id)
-        .maybeSingle();
-      if (cErr) {
-        // eslint-disable-next-line no-console
-        console.error("[ScheduleReview] campaign read failed", cErr);
-        return;
-      }
-      const programIds = c?.draft_inputs?.what?.program_ids ?? [];
-      // eslint-disable-next-line no-console
-      console.log("[ScheduleReview] campaign loaded:", { hasCampaign: !!c, programIdsCount: programIds.length });
-      if (!Array.isArray(programIds) || programIds.length === 0) {
-        if (alive) setPickedLocations([]);
-        return;
-      }
       const { data: progs, error: pErr } = await supabase
         .from("programs")
         .select("program_location_id, program_locations(id, name)")
@@ -87,11 +82,6 @@ export default function ScheduleReview({
         console.error("[ScheduleReview] programs query failed", pErr);
         return;
       }
-      // eslint-disable-next-line no-console
-      console.log("[ScheduleReview] programs loaded:", {
-        count: (progs ?? []).length,
-        sample: (progs ?? [])[0],
-      });
       const seen = new Set();
       const locs = [];
       for (const p of progs ?? []) {
@@ -105,12 +95,10 @@ export default function ScheduleReview({
         locs.push({ id: loc.id, name: loc.name });
       }
       locs.sort((a, b) => a.name.localeCompare(b.name));
-      // eslint-disable-next-line no-console
-      console.log("[ScheduleReview] picked locations resolved:", locs.length);
       if (alive) setPickedLocations(locs);
     })();
     return () => { alive = false; };
-  }, [draft?.campaign_id]);
+  }, [programIdsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const topicColors = useMemo(() => {
     const topics = new Set();

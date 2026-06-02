@@ -479,6 +479,13 @@ export default function AICampaignBuilder() {
     return (
       <ScheduleReview
         draft={state.draft}
+        // Pass the operator's in-memory picks so ScheduleReview can resolve
+        // the picked-schools dropdown WITHOUT re-reading marketing_campaigns
+        // (which currently has no SELECT RLS policy for the creating user —
+        // service-role wrote the row, user is locked out for reads).
+        // The campaign row is the source of truth for what got SAVED, but for
+        // the UI's preview dropdown the in-memory picks are equivalent.
+        inputs={state.inputs}
         org={org}
         onBack={() => dispatch({ type: "BACK" })}
         onReset={() => dispatch({ type: "RESET" })}
