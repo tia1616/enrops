@@ -305,16 +305,31 @@ export default function AICampaignBuilder() {
         },
       });
       if (error) {
-        // Pull friendly error from edge function response when available
+        // Pull friendly error from edge function response when available.
+        // supabase-js wraps non-2xx as FunctionsHttpError with the original
+        // Response on error.context — clone+read for the JSON body Ennie's
+        // function actually returned.
         let msg = error.message ?? "Send failed.";
+        let rawBody = null;
+        let httpStatus = null;
         try {
-          const resp = error?.context?.response;
+          const resp = error?.context?.response ?? error?.context;
           if (resp && typeof resp.clone === "function") {
-            const payload = await resp.clone().json();
-            if (payload?.error) msg = payload.error;
+            httpStatus = resp.status;
+            const text = await resp.clone().text();
+            rawBody = text;
+            try {
+              const payload = JSON.parse(text);
+              if (payload?.error) msg = payload.error;
+            } catch { /* not JSON, leave msg alone */ }
           }
-        } catch { /* fall through to raw message */ }
-        alert(`Test send failed: ${msg}`);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error("[onSendTest] failed to read error body:", e);
+        }
+        // eslint-disable-next-line no-console
+        console.error("[onSendTest] edge function error", { httpStatus, msg, rawBody, error });
+        alert(`Test send failed (HTTP ${httpStatus ?? "?"}): ${msg}\n\nFull response body logged to console.`);
         return;
       }
       if (data?.sent > 0) {

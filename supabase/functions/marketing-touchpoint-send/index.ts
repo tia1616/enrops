@@ -445,8 +445,14 @@ async function verifyCaller(authHeader: string | null, body: Record<string, unkn
   }
 
   // User token — resolve user + their org admin memberships.
-  const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { global: { headers: { Authorization: authHeader } } });
-  const { data: { user }, error } = await userClient.auth.getUser();
+  // getUser() needs the JWT passed explicitly; it does NOT read from the
+  // global.headers.Authorization config (that header is for outgoing PostgREST
+  // requests, not auth). Bug that bit us 2026-06-02 — caller saw "Edge Function
+  // returned a non-2xx status code" with HTTP 401 because user was always null.
+  const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: { user }, error } = await userClient.auth.getUser(token);
   if (error || !user) return { ok: false, reason: "invalid token", status: 401 };
 
   const svc = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);

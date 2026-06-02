@@ -2,6 +2,20 @@
 
 
 
+\## 2026-06-03
+
+\- \[task] Replace every `alert()` and `confirm()` across the admin app with a real shared Toast/Banner component. Browser-native dialogs look like 1998 OS chrome ("localhost:5173 says" / "enrops.com says") and feel out-of-place against the rest of Enrops. Sweep: Family Comms (AICampaignBuilder onSendTest / onApprove / onSaveDraft), Payroll, Finances, AdminSettings, CurriculumNew — anywhere `alert(` or `confirm(` appears in src/. Component pattern: top-right stacking toast with soft-green for success, red for error, neutral for info; auto-dismiss after 6s; manual close on long messages; `confirm()` becomes an inline confirmation card with primary/secondary buttons (no modal flash). Build once, replace globally.
+
+\- \[task] Platform-voice audit: every operator-facing surface should frame asks around the provider's actual business goals (make money → increase enrollment → grow LTV via parent/child/instructor satisfaction) and be backed by data (industry benchmark, tenant's past-campaign numbers, or honest "we'll measure this next time"). Memory rule lives at feedback_platform_voice_data_backed.md. Audit list lives in task #21. Spell out LTV on first mention; operators aren't developers. (See task #21.)
+
+
+
+\## 2026-06-02
+
+\- \[task] Q1 redesign: intent-first surfaces. Keep the "What do you want to promote?" wording. Replace Programs/Camps/Other tabs with auto-detected period cards (Fall 2026 After-School, Summer 2026 Camps, Winter Break Camps — pulled from the operator's actual data, not hardcoded terms). Each card has intent sub-actions (Early-bird push, Registration just opened, Low enrollment push, Last call before start). Click an intent → pre-selects the relevant programs/camps + sets Q2-Q4 defaults. Promo codes do NOT belong under period cards (they're a tactic, not a period — that's the promo step). Keep "Pick manually from catalog" as escape hatch — current picker lives underneath. Defer until after FA26 ships. (See task #19 in session task list.)
+
+
+
 \## 2026-06-01
 
 \- \[task] Set up a customer-support inbox for Enrops (e.g. hello@enrops.com or support@enrops.com). Mailbox must actually receive mail (forward to Jessica or shared inbox), Resend-verify the domain so platform sends from it, and swap into: (1) Google OAuth consent screen → User support email, (2) `_shared/orgBrand.ts` ENROPS_PLATFORM_BRAND defaults, (3) any other places currently using `jessica@journeytosteam.com` as a stand-in for an Enrops platform address.
