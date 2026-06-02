@@ -211,7 +211,7 @@ export default function TouchpointCard({
               <option value="">
                 {pickedLocations.length === 0
                   ? "(loading schools, or campaign has no school picks)"
-                  : "— show tokens (no school picked) —"}
+                  : "Pick a school to preview…"}
               </option>
               {pickedLocations.map((l) => (
                 <option key={l.id} value={l.id}>{l.name}</option>

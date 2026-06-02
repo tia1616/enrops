@@ -763,6 +763,17 @@ function buildVipBlock(
 
 // Replaces {{token}} placeholders. `html=true` escapes the value before insert
 // (defends against malicious / weird recipient data like '<script>' in name).
+//
+// PRE_RENDERED_HTML_TOKENS bypass escaping because they're built by THIS
+// function with known-safe content (operator's brand_voice strings already
+// passed through escapeHtml inside the builder). Escaping them again would
+// turn <strong> into &lt;strong&gt; and the operator's apostrophes into
+// &#39;, both rendering as literal text in the email — bug surfaced
+// 2026-06-02 when Cascadia-excluded vs Cascadia-included previews showed
+// raw HTML tags. All OTHER tokens still get escaped: they come from
+// recipient data (parent_name, school) which could contain <script> etc.
+const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block"]);
+
 function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: boolean }): string {
   return text.replace(/\{\{(\w+)\}\}/g, (full, key) => {
     if (!APPROVED_TOKENS.has(key)) {
@@ -770,6 +781,7 @@ function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: 
       return "";
     }
     const value = tokens.get(key) ?? "";
+    if (opts.html && PRE_RENDERED_HTML_TOKENS.has(key)) return value;
     return opts.html ? escapeHtml(value) : value;
   });
 }
