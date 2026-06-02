@@ -200,8 +200,19 @@ export default function ScheduleReview({
             Save as draft
           </button>
           <button
-            onClick={onSendTest}
-            disabled={busy}
+            onClick={() => {
+              // Send test for the FIRST touchpoint by default — the sticky-bar
+              // button is a convenience for "test the whole campaign quickly"
+              // without scrolling to a specific touchpoint card. Per-touchpoint
+              // buttons in TouchpointCard target their own id.
+              // (Bug fix: was `onClick={onSendTest}` which passed the React
+              // click event as the first arg, hitting "Converting circular
+              // structure to JSON" when supabase.functions.invoke tried to
+              // stringify the body.)
+              if (touchpoints[0]?.id) onSendTest?.(touchpoints[0].id);
+              else alert("No touchpoints to test — draft a campaign first.");
+            }}
+            disabled={busy || touchpoints.length === 0}
             style={{
               background: "#fff", border: `1px solid ${INFO}`, color: INFO,
               padding: "8px 14px", borderRadius: 6, cursor: busy ? "not-allowed" : "pointer",

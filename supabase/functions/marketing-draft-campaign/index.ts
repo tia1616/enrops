@@ -1118,7 +1118,13 @@ This is a SINGLE-EMAIL send, not a multi-touchpoint campaign. The operator wants
 - Set scheduled_at to: ${resolveSendAtForPrompt(inputs.send_at!, orgTimezone)}
 - The body should be a single direct note. Use the operator's typed topic + operator_notes as the source. Common cases: weather cancellation, schedule change, recap / thank-you, holiday greeting.
 - Subject line should be clear and action-oriented for urgent sends ("Class cancelled tomorrow — Tuesday Sept 9") and warm for relational sends ("Thanks for an amazing fall, families").
-- Do NOT generate 48h/24h reminders. Do NOT enumerate program details unless the operator wrote them in notes. Do NOT add a kickoff/final-call structure.`
+- Do NOT generate 48h/24h reminders. Do NOT enumerate program details unless the operator wrote them in notes. Do NOT add a kickoff/final-call structure.
+- Do NOT mention curricula or specific programs unless the operator wrote that in operator_notes. A "thank-you" or "Special announcement" with no other input means you write generically and warmly — but DO flag it.
+
+THIN INPUT — TELL THE OPERATOR
+If the operator's topic + operator_notes give you very little to work with (e.g. just "thank you" with no details), do NOT pad the body with invented specifics. Write a short warm generic note AND put this in notes_to_operator:
+  "Not much to go on — a generic [thank-you / announcement / etc.] is what I wrote. For a stronger message, add details in the operator_notes field (a specific moment to celebrate, what's exciting about the news, etc.) and re-draft."
+This is more useful to the operator than guessing or apologizing for the lack of specifics in the body.`
     : "";
 
   return [
@@ -1560,11 +1566,18 @@ serve(async (req: Request) => {
 
   let programDetailsBlock = "";
   let curriculumMatches: CurriculumMatch[] = [];
+  const isOneOffMode = parsed.structuredWhat?.mode === "other";
   if (facts.programs.length > 0 || facts.camps.length > 0) {
     // Structured picks — use grounded facts. Skip fuzzy curriculum match entirely.
     programDetailsBlock = formatGroundedFactsForPrompt(facts, inputs.promo);
+  } else if (isOneOffMode) {
+    // Mode='other' is a one-off note (weather cancellation, holiday greeting,
+    // thank-you). Curriculum matching doesn't apply — the topic is an event,
+    // not a curriculum. Skip the fuzzy match. If operator_notes is thin,
+    // Ennie will say so in notes_to_operator (per the prompt rule below).
+    programDetailsBlock = "";
   } else {
-    // Legacy / mode='other' — fall back to fuzzy curriculum match against topic strings.
+    // Legacy string/string[] callers — fall back to fuzzy curriculum match.
     const curricula = await loadCurricula(supabase, organization_id);
     curriculumMatches = matchCurriculaToTopics(topicsArr, curricula);
     programDetailsBlock = formatCurriculaForPrompt(curriculumMatches);
