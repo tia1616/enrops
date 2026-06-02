@@ -169,7 +169,7 @@ export default function AdminOverview() {
         <Card
           title="Family Comms"
           body="Preview, schedule, and send campaigns."
-          to="/admin/family-comms"
+          to="/admin/family-comms/marketing"
           cta="Open Family Comms"
           ready
         />

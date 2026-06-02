@@ -100,11 +100,15 @@ export default function App() {
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<AdminOverview />} />
         {/* "Family Comms" — operator-facing name. Internal folder is still
-            marketing-v2/ to avoid touching dozens of imports. The /marketing-v2
-            redirect below preserves any bookmarks / external links pointing
-            at the old URL. */}
-        <Route path="family-comms" element={<AICampaignBuilder />} />
-        <Route path="marketing-v2" element={<Navigate to="/admin/family-comms" replace />} />
+            marketing-v2/ to avoid touching dozens of imports.
+            Sub-routes:
+              /admin/family-comms              -> redirects to /marketing (default)
+              /admin/family-comms/marketing    -> AI campaign builder (was /marketing-v2)
+              /admin/family-comms/automations  -> Automations sub-tab (build pending, task #13)
+            /admin/marketing-v2 stays as a redirect for old bookmarks. */}
+        <Route path="family-comms" element={<Navigate to="/admin/family-comms/marketing" replace />} />
+        <Route path="family-comms/marketing" element={<AICampaignBuilder />} />
+        <Route path="marketing-v2" element={<Navigate to="/admin/family-comms/marketing" replace />} />
         <Route path="schedule" element={<Schedule />} />
         <Route path="schedule/print" element={<SchedulePrint />} />
         <Route path="curricula" element={<CurriculaList />} />

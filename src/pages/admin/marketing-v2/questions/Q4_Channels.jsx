@@ -43,7 +43,7 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
             // Friendly bail-out — kick back to the admin home. The Family
             // Comms surface auto-creates a draft row when Ennie's draft pass
             // runs, so this button doesn't need to persist anything. Future
-            // (when a drafts list ships): land on /admin/family-comms/drafts
+            // (when a drafts list ships): land on /admin/family-comms/marketing/drafts
             // so the operator can pick this back up.
             // Was navigate("/admin/marketing") — that route was retired with
             // the old Marketing tab; would 404 / catch-all.
