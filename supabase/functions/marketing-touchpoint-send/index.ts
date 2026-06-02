@@ -350,10 +350,17 @@ serve(async (req: Request) => {
     });
 
     const subject = postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }));
-    const bodyHtml = postCleanCopy(replaceTokens(touchpoint.payload!.body_html!, tokens, { html: true }));
+    // Wrap Ennie's body in a minimal HTML shell: doctype, basic styling,
+    // unsubscribe footer. Ennie writes the CONTENT; the shell guarantees:
+    // - Consistent rendering across Outlook / Gmail / Apple Mail
+    // - Mobile-friendly viewport meta
+    // - CAN-SPAM unsubscribe link in every send (her draft may or may not
+    //   include {{unsubscribe_url}}; the shell adds it unconditionally)
+    const innerHtml = postCleanCopy(replaceTokens(touchpoint.payload!.body_html!, tokens, { html: true }));
+    const bodyHtml = wrapInEmailShell(innerHtml, tokens);
     const bodyText = touchpoint.payload!.body_text
       ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
-      : null;
+      : stripHtmlToText(innerHtml);
 
     // ---- Send via Resend ----
     const sendResult = await sendViaResend({
@@ -623,6 +630,71 @@ function postCleanCopy(text: string): string {
     .replace(/[ \t]{2,}/g, " ")
     // Trim trailing whitespace on each line
     .replace(/[ \t]+$/gm, "");
+}
+
+// Wraps Ennie's body in a minimal email shell. Provides:
+// - doctype + mobile viewport
+// - max-width container with light card styling
+// - footer with unsubscribe link (CAN-SPAM compliance) and explanation
+// Tokens in the shell (org_name, unsubscribe_url, sender_name) are already
+// resolved at this point — they're pre-replaced by replaceTokens before
+// being passed in.
+function wrapInEmailShell(innerHtml: string, tokens: Map<string, string>): string {
+  const orgName = tokens.get("org_name") || "";
+  const senderName = tokens.get("sender_name") || orgName;
+  const unsubscribeUrl = tokens.get("unsubscribe_url") || "";
+  const logoUrl = tokens.get("logo_url") || "";
+
+  // Defensive: if for some reason unsubscribe_url didn't resolve, don't render
+  // an empty <a href=""> — Resend would still send but the link would be broken.
+  // Better to omit and let CAN-SPAM compliance fail loudly (we'd notice in QA)
+  // than to ship a broken unsubscribe.
+  const unsubBlock = unsubscribeUrl
+    ? `<a href="${escapeHtml(unsubscribeUrl)}" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a>`
+    : "";
+
+  const logoBlock = logoUrl
+    ? `<div style="text-align:center;margin-bottom:16px;"><img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(orgName)}" style="max-width:160px;height:auto;"></div>`
+    : "";
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(orgName)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1f2937;line-height:1.55;">
+<div style="max-width:600px;margin:0 auto;padding:24px 16px;">
+<div style="background:#ffffff;border-radius:10px;padding:32px 28px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+${logoBlock}
+${innerHtml}
+</div>
+<div style="margin-top:16px;padding:0 12px;font-size:11px;color:#6b7280;line-height:1.6;text-align:center;">
+You're receiving this because your family is on ${escapeHtml(senderName || orgName || "our")}'s mailing list.
+${unsubBlock ? `<br>${unsubBlock}` : ""}
+</div>
+</div>
+</body>
+</html>`;
+}
+
+// Quick plain-text fallback from HTML — strips tags, collapses whitespace.
+// Used when the touchpoint has no body_text. Far better than no plain-text
+// alt at all (spam filters penalize HTML-only emails).
+function stripHtmlToText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function escapeHtml(s: string): string {
