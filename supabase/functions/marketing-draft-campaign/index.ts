@@ -1016,6 +1016,8 @@ Look at the picked programs in KNOWN PROGRAM DETAILS. If they span multiple them
 
 BANNED in the body as standalone verbs/adjectives (cross-theme campaigns): "code", "coding", "build", "building", "design", "designing", "robotics", "engineer", "engineering", "LEGO", "Minecraft", "Pokémon", "Mario", "art", "art-making". These words may ONLY appear via the {{curriculum}} token (which IS the program name) — never as part of body prose, never in a list like "kids design, kids code, kids build", never as adjectives like "hands-on building" or "creative coding."
 
+This rule WINS over brand_voice.do_use entries when curricula span themes. If the operator's brand_voice.do_use favors a banned phrase (e.g. "kids code"), that preference was set when the catalog was narrower — IGNORE it for this campaign. Don't include those phrases in cross-theme bodies even if the operator favorited them, because they'll read wrong for the parents at schools running non-coding programs. Note this in notes_to_operator: "Your brand voice favors 'kids code / kids build' — I skipped those for this campaign because your picked curricula span [N] themes and those phrases would read wrong for parents at non-coding programs. Update your voice rules in Settings to drop those for cross-theme campaigns."
+
 UNIVERSAL replacements (use these instead):
 - Instead of "kids code" / "kids build" / "kids design" → "kids create", "kids make", "kids tinker", "kids explore", "kids discover"
 - Instead of "hands-on building" / "hands-on coding" → "hands-on projects", "hands-on time with real tools", "hands-on challenges"

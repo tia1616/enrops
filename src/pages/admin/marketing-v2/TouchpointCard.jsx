@@ -209,9 +209,14 @@ function BodyEditor({ value, onChange }) {
       )}
 
       {!editing && (
-        <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED }}>
-          Highlighted tags like <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span> get filled in for each parent when the email sends.
-        </p>
+        <div style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
+          <p style={{ margin: 0 }}>
+            Highlighted tags like <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span> get filled in for each parent when the email sends.
+          </p>
+          <p style={{ margin: "4px 0 0", color: OK, fontStyle: "italic" }}>
+            ✨ Your edits teach Ennie your brand voice — future drafts get sharper as you go.
+          </p>
+        </div>
       )}
     </div>
   );
