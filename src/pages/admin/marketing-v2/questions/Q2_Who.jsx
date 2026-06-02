@@ -31,7 +31,9 @@ const PARENT_SCOPES = [
   { value: "master_list", label: "Master list (everyone)" },
   { value: "school", label: "A specific school…" },
   { value: "area", label: "An area…" },
-  { value: "segment", label: "A saved segment…" },
+  // "segment" intentionally dropped 2026-06-01 — no segments built yet;
+  // the underlying multi-select component stays in this file for when
+  // segments come back. Add the option back here to re-expose.
   { value: "person", label: "Just one person…" },
 ];
 
