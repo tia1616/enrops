@@ -1551,7 +1551,64 @@ serve(async (req: Request) => {
   // ---- Resolve recipients ----
   const resolved = await resolveParents(supabase, organization_id, inputs.who.filter as ParentsFilter);
   if (!resolved.ok) return jsonError(resolved.error, resolved.status);
-  const { ids: recipientIds, count: recipientCount, segment_summary } = resolved.data;
+  let { ids: recipientIds, count: recipientCount, segment_summary } = resolved.data;
+
+  // Optional: exclude parents who've already registered for the picked
+  // programs/camps. Gated by Enrops registration (we can't dedup against
+  // Squarespace etc.). Toggle set on the client (inputs.who.exclude_already_registered).
+  const excludeAlreadyRegistered = (inputs.who as { exclude_already_registered?: boolean }).exclude_already_registered === true;
+  let excludedCount = 0;
+  if (excludeAlreadyRegistered && parsed.structuredWhat) {
+    const programIds = parsed.structuredWhat.program_ids ?? [];
+    const campIds = parsed.structuredWhat.camp_session_ids ?? [];
+    if (programIds.length > 0 || campIds.length > 0) {
+      // 1. Confirmed registrations for the picks → parent_ids
+      let regQuery = supabase
+        .from("registrations")
+        .select("parent_id")
+        .eq("organization_id", organization_id)
+        .eq("status", "confirmed");
+      if (programIds.length > 0 && campIds.length > 0) {
+        regQuery = regQuery.or(`program_id.in.(${programIds.join(",")}),camp_session_id.in.(${campIds.join(",")})`);
+      } else if (programIds.length > 0) {
+        regQuery = regQuery.in("program_id", programIds);
+      } else {
+        regQuery = regQuery.in("camp_session_id", campIds);
+      }
+      const { data: regs } = await regQuery;
+      const parentIds = [...new Set((regs ?? []).map((r: { parent_id: string }) => r.parent_id).filter(Boolean))];
+
+      if (parentIds.length > 0) {
+        // 2. parent_ids → emails
+        const { data: parents } = await supabase
+          .from("parents")
+          .select("email")
+          .in("id", parentIds);
+        const excludedEmails = new Set(
+          ((parents ?? []) as Array<{ email: string | null }>)
+            .map((p) => p.email?.toLowerCase())
+            .filter(Boolean) as string[],
+        );
+
+        if (excludedEmails.size > 0) {
+          // 3. Filter recipientIds by looking up their emails
+          const { data: rcps } = await supabase
+            .from("marketing_recipients")
+            .select("id, email")
+            .in("id", recipientIds);
+          const filtered = ((rcps ?? []) as Array<{ id: string; email: string }>)
+            .filter((r) => !excludedEmails.has((r.email || "").toLowerCase()))
+            .map((r) => r.id);
+          excludedCount = recipientIds.length - filtered.length;
+          recipientIds = filtered;
+          recipientCount = filtered.length;
+          if (excludedCount > 0) {
+            segment_summary = `${segment_summary} (minus ${excludedCount} already registered)`;
+          }
+        }
+      }
+    }
+  }
 
   // Zero-recipient case is a soft warning: the admin can still see the draft
   // and adjust the filter without re-running the whole question flow.

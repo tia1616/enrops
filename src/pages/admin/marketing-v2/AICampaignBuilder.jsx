@@ -44,7 +44,7 @@ const INITIAL = {
       camp_session_ids: [],
       topics: [],
     },
-    who: { audience: "parents", filter: { type: "auto" } },
+    who: { audience: "parents", filter: { type: "auto" }, exclude_already_registered: false },
     promo: {
       early_bird: false,
       vip_option: false,

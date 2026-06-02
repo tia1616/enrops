@@ -163,7 +163,140 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
           />
         )}
       </div>
+
+      {/* Already-registered toggle. Only meaningful for programs/camps mode
+          (one-off notes have nothing to dedup against). Gated by Enrops
+          registration data — if there are 0 confirmed registrations for the
+          picked programs, the toggle is disabled with coaching toward
+          adopting Enrops registration. */}
+      {(what?.mode === "programs" || what?.mode === "camps") && (
+        <ExcludeAlreadyRegisteredToggle
+          orgId={org?.id}
+          what={what}
+          checked={!!who.exclude_already_registered}
+          onChange={(v) => setField("who", { ...who, exclude_already_registered: v })}
+        />
+      )}
     </QuestionStep>
+  );
+}
+
+// ---------- Exclude-already-registered toggle ----------
+// Queries the registrations table for the picked programs/camps. If there are
+// confirmed registrations -> toggle enabled, shows the count that would be
+// excluded. If zero -> disabled with a coaching link explaining why (likely
+// the provider's registration isn't on Enrops, or no one's registered yet).
+function ExcludeAlreadyRegisteredToggle({ orgId, what, checked, onChange }) {
+  const [registeredCount, setRegisteredCount] = useState(null);
+  const [excludableCount, setExcludableCount] = useState(0);
+
+  useEffect(() => {
+    if (!orgId) return;
+    let alive = true;
+    setRegisteredCount(null);
+    (async () => {
+      const programIds = Array.isArray(what?.program_ids) ? what.program_ids : [];
+      const campIds = Array.isArray(what?.camp_session_ids) ? what.camp_session_ids : [];
+      if (programIds.length === 0 && campIds.length === 0) {
+        if (alive) { setRegisteredCount(0); setExcludableCount(0); }
+        return;
+      }
+
+      // Count confirmed registrations for the picked programs/camps. We don't
+      // join to marketing_recipients yet because the toggle's gate logic only
+      // needs "any Enrops registrations exist?". The actual exclusion happens
+      // server-side at send time.
+      let regQuery = supabase
+        .from("registrations")
+        .select("parent_id", { count: "exact", head: false })
+        .eq("organization_id", orgId)
+        .eq("status", "confirmed");
+      if (programIds.length > 0 && campIds.length > 0) {
+        regQuery = regQuery.or(`program_id.in.(${programIds.join(",")}),camp_session_id.in.(${campIds.join(",")})`);
+      } else if (programIds.length > 0) {
+        regQuery = regQuery.in("program_id", programIds);
+      } else {
+        regQuery = regQuery.in("camp_session_id", campIds);
+      }
+      const { data: regs } = await regQuery;
+      if (!alive) return;
+      const total = regs?.length ?? 0;
+      setRegisteredCount(total);
+
+      // For the inline "would exclude N" hint, count distinct recipients with
+      // matching emails. Two-query approach is fine for v1.
+      if (total > 0) {
+        const parentIds = [...new Set((regs ?? []).map((r) => r.parent_id).filter(Boolean))];
+        const { data: parents } = await supabase
+          .from("parents")
+          .select("email")
+          .in("id", parentIds);
+        const emails = (parents ?? []).map((p) => p.email?.toLowerCase()).filter(Boolean);
+        if (emails.length > 0) {
+          const { count: matched } = await supabase
+            .from("marketing_recipients")
+            .select("id", { count: "exact", head: true })
+            .eq("organization_id", orgId)
+            .in("email", emails);
+          if (alive) setExcludableCount(matched ?? 0);
+        } else {
+          if (alive) setExcludableCount(0);
+        }
+      } else {
+        setExcludableCount(0);
+      }
+    })();
+    return () => { alive = false; };
+  }, [orgId, what?.program_ids, what?.camp_session_ids, what?.mode]);
+
+  const loading = registeredCount === null;
+  const enabled = (registeredCount ?? 0) > 0;
+  // Disable + uncheck if gate is closed
+  useEffect(() => {
+    if (!enabled && checked) onChange(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]);
+
+  return (
+    <div style={{
+      marginTop: 12, padding: "12px 14px",
+      background: enabled ? "#fff" : "#faf7ed",
+      border: `1px solid ${enabled ? RULE : "#ece1bf"}`,
+      borderRadius: 8,
+    }}>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: enabled ? "pointer" : "not-allowed" }}>
+        <input
+          type="checkbox"
+          checked={checked && enabled}
+          disabled={!enabled || loading}
+          onChange={(e) => onChange(e.target.checked)}
+          style={{ marginTop: 3 }}
+        />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: enabled ? INK : MUTED }}>
+            Skip parents already registered for these {what?.mode === "camps" ? "camps" : "programs"}
+            {enabled && checked && excludableCount > 0 && (
+              <span style={{ color: OK, fontWeight: 500 }}> · {excludableCount} will be excluded</span>
+            )}
+          </div>
+          {loading && (
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>Checking who's already in…</div>
+          )}
+          {!loading && enabled && (
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+              {registeredCount} parent{registeredCount === 1 ? "" : "s"} {registeredCount === 1 ? "has" : "have"} already registered for {what?.mode === "camps" ? "these camps" : "these programs"} through Enrops. Skipping them keeps your campaign from pushing an offer they already took.
+            </div>
+          )}
+          {!loading && !enabled && (
+            <div style={{ fontSize: 12, color: "#7a5510", marginTop: 2 }}>
+              Available when registration runs through Enrops — we'll know who's already in, in real time. For Squarespace / external registration, we can't see who's signed up yet.
+              {" "}
+              <a href="/admin/settings" style={{ color: PURPLE, fontWeight: 600 }}>Move registration to Enrops →</a>
+            </div>
+          )}
+        </div>
+      </label>
+    </div>
   );
 }
 
