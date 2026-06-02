@@ -186,9 +186,34 @@ function ProgramsPicker({ orgId, selected, onChange }) {
   }
 
   const lowCount = rows.filter(isLowEnrollment).length;
+  const urgency = detectUrgentTerm(rows);
 
   return (
     <div>
+      {/* Urgency hint — surfaces when a term has an early-bird deadline within
+          7 days AND enough programs to justify a campaign. Operator gets a
+          one-click "pick all that term's programs" affordance. Coaching pattern. */}
+      {urgency && (
+        <div style={{
+          marginBottom: 8, padding: "10px 14px", background: "#EAF3DE",
+          border: `1px solid ${OK}55`, borderRadius: 6, fontSize: 13, color: "#2d5a2d",
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
+        }}>
+          <span>
+            🎯 <strong>{urgency.term} early-bird ends in {urgency.daysAway} day{urgency.daysAway === 1 ? "" : "s"}</strong> — {urgency.count} program{urgency.count === 1 ? "" : "s"} across {urgency.schoolCount} school{urgency.schoolCount === 1 ? "" : "s"}.
+          </span>
+          <button
+            onClick={() => onChange([...new Set([...selected, ...urgency.programIds])])}
+            style={{
+              padding: "5px 12px", background: OK, color: "#fff", border: "none",
+              borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            Pick all {urgency.term} →
+          </button>
+        </div>
+      )}
+
       {/* Hint about hidden drafts — only renders when there are upcoming
           programs in status='draft' that the operator may have expected to see. */}
       {draftCount > 0 && (
@@ -288,6 +313,47 @@ function ProgramRow({ row, checked, onToggle }) {
       </div>
     </label>
   );
+}
+
+// Detects the most urgent term to nudge the operator toward marketing. Returns
+// info about a term IF that term has:
+//   - An early-bird deadline within the next 7 days, AND
+//   - At least 3 programs sharing that deadline (worth a campaign)
+// Returns null otherwise. The hint is intentionally quiet — only fires for
+// real deadline urgency, not as a "you should run a campaign every day" nag.
+function detectUrgentTerm(rows) {
+  if (!rows || rows.length === 0) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const MS_PER_DAY = 86400000;
+  // Group rows by (term + early_bird_deadline) so we count programs that share
+  // a real deadline together. Different deadlines in the same term are separate
+  // urgency candidates.
+  const buckets = new Map();
+  for (const r of rows) {
+    if (!r.early_bird_price_cents || !r.early_bird_deadline) continue;
+    const dl = new Date(r.early_bird_deadline + "T23:59:59");
+    const daysAway = Math.ceil((dl.getTime() - today.getTime()) / MS_PER_DAY);
+    if (daysAway < 0 || daysAway > 7) continue;
+    const key = `${r.term}::${r.early_bird_deadline}`;
+    if (!buckets.has(key)) {
+      buckets.set(key, { term: r.term, deadline: r.early_bird_deadline, daysAway, rows: [] });
+    }
+    buckets.get(key).rows.push(r);
+  }
+  // Pick the bucket with the largest program count, breaking ties on soonest deadline
+  const candidates = [...buckets.values()].filter((b) => b.rows.length >= 3);
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.rows.length - a.rows.length || a.daysAway - b.daysAway);
+  const winner = candidates[0];
+  const schoolCount = new Set(winner.rows.map((r) => r.program_location_id).filter(Boolean)).size;
+  return {
+    term: winner.term,
+    daysAway: winner.daysAway,
+    count: winner.rows.length,
+    schoolCount,
+    programIds: winner.rows.map((r) => r.id),
+  };
 }
 
 // "Low enrollment" = under half of capacity AND first_session_date within 6 weeks.
