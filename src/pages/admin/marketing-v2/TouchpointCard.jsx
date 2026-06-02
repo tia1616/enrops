@@ -296,11 +296,20 @@ function stripHtml(html) {
 }
 
 // Wraps merge tokens like {{first_name}} in a styled span so operators can
-// see at a glance which bits get personalized at send time. Returns HTML safe
-// to drop into dangerouslySetInnerHTML (input is Ennie's already-sanitized HTML).
+// see at a glance which bits get personalized at send time.
+//
+// CRITICAL: only highlights tokens in TEXT content, not tokens inside HTML
+// attribute values. Wrapping a token in <span> inside <a href="..."> would
+// produce `<a href="<span...>...">` — invalid HTML that the browser parses
+// unpredictably, swallowing the anchor tag entirely and leaking the href as
+// plain text. The negative lookahead `(?![^<]*>)` matches a token only when
+// there's an unclosed `<` before the next `>`, i.e. the token sits in text
+// content not inside an attribute. Bug surfaced 2026-06-02 when Ennie wrote
+// `<a href="{{register_url}}">Grab the rate →</a>` and operators saw the
+// rendered preview as `{{register_url}}">Grab the rate →` with no link.
 function highlightTokens(html) {
   if (!html) return "";
-  return html.replace(/\{\{(\w+)\}\}/g, (_, name) =>
+  return html.replace(/\{\{(\w+)\}\}(?![^<]*>)/g, (_, name) =>
     `<span style="display:inline-block;padding:0 6px;border-radius:4px;background:#f0e3e8;color:#1C004F;font-size:0.9em;font-weight:600;font-family:ui-monospace,monospace;">{{${name}}}</span>`,
   );
 }
