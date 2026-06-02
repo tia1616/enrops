@@ -243,7 +243,6 @@ export default function TouchpointCard({
                 </span>
               )}
             </div>
-          )}
 
           <BodyEditor
             value={tp.body_html ?? ""}

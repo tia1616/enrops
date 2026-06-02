@@ -61,29 +61,52 @@ export default function ScheduleReview({
       // Pull the campaign's draft_inputs to get program_ids (don't re-trust
       // the in-memory `inputs` from the parent — the campaign row is the
       // source of truth for what was actually picked).
-      const { data: c } = await supabase
+      const { data: c, error: cErr } = await supabase
         .from("marketing_campaigns")
         .select("draft_inputs")
         .eq("id", draft.campaign_id)
         .maybeSingle();
+      if (cErr) {
+        // eslint-disable-next-line no-console
+        console.error("[ScheduleReview] campaign read failed", cErr);
+        return;
+      }
       const programIds = c?.draft_inputs?.what?.program_ids ?? [];
+      // eslint-disable-next-line no-console
+      console.log("[ScheduleReview] campaign loaded:", { hasCampaign: !!c, programIdsCount: programIds.length });
       if (!Array.isArray(programIds) || programIds.length === 0) {
         if (alive) setPickedLocations([]);
         return;
       }
-      const { data: progs } = await supabase
+      const { data: progs, error: pErr } = await supabase
         .from("programs")
         .select("program_location_id, program_locations(id, name)")
         .in("id", programIds);
+      if (pErr) {
+        // eslint-disable-next-line no-console
+        console.error("[ScheduleReview] programs query failed", pErr);
+        return;
+      }
+      // eslint-disable-next-line no-console
+      console.log("[ScheduleReview] programs loaded:", {
+        count: (progs ?? []).length,
+        sample: (progs ?? [])[0],
+      });
       const seen = new Set();
       const locs = [];
       for (const p of progs ?? []) {
-        const loc = p.program_locations;
+        // PostgREST embeds: when the FK column is unique to one parent, the
+        // embed is an OBJECT. When it could be many (no unique constraint),
+        // it's an ARRAY. We handle both shapes defensively.
+        const rawLoc = p.program_locations;
+        const loc = Array.isArray(rawLoc) ? rawLoc[0] : rawLoc;
         if (!loc?.id || seen.has(loc.id)) continue;
         seen.add(loc.id);
         locs.push({ id: loc.id, name: loc.name });
       }
       locs.sort((a, b) => a.name.localeCompare(b.name));
+      // eslint-disable-next-line no-console
+      console.log("[ScheduleReview] picked locations resolved:", locs.length);
       if (alive) setPickedLocations(locs);
     })();
     return () => { alive = false; };
