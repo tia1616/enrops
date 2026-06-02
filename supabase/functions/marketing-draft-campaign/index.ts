@@ -1102,7 +1102,8 @@ VOICE DETAILS
 - Preheader (first ~80 chars of body) extends the subject, never repeats it.
 - Match length to purpose: a kickoff can be substantial — paint the picture. A 24-hour reminder is three or four sentences, but still warm, not curt.
 - Leave the parent feeling something positive after reading: curiosity, anticipation, that "this sounds like my kid" hum. Don't just inform — connect.
-- End every email body with the closer line on its own paragraph: "${v.closer ?? "(no closer set)"}" — only if a closer is set, otherwise omit.
+- SIGN-OFF: end the body content with a sign-off line using ONLY {{sender_name}} on its own paragraph (e.g. "— {{sender_name}}"). Do NOT append {{org_name}} after the sender — tenants frequently set their sender_name as "First Last @ Org" so the org is already conveyed; appending it again produces redundancy like "Jessica @ Journey to STEAM, Journey to STEAM". Skip the comma + org_name.
+- End every email body with the closer line on its own paragraph AFTER the sign-off: "${v.closer ?? "(no closer set)"}" — only if a closer is set, otherwise omit.
 
 ${tokenList}
 
