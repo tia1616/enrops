@@ -280,11 +280,16 @@ serve(async (req: Request) => {
     .eq("organization_id", campaign.organization_id);
   const suppressedEmails = new Set(((suppressions ?? []) as Array<{ email: string }>).map((s) => s.email.toLowerCase()));
 
-  // ---- Dedup: already-delivered marketing_sends for this campaign + touchpoint ----
+  // ---- Dedup: already-delivered marketing_sends for THIS campaign + touchpoint ----
+  // Key on (campaign_id, touchpoint_id, recipient_id). Two touchpoints in the
+  // same campaign don't collide with each other; each fires exactly once per
+  // recipient. Legacy J2S FA26-launch sends have touchpoint_id NULL so they
+  // don't false-positive against the new touchpoint sends.
   const { data: prior } = await supabase
     .from("marketing_sends")
     .select("recipient_id, status")
     .eq("campaign_id", campaign.id)
+    .eq("touchpoint_id", touchpoint.id)
     .in("recipient_id", recipientIds)
     .in("status", DELIVERED_STATUSES);
   const alreadyDelivered = new Set(((prior ?? []) as Array<{ recipient_id: string }>).map((r) => r.recipient_id));
@@ -361,20 +366,23 @@ serve(async (req: Request) => {
     });
 
     // ---- Log to marketing_sends ----
+    // Column names verified against information_schema:
+    //   resend_message_id (NOT resend_id), rendered_subject, sent_at, etc.
+    //   suppressed_by_throttle is NOT NULL — explicitly set false.
+    // touchpoint_id added by migration 20260603 so dedup is per-touchpoint.
     await supabase.from("marketing_sends").insert({
       organization_id: campaign.organization_id,
       campaign_id: campaign.id,
+      touchpoint_id: touchpoint.id,
       recipient_id: r.id,
       email: r.email,
       status: sendResult.ok ? "sent" : "failed",
-      resend_id: sendResult.ok ? sendResult.id : null,
+      resend_message_id: sendResult.ok ? sendResult.id : null,
+      rendered_subject: subject,
+      sent_at: sendResult.ok ? new Date().toISOString() : null,
+      school_name: r.school_name ?? null,
       error_message: sendResult.ok ? null : sendResult.error,
-      // touchpoint_id intentionally NOT a separate column — marketing_sends
-      // schema dates from before touchpoints. Touchpoint identity captured in
-      // metadata if we extend the schema later. For now (campaign_id +
-      // recipient_id) dedup is per campaign, not per touchpoint — operators
-      // sending a 5-touchpoint campaign would dedup after touchpoint 1.
-      // TODO: add touchpoint_id column or change dedup key. Tracked separately.
+      suppressed_by_throttle: false,
     });
 
     if (sendResult.ok) results.sent++;
