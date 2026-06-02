@@ -214,7 +214,7 @@ function BodyEditor({ value, onChange }) {
             Highlighted tags like <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span> get filled in for each parent when the email sends.
           </p>
           <p style={{ margin: "4px 0 0", color: OK, fontStyle: "italic" }}>
-            ✨ Your edits teach Ennie your brand voice — future drafts get sharper as you go.
+            ✨ Every edit teaches Ennie a phrase you prefer or drop. Future drafts will reflect your voice automatically — less editing each campaign.
           </p>
         </div>
       )}
