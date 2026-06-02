@@ -284,7 +284,17 @@ function ExcludeAlreadyRegisteredToggle({ orgId, what, checked, onChange }) {
           )}
           {!loading && enabled && (
             <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-              {registeredCount} parent{registeredCount === 1 ? "" : "s"} {registeredCount === 1 ? "has" : "have"} already registered for {what?.mode === "camps" ? "these camps" : "these programs"} through Enrops. Skipping them keeps your campaign from pushing an offer they already took.
+              {/* Two real numbers in play and they aren't always equal:
+                  - registeredCount: total parents with a confirmed registration
+                  - excludableCount: how many of those are on your marketing list
+                  When they match we say "10 parents..."; when they don't we
+                  explain the gap so "10 registered / 7 excluded" doesn't read
+                  like a bug. The non-list registrants aren't in this campaign's
+                  audience anyway, so they're not actionable here either way. */}
+              {registeredCount === excludableCount
+                ? <>{registeredCount} parent{registeredCount === 1 ? "" : "s"} {registeredCount === 1 ? "has" : "have"} already registered for {what?.mode === "camps" ? "these camps" : "these programs"} through Enrops. Skipping them keeps your campaign from pushing an offer they already took.</>
+                : <>{excludableCount} of your marketing-list parents {excludableCount === 1 ? "has" : "have"} already registered for {what?.mode === "camps" ? "these camps" : "these programs"} through Enrops — skipping them keeps your campaign from pushing an offer they already took. ({registeredCount - excludableCount} more registered but {(registeredCount - excludableCount) === 1 ? "isn't" : "aren't"} on your marketing list, so {(registeredCount - excludableCount) === 1 ? "they aren't" : "they aren't"} getting this campaign anyway.)</>
+              }
             </div>
           )}
           {!loading && !enabled && (
