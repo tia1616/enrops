@@ -583,14 +583,27 @@ function CampRow({ row, checked, onToggle }) {
 // ---------- Other (free-text topic chips) ----------
 function TopicChips({ topics, onChange }) {
   const [pending, setPending] = useState("");
-  // Parent-only presets per the IA decision: Marketing tab is parent comms
-  // only. Partner notes live in the Partners tab; instructor reminders live
-  // in the Instructors tab. The presets here are parent-facing situations
-  // that don't tie to a specific scheduled program/camp.
+  // Parent-only AD-HOC presets. Recurring patterns (recaps, thank-yous,
+  // birthdays, schedule changes) live in Automations — set up once and
+  // fire on their own. The presets here are genuinely one-off situations:
+  // weather, unexpected news, holiday greetings the operator wants to write
+  // fresh each year instead of automating.
   const PRESETS = [
-    "Recap / thank-you to families",
+    "Weather cancellation",
+    "Special announcement",
     "Holiday or seasonal greeting",
-    "General family newsletter",
+  ];
+
+  // Pattern list rendered below to coach operators away from manually
+  // re-doing what automations cover. Updated as task #13 lands.
+  const AUTOMATION_PATTERNS = [
+    "Schedule change (program date or time changes)",
+    "Recap / thank-you after a program ends",
+    "Birthday greeting",
+    "Camp prep email (a few days before camp starts)",
+    "Drop-off morning reminder",
+    "Pre-charge notice + failed-charge recovery",
+    '"More camps coming up" cross-sell',
   ];
 
   function addTopic(label) {
@@ -652,7 +665,7 @@ function TopicChips({ topics, onChange }) {
         />
       </div>
       <p style={{ margin: "6px 0 12px", fontSize: 12, color: MUTED }}>
-        Use this for parent-facing notes that aren't tied to a specific program or camp — schedule changes, holiday greetings, recaps, newsletters.
+        Use this for genuinely one-off parent notes — weather cancellations, special announcements, holiday greetings. For anything recurring (recaps, thank-yous, schedule changes), set up an Automation instead so you don't have to keep redoing the work.
       </p>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {PRESETS.map((p) => (
@@ -672,6 +685,26 @@ function TopicChips({ topics, onChange }) {
             {topics.includes(p) ? "✓" : "+"} {p}
           </button>
         ))}
+      </div>
+
+      {/* Automations coaching panel — surfaces what's (going to be) handled
+          automatically so operators don't manually redo the same work each
+          term/week. Real Automations sub-tab lands with task #13. */}
+      <div style={{
+        marginTop: 18, padding: "12px 14px", background: "#faf7ed",
+        border: `1px solid #ece1bf`, borderRadius: 6,
+      }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+          These are automations — set up once
+        </div>
+        <p style={{ margin: "0 0 8px", fontSize: 12, color: MUTED }}>
+          For repeatable parent comms, set up an Automation once and Ennie fires it on the right trigger — no manual campaign each time. Coming soon:
+        </p>
+        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: INK, lineHeight: 1.7 }}>
+          {AUTOMATION_PATTERNS.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
       </div>
     </div>
   );
