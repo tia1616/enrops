@@ -74,13 +74,10 @@ export default function TouchpointCard({
               fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5,
               color: labelColor, padding: "2px 6px", borderRadius: 999, background: "rgba(0,0,0,0.04)",
             }}>{tp.label}</span>
-            {(tp.topics ?? []).map((t) => (
-              <span key={t} style={{
-                fontSize: 10, fontWeight: 600,
-                padding: "2px 6px", borderRadius: 999,
-                ...(topicColors?.[t] ?? { background: "#f1efe8", color: MUTED }),
-              }}>{t}</span>
-            ))}
+            {/* Topic chips intentionally dropped 2026-06-01: with grounded
+                program picks they enumerate the same N curricula on every
+                touchpoint -- noisy and not informative. Subject + body
+                carry what the touchpoint is about. */}
           </div>
           <div style={{ fontSize: 14, fontWeight: 600, color: INK, marginTop: 4, lineHeight: 1.3 }}>
             {tp.subject || "(no subject yet)"}
