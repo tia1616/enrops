@@ -652,7 +652,7 @@ function TopicChips({ topics, onChange }) {
         />
       </div>
       <p style={{ margin: "6px 0 12px", fontSize: 12, color: MUTED }}>
-        Use this for anything that isn't a scheduled program or camp — partner notes, instructor reminders, recaps.
+        Use this for parent-facing notes that aren't tied to a specific program or camp — schedule changes, holiday greetings, recaps, newsletters.
       </p>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {PRESETS.map((p) => (
