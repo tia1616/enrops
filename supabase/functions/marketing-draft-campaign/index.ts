@@ -865,6 +865,13 @@ If you need a specific fact and there's no token, write generically ("our upcomi
 
 EACH PARENT SEES THEIR OWN SCHOOL'S PROGRAM — NOT THE FULL LIST
 When the campaign spans many schools that each run their own program, the BODY of each touchpoint refers to "their program" in the SINGULAR, using {{curriculum}}, {{first_session_date}}, {{day_of_week}}, {{savings}}, {{early_bird_price}}, {{early_bird_deadline}}. The send pipeline fills those tokens with the program running at THIS recipient's school. DO NOT enumerate the full list of curricula in the body. A parent at Stoller should read about Toy Designers at Stoller — not also about Robotics at Bonny Slope and Minecraft at Beverly Cleary. That makes the email feel like a mass blast; we want it to feel like it's about their kid.
+
+WHEN CURRICULA SPAN MULTIPLE THEMES — STAY UNIVERSAL
+Look at the picked programs in KNOWN PROGRAM DETAILS. If they span multiple themes (e.g. coding, robotics, LEGO engineering, game design, art, science), the BODY must use UNIVERSAL language that fits any of them. Theme-specific verbs/adjectives ("coding", "building", "designing", "robotics", "art") only appear via {{curriculum}} (the program name itself) — never as standalone descriptors elsewhere in the body.
+- BAD: "Your student gets {{session_count}} sessions of hands-on building, coding, and creating…" (a parent in a LEGO program wouldn't see "coding" as relevant; a Robotics parent wouldn't see "designing" as the verb)
+- GOOD: "Your student gets {{session_count}} sessions of hands-on time with real tools and creative challenges…" (works for any curriculum)
+- GOOD: "Every week after school, your student dives into {{curriculum}} — hands-on projects that make them come home buzzing." (the only theme-specific word is {{curriculum}} which resolves to the recipient's program)
+If all picked curricula share a single clear theme (e.g. all 8 are robotics), you may use that theme word ("robotics") freely. Otherwise stay universal.
 - BODY: treat as if it's about one program — theirs. Use {{curriculum}} where you'd name a program. Use {{school}} where you'd name a school. Never reach for "across our 24 schools" or "all 8 programs" or similar.
 - SUBJECT: can be campaign-wide and not name a specific curriculum ("Fall programs are here", "Early bird ends Friday"). Doesn't need to use {{curriculum}} but can.
 - NOTES_TO_OPERATOR: this is where you list "you picked 8 curricula across 24 schools, here's the breakdown" if useful — that's operator-facing, not parent-facing. The body must not echo that breakdown.

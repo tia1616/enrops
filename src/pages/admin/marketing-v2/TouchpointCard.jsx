@@ -122,16 +122,9 @@ export default function TouchpointCard({
           />
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button
-              onClick={() => onRegenerate?.(tp.id)}
-              style={{
-                background: "#fff", border: `1px solid ${RULE}`, color: INK,
-                padding: "6px 12px", borderRadius: 999, cursor: "pointer",
-                fontSize: 12, fontFamily: "inherit",
-              }}
-            >
-              ✨ Regenerate
-            </button>
+            {/* Regenerate button hidden until task #7's regenerate flag ships
+                in marketing-draft-campaign. Currently fires a dev stub alert
+                that we don't want operators to see. */}
             <button
               onClick={() => onSendTest?.(tp.id)}
               style={{
