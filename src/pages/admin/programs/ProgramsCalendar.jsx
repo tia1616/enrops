@@ -9,7 +9,7 @@
 //   - by_school: programs grouped by program_location, sorted by day/time within school
 
 import { useEffect, useMemo, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 
@@ -73,6 +73,21 @@ export default function ProgramsCalendar() {
       .eq("id", programId);
     if (updErr) throw updErr;
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, ...payload } : p)));
+  }
+
+  // Flip a program from draft → open. The only place this was possible until
+  // now was a direct SQL update — operators had to ask for help. Self-serve.
+  async function publishProgram(programId) {
+    if (!confirm("Publish this program? It'll show in marketing campaigns and the public catalog.")) return;
+    const { error: pubErr } = await supabase
+      .from("programs")
+      .update({ status: "open" })
+      .eq("id", programId);
+    if (pubErr) {
+      alert(`Couldn't publish: ${pubErr.message}`);
+      return;
+    }
+    setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "open" } : p)));
   }
   const [sessionDatesByProgram, setSessionDatesByProgram] = useState({});
   const [expandedDates, setExpandedDates] = useState(() => new Set());
@@ -244,6 +259,22 @@ export default function ProgramsCalendar() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <Link
+            to="/admin/programs/new"
+            style={{
+              padding: "8px 14px",
+              background: PURPLE,
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 600,
+              textDecoration: "none",
+              display: "inline-block",
+            }}
+          >
+            + New program
+          </Link>
           <select value={term} onChange={(e) => setTerm(e.target.value)} style={selectStyle}>
             {TERM_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
@@ -286,6 +317,7 @@ export default function ProgramsCalendar() {
               onToggleDates={toggleDatesExpanded}
               onEdit={setEditingProgram}
               onEditFacility={setEditingFacility}
+              onPublish={publishProgram}
             />
           : <BySchoolView
               programs={programs}
@@ -297,6 +329,7 @@ export default function ProgramsCalendar() {
               onToggleSchool={toggleSchoolExpanded}
               onEdit={setEditingProgram}
               onEditFacility={setEditingFacility}
+              onPublish={publishProgram}
             />
       )}
 
@@ -334,7 +367,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onEdit, onEditFacility }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -377,6 +410,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWi
               onToggleDates={onToggleDates}
               onEdit={onEdit}
               onEditFacility={onEditFacility}
+              onPublish={onPublish}
             />
           ))}
         </div>
@@ -385,7 +419,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWi
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -488,6 +522,7 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWi
                 onToggleDates={onToggleDates}
                 onEdit={onEdit}
                 onEditFacility={onEditFacility}
+                onPublish={onPublish}
                 showDay
               />
             ))}
@@ -535,7 +570,7 @@ function districtHasCal(program, districtsWithCalendar) {
   return districtsWithCalendar.has(district);
 }
 
-function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -587,19 +622,44 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
         <div style={{ fontWeight: 600, color: INK, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>{p.curriculum ?? "Untitled"}</span>
           {isDraft && (
-            <span style={{
-              fontSize: 10,
-              color: AMBER,
-              background: `${AMBER}1F`,
-              padding: "2px 8px",
-              borderRadius: 999,
-              fontWeight: 700,
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-              flexShrink: 0,
-            }}>
-              Draft
-            </span>
+            <>
+              <span style={{
+                fontSize: 10,
+                color: AMBER,
+                background: `${AMBER}1F`,
+                padding: "2px 8px",
+                borderRadius: 999,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+                flexShrink: 0,
+              }}>
+                Draft
+              </span>
+              {onPublish && (
+                <button
+                  type="button"
+                  onClick={() => onPublish(p.id)}
+                  title="Publish this program — shows in campaigns + public catalog"
+                  style={{
+                    fontSize: 10,
+                    color: "#fff",
+                    background: OK_GREEN,
+                    border: "none",
+                    padding: "2px 10px",
+                    borderRadius: 999,
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.5,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    flexShrink: 0,
+                  }}
+                >
+                  Publish →
+                </button>
+              )}
+            </>
           )}
           {hasDates && (
             <button
