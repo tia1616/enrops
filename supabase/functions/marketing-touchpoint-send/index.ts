@@ -403,7 +403,19 @@ serve(async (req: Request) => {
     const isInternalAdmin = (r.segments ?? []).includes("_internal_admin");
     if (!program && programIds.length > 0) {
       if (isInternalAdmin) {
-        program = pickedPrograms[0]; // show the first picked program in the test preview
+        // For test-send to admin: pick a program at a school that's NOT in
+        // org.vip_offering.excluded_location_ids, so the test renders the
+        // {{vip_block}} for the operator to verify. Falls back to the first
+        // picked program if every picked school is excluded.
+        // Was unconditionally pickedPrograms[0], which for J2S happened to
+        // be Cascadia (alphabetically first AND VIP-excluded), so the test
+        // email NEVER showed the VIP block — making it impossible to
+        // visually verify VIP rendering without using the in-app preview
+        // dropdown to pick a different school manually.
+        const excluded = new Set<string>(org.vip_offering?.excluded_location_ids ?? []);
+        program =
+          pickedPrograms.find((p) => p.program_location_id && !excluded.has(p.program_location_id))
+          ?? pickedPrograms[0];
       } else {
         // Audience-resolution mismatch — log + skip rather than send garbage copy
         results.skipped_no_school_program++;
