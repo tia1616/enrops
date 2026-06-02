@@ -317,12 +317,20 @@ serve(async (req: Request) => {
     if (alreadyDelivered.has(r.id)) { results.skipped_deduped++; continue; }
 
     // Resolve the recipient's school's program (per-program tokens). When
-    // the recipient's school has no picked program, skip them.
-    const program = resolveRecipientProgram(r, pickedPrograms, locationNameMap);
+    // the recipient's school has no picked program, skip them — unless this
+    // is an internal admin test recipient (no school by design), in which
+    // case use the FIRST picked program as the example so the test email
+    // shows real-looking content.
+    let program = resolveRecipientProgram(r, pickedPrograms, locationNameMap);
+    const isInternalAdmin = (r.segments ?? []).includes("_internal_admin");
     if (!program && programIds.length > 0) {
-      // Audience-resolution mismatch — log + skip rather than send garbage copy
-      results.skipped_no_school_program++;
-      continue;
+      if (isInternalAdmin) {
+        program = pickedPrograms[0]; // show the first picked program in the test preview
+      } else {
+        // Audience-resolution mismatch — log + skip rather than send garbage copy
+        results.skipped_no_school_program++;
+        continue;
+      }
     }
 
     const tokens = await buildTokensForRecipient({
@@ -333,6 +341,7 @@ serve(async (req: Request) => {
       draftInputs,
       safeRegistrationUrl,
       campaignTopics: extractTopics(what),
+      locationNameMap,
     });
 
     const subject = postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }));
@@ -509,16 +518,23 @@ type TokensInput = {
   campaignTopics: string[];
 };
 
-async function buildTokensForRecipient(input: TokensInput): Promise<Map<string, string>> {
-  const { recipient: r, org, program, draftInputs, safeRegistrationUrl, campaignTopics } = input;
+async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: Map<string, string[]> }): Promise<Map<string, string>> {
+  const { recipient: r, org, program, draftInputs, safeRegistrationUrl, campaignTopics, locationNameMap } = input;
   const tokens = new Map<string, string>();
+  const isInternalAdmin = (r.segments ?? []).includes("_internal_admin");
 
-  // Per-recipient
+  // Per-recipient. For internal admin test recipients (no school by design),
+  // fall back to the program's school name so the test preview shows real
+  // location context instead of "your school".
+  const adminSchoolFallback = isInternalAdmin && program?.program_location_id
+    ? (locationNameMap?.get(program.program_location_id)?.[0] ?? null)
+    : null;
+
   tokens.set("first_name", r.first_name?.trim() || splitFirstName(r.parent_name) || "there");
   tokens.set("parent_name", r.parent_name?.trim() || "");
   tokens.set("child_first_name", r.child_first_name?.trim() || "");
   tokens.set("child_last_name", r.child_last_name?.trim() || "");
-  tokens.set("school", r.school_name?.trim() || "your school");
+  tokens.set("school", r.school_name?.trim() || adminSchoolFallback || "your school");
   tokens.set("city", r.city?.trim() || "");
   tokens.set("zip", r.zip?.trim() || "");
   tokens.set("geo_segment", r.geo_segment?.trim() || "");

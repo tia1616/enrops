@@ -230,21 +230,70 @@ export default function AICampaignBuilder() {
   const updateTouchpoint = (id, patch) => dispatch({ type: "UPDATE_TOUCHPOINT", id, patch });
   const removeRecipient = (id) => dispatch({ type: "REMOVE_RECIPIENT", id });
 
-  // Action stubs — chunk 07 wires these to real edge function + PATCH calls.
+  // Save as draft — still a stub. Approve flow lands first (next commit) since
+  // approve is what unblocks the actual send. Save-as-draft is "park this for
+  // later" which is lower priority.
   const onSaveDraft = () => {
     setActionBusy(true);
     setTimeout(() => {
       setActionBusy(false);
-      alert("Save as draft — chunk 07 wires the PATCH against marketing_campaigns + marketing_campaign_touchpoints.");
+      alert("Save as draft — coming soon. For now the draft persists automatically; you can come back and approve later.");
     }, 300);
   };
-  const onSendTest = () => {
+
+  // Send a single touchpoint to the admin's inbox for preview. Calls
+  // marketing-touchpoint-send with mode='test' which bootstraps the admin
+  // into marketing_recipients (segment='_internal_admin') and resolves all
+  // tokens with real org / program / recipient data.
+  const onSendTest = async (touchpointId) => {
+    if (!state.draft?.campaign_id) {
+      alert("No campaign drafted yet. Draft first, then send test.");
+      return;
+    }
+    if (!touchpointId) {
+      alert("No touchpoint selected. Click the touchpoint card first, then send test.");
+      return;
+    }
     setActionBusy(true);
-    setTimeout(() => {
+    try {
+      const { data, error } = await supabase.functions.invoke("marketing-touchpoint-send", {
+        body: {
+          campaign_id: state.draft.campaign_id,
+          touchpoint_id: touchpointId,
+          mode: "test",
+        },
+      });
+      if (error) {
+        // Pull friendly error from edge function response when available
+        let msg = error.message ?? "Send failed.";
+        try {
+          const resp = error?.context?.response;
+          if (resp && typeof resp.clone === "function") {
+            const payload = await resp.clone().json();
+            if (payload?.error) msg = payload.error;
+          }
+        } catch { /* fall through to raw message */ }
+        alert(`Test send failed: ${msg}`);
+        return;
+      }
+      if (data?.sent > 0) {
+        alert(`Test sent to ${user?.email ?? "your inbox"}. Check your inbox in a moment.`);
+      } else if (data?.skipped_suppressed > 0) {
+        alert("Test skipped: your email is on this org's suppression list. Unsubscribe somewhere?");
+      } else if (data?.skipped_no_school_program > 0) {
+        alert("Test skipped: as the admin recipient, you don't have a school that matches any picked program. (Expected — admin bootstrap has no school.)");
+      } else if (data?.skipped_deduped > 0) {
+        alert("Test skipped: this campaign already sent to your inbox once. (Dedup is per-campaign right now.)");
+      } else {
+        alert(`Test attempted but nothing landed. Response: ${JSON.stringify(data)}`);
+      }
+    } finally {
       setActionBusy(false);
-      alert(`Send test to me — chunk 07 calls marketing-send (mode=test) with the admin recipient. ${user?.email ? "Will send to " + user.email : ""}`);
-    }, 300);
+    }
   };
+
+  // Approve flow lands in commit 3. For now keep the old setTimeout fake so
+  // CelebrationScreen still appears for visual testing.
   const onApprove = () => {
     if (!confirm(`Approve ${state.draft?.schedule?.touchpoints?.length ?? 0} touchpoints and schedule them to ${state.draft?.recipients?.count ?? 0} recipients?`)) return;
     setActionBusy(true);
@@ -254,7 +303,7 @@ export default function AICampaignBuilder() {
     }, 400);
   };
   const onRegenerate = (touchpointId) => {
-    alert(`Regenerate ${touchpointId} — chunk 07 re-calls marketing-draft-campaign with a regenerate flag for this touchpoint only.`);
+    alert(`Regenerate ${touchpointId} — coming soon.`);
   };
 
   async function startDrafting() {
