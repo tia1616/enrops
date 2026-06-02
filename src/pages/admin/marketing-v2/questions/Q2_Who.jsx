@@ -50,20 +50,24 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
     const isAuto = who?.filter?.type === "auto" || who?.filter?.auto_derived === true;
     if (!isAuto) return;
 
-    // Key the derive on the picks signature so we don't redundantly re-fetch
+    // Key the derive on the picks signature so we don't redundantly re-fetch.
+    // We mark the key as "done" AFTER the async resolves, not before — otherwise
+    // React StrictMode's double-mount tears down the first effect (sets alive=false)
+    // before the IIFE finishes, then the second mount sees the key already set and
+    // bails early, leaving the loading state stuck forever.
     const key = JSON.stringify({
       mode: what?.mode,
       pids: what?.program_ids ?? [],
       cids: what?.camp_session_ids ?? [],
     });
     if (deriveKeyRef.current === key) return;
-    deriveKeyRef.current = key;
 
     let alive = true;
     (async () => {
       setAutoDeriveState({ status: "loading", info: null });
       const resolved = await deriveScopeFromPicks(org.id, what);
       if (!alive) return;
+      deriveKeyRef.current = key; // mark complete only after successful resolve
       setAutoDeriveState({ status: "ready", info: resolved.info });
       setField("who", {
         audience: "parents",
