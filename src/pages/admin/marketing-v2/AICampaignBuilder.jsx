@@ -292,15 +292,57 @@ export default function AICampaignBuilder() {
     }
   };
 
-  // Approve flow lands in commit 3. For now keep the old setTimeout fake so
-  // CelebrationScreen still appears for visual testing.
-  const onApprove = () => {
-    if (!confirm(`Approve ${state.draft?.schedule?.touchpoints?.length ?? 0} touchpoints and schedule them to ${state.draft?.recipients?.count ?? 0} recipients?`)) return;
+  // Approve & schedule — real DB write. Marks campaign as approved with the
+  // current user as approver and bumps status to 'sending'. The touchpoint
+  // cron polls campaigns with approved_at IS NOT NULL and fires queued
+  // touchpoints as their scheduled_at times arrive. Idempotency: the update
+  // is guarded by .is('approved_at', null) so a double-click can't re-approve
+  // (and the second click gets a clean "already approved" path).
+  const onApprove = async () => {
+    if (!state.draft?.campaign_id) {
+      alert("No campaign drafted yet. Draft first.");
+      return;
+    }
+    const tpCount = state.draft?.schedule?.touchpoints?.length ?? 0;
+    const recipientCount = state.draft?.recipients?.count ?? 0;
+    if (!confirm(`Approve ${tpCount} touchpoint${tpCount === 1 ? "" : "s"} and schedule to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}? Once approved, Ennie sends each touchpoint at its scheduled time. You can't edit after this.`)) return;
     setActionBusy(true);
-    setTimeout(() => {
-      setActionBusy(false);
+    try {
+      const { data, error } = await supabase
+        .from("marketing_campaigns")
+        .update({
+          approved_at: new Date().toISOString(),
+          approved_by: user?.id ?? null,
+          status: "sending",
+        })
+        .eq("id", state.draft.campaign_id)
+        .is("approved_at", null) // idempotency guard
+        .select("id, approved_at")
+        .maybeSingle();
+      if (error) {
+        alert(`Approve failed: ${error.message}`);
+        return;
+      }
+      if (!data) {
+        // Either RLS hid the row OR approved_at was already set (double-click).
+        // Re-fetch to find out which.
+        const { data: existing } = await supabase
+          .from("marketing_campaigns")
+          .select("approved_at")
+          .eq("id", state.draft.campaign_id)
+          .maybeSingle();
+        if (existing?.approved_at) {
+          // Already approved earlier — treat as success
+          dispatch({ type: "APPROVE_SCHEDULED" });
+          return;
+        }
+        alert("Couldn't approve — campaign not found or you don't have admin access.");
+        return;
+      }
       dispatch({ type: "APPROVE_SCHEDULED" });
-    }, 400);
+    } finally {
+      setActionBusy(false);
+    }
   };
   const onRegenerate = (touchpointId) => {
     alert(`Regenerate ${touchpointId} — coming soon.`);
