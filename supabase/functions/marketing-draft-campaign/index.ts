@@ -9,6 +9,13 @@
 // Critical: NOTHING in this file is hardcoded for J2S or any specific tenant.
 // All copy rules, sender identity, and location aliases load from the DB.
 //
+// ENNIE PROMPT — human-readable docs (keep in sync with buildSystemPrompt):
+//   - docs/agents/ennie/system-prompt.md         (cross-platform persona)
+//   - docs/agents/ennie/marketing-draft-rules.md (this function's rules)
+// When changing the prompt here, update the .md files. Future refactor:
+// have buildSystemPrompt read from those files at deploy time so there's
+// one source of truth.
+//
 // Body shape:
 //   {
 //     organization_id: uuid,
@@ -549,6 +556,19 @@ function matchCurriculaToTopics(
 // Grounded facts (structured catalog picks)
 // ---------------------------------------------------------------------------
 
+// Rich curriculum detail loaded from the curricula table when the
+// program/camp_session row has curriculum_id set. Lets Ennie write from
+// the operator's uploaded skill list + final showcase instead of guessing.
+type CurriculumDetail = {
+  short_description: string | null;
+  themes: string[] | null;
+  skills_overall: string[] | null;
+  final_showcase: string | null;
+  format: string | null;
+  age_range_min: number | null;
+  age_range_max: number | null;
+};
+
 type ProgramFact = {
   id: string;
   curriculum: string;
@@ -564,6 +584,7 @@ type ProgramFact = {
   age_min: number | null;
   age_max: number | null;
   short_description: string | null;
+  curriculum_detail: CurriculumDetail | null; // null when program isn't linked to a curriculum row
 };
 
 type CampFact = {
@@ -579,6 +600,7 @@ type CampFact = {
   session_type: string;
   current_enrollment: number;
   week_num: number;
+  curriculum_detail: CurriculumDetail | null;
 };
 
 type GroundedFacts = {
@@ -599,14 +621,20 @@ async function loadGroundedFacts(
   if (structured.mode === "programs" && (structured.program_ids?.length ?? 0) > 0) {
     const { data, error } = await supabase
       .from("programs")
-      .select("id, term, curriculum, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents, age_min, age_max, short_description, program_locations(name)")
+      .select("id, term, curriculum, curriculum_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents, age_min, age_max, short_description, program_locations(name)")
       .eq("organization_id", orgId)
       .in("id", structured.program_ids ?? []);
     if (error) {
       console.error("loadGroundedFacts programs error:", error.message);
       return { programs: [], camps: [], topics: fallbackTopics };
     }
-    const programs: ProgramFact[] = (data ?? []).map((r: Record<string, unknown>) => ({
+    const rows = data ?? [];
+    const curriculumDetails = await loadCurriculumDetails(
+      supabase,
+      orgId,
+      rows.map((r: Record<string, unknown>) => r.curriculum_id as string | null).filter(Boolean) as string[],
+    );
+    const programs: ProgramFact[] = rows.map((r: Record<string, unknown>) => ({
       id: r.id as string,
       curriculum: r.curriculum as string,
       school_name: ((r.program_locations as { name?: string } | null)?.name) ?? "(unknown school)",
@@ -621,6 +649,7 @@ async function loadGroundedFacts(
       age_min: (r.age_min as number | null) ?? null,
       age_max: (r.age_max as number | null) ?? null,
       short_description: (r.short_description as string | null) ?? null,
+      curriculum_detail: r.curriculum_id ? curriculumDetails.get(r.curriculum_id as string) ?? null : null,
     }));
     const topics = [...new Set(programs.map((p) => p.curriculum).filter(Boolean))];
     return { programs, camps: [], topics };
@@ -628,14 +657,20 @@ async function loadGroundedFacts(
   if (structured.mode === "camps" && (structured.camp_session_ids?.length ?? 0) > 0) {
     const { data, error } = await supabase
       .from("camp_sessions")
-      .select("id, week_num, session_type, location_name, curriculum_name, starts_on, ends_on, start_time, end_time, ages_min, ages_max, current_enrollment")
+      .select("id, week_num, session_type, location_name, curriculum_name, curriculum_id, starts_on, ends_on, start_time, end_time, ages_min, ages_max, current_enrollment")
       .eq("organization_id", orgId)
       .in("id", structured.camp_session_ids ?? []);
     if (error) {
       console.error("loadGroundedFacts camps error:", error.message);
       return { programs: [], camps: [], topics: fallbackTopics };
     }
-    const camps: CampFact[] = (data ?? []).map((r: Record<string, unknown>) => ({
+    const rows = data ?? [];
+    const curriculumDetails = await loadCurriculumDetails(
+      supabase,
+      orgId,
+      rows.map((r: Record<string, unknown>) => r.curriculum_id as string | null).filter(Boolean) as string[],
+    );
+    const camps: CampFact[] = rows.map((r: Record<string, unknown>) => ({
       id: r.id as string,
       curriculum_name: r.curriculum_name as string,
       location_name: r.location_name as string,
@@ -648,11 +683,58 @@ async function loadGroundedFacts(
       session_type: r.session_type as string,
       current_enrollment: (r.current_enrollment as number) ?? 0,
       week_num: r.week_num as number,
+      curriculum_detail: r.curriculum_id ? curriculumDetails.get(r.curriculum_id as string) ?? null : null,
     }));
     const topics = [...new Set(camps.map((c) => c.curriculum_name).filter(Boolean))];
     return { programs: [], camps, topics };
   }
   return { programs: [], camps: [], topics: fallbackTopics };
+}
+
+// Bulk-load curriculum rows by id. Returns a map curriculum_id -> CurriculumDetail.
+// Tolerates partial misses (an unlinked program just has null detail).
+async function loadCurriculumDetails(
+  supabase: SupabaseClient,
+  orgId: string,
+  ids: string[],
+): Promise<Map<string, CurriculumDetail>> {
+  const out = new Map<string, CurriculumDetail>();
+  const uniqIds = [...new Set(ids)];
+  if (uniqIds.length === 0) return out;
+  const { data, error } = await supabase
+    .from("curricula")
+    .select("id, short_description, themes, skills_overall, final_showcase, format, age_range_min, age_range_max")
+    .eq("organization_id", orgId)
+    .in("id", uniqIds);
+  if (error) {
+    console.error("loadCurriculumDetails error:", error.message);
+    return out;
+  }
+  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+    out.set(r.id as string, {
+      short_description: (r.short_description as string | null) ?? null,
+      themes: (r.themes as string[] | null) ?? null,
+      skills_overall: (r.skills_overall as string[] | null) ?? null,
+      final_showcase: (r.final_showcase as string | null) ?? null,
+      format: (r.format as string | null) ?? null,
+      age_range_min: (r.age_range_min as number | null) ?? null,
+      age_range_max: (r.age_range_max as number | null) ?? null,
+    });
+  }
+  return out;
+}
+
+// Append the uploaded curriculum's rich details to a program/camp's facts
+// block. Operator put real effort into describing what kids actually do +
+// what they learn — Ennie should weave from that, not invent activities.
+function appendCurriculumDetail(parts: string[], d: CurriculumDetail) {
+  if (d.short_description) parts.push(`- Curriculum description: ${d.short_description}`);
+  if (d.themes && d.themes.length > 0) parts.push(`- Themes: ${d.themes.join(", ")}`);
+  if (d.skills_overall && d.skills_overall.length > 0) {
+    parts.push(`- Skills students develop:`);
+    for (const s of d.skills_overall) parts.push(`    • ${s}`);
+  }
+  if (d.final_showcase) parts.push(`- Final showcase: ${d.final_showcase}`);
 }
 
 function formatGroundedFactsForPrompt(facts: GroundedFacts, promo: PromoSettings | undefined): string {
@@ -685,7 +767,10 @@ function formatGroundedFactsForPrompt(facts: GroundedFacts, promo: PromoSettings
       parts.push(`- Early bird price: $${(r0.early_bird_price_cents / 100).toFixed(0)} (save $${savings.toFixed(0)}) - ends ${r0.early_bird_deadline}`);
     }
     if (r0.vip_price_cents) parts.push(`- VIP full-year price: $${(r0.vip_price_cents / 100).toFixed(0)}`);
-    if (r0.short_description) parts.push(`- Description: ${r0.short_description}`);
+    if (r0.short_description) parts.push(`- Short description (program row): ${r0.short_description}`);
+    // Rich curriculum data — the operator's uploaded skill list + showcase.
+    // This is the ground truth Ennie should draw from for "what kids actually do."
+    if (r0.curriculum_detail) appendCurriculumDetail(parts, r0.curriculum_detail);
     blocks.push(parts.join("\n"));
   }
 
@@ -707,6 +792,7 @@ function formatGroundedFactsForPrompt(facts: GroundedFacts, promo: PromoSettings
     parts.push(`- Daily hours: ${r0.start_time} to ${r0.end_time}`);
     if (r0.ages_min != null && r0.ages_max != null) parts.push(`- Ages: ${r0.ages_min}-${r0.ages_max}`);
     if (r0.session_type) parts.push(`- Type: ${r0.session_type}`);
+    if (r0.curriculum_detail) appendCurriculumDetail(parts, r0.curriculum_detail);
     blocks.push(parts.join("\n"));
   }
 
@@ -865,6 +951,15 @@ If you need a specific fact and there's no token, write generically ("our upcomi
 
 EACH PARENT SEES THEIR OWN SCHOOL'S PROGRAM — NOT THE FULL LIST
 When the campaign spans many schools that each run their own program, the BODY of each touchpoint refers to "their program" in the SINGULAR, using {{curriculum}}, {{first_session_date}}, {{day_of_week}}, {{savings}}, {{early_bird_price}}, {{early_bird_deadline}}. The send pipeline fills those tokens with the program running at THIS recipient's school. DO NOT enumerate the full list of curricula in the body. A parent at Stoller should read about Toy Designers at Stoller — not also about Robotics at Bonny Slope and Minecraft at Beverly Cleary. That makes the email feel like a mass blast; we want it to feel like it's about their kid.
+
+USE THE UPLOADED CURRICULUM DATA — DON'T INVENT ACTIVITIES
+When a PROGRAM or CAMP block in KNOWN PROGRAM DETAILS includes any of:
+- "Curriculum description: ..." (richer than the row's short_description),
+- "Themes: ...",
+- "Skills students develop:" (a bulleted list),
+- "Final showcase: ...",
+…that's the operator's uploaded curriculum file — the ground truth for what kids actually do and what they walk away with. Draw your specifics from those bullets and that showcase paragraph. Reference one or two skills naturally ("they learn loops and debugging" not "they learn coding"). Mention the showcase as a real moment ("they finish with a Playtest Arcade where classmates rotate through and play each other's games"). If a parent reads "they learn computational thinking and break problems into smaller steps," they trust you. If they read "kids design, code, and build," they don't.
+Do NOT invent skills, activities, or outcomes that aren't in the curriculum data. If a program block lacks these details (no curriculum_id linked), write generically (no invented bullets) and flag in notes_to_operator that "X of Y picked programs are missing curriculum details — uploading them would let Ennie write more specifically."
 
 WHEN CURRICULA SPAN MULTIPLE THEMES — STAY UNIVERSAL
 Look at the picked programs in KNOWN PROGRAM DETAILS. If they span multiple themes (e.g. coding, robotics, LEGO engineering, game design, art, science), the BODY must use UNIVERSAL language that fits any of them. Theme-specific verbs/adjectives ("coding", "building", "designing", "robotics", "art") only appear via {{curriculum}} (the program name itself) — never as standalone descriptors elsewhere in the body.
