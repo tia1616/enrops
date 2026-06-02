@@ -70,6 +70,28 @@ export default function ScheduleReview({
         ← Back to questions
       </button>
 
+      {/* Ennie's note + zero-recipients warning hoisted ABOVE the summary card
+          so the operator reads the context (e.g. "early-bird deadline is only
+          3 days away — kickoff sends tomorrow, reminders bunch in week 1")
+          BEFORE the window dates that the context explains. */}
+      {operatorNotes && (
+        <div style={{
+          background: "#FFF8E1", border: "1px solid #E6C77A", borderRadius: 8,
+          padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#5C4A1C",
+        }}>
+          <strong style={{ fontWeight: 700 }}>A note from Ennie:</strong> {operatorNotes}
+        </div>
+      )}
+
+      {zeroRecipients && (
+        <div style={{
+          background: "#FDECEA", border: "1px solid #E5A6A0", borderRadius: 8,
+          padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#7A1F19",
+        }}>
+          <strong style={{ fontWeight: 700 }}>No recipients matched.</strong> Ennie drafted the schedule, but no parents fit this filter yet. Go back and widen the audience, or save as a draft for later.
+        </div>
+      )}
+
       <div style={{
         background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10,
         padding: "18px 20px", marginBottom: 12,
@@ -116,24 +138,6 @@ export default function ScheduleReview({
           </div>
         </div>
       </div>
-
-      {operatorNotes && (
-        <div style={{
-          background: "#FFF8E1", border: "1px solid #E6C77A", borderRadius: 8,
-          padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#5C4A1C",
-        }}>
-          <strong style={{ fontWeight: 700 }}>A note from Ennie:</strong> {operatorNotes}
-        </div>
-      )}
-
-      {zeroRecipients && (
-        <div style={{
-          background: "#FDECEA", border: "1px solid #E5A6A0", borderRadius: 8,
-          padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#7A1F19",
-        }}>
-          <strong style={{ fontWeight: 700 }}>No recipients matched.</strong> Ennie drafted the schedule, but no parents fit this filter yet. Go back and widen the audience, or save as a draft for later.
-        </div>
-      )}
 
       {/* Recipient summary */}
       <div style={{
