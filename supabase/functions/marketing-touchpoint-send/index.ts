@@ -688,7 +688,17 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
 
   // Per-org
   tokens.set("org_name", org.name || "");
-  tokens.set("sender_name", org.default_sender_name || org.name || "");
+  // {{sender_name}} in body context strips a " @ Org" suffix if the operator
+  // packed both into default_sender_name (the right shape for an email From
+  // header e.g. "Jessica @ Journey to STEAM" — but in a body sign-off that
+  // reads like an email address: "— Jessica @ Journey to STEAM"). Stripping
+  // gives the natural body version ("— Jessica") without forcing operators
+  // to choose between a friendly From header and a clean sign-off.
+  // No split for senders without " @ " (e.g. "Sarah Lopez") — used as-is.
+  const senderRaw = (org.default_sender_name || org.name || "").trim();
+  const atIdx = senderRaw.indexOf(" @ ");
+  const senderForBody = atIdx > 0 ? senderRaw.slice(0, atIdx).trim() : senderRaw;
+  tokens.set("sender_name", senderForBody);
   tokens.set("sender_email", org.default_sender_email || "");
   tokens.set("reply_to", org.default_sender_email || "");
   tokens.set("logo_url", org.logo_url || "");
