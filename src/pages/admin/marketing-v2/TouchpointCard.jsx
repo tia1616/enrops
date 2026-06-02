@@ -4,7 +4,8 @@
 
 import { useState } from "react";
 import EditableField from "./EditableField.jsx";
-import { INK, MUTED, PURPLE, RULE, OK } from "../marketing/tokens.jsx";
+import { supabase } from "../../../lib/supabase.js";
+import { INK, MUTED, PURPLE, RULE, OK, INFO } from "../marketing/tokens.jsx";
 
 function fmtScheduled(iso, timezone) {
   if (!iso) return "—";
@@ -46,6 +47,11 @@ export default function TouchpointCard({
   onUpdate,
   onSendTest,
   onRegenerate,
+  // Picked schools for the per-school preview dropdown. Each {id, name}.
+  // Empty array hides the dropdown (camps-only campaigns, one-off mode).
+  pickedLocations = [],
+  // Campaign id for the preview API call. Empty disables preview.
+  campaignId,
 }) {
   const [open, setOpen] = useState(defaultOpen);
   // Local pending state for the per-card Send-test button so the operator
@@ -61,6 +67,55 @@ export default function TouchpointCard({
     setSendingTest(true);
     try { await onSendTest?.(tp.id); }
     finally { setSendingTest(false); }
+  };
+
+  // Per-school preview state. previewLocationId is what the operator
+  // selected from the dropdown. previewData holds the server's rendered
+  // subject + body for that school. Defaults to "" (i.e. show Ennie's
+  // raw {{token}} body so the operator can see which tokens get replaced).
+  const [previewLocationId, setPreviewLocationId] = useState("");
+  const [previewData, setPreviewData] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
+  const isPreviewing = !!previewLocationId;
+
+  const loadPreview = async (locationId) => {
+    if (!locationId || !campaignId) return;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("marketing-touchpoint-send", {
+        body: {
+          campaign_id: campaignId,
+          touchpoint_id: tp.id,
+          mode: "preview",
+          preview_location_id: locationId,
+        },
+      });
+      if (error) {
+        let msg = error.message ?? "Preview failed.";
+        try {
+          const resp = error?.context?.response ?? error?.context;
+          if (resp && typeof resp.clone === "function") {
+            const text = await resp.clone().text();
+            try { const payload = JSON.parse(text); if (payload?.error) msg = payload.error; }
+            catch { /* not JSON */ }
+          }
+        } catch { /* ignore */ }
+        setPreviewError(msg);
+        return;
+      }
+      setPreviewData(data);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const onPickPreviewLocation = (e) => {
+    const id = e.target.value;
+    setPreviewLocationId(id);
+    if (!id) { setPreviewData(null); setPreviewError(null); return; }
+    loadPreview(id);
   };
 
   return (
@@ -128,9 +183,70 @@ export default function TouchpointCard({
             />
           </div>
 
+          {/* Per-school preview dropdown. Lets the operator flip through
+              schools and see exactly what a parent at each school will
+              receive — same code path as a real send, just no Resend call.
+              Catches "this school doesn't have VIP" / "this school's
+              first session is a different date" issues before approve. */}
+          {pickedLocations.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
+                Preview as parent at
+              </span>
+              <select
+                value={previewLocationId}
+                onChange={onPickPreviewLocation}
+                style={{
+                  padding: "6px 10px", border: `1px solid ${RULE}`, borderRadius: 6,
+                  fontSize: 13, fontFamily: "inherit", background: "#fff", color: INK,
+                }}
+              >
+                <option value="">— show tokens (no school picked) —</option>
+                {pickedLocations.map((l) => (
+                  <option key={l.id} value={l.id}>{l.name}</option>
+                ))}
+              </select>
+              {previewLoading && <span style={{ fontSize: 11, color: MUTED }}>rendering…</span>}
+              {previewData?.vip_block_shown === false && isPreviewing && (
+                <span style={{
+                  fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5,
+                  color: "#854F0B", padding: "2px 8px", borderRadius: 999, background: "#FAEEDA",
+                }}>
+                  VIP block suppressed for this school
+                </span>
+              )}
+              {previewData?.vip_block_shown === true && isPreviewing && (
+                <span style={{
+                  fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5,
+                  color: OK, padding: "2px 8px", borderRadius: 999, background: "#EAF3DE",
+                }}>
+                  VIP block shown
+                </span>
+              )}
+              {previewData?.program_matched === false && isPreviewing && (
+                <span style={{
+                  fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5,
+                  color: "#b3261e", padding: "2px 8px", borderRadius: 999, background: "#fce4ec",
+                }}>
+                  No program at this school in your picks
+                </span>
+              )}
+            </div>
+          )}
+
           <BodyEditor
             value={tp.body_html ?? ""}
             onChange={(v) => onUpdate(tp.id, { body_html: v, body_text: stripHtml(v) })}
+            // Preview overrides: when an operator picks a school in the
+            // dropdown, BodyEditor shows the SERVER-rendered body (tokens
+            // resolved, VIP shown/suppressed) instead of the raw
+            // body_html with merge-token highlighting. Edit button is
+            // still available — clicking Edit hides the preview and
+            // shows the raw body so the operator can keep iterating.
+            previewHtml={isPreviewing ? previewData?.body_html : null}
+            previewSubject={isPreviewing ? previewData?.subject : null}
+            previewSchoolName={isPreviewing ? previewData?.used_school_name : null}
+            previewError={previewError}
           />
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -178,8 +294,14 @@ function highlightTokens(html) {
   );
 }
 
-function BodyEditor({ value, onChange }) {
+function BodyEditor({ value, onChange, previewHtml, previewSubject, previewSchoolName, previewError }) {
   const [editing, setEditing] = useState(false);
+  // When a school is picked in the dropdown above, we hide the raw-tokens
+  // view and show the server-rendered body for that school. Editing the
+  // body is always allowed — clicking Edit drops out of preview mode for
+  // this card visually, but the parent's previewLocationId is unchanged
+  // so de-selecting Edit returns to the preview view.
+  const showingPreview = !!previewHtml && !editing;
 
   return (
     <div>
@@ -188,7 +310,7 @@ function BodyEditor({ value, onChange }) {
         marginBottom: 4,
       }}>
         <span style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
-          Email body
+          {showingPreview ? `Preview for parents at ${previewSchoolName}` : "Email body"}
         </span>
         <button
           onClick={() => setEditing((v) => !v)}
@@ -201,7 +323,47 @@ function BodyEditor({ value, onChange }) {
         </button>
       </div>
 
-      {editing ? (
+      {previewError && (
+        <div style={{
+          padding: "8px 12px", marginBottom: 6,
+          border: "1px solid #b3261e", borderRadius: 6,
+          background: "#fce4ec", color: "#b3261e", fontSize: 12,
+        }}>
+          Preview failed: {previewError}
+        </div>
+      )}
+
+      {showingPreview ? (
+        <>
+          {previewSubject && (
+            <div style={{
+              padding: "8px 12px", marginBottom: 6,
+              border: `1px solid ${RULE}`, borderRadius: 6,
+              background: "#faf8f1", fontSize: 13, color: INK,
+            }}>
+              <span style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginRight: 6 }}>
+                Subject
+              </span>
+              {previewSubject}
+            </div>
+          )}
+          {/* Server-rendered, real send-time output for the picked school.
+              Includes the email-shell wrapper + unsubscribe footer the
+              parent will actually see. Using an iframe srcDoc isolates
+              the rendered HTML from the admin app's stylesheet (the email
+              ships in a fresh document). */}
+          <iframe
+            title="email preview"
+            srcDoc={previewHtml}
+            sandbox=""
+            style={{
+              width: "100%", minHeight: 480,
+              border: `1px solid ${RULE}`, borderRadius: 6,
+              background: "#fff",
+            }}
+          />
+        </>
+      ) : editing ? (
         <textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -225,10 +387,10 @@ function BodyEditor({ value, onChange }) {
         />
       )}
 
-      {!editing && (
+      {!editing && !showingPreview && (
         <div style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
           <p style={{ margin: 0 }}>
-            Highlighted tags like <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span> get filled in for each parent when the email sends.
+            Highlighted tags like <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span> get filled in for each parent when the email sends. Pick a school above to see exactly what parents there will receive.
           </p>
           <p style={{ margin: "4px 0 0", color: OK, fontStyle: "italic" }}>
             ✨ Every edit teaches Ennie a phrase you prefer or drop. Future drafts will reflect your voice automatically — less editing each campaign.

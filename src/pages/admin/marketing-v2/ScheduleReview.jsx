@@ -50,6 +50,45 @@ export default function ScheduleReview({
   const sender = draft?.sender ?? { name: org?.default_sender_name, email: org?.default_sender_email };
   const timezone = org?.timezone ?? "America/Los_Angeles";
 
+  // Picked schools for the per-school preview dropdown in TouchpointCard.
+  // Loaded once per draft: query the campaign's program_ids -> distinct
+  // program_locations. Empty when the campaign is a one-off or camps-only.
+  const [pickedLocations, setPickedLocations] = useState([]); // [{id, name}, ...]
+  useEffect(() => {
+    if (!draft?.campaign_id) { setPickedLocations([]); return; }
+    let alive = true;
+    (async () => {
+      // Pull the campaign's draft_inputs to get program_ids (don't re-trust
+      // the in-memory `inputs` from the parent — the campaign row is the
+      // source of truth for what was actually picked).
+      const { data: c } = await supabase
+        .from("marketing_campaigns")
+        .select("draft_inputs")
+        .eq("id", draft.campaign_id)
+        .maybeSingle();
+      const programIds = c?.draft_inputs?.what?.program_ids ?? [];
+      if (!Array.isArray(programIds) || programIds.length === 0) {
+        if (alive) setPickedLocations([]);
+        return;
+      }
+      const { data: progs } = await supabase
+        .from("programs")
+        .select("program_location_id, program_locations(id, name)")
+        .in("id", programIds);
+      const seen = new Set();
+      const locs = [];
+      for (const p of progs ?? []) {
+        const loc = p.program_locations;
+        if (!loc?.id || seen.has(loc.id)) continue;
+        seen.add(loc.id);
+        locs.push({ id: loc.id, name: loc.name });
+      }
+      locs.sort((a, b) => a.name.localeCompare(b.name));
+      if (alive) setPickedLocations(locs);
+    })();
+    return () => { alive = false; };
+  }, [draft?.campaign_id]);
+
   const topicColors = useMemo(() => {
     const topics = new Set();
     for (const tp of touchpoints) for (const t of tp.topics ?? []) topics.add(t);
@@ -178,6 +217,10 @@ export default function ScheduleReview({
           onUpdate={onUpdateTouchpoint}
           onSendTest={onSendTest}
           onRegenerate={onRegenerate}
+          // Per-school preview: list of {id, name} for the dropdown,
+          // and the campaign id so the card can call mode='preview' itself.
+          pickedLocations={pickedLocations}
+          campaignId={draft?.campaign_id}
         />
       ))}
 

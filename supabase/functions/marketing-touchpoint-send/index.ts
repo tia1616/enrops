@@ -82,8 +82,19 @@ const corsHeaders = {
 type Body = {
   campaign_id: string;
   touchpoint_id: string;
-  mode: "test" | "send";
+  // 'test'    -> one send to the caller's admin email
+  // 'send'    -> mass send (cron-invoked) to recipient_ids
+  // 'preview' -> render-only; returns the resolved subject+body for one
+  //              location/school. No Resend call, no marketing_sends insert.
+  //              Used by the per-school preview dropdown in TouchpointCard.
+  mode: "test" | "send" | "preview";
   recipient_ids?: string[];
+  // For mode='preview' only. The program_location_id (school) to render the
+  // touchpoint AS IF a parent at that school received it. Their school's
+  // matching program drives the per-program tokens, and the {{vip_block}}
+  // suppression hits or doesn't based on whether that location is in
+  // org.vip_offering.excluded_location_ids.
+  preview_location_id?: string;
 };
 
 type Campaign = {
@@ -173,11 +184,14 @@ serve(async (req: Request) => {
   if (!body.touchpoint_id || typeof body.touchpoint_id !== "string") {
     return json({ error: "touchpoint_id required" }, 400);
   }
-  if (body.mode !== "test" && body.mode !== "send") {
-    return json({ error: "mode must be 'test' or 'send'" }, 400);
+  if (body.mode !== "test" && body.mode !== "send" && body.mode !== "preview") {
+    return json({ error: "mode must be 'test', 'send', or 'preview'" }, 400);
   }
   if (body.mode === "send" && (!Array.isArray(body.recipient_ids) || body.recipient_ids.length === 0)) {
     return json({ error: "recipient_ids required for mode='send'" }, 400);
+  }
+  if (body.mode === "preview" && (!body.preview_location_id || typeof body.preview_location_id !== "string")) {
+    return json({ error: "preview_location_id required for mode='preview'" }, 400);
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -227,6 +241,15 @@ serve(async (req: Request) => {
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
   if (!org.default_sender_email || !org.default_sender_name) {
     return json({ error: "org_not_configured", missing: [!org.default_sender_email ? "default_sender_email" : null, !org.default_sender_name ? "default_sender_name" : null].filter(Boolean) }, 400);
+  }
+
+  // ---- Preview mode: render-only, no send ----
+  // Builds a synthetic recipient at the requested location, runs the SAME
+  // token resolution + body rendering as a real send, returns the result.
+  // Reuses the real send code path so previews can never drift from what
+  // parents actually receive.
+  if (body.mode === "preview") {
+    return await renderPreview(supabase, campaign, touchpoint, org, body.preview_location_id!);
   }
 
   // ---- Resolve recipients ----
@@ -944,5 +967,121 @@ function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Preview rendering (no send, no DB writes)
+// ---------------------------------------------------------------------------
+//
+// Returns the rendered subject + body for a single school. Used by the
+// per-school preview dropdown in TouchpointCard so the operator can flip
+// through schools and confirm each rendering before approve. Mirrors the
+// real send code path: same program lookup, same token resolution, same
+// HTML shell wrapper, same post-clean. The only difference is no Resend
+// call and no marketing_sends insert.
+//
+// Inputs:
+//   - campaign, touchpoint, org: already loaded by the main handler
+//   - locationId: program_location_id (a school) to render for
+//
+// Output: { subject, body_html, body_text, used_school_name, vip_block_shown }
+async function renderPreview(
+  supabase: SupabaseClient,
+  campaign: Campaign,
+  touchpoint: Touchpoint,
+  org: Org,
+  locationId: string,
+): Promise<Response> {
+  // Load the picked programs (campaign-wide) so per-school token resolution
+  // can find the program at this location.
+  const draftInputs = (campaign.draft_inputs ?? {}) as Record<string, unknown>;
+  const what = draftInputs.what as Record<string, unknown> | undefined;
+  const programIds = Array.isArray(what?.program_ids) ? (what!.program_ids as string[]) : [];
+
+  let pickedPrograms: ProgramRow[] = [];
+  if (programIds.length > 0) {
+    const { data: progs } = await supabase
+      .from("programs")
+      .select("id, curriculum, program_location_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
+      .eq("organization_id", campaign.organization_id)
+      .in("id", programIds);
+    pickedPrograms = (progs ?? []) as ProgramRow[];
+  }
+
+  // Find the program at the requested location, plus the location name.
+  const programAtLocation = pickedPrograms.find((p) => p.program_location_id === locationId);
+  const { data: loc } = await supabase
+    .from("program_locations")
+    .select("id, name, name_aliases")
+    .eq("id", locationId)
+    .eq("organization_id", campaign.organization_id)
+    .single();
+  if (!loc) {
+    return json({ error: "preview location not found or not in this org" }, 404);
+  }
+
+  // Build the locationNameMap so buildTokensForRecipient's admin-fallback path
+  // works the same as in test mode.
+  const locationNameMap = new Map<string, string[]>();
+  locationNameMap.set(loc.id, [loc.name, ...((loc.name_aliases ?? []) as string[])]);
+
+  // Synthetic recipient at this school. Realistic enough that the operator
+  // sees how the email reads. {{first_name}} and {{parent_name}} render as
+  // placeholders so the operator can tell they'll vary per parent.
+  const syntheticRecipient: Recipient = {
+    id: "preview",
+    email: "preview@example.com",
+    parent_name: "Sample Parent",
+    child_first_name: "Sam",
+    child_last_name: "Sample",
+    school_name: loc.name,
+    city: null,
+    zip: null,
+    geo_segment: null,
+    segments: null, // not an internal admin — VIP suppression behaves real
+  };
+
+  const registrationUrlOverride = typeof draftInputs.registration_url_override === "string"
+    ? draftInputs.registration_url_override
+    : null;
+  const safeRegistrationUrl = registrationUrlOverride && /^https?:\/\//i.test(registrationUrlOverride)
+    ? registrationUrlOverride
+    : null;
+
+  const tokens = await buildTokensForRecipient({
+    recipient: syntheticRecipient,
+    org,
+    program: programAtLocation ?? null,
+    pickedPrograms,
+    draftInputs,
+    safeRegistrationUrl,
+    campaignTopics: extractTopics(what),
+    locationNameMap,
+  });
+
+  const subject = postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }));
+  const innerHtml = postCleanCopy(replaceTokens(touchpoint.payload!.body_html!, tokens, { html: true }));
+  const bodyHtml = wrapInEmailShell(innerHtml, tokens);
+  const bodyText = touchpoint.payload!.body_text
+    ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
+    : stripHtmlToText(innerHtml);
+
+  // Tell the operator whether the VIP block fired for this school so the
+  // dropdown UI can show a chip ("VIP shown" / "VIP suppressed for this school").
+  const vipBlockShown = (tokens.get("vip_block") ?? "").length > 0;
+
+  return json({
+    ok: true,
+    mode: "preview",
+    campaign_id: campaign.id,
+    touchpoint_id: touchpoint.id,
+    preview_location_id: locationId,
+    used_school_name: loc.name,
+    subject,
+    body_html: bodyHtml,
+    body_text: bodyText,
+    vip_block_shown: vipBlockShown,
+    program_matched: !!programAtLocation,
   });
 }
