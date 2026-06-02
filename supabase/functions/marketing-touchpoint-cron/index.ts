@@ -145,9 +145,15 @@ serve(async (req: Request) => {
     }
 
     // Update touchpoint status based on result.
-    // - All sent successfully or all skipped via dedup → 'sent'
-    // - Any failures → 'failed' (operator can investigate; cron does not retry)
-    const newStatus = sendResult.ok && (sendResult.failed ?? 0) === 0 ? "sent" : "failed";
+    // - Actual sends succeeded (sent > 0, no failures) → 'sent'
+    // - Everyone skipped (suppressed / deduped / no-match), zero sent → 'skipped'
+    // - Any per-recipient failures → 'failed' (operator can investigate; cron does not retry)
+    const sentCount = sendResult.sent ?? 0;
+    const failedCount = sendResult.failed ?? 0;
+    let newStatus: string;
+    if (!sendResult.ok || failedCount > 0) newStatus = "failed";
+    else if (sentCount > 0) newStatus = "sent";
+    else newStatus = "skipped";
     await supabase
       .from("marketing_campaign_touchpoints")
       .update({
