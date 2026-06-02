@@ -142,9 +142,10 @@ export default function TouchpointCard({
             >
               Send test to me
             </button>
-            <span style={{ fontSize: 11, color: OK, alignSelf: "center" }}>
-              Also lands in the parent portal feed
-            </span>
+            {/* "Also lands in the parent portal feed" was sitting next to
+                Send-test and read as if the test sent to parents too.
+                Dropped — when the parent-portal feed ships we'll re-surface
+                this info in the right place (probably on the Approve button). */}
           </div>
         </div>
       )}

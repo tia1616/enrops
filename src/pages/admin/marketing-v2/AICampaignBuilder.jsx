@@ -25,7 +25,7 @@
 // All tenant context (org, user) comes from useOutletContext(). No hardcoded ids.
 
 import { useReducer, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, RULE, INK, MUTED, OK } from "../marketing/tokens.jsx";
 import Q1_What from "./questions/Q1_What.jsx";
@@ -210,12 +210,19 @@ function isStepValid(step, inputs) {
 
 export default function AICampaignBuilder() {
   const { org, user } = useOutletContext() ?? {};
+  const navigate = useNavigate();
   const [state, dispatch] = useReducer(reducer, INITIAL);
   const [actionBusy, setActionBusy] = useState(false);
 
   const setField = (field, value) => dispatch({ type: "SET_FIELD", field, value });
   const next = () => dispatch({ type: "NEXT" });
-  const back = () => dispatch({ type: "BACK" });
+  // On step 1 there's no previous question, so Back exits the builder back
+  // to the admin overview instead of being a dead button. Q2/3/4 use the
+  // normal in-flow dispatch.
+  const back = () => {
+    if (state.step === 1) { navigate("/admin"); return; }
+    dispatch({ type: "BACK" });
+  };
 
   // Local-only updates for chunk 06. Chunk 07 PATCHes the touchpoint row.
   const updateTouchpoint = (id, patch) => dispatch({ type: "UPDATE_TOUCHPOINT", id, patch });

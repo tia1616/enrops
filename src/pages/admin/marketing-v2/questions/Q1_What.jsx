@@ -23,7 +23,7 @@ const TABS = [
   { mode: "other", label: "Something else" },
 ];
 
-export default function Q1_What({ inputs, setField, onNext, canNext }) {
+export default function Q1_What({ inputs, setField, onNext, onBack, canNext }) {
   const { org } = useOutletContext() ?? {};
   const w = inputs.what;
   const mode = w?.mode ?? "programs";
@@ -38,6 +38,7 @@ export default function Q1_What({ inputs, setField, onNext, canNext }) {
       title="What are you marketing?"
       helper="Pick from your catalog — Ennie will use these to plan your campaign."
       onNext={onNext}
+      onBack={onBack}
       canNext={canNext}
     >
       <TabBar mode={mode} onChange={setMode} />
