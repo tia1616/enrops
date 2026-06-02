@@ -118,6 +118,29 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
           {(inputs.operator_notes ?? "").length}/500
         </div>
       </div>
+
+      {/* Registration URL override — for campaigns where registration isn't
+          on the operator's default enrops.com page (e.g. summer camps that
+          register on Squarespace, an external form, a partner site). */}
+      <div style={{ marginTop: 16 }}>
+        <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 4 }}>
+          Where parents will register <span style={{ color: MUTED, fontWeight: 400 }}>(Optional)</span>
+        </label>
+        <p style={{ fontSize: 12, color: MUTED, margin: "0 0 6px" }}>
+          Leave blank to use your default registration page. Add a URL if this campaign sends parents somewhere else — Squarespace, an external form, a partner site.
+        </p>
+        <input
+          type="url"
+          value={inputs.registration_url_override ?? ""}
+          onChange={(e) => setField("registration_url_override", e.target.value.slice(0, 300))}
+          placeholder="https://journeytosteam.com/summer-camps"
+          style={{
+            width: "100%", padding: 10, fontSize: 13, fontFamily: "inherit",
+            border: `1px solid ${RULE}`, borderRadius: 6,
+            color: INK, background: "#fff", boxSizing: "border-box",
+          }}
+        />
+      </div>
     </QuestionStep>
   );
 }

@@ -52,6 +52,7 @@ const INITIAL = {
       code: null,
     },
     operator_notes: "",
+    registration_url_override: "",
     duration: "",
     channels: ["email"],
   },

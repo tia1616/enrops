@@ -114,6 +114,11 @@ type DraftInputs = {
   // Ennie's defaults when in conflict. Used for things the system can't infer
   // from the catalog (e.g. tenant-level VIP offers, partner events, copy preferences).
   operator_notes?: string;
+  // Per-campaign registration URL override. When set, {{register_url}} resolves
+  // to this URL at send time instead of the org default. For campaigns where
+  // registration isn't on the operator's default enrops.com page (Squarespace,
+  // external form, partner site).
+  registration_url_override?: string;
 };
 
 type DraftRequest = {
@@ -308,6 +313,23 @@ function parseRequest(body: unknown):
     if (trimmed.length > 0) operator_notes = trimmed;
   }
 
+  // Validate registration_url_override if present. Light validation: must look
+  // URL-shaped. If they typed bare 'example.com', prepend https://.
+  let registration_url_override: string | undefined;
+  if (inputs.registration_url_override !== undefined && inputs.registration_url_override !== null) {
+    if (typeof inputs.registration_url_override !== "string") {
+      return { ok: false, error: "inputs.registration_url_override must be a string", status: 400 };
+    }
+    let raw = inputs.registration_url_override.trim().slice(0, 300);
+    if (raw.length > 0) {
+      if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+      try { new URL(raw); } catch {
+        return { ok: false, error: "inputs.registration_url_override doesn't look like a valid URL", status: 400 };
+      }
+      registration_url_override = raw;
+    }
+  }
+
   // Validate promo if present
   let promo: PromoSettings | undefined;
   if (inputs.promo !== undefined && inputs.promo !== null) {
@@ -334,6 +356,7 @@ function parseRequest(body: unknown):
         channels: inputs.channels as string[],
         promo,
         operator_notes,
+        registration_url_override,
       },
     },
     derivedTopics: topics,
@@ -1040,6 +1063,14 @@ If the tenant has refined your voice over time (their "Ennie's notes" file), tho
     ? `OPERATOR NOTES FOR THIS CAMPAIGN (these override your defaults when in conflict — treat as ground truth for this draft):\n${inputs.operator_notes}`
     : "";
 
+  // Registration URL override — per-campaign. At send time {{register_url}}
+  // resolves to this URL instead of the org default. Ennie still writes
+  // {{register_url}} normally; she just needs to know the destination so she
+  // doesn't accidentally double-link.
+  const registrationUrlBlock = inputs.registration_url_override
+    ? `REGISTRATION URL FOR THIS CAMPAIGN: ${inputs.registration_url_override}\n{{register_url}} will resolve to this URL when this campaign sends. Write {{register_url}} as usual — do not paste the URL inline. The operator is sending parents to this destination for THIS campaign (e.g. external Squarespace page, partner site).`
+    : "";
+
   return [
     personaBlock,
     ``,
@@ -1051,6 +1082,7 @@ If the tenant has refined your voice over time (their "Ennie's notes" file), tho
     ``,
     curriculumBlock,
     operatorNotesBlock ? `\n${operatorNotesBlock}` : ``,
+    registrationUrlBlock ? `\n${registrationUrlBlock}` : ``,
     ``,
     cadenceGuidance,
     ``,
