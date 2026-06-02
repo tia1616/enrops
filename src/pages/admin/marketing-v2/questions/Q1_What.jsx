@@ -583,10 +583,14 @@ function CampRow({ row, checked, onToggle }) {
 // ---------- Other (free-text topic chips) ----------
 function TopicChips({ topics, onChange }) {
   const [pending, setPending] = useState("");
+  // Parent-only presets per the IA decision: Marketing tab is parent comms
+  // only. Partner notes live in the Partners tab; instructor reminders live
+  // in the Instructors tab. The presets here are parent-facing situations
+  // that don't tie to a specific scheduled program/camp.
   const PRESETS = [
-    "Note to partner schools",
-    "Instructor reminder",
     "Recap / thank-you to families",
+    "Holiday or seasonal greeting",
+    "General family newsletter",
   ];
 
   function addTopic(label) {
