@@ -1090,12 +1090,22 @@ If the tenant has refined your voice over time (their "Ennie's notes" file), tho
     ? `OPERATOR NOTES FOR THIS CAMPAIGN (these override your defaults when in conflict — treat as ground truth for this draft):\n${inputs.operator_notes}`
     : "";
 
-  // Registration URL override — per-campaign. At send time {{register_url}}
-  // resolves to this URL instead of the org default. Ennie still writes
-  // {{register_url}} normally; she just needs to know the destination so she
-  // doesn't accidentally double-link.
+  // Per-campaign link override. The operator field is labeled "Link to
+  // include" (generic — could be registration, photo gallery, rebook tool,
+  // makeup form, updated schedule, etc.). Ennie uses context (topic +
+  // operator_notes) to decide what to CALL the link in the copy.
+  // The token is named {{register_url}} for legacy reasons but Ennie treats
+  // it as the campaign's CTA destination, whatever that is.
   const registrationUrlBlock = inputs.registration_url_override
-    ? `REGISTRATION URL FOR THIS CAMPAIGN: ${inputs.registration_url_override}\n{{register_url}} will resolve to this URL when this campaign sends. Write {{register_url}} as usual — do not paste the URL inline. The operator is sending parents to this destination for THIS campaign (e.g. external Squarespace page, partner site).`
+    ? `LINK TO INCLUDE IN THIS CAMPAIGN: ${inputs.registration_url_override}
+{{register_url}} resolves to this URL at send time. Write {{register_url}} where you want the link — do not paste the URL inline.
+This URL is NOT always a registration page. Use context to decide what to call it:
+- A registration page (Squarespace, Enrops, partner): "Register here", "Grab your spot", "Sign up"
+- A photo gallery: "See the photos", "View this week's photos"
+- A rebook / makeup form: "Reschedule", "Book a makeup class"
+- An updated schedule PDF or page: "See the new schedule"
+- A feedback / survey form: "Share your thoughts", "Quick survey"
+Look at the campaign topic, operator_notes, and what's happening (cancellation? recap? new program?) to pick the right framing. When in doubt, "More info" works for any link type.`
     : "";
 
   // One-off mode (mode='other' with send_at) -> 1 touchpoint at exact time.

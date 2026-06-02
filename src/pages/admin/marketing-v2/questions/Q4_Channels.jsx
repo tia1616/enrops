@@ -119,15 +119,17 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
         </div>
       </div>
 
-      {/* Registration URL override — for campaigns where registration isn't
-          on the operator's default enrops.com page (e.g. summer camps that
-          register on Squarespace, an external form, a partner site). */}
+      {/* Optional CTA link to include in the body. Used for any campaign type
+          — registration page, photo gallery, rebook tool, makeup-class form,
+          updated schedule PDF. Field name (registration_url_override) is
+          legacy; the operator-facing label is generic 'Link to include' so
+          providers don't have to think 'registration' for every campaign. */}
       <div style={{ marginTop: 16 }}>
         <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 4 }}>
-          Where parents will register <span style={{ color: MUTED, fontWeight: 400 }}>(Optional)</span>
+          Link to include <span style={{ color: MUTED, fontWeight: 400 }}>(Optional)</span>
         </label>
         <p style={{ fontSize: 12, color: MUTED, margin: "0 0 6px" }}>
-          Leave blank to use your default registration page. Add a URL if this campaign sends parents somewhere else — Squarespace, an external form, a partner site.
+          If your email needs a link — registration page, photo gallery, makeup-class form, updated schedule, rebook tool — paste it here. Ennie weaves it in naturally. Leave blank if no link.
         </p>
         <input
           type="url"
