@@ -6,8 +6,9 @@
 // All edits are LOCAL until "Save as draft" or "Approve & Schedule". Chunk 07
 // wires the real PATCH + marketing-send calls.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import TouchpointCard from "./TouchpointCard.jsx";
+import { supabase } from "../../../lib/supabase.js";
 import { INK, MUTED, PURPLE, RULE, OK, INFO } from "../marketing/tokens.jsx";
 
 // Stable color palette for topic chips. Same five we used in the mockup.
@@ -106,28 +107,14 @@ export default function ScheduleReview({
           {draft?.schedule?.summary || "Expand any touchpoint to edit and preview. Approve when it's right."}
         </p>
 
-        {/* Plan summary grid */}
+        {/* Plan summary grid — Topics and Audience are surfaced elsewhere
+            (topic chips on each touchpoint card; recipient count in its own
+            card below), so this row stays minimal: when + who-the-sender-is. */}
         <div style={{
           marginTop: 14, display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
           gap: 12, fontSize: 13,
         }}>
-          <div>
-            <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>Topics</div>
-            <div style={{ marginTop: 2, display: "flex", gap: 4, flexWrap: "wrap" }}>
-              {Object.entries(topicColors).map(([t, color]) => (
-                <span key={t} style={{
-                  fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 999, ...color,
-                }}>{t}</span>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>Audience</div>
-            <div style={{ marginTop: 2 }}>
-              {recipients.count} parents · {recipients.segment_summary}
-            </div>
-          </div>
           <div>
             <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>Window</div>
             <div style={{ marginTop: 2 }}>{fmtDate(firstDate)} — {fmtDate(lastDate)}</div>
@@ -135,6 +122,11 @@ export default function ScheduleReview({
           <div>
             <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>Sender</div>
             <div style={{ marginTop: 2 }}>{sender.name}</div>
+            {sender.email && (
+              <div style={{ marginTop: 1, fontSize: 11, color: MUTED, fontFamily: "ui-monospace, monospace" }}>
+                {sender.email}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -238,6 +230,32 @@ export default function ScheduleReview({
 }
 
 function RecipientList({ ids, onRemove }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    if (!ids || ids.length === 0) { setRows([]); return; }
+    let alive = true;
+    setRows(null);
+    setErr(null);
+    // Fetch in chunks if the audience is huge. supabase-js .in() handles a few
+    // thousand fine, but we cap at 1000 here to keep payload sane and only
+    // render the first 50 anyway.
+    const sliced = ids.slice(0, 1000);
+    supabase
+      .from("marketing_recipients")
+      .select("id, parent_name, email, school_name")
+      .in("id", sliced)
+      .then(({ data, error }) => {
+        if (!alive) return;
+        if (error) { setErr(error.message); return; }
+        // Preserve incoming order so the operator sees the same shape they had
+        const byId = new Map((data ?? []).map((r) => [r.id, r]));
+        setRows(sliced.map((id) => byId.get(id)).filter(Boolean));
+      });
+    return () => { alive = false; };
+  }, [ids]);
+
   if (!ids || ids.length === 0) {
     return (
       <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
@@ -245,28 +263,39 @@ function RecipientList({ ids, onRemove }) {
       </p>
     );
   }
+  if (err) {
+    return <p style={{ fontSize: 12, color: "#b3261e", margin: "8px 0 0" }}>Couldn't load recipient details. Refresh to retry.</p>;
+  }
+  if (rows === null) {
+    return <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>Loading recipients…</p>;
+  }
   return (
     <div style={{
       marginTop: 10, border: `1px solid ${RULE}`, borderRadius: 6,
-      maxHeight: 200, overflowY: "auto",
+      maxHeight: 240, overflowY: "auto",
     }}>
-      {ids.slice(0, 50).map((id) => (
-        <div key={id} style={{
+      {rows.slice(0, 50).map((r) => (
+        <div key={r.id} style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "6px 10px", borderBottom: `1px solid ${RULE}`, fontSize: 12, color: INK,
+          padding: "8px 12px", borderBottom: `1px solid ${RULE}`, fontSize: 13, color: INK, gap: 8,
         }}>
-          <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 11 }}>{id}</span>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 600, color: INK }}>{r.parent_name || "(no name on file)"}</div>
+            <div style={{ fontSize: 11, color: MUTED, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {r.email}{r.school_name ? ` · ${r.school_name}` : ""}
+            </div>
+          </div>
           <button
-            onClick={() => onRemove?.(id)}
-            style={{ background: "transparent", border: "none", color: "#b3261e", cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}
+            onClick={() => onRemove?.(r.id)}
+            style={{ background: "transparent", border: "none", color: "#b3261e", cursor: "pointer", fontSize: 12, fontFamily: "inherit", flexShrink: 0 }}
           >
             Remove
           </button>
         </div>
       ))}
       {ids.length > 50 && (
-        <div style={{ padding: "8px 10px", fontSize: 11, color: MUTED }}>
-          (showing first 50 of {ids.length})
+        <div style={{ padding: "8px 12px", fontSize: 11, color: MUTED }}>
+          Showing first 50 of {ids.length}.
         </div>
       )}
     </div>
