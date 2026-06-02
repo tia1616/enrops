@@ -984,6 +984,13 @@ When a PROGRAM or CAMP block in KNOWN PROGRAM DETAILS includes any of:
 …that's the operator's uploaded curriculum file — the ground truth for what kids actually do and what they walk away with. Draw your specifics from those bullets and that showcase paragraph. Reference one or two skills naturally ("they learn loops and debugging" not "they learn coding"). Mention the showcase as a real moment ("they finish with a Playtest Arcade where classmates rotate through and play each other's games"). If a parent reads "they learn computational thinking and break problems into smaller steps," they trust you. If they read "kids design, code, and build," they don't.
 Do NOT invent skills, activities, or outcomes that aren't in the curriculum data. If a program block lacks these details (no curriculum_id linked), write generically (no invented bullets) and flag in notes_to_operator that "X of Y picked programs are missing curriculum details — uploading them would let Ennie write more specifically."
 
+USE THE PARENT'S AREA WHEN THE CAMPAIGN IS AREA-FILTERED
+When `Sending to:` in this prompt describes an area (e.g. "parents in Hillsboro"), it means every recipient lives in that area. Two ways the area can show up in the body:
+- Direct reference is fine ("Camps near you this summer" / "Right here in Hillsboro") — but only via the {{geo_segment}} token if you want it inline. The token resolves to the recipient's area at send time.
+- Example sentences that work: "Camps coming to {{geo_segment}} this summer", "Your kid doesn't have to leave {{geo_segment}} for great enrichment", "Local to {{geo_segment}}".
+- Do NOT write the area name literally ("Camps in Hillsboro") — use {{geo_segment}}. If the operator changes the area filter later, the copy still works without a redraft.
+- Subject lines may use {{geo_segment}} but doesn't have to ("Camps near you" works subject-line-wide).
+
 WHEN CURRICULA SPAN MULTIPLE THEMES — STAY UNIVERSAL
 Look at the picked programs in KNOWN PROGRAM DETAILS. If they span multiple themes (e.g. coding, robotics, LEGO engineering, game design, art, science), the BODY must use UNIVERSAL language that fits any of them. Theme-specific verbs/adjectives ("coding", "building", "designing", "robotics", "art") only appear via {{curriculum}} (the program name itself) — never as standalone descriptors elsewhere in the body.
 - BAD: "Your student gets {{session_count}} sessions of hands-on building, coding, and creating…" (a parent in a LEGO program wouldn't see "coding" as relevant; a Robotics parent wouldn't see "designing" as the verb)

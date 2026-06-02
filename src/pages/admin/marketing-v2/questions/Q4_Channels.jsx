@@ -100,7 +100,7 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
           Anything else Ennie should know? <span style={{ color: MUTED, fontWeight: 400 }}>(Optional)</span>
         </label>
         <p style={{ fontSize: 12, color: MUTED, margin: "0 0 6px" }}>
-          Free-text context for this campaign — Ennie treats your notes as ground truth and weaves them in.
+          Tell Ennie anything you'd like her to mention in the emails.
           Examples: "Mention our STEAM VIP full-year option, $720 total" · "Lead with the savings, not the program list" · "Don't talk about prices in the kickoff"
         </p>
         <textarea

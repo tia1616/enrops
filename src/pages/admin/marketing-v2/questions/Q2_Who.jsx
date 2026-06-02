@@ -293,18 +293,20 @@ async function deriveScopeFromPicks(orgId, what) {
       };
     }
 
-    // Multiple areas — pick the one with the most parents to maximize reach,
-    // and surface the alternatives so the operator can override.
+    // Multiple areas — pick the one with the most CAMPS (operator's signal
+    // of where they want to focus), tie-breaking on parent count. Sorting by
+    // parents alone was wrong — e.g. 1 camp in Portland (713 parents) would
+    // beat 10 camps in Hillsboro (305 parents). Camp count reflects intent.
     const sorted = [...areasWithParents]
       .map(([d, campCount]) => ({ area: d, campCount, parents: parentsByArea.get(d) ?? 0 }))
-      .sort((a, b) => b.parents - a.parents);
+      .sort((a, b) => b.campCount - a.campCount || b.parents - a.parents);
     const top = sorted[0];
-    const others = sorted.slice(1, 4).map((s) => `${s.area} (${s.parents})`).join(", ");
+    const others = sorted.slice(1, 4).map((s) => `${s.area} (${s.campCount} camp${s.campCount === 1 ? "" : "s"}, ${s.parents} parents)`).join(", ");
     return {
       filter: { type: "area", area: top.area },
       info: {
         headline: `Parents in ${top.area}`,
-        sub: `Your camps span ${sorted.length} areas — picked ${top.area} (${top.parents} parents) as the largest. Other options: ${others}. Change below to pick one of those instead, or 'Master list' to send to all.`,
+        sub: `Your camps span ${sorted.length} areas — picked ${top.area} (${top.campCount} camp${top.campCount === 1 ? "" : "s"} there, ${top.parents} parents). Other options: ${others}. Change below to pick one of those, or 'Master list' to send to all.`,
         tone: "ok",
       },
     };
