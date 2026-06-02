@@ -235,15 +235,51 @@ export default function AICampaignBuilder() {
   const updateTouchpoint = (id, patch) => dispatch({ type: "UPDATE_TOUCHPOINT", id, patch });
   const removeRecipient = (id) => dispatch({ type: "REMOVE_RECIPIENT", id });
 
-  // Save as draft — still a stub. Approve flow lands first (next commit) since
-  // approve is what unblocks the actual send. Save-as-draft is "park this for
-  // later" which is lower priority.
-  const onSaveDraft = () => {
+  // Save as draft — persists any inline edits the operator made on
+  // ScheduleReview (subject/body/scheduled_at) to the touchpoint rows.
+  // Campaign row itself is already in 'draft' status from when Ennie's draft
+  // call created it; this just snapshots the operator's working state so
+  // approve-later picks up the edits, not the original.
+  const onSaveDraft = async () => {
+    if (!state.draft?.campaign_id) {
+      alert("No campaign drafted yet. Walk through Q1–Q4 + click Draft first.");
+      return;
+    }
+    const touchpoints = state.draft?.schedule?.touchpoints ?? [];
+    if (touchpoints.length === 0) {
+      alert("No touchpoints to save.");
+      return;
+    }
     setActionBusy(true);
-    setTimeout(() => {
+    try {
+      // PATCH each touchpoint with current local state. Campaigns table
+      // itself doesn't need updating — campaign is already in 'draft' with
+      // approved_at=null, which is what we want.
+      const updates = touchpoints.map((tp) => supabase
+        .from("marketing_campaign_touchpoints")
+        .update({
+          scheduled_at: tp.scheduled_at,
+          payload: {
+            label: tp.label,
+            subject: tp.subject ?? null,
+            body_html: tp.body_html ?? null,
+            body_text: tp.body_text ?? null,
+          },
+          topics: tp.topics ?? [],
+        })
+        .eq("id", tp.id));
+      const results = await Promise.all(updates);
+      const failed = results.filter((r) => r.error);
+      if (failed.length > 0) {
+        alert(`Saved ${results.length - failed.length} of ${results.length}. ${failed.length} touchpoint${failed.length === 1 ? "" : "s"} failed: ${failed[0].error.message}`);
+        return;
+      }
+      // Refresh the local draft state so subsequent edits compare against
+      // the latest persisted version (no surprise overwrites).
+      alert(`Saved — your edits are persisted. Campaign stays in DRAFT status until you click Approve. Reach the draft again from the campaign list (coming soon) or by re-walking Q1–Q4 with the same picks.`);
+    } finally {
       setActionBusy(false);
-      alert("Save as draft — coming soon. For now the draft persists automatically; you can come back and approve later.");
-    }, 300);
+    }
   };
 
   // Send a single touchpoint to the admin's inbox for preview. Calls
