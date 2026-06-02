@@ -58,11 +58,12 @@ export default function ScheduleReview({
   const timezone = org?.timezone ?? "America/Los_Angeles";
 
   // Picked schools for the per-school preview dropdown in TouchpointCard.
-  // Loaded from inputs.what.program_ids (the operator's in-memory picks)
-  // — not from marketing_campaigns, because that table currently 403s on
-  // SELECT for the campaign-creating user (service-role wrote, RLS hasn't
-  // been granted to the creator yet). Query path is the public `programs`
-  // table which DOES allow tenant admins to read their own.
+  // Loaded from the operator's in-memory `inputs.what.program_ids` — the
+  // same shape they just submitted in Q1. Avoids a redundant DB round-trip
+  // to marketing_campaigns.draft_inputs (which holds the same picks). When
+  // the operator returns to an existing draft from outside this flow (a
+  // future "drafts list" surface), the loader for THAT screen will rehydrate
+  // inputs from the campaign row + pass them in here, same shape.
   const [pickedLocations, setPickedLocations] = useState([]); // [{id, name}, ...]
   const programIdsKey = (inputs?.what?.program_ids ?? []).join(",");
   useEffect(() => {

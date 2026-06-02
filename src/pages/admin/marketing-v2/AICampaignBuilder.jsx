@@ -340,9 +340,17 @@ export default function AICampaignBuilder() {
       } else if (data?.skipped_suppressed > 0) {
         alert("Test skipped: your email is on this org's suppression list. Unsubscribe somewhere?");
       } else if (data?.skipped_no_school_program > 0) {
-        alert("Test skipped: as the admin recipient, you don't have a school that matches any picked program. (Expected — admin bootstrap has no school.)");
+        // This fires in a defensive edge case where the admin recipient isn't
+        // tagged _internal_admin so the first-program fallback didn't kick in.
+        // Operator-facing copy: just point them to the in-app preview dropdown
+        // instead, which always works regardless of recipient state.
+        alert("Couldn't render this preview by email. Use the 'Preview as parent at' dropdown above the email body — it shows the same rendered output for any school you pick, no email needed.");
       } else if (data?.skipped_deduped > 0) {
-        alert("Test skipped: this campaign already sent to your inbox once. (Dedup is per-campaign right now.)");
+        // TODO: test mode should bypass per-touchpoint dedup — operators want
+        // to re-preview the same touchpoint after edits. Backlog'd alongside
+        // the other Family Comms audit items. For now, this alert just tells
+        // them why the second click went nowhere.
+        alert("Already previewed this touchpoint once today. Try a different touchpoint, or click Edit on the body to make a change and redraft.");
       } else {
         alert(`Test attempted but nothing landed. Response: ${JSON.stringify(data)}`);
       }
@@ -480,11 +488,9 @@ export default function AICampaignBuilder() {
       <ScheduleReview
         draft={state.draft}
         // Pass the operator's in-memory picks so ScheduleReview can resolve
-        // the picked-schools dropdown WITHOUT re-reading marketing_campaigns
-        // (which currently has no SELECT RLS policy for the creating user —
-        // service-role wrote the row, user is locked out for reads).
-        // The campaign row is the source of truth for what got SAVED, but for
-        // the UI's preview dropdown the in-memory picks are equivalent.
+        // the picked-schools dropdown without a redundant round-trip to
+        // marketing_campaigns.draft_inputs (same data lives in both places
+        // by the time we're rendering ScheduleReview).
         inputs={state.inputs}
         org={org}
         onBack={() => dispatch({ type: "BACK" })}
@@ -572,14 +578,14 @@ function CelebrationScreen({ draft, onReset }) {
 
       <div style={{ marginTop: 24, display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
         <button
-          onClick={() => { window.location.href = "/admin/marketing-v2"; }}
+          onClick={() => navigate("/admin")}
           style={{
             padding: "10px 16px", background: "#fff", color: INK,
             border: `1px solid ${RULE}`, borderRadius: 6, cursor: "pointer",
             fontSize: 14, fontFamily: "inherit", fontWeight: 500,
           }}
         >
-          Back to campaigns
+          Back to admin home
         </button>
         <button
           onClick={onReset}

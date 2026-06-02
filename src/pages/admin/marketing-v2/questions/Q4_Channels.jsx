@@ -40,9 +40,14 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
       rightExtras={
         <button
           onClick={() => {
-            // Remind-me-later in chunk 05 is just a friendly bail-out. Chunk 06
-            // wires this to write a partial campaigns row + a homescreen card.
-            navigate("/admin/marketing");
+            // Friendly bail-out — kick back to the admin home. The Family
+            // Comms surface auto-creates a draft row when Ennie's draft pass
+            // runs, so this button doesn't need to persist anything. Future
+            // (when a drafts list ships): land on /admin/marketing-v2/drafts
+            // so the operator can pick this back up.
+            // Was navigate("/admin/marketing") — that route was retired with
+            // the old Marketing tab; would 404 / catch-all.
+            navigate("/admin");
           }}
           disabled={loading}
           style={{
@@ -103,8 +108,12 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
           Anything else Ennie should know? <span style={{ color: MUTED, fontWeight: 400 }}>(Optional)</span>
         </label>
         <p style={{ fontSize: 12, color: MUTED, margin: "0 0 6px" }}>
-          Tell Ennie anything you'd like her to mention in the emails.
-          Examples: "Mention our STEAM VIP full-year option, $720 total" · "Lead with the savings, not the program list" · "Don't talk about prices in the kickoff"
+          Tell Ennie anything you'd like her to mention in the emails. Examples: "Lead with the savings, not the program list" · "Don't talk about prices in the kickoff" · "Mention our parent showcase event on June 15"
+          {/* Removed "Mention our STEAM VIP full-year option, $720 total"
+              from the examples — the VIP/annual-pass offering is now
+              centralized in organizations.vip_offering and Ennie places it
+              via {{vip_block}} automatically. Asking the operator to retype
+              it in operator_notes contradicts that architecture. */}
         </p>
         <textarea
           value={inputs.operator_notes ?? ""}
@@ -138,7 +147,7 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
           type="url"
           value={inputs.registration_url_override ?? ""}
           onChange={(e) => setField("registration_url_override", e.target.value.slice(0, 300))}
-          placeholder="https://journeytosteam.com/summer-camps"
+          placeholder="https://your-site.com/register"
           style={{
             width: "100%", padding: 10, fontSize: 13, fontFamily: "inherit",
             border: `1px solid ${RULE}`, borderRadius: 6,

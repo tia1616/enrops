@@ -22,7 +22,7 @@
 //   - single   → simple typeahead against marketing_recipients name/email
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../../lib/supabase.js";
 import QuestionStep from "../QuestionStep.jsx";
 import { PURPLE, RULE, INK, MUTED, OK, WARN } from "../../marketing/tokens.jsx";
@@ -301,7 +301,7 @@ function ExcludeAlreadyRegisteredToggle({ orgId, what, checked, onChange }) {
             <div style={{ fontSize: 12, color: "#7a5510", marginTop: 2 }}>
               Available when registration runs through Enrops — we'll know who's already in, in real time. For Squarespace / external registration, we can't see who's signed up yet.
               {" "}
-              <a href="/admin/settings" style={{ color: PURPLE, fontWeight: 600 }}>Move registration to Enrops →</a>
+              <Link to="/admin/settings" style={{ color: PURPLE, fontWeight: 600 }}>Move registration to Enrops →</Link>
             </div>
           )}
         </div>

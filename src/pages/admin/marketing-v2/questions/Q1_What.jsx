@@ -12,7 +12,7 @@
 // the structured KNOWN-FACTS list to write a personalized campaign from.
 
 import { useEffect, useMemo, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../../lib/supabase.js";
 import QuestionStep from "../QuestionStep.jsx";
 import { PURPLE, RULE, INK, MUTED, OK, INFO, WARN } from "../../marketing/tokens.jsx";
@@ -256,7 +256,7 @@ function ProgramsPicker({ orgId, selected, onChange }) {
           marginBottom: 8, padding: "8px 12px", background: "#FAEEDA",
           border: "1px solid #ece1bf", borderRadius: 6, fontSize: 12, color: "#7a5510",
         }}>
-          {draftCount} upcoming program{draftCount === 1 ? "" : "s"} {draftCount === 1 ? "is" : "are"} still in <strong>draft</strong> and not shown here. Publish them in <a href="/admin/programs" style={{ color: PURPLE, fontWeight: 600 }}>Programs → Scheduled programs</a> to include in campaigns.
+          {draftCount} upcoming program{draftCount === 1 ? "" : "s"} {draftCount === 1 ? "is" : "are"} still in <strong>draft</strong> and not shown here. Publish them in <Link to="/admin/programs" style={{ color: PURPLE, fontWeight: 600 }}>Programs → Scheduled programs</Link> to include in campaigns.
         </div>
       )}
 
