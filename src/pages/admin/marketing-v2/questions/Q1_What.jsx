@@ -191,8 +191,11 @@ function ProgramsPicker({ orgId, selected, onChange }) {
   return (
     <div>
       {/* Term quick-picks — always visible when there are upcoming programs.
-          One click selects all programs in that term. The term with an
-          early-bird deadline within 7 days gets a soft red urgency badge. */}
+          Click toggles: if all the term's programs are selected, click clears
+          them; otherwise click adds them. Visual state reflects toggle so you
+          get instant feedback even when the checkbox list is below the fold.
+          The term with an early-bird deadline within 7 days gets a green
+          accent + 'EB in Nd' badge. */}
       {termSummary.length > 0 && (
         <div style={{
           marginBottom: 8, padding: "8px 12px", background: "#fff",
@@ -202,28 +205,47 @@ function ProgramsPicker({ orgId, selected, onChange }) {
           <span style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 4 }}>
             Pick a term
           </span>
-          {termSummary.map((t) => (
-            <button
-              key={t.term}
-              onClick={() => onChange([...new Set([...selected, ...t.programIds])])}
-              title={t.isUrgent ? `Early-bird ends in ${t.daysAway} day${t.daysAway === 1 ? "" : "s"}` : `${t.count} program${t.count === 1 ? "" : "s"}`}
-              style={{
-                padding: "5px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
-                background: t.isUrgent ? "#EAF3DE" : "#fff",
-                color: t.isUrgent ? "#2d5a2d" : INK,
-                border: `1px solid ${t.isUrgent ? OK : RULE}`,
-                cursor: "pointer", fontFamily: "inherit",
-                display: "inline-flex", alignItems: "center", gap: 6,
-              }}
-            >
-              {t.term} <span style={{ color: MUTED, fontWeight: 500 }}>· {t.count}</span>
-              {t.isUrgent && (
-                <span style={{ fontSize: 10, color: OK, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>
-                  EB in {t.daysAway}d
-                </span>
-              )}
-            </button>
-          ))}
+          {termSummary.map((t) => {
+            const allSelected = t.programIds.length > 0 && t.programIds.every((id) => selected.includes(id));
+            const onToggle = () => {
+              if (allSelected) {
+                onChange(selected.filter((id) => !t.programIds.includes(id)));
+              } else {
+                onChange([...new Set([...selected, ...t.programIds])]);
+              }
+            };
+            const baseBg = allSelected ? PURPLE : (t.isUrgent ? "#EAF3DE" : "#fff");
+            const baseFg = allSelected ? "#fff" : (t.isUrgent ? "#2d5a2d" : INK);
+            const baseBorder = allSelected ? PURPLE : (t.isUrgent ? OK : RULE);
+            return (
+              <button
+                key={t.term}
+                onClick={onToggle}
+                title={t.isUrgent ? `Early-bird ends in ${t.daysAway} day${t.daysAway === 1 ? "" : "s"}` : `${t.count} program${t.count === 1 ? "" : "s"}`}
+                style={{
+                  padding: "5px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+                  background: baseBg, color: baseFg, border: `1px solid ${baseBorder}`,
+                  cursor: "pointer", fontFamily: "inherit",
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                }}
+              >
+                {allSelected ? "✓ " : ""}{t.term}
+                <span style={{ color: allSelected ? "rgba(255,255,255,0.75)" : MUTED, fontWeight: 500 }}>· {t.count}</span>
+                {t.isUrgent && !allSelected && (
+                  <span style={{ fontSize: 10, color: OK, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                    EB in {t.daysAway}d
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {selected.length > 0 && (
+            <span style={{
+              marginLeft: "auto", fontSize: 12, color: PURPLE, fontWeight: 600,
+            }}>
+              {selected.length} selected
+            </span>
+          )}
         </div>
       )}
 
