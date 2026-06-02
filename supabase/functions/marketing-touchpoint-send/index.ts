@@ -386,7 +386,10 @@ serve(async (req: Request) => {
   // First pass: filter the recipients we'll actually send to (cheap, in-memory)
   // so the parallel send loop only sees deliverable recipients. Skip counters
   // are tallied here.
-  type ReadyRecipient = { r: Recipient; program: ProgramRow | undefined };
+  // `recipientPrograms` is ALL picked programs at the recipient's school (for
+  // multi-program schools, used to join {{curriculum}} as a list). `program`
+  // is the first one (used for numeric tokens like price + savings + date).
+  type ReadyRecipient = { r: Recipient; program: ProgramRow | undefined; recipientPrograms: ProgramRow[] };
   const ready: ReadyRecipient[] = [];
   for (const r of recipientRows) {
     results.attempted++;
@@ -399,7 +402,8 @@ serve(async (req: Request) => {
     // is an internal admin test recipient (no school by design), in which
     // case use the FIRST picked program as the example so the test email
     // shows real-looking content.
-    let program = resolveRecipientProgram(r, pickedPrograms, locationNameMap);
+    let recipientPrograms = resolveRecipientPrograms(r, pickedPrograms, locationNameMap);
+    let program: ProgramRow | null = recipientPrograms[0] ?? null;
     const isInternalAdmin = (r.segments ?? []).includes("_internal_admin");
     if (!program && programIds.length > 0) {
       if (isInternalAdmin) {
@@ -416,13 +420,14 @@ serve(async (req: Request) => {
         program =
           pickedPrograms.find((p) => p.program_location_id && !excluded.has(p.program_location_id))
           ?? pickedPrograms[0];
+        recipientPrograms = program ? [program] : [];
       } else {
         // Audience-resolution mismatch — log + skip rather than send garbage copy
         results.skipped_no_school_program++;
         continue;
       }
     }
-    ready.push({ r, program });
+    ready.push({ r, program, recipientPrograms });
   }
 
   // Second pass: send in parallel batches of SEND_PARALLEL_BATCH. Each batch
@@ -436,11 +441,12 @@ serve(async (req: Request) => {
   for (let i = 0; i < ready.length; i += SEND_PARALLEL_BATCH) {
     const batch = ready.slice(i, i + SEND_PARALLEL_BATCH);
 
-    const batchResults = await Promise.all(batch.map(async ({ r, program }) => {
+    const batchResults = await Promise.all(batch.map(async ({ r, program, recipientPrograms }) => {
       const tokens = await buildTokensForRecipient({
         recipient: r,
         org,
         program,
+        recipientPrograms,
         pickedPrograms,
         draftInputs,
         safeRegistrationUrl,
@@ -632,22 +638,43 @@ async function ensureAdminRecipient(supabase: SupabaseClient, orgId: string, ema
 //      Task #15 deferred a proper "highest enrollment" lookup; for now
 //      earliest first_session_date is the practical signal.
 //   3. Returns null if no match — caller should skip the recipient.
-function resolveRecipientProgram(
+// Returns ALL picked programs at this recipient's school (was: only the
+// earliest one). Per-program numeric tokens use the first; {{curriculum}}
+// joins all curricula as a list. The prompt has long promised "the token
+// system joins {{curriculum}} naturally as a list" — this function makes
+// that true (it was a lie before; Cannady parents got only one of their
+// two picked programs mentioned).
+function resolveRecipientPrograms(
   r: Recipient,
   picked: ProgramRow[],
   locationNameMap: Map<string, string[]>,
-): ProgramRow | null {
-  if (!r.school_name || picked.length === 0) return null;
+): ProgramRow[] {
+  if (!r.school_name || picked.length === 0) return [];
   const recipientSchool = r.school_name.trim().toLowerCase();
   const matches = picked.filter((p) => {
     if (!p.program_location_id) return false;
     const names = locationNameMap.get(p.program_location_id) ?? [];
     return names.some((n) => n.trim().toLowerCase() === recipientSchool);
   });
-  if (matches.length === 0) return null;
-  if (matches.length === 1) return matches[0];
-  // Multi-program school: earliest first_session_date wins
-  return [...matches].sort((a, b) => (a.first_session_date ?? "9999").localeCompare(b.first_session_date ?? "9999"))[0];
+  // Sort: programs with a known first_session_date come first (earliest
+  // first), then nulls. The first element drives per-program numeric tokens
+  // (price, savings, etc.) so we prefer a program with real dates.
+  return [...matches].sort((a, b) => {
+    const aDate = a.first_session_date ?? "9999";
+    const bDate = b.first_session_date ?? "9999";
+    return aDate.localeCompare(bDate);
+  });
+}
+
+// Back-compat shim — used by admin-fallback path which still wants a single
+// program for "show the operator one program in the test email".
+function resolveRecipientProgram(
+  r: Recipient,
+  picked: ProgramRow[],
+  locationNameMap: Map<string, string[]>,
+): ProgramRow | null {
+  const all = resolveRecipientPrograms(r, picked, locationNameMap);
+  return all[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -658,6 +685,11 @@ type TokensInput = {
   recipient: Recipient;
   org: Org;
   program: ProgramRow | null;
+  // All picked programs at THIS recipient's school. Drives the {{curriculum}}
+  // list-join for multi-program schools. Single-program schools: length 1.
+  // Empty when recipient has no school match (admin fallback path supplies
+  // the single `program` directly instead).
+  recipientPrograms?: ProgramRow[];
   pickedPrograms: ProgramRow[];
   draftInputs: Record<string, unknown>;
   safeRegistrationUrl: string | null;
@@ -665,7 +697,7 @@ type TokensInput = {
 };
 
 async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: Map<string, string[]> }): Promise<Map<string, string>> {
-  const { recipient: r, org, program, draftInputs, safeRegistrationUrl, campaignTopics, locationNameMap } = input;
+  const { recipient: r, org, program, recipientPrograms, draftInputs, safeRegistrationUrl, campaignTopics, locationNameMap } = input;
   const tokens = new Map<string, string>();
   const isInternalAdmin = (r.segments ?? []).includes("_internal_admin");
 
@@ -712,7 +744,18 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
 
   // Per-program (from THIS recipient's school's matching program)
   if (program) {
-    tokens.set("curriculum", program.curriculum || "");
+    // {{curriculum}} joins ALL programs at the recipient's school as a natural
+    // list. Cannady parent with two picked programs gets:
+    //   "LEGO Brickopolis Architects: Engineering & Design and Robotics Builders: Carnival Games & Challenges"
+    // The other per-program tokens (price, savings, dates) intentionally use
+    // ONLY the first program — they don't have a clean "list-of-prices"
+    // shape, and Ennie's body usually phrases them singularly ("the early
+    // bird rate is X"). For multi-program schools where prices differ, this
+    // means the body shows the price for the first program only. Tracked
+    // as a known limitation in the prompt's multi-program rule.
+    const allPrograms = (recipientPrograms && recipientPrograms.length > 0) ? recipientPrograms : [program];
+    const curriculumList = joinNaturally(allPrograms.map((p) => p.curriculum).filter(Boolean));
+    tokens.set("curriculum", curriculumList);
     tokens.set("day_of_week", program.day_of_week || "");
     tokens.set("first_session_date", program.first_session_date ? formatHumanDate(program.first_session_date) : "");
     tokens.set("session_count", program.session_count != null ? String(program.session_count) : "");
@@ -908,6 +951,22 @@ function splitFirstName(parentName: string | null): string {
   return t[0] || "";
 }
 
+// Joins an array of strings with natural-language conjunctions:
+//   []                    -> ""
+//   ["a"]                 -> "a"
+//   ["a", "b"]            -> "a and b"
+//   ["a", "b", "c"]       -> "a, b, and c"
+// Used for {{curriculum}} in multi-program-school recipients (e.g. a Cannady
+// parent enrolled in two of the picked programs gets a body that reads
+// "LEGO Brickopolis Architects and Robotics Builders" instead of just one).
+function joinNaturally(items: string[]): string {
+  const xs = items.filter((s) => typeof s === "string" && s.trim().length > 0);
+  if (xs.length === 0) return "";
+  if (xs.length === 1) return xs[0];
+  if (xs.length === 2) return `${xs[0]} and ${xs[1]}`;
+  return `${xs.slice(0, -1).join(", ")}, and ${xs[xs.length - 1]}`;
+}
+
 function formatHumanDate(iso: string): string {
   try {
     const d = new Date(iso + "T00:00:00");
@@ -1051,7 +1110,11 @@ async function renderPreview(
   }
 
   // Find the program at the requested location, plus the location name.
-  const programAtLocation = pickedPrograms.find((p) => p.program_location_id === locationId);
+  // ALL picked programs at the preview location — used to join {{curriculum}}
+  // as a list for multi-program schools. Mirrors the real-send behavior so
+  // preview shows what parents at this school will actually see.
+  const programsAtLocation = pickedPrograms.filter((p) => p.program_location_id === locationId);
+  const programAtLocation = programsAtLocation[0];
   const { data: loc } = await supabase
     .from("program_locations")
     .select("id, name, name_aliases")
@@ -1094,6 +1157,7 @@ async function renderPreview(
     recipient: syntheticRecipient,
     org,
     program: programAtLocation ?? null,
+    recipientPrograms: programsAtLocation,
     pickedPrograms,
     draftInputs,
     safeRegistrationUrl,
