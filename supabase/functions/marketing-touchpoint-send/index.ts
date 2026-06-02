@@ -67,10 +67,6 @@ const APPROVED_TOKENS = new Set([
   // when the org has no offering enabled). This is the per-school suppression
   // mechanism — same body_html, different rendered output per recipient.
   "vip_block",
-  // Curriculum is HTML when in body context (carries <strong> per program)
-  // so multi-program schools render as "<strong>X</strong> and <strong>Y</strong>"
-  // with the "and" NOT bolded. Plain text in subject (HTML tags stripped).
-  "curriculum",
 ]);
 
 const corsHeaders = {
@@ -851,7 +847,7 @@ function buildVipBlock(
 // 2026-06-02 when Cascadia-excluded vs Cascadia-included previews showed
 // raw HTML tags. All OTHER tokens still get escaped: they come from
 // recipient data (parent_name, school) which could contain <script> etc.
-const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block"]);
+const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block", "curriculum"]);
 
 function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: boolean }): string {
   return text.replace(/\{\{(\w+)\}\}/g, (full, key) => {
