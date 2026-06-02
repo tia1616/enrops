@@ -187,25 +187,36 @@ export default function TouchpointCard({
               schools and see exactly what a parent at each school will
               receive — same code path as a real send, just no Resend call.
               Catches "this school doesn't have VIP" / "this school's
-              first session is a different date" issues before approve. */}
-          {pickedLocations.length > 0 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
-                Preview as parent at
-              </span>
-              <select
-                value={previewLocationId}
-                onChange={onPickPreviewLocation}
-                style={{
-                  padding: "6px 10px", border: `1px solid ${RULE}`, borderRadius: 6,
-                  fontSize: 13, fontFamily: "inherit", background: "#fff", color: INK,
-                }}
-              >
-                <option value="">— show tokens (no school picked) —</option>
-                {pickedLocations.map((l) => (
-                  <option key={l.id} value={l.id}>{l.name}</option>
-                ))}
-              </select>
+              first session is a different date" issues before approve.
+              Rendered visible-but-disabled when no schools are available
+              (loading or camps-only campaign) so the operator knows the
+              feature is there and what state it's in — silently hiding
+              made the dropdown look broken / absent. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
+              Preview as parent at
+            </span>
+            <select
+              value={previewLocationId}
+              onChange={onPickPreviewLocation}
+              disabled={pickedLocations.length === 0}
+              style={{
+                padding: "6px 10px", border: `1px solid ${RULE}`, borderRadius: 6,
+                fontSize: 13, fontFamily: "inherit",
+                background: pickedLocations.length === 0 ? "#f7f4ec" : "#fff",
+                color: pickedLocations.length === 0 ? MUTED : INK,
+                cursor: pickedLocations.length === 0 ? "not-allowed" : "pointer",
+              }}
+            >
+              <option value="">
+                {pickedLocations.length === 0
+                  ? "(loading schools, or campaign has no school picks)"
+                  : "— show tokens (no school picked) —"}
+              </option>
+              {pickedLocations.map((l) => (
+                <option key={l.id} value={l.id}>{l.name}</option>
+              ))}
+            </select>
               {previewLoading && <span style={{ fontSize: 11, color: MUTED }}>rendering…</span>}
               {previewData?.vip_block_shown === false && isPreviewing && (
                 <span style={{
