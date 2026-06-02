@@ -132,6 +132,14 @@ type DraftRequest = {
   inputs: DraftInputs;
 };
 
+type VipOffering = {
+  enabled: boolean;
+  label?: string;
+  price_cents?: number;
+  description?: string;
+  excluded_location_ids?: string[];
+};
+
 type OrgConfig = {
   id: string;
   default_sender_name: string | null;
@@ -139,6 +147,7 @@ type OrgConfig = {
   sending_domain: string | null;
   brand_voice: Record<string, unknown> | null;
   timezone: string | null;
+  vip_offering: VipOffering | null;
 };
 
 type ResolvedRecipients = {
@@ -849,7 +858,12 @@ function formatGroundedFactsForPrompt(facts: GroundedFacts, promo: PromoSettings
     promoLines.push(`- Lead with early-bird savings. Reference the deadline ({{early_bird_deadline}}) and savings amount ({{savings}}). Include 48h-before AND 24h-before reminder touchpoints.`);
   }
   if (promo?.vip_option) {
-    promoLines.push(`- STEAM VIP full-year option: mention it as an upsell in at least one touchpoint (refer to {{vip_price}}).`);
+    // Tells Ennie to surface the VIP add-on via the {{vip_block}} token. The
+    // detailed VIP rules + label/price/description come from
+    // org.vip_offering (rendered in buildSystemPrompt). Per-school exclusion
+    // (e.g. Cascadia doesn't offer it) happens at send time via the
+    // {{vip_block}} resolver — Ennie doesn't need to worry about it here.
+    promoLines.push(`- VIP/annual-pass upsell: place {{vip_block}} in at least one touchpoint (typically the kickoff and/or the 24h reminder). Do not write VIP language inline.`);
   }
   if (promo?.multi_camp_discount) {
     promoLines.push(`- Multi-camp bundle discount: reference {{promo_code}} (10% off when registering for 2+ camps). Mention in the kickoff and at least one mid-window touchpoint.`);
@@ -919,6 +933,11 @@ const APPROVED_TOKENS = new Set([
   "first_session_date", "session_count", "day_of_week", "curriculum", "vip_price",
   // per-campaign
   "topic", "topics_list", "promo_code", "promo_amount",
+  // VIP/annual-pass block — resolves per recipient at send time. Empty when
+  // the recipient's school is in org.vip_offering.excluded_location_ids or
+  // when the org has no VIP offering enabled. Otherwise an HTML paragraph
+  // built from the org's label/price_cents/description.
+  "vip_block",
 ]);
 
 function buildSystemPrompt(
@@ -958,6 +977,7 @@ function buildSystemPrompt(
 - Per-recipient: {{first_name}}, {{parent_name}}, {{child_first_name}}, {{child_last_name}}, {{school}}, {{city}}, {{zip}}, {{geo_segment}}, {{unsubscribe_url}}
 - Per-org: {{org_name}}, {{sender_name}}, {{sender_email}}, {{register_url}}, {{reply_to}}, {{logo_url}}, {{closer}}, {{phone}}, {{website}}
 - Per-program (pulled per recipient's school): {{savings}}, {{early_bird_price}}, {{regular_price}}, {{early_bird_deadline}}, {{first_session_date}}, {{session_count}}, {{day_of_week}}, {{curriculum}}, {{vip_price}}
+- VIP / annual-pass block (whole paragraph, per-recipient suppression): {{vip_block}} — see "VIP / ANNUAL-PASS BLOCK" rules below
 - Per-campaign: {{topic}}, {{topics_list}}, {{promo_code}}, {{promo_amount}}
 
 If a {{token}} you'd want doesn't appear in this list, do NOT invent one. Write around it generically.`;
@@ -1051,10 +1071,19 @@ OPERATOR_NOTES INPUT
 If the operator typed something into OPERATOR NOTES FOR THIS CAMPAIGN, those are their explicit instructions — treat as ground truth and weave them in. You don't need to ask follow-up questions about them; they wrote what they meant.
 
 PURCHASABLE ADD-ONS ARE ON THE REGISTRATION PAGE
-When the operator tells you to mention an add-on (STEAM VIP, multi-camp discount, etc.) or a promo, assume it's selectable at checkout on the registration page — that's the default for any enrichment provider unless the operator explicitly says otherwise.
-- DO: "Select STEAM VIP at checkout for $720…", "Look for the VIP option when you register…", "Add VIP at registration for the full-year price…"
-- DO NOT: "Ask about our VIP option" / "Inquire about" / "Contact us for details on" / "Reach out to learn more about" — these imply a separate sales process. Operators don't run sales calls. The registration page IS the buying surface.
-- If the add-on isn't actually selectable inline (operator said so in operator_notes), then use the directed language they specified.
+When you mention an add-on or promo, assume it's selectable at checkout on the registration page — that's the default for any enrichment provider unless the operator explicitly says otherwise.
+- DO: "Look for the [offering name] option when you register…", "Add it at registration for the listed price…"
+- DO NOT: "Ask about our X" / "Inquire about" / "Contact us for details on" / "Reach out to learn more about" — these imply a separate sales process. Operators don't run sales calls. The registration page IS the buying surface.
+- If the add-on isn't actually selectable inline (operator said so in operator_notes), use the directed language they specified.
+
+VIP / ANNUAL-PASS BLOCK
+${org.vip_offering?.enabled
+  ? `This provider offers an annual pass labeled "${org.vip_offering.label ?? "VIP"}"${org.vip_offering.price_cents ? ` at $${(org.vip_offering.price_cents / 100).toFixed(0)}/year` : ""}. Description (provider's words): "${org.vip_offering.description ?? ""}".
+- Do NOT inline the VIP description yourself. Place the {{vip_block}} merge token where you want the VIP paragraph to appear. The send-time resolver expands it into the provider's pre-written paragraph for recipients whose school offers it, and renders it EMPTY for recipients at schools where VIP isn't offered (so the same email body works for everyone). Place {{vip_block}} on its own line in the body_html (e.g. <p>{{vip_block}}</p> — but the resolver also handles bare placement gracefully).
+- Only place {{vip_block}} ONCE per touchpoint, not in subject lines. A natural spot is just before the register CTA in the kickoff and the 24h-reminder.
+- Do NOT write your own VIP language ("Want the full year?" / "Lock it in" / "STEAM VIP option" / etc.) anywhere in the body — the resolver handles voice + price + suppression as one block. If you write VIP prose inline, parents at excluded schools will see a CTA they can't act on.`
+  : `This provider has NO active annual-pass / VIP offering. Do NOT invent one. Do NOT use {{vip_block}}. Do NOT mention STEAM VIP, annual pass, year-long bundles, or anything implying multi-term pre-purchase.`
+}
 
 THINGS YOU SHOULD NEVER CLAIM
 - That a program is "selling fast" or "almost full" (unless the operator said so).
@@ -1552,7 +1581,7 @@ serve(async (req: Request) => {
   // ---- Load org config ----
   const { data: orgRow, error: oErr } = await supabase
     .from("organizations")
-    .select("id, default_sender_name, default_sender_email, sending_domain, brand_voice, timezone")
+    .select("id, default_sender_name, default_sender_email, sending_domain, brand_voice, timezone, vip_offering")
     .eq("id", organization_id)
     .single<OrgConfig>();
   if (oErr || !orgRow) return jsonError(`organization not found: ${oErr?.message ?? "unknown"}`, 404);

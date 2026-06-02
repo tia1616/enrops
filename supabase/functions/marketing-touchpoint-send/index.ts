@@ -61,6 +61,12 @@ const APPROVED_TOKENS = new Set([
   "savings", "early_bird_price", "regular_price", "early_bird_deadline",
   "first_session_date", "session_count", "day_of_week", "curriculum", "vip_price",
   "topic", "topics_list", "promo_code", "promo_amount",
+  // VIP/annual-pass block: resolves to an HTML <p> built from org.vip_offering
+  // for recipients whose school offers it, and to an empty string for
+  // recipients whose school is in org.vip_offering.excluded_location_ids (or
+  // when the org has no offering enabled). This is the per-school suppression
+  // mechanism — same body_html, different rendered output per recipient.
+  "vip_block",
 ]);
 
 const corsHeaders = {
@@ -110,6 +116,14 @@ type Recipient = {
   segments: string[] | null;
 };
 
+type VipOffering = {
+  enabled: boolean;
+  label?: string;
+  price_cents?: number;
+  description?: string;
+  excluded_location_ids?: string[];
+};
+
 type Org = {
   id: string;
   name: string;
@@ -118,6 +132,7 @@ type Org = {
   default_sender_email: string | null;
   brand_voice: { closer?: string; phone?: string; website?: string } | null;
   logo_url: string | null;
+  vip_offering: VipOffering | null;
 };
 
 type ProgramRow = {
@@ -206,7 +221,7 @@ serve(async (req: Request) => {
   // ---- Load org ----
   const { data: org, error: oErr } = await supabase
     .from("organizations")
-    .select("id, name, slug, default_sender_name, default_sender_email, brand_voice, logo_url")
+    .select("id, name, slug, default_sender_name, default_sender_email, brand_voice, logo_url, vip_offering")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
@@ -678,7 +693,43 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   tokens.set("promo_code", promo?.code || "");
   tokens.set("promo_amount", ""); // task #6 wires this when promo step ships
 
+  // VIP/annual-pass block. Resolves to an HTML paragraph for recipients whose
+  // school offers it, or an empty string for excluded schools (so Ennie can
+  // safely place {{vip_block}} in the body once and the resolver handles
+  // per-school suppression). Cases that resolve to empty string:
+  //   1. Org has no vip_offering or it's disabled
+  //   2. Recipient's school is in vip_offering.excluded_location_ids
+  //   3. Recipient has no matching program (no signal to know if VIP applies)
+  // For admin test recipients: render the block as if their fallback program's
+  // school offers VIP, so the operator sees realistic preview output.
+  tokens.set("vip_block", buildVipBlock(org.vip_offering, program?.program_location_id ?? null));
+
   return tokens;
+}
+
+// Renders the VIP block for one recipient. Returns "" for the three suppression
+// cases above. Output is a single <p>...</p> ready for direct insertion into
+// the email body — already HTML-escaped where it matters (label/description
+// pass through escapeHtml). The trailing whitespace/newline is intentional so
+// the surrounding paragraph doesn't crowd it visually.
+function buildVipBlock(
+  offering: VipOffering | null,
+  recipientLocationId: string | null,
+): string {
+  if (!offering || !offering.enabled) return "";
+  if (!recipientLocationId) return ""; // unknown school -> don't gamble
+  const excluded = offering.excluded_location_ids ?? [];
+  if (excluded.includes(recipientLocationId)) return "";
+
+  const label = escapeHtml(offering.label ?? "Annual pass");
+  const desc = escapeHtml(offering.description ?? "");
+  const priceStr = offering.price_cents
+    ? ` for $${(offering.price_cents / 100).toFixed(0)}/year`
+    : "";
+  // The phrasing keeps the operator's `description` verbatim (their voice) and
+  // wraps it in a checkout-CTA frame. Matches the PURCHASABLE-ADD-ONS rule —
+  // it's selectable at registration, not a sales call.
+  return `<p>🔑 <strong>Want the full year?</strong> Look for the ${label} option at checkout${priceStr}. ${desc}</p>`;
 }
 
 // ---------------------------------------------------------------------------
