@@ -8,7 +8,10 @@ import QuestionStep from "../QuestionStep.jsx";
 import { PURPLE, RULE, INK, MUTED, WARN } from "../../marketing/tokens.jsx";
 
 const CHANNELS = [
-  { key: "email", label: "Email + parent portal", icon: "✉️", helper: "Personalized per recipient." },
+  // Was "Email + parent portal" — but the parent portal feed doesn't exist
+  // yet (target with the lifecycle automations build). Misleading copy on the
+  // operator's review screen; downgraded to plain "Email" until that ships.
+  { key: "email", label: "Email", icon: "✉️", helper: "Personalized per recipient." },
   { key: "flyer", label: "Flyer (PDF)", icon: "📄", helper: "Branded handout for partners.", disabled: true },
   { key: "social", label: "Social post", icon: "📣", helper: "Caption + hashtags + tags.", disabled: true },
 ];

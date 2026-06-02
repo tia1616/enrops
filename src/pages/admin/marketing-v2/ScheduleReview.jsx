@@ -249,21 +249,32 @@ function RecipientList({ ids, onRemove }) {
     let alive = true;
     setRows(null);
     setErr(null);
-    // Fetch in chunks if the audience is huge. supabase-js .in() handles a few
-    // thousand fine, but we cap at 1000 here to keep payload sane and only
-    // render the first 50 anyway.
+    // PostgREST puts .in(...) values in the URL. ~500 UUIDs is the safe ceiling
+    // before the URL exceeds standard length limits and the query silently
+    // 414s or returns empty. We render the first 50 anyway, but we still need
+    // to look up 'em all so the count-displayed and the rows-displayed agree
+    // on which 50 we picked. Chunk into 500-id batches.
     const sliced = ids.slice(0, 1000);
-    supabase
-      .from("marketing_recipients")
-      .select("id, parent_name, email, school_name")
-      .in("id", sliced)
-      .then(({ data, error }) => {
+    const CHUNK = 500;
+    (async () => {
+      try {
+        const byId = new Map();
+        for (let i = 0; i < sliced.length; i += CHUNK) {
+          const batch = sliced.slice(i, i + CHUNK);
+          const { data, error } = await supabase
+            .from("marketing_recipients")
+            .select("id, parent_name, email, school_name")
+            .in("id", batch);
+          if (error) throw error;
+          for (const r of (data ?? [])) byId.set(r.id, r);
+        }
         if (!alive) return;
-        if (error) { setErr(error.message); return; }
         // Preserve incoming order so the operator sees the same shape they had
-        const byId = new Map((data ?? []).map((r) => [r.id, r]));
         setRows(sliced.map((id) => byId.get(id)).filter(Boolean));
-      });
+      } catch (e) {
+        if (alive) setErr(e?.message ?? "load failed");
+      }
+    })();
     return () => { alive = false; };
   }, [ids]);
 
