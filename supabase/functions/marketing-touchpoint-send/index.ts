@@ -67,6 +67,10 @@ const APPROVED_TOKENS = new Set([
   // when the org has no offering enabled). This is the per-school suppression
   // mechanism — same body_html, different rendered output per recipient.
   "vip_block",
+  // Curriculum is HTML when in body context (carries <strong> per program)
+  // so multi-program schools render as "<strong>X</strong> and <strong>Y</strong>"
+  // with the "and" NOT bolded. Plain text in subject (HTML tags stripped).
+  "curriculum",
 ]);
 
 const corsHeaders = {
@@ -744,18 +748,28 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
 
   // Per-program (from THIS recipient's school's matching program)
   if (program) {
-    // {{curriculum}} joins ALL programs at the recipient's school as a natural
-    // list. Cannady parent with two picked programs gets:
-    //   "LEGO Brickopolis Architects: Engineering & Design and Robotics Builders: Carnival Games & Challenges"
+    // {{curriculum}} is HTML in body context — each program wrapped in its OWN
+    // <strong>...</strong>, separated by plain " and " / oxford-comma form.
+    // Multi-program Cannady parent gets:
+    //   <strong>LEGO Brickopolis Architects: Engineering & Design</strong> and <strong>Robotics Builders: Carnival Games & Challenges</strong>
+    // Each program is bolded; the "and" between them is NOT bolded — fixes
+    // the "looks like one class name" problem Jessica caught.
+    // Subject lines (plaintext) strip the tags at replaceTokens time, so
+    // subjects read naturally: "LEGO X and Robotics Y".
     // The other per-program tokens (price, savings, dates) intentionally use
     // ONLY the first program — they don't have a clean "list-of-prices"
-    // shape, and Ennie's body usually phrases them singularly ("the early
-    // bird rate is X"). For multi-program schools where prices differ, this
-    // means the body shows the price for the first program only. Tracked
-    // as a known limitation in the prompt's multi-program rule.
+    // shape, and Ennie's body usually phrases them singularly. For
+    // multi-program schools where prices differ, the body shows the price
+    // for the first program only.
     const allPrograms = (recipientPrograms && recipientPrograms.length > 0) ? recipientPrograms : [program];
-    const curriculumList = joinNaturally(allPrograms.map((p) => p.curriculum).filter(Boolean));
-    tokens.set("curriculum", curriculumList);
+    const curriculumNames = allPrograms.map((p) => p.curriculum).filter((s) => typeof s === "string" && s.trim().length > 0);
+    const bolded = curriculumNames.map((n) => `<strong>${escapeHtml(n)}</strong>`);
+    let curriculumHtml = "";
+    if (bolded.length === 0) curriculumHtml = "";
+    else if (bolded.length === 1) curriculumHtml = bolded[0];
+    else if (bolded.length === 2) curriculumHtml = `${bolded[0]} and ${bolded[1]}`;
+    else curriculumHtml = `${bolded.slice(0, -1).join(", ")}, and ${bolded[bolded.length - 1]}`;
+    tokens.set("curriculum", curriculumHtml);
     tokens.set("day_of_week", program.day_of_week || "");
     tokens.set("first_session_date", program.first_session_date ? formatHumanDate(program.first_session_date) : "");
     tokens.set("session_count", program.session_count != null ? String(program.session_count) : "");
@@ -846,7 +860,19 @@ function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: 
       return "";
     }
     const value = tokens.get(key) ?? "";
-    if (opts.html && PRE_RENDERED_HTML_TOKENS.has(key)) return value;
+    if (PRE_RENDERED_HTML_TOKENS.has(key)) {
+      // Body context: emit the HTML as-is (token already contains the right tags).
+      // Plaintext context (subject lines): strip tags + decode common entities so
+      // the subject doesn't show literal <strong>...</strong>.
+      if (opts.html) return value;
+      return value
+        .replace(/<[^>]+>/g, "")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#039;/g, "'");
+    }
     return opts.html ? escapeHtml(value) : value;
   });
 }
