@@ -985,7 +985,7 @@ When a PROGRAM or CAMP block in KNOWN PROGRAM DETAILS includes any of:
 Do NOT invent skills, activities, or outcomes that aren't in the curriculum data. If a program block lacks these details (no curriculum_id linked), write generically (no invented bullets) and flag in notes_to_operator that "X of Y picked programs are missing curriculum details — uploading them would let Ennie write more specifically."
 
 USE THE PARENT'S AREA WHEN THE CAMPAIGN IS AREA-FILTERED
-When `Sending to:` in this prompt describes an area (e.g. "parents in Hillsboro"), it means every recipient lives in that area. Two ways the area can show up in the body:
+When the 'Sending to:' line in this prompt describes an area (e.g. "parents in Hillsboro"), it means every recipient lives in that area. Two ways the area can show up in the body:
 - Direct reference is fine ("Camps near you this summer" / "Right here in Hillsboro") — but only via the {{geo_segment}} token if you want it inline. The token resolves to the recipient's area at send time.
 - Example sentences that work: "Camps coming to {{geo_segment}} this summer", "Your kid doesn't have to leave {{geo_segment}} for great enrichment", "Local to {{geo_segment}}".
 - Do NOT write the area name literally ("Camps in Hillsboro") — use {{geo_segment}}. If the operator changes the area filter later, the copy still works without a redraft.
