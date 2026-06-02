@@ -39,6 +39,18 @@ const DELIVERED_STATUSES = ["sent", "delivered", "opened", "clicked"];
 // Soft defense against test-send abuse — caps test sends per minute per user.
 const TEST_SEND_THROTTLE_PER_MINUTE = 30;
 
+// PostgREST puts .in(...) values in the URL query string. At ~37 chars per
+// UUID + delimiter, ~500 UUIDs is a safe URL-length ceiling across providers.
+// Above that the query silently returns empty or 414. Chunk every IN-query
+// over recipient_ids through chunkedIn() before relying on its result.
+const IN_QUERY_CHUNK = 500;
+
+// Number of recipients to send to in parallel within a single function
+// invocation. Resend rate-limits at ~10 req/sec on Pro tier; 25-parallel
+// keeps wall-clock fast (≈1s per batch including network) without
+// triggering 429s. Tune down if Resend complains.
+const SEND_PARALLEL_BATCH = 25;
+
 // Tokens Ennie's draft pass approved. Anything outside this set in the touchpoint
 // body is a bug from earlier in the pipeline; we replace with empty string but log.
 const APPROVED_TOKENS = new Set([
@@ -221,12 +233,19 @@ serve(async (req: Request) => {
     // Verify all recipient_ids belong to the campaign's org. Critical
     // multi-tenant defense — without this a compromised admin could pass
     // recipient_ids from another tenant and blast their parents.
-    const { data: verify } = await supabase
-      .from("marketing_recipients")
-      .select("id")
-      .eq("organization_id", campaign.organization_id)
-      .in("id", body.recipient_ids!);
-    const validIds = new Set((verify ?? []).map((r) => r.id));
+    // Chunked through IN_QUERY_CHUNK because at scale (1000+ recipients)
+    // PostgREST's URL-bound IN(...) clause silently fails.
+    const validIds = new Set<string>();
+    for (let i = 0; i < body.recipient_ids!.length; i += IN_QUERY_CHUNK) {
+      const slice = body.recipient_ids!.slice(i, i + IN_QUERY_CHUNK);
+      const { data: verify, error: vErr } = await supabase
+        .from("marketing_recipients")
+        .select("id")
+        .eq("organization_id", campaign.organization_id)
+        .in("id", slice);
+      if (vErr) return json({ error: `recipient verify query failed: ${vErr.message}` }, 500);
+      for (const r of verify ?? []) validIds.add(r.id);
+    }
     const invalid = body.recipient_ids!.filter((id) => !validIds.has(id));
     if (invalid.length > 0) {
       return json({ error: "some recipient_ids do not belong to this campaign's org", invalid_count: invalid.length }, 400);
@@ -235,13 +254,19 @@ serve(async (req: Request) => {
   }
 
   // ---- Load recipients ----
-  const { data: recipients, error: rErr } = await supabase
-    .from("marketing_recipients")
-    .select("id, email, parent_name, child_first_name, child_last_name, school_name, city, zip, geo_segment, segments")
-    .eq("organization_id", campaign.organization_id)
-    .in("id", recipientIds);
-  if (rErr) return json({ error: `recipients query failed: ${rErr.message}` }, 500);
-  const recipientRows = (recipients ?? []) as Recipient[];
+  // Chunked: 700+ UUIDs in a single .in() blows the PostgREST URL limit and
+  // returns empty silently.
+  const recipientRows: Recipient[] = [];
+  for (let i = 0; i < recipientIds.length; i += IN_QUERY_CHUNK) {
+    const slice = recipientIds.slice(i, i + IN_QUERY_CHUNK);
+    const { data: recipients, error: rErr } = await supabase
+      .from("marketing_recipients")
+      .select("id, email, parent_name, child_first_name, child_last_name, school_name, city, zip, geo_segment, segments")
+      .eq("organization_id", campaign.organization_id)
+      .in("id", slice);
+    if (rErr) return json({ error: `recipients query failed: ${rErr.message}` }, 500);
+    for (const r of (recipients ?? []) as Recipient[]) recipientRows.push(r);
+  }
 
   // ---- Load programs the campaign picked (for per-program tokens) ----
   const draftInputs = (campaign.draft_inputs ?? {}) as Record<string, unknown>;
@@ -284,14 +309,20 @@ serve(async (req: Request) => {
   // same campaign don't collide with each other; each fires exactly once per
   // recipient. Legacy J2S FA26-launch sends have touchpoint_id NULL so they
   // don't false-positive against the new touchpoint sends.
-  const { data: prior } = await supabase
-    .from("marketing_sends")
-    .select("recipient_id, status")
-    .eq("campaign_id", campaign.id)
-    .eq("touchpoint_id", touchpoint.id)
-    .in("recipient_id", recipientIds)
-    .in("status", DELIVERED_STATUSES);
-  const alreadyDelivered = new Set(((prior ?? []) as Array<{ recipient_id: string }>).map((r) => r.recipient_id));
+  // Chunked through IN_QUERY_CHUNK for the same URL-length reason as above.
+  const alreadyDelivered = new Set<string>();
+  for (let i = 0; i < recipientIds.length; i += IN_QUERY_CHUNK) {
+    const slice = recipientIds.slice(i, i + IN_QUERY_CHUNK);
+    const { data: prior, error: pErr } = await supabase
+      .from("marketing_sends")
+      .select("recipient_id, status")
+      .eq("campaign_id", campaign.id)
+      .eq("touchpoint_id", touchpoint.id)
+      .in("recipient_id", slice)
+      .in("status", DELIVERED_STATUSES);
+    if (pErr) return json({ error: `dedup query failed: ${pErr.message}` }, 500);
+    for (const r of (prior ?? []) as Array<{ recipient_id: string }>) alreadyDelivered.add(r.recipient_id);
+  }
 
   // ---- Optional per-campaign overrides from draft_inputs ----
   const registrationUrlOverride = typeof draftInputs.registration_url_override === "string"
@@ -314,6 +345,11 @@ serve(async (req: Request) => {
     errors: [] as string[],
   };
 
+  // First pass: filter the recipients we'll actually send to (cheap, in-memory)
+  // so the parallel send loop only sees deliverable recipients. Skip counters
+  // are tallied here.
+  type ReadyRecipient = { r: Recipient; program: ProgramRow | undefined };
+  const ready: ReadyRecipient[] = [];
   for (const r of recipientRows) {
     results.attempted++;
     if (!r.email) { results.skipped_no_email++; continue; }
@@ -336,47 +372,62 @@ serve(async (req: Request) => {
         continue;
       }
     }
+    ready.push({ r, program });
+  }
 
-    const tokens = await buildTokensForRecipient({
-      recipient: r,
-      org,
-      program,
-      pickedPrograms,
-      draftInputs,
-      safeRegistrationUrl,
-      campaignTopics: extractTopics(what),
-      locationNameMap,
-    });
+  // Second pass: send in parallel batches of SEND_PARALLEL_BATCH. Each batch
+  // races SEND_PARALLEL_BATCH Resend requests + token resolution, then bulk
+  // inserts the marketing_sends rows for that batch in one call.
+  //
+  // Why this matters: the previous sequential loop took ~350ms/recipient.
+  // At 771 recipients that's 270s — over the 150s edge-function hard timeout.
+  // With 25-parallel batches the wall-clock for 771 is ~30s, well inside
+  // budget. The marketing_sends bulk insert removes ~800 round-trips at scale.
+  for (let i = 0; i < ready.length; i += SEND_PARALLEL_BATCH) {
+    const batch = ready.slice(i, i + SEND_PARALLEL_BATCH);
 
-    const subject = postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }));
-    // Wrap Ennie's body in a minimal HTML shell: doctype, basic styling,
-    // unsubscribe footer. Ennie writes the CONTENT; the shell guarantees:
-    // - Consistent rendering across Outlook / Gmail / Apple Mail
-    // - Mobile-friendly viewport meta
-    // - CAN-SPAM unsubscribe link in every send (her draft may or may not
-    //   include {{unsubscribe_url}}; the shell adds it unconditionally)
-    const innerHtml = postCleanCopy(replaceTokens(touchpoint.payload!.body_html!, tokens, { html: true }));
-    const bodyHtml = wrapInEmailShell(innerHtml, tokens);
-    const bodyText = touchpoint.payload!.body_text
-      ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
-      : stripHtmlToText(innerHtml);
+    const batchResults = await Promise.all(batch.map(async ({ r, program }) => {
+      const tokens = await buildTokensForRecipient({
+        recipient: r,
+        org,
+        program,
+        pickedPrograms,
+        draftInputs,
+        safeRegistrationUrl,
+        campaignTopics: extractTopics(what),
+        locationNameMap,
+      });
 
-    // ---- Send via Resend ----
-    const sendResult = await sendViaResend({
-      fromName: org.default_sender_name!,
-      fromEmail: org.default_sender_email!,
-      toEmail: r.email,
-      subject,
-      html: bodyHtml,
-      text: bodyText,
-    });
+      const subject = postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }));
+      // Wrap Ennie's body in a minimal HTML shell: doctype, basic styling,
+      // unsubscribe footer. Ennie writes the CONTENT; the shell guarantees:
+      // - Consistent rendering across Outlook / Gmail / Apple Mail
+      // - Mobile-friendly viewport meta
+      // - CAN-SPAM unsubscribe link in every send (her draft may or may not
+      //   include {{unsubscribe_url}}; the shell adds it unconditionally)
+      const innerHtml = postCleanCopy(replaceTokens(touchpoint.payload!.body_html!, tokens, { html: true }));
+      const bodyHtml = wrapInEmailShell(innerHtml, tokens);
+      const bodyText = touchpoint.payload!.body_text
+        ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
+        : stripHtmlToText(innerHtml);
 
-    // ---- Log to marketing_sends ----
-    // Column names verified against information_schema:
-    //   resend_message_id (NOT resend_id), rendered_subject, sent_at, etc.
-    //   suppressed_by_throttle is NOT NULL — explicitly set false.
-    // touchpoint_id added by migration 20260603 so dedup is per-touchpoint.
-    await supabase.from("marketing_sends").insert({
+      const sendResult = await sendViaResend({
+        fromName: org.default_sender_name!,
+        fromEmail: org.default_sender_email!,
+        toEmail: r.email,
+        subject,
+        html: bodyHtml,
+        text: bodyText,
+      });
+
+      return { r, subject, sendResult };
+    }));
+
+    // Bulk insert marketing_sends for the whole batch — one round-trip per batch
+    // instead of one per recipient. Column names verified against
+    // information_schema: resend_message_id (NOT resend_id), rendered_subject,
+    // sent_at, etc. suppressed_by_throttle is NOT NULL — explicitly set false.
+    const inserts = batchResults.map(({ r, subject, sendResult }) => ({
       organization_id: campaign.organization_id,
       campaign_id: campaign.id,
       touchpoint_id: touchpoint.id,
@@ -389,12 +440,20 @@ serve(async (req: Request) => {
       school_name: r.school_name ?? null,
       error_message: sendResult.ok ? null : sendResult.error,
       suppressed_by_throttle: false,
-    });
+    }));
+    const { error: insertErr } = await supabase.from("marketing_sends").insert(inserts);
+    if (insertErr) {
+      // The emails already shipped — we just failed to log them. Surface in
+      // response so the cron can flag the touchpoint, but don't double-send.
+      results.errors.push(`marketing_sends bulk insert failed mid-batch (emails sent, logging lost): ${insertErr.message}`);
+    }
 
-    if (sendResult.ok) results.sent++;
-    else {
-      results.failed++;
-      results.errors.push(`${r.email}: ${sendResult.error}`);
+    for (const { r, sendResult } of batchResults) {
+      if (sendResult.ok) results.sent++;
+      else {
+        results.failed++;
+        results.errors.push(`${r.email}: ${sendResult.error}`);
+      }
     }
   }
 
