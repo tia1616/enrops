@@ -40,7 +40,12 @@ export default function DraftingScreen() {
         Ennie's drafting your campaign…
       </h1>
       <p style={{ margin: "10px 0 0", fontSize: 14, color: MUTED, lineHeight: 1.5 }}>
-        This usually takes 30–60 seconds. You can stay here or come back later — we'll keep going either way.
+        This usually takes 30–60 seconds. Keep this tab open — closing it cancels the draft.
+        {/* Was "You can stay here or come back later — we'll keep going either way."
+            That was aspirational copy — the edge function call is in-memory React
+            state; navigating away cancels it. Backlog: persist drafting state to
+            the campaign row so a navigate-away can return and find the result.
+            For now: tell the operator the truth. */}
       </p>
 
       <ul style={{

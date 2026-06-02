@@ -731,10 +731,12 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
 }
 
 // Renders the VIP block for one recipient. Returns "" for the three suppression
-// cases above. Output is a single <p>...</p> ready for direct insertion into
-// the email body — already HTML-escaped where it matters (label/description
-// pass through escapeHtml). The trailing whitespace/newline is intentional so
-// the surrounding paragraph doesn't crowd it visually.
+// cases above. Output is INLINE content (no outer <p>) — Ennie typically wraps
+// the {{vip_block}} token in a <p>...</p> in the body, so emitting our own <p>
+// here would produce nested <p><p>...</p></p> (invalid HTML; Outlook in
+// particular adds awkward spacing). The caller's <p> wraps our inline content
+// cleanly. When the block resolves to empty string (suppressed schools),
+// postCleanCopy collapses the resulting empty <p></p>.
 function buildVipBlock(
   offering: VipOffering | null,
   recipientLocationId: string | null,
@@ -752,7 +754,7 @@ function buildVipBlock(
   // The phrasing keeps the operator's `description` verbatim (their voice) and
   // wraps it in a checkout-CTA frame. Matches the PURCHASABLE-ADD-ONS rule —
   // it's selectable at registration, not a sales call.
-  return `<p>🔑 <strong>Want the full year?</strong> Look for the ${label} option at checkout${priceStr}. ${desc}</p>`;
+  return `🔑 <strong>Want the full year?</strong> Look for the ${label} option at checkout${priceStr}. ${desc}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -781,6 +783,11 @@ function postCleanCopy(text: string): string {
     .replace(/save\s+off/gi, "save off")
     // Empty "Starts:" / "Sessions:" / similar bullets — strip the line
     .replace(/^(.*?:\s*$)\n/gm, "")
+    // Empty <p></p> left behind when a token (e.g. {{vip_block}}) resolves to
+    // empty string for an excluded school. Without this cleanup, the operator
+    // would see a blank vertical gap where the suppressed block used to live.
+    // Tolerates whitespace + optional <br> inside the empty paragraph.
+    .replace(/<p>\s*(?:<br\s*\/?>)?\s*<\/p>/gi, "")
     // Collapse 2+ spaces to 1 (keeps line breaks)
     .replace(/[ \t]{2,}/g, " ")
     // Trim trailing whitespace on each line
