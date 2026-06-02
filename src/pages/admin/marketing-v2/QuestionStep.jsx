@@ -18,6 +18,24 @@ export default function QuestionStep({
 }) {
   return (
     <div>
+      {/* Top-of-step back link — visible without scrolling. Sticky bottom bar
+          also has a Back button; this top one mirrors it so the operator
+          doesn't have to find the floating one. */}
+      {onBack && (
+        <button
+          type="button"
+          onClick={onBack}
+          disabled={loading}
+          style={{
+            background: "transparent", border: "none", color: MUTED,
+            cursor: loading ? "not-allowed" : "pointer",
+            fontSize: 13, fontFamily: "inherit",
+            padding: "0 0 12px", display: "inline-flex", alignItems: "center", gap: 4,
+          }}
+        >
+          ← Back
+        </button>
+      )}
       <h2 style={{ margin: "0 0 6px", fontSize: 24, color: INK, fontWeight: 700, letterSpacing: -0.2 }}>
         {title}
       </h2>
