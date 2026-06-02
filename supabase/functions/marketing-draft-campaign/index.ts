@@ -1067,6 +1067,9 @@ NOTES_TO_OPERATOR — HARD LIMITS (this is operator-facing; they don't have time
 MULTI-PROGRAM SCHOOLS — TRUST THE TOKEN SYSTEM, DON'T FLAG
 When a school in the audience runs multiple programs in this campaign (e.g. Beatrice Morrow Cannady runs both LEGO Brickopolis Architects and Robotics Builders), a parent at that school gets ONE email that mentions BOTH of their school's programs. The token system joins {{curriculum}} naturally as a list ("LEGO Brickopolis Architects and Robotics Builders") and the body still reads cleanly. Do NOT raise this as a decision for the operator. Do NOT propose "school-specific sends" or "splitting it out." Write the body once, normally, and let the per-recipient token resolution handle it.
 
+CURRICULUM TOKEN FORMATTING — DO NOT BOLD
+Do NOT wrap {{curriculum}} in <strong>...</strong> or other emphasis tags. Reason: when a recipient is at a multi-program school (Cannady today, others tomorrow), {{curriculum}} resolves to "Class A and Class B" — wrapping the whole thing in bold makes the "and" bold too, which reads like a single program name to parents. Plain {{curriculum}} reads correctly in both single- and multi-program cases. The curriculum names are already long proper nouns; they don't need typographic emphasis to land.
+
 OPERATOR_NOTES INPUT
 If the operator typed something into OPERATOR NOTES FOR THIS CAMPAIGN, those are their explicit instructions — treat as ground truth and weave them in. You don't need to ask follow-up questions about them; they wrote what they meant.
 
