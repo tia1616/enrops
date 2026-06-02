@@ -48,8 +48,20 @@ export default function TouchpointCard({
   onRegenerate,
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // Local pending state for the per-card Send-test button so the operator
+  // gets immediate visual feedback (grayed bg + "Sending test…" label) the
+  // moment they click — instead of waiting ~2s for the browser alert to pop.
+  // Awaits the parent's async handler so the spinner clears on real completion.
+  const [sendingTest, setSendingTest] = useState(false);
   const tp = touchpoint;
   const labelColor = LABEL_COLORS[tp.label] ?? MUTED;
+
+  const handleSendTest = async () => {
+    if (sendingTest) return;
+    setSendingTest(true);
+    try { await onSendTest?.(tp.id); }
+    finally { setSendingTest(false); }
+  };
 
   return (
     <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, marginBottom: 10, background: "#fff", overflow: "hidden" }}>
@@ -126,14 +138,19 @@ export default function TouchpointCard({
                 in marketing-draft-campaign. Currently fires a dev stub alert
                 that we don't want operators to see. */}
             <button
-              onClick={() => onSendTest?.(tp.id)}
+              onClick={handleSendTest}
+              disabled={sendingTest}
               style={{
-                background: "#fff", border: `1px solid ${RULE}`, color: INK,
-                padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                background: sendingTest ? "#efeae0" : "#fff",
+                border: `1px solid ${RULE}`,
+                color: sendingTest ? MUTED : INK,
+                padding: "6px 12px", borderRadius: 999,
+                cursor: sendingTest ? "wait" : "pointer",
                 fontSize: 12, fontFamily: "inherit",
+                transition: "background 0.15s ease, color 0.15s ease",
               }}
             >
-              Send test to me
+              {sendingTest ? "Sending test…" : "Send test to me"}
             </button>
             {/* "Also lands in the parent portal feed" was sitting next to
                 Send-test and read as if the test sent to parents too.

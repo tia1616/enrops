@@ -219,7 +219,10 @@ export default function AICampaignBuilder() {
   const { org, user } = useOutletContext() ?? {};
   const navigate = useNavigate();
   const [state, dispatch] = useReducer(reducer, INITIAL);
-  const [actionBusy, setActionBusy] = useState(false);
+  // Tracks which long-running button is currently in flight so each button can
+  // show its OWN spinner copy ("Saving…" / "Sending test…" / "Approving…")
+  // instead of every button reflecting whichever one was clicked. null = idle.
+  const [busyAction, setBusyAction] = useState(null); // null | 'save' | 'test' | 'approve'
 
   const setField = (field, value) => dispatch({ type: "SET_FIELD", field, value });
   const next = () => dispatch({ type: "NEXT" });
@@ -250,7 +253,7 @@ export default function AICampaignBuilder() {
       alert("No touchpoints to save.");
       return;
     }
-    setActionBusy(true);
+    setBusyAction("save");
     try {
       // PATCH each touchpoint with current local state. Campaigns table
       // itself doesn't need updating — campaign is already in 'draft' with
@@ -278,7 +281,7 @@ export default function AICampaignBuilder() {
       // the latest persisted version (no surprise overwrites).
       alert(`Saved — your edits are persisted. Campaign stays in DRAFT status until you click Approve. Reach the draft again from the campaign list (coming soon) or by re-walking Q1–Q4 with the same picks.`);
     } finally {
-      setActionBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -295,7 +298,7 @@ export default function AICampaignBuilder() {
       alert("No touchpoint selected. Click the touchpoint card first, then send test.");
       return;
     }
-    setActionBusy(true);
+    setBusyAction("test");
     try {
       const { data, error } = await supabase.functions.invoke("marketing-touchpoint-send", {
         body: {
@@ -344,7 +347,7 @@ export default function AICampaignBuilder() {
         alert(`Test attempted but nothing landed. Response: ${JSON.stringify(data)}`);
       }
     } finally {
-      setActionBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -362,7 +365,7 @@ export default function AICampaignBuilder() {
     const tpCount = state.draft?.schedule?.touchpoints?.length ?? 0;
     const recipientCount = state.draft?.recipients?.count ?? 0;
     if (!confirm(`Approve ${tpCount} touchpoint${tpCount === 1 ? "" : "s"} and schedule to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}? Once approved, Ennie sends each touchpoint at its scheduled time. You can't edit after this.`)) return;
-    setActionBusy(true);
+    setBusyAction("approve");
     try {
       // Captures audience at approve time. If parents subscribe/unsubscribe
       // between draft and send, the approved campaign sends to the
@@ -402,7 +405,7 @@ export default function AICampaignBuilder() {
       }
       dispatch({ type: "APPROVE_SCHEDULED" });
     } finally {
-      setActionBusy(false);
+      setBusyAction(null);
     }
   };
   const onRegenerate = (touchpointId) => {
@@ -485,7 +488,8 @@ export default function AICampaignBuilder() {
         onSendTest={onSendTest}
         onApprove={onApprove}
         onRegenerate={onRegenerate}
-        busy={actionBusy}
+        busy={busyAction !== null}
+        busyAction={busyAction}
       />
     );
   }

@@ -38,6 +38,11 @@ export default function ScheduleReview({
   onApprove,
   onRegenerate,
   busy,
+  // Which long-running button is in flight, if any. Lets each button show its
+  // OWN spinner text ("Saving…" / "Sending test…" / "Approving…") instead of
+  // every button echoing whichever one the operator clicked.
+  // Values: null | 'save' | 'test' | 'approve'
+  busyAction,
 }) {
   const [recipientsOpen, setRecipientsOpen] = useState(false);
   const touchpoints = draft?.schedule?.touchpoints ?? [];
@@ -192,12 +197,17 @@ export default function ScheduleReview({
             onClick={onSaveDraft}
             disabled={busy}
             style={{
-              background: "#fff", border: `1px solid ${RULE}`, color: INK,
-              padding: "8px 14px", borderRadius: 6, cursor: busy ? "not-allowed" : "pointer",
+              background: busyAction === "save" ? "#efeae0" : "#fff",
+              border: `1px solid ${RULE}`,
+              color: busyAction === "save" ? MUTED : INK,
+              padding: "8px 14px", borderRadius: 6,
+              cursor: busy ? "wait" : "pointer",
               fontSize: 13, fontFamily: "inherit",
+              transition: "background 0.15s ease, color 0.15s ease",
+              opacity: busy && busyAction !== "save" ? 0.5 : 1,
             }}
           >
-            Save as draft
+            {busyAction === "save" ? "Saving…" : "Save as draft"}
           </button>
           <button
             onClick={() => {
@@ -214,25 +224,34 @@ export default function ScheduleReview({
             }}
             disabled={busy || touchpoints.length === 0}
             style={{
-              background: "#fff", border: `1px solid ${INFO}`, color: INFO,
-              padding: "8px 14px", borderRadius: 6, cursor: busy ? "not-allowed" : "pointer",
+              background: busyAction === "test" ? "#efeae0" : "#fff",
+              border: `1px solid ${INFO}`,
+              color: busyAction === "test" ? MUTED : INFO,
+              padding: "8px 14px", borderRadius: 6,
+              cursor: busy ? "wait" : "pointer",
               fontSize: 13, fontFamily: "inherit",
+              transition: "background 0.15s ease, color 0.15s ease",
+              opacity: busy && busyAction !== "test" ? 0.5 : 1,
             }}
           >
-            Send test to me
+            {busyAction === "test" ? "Sending test…" : "Send test to me"}
           </button>
           <button
             onClick={onApprove}
             disabled={busy || touchpoints.length === 0}
             style={{
-              background: busy || touchpoints.length === 0 ? "#cfcfcf" : PURPLE,
+              background: busyAction === "approve"
+                ? "#9b87b9"  // softened purple while the approve write is in-flight
+                : (busy || touchpoints.length === 0 ? "#cfcfcf" : PURPLE),
               color: "#fff", border: "none",
               padding: "10px 16px", borderRadius: 6,
-              cursor: busy || touchpoints.length === 0 ? "not-allowed" : "pointer",
+              cursor: busy || touchpoints.length === 0 ? "wait" : "pointer",
               fontSize: 14, fontWeight: 600, fontFamily: "inherit",
+              transition: "background 0.15s ease",
+              opacity: busy && busyAction !== "approve" ? 0.5 : 1,
             }}
           >
-            Approve &amp; schedule ✨
+            {busyAction === "approve" ? "Approving…" : "Approve & schedule ✨"}
           </button>
         </div>
       </div>
