@@ -15,6 +15,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../../lib/supabase.js";
 import QuestionStep from "../QuestionStep.jsx";
+import PeriodCards from "../PeriodCards.jsx";
+import { isLowEnrollment as sharedIsLowEnrollment, usePeriodCards } from "../lib/periodDetection.js";
 import { PURPLE, RULE, INK, MUTED, OK, INFO, WARN } from "../../marketing/tokens.jsx";
 
 const TABS = [
@@ -23,35 +25,117 @@ const TABS = [
   { mode: "other", label: "Something else" },
 ];
 
-export default function Q1_What({ inputs, setField, onNext, onBack, canNext }) {
+// sessionStorage key for the "Pick programs manually" collapsible state. Per-
+// session memory matches the spec — toggle survives Q1→Q2→Q1 navigations but
+// resets cleanly across browser sessions.
+const PICKER_STATE_KEY = "familyComms.pickerExpanded";
+
+export default function Q1_What({ inputs, setField, onNext, onBack, canNext, onApplyPreselect }) {
   const { org } = useOutletContext() ?? {};
+  const periodsState = usePeriodCards(org?.id);
   const w = inputs.what;
   const mode = w?.mode ?? "programs";
+
+  // Picker default-expanded when there are no period cards to pick from
+  // (per spec: zero-card state shows picker by default). Operator's manual
+  // toggle (sessionStorage) wins once they touch it.
+  const [pickerExpanded, setPickerExpanded] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const stored = sessionStorage.getItem(PICKER_STATE_KEY);
+    if (stored === "1") return true;
+    if (stored === "0") return false;
+    return false; // default; the effect below opens it when periods land empty
+  });
+  // Auto-expand on first detection that periods are empty AND operator hasn't
+  // touched the toggle yet (no sessionStorage entry).
+  useEffect(() => {
+    if (periodsState.status !== "ready") return;
+    if (periodsState.periods.length > 0) return;
+    if (typeof window === "undefined") return;
+    if (sessionStorage.getItem(PICKER_STATE_KEY) !== null) return; // operator already chose
+    setPickerExpanded(true);
+  }, [periodsState.status, periodsState.periods.length]);
+
+  const togglePicker = () => {
+    setPickerExpanded((v) => {
+      const next = !v;
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(PICKER_STATE_KEY, next ? "1" : "0");
+      }
+      return next;
+    });
+  };
 
   const setMode = (nextMode) => setField("what", { ...w, mode: nextMode });
   const setProgramIds = (program_ids) => setField("what", { ...w, program_ids });
   const setCampIds = (camp_session_ids) => setField("what", { ...w, camp_session_ids });
   const setTopics = (topics) => setField("what", { ...w, topics });
 
+  // Intent click → apply preselect + advance to Q2 atomically.
+  // Pure function — the intent's `preselects` payload already shaped by
+  // lib/intents.js. AICampaignBuilder dispatches APPLY_PRESELECT + NEXT.
+  //
+  // Free-form sub-intent (intent.expandsPickerOnly=true) is special: opens
+  // the picker on the 'other' tab and stays on Q1 so the operator can type
+  // their topic before advancing.
+  const handlePickIntent = (_period, intent) => {
+    if (intent.expandsPickerOnly) {
+      // Set mode='other' so the picker lands on the right tab + remember in
+      // session storage. Don't advance — operator types topic, clicks Next.
+      setField("what", { ...w, ...(intent.preselects?.what ?? {}) });
+      if (!pickerExpanded) {
+        if (typeof window !== "undefined") sessionStorage.setItem(PICKER_STATE_KEY, "1");
+        setPickerExpanded(true);
+      }
+      return;
+    }
+    if (!onApplyPreselect) return;
+    onApplyPreselect(intent.preselects);
+  };
+
   return (
     <QuestionStep
       title="What are you marketing?"
-      helper="Pick from your catalog — Ennie will use these to plan your campaign."
+      helper="Pick an intent below — Ennie pre-fills the rest. Or open the picker to choose programs manually."
       onNext={onNext}
       onBack={onBack}
       canNext={canNext}
     >
-      <TabBar mode={mode} onChange={setMode} />
+      <PeriodCards orgId={org?.id} periodsState={periodsState} onPickIntent={handlePickIntent} />
 
-      <div style={{ marginTop: 14 }}>
-        {mode === "programs" && (
-          <ProgramsPicker orgId={org?.id} selected={w.program_ids ?? []} onChange={setProgramIds} />
-        )}
-        {mode === "camps" && (
-          <CampsPicker orgId={org?.id} selected={w.camp_session_ids ?? []} onChange={setCampIds} />
-        )}
-        {mode === "other" && (
-          <TopicChips topics={w.topics ?? []} onChange={setTopics} />
+      {/* Collapsible catalog picker — the escape hatch. Default collapsed
+          because operators typically pick an intent above; opens with a
+          chevron toggle and remembers state per session. */}
+      <div style={{ marginTop: 6 }}>
+        <button
+          type="button"
+          onClick={togglePicker}
+          style={{
+            display: "flex", alignItems: "center", gap: 6,
+            background: "transparent", border: "none", padding: "8px 0",
+            color: PURPLE, fontWeight: 600, fontSize: 13,
+            cursor: "pointer", fontFamily: "inherit",
+          }}
+        >
+          <span style={{ display: "inline-block", transform: pickerExpanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▶</span>
+          {pickerExpanded ? "Hide picker" : "Pick programs manually"}
+        </button>
+
+        {pickerExpanded && (
+          <div style={{ marginTop: 6 }}>
+            <TabBar mode={mode} onChange={setMode} />
+            <div style={{ marginTop: 14 }}>
+              {mode === "programs" && (
+                <ProgramsPicker orgId={org?.id} selected={w.program_ids ?? []} onChange={setProgramIds} />
+              )}
+              {mode === "camps" && (
+                <CampsPicker orgId={org?.id} selected={w.camp_session_ids ?? []} onChange={setCampIds} />
+              )}
+              {mode === "other" && (
+                <TopicChips topics={w.topics ?? []} onChange={setTopics} />
+              )}
+            </div>
+          </div>
         )}
       </div>
     </QuestionStep>
@@ -107,9 +191,12 @@ function ProgramsPicker({ orgId, selected, onChange }) {
     // parallel, then merge client-side. status='open' hides drafts;
     // first_session_date filter hides past programs.
     Promise.all([
+      // curricula join provides class_size_min/max so the low-enrollment chip
+      // uses the operator's real threshold (not a heuristic). Same shape as
+      // periodDetection.js so the picker and intent cards agree.
       supabase
         .from("programs")
-        .select("id, term, curriculum, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, max_capacity, status, program_location_id, program_locations(name)")
+        .select("id, term, curriculum, curriculum_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, max_capacity, status, program_location_id, program_locations(name), curricula(class_size_min, class_size_max)")
         .eq("organization_id", orgId)
         .eq("status", "open")
         .gte("first_session_date", todayIso())
@@ -138,6 +225,8 @@ function ProgramsPicker({ orgId, selected, onChange }) {
       const merged = (progRes.data ?? []).map((p) => ({
         ...p,
         enrolled: countByProgram.get(p.id) ?? 0,
+        class_size_min: p.curricula?.class_size_min ?? null,
+        class_size_max: p.max_capacity ?? p.curricula?.class_size_max ?? null,
       }));
       setRows(merged);
       setDraftCount(draftRes.count ?? 0);
@@ -387,22 +476,10 @@ function summarizeTerms(rows) {
     }));
 }
 
-// "Low enrollment" = under half of capacity AND first_session_date within 6 weeks.
-// The proximity gate matters: when registration just opened (3+ months out),
-// EVERY program has near-zero enrollment — flagging them all as "low" is noise.
-// "Low" is only meaningful close to start when an empty roster is a real
-// problem the operator should address with a push campaign.
-function isLowEnrollment(row) {
-  if (!row.first_session_date) return false;
-  const daysUntilStart = Math.ceil(
-    (new Date(row.first_session_date + "T00:00:00").getTime() - new Date().setHours(0, 0, 0, 0)) / 86400000,
-  );
-  if (daysUntilStart > 42) return false; // 6 weeks out — too early to judge
-  const enrolled = row.enrolled ?? 0;
-  const cap = row.max_capacity;
-  if (cap && cap > 0) return enrolled < cap * 0.5;
-  return enrolled < 6;
-}
+// Low-enrollment for the picker uses the shared rule directly — proximity
+// gate, class_size_min comparison, honest-default-on-unknown are all baked
+// into [[feedback-build-right-first-time]]'s sharedIsLowEnrollment.
+const isLowEnrollment = sharedIsLowEnrollment;
 
 function FilterChip({ active, onClick, label, disabled }) {
   return (
@@ -436,7 +513,7 @@ function CampsPicker({ orgId, selected, onChange }) {
     setErr(null);
     supabase
       .from("camp_sessions")
-      .select("id, week_num, session_type, location_name, curriculum_name, starts_on, ends_on, current_enrollment, status")
+      .select("id, week_num, session_type, location_name, curriculum_name, curriculum_id, starts_on, ends_on, current_enrollment, status, curricula(class_size_min, class_size_max)")
       .eq("organization_id", orgId)
       .gte("starts_on", todayIso())
       .order("starts_on")
@@ -444,7 +521,12 @@ function CampsPicker({ orgId, selected, onChange }) {
       .then(({ data, error }) => {
         if (!alive) return;
         if (error) { setErr(error); return; }
-        setRows(data ?? []);
+        const merged = (data ?? []).map((c) => ({
+          ...c,
+          class_size_min: c.curricula?.class_size_min ?? null,
+          class_size_max: c.curricula?.class_size_max ?? null,
+        }));
+        setRows(merged);
       });
     return () => { alive = false; };
   }, [orgId]);
@@ -558,7 +640,10 @@ function CampsPicker({ orgId, selected, onChange }) {
 
 function CampRow({ row, checked, onToggle }) {
   const enrollment = row.current_enrollment ?? 0;
-  const lowEnrollment = enrollment > 0 && enrollment < 6;
+  // Low when below the curriculum's minimum class size. Picker doesn't apply
+  // the proximity gate that programs use — camps are typically close enough
+  // to start that the flag is always meaningful.
+  const lowEnrollment = enrollment > 0 && sharedIsLowEnrollment(row);
   return (
     <label style={{
       display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px",

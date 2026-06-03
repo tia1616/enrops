@@ -43,6 +43,13 @@ const INITIAL = {
       program_ids: [],
       camp_session_ids: [],
       topics: [],
+      // Identifier of the Q1 intent the operator picked (e.g. 'last_call',
+      // 'registration_opened', 'fill_remaining_seats', 'low_enrollment_push',
+      // 'other_schedule_change'). Drives tone/cadence in the edge function
+      // prompt's INTENT-DRIVEN rule. null = operator used the manual catalog
+      // picker, in which case the edge function falls back to the duration-
+      // and-deadline cadence heuristics.
+      intent_key: null,
     },
     who: { audience: "parents", filter: { type: "auto" }, exclude_already_registered: false },
     promo: {
@@ -120,6 +127,27 @@ function reducer(state, action) {
       return { ...state, step: prevStep(state.step) };
     case "SET_FIELD":
       return { ...state, inputs: { ...state.inputs, [action.field]: action.value } };
+    case "APPLY_PRESELECT": {
+      // Applies an intent's preselect (from lib/intents.js) atomically. Each
+      // intent click is a fresh campaign start, so `who` is replaced wholesale
+      // (intent owns the audience scope). `promo` is merged over defaults
+      // when the intent specified one, otherwise defaults stand. `what` is
+      // merged so the operator's pre-existing topics/notes aren't dropped if
+      // they happen to be set — though for Q1 cards they'll typically be empty.
+      const p = action.preselect ?? {};
+      return {
+        ...state,
+        inputs: {
+          ...state.inputs,
+          what: { ...state.inputs.what, ...(p.what ?? {}) },
+          who: p.who ?? state.inputs.who,
+          duration: p.duration ?? state.inputs.duration,
+          promo: p.promo
+            ? { ...state.inputs.promo, ...p.promo }
+            : state.inputs.promo,
+        },
+      };
+    }
     case "START_DRAFTING":
       return { ...state, loading: true, error: null };
     case "DRAFT_RECEIVED":
@@ -192,7 +220,12 @@ function isStepValid(step, inputs) {
     if (f.type === "auto") return true; // derived from what.mode/picks
     if (f.type === "master_list") return true;
     if (f.type === "school") return Array.isArray(f.school_ids) && f.school_ids.length > 0;
-    if (f.type === "area") return typeof f.area === "string" && f.area.length > 0;
+    if (f.type === "area") {
+      // Multi-select 2026-06-02. Tolerate legacy single-area drafts so back-
+      // navigation from a previously-loaded draft still validates.
+      if (Array.isArray(f.areas)) return f.areas.length > 0;
+      return typeof f.area === "string" && f.area.length > 0;
+    }
     if (f.type === "segment") return Array.isArray(f.segments) && f.segments.length > 0;
     if (f.type === "person") return !!f.recipient_id;
     return false;
@@ -225,6 +258,12 @@ export default function AICampaignBuilder() {
   const [busyAction, setBusyAction] = useState(null); // null | 'save' | 'test' | 'approve'
 
   const setField = (field, value) => dispatch({ type: "SET_FIELD", field, value });
+  // Apply an intent preselect AND advance to Q2 in one dispatch — the
+  // operator's intent click is "I pick this, take me to review."
+  const applyPreselectAndAdvance = (preselect) => {
+    dispatch({ type: "APPLY_PRESELECT", preselect });
+    dispatch({ type: "NEXT" });
+  };
   const next = () => dispatch({ type: "NEXT" });
   // On step 1 there's no previous question, so Back exits the builder back
   // to the admin overview instead of being a dead button. Q2/3/4 use the
@@ -234,9 +273,43 @@ export default function AICampaignBuilder() {
     dispatch({ type: "BACK" });
   };
 
-  // Local-only updates for chunk 06. Chunk 07 PATCHes the touchpoint row.
+  // In-memory only — wires keystroke-by-keystroke updates so the UI stays
+  // responsive without firing a DB write per character. The matching
+  // commitTouchpoint below persists at natural save points (textarea Done
+  // editing, EditableField blur, datetime change) so Send test / Approve
+  // / a tab refresh always reflects what the operator sees on screen.
   const updateTouchpoint = (id, patch) => dispatch({ type: "UPDATE_TOUCHPOINT", id, patch });
   const removeRecipient = (id) => dispatch({ type: "REMOVE_RECIPIENT", id });
+
+  // Persist the touchpoint to the DB. Dispatches the in-memory update first
+  // so React state is the latest, then PATCHes the row using the merged
+  // (existing + patch) payload. Skips DB write if no campaign_id yet (the
+  // operator is still building before the first Draft call).
+  const commitTouchpoint = async (id, patch) => {
+    dispatch({ type: "UPDATE_TOUCHPOINT", id, patch });
+    if (!state.draft?.campaign_id) return;
+    const tp = state.draft?.schedule?.touchpoints?.find((t) => t.id === id);
+    if (!tp) return;
+    const merged = { ...tp, ...patch };
+    try {
+      const { error } = await supabase
+        .from("marketing_campaign_touchpoints")
+        .update({
+          scheduled_at: merged.scheduled_at,
+          payload: {
+            label: merged.label,
+            subject: merged.subject ?? null,
+            body_html: merged.body_html ?? null,
+            body_text: merged.body_text ?? null,
+          },
+          topics: merged.topics ?? [],
+        })
+        .eq("id", id);
+      if (error) console.error("[commitTouchpoint] PATCH failed:", error);
+    } catch (e) {
+      console.error("[commitTouchpoint] exception:", e);
+    }
+  };
 
   // Save as draft — persists any inline edits the operator made on
   // ScheduleReview (subject/body/scheduled_at) to the touchpoint rows.
@@ -496,6 +569,7 @@ export default function AICampaignBuilder() {
         onBack={() => dispatch({ type: "BACK" })}
         onReset={() => dispatch({ type: "RESET" })}
         onUpdateTouchpoint={updateTouchpoint}
+        onCommitTouchpoint={commitTouchpoint}
         onRemoveRecipient={removeRecipient}
         onSaveDraft={onSaveDraft}
         onSendTest={onSendTest}
@@ -515,6 +589,7 @@ export default function AICampaignBuilder() {
     canNext: isStepValid(state.step, state.inputs),
     loading: state.loading,
     onStartDrafting: startDrafting,
+    onApplyPreselect: applyPreselectAndAdvance, // Q1 only
   };
 
   return (

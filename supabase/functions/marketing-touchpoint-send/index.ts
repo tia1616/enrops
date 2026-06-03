@@ -67,6 +67,10 @@ const APPROVED_TOKENS = new Set([
   // when the org has no offering enabled). This is the per-school suppression
   // mechanism — same body_html, different rendered output per recipient.
   "vip_block",
+  // Per-area camp list (camps mode): an HTML <ul> with each picked camp's name,
+  // venue, and date range in THIS recipient's area. Empty for afterschool
+  // campaigns. KEEP IN SYNC with marketing-draft-campaign's APPROVED_TOKENS.
+  "camp_details",
 ]);
 
 const corsHeaders = {
@@ -157,6 +161,24 @@ type ProgramRow = {
   early_bird_price_cents: number | null;
   early_bird_deadline: string | null;
   vip_price_cents: number | null;
+};
+
+// Camp row + per-recipient camp resolution added 2026-06-02 so camp
+// campaigns get per-area personalization (Hillsboro parents see Hillsboro
+// camps, etc.). Mirrors the afterschool program flow: pickedCamps is the
+// operator's full set; resolveRecipientCamps narrows to the recipient's
+// area via program_locations.district === marketing_recipients.geo_segment.
+// See [[project-enrops-camps-renderer-gap]] for the architectural backstory.
+type CampRow = {
+  id: string;
+  curriculum_name: string;
+  location_id: string | null;
+  location_name: string;
+  location_district: string | null; // resolved via program_locations join
+  starts_on: string;
+  ends_on: string;
+  start_time: string;
+  end_time: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -320,18 +342,77 @@ serve(async (req: Request) => {
     pickedPrograms = (progs ?? []) as ProgramRow[];
   }
 
+  // ---- Load camps the campaign picked (for per-area camp tokens) ----
+  // Camps token model: each recipient sees the picked camps in THEIR area
+  // (program_locations.district === recipient.geo_segment). Hillsboro parents
+  // see the Hillsboro camps; Beaverton parents see Beaverton camps.
+  // Empty when the campaign isn't a camps campaign.
+  const campIds = Array.isArray(what?.camp_session_ids) ? (what!.camp_session_ids as string[]) : [];
+  let pickedCamps: CampRow[] = [];
+  if (campIds.length > 0) {
+    const { data: camps } = await supabase
+      .from("camp_sessions")
+      .select("id, curriculum_name, location_id, location_name, starts_on, ends_on, start_time, end_time, program_locations(district)")
+      .eq("organization_id", campaign.organization_id)
+      .in("id", campIds);
+    pickedCamps = ((camps ?? []) as Array<Record<string, unknown>>).map((c) => {
+      const pl = c.program_locations as { district?: string } | { district?: string }[] | null;
+      const district = Array.isArray(pl) ? (pl[0]?.district ?? null) : (pl?.district ?? null);
+      return {
+        id: c.id as string,
+        curriculum_name: (c.curriculum_name as string) ?? "",
+        location_id: (c.location_id as string | null) ?? null,
+        location_name: (c.location_name as string) ?? "",
+        location_district: district,
+        starts_on: c.starts_on as string,
+        ends_on: c.ends_on as string,
+        start_time: (c.start_time as string) ?? "",
+        end_time: (c.end_time as string) ?? "",
+      };
+    });
+  }
+
   // For per-recipient program lookup, we need to map recipient.school_name to
   // a program (via program_location). Load the location names + name_aliases
   // so we can match recipients whose school_name uses a short form.
   const locationIds = [...new Set(pickedPrograms.map((p) => p.program_location_id).filter(Boolean))] as string[];
-  const locationNameMap = new Map<string, string[]>(); // location_id -> [canonical, ...aliases]
+  // location_id -> [canonical, ...aliases, ...auto-derived short forms]
+  // Auto-derive matches the resolveParents logic in marketing-draft-campaign:
+  // strips common school suffixes ("Elementary", "Academy", etc.) so a
+  // parent tagged "Alameda" matches a picked "Alameda Elementary" without
+  // requiring the operator to add an explicit alias. Same uniqueness gate
+  // — only add a derived variant if it's unique across the org's picked
+  // locations (collision protection).
+  const locationNameMap = new Map<string, string[]>();
   if (locationIds.length > 0) {
     const { data: locs } = await supabase
       .from("program_locations")
       .select("id, name, name_aliases")
       .in("id", locationIds);
-    for (const l of (locs ?? []) as Array<{ id: string; name: string; name_aliases: string[] | null }>) {
-      locationNameMap.set(l.id, [l.name, ...((l.name_aliases ?? []) as string[])]);
+    const allLocs = (locs ?? []) as Array<{ id: string; name: string; name_aliases: string[] | null }>;
+    // Count how many picked locations each derived variant would map to
+    const variantCount = new Map<string, number>();
+    for (const l of allLocs) {
+      const seen = new Set<string>();
+      for (const n of [l.name, ...(l.name_aliases ?? [])]) {
+        if (!n) continue;
+        for (const v of expandSchoolNameVariants(n)) seen.add(v.toLowerCase());
+      }
+      for (const v of seen) variantCount.set(v, (variantCount.get(v) ?? 0) + 1);
+    }
+    for (const l of allLocs) {
+      const explicit = new Set<string>();
+      if (l.name) explicit.add(l.name);
+      for (const a of l.name_aliases ?? []) explicit.add(a);
+      const final = new Set<string>(explicit);
+      // Only add auto-derived variants that are unique across picked locations
+      for (const e of explicit) {
+        for (const v of expandSchoolNameVariants(e)) {
+          if (explicit.has(v)) continue;
+          if ((variantCount.get(v.toLowerCase()) ?? 0) <= 1) final.add(v);
+        }
+      }
+      locationNameMap.set(l.id, [...final]);
     }
   }
 
@@ -389,7 +470,12 @@ serve(async (req: Request) => {
   // `recipientPrograms` is ALL picked programs at the recipient's school (for
   // multi-program schools, used to join {{curriculum}} as a list). `program`
   // is the first one (used for numeric tokens like price + savings + date).
-  type ReadyRecipient = { r: Recipient; program: ProgramRow | undefined; recipientPrograms: ProgramRow[] };
+  type ReadyRecipient = {
+    r: Recipient;
+    program: ProgramRow | undefined;
+    recipientPrograms: ProgramRow[];
+    recipientCamps: CampRow[]; // empty when not a camps campaign
+  };
   const ready: ReadyRecipient[] = [];
   for (const r of recipientRows) {
     results.attempted++;
@@ -397,37 +483,43 @@ serve(async (req: Request) => {
     if (suppressedEmails.has(r.email.toLowerCase())) { results.skipped_suppressed++; continue; }
     if (alreadyDelivered.has(r.id)) { results.skipped_deduped++; continue; }
 
-    // Resolve the recipient's school's program (per-program tokens). When
-    // the recipient's school has no picked program, skip them — unless this
-    // is an internal admin test recipient (no school by design), in which
-    // case use the FIRST picked program as the example so the test email
-    // shows real-looking content.
+    // Resolve afterschool program(s) for this recipient (per-program tokens).
     let recipientPrograms = resolveRecipientPrograms(r, pickedPrograms, locationNameMap);
     let program: ProgramRow | null = recipientPrograms[0] ?? null;
+    // Resolve camps for this recipient (per-area camp tokens). Filters the
+    // operator's full pickedCamps to those in THIS recipient's district.
+    let recipientCamps = resolveRecipientCamps(r, pickedCamps);
     const isInternalAdmin = (r.segments ?? []).includes("_internal_admin");
+
+    // Two skip cases, mode-aware:
+    // - Programs campaign: no program at recipient's school → skip (no copy
+    //   to send them). Admin-test recipients fall back to the first picked
+    //   program so VIP block etc. renders.
+    // - Camps campaign: no camp in recipient's area → skip (the audience
+    //   filter should have prevented this, but defensively skip vs sending
+    //   "join us on  for "). Admin-test falls back to all picked camps so
+    //   the preview renders meaningfully.
     if (!program && programIds.length > 0) {
       if (isInternalAdmin) {
-        // For test-send to admin: pick a program at a school that's NOT in
-        // org.vip_offering.excluded_location_ids, so the test renders the
-        // {{vip_block}} for the operator to verify. Falls back to the first
-        // picked program if every picked school is excluded.
-        // Was unconditionally pickedPrograms[0], which for J2S happened to
-        // be Cascadia (alphabetically first AND VIP-excluded), so the test
-        // email NEVER showed the VIP block — making it impossible to
-        // visually verify VIP rendering without using the in-app preview
-        // dropdown to pick a different school manually.
         const excluded = new Set<string>(org.vip_offering?.excluded_location_ids ?? []);
         program =
           pickedPrograms.find((p) => p.program_location_id && !excluded.has(p.program_location_id))
           ?? pickedPrograms[0];
         recipientPrograms = program ? [program] : [];
       } else {
-        // Audience-resolution mismatch — log + skip rather than send garbage copy
         results.skipped_no_school_program++;
         continue;
       }
     }
-    ready.push({ r, program, recipientPrograms });
+    if (recipientCamps.length === 0 && pickedCamps.length > 0 && programIds.length === 0) {
+      if (isInternalAdmin) {
+        recipientCamps = pickedCamps;
+      } else {
+        results.skipped_no_school_program++; // reuse the no-match counter
+        continue;
+      }
+    }
+    ready.push({ r, program, recipientPrograms, recipientCamps });
   }
 
   // Second pass: send in parallel batches of SEND_PARALLEL_BATCH. Each batch
@@ -441,13 +533,15 @@ serve(async (req: Request) => {
   for (let i = 0; i < ready.length; i += SEND_PARALLEL_BATCH) {
     const batch = ready.slice(i, i + SEND_PARALLEL_BATCH);
 
-    const batchResults = await Promise.all(batch.map(async ({ r, program, recipientPrograms }) => {
+    const batchResults = await Promise.all(batch.map(async ({ r, program, recipientPrograms, recipientCamps }) => {
       const tokens = await buildTokensForRecipient({
         recipient: r,
         org,
         program,
         recipientPrograms,
         pickedPrograms,
+        recipientCamps,
+        pickedCamps,
         draftInputs,
         safeRegistrationUrl,
         campaignTopics: extractTopics(what),
@@ -677,10 +771,56 @@ function resolveRecipientProgram(
   return all[0] ?? null;
 }
 
+// Shared with marketing-draft-campaign — KEEP IN SYNC. Auto-derives common
+// school-name short forms by stripping " Elementary", " Academy", etc.
+// Used by locationNameMap construction so a recipient tagged with a short
+// form still matches a picked location whose canonical name has the suffix.
+const SCHOOL_SUFFIX_PATTERNS: RegExp[] = [
+  / Elementary School$/i,
+  / Elementary$/i,
+  / Middle School$/i,
+  / Middle$/i,
+  / High School$/i,
+  / Charter School$/i,
+  / Charter$/i,
+  / Magnet School$/i,
+  / Magnet$/i,
+  / Academy$/i,
+  / School$/i,
+];
+function expandSchoolNameVariants(name: string): string[] {
+  const trimmed = name.trim();
+  if (!trimmed) return [];
+  const variants = new Set<string>([trimmed]);
+  for (const re of SCHOOL_SUFFIX_PATTERNS) {
+    const stripped = trimmed.replace(re, "").trim();
+    if (stripped && stripped !== trimmed) variants.add(stripped);
+  }
+  return [...variants];
+}
+
+// Per-area camp resolution. Matches recipient.geo_segment to the camp's
+// location.district. Sort by start date so the earliest camp's date powers
+// {{first_session_date}}. Returns ALL matching camps in the recipient's
+// area — {{curriculum}} will join them as a list, mirroring the multi-
+// program-school pattern for afterschool.
+function resolveRecipientCamps(r: Recipient, picked: CampRow[]): CampRow[] {
+  if (!r.geo_segment || picked.length === 0) return [];
+  const target = r.geo_segment.trim().toLowerCase();
+  const matches = picked.filter((c) => (c.location_district ?? "").trim().toLowerCase() === target);
+  return [...matches].sort((a, b) => (a.starts_on ?? "").localeCompare(b.starts_on ?? ""));
+}
+
 // ---------------------------------------------------------------------------
 // Token resolution
 // ---------------------------------------------------------------------------
 
+// TokensInput shape — camps fields added 2026-06-02.
+// When recipientCamps is non-empty AND program is null, buildTokensForRecipient
+// resolves per-program tokens ({{curriculum}}, {{first_session_date}}) from
+// the camps instead of an afterschool program. Both can be present in mixed
+// campaigns (operator picked programs + camps via the manual picker) — the
+// afterschool path takes precedence when present.
 type TokensInput = {
   recipient: Recipient;
   org: Org;
@@ -691,13 +831,18 @@ type TokensInput = {
   // the single `program` directly instead).
   recipientPrograms?: ProgramRow[];
   pickedPrograms: ProgramRow[];
+  // Camps in THIS recipient's area (matched by program_locations.district
+  // === marketing_recipients.geo_segment). When set + program is null,
+  // {{curriculum}} and {{first_session_date}} resolve from the camps.
+  recipientCamps?: CampRow[];
+  pickedCamps?: CampRow[];
   draftInputs: Record<string, unknown>;
   safeRegistrationUrl: string | null;
   campaignTopics: string[];
 };
 
 async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: Map<string, string[]> }): Promise<Map<string, string>> {
-  const { recipient: r, org, program, recipientPrograms, draftInputs, safeRegistrationUrl, campaignTopics, locationNameMap } = input;
+  const { recipient: r, org, program, recipientPrograms, recipientCamps, draftInputs, safeRegistrationUrl, campaignTopics, locationNameMap } = input;
   const tokens = new Map<string, string>();
   const isInternalAdmin = (r.segments ?? []).includes("_internal_admin");
 
@@ -777,12 +922,57 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
         ? `$${((program.price_cents - program.early_bird_price_cents) / 100).toFixed(0)}`
         : "");
     tokens.set("vip_price", program.vip_price_cents ? `$${(program.vip_price_cents / 100).toFixed(0)}` : "");
+  } else if ((recipientCamps?.length ?? 0) > 0) {
+    // Camps mode — per-area camp tokens.
+    // {{curriculum}}    = bolded list of camp names in THIS recipient's area
+    // {{first_session_date}} = earliest start date among those camps
+    // {{camp_details}}  = an HTML <ul> with each camp's name + venue + date
+    //                     range, scoped to this recipient's area. Use this
+    //                     instead of {{curriculum}} when the operator wants
+    //                     parents to see specific dates + venues per camp
+    //                     (almost always — that's what helps parents register).
+    // Camps don't have per-program early_bird / session_count / day_of_week
+    // (multi-day, multi-week) — leave those tokens empty so Ennie's body
+    // (per the CAMPS MODE prompt rule) doesn't emit them.
+    const camps = recipientCamps!;
+    const names = camps.map((c) => c.curriculum_name).filter((s) => typeof s === "string" && s.trim().length > 0);
+    const bolded = names.map((n) => `<strong>${escapeHtml(n)}</strong>`);
+    let curriculumHtml = "";
+    if (bolded.length === 0) curriculumHtml = "";
+    else if (bolded.length === 1) curriculumHtml = bolded[0];
+    else if (bolded.length === 2) curriculumHtml = `${bolded[0]} and ${bolded[1]}`;
+    else curriculumHtml = `${bolded.slice(0, -1).join(", ")}, and ${bolded[bolded.length - 1]}`;
+    tokens.set("curriculum", curriculumHtml);
+    tokens.set("first_session_date", camps[0]?.starts_on ? formatHumanDate(camps[0].starts_on) : "");
+
+    // {{camp_details}} — per-area camp list with venue + dates. Inline so
+    // operator can wrap in <p> or nothing. Sorted by start date.
+    const sortedForDetails = [...camps].sort((a, b) => (a.starts_on ?? "").localeCompare(b.starts_on ?? ""));
+    const detailItems = sortedForDetails.map((c) => {
+      const name = escapeHtml(c.curriculum_name ?? "");
+      const venue = escapeHtml(c.location_name ?? "");
+      const start = c.starts_on ? formatHumanDate(c.starts_on) : "";
+      const end = c.ends_on ? formatHumanDate(c.ends_on) : "";
+      const dateRange = start && end && start !== end ? `${start}–${end}` : (start || end || "");
+      const parts = [`<strong>${name}</strong>`];
+      if (venue) parts.push(`at ${venue}`);
+      if (dateRange) parts.push(`(${dateRange})`);
+      return `<li>${parts.join(" ")}</li>`;
+    });
+    tokens.set("camp_details", detailItems.length > 0 ? `<ul>${detailItems.join("")}</ul>` : "");
+
+    for (const k of ["day_of_week", "session_count", "regular_price", "early_bird_price", "early_bird_deadline", "savings", "vip_price"]) {
+      tokens.set(k, "");
+    }
   } else {
-    // No matching program — leave per-program tokens empty
-    for (const k of ["curriculum", "day_of_week", "first_session_date", "session_count", "regular_price", "early_bird_price", "early_bird_deadline", "savings", "vip_price"]) {
+    // No matching program AND no matching camps — leave per-program tokens empty
+    for (const k of ["curriculum", "day_of_week", "first_session_date", "session_count", "regular_price", "early_bird_price", "early_bird_deadline", "savings", "vip_price", "camp_details"]) {
       tokens.set(k, "");
     }
   }
+  // For the afterschool path, camp_details doesn't apply — set empty so the
+  // token still resolves (empty replacement) if Ennie ever emits it.
+  if (program && !tokens.has("camp_details")) tokens.set("camp_details", "");
 
   // Per-campaign
   tokens.set("topic", campaignTopics[0] || "");
@@ -847,7 +1037,7 @@ function buildVipBlock(
 // 2026-06-02 when Cascadia-excluded vs Cascadia-included previews showed
 // raw HTML tags. All OTHER tokens still get escaped: they come from
 // recipient data (parent_name, school) which could contain <script> etc.
-const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block", "curriculum"]);
+const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block", "curriculum", "camp_details"]);
 
 function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: boolean }): string {
   return text.replace(/\{\{(\w+)\}\}/g, (full, key) => {
@@ -1131,15 +1321,45 @@ async function renderPreview(
     pickedPrograms = (progs ?? []) as ProgramRow[];
   }
 
+  // Load picked camps too — for camps campaigns, per-recipient resolution
+  // filters by the recipient's geo_segment / district.
+  const campIds = Array.isArray(what?.camp_session_ids) ? (what!.camp_session_ids as string[]) : [];
+  let pickedCamps: CampRow[] = [];
+  if (campIds.length > 0) {
+    const { data: camps } = await supabase
+      .from("camp_sessions")
+      .select("id, curriculum_name, location_id, location_name, starts_on, ends_on, start_time, end_time, program_locations(district)")
+      .eq("organization_id", campaign.organization_id)
+      .in("id", campIds);
+    pickedCamps = ((camps ?? []) as Array<Record<string, unknown>>).map((c) => {
+      const pl = c.program_locations as { district?: string } | { district?: string }[] | null;
+      const district = Array.isArray(pl) ? (pl[0]?.district ?? null) : (pl?.district ?? null);
+      return {
+        id: c.id as string,
+        curriculum_name: (c.curriculum_name as string) ?? "",
+        location_id: (c.location_id as string | null) ?? null,
+        location_name: (c.location_name as string) ?? "",
+        location_district: district,
+        starts_on: c.starts_on as string,
+        ends_on: c.ends_on as string,
+        start_time: (c.start_time as string) ?? "",
+        end_time: (c.end_time as string) ?? "",
+      };
+    });
+  }
+
   // Find the program at the requested location, plus the location name.
   // ALL picked programs at the preview location — used to join {{curriculum}}
   // as a list for multi-program schools. Mirrors the real-send behavior so
   // preview shows what parents at this school will actually see.
   const programsAtLocation = pickedPrograms.filter((p) => p.program_location_id === locationId);
   const programAtLocation = programsAtLocation[0];
+  // Also load district (added 2026-06-02) so camps preview synthesizes a
+  // parent in this location's area and {{curriculum}} resolves to the camps
+  // in that district.
   const { data: loc } = await supabase
     .from("program_locations")
-    .select("id, name, name_aliases")
+    .select("id, name, name_aliases, district")
     .eq("id", locationId)
     .eq("organization_id", campaign.organization_id)
     .single();
@@ -1152,9 +1372,12 @@ async function renderPreview(
   const locationNameMap = new Map<string, string[]>();
   locationNameMap.set(loc.id, [loc.name, ...((loc.name_aliases ?? []) as string[])]);
 
-  // Synthetic recipient at this school. Realistic enough that the operator
-  // sees how the email reads. {{first_name}} and {{parent_name}} render as
-  // placeholders so the operator can tell they'll vary per parent.
+  // Synthetic recipient at this school + in this district. Realistic enough
+  // that the operator sees how the email reads. {{first_name}} and
+  // {{parent_name}} render as placeholders so the operator can tell they'll
+  // vary per parent. geo_segment = location's district so camps resolution
+  // pulls the camps in this area for camps campaigns. school_name = the
+  // location name so afterschool resolution works as before.
   const syntheticRecipient: Recipient = {
     id: "preview",
     email: "preview@example.com",
@@ -1164,9 +1387,12 @@ async function renderPreview(
     school_name: loc.name,
     city: null,
     zip: null,
-    geo_segment: null,
+    geo_segment: (loc as { district?: string | null }).district ?? null,
     segments: null, // not an internal admin — VIP suppression behaves real
   };
+  // Resolve camps in this preview area (mirrors per-recipient resolution).
+  // Empty for afterschool-only campaigns or for areas with no picked camps.
+  const previewRecipientCamps = resolveRecipientCamps(syntheticRecipient, pickedCamps);
 
   const registrationUrlOverride = typeof draftInputs.registration_url_override === "string"
     ? draftInputs.registration_url_override
@@ -1181,6 +1407,8 @@ async function renderPreview(
     program: programAtLocation ?? null,
     recipientPrograms: programsAtLocation,
     pickedPrograms,
+    recipientCamps: previewRecipientCamps,
+    pickedCamps,
     draftInputs,
     safeRegistrationUrl,
     campaignTopics: extractTopics(what),
@@ -1195,8 +1423,17 @@ async function renderPreview(
     : stripHtmlToText(innerHtml);
 
   // Tell the operator whether the VIP block fired for this school so the
-  // dropdown UI can show a chip ("VIP shown" / "VIP suppressed for this school").
-  const vipBlockShown = (tokens.get("vip_block") ?? "").length > 0;
+  // dropdown UI can show a chip. Three states:
+  //   true  — VIP block rendered (chip: "VIP block shown")
+  //   false — VIP block suppressed for this school (chip: "VIP block suppressed here")
+  //   null  — VIP doesn't apply to this campaign at all (no chip)
+  // null fires when: org has no vip_offering enabled OR this campaign isn't
+  // afterschool (camps + one-offs don't use VIP). Without the null state the
+  // suppression chip incorrectly fires on every camps preview.
+  const vipApplicable = !!org.vip_offering?.enabled && pickedPrograms.length > 0;
+  const vipBlockShown = vipApplicable
+    ? (tokens.get("vip_block") ?? "").length > 0
+    : null;
 
   // Inject <base target="_blank"> into the preview-only HTML so any link the
   // operator clicks inside the iframe opens in a new tab instead of trying
@@ -1219,6 +1456,6 @@ async function renderPreview(
     body_html: previewHtml,
     body_text: bodyText,
     vip_block_shown: vipBlockShown,
-    program_matched: !!programAtLocation,
+    program_matched: !!programAtLocation || previewRecipientCamps.length > 0,
   });
 }

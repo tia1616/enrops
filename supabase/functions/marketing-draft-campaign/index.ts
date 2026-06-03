@@ -71,7 +71,10 @@ const corsHeaders = {
 type ParentsFilter =
   | { type: "master_list" }
   | { type: "school"; school_ids: string[] }
-  | { type: "area"; area: string }
+  // Area filter went multi-select 2026-06-02. `area: string` is still accepted
+  // for backward-compat with in-flight drafts; resolveParents normalizes it
+  // into `areas: string[]`.
+  | { type: "area"; areas?: string[]; area?: string }
   | { type: "segment"; segments: string[] }
   | { type: "natural"; text: string };
 
@@ -91,6 +94,12 @@ type StructuredWhat = {
   program_ids?: string[];
   camp_session_ids?: string[];
   topics?: string[];
+  // Q1 intent identifier when the operator clicked an intent card (Family
+  // Comms intent-first redesign 2026-06-02). Drives the INTENT-DRIVEN
+  // TONE/CADENCE block in buildSystemPrompt. null/undefined when the
+  // operator used the manual catalog picker — prompt falls back to the
+  // duration-based cadence heuristics.
+  intent_key?: string | null;
 };
 
 type PromoSettings = {
@@ -270,24 +279,35 @@ function parseRequest(body: unknown):
     if (mode !== "programs" && mode !== "camps" && mode !== "other") {
       return { ok: false, error: "inputs.what.mode must be programs | camps | other", status: 400 };
     }
+    // intent_key is optional — present when the operator clicked a Q1 intent
+    // card. Validated here so the prompt can trust it; unknown keys are
+    // dropped silently (forward-compat: future intents added in the registry
+    // won't 400 older edge function versions).
+    const KNOWN_INTENTS = new Set([
+      "registration_opened", "last_call", "fill_remaining_seats", "low_enrollment_push",
+      "other_schedule_change", "other_photo_gallery", "other_partner_event", "other_free_form",
+    ]);
+    const intentKeyRaw = typeof w.intent_key === "string" ? w.intent_key.trim() : null;
+    const intent_key = intentKeyRaw && KNOWN_INTENTS.has(intentKeyRaw) ? intentKeyRaw : null;
+
     if (mode === "programs") {
       const ids = Array.isArray(w.program_ids) ? (w.program_ids as unknown[]).filter((x) => typeof x === "string") as string[] : [];
       if (ids.length === 0) {
         return { ok: false, error: "inputs.what.program_ids must contain at least one id", status: 400 };
       }
-      structuredWhat = { mode: "programs", program_ids: ids };
+      structuredWhat = { mode: "programs", program_ids: ids, intent_key };
     } else if (mode === "camps") {
       const ids = Array.isArray(w.camp_session_ids) ? (w.camp_session_ids as unknown[]).filter((x) => typeof x === "string") as string[] : [];
       if (ids.length === 0) {
         return { ok: false, error: "inputs.what.camp_session_ids must contain at least one id", status: 400 };
       }
-      structuredWhat = { mode: "camps", camp_session_ids: ids };
+      structuredWhat = { mode: "camps", camp_session_ids: ids, intent_key };
     } else {
       const ts = Array.isArray(w.topics) ? (w.topics as unknown[]).filter((x) => typeof x === "string" && (x as string).trim()).map((x) => (x as string).trim()) : [];
       if (ts.length === 0) {
         return { ok: false, error: "inputs.what.topics must contain at least one topic", status: 400 };
       }
-      structuredWhat = { mode: "other", topics: ts };
+      structuredWhat = { mode: "other", topics: ts, intent_key };
     }
     // Topics get filled in by loadGroundedFacts for programs/camps modes;
     // for 'other' we already have them. Placeholder for prompt-builder until
@@ -397,6 +417,45 @@ function parseRequest(body: unknown):
 // Recipient resolution (parents audience)
 // ---------------------------------------------------------------------------
 
+// Expands a canonical school name to common short-form variants. Drives the
+// auto-derive logic in resolveParents' school case so parents tagged
+// "Johnson" in marketing_recipients still match a picked "Johnson Elementary"
+// program_location.
+//
+// Pattern: strip common school-type suffixes. Operator-provided aliases ALWAYS
+// take precedence; this is purely additive. Variants are only USED when they
+// are unique org-wide (collision check in the caller) so two schools sharing
+// a short form don't both claim a parent.
+//
+// Added 2026-06-02 after the FA26 send missed 147 parents at "Alameda" /
+// "Cannady" because their marketing_recipients.school_name didn't exactly
+// match program_locations.name ("Alameda Elementary", "Beatrice Morrow
+// Cannady"). Generic across tenants — Johnson Elementary, Lincoln Middle
+// School, etc. all derive the right short forms.
+const SCHOOL_SUFFIX_PATTERNS: RegExp[] = [
+  / Elementary School$/i,
+  / Elementary$/i,
+  / Middle School$/i,
+  / Middle$/i,
+  / High School$/i,
+  / Charter School$/i,
+  / Charter$/i,
+  / Magnet School$/i,
+  / Magnet$/i,
+  / Academy$/i,
+  / School$/i,
+];
+function expandSchoolNameVariants(name: string): string[] {
+  const trimmed = name.trim();
+  if (!trimmed) return [];
+  const variants = new Set<string>([trimmed]);
+  for (const re of SCHOOL_SUFFIX_PATTERNS) {
+    const stripped = trimmed.replace(re, "").trim();
+    if (stripped && stripped !== trimmed) variants.add(stripped);
+  }
+  return [...variants];
+}
+
 async function resolveParents(
   supabase: SupabaseClient,
   orgId: string,
@@ -428,10 +487,41 @@ async function resolveParents(
       if (!locs || locs.length === 0) {
         return { ok: false, error: "no matching program_locations for this org", status: 404 };
       }
+      // Build the org-wide variant count so we only auto-derive short forms
+      // that are UNIQUE org-wide. Without this guard, "Johnson Elementary"
+      // and "Johnson Academy" would both auto-derive "Johnson" and a parent
+      // tagged "Johnson" would be wrongly attributed to both schools.
+      const { data: allLocs } = await supabase
+        .from("program_locations")
+        .select("name, name_aliases")
+        .eq("organization_id", orgId);
+      const orgWideVariantCount = new Map<string, number>();
+      for (const l of (allLocs ?? []) as { name: string; name_aliases: string[] | null }[]) {
+        const seenInThisLoc = new Set<string>();
+        for (const n of [l.name, ...(l.name_aliases ?? [])]) {
+          if (!n) continue;
+          for (const v of expandSchoolNameVariants(n)) seenInThisLoc.add(v.toLowerCase());
+        }
+        for (const v of seenInThisLoc) orgWideVariantCount.set(v, (orgWideVariantCount.get(v) ?? 0) + 1);
+      }
+      // Build the picked-side variant set. Always include the operator's
+      // explicit canonical + alias strings (those are the operator's intent
+      // — never gate them). Additionally include any AUTO-derived variant
+      // that is UNIQUE org-wide.
       const recipientNames = new Set<string>();
       for (const loc of locs as { name: string; name_aliases: string[] | null }[]) {
-        if (loc.name) recipientNames.add(loc.name);
-        for (const alias of loc.name_aliases ?? []) recipientNames.add(alias);
+        const explicit = new Set<string>();
+        if (loc.name) explicit.add(loc.name);
+        for (const alias of loc.name_aliases ?? []) explicit.add(alias);
+        for (const e of explicit) recipientNames.add(e);
+        // Now auto-derive — only add variants unique org-wide.
+        for (const e of explicit) {
+          for (const v of expandSchoolNameVariants(e)) {
+            if (explicit.has(v)) continue; // already added
+            const count = orgWideVariantCount.get(v.toLowerCase()) ?? 0;
+            if (count <= 1) recipientNames.add(v);
+          }
+        }
       }
       query = query.in("school_name", [...recipientNames]);
       const displayNames = (locs as { name: string }[]).map((l) => l.name).filter(Boolean);
@@ -439,11 +529,19 @@ async function resolveParents(
       break;
     }
     case "area": {
-      if (typeof filter.area !== "string" || !filter.area.trim()) {
-        return { ok: false, error: "filter.area required for type=area", status: 400 };
+      // Multi-select 2026-06-02. Accept `areas: string[]` (new) OR `area: string`
+      // (legacy single-area drafts).
+      const areasRaw = Array.isArray(filter.areas)
+        ? filter.areas.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
+        : (typeof filter.area === "string" && filter.area.trim() ? [filter.area.trim()] : []);
+      const areas = [...new Set(areasRaw.map((a) => a.trim()))];
+      if (areas.length === 0) {
+        return { ok: false, error: "filter.areas required for type=area", status: 400 };
       }
-      query = query.eq("geo_segment", filter.area);
-      segmentSummary = `parents in the ${filter.area} area`;
+      query = query.in("geo_segment", areas);
+      segmentSummary = areas.length === 1
+        ? `parents in the ${areas[0]} area`
+        : `parents across ${areas.length} areas (${joinWithAnd(areas)})`;
       break;
     }
     case "segment": {
@@ -931,6 +1029,10 @@ const APPROVED_TOKENS = new Set([
   // per-program (computed from this recipient's school's programs)
   "savings", "early_bird_price", "regular_price", "early_bird_deadline",
   "first_session_date", "session_count", "day_of_week", "curriculum", "vip_price",
+  // per-area camps (resolves to an HTML <ul> with each camp's name, venue, dates
+  // in THIS recipient's area). The camps-mode equivalent of the per-school
+  // program tokens for afterschool. Empty for afterschool campaigns.
+  "camp_details",
   // per-campaign
   "topic", "topics_list", "promo_code", "promo_amount",
   // VIP/annual-pass block — resolves per recipient at send time. Empty when
@@ -939,6 +1041,77 @@ const APPROVED_TOKENS = new Set([
   // built from the org's label/price_cents/description.
   "vip_block",
 ]);
+
+// Extracts inputs.what.intent_key (set by the Q1 intent-first cards as of
+// 2026-06-02). Returns null when the operator used the legacy/manual path —
+// the INTENT-DRIVEN block emits a fall-back stanza in that case so Ennie
+// still knows to defer to the duration-based cadence below.
+function readIntentKey(inputs: DraftInputs): string | null {
+  const w = inputs.what;
+  if (!w || typeof w !== "object" || Array.isArray(w)) return null;
+  const k = (w as StructuredWhat).intent_key;
+  return typeof k === "string" && k.length > 0 ? k : null;
+}
+
+// INTENT-DRIVEN TONE/CADENCE — added 2026-06-02 with the Family Comms Q1
+// intent-first redesign. The operator's intent click maps to a specific
+// tone register + cadence shape. These rules OVERRIDE the duration-based
+// cadence heuristics below when in conflict.
+//
+// Keys must stay in sync with src/pages/admin/marketing-v2/lib/intents.js
+// AND the KNOWN_INTENTS set in parseRequest above.
+function buildIntentBlock(inputs: DraftInputs): string {
+  const key = readIntentKey(inputs);
+
+  const header = `INTENT-DRIVEN TONE/CADENCE
+The operator picked one of these intents from the Q1 intent-first surface (or used the manual catalog picker, intent_key=null). Apply the matching tone + cadence below.
+
+THESE RULES OVERRIDE THE SCHEDULE-PLANNING BLOCK BELOW — including:
+- the duration-based cadence heuristics
+- the DEADLINE PROXIMITY rule (the one that collapses to "2 emails total" when a deadline falls in the first 7 days of the window)
+- the "CAMPAIGN ENDS AT THE DEADLINE" rule
+
+The operator picked the intent on purpose. If they wanted a deadline push, they would have clicked "last_call". When fill_remaining_seats or registration_opened is the intent and an early-bird deadline happens to be in the window, you DO NOT collapse the schedule around the deadline. You space the emails across the FULL chosen duration (see each intent's CADENCE rule). Mention the deadline naturally in one or two of the emails if it's real, but never let it hijack the cadence the operator chose.
+
+Current intent: ${key ?? "(none — operator used manual picker; defer to duration heuristics below)"}`;
+
+  // Per-intent guidance. Always include all of them so Ennie has the full
+  // reference, but mark the active one explicitly so attention lands there.
+  const sections: Record<string, string> = {
+    registration_opened: `intent_key="registration_opened"  (fall registration just opened, term starts 4-13 weeks out)
+  TONE: warm announcement, building anticipation. "Here's what your kid will be up to this year" energy. Sketch what they'll do; let parents imagine the year. Lead with possibility, not urgency. Subject line names the program / season — NOT the deadline.
+  CADENCE: 3 emails across the FULL chosen duration. Space them roughly evenly (e.g. 1-month duration → emails at week 1, week 2-3, week 4). Email 1 (kickoff): announce, paint the picture. Email 2 (mid): highlight skills/showcase using curriculum_detail. Email 3 (close): soft register-now reminder. If promo.early_bird is true, mention {{early_bird_deadline}} naturally in 1-2 emails, but DO NOT collapse the schedule around the deadline — even if the EB deadline is only days away, hold the 3-email cadence across the full duration. The operator picked this intent (not last_call) — respect the long-view.`,
+    last_call: `intent_key="last_call"  (a deadline is 7-14 days away — this campaign IS the deadline push)
+  TONE: urgent, short, deadline-driven, but still warm. Lead with the deadline ("Last 5 days for early-bird" / "Class starts Tuesday"). Strip the exposition — parents reading this need to act, not learn about the program for the first time. Subject line owns the deadline.
+  CADENCE: 2-3 emails total, clustered against the deadline. Email 1: kickoff that leads with the deadline. Email 2 (if 5+ days): 48h-before reminder. Email 3: 24h-before reminder. NEVER add mid-window topical content — the campaign window IS the deadline push.`,
+    fill_remaining_seats: `intent_key="fill_remaining_seats"  (term starts 21+ days out, programs have room but aren't full)
+  TONE: encouraging, not desperate. Lean on what makes the program worth joining (curriculum showcase, skills, the experience). Do NOT invent scarcity ("only 3 spots!") — only mention real numbers if the operator put them in operator_notes. "Still a few seats" is fine if the catalog facts show partial fill; otherwise just promote the program warmly. Subject line is about the program, NOT the deadline.
+  CADENCE: 2-3 emails spaced ACROSS the operator's chosen duration. Roughly even spacing (e.g. 2-month duration → emails at week 1, week 4-5, week 8). DO NOT cluster against any early-bird deadline that happens to be in the window — the operator chose the long-view "fill seats" intent, not the deadline push (that's last_call). You may mention {{early_bird_deadline}} naturally in ONE email if it's real and well-timed, but the schedule itself is driven by the chosen duration, not the deadline. No 48h/24h deadline reminder emails.`,
+    low_enrollment_push: `intent_key="low_enrollment_push"  (specific programs are below their minimum class size, start within 6 weeks)
+  TONE: warm, intimate-class framing — "smaller group means more attention, more hands-on time per kid." Honest, not desperate. NEVER tell parents "we'll cancel if we don't fill" — that's an internal operator concern; the parent-facing framing is the intimacy of a small class.
+  CADENCE: 2 emails spaced ACROSS the chosen duration. Kickoff with the small-class angle and what makes this program special. Final email near start. If start is within 7 days, just 1 email — and consider a "share with a friend whose kid might love this" closing line. Do NOT cluster against an early-bird deadline even if one is in the window — operator picked the small-class push, not the deadline push.`,
+    other_schedule_change: `intent_key="other_schedule_change"  (one-off note: class moved, time shifted, cancelled session)
+  TONE: factual, clear, calm. Lead with what changed. Tell parents what to do (or what NOT to do). No fluff, no marketing copy. Zero exclamation points unless the change is positive (e.g. "new date works for more families"). Remember the never-cancel rule — phrase as "isn't running this term" or "we've moved that to next week," not "cancelled."
+  CADENCE: Single touchpoint — see ONE-OFF SEND MODE block above.`,
+    other_photo_gallery: `intent_key="other_photo_gallery"  (one-off note: share photos / ad-hoc recap)
+  TONE: celebratory, warm. "Look what your kid did this week." Reference the program by name; DON'T describe specific photos (you can't see them). Direct parents to the gallery via {{register_url}} (which the operator filled in with the gallery URL). One image's worth of words, not a recap essay.
+  CADENCE: Single touchpoint.`,
+    other_partner_event: `intent_key="other_partner_event"  (one-off note: cross-promote a partner's event)
+  TONE: friendly invitation. Brief. Acknowledge it's a partner ("our friends at X are running…"). Don't over-pitch — parents trust your judgment, not a sales pitch. Set expectations honestly: this isn't a {{org_name}} program, it's a heads-up — use the {{org_name}} token, don't write the org name literally.
+  CADENCE: Single touchpoint.`,
+    other_free_form: `intent_key="other_free_form"  (operator typed their own topic in the free-form picker)
+  TONE: take cues from the topic string + operator_notes. Lean warm if intent is unclear. Don't invent specifics that aren't grounded in the topic / notes.
+  CADENCE: Single touchpoint.`,
+  };
+
+  const lines: string[] = [header, ""];
+  for (const [k, body] of Object.entries(sections)) {
+    const marker = k === key ? "▶ ACTIVE INTENT — apply this section's tone + cadence" : "";
+    lines.push(marker ? `${marker}\n${body}` : body);
+    lines.push("");
+  }
+  return lines.join("\n").trim();
+}
 
 function buildSystemPrompt(
   org: OrgConfig,
@@ -977,6 +1150,7 @@ function buildSystemPrompt(
 - Per-recipient: {{first_name}}, {{parent_name}}, {{child_first_name}}, {{child_last_name}}, {{school}}, {{city}}, {{zip}}, {{geo_segment}}, {{unsubscribe_url}}
 - Per-org: {{org_name}}, {{sender_name}}, {{sender_email}}, {{register_url}}, {{reply_to}}, {{logo_url}}, {{closer}}, {{phone}}, {{website}}
 - Per-program (pulled per recipient's school): {{savings}}, {{early_bird_price}}, {{regular_price}}, {{early_bird_deadline}}, {{first_session_date}}, {{session_count}}, {{day_of_week}}, {{curriculum}}, {{vip_price}}
+- Per-area camp list (pulled per recipient's area, camps mode only): {{camp_details}} — an HTML <ul> with each camp's name, venue, and date range in this recipient's area. Use this when the operator wants parents to see specific venues + dates per camp (almost always — it's what helps them pick a camp to register for).
 - VIP / annual-pass block (whole paragraph, per-recipient suppression): {{vip_block}} — see "VIP / ANNUAL-PASS BLOCK" rules below
 - Per-campaign: {{topic}}, {{topics_list}}, {{promo_code}}, {{promo_amount}}
 
@@ -1012,7 +1186,30 @@ You MUST use the approved merge tokens for anything specific. You MUST NOT inven
 
 If you need a specific fact and there's no token, write generically ("our upcoming session", "more details on the registration page"). Generic copy is always better than invented copy.
 
-EACH PARENT SEES THEIR OWN SCHOOL'S PROGRAM — NOT THE FULL LIST
+CAMPS MODE — PER-AREA PERSONALIZATION (HARD RULE when the picks are camps)
+Camps work just like afterschool, but the per-recipient unit is AREA, not school. Each parent sees the camps happening in THEIR area ({{geo_segment}}). The renderer matches the camps' location district to the recipient's geo_segment.
+
+Tokens that work for camps (same names as afterschool, different source):
+- {{camp_details}}  — PREFERRED. An HTML <ul> with each camp's name, venue, and date range in THIS recipient's area. Use this whenever the body needs to show parents what camps are happening + where + when. Example output for a Hillsboro parent: "<ul><li><strong>LEGO Superheroes</strong> at Hillsboro Tyson Rec Center (Jul 6–10)</li><li><strong>Next Level Robotics: Busy Cities</strong> at Hillsboro Tyson Rec Center (Jul 13–17)</li></ul>". Wrap in any context you want — e.g. "Here's what's coming to {{geo_segment}}: {{camp_details}}".
+- {{curriculum}}  — joined list of camp names without venues/dates (use when you want an inline name reference, not a full breakdown).
+- {{first_session_date}}  — earliest start date among the camps in THIS recipient's area.
+- {{geo_segment}}  — the recipient's city/area (e.g. "Hillsboro").
+- Per-recipient names: {{first_name}}, {{parent_name}}, {{child_first_name}}, {{child_last_name}}.
+- Per-org / per-campaign: {{org_name}}, {{sender_name}}, {{register_url}}, {{unsubscribe_url}}, {{vip_block}} (if applicable), {{topic}}, {{topics_list}}.
+
+Tokens that DO NOT work for camps (leave empty — emitting them gives broken copy):
+- {{school}}  — camp parents have kids at many schools; the camp is a destination, not their school. Use {{geo_segment}} ("camps in {{geo_segment}}", "this summer in {{geo_segment}}") instead.
+- {{day_of_week}}, {{session_count}}, {{regular_price}}, {{early_bird_price}}, {{early_bird_deadline}}, {{savings}}, {{vip_price}}  — camps don't share these structurally with the afterschool program model. Write any price/dates inline FROM KNOWN PROGRAM DETAILS if you need them — but most camp copy doesn't.
+
+NEVER say "your school", "their school", or "your kid's school" in camps copy.
+
+GOOD examples for camps:
+- "Here's what's coming up in {{geo_segment}}:\n{{camp_details}}\nPick a week that works on {{register_url}}." (preferred — full details visible)
+- "Summer camps in {{geo_segment}} are here:\n{{camp_details}}"
+- Use {{curriculum}} alone only for an inline name mention: "{{curriculum}} are happening near you this summer — full lineup below.\n{{camp_details}}"
+- Subject lines: "Summer camps in {{geo_segment}} — small groups, big fun" or "{{curriculum}} in {{geo_segment}}" — names + city work here; details belong in body.
+
+EACH PARENT SEES THEIR OWN SCHOOL'S PROGRAM — NOT THE FULL LIST (afterschool mode only)
 When the campaign spans many schools that each run their own program, the BODY of each touchpoint refers to "their program" in the SINGULAR, using {{curriculum}}, {{first_session_date}}, {{day_of_week}}, {{savings}}, {{early_bird_price}}, {{early_bird_deadline}}. The send pipeline fills those tokens with the program running at THIS recipient's school. DO NOT enumerate the full list of curricula in the body. A parent at Stoller should read about Toy Designers at Stoller — not also about Robotics at Bonny Slope and Minecraft at Beverly Cleary. That makes the email feel like a mass blast; we want it to feel like it's about their kid.
 
 USE THE UPLOADED CURRICULUM DATA — DON'T INVENT ACTIVITIES
@@ -1025,11 +1222,12 @@ When a PROGRAM or CAMP block in KNOWN PROGRAM DETAILS includes any of:
 Do NOT invent skills, activities, or outcomes that aren't in the curriculum data. If a program block lacks these details (no curriculum_id linked), write generically (no invented bullets) and flag in notes_to_operator that "X of Y picked programs are missing curriculum details — uploading them would let Ennie write more specifically."
 
 USE THE PARENT'S AREA WHEN THE CAMPAIGN IS AREA-FILTERED
-When the 'Sending to:' line in this prompt describes an area (e.g. "parents in Hillsboro"), it means every recipient lives in that area. Two ways the area can show up in the body:
-- Direct reference is fine ("Camps near you this summer" / "Right here in Hillsboro") — but only via the {{geo_segment}} token if you want it inline. The token resolves to the recipient's area at send time.
-- Example sentences that work: "Camps coming to {{geo_segment}} this summer", "Your kid doesn't have to leave {{geo_segment}} for great enrichment", "Local to {{geo_segment}}".
-- Do NOT write the area name literally ("Camps in Hillsboro") — use {{geo_segment}}. If the operator changes the area filter later, the copy still works without a redraft.
-- Subject lines may use {{geo_segment}} but doesn't have to ("Camps near you" works subject-line-wide).
+When the 'Sending to:' line in this prompt names ANY area(s) (e.g. "parents in Hillsboro" OR "parents across 3 areas (Hillsboro, Beaverton, Cornelius)"), every individual recipient lives in ONE of those areas. The body MUST use {{geo_segment}} to talk about "their area," never enumerate the full area list:
+- Each parent sees ONE area name — their own — via the {{geo_segment}} token. Resolved per-recipient at send time.
+- BAD (multi-area campaigns): "Camps coming to Hillsboro, Beaverton, and Cornelius this summer" — a Hillsboro parent doesn't care about Beaverton, and listing all three makes the email feel like a mass blast.
+- GOOD: "Camps coming to {{geo_segment}} this summer", "Your kid doesn't have to leave {{geo_segment}} for great enrichment", "Local to {{geo_segment}}".
+- Do NOT write any area name literally — always use {{geo_segment}}. If the operator changes the area filter later, the copy still works without a redraft.
+- Subject lines may use {{geo_segment}} but don't have to ("Camps near you" works subject-line-wide).
 
 WHEN CURRICULA SPAN MULTIPLE THEMES — STAY UNIVERSAL (HARD RULE)
 Look at the picked programs in KNOWN PROGRAM DETAILS. If they span multiple themes (e.g. coding, robotics, LEGO, game design, art, science), the BODY must use UNIVERSAL language that fits any of them.
@@ -1084,8 +1282,8 @@ ${org.vip_offering?.enabled
   ? `This provider offers an annual pass labeled "${org.vip_offering.label ?? "VIP"}"${org.vip_offering.price_cents ? ` at $${(org.vip_offering.price_cents / 100).toFixed(0)}/year` : ""}. Description (provider's words): "${org.vip_offering.description ?? ""}".
 - Do NOT inline the VIP description yourself. Place the {{vip_block}} merge token where you want the VIP paragraph to appear. The send-time resolver expands it into the provider's pre-written paragraph for recipients whose school offers it, and renders it EMPTY for recipients at schools where VIP isn't offered (so the same email body works for everyone). Place {{vip_block}} on its own line in the body_html (e.g. <p>{{vip_block}}</p> — but the resolver also handles bare placement gracefully).
 - Only place {{vip_block}} ONCE per touchpoint, not in subject lines. A natural spot is just before the register CTA in the kickoff and the 24h-reminder.
-- Do NOT write your own VIP language ("Want the full year?" / "Lock it in" / "STEAM VIP option" / etc.) anywhere in the body — the resolver handles voice + price + suppression as one block. If you write VIP prose inline, parents at excluded schools will see a CTA they can't act on.`
-  : `This provider has NO active annual-pass / VIP offering. Do NOT invent one. Do NOT use {{vip_block}}. Do NOT mention STEAM VIP, annual pass, year-long bundles, or anything implying multi-term pre-purchase.`
+- Do NOT write your own VIP language ("Want the full year?" / "Lock it in" / "Add the annual pass" / etc.) anywhere in the body — the resolver handles voice + price + suppression as one block. If you write VIP prose inline, parents at excluded schools will see a CTA they can't act on.`
+  : `This provider has NO active annual-pass / VIP offering. Do NOT invent one. Do NOT use {{vip_block}}. Do NOT mention an annual pass, year-long bundle, multi-term pre-purchase, or any equivalent.`
 }
 
 THINGS YOU SHOULD NEVER CLAIM
@@ -1095,7 +1293,7 @@ THINGS YOU SHOULD NEVER CLAIM
 - That this program is better than another provider's.
 - Never use cancellation language with parents. If a program isn't running, say "isn't running this term" or "we've moved that to next session."
 - That kids use "real tools" / "hands-on tools" / specific materials (clay, wood, soldering, etc.) UNLESS the curriculum_detail or short_description for THIS curriculum names them. Many curricula are software-based (Minecraft, Block Coding, etc.) — claiming "real tools" there is wrong.
-- That "every session wraps with a finished project" or "every week they take home something they made". Curricula vary: some are session-wrapped, many are multi-week builds where the deliverable is the FINAL showcase, not per-session. Only claim per-session artifacts when the curriculum_detail explicitly says so. Default safer phrasing: "they'll come home with stories" / "by the end they'll have something to show" / "they'll be able to walk you through what they built".
+- That "every session wraps with a finished project" or "every week they take home something they made" or "every camp wraps with a showcase where your kid gets to walk you through what they made". Curricula vary: some are session-wrapped, many are multi-week builds where the deliverable is the FINAL showcase, not per-session, and SOME HAVE NO SHOWCASE AT ALL. For CAMPS specifically: do NOT generalize "every camp" or "all our camps" — when the campaign spans multiple camps from different curricula (which is the common case for multi-area camp sends), the camps differ in format. Only claim a showcase / final project / demo day when the relevant curriculum_detail explicitly names one, and even then phrase it as "your kid's camp wraps with…" (singular, scoped to their camp). Default safer phrasing: "they'll come home with stories" / "by the end they'll have something to show" / "they'll be able to walk you through what they built".
 - Specifics about pickup/dropoff, snacks, materials brought by kids, holiday closures, instructor names, photos, past success stories — none of these are in the grounded facts unless the operator put them in operator_notes. Don't invent them.
 
 GROUNDED LANGUAGE TEST (apply before writing each sentence)
@@ -1111,10 +1309,12 @@ VOICE DETAILS
 - Preheader (first ~80 chars of body) extends the subject, never repeats it.
 - Match length to purpose: a kickoff can be substantial — paint the picture. A 24-hour reminder is three or four sentences, but still warm, not curt.
 - Leave the parent feeling something positive after reading: curiosity, anticipation, that "this sounds like my kid" hum. Don't just inform — connect.
-- SIGN-OFF: end the body content with a sign-off line using ONLY {{sender_name}} on its own paragraph (e.g. "— {{sender_name}}"). Do NOT append {{org_name}} after the sender — tenants frequently set their sender_name as "First Last @ Org" so the org is already conveyed; appending it again produces redundancy like "Jessica @ Journey to STEAM, Journey to STEAM". Skip the comma + org_name.
+- SIGN-OFF: end the body content with a sign-off line using ONLY {{sender_name}} on its own paragraph (e.g. "— {{sender_name}}"). Do NOT append {{org_name}} after the sender — tenants frequently set their sender_name as "First Last @ Org" so the org is already conveyed; appending it again duplicates the provider name in the closer. Skip the comma + org_name.
 - End every email body with the closer line on its own paragraph AFTER the sign-off: "${v.closer ?? "(no closer set)"}" — only if a closer is set, otherwise omit.
 
 ${tokenList}
+
+${buildIntentBlock(inputs)}
 
 SCHEDULE-PLANNING RULES (you plan a multi-touchpoint sequence, not a single send)
 - DEFAULT SEND TIMES (org timezone ${orgTimezone}): Tuesday/Thursday 10am for regular sends. Deadline-day reminders at 7am. Welcome notes Monday 9am. NEVER Friday afternoons or weekends.

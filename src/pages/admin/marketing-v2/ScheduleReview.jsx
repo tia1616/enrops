@@ -39,6 +39,7 @@ export default function ScheduleReview({
   onBack,
   onReset,
   onUpdateTouchpoint,
+  onCommitTouchpoint,
   onRemoveRecipient,
   onSaveDraft,
   onSendTest,
@@ -57,49 +58,96 @@ export default function ScheduleReview({
   const sender = draft?.sender ?? { name: org?.default_sender_name, email: org?.default_sender_email };
   const timezone = org?.timezone ?? "America/Los_Angeles";
 
-  // Picked schools for the per-school preview dropdown in TouchpointCard.
-  // Loaded from the operator's in-memory `inputs.what.program_ids` — the
-  // same shape they just submitted in Q1. Avoids a redundant DB round-trip
-  // to marketing_campaigns.draft_inputs (which holds the same picks). When
-  // the operator returns to an existing draft from outside this flow (a
-  // future "drafts list" surface), the loader for THAT screen will rehydrate
-  // inputs from the campaign row + pass them in here, same shape.
-  const [pickedLocations, setPickedLocations] = useState([]); // [{id, name}, ...]
-  const programIdsKey = (inputs?.what?.program_ids ?? []).join(",");
+  // Whether the operator picked any curricula in Q1. For schedule-change /
+  // photo-gallery / partner-event / free-form intents there are no picks —
+  // the campaign is school-wide, not about specific programs. The "no
+  // picked content for this audience" badge in the per-school preview is
+  // meaningless in those cases and looks like an error. Pass this down so
+  // TouchpointCard can suppress the badge when no picks were made.
+  const hasContentPicks =
+    (inputs?.what?.program_ids?.length ?? 0) > 0 ||
+    (inputs?.what?.camp_session_ids?.length ?? 0) > 0;
+
+  // Preview entries — the dropdown lets the operator see what a parent in
+  // EACH AUDIENCE SCOPE sees. Source of truth: the Q2 audience filter
+  // (inputs.who.filter), NOT the Q1 catalog picks. The audience is who the
+  // email actually goes to; the preview should mirror that. Unified across
+  // all campaign types (afterschool / camps / one-off).
+  //
+  //   filter.type='school'     → one entry per school in filter.school_ids
+  //   filter.type='area'       → one entry per area in filter.areas (or
+  //                              legacy filter.area)
+  //   filter.type='master_list'→ empty dropdown ("send a test to preview")
+  //   filter.type='person'     → single entry for that recipient
+  //
+  // Each entry: { value, label, kind }
+  //   value: a program_locations.id the renderer uses (for area entries we
+  //          pick ANY location in that area as the representative; the
+  //          synthetic recipient's geo_segment is what drives camp-token
+  //          resolution per area)
+  //   label: what the operator sees ("Hillsboro" or "Alameda Elementary")
+  //   kind:  'school' | 'area' — used for the dropdown placeholder copy
+  const [pickedLocations, setPickedLocations] = useState([]);
+  const filterKey = JSON.stringify(inputs?.who?.filter ?? {});
   useEffect(() => {
-    const programIds = inputs?.what?.program_ids ?? [];
-    if (!Array.isArray(programIds) || programIds.length === 0) {
-      setPickedLocations([]);
-      return;
-    }
+    const filter = inputs?.who?.filter ?? {};
     let alive = true;
     (async () => {
-      const { data: progs, error: pErr } = await supabase
-        .from("programs")
-        .select("program_location_id, program_locations(id, name)")
-        .in("id", programIds);
-      if (pErr) {
-        // eslint-disable-next-line no-console
-        console.error("[ScheduleReview] programs query failed", pErr);
-        return;
-      }
+      const out = [];
       const seen = new Set();
-      const locs = [];
-      for (const p of progs ?? []) {
-        // PostgREST embeds: when the FK column is unique to one parent, the
-        // embed is an OBJECT. When it could be many (no unique constraint),
-        // it's an ARRAY. We handle both shapes defensively.
-        const rawLoc = p.program_locations;
-        const loc = Array.isArray(rawLoc) ? rawLoc[0] : rawLoc;
-        if (!loc?.id || seen.has(loc.id)) continue;
-        seen.add(loc.id);
-        locs.push({ id: loc.id, name: loc.name });
+
+      // Audience-scope school: one entry per school
+      if (filter.type === "school" && Array.isArray(filter.school_ids) && filter.school_ids.length > 0) {
+        const { data: locs, error } = await supabase
+          .from("program_locations")
+          .select("id, name")
+          .eq("organization_id", org?.id)
+          .in("id", filter.school_ids);
+        if (!error) {
+          for (const l of locs ?? []) {
+            if (seen.has(l.id)) continue;
+            seen.add(l.id);
+            out.push({ value: l.id, label: l.name, kind: "school" });
+          }
+        }
       }
-      locs.sort((a, b) => a.name.localeCompare(b.name));
-      if (alive) setPickedLocations(locs);
+
+      // Audience-scope area: one entry per area (representative location for
+      // the renderer to look up the area's recipients + camps).
+      if (filter.type === "area") {
+        const areas = Array.isArray(filter.areas)
+          ? filter.areas
+          : (typeof filter.area === "string" && filter.area ? [filter.area] : []);
+        if (areas.length > 0) {
+          const { data: locs, error } = await supabase
+            .from("program_locations")
+            .select("id, name, district")
+            .eq("organization_id", org?.id)
+            .in("district", areas);
+          if (!error) {
+            const byDistrict = new Map();
+            for (const l of locs ?? []) {
+              if (!l.district || byDistrict.has(l.district)) continue;
+              byDistrict.set(l.district, l.id);
+            }
+            for (const area of areas) {
+              const locId = byDistrict.get(area);
+              if (!locId || seen.has(locId)) continue;
+              seen.add(locId);
+              out.push({ value: locId, label: area, kind: "area" });
+            }
+          }
+        }
+      }
+
+      // master_list / person / auto: dropdown stays empty — operator uses
+      // "send test to yourself" for those preview cases.
+
+      out.sort((a, b) => a.label.localeCompare(b.label));
+      if (alive) setPickedLocations(out);
     })();
     return () => { alive = false; };
-  }, [programIdsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filterKey, org?.id]);
 
   const topicColors = useMemo(() => {
     const topics = new Set();
@@ -227,11 +275,13 @@ export default function ScheduleReview({
           timezone={timezone}
           topicColors={topicColors}
           onUpdate={onUpdateTouchpoint}
+          onCommit={onCommitTouchpoint}
           onSendTest={onSendTest}
           onRegenerate={onRegenerate}
           // Per-school preview: list of {id, name} for the dropdown,
           // and the campaign id so the card can call mode='preview' itself.
           pickedLocations={pickedLocations}
+          hasContentPicks={hasContentPicks}
           campaignId={draft?.campaign_id}
         />
       ))}

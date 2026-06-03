@@ -45,11 +45,18 @@ export default function TouchpointCard({
   timezone,
   topicColors,
   onUpdate,
+  onCommit,
   onSendTest,
   onRegenerate,
   // Picked schools for the per-school preview dropdown. Each {id, name}.
   // Empty array hides the dropdown (camps-only campaigns, one-off mode).
   pickedLocations = [],
+  // True when the operator picked any curricula in Q1. When false (schedule-
+  // change / photo-gallery / partner-event / free-form intents), suppress
+  // the "no picked content for this audience" badge — there's nothing to
+  // pick for those intents, so a red badge looks like an error when nothing
+  // is actually wrong.
+  hasContentPicks = true,
   // Campaign id for the preview API call. Empty disables preview.
   campaignId,
 }) {
@@ -161,7 +168,7 @@ export default function TouchpointCard({
           <EditableField
             label="Subject"
             value={tp.subject}
-            onChange={(v) => onUpdate(tp.id, { subject: v })}
+            onChange={(v) => (onCommit ?? onUpdate)(tp.id, { subject: v })}
             placeholder="Click to write a subject"
           />
 
@@ -174,7 +181,7 @@ export default function TouchpointCard({
               value={fmtDatetimeInput(tp.scheduled_at)}
               onChange={(e) => {
                 const local = new Date(e.target.value);
-                if (!isNaN(local.getTime())) onUpdate(tp.id, { scheduled_at: local.toISOString() });
+                if (!isNaN(local.getTime())) (onCommit ?? onUpdate)(tp.id, { scheduled_at: local.toISOString() });
               }}
               style={{
                 padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6,
@@ -183,18 +190,16 @@ export default function TouchpointCard({
             />
           </div>
 
-          {/* Per-school preview dropdown. Lets the operator flip through
-              schools and see exactly what a parent at each school will
-              receive — same code path as a real send, just no Resend call.
-              Catches "this school doesn't have VIP" / "this school's
-              first session is a different date" issues before approve.
-              Rendered visible-but-disabled when no schools are available
-              (loading or camps-only campaign) so the operator knows the
-              feature is there and what state it's in — silently hiding
-              made the dropdown look broken / absent. */}
+          {/* Per-recipient preview dropdown. Entries vary by campaign type:
+              - Afterschool catalog picks → list of schools
+              - Camps catalog picks → list of areas (each area = many camps)
+              - One-off scoped to schools/areas → list of those
+              Picking an entry renders the touchpoint AS IF a parent at that
+              school / in that area received it. Same code path as a real
+              send, just no Resend call. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
-              Preview as parent at
+              Preview as parent in
             </span>
             <select
               value={previewLocationId}
@@ -210,11 +215,18 @@ export default function TouchpointCard({
             >
               <option value="">
                 {pickedLocations.length === 0
-                  ? "(loading schools, or campaign has no school picks)"
-                  : "Pick a school to preview…"}
+                  ? "(no preview audience — pick a school/area scope in Q2, or this is a one-off blast to your master list)"
+                  : (
+                      ((kinds) => {
+                        const allArea = kinds.size === 1 && kinds.has("area");
+                        const allSchool = kinds.size === 1 && kinds.has("school");
+                        const noun = allArea ? "area" : allSchool ? "school" : "recipient";
+                        return `Pick ${allArea ? "an" : "a"} ${noun} to preview as a parent there…`;
+                      })(new Set(pickedLocations.map((l) => l.kind)))
+                    )}
               </option>
               {pickedLocations.map((l) => (
-                <option key={l.id} value={l.id}>{l.name}</option>
+                <option key={l.value} value={l.value}>{l.label}</option>
               ))}
             </select>
               {previewLoading && <span style={{ fontSize: 11, color: MUTED }}>rendering…</span>}
@@ -223,7 +235,7 @@ export default function TouchpointCard({
                   fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5,
                   color: "#854F0B", padding: "2px 8px", borderRadius: 999, background: "#FAEEDA",
                 }}>
-                  VIP block suppressed for this school
+                  VIP block suppressed here
                 </span>
               )}
               {previewData?.vip_block_shown === true && isPreviewing && (
@@ -234,12 +246,12 @@ export default function TouchpointCard({
                   VIP block shown
                 </span>
               )}
-              {previewData?.program_matched === false && isPreviewing && (
+              {previewData?.program_matched === false && isPreviewing && hasContentPicks && (
                 <span style={{
                   fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5,
                   color: "#b3261e", padding: "2px 8px", borderRadius: 999, background: "#fce4ec",
                 }}>
-                  No program at this school in your picks
+                  No picked content for this audience
                 </span>
               )}
             </div>
@@ -247,6 +259,7 @@ export default function TouchpointCard({
           <BodyEditor
             value={tp.body_html ?? ""}
             onChange={(v) => onUpdate(tp.id, { body_html: v, body_text: stripHtml(v) })}
+            onCommit={(v) => onCommit?.(tp.id, { body_html: v, body_text: stripHtml(v) })}
             // Preview overrides: when an operator picks a school in the
             // dropdown, BodyEditor shows the SERVER-rendered body (tokens
             // resolved, VIP shown/suppressed) instead of the raw
@@ -313,14 +326,71 @@ function highlightTokens(html) {
   );
 }
 
-function BodyEditor({ value, onChange, previewHtml, previewSubject, previewSchoolName, previewError }) {
+// Convert stored HTML (what Ennie writes, what the server renders) into the
+// plain-text form an operator edits.
+// - <p>...</p> blocks become blank-line-separated blocks.
+// - <a href="X">Y</a> becomes [Y](X) so the operator can edit the visible
+//   text without breaking the URL.
+// - <em>X</em>/<i>X</i> become _X_ and <strong>X</strong>/<b>X</b> become
+//   **X**, so Ennie's emphasis survives a no-touch round-trip.
+// - Merge tokens like {{first_name}} pass through untouched.
+function htmlToEditable(html) {
+  if (!html) return "";
+  let text = html;
+  text = text.replace(/<a\s+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, href, inner) => `[${inner.trim()}](${href})`);
+  text = text.replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, inner) => `**${inner}**`);
+  text = text.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, inner) => `_${inner}_`);
+  text = text.replace(/<\/p>\s*<p[^>]*>/gi, "\n\n");
+  text = text.replace(/<p[^>]*>/gi, "");
+  text = text.replace(/<\/p>/gi, "");
+  return text.trim();
+}
+
+// Reverse: convert markdown back to HTML, then wrap each blank-line-separated
+// block in <p>...</p>. Links first (so a paragraph that's just a link still
+// wraps in <p>); then **bold** and _italic_. The underscore pattern requires
+// non-space content so plain identifiers like _internal_method don't match
+// unless they sit next to spaces or line boundaries on both sides.
+function editableToHtml(text) {
+  if (!text) return "";
+  let html = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${href}">${label}</a>`);
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, (_, inner) => `<strong>${inner}</strong>`);
+  html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s.,;:!?)]|$)/g, (_m, pre, inner) => `${pre}<em>${inner}</em>`);
+  const paragraphs = html.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  return paragraphs.map((p) => `<p>${p}</p>`).join("");
+}
+
+function BodyEditor({ value, onChange, onCommit, previewHtml, previewSubject, previewSchoolName, previewError }) {
   const [editing, setEditing] = useState(false);
+  // Plain-text working copy used only while the textarea is open. Seeded
+  // from `value` (HTML) when Edit is clicked. Bubbled back up as HTML on
+  // every keystroke via onChange(editableToHtml(...)), so the parent's
+  // body_html stays canonical. On Done editing we additionally call
+  // onCommit(html) which PATCHes the touchpoint row to the DB so the
+  // edits survive Send test, reloads, and Approve.
+  const [editableText, setEditableText] = useState("");
+
   // When a school is picked in the dropdown above, we hide the raw-tokens
   // view and show the server-rendered body for that school. Editing the
   // body is always allowed — clicking Edit drops out of preview mode for
   // this card visually, but the parent's previewLocationId is unchanged
   // so de-selecting Edit returns to the preview view.
   const showingPreview = !!previewHtml && !editing;
+
+  const toggleEditing = () => {
+    if (editing) {
+      const finalHtml = editableToHtml(editableText);
+      onCommit?.(finalHtml);
+    } else {
+      setEditableText(htmlToEditable(value));
+    }
+    setEditing((v) => !v);
+  };
+
+  const handleTextChange = (newText) => {
+    setEditableText(newText);
+    onChange(editableToHtml(newText));
+  };
 
   return (
     <div>
@@ -332,7 +402,7 @@ function BodyEditor({ value, onChange, previewHtml, previewSubject, previewSchoo
           {showingPreview ? `Preview for parents at ${previewSchoolName}` : "Email body"}
         </span>
         <button
-          onClick={() => setEditing((v) => !v)}
+          onClick={toggleEditing}
           style={{
             background: "transparent", border: "none", color: PURPLE,
             cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: 600,
@@ -388,18 +458,23 @@ function BodyEditor({ value, onChange, previewHtml, previewSubject, previewSchoo
           />
         </>
       ) : editing ? (
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          rows={10}
-          style={{
-            width: "100%", padding: "10px 12px",
-            border: `1px solid ${RULE}`, borderRadius: 6,
-            fontFamily: "ui-monospace, monospace", fontSize: 12,
-            lineHeight: 1.5, color: INK, background: "#fff",
-            resize: "vertical", boxSizing: "border-box",
-          }}
-        />
+        <>
+          <textarea
+            value={editableText}
+            onChange={(e) => handleTextChange(e.target.value)}
+            rows={12}
+            style={{
+              width: "100%", padding: "12px 14px",
+              border: `1px solid ${RULE}`, borderRadius: 6,
+              fontFamily: "inherit", fontSize: 14,
+              lineHeight: 1.55, color: INK, background: "#fff",
+              resize: "vertical", boxSizing: "border-box",
+            }}
+          />
+          <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
+            Blank line = new paragraph. Square brackets <span style={{ fontFamily: "ui-monospace, monospace" }}>[link text]({"{{register_url}}"})</span> mark a clickable button — keep the brackets so the link still works.
+          </p>
+        </>
       ) : (
         <div
           style={{

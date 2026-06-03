@@ -44,56 +44,65 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
   const [autoDeriveState, setAutoDeriveState] = useState({ status: "idle", info: null });
   const deriveKeyRef = useRef(null);
 
-  // Auto-derive scope from Q1 picks when filter.type='auto'. Runs on mount and
-  // whenever the picks change AS LONG AS the user hasn't manually overridden
-  // (auto_derived flag still set).
+  // Auto-derive scope from Q1 picks. For programs/camps modes, this ALWAYS
+  // runs when Q1 picks change — Q2 audience must mirror Q1 catalog
+  // (operator confirmed 2026-06-02: "Q2 areas = Q1 districts always").
+  // Without this, drift accumulates: operator-edits-Q2 → Q1-changes-later →
+  // stale audience with orphan areas (Portland audience but no Portland
+  // camps) or under-derived areas (Q1 has Oregon City camps but Q2 missing).
+  //
+  // Operator can still NARROW within the auto-derived set (uncheck areas in
+  // the multi-select). That narrowing survives Q1 NOT-changing — tracked via
+  // filter.derived_from_picks_key. When picks key matches, we don't re-derive
+  // so the operator's narrowing isn't overwritten on re-mount.
+  //
+  // For mode='other' (one-off), only run when filter.type='auto' (operator
+  // has full audience freedom for one-offs).
+  const picksKey = JSON.stringify({
+    mode: what?.mode,
+    pids: what?.program_ids ?? [],
+    cids: what?.camp_session_ids ?? [],
+  });
   useEffect(() => {
     if (!org?.id) return;
-    const isAuto = who?.filter?.type === "auto" || who?.filter?.auto_derived === true;
-    if (!isAuto) return;
-
-    // Key the derive on the picks signature so we don't redundantly re-fetch.
-    // We mark the key as "done" AFTER the async resolves, not before — otherwise
-    // React StrictMode's double-mount tears down the first effect (sets alive=false)
-    // before the IIFE finishes, then the second mount sees the key already set and
-    // bails early, leaving the loading state stuck forever.
-    const key = JSON.stringify({
-      mode: what?.mode,
-      pids: what?.program_ids ?? [],
-      cids: what?.camp_session_ids ?? [],
-    });
-    if (deriveKeyRef.current === key) return;
+    const isOther = what?.mode === "other";
+    if (isOther && who?.filter?.type !== "auto") return;
+    // Already derived for THIS Q1 picks set? Bail — preserves operator narrowing.
+    if (who?.filter?.derived_from_picks_key === picksKey) return;
 
     let alive = true;
     (async () => {
       setAutoDeriveState({ status: "loading", info: null });
       const resolved = await deriveScopeFromPicks(org.id, what);
       if (!alive) return;
-      deriveKeyRef.current = key; // mark complete only after successful resolve
+      deriveKeyRef.current = picksKey;
       setAutoDeriveState({ status: "ready", info: resolved.info });
       setField("who", {
         audience: "parents",
-        filter: { ...resolved.filter, auto_derived: true },
+        filter: { ...resolved.filter, auto_derived: true, derived_from_picks_key: picksKey },
       });
     })();
     return () => { alive = false; };
-  }, [org?.id, what?.mode, what?.program_ids, what?.camp_session_ids, who?.filter?.type, who?.filter?.auto_derived]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [org?.id, picksKey]);
 
   function setParentsScope(type) {
     if (type === "master_list") {
-      setField("who", { audience: "parents", filter: { type: "master_list" } });
+      setField("who", { audience: "parents", filter: { type: "master_list", derived_from_picks_key: picksKey } });
       return;
     }
-    const next = { type };
+    const next = { type, derived_from_picks_key: picksKey };
     if (type === "school") next.school_ids = [];
-    if (type === "area") next.area = "";
+    if (type === "area") next.areas = [];
     if (type === "segment") next.segments = [];
     if (type === "person") next.recipient_id = null;
     setField("who", { audience: "parents", filter: next });
   }
 
   function updateFilter(patch) {
-    // Manual filter changes drop the auto_derived flag so re-deriving stops
+    // Manual filter changes drop the auto_derived flag but PRESERVE
+    // derived_from_picks_key so the narrowing survives re-mount / re-render
+    // (until Q1 picks actually change, which triggers re-derive).
     const { auto_derived: _drop, ...rest } = who.filter;
     setField("who", { audience: "parents", filter: { ...rest, ...patch } });
   }
@@ -142,10 +151,15 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
           />
         )}
         {who.filter?.type === "area" && (
-          <AreaSelect
+          <AreaMultiSelect
             orgId={org?.id}
-            selected={who.filter.area ?? ""}
-            onChange={(area) => updateFilter({ area })}
+            selected={
+              // Backward-compat: tolerate legacy single-area drafts.
+              Array.isArray(who.filter.areas)
+                ? who.filter.areas
+                : (who.filter.area ? [who.filter.area] : [])
+            }
+            onChange={(areas) => updateFilter({ areas, area: undefined })}
           />
         )}
         {who.filter?.type === "segment" && (
@@ -427,7 +441,7 @@ async function deriveScopeFromPicks(orgId, what) {
     if (areasWithParents.length === 1) {
       const [area] = areasWithParents[0];
       return {
-        filter: { type: "area", area },
+        filter: { type: "area", areas: [area] },
         info: {
           headline: `Parents in ${area}`,
           sub: `Derived from your camps' location districts. ${parentsByArea.get(area) ?? 0} parents in this area. Change the scope below to override.`,
@@ -436,20 +450,23 @@ async function deriveScopeFromPicks(orgId, what) {
       };
     }
 
-    // Multiple areas — pick the one with the most CAMPS (operator's signal
-    // of where they want to focus), tie-breaking on parent count. Sorting by
-    // parents alone was wrong — e.g. 1 camp in Portland (713 parents) would
-    // beat 10 camps in Hillsboro (305 parents). Camp count reflects intent.
+    // Multiple areas — pre-select ALL areas that have BOTH camps AND parents.
+    // Operator scoped to the camps that match; the audience should mirror.
+    // They can drop individual areas in Q2 if they want a narrower send.
+    // (Was: pick the single top-camp area; that forced the operator to manually
+    // re-add the other areas every time. Multi-select is the cleaner default.)
     const sorted = [...areasWithParents]
       .map(([d, campCount]) => ({ area: d, campCount, parents: parentsByArea.get(d) ?? 0 }))
       .sort((a, b) => b.campCount - a.campCount || b.parents - a.parents);
-    const top = sorted[0];
-    const others = sorted.slice(1, 4).map((s) => `${s.area} (${s.campCount} camp${s.campCount === 1 ? "" : "s"}, ${s.parents} parents)`).join(", ");
+    const areaKeys = sorted.map((s) => s.area);
+    const totalParents = sorted.reduce((n, s) => n + s.parents, 0);
+    const breakdown = sorted.slice(0, 4).map((s) => `${s.area} (${s.parents})`).join(", ");
+    const extra = sorted.length > 4 ? ` and ${sorted.length - 4} more` : "";
     return {
-      filter: { type: "area", area: top.area },
+      filter: { type: "area", areas: areaKeys },
       info: {
-        headline: `Parents in ${top.area}`,
-        sub: `Your camps span ${sorted.length} areas — picked ${top.area} (${top.campCount} camp${top.campCount === 1 ? "" : "s"} there, ${top.parents} parents). Other options: ${others}. Change below to pick one of those, or 'Master list' to send to all.`,
+        headline: `Parents across ${sorted.length} areas`,
+        sub: `Your camps span ${sorted.length} areas. ~${totalParents} parents in those areas total: ${breakdown}${extra}. Uncheck any below to narrow, or switch scope.`,
         tone: "ok",
       },
     };
@@ -501,6 +518,10 @@ function SchoolMultiSelect({ orgId, selected, onChange }) {
   return (
     <ListWrap>
       <SearchInput value={q} onChange={setQ} placeholder="Search your schools…" />
+      <AllNoneBar
+        onAll={() => onChange((filtered ?? []).map((loc) => loc.id))}
+        onNone={() => onChange([])}
+      />
       <ListBody loading={!rows} error={err} empty={!err && rows && rows.length === 0 ? "No program_locations yet — add some in Programs." : null}>
         {(filtered ?? []).map((loc) => (
           <CheckRow
@@ -518,7 +539,28 @@ function SchoolMultiSelect({ orgId, selected, onChange }) {
 }
 
 // ---------- Area single-select (distinct geo_segment) ----------
-function AreaSelect({ orgId, selected, onChange }) {
+// Multi-select. Camps frequently span 3+ cities (SU26 has Hillsboro,
+// Beaverton, Cornelius, …) and the operator wants to email parents across
+// the set. Changed 2026-06-02 from radio (single) to checkbox (multi).
+// Inline "All / None" affordance — same shape as the instructor picker
+// in admin/Schedule.jsx. Rendered above the checkbox list. Keeps the
+// component visually consistent with other multi-selects we already ship.
+function AllNoneBar({ onAll, onNone }) {
+  return (
+    <div style={{ display: "flex", gap: 8, padding: "8px 10px", borderBottom: "1px solid #e8e2d4", background: "#fafaf6" }}>
+      <button type="button" onClick={onAll}
+        style={{ background: "transparent", border: "1px solid #e8e2d4", color: "#674EE8", borderRadius: 4, padding: "3px 10px", fontFamily: "inherit", cursor: "pointer", fontWeight: 600, fontSize: 11 }}>
+        All
+      </button>
+      <button type="button" onClick={onNone}
+        style={{ background: "transparent", border: "1px solid #e8e2d4", color: "#6b6880", borderRadius: 4, padding: "3px 10px", fontFamily: "inherit", cursor: "pointer", fontWeight: 600, fontSize: 11 }}>
+        None
+      </button>
+    </div>
+  );
+}
+
+function AreaMultiSelect({ orgId, selected, onChange }) {
   const [areas, setAreas] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -527,49 +569,61 @@ function AreaSelect({ orgId, selected, onChange }) {
     let alive = true;
     setAreas(null);
     setErr(null);
-    supabase
-      .from("marketing_recipients")
-      .select("geo_segment")
-      .eq("organization_id", orgId)
-      .not("geo_segment", "is", null)
-      .limit(2000)
-      .then(({ data, error }) => {
+    // Paginate — was .limit(2000) which silently truncated rows for tenants
+    // with > 2000 recipients (J2S has 2275). The cut-off slice may contain
+    // ALL parents of a small area (Corbett's 23 parents got truncated 2026-06-02),
+    // making that area invisible in the multi-select even though it has
+    // real coverage.
+    (async () => {
+      const PAGE = 1000;
+      const counts = new Map();
+      for (let off = 0; ; off += PAGE) {
+        const { data, error } = await supabase
+          .from("marketing_recipients")
+          .select("geo_segment")
+          .eq("organization_id", orgId)
+          .not("geo_segment", "is", null)
+          .range(off, off + PAGE - 1);
         if (!alive) return;
         if (error) { setErr(error.message); return; }
-        const counts = new Map();
-        for (const r of data ?? []) {
+        if (!data || data.length === 0) break;
+        for (const r of data) {
           if (!r.geo_segment) continue;
           counts.set(r.geo_segment, (counts.get(r.geo_segment) ?? 0) + 1);
         }
-        const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-        setAreas(sorted.map(([key, n]) => ({ key, count: n })));
-      });
+        if (data.length < PAGE) break;
+        if (counts.size >= 5000) break; // sanity ceiling on distinct areas
+      }
+      if (!alive) return;
+      const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      setAreas(sorted.map(([key, n]) => ({ key, count: n })));
+    })();
     return () => { alive = false; };
   }, [orgId]);
 
+  function toggle(key) {
+    if (selected.includes(key)) onChange(selected.filter((x) => x !== key));
+    else onChange([...selected, key]);
+  }
+
   return (
     <ListWrap>
+      <AllNoneBar
+        onAll={() => onChange((areas ?? []).map((a) => a.key))}
+        onNone={() => onChange([])}
+      />
       <ListBody loading={!areas} error={err} empty={!err && areas && areas.length === 0 ? "No areas yet — tag recipients with geo_segment to use this filter." : null}>
         {(areas ?? []).map((a) => (
-          <label
+          <CheckRow
             key={a.key}
-            style={{
-              display: "flex", alignItems: "center", gap: 8, padding: "8px 10px",
-              borderTop: `1px solid ${RULE}`, cursor: "pointer",
-              background: selected === a.key ? "#faf7ed" : "transparent",
-            }}
-          >
-            <input
-              type="radio"
-              name="area"
-              checked={selected === a.key}
-              onChange={() => onChange(a.key)}
-            />
-            <span style={{ fontSize: 13, color: INK, flex: 1 }}>{a.key}</span>
-            <span style={{ fontSize: 11, color: MUTED }}>{a.count} parents</span>
-          </label>
+            checked={selected.includes(a.key)}
+            onChange={() => toggle(a.key)}
+            label={a.key}
+            aside={`${a.count} parents`}
+          />
         ))}
       </ListBody>
+      <FooterCount n={selected.length} singular="area selected" plural="areas selected" />
     </ListWrap>
   );
 }
@@ -584,25 +638,35 @@ function SegmentMultiSelect({ orgId, selected, onChange }) {
     let alive = true;
     setRows(null);
     setErr(null);
-    supabase
-      .from("marketing_recipients")
-      .select("segments")
-      .eq("organization_id", orgId)
-      .not("segments", "is", null)
-      .limit(5000)
-      .then(({ data, error }) => {
+    // Paginated for the same reason as AreaMultiSelect — .limit(5000) was
+    // silently truncating for tenants with > 5000 recipients (no current
+    // tenant is that big, but eliminating the cliff before it's a problem).
+    (async () => {
+      const PAGE = 1000;
+      const counts = new Map();
+      for (let off = 0; ; off += PAGE) {
+        const { data, error } = await supabase
+          .from("marketing_recipients")
+          .select("segments")
+          .eq("organization_id", orgId)
+          .not("segments", "is", null)
+          .range(off, off + PAGE - 1);
         if (!alive) return;
         if (error) { setErr(error.message); return; }
-        const counts = new Map();
-        for (const r of data ?? []) {
+        if (!data || data.length === 0) break;
+        for (const r of data) {
           for (const s of r.segments ?? []) {
             if (!s) continue;
             counts.set(s, (counts.get(s) ?? 0) + 1);
           }
         }
-        const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-        setRows(sorted.map(([key, n]) => ({ key, count: n })));
-      });
+        if (data.length < PAGE) break;
+        if (counts.size >= 5000) break;
+      }
+      if (!alive) return;
+      const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      setRows(sorted.map(([key, n]) => ({ key, count: n })));
+    })();
     return () => { alive = false; };
   }, [orgId]);
 
@@ -613,6 +677,10 @@ function SegmentMultiSelect({ orgId, selected, onChange }) {
 
   return (
     <ListWrap>
+      <AllNoneBar
+        onAll={() => onChange((rows ?? []).map((s) => s.key))}
+        onNone={() => onChange([])}
+      />
       <ListBody loading={!rows} error={err} empty={!err && rows && rows.length === 0 ? "No saved segments yet — tag recipients to use this filter." : null}>
         {(rows ?? []).map((s) => (
           <CheckRow
