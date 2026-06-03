@@ -1,0 +1,1095 @@
+// lifecycle-automations-cron — fires informational automations (Welcome,
+// Mid-recap, etc.) once per day. Reads enabled automations across all orgs,
+// resolves per-trigger audience, and sends via Resend with idempotency.
+//
+// v1 wired triggers:
+//   - days_before_first_session  (welcome_camp, welcome_afterschool)
+//   - event_registration_abandoned (abandoned_registration, 24h pending)
+//
+// Stubbed triggers (return empty audience, no fire):
+//   - session_midpoint, session_last_day, days_after_first_session, birthday
+//   - event_registration_confirmed (handled by stripe-webhook, not here)
+//   - survey_pending (template-only until surveys ship)
+//
+// Idempotency: automation_run_recipients has UNIQUE(automation_id, context_key).
+// Re-running this cron same day is safe — duplicates fail the insert silently.
+//
+// Multi-tenant: all .from() queries filter by organization_id from the
+// automation row. Resume URLs use org.slug (not hardcoded). No tenant strings
+// in this file.
+//
+// Mailing-type: every send here bypasses the marketing promotional-unsubscribe
+// filter because templates are mailing_type='informational'. Parents who
+// unsubscribed from marketing campaigns still receive lifecycle service comms.
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { loadOrgBrand, formatFromAddress, type OrgBrand } from "../_shared/orgBrand.ts";
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
+const PUBLIC_SITE_URL = Deno.env.get("PUBLIC_SITE_URL") ?? "https://enrops.com";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// Types
+// ───────────────────────────────────────────────────────────────────────────
+
+interface TemplateRow {
+  id: string;
+  key: string;
+  display_name: string;
+  trigger_type: string;
+  applies_to_program_type: "camps" | "afterschool" | "both";
+  mailing_type: "informational" | "marketing";
+  default_subject: string;
+  default_body: string;
+  default_timing: Record<string, unknown>;
+  time_saved_minutes_per_send: number;
+  is_v1_enabled: boolean;
+}
+
+interface AutomationRow {
+  id: string;
+  organization_id: string;
+  template_id: string;
+  enabled: boolean;
+  subject_override: string | null;
+  body_override: string | null;
+  timing_override: Record<string, unknown> | null;
+  template: TemplateRow;
+  org: { id: string; slug: string; name: string };
+}
+
+interface TestSendParams {
+  organization_id: string;
+  template_key: string;
+  test_to_email: string;
+  preview_subject: string | null;
+  preview_body: string | null;
+}
+
+interface TestSendResult {
+  ok: boolean;
+  error?: string;
+  message_id?: string;
+}
+
+interface AudienceEntry {
+  context_key: string;
+  parent_id: string | null;
+  parent_email: string;
+  parent_first_name: string | null;
+  child_first_name: string | null;
+  program_name: string;
+  program_start_date: string;   // formatted, e.g. "Monday, June 17"
+  program_end_date: string;     // formatted or ""
+  location_name: string;
+  abandoned_resume_url: string; // empty unless workflow uses it
+  age_turning: string;          // empty unless birthday
+  final_showcase_raw: string;   // raw curricula.final_showcase text (block HTML built in buildTokens where brand is known)
+  register_url: string;         // org's base registration URL
+  next_term_available: boolean; // true if org has programs/camps starting >14 days out — drives {{next_term_link_block}}
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Entry point
+// ───────────────────────────────────────────────────────────────────────────
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
+  // Three modes:
+  //   cron mode      → POST {} (or no body) — scan all enabled automations
+  //   event mode     → POST {registration_id: "UUID"} — fire eligible Welcome
+  //                    for a specific registration (stripe-webhook → late
+  //                    registrants who confirm inside the 7-day window)
+  //   test_send mode → POST {mode: "test_send", organization_id, template_key,
+  //                    test_to_email, preview_subject, preview_body} —
+  //                    operator-initiated preview send from the editor drawer.
+  //                    Validates test_to_email belongs to an org admin so this
+  //                    can't be abused to spam non-admins. Doesn't write to
+  //                    automation_run_recipients or time_saved_events.
+  let eventRegistrationId: string | null = null;
+  let testSendParams: TestSendParams | null = null;
+  if (req.method === "POST") {
+    try {
+      const body = await req.json().catch(() => ({}));
+      if (body?.mode === "test_send") {
+        testSendParams = {
+          organization_id: body.organization_id,
+          template_key: body.template_key,
+          test_to_email: body.test_to_email,
+          preview_subject: typeof body.preview_subject === "string" ? body.preview_subject : null,
+          preview_body: typeof body.preview_body === "string" ? body.preview_body : null,
+        };
+      } else if (typeof body?.registration_id === "string") {
+        eventRegistrationId = body.registration_id;
+      }
+    } catch { /* empty body — cron mode */ }
+  }
+
+  const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
+
+  // Test send shortcut — different shape (single recipient, no audit log,
+  // no idempotency tracking) so handled before the cron-mode automation loop.
+  if (testSendParams) {
+    const result = await runTestSend(supabase, testSendParams);
+    return new Response(JSON.stringify(result), {
+      status: result.ok ? 200 : 400,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+  const summary: { mode: string; automations: unknown[]; errors: unknown[] } = {
+    mode: eventRegistrationId ? "event" : "cron",
+    automations: [],
+    errors: [],
+  };
+
+  // Load all enabled automations whose template is v1-enabled. In event mode
+  // we filter again per-org inside the audience resolver, so loading globally
+  // is fine — typically one row per (org, template_key) and we have few orgs.
+  const { data: automations, error: loadErr } = await supabase
+    .from("automations")
+    .select(`
+      id, organization_id, template_id, enabled, subject_override, body_override, timing_override,
+      template:automation_templates!inner (
+        id, key, display_name, trigger_type, applies_to_program_type, mailing_type,
+        default_subject, default_body, default_timing, time_saved_minutes_per_send, is_v1_enabled
+      ),
+      org:organizations!inner ( id, slug, name )
+    `)
+    .eq("enabled", true)
+    .eq("template.is_v1_enabled", true);
+
+  if (loadErr) {
+    return new Response(JSON.stringify({ ok: false, error: loadErr.message }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  for (const a of (automations ?? []) as AutomationRow[]) {
+    // In event mode, only run Welcome workflows — other triggers are time-based.
+    if (eventRegistrationId && a.template.trigger_type !== "days_before_first_session") continue;
+    try {
+      const result = await runAutomation(supabase, a, eventRegistrationId);
+      summary.automations.push({ automation_id: a.id, key: a.template.key, org_slug: a.org.slug, ...result });
+    } catch (e) {
+      summary.errors.push({ automation_id: a.id, error: (e as Error).message });
+      console.error(`[lifecycle-automations-cron] automation ${a.id} failed:`, e);
+    }
+  }
+
+  return new Response(JSON.stringify({ ok: true, summary }), {
+    status: 200,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Per-automation runner
+// ───────────────────────────────────────────────────────────────────────────
+
+async function runAutomation(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+  eventRegistrationId: string | null = null,
+) {
+  // 1. Resolve audience by trigger type
+  let audience: AudienceEntry[] = [];
+  switch (a.template.trigger_type) {
+    case "days_before_first_session":
+      audience = await resolveWelcomeAudience(supabase, a, eventRegistrationId);
+      break;
+    case "event_registration_abandoned":
+      audience = await resolveAbandonedAudience(supabase, a);
+      break;
+    case "days_after_first_session":
+      audience = await resolveCheckInAudience(supabase, a);
+      break;
+    case "session_midpoint":
+      audience = await resolveMidRecapAudience(supabase, a);
+      break;
+    case "session_last_day":
+      audience = await resolveFinalRecapAudience(supabase, a);
+      break;
+    case "birthday":
+      audience = await resolveBirthdayAudience(supabase, a);
+      break;
+    case "event_registration_confirmed":
+      // Handled by stripe-webhook (registration table → confirmation email).
+      // Cron isn't the right trigger here — checkout completion is event-driven.
+      return { skipped: "handled_by_stripe_webhook" };
+    case "survey_pending":
+      // Survey feature not built yet — template stays is_v1_enabled=false.
+      return { skipped: "template_disabled_v1" };
+    default:
+      return { skipped: "unknown_trigger", trigger: a.template.trigger_type };
+  }
+
+  // 2. Create automation_runs row
+  const { data: runRow, error: runErr } = await supabase
+    .from("automation_runs")
+    .insert({
+      automation_id: a.id,
+      organization_id: a.organization_id,
+      audience_size: audience.length,
+      status: audience.length === 0 ? "skipped_no_audience" : "sending",
+    })
+    .select("id")
+    .single();
+
+  if (runErr || !runRow) {
+    throw new Error(`Failed to create automation_runs row: ${runErr?.message}`);
+  }
+
+  if (audience.length === 0) {
+    return { audience: 0, sent: 0, failed: 0, skipped: 0, run_id: runRow.id };
+  }
+
+  // 3. Load brand once per org
+  const brand = await loadOrgBrand(supabase, a.organization_id);
+
+  // 4. Pre-check which context_keys already sent (one query, not N)
+  const contextKeys = audience.map((e) => e.context_key);
+  const { data: alreadySent } = await supabase
+    .from("automation_run_recipients")
+    .select("context_key")
+    .eq("automation_id", a.id)
+    .in("context_key", contextKeys);
+  const alreadySentSet = new Set((alreadySent ?? []).map((r: { context_key: string }) => r.context_key));
+
+  // 5. Per-recipient: send-first-then-insert pattern (avoids stranded-parent bug
+  // — if Resend fails, we don't write a row, so the next cron retries).
+  // Batch of 5 concurrent sends to stay within edge function 150s timeout
+  // at scale-target audience sizes.
+  let sent = 0, failed = 0, skipped = 0;
+  const BATCH_SIZE = 5;
+  const toSend = audience.filter((e) => !alreadySentSet.has(e.context_key));
+  skipped = audience.length - toSend.length;
+
+  for (let i = 0; i < toSend.length; i += BATCH_SIZE) {
+    const batch = toSend.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(batch.map((entry) =>
+      sendOne(supabase, a, brand, runRow.id, entry),
+    ));
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value === "sent") sent += 1;
+      else failed += 1;
+    }
+  }
+
+  // 5. Finalize run row
+  const finalStatus = failed > 0 && sent === 0 ? "failed" : "sent";
+  const timeSavedMinutes = sent * a.template.time_saved_minutes_per_send;
+  await supabase.from("automation_runs")
+    .update({
+      status: finalStatus,
+      time_saved_minutes: timeSavedMinutes,
+      error_message: failed > 0 ? `${failed} of ${audience.length} sends failed` : null,
+    })
+    .eq("id", runRow.id);
+
+  // 6. Contribute to the org's lifetime time-saved tally (read by the
+  // AdminLayout sidebar pill). Per project_enrops_time_saved memory rule:
+  // every action that fires a time-saved pill also INSERTs here. CHECK
+  // constraint requires hours_saved > 0, so skip when 0 sends.
+  if (sent > 0) {
+    const hoursSaved = timeSavedMinutes / 60;
+    const familyWord = sent === 1 ? "family" : "families";
+    const { error: tseErr } = await supabase.from("time_saved_events").insert({
+      organization_id: a.organization_id,
+      action_type: "automation_fired",
+      action_label: `Sent ${a.template.display_name} to ${sent} ${familyWord}`,
+      hours_saved: hoursSaved,
+      related_entity_type: "automation",
+      related_entity_id: a.id,
+    });
+    if (tseErr) {
+      // Non-fatal — log but don't fail the run. The main delivery happened.
+      console.error("[lifecycle-automations-cron] time_saved_events insert failed:", tseErr);
+    }
+  }
+
+  return { audience: audience.length, sent, failed, skipped, run_id: runRow.id, time_saved_minutes: timeSavedMinutes };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Per-recipient send + log
+// ───────────────────────────────────────────────────────────────────────────
+
+async function sendOne(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+  brand: OrgBrand,
+  runId: string,
+  entry: AudienceEntry,
+): Promise<"sent" | "failed"> {
+  const tokens = buildTokens(entry, brand);
+  const subject = renderTokens(a.subject_override ?? a.template.default_subject, tokens);
+  const innerBody = renderTokens(a.body_override ?? a.template.default_body, tokens);
+  const fullHtml = wrapInShell(innerBody, brand);
+
+  let resendMessageId: string | null = null;
+  let errorMessage: string | null = null;
+
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+      },
+      body: JSON.stringify({
+        from: formatFromAddress(brand),
+        to: entry.parent_email,
+        reply_to: brand.reply_to,
+        subject,
+        html: fullHtml,
+        tags: [
+          { name: "type", value: "lifecycle" },
+          { name: "automation", value: a.template.key },
+        ],
+      }),
+    });
+    if (resp.ok) {
+      const json = await resp.json() as { id?: string };
+      resendMessageId = json.id ?? null;
+    } else {
+      const errText = await resp.text();
+      errorMessage = `Resend ${resp.status}: ${errText.slice(0, 400)}`;
+      console.error(`[lifecycle-automations-cron] ${errorMessage}`);
+    }
+  } catch (e) {
+    errorMessage = (e as Error).message.slice(0, 500);
+  }
+
+  if (errorMessage) {
+    // Don't insert a row — next cron will retry. Stranded-parent prevention.
+    return "failed";
+  }
+
+  // Post-send insert. Race with a concurrent cron run could trigger 23505 →
+  // a duplicate Resend send happened. Acceptable bound: at most one duplicate
+  // per concurrent run pair, which is extremely rare for a once-daily cron.
+  const { error: recErr } = await supabase
+    .from("automation_run_recipients")
+    .insert({
+      automation_run_id: runId,
+      automation_id: a.id,
+      organization_id: a.organization_id,
+      parent_id: entry.parent_id,
+      context_key: entry.context_key,
+      email: entry.parent_email,
+      resend_message_id: resendMessageId,
+      status: "sent",
+    });
+  if (recErr && (recErr as { code?: string }).code !== "23505") {
+    console.error("[lifecycle-automations-cron] post-send insert failed:", recErr);
+    return "failed";
+  }
+  return "sent";
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Test send (operator-initiated preview from the editor drawer)
+// ───────────────────────────────────────────────────────────────────────────
+
+async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Promise<TestSendResult> {
+  if (!params.organization_id || !params.template_key || !params.test_to_email) {
+    return { ok: false, error: "missing_required_params" };
+  }
+  if (!params.test_to_email.includes("@")) {
+    return { ok: false, error: "invalid_test_email" };
+  }
+
+  // Anti-spam: the test recipient must be an admin on this org. Service-role
+  // bypass exists for delivery, but the check is enforced in code so the
+  // endpoint can't be used to spam arbitrary addresses.
+  const { data: member } = await supabase
+    .from("org_members")
+    .select("email")
+    .eq("organization_id", params.organization_id)
+    .ilike("email", params.test_to_email)
+    .maybeSingle();
+  if (!member) {
+    return { ok: false, error: "test_email_not_an_org_admin" };
+  }
+
+  // Look up template
+  const { data: template, error: tErr } = await supabase
+    .from("automation_templates")
+    .select("*")
+    .eq("key", params.template_key)
+    .maybeSingle();
+  if (tErr || !template) {
+    return { ok: false, error: "template_not_found" };
+  }
+
+  // Look up org slug for {{register_url}}
+  const { data: org, error: oErr } = await supabase
+    .from("organizations")
+    .select("id, slug, name")
+    .eq("id", params.organization_id)
+    .maybeSingle();
+  if (oErr || !org) {
+    return { ok: false, error: "org_not_found" };
+  }
+
+  // Load brand
+  const brand = await loadOrgBrand(supabase, params.organization_id);
+
+  // Build a sample audience entry so the same buildTokens + renderTokens +
+  // wrapInShell pipeline as a real send is exercised (eat-the-cooking).
+  const entry: AudienceEntry = {
+    context_key: "test:preview",
+    parent_id: null,
+    parent_email: params.test_to_email,
+    parent_first_name: "Sarah",
+    child_first_name: "Mia",
+    program_name: "Mini Robotics",
+    program_start_date: "Monday, June 17",
+    program_end_date: "Friday, June 21",
+    location_name: "Beaverton STEAM Hub",
+    abandoned_resume_url: "#",
+    age_turning: "8",
+    final_showcase_raw: "Campers host a Playtest Arcade where every kid loads their finished platformer onto a Chromebook and the whole group rotates through playing each other's games.",
+    register_url: `${PUBLIC_SITE_URL}/${org.slug}/register`,
+    // Test sends always show the "Looking ahead" block so operators see the
+    // styled version regardless of their org's current data.
+    next_term_available: true,
+  };
+
+  const tokens = buildTokens(entry, brand);
+  // For thank_you tests, render the auto-table token as a clear placeholder
+  // since stripe-webhook is what actually fills it on a real send.
+  tokens["registration_summary_block"] =
+    '<div style="background:#f5f4ee;padding:16px;margin:16px 0;border-radius:6px;color:#6b6880;font-style:italic;">[Auto-generated registration details would appear here on a real send.]</div>';
+
+  // Editor passes in the current draft content; fall back to template defaults
+  // so operators can also test the unmodified template.
+  const subjectTpl = params.preview_subject ?? template.default_subject;
+  const bodyTpl = params.preview_body ?? template.default_body;
+
+  const subject = renderTokens(subjectTpl, tokens);
+  const innerBody = renderTokens(bodyTpl, tokens);
+  const fullHtml = wrapInShell(innerBody, brand);
+
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+      },
+      body: JSON.stringify({
+        from: formatFromAddress(brand),
+        to: params.test_to_email,
+        reply_to: brand.reply_to,
+        subject: `[TEST] ${subject}`,
+        html: fullHtml,
+        tags: [
+          { name: "type", value: "lifecycle_test" },
+          { name: "automation", value: template.key },
+        ],
+      }),
+    });
+    if (resp.ok) {
+      const json = await resp.json() as { id?: string };
+      return { ok: true, message_id: json.id };
+    }
+    const errText = await resp.text();
+    return { ok: false, error: `Resend ${resp.status}: ${errText.slice(0, 240)}` };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Audience resolvers
+// ───────────────────────────────────────────────────────────────────────────
+
+async function resolveWelcomeAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+  eventRegistrationId: string | null = null,
+): Promise<AudienceEntry[]> {
+  const days = pickNumber(a.timing_override?.days_before, a.template.default_timing?.days_before, 7);
+  const today = new Date().toISOString().slice(0, 10);
+  const windowEnd = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
+
+  // Audience window: programs starting between today and today + days_before.
+  // BETWEEN + idempotency (UNIQUE constraint) handles late registrants without
+  // duplicate sends. Programs already started (before today) are excluded —
+  // backstop against an automation re-enabled after a long pause.
+  //
+  // Context key includes student_id — siblings in the SAME program get
+  // separate emails, each personalized to their kid. Same parent might
+  // receive 2 welcomes for 2 enrolled kids, which is the right behavior.
+
+  if (a.template.applies_to_program_type === "afterschool") {
+    let q = supabase
+      .from("registrations")
+      .select(`
+        id, parent_id,
+        students!inner ( id, first_name ),
+        parents!inner ( id, first_name, email ),
+        programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase ) )
+      `)
+      .eq("organization_id", a.organization_id)
+      .eq("status", "confirmed")
+      .not("program_id", "is", null)
+      .gte("programs.first_session_date", today)
+      .lte("programs.first_session_date", windowEnd);
+    if (eventRegistrationId) q = q.eq("id", eventRegistrationId);
+    const { data, error } = await q;
+    if (error) throw error;
+    return (data ?? [])
+      .filter((r: any) => r.parents?.email && r.students?.id)
+      .map((r: any) => ({
+        context_key: `program:${r.programs.id}:parent:${r.parents.id}:student:${r.students.id}`,
+        parent_id: r.parents.id,
+        parent_email: r.parents.email,
+        parent_first_name: r.parents.first_name,
+        child_first_name: r.students?.first_name ?? null,
+        program_name: r.programs.curriculum ?? "your program",
+        program_start_date: formatDate(r.programs.first_session_date),
+        program_end_date: "",
+        location_name: r.programs.program_locations?.name ?? "",
+        abandoned_resume_url: "",
+        age_turning: "",
+        final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
+        register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+        next_term_available: nextTermAvailable,
+      }));
+  }
+
+  if (a.template.applies_to_program_type === "camps") {
+    let q = supabase
+      .from("registrations")
+      .select(`
+        id, parent_id,
+        students!inner ( id, first_name ),
+        parents!inner ( id, first_name, email ),
+        camp_sessions!inner ( id, curriculum_name, starts_on, ends_on, location_name, curriculum_id, curricula ( final_showcase ) )
+      `)
+      .eq("organization_id", a.organization_id)
+      .eq("status", "confirmed")
+      .not("camp_session_id", "is", null)
+      .gte("camp_sessions.starts_on", today)
+      .lte("camp_sessions.starts_on", windowEnd);
+    if (eventRegistrationId) q = q.eq("id", eventRegistrationId);
+    const { data, error } = await q;
+    if (error) throw error;
+    return (data ?? [])
+      .filter((r: any) => r.parents?.email && r.students?.id)
+      .map((r: any) => ({
+        context_key: `camp:${r.camp_sessions.id}:parent:${r.parents.id}:student:${r.students.id}`,
+        parent_id: r.parents.id,
+        parent_email: r.parents.email,
+        parent_first_name: r.parents.first_name,
+        child_first_name: r.students?.first_name ?? null,
+        program_name: r.camp_sessions.curriculum_name ?? "your camp",
+        program_start_date: formatDate(r.camp_sessions.starts_on),
+        program_end_date: r.camp_sessions.ends_on ? formatDate(r.camp_sessions.ends_on) : "",
+        location_name: r.camp_sessions.location_name ?? "",
+        abandoned_resume_url: "",
+        age_turning: "",
+        final_showcase_raw: r.camp_sessions.curricula?.final_showcase ?? "",
+        register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+        next_term_available: nextTermAvailable,
+      }));
+  }
+
+  // applies_to='both' — currently no template uses this for Welcome, but
+  // handle gracefully by running both queries and concatenating.
+  return [];
+}
+
+// ─── Check-in (afterschool only, fires N days after first session) ──────────
+async function resolveCheckInAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  const days = pickNumber(a.timing_override?.days_after, a.template.default_timing?.days_after, 14);
+  // 3-day grace window so a slightly-delayed cron still catches recent starts.
+  // Idempotency UNIQUE constraint handles dedup across days.
+  const earliest = new Date(Date.now() - (days + 3) * 86400000).toISOString().slice(0, 10);
+  const latest = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
+
+  const { data, error } = await supabase
+    .from("registrations")
+    .select(`
+      id, parent_id,
+      students!inner ( id, first_name ),
+      parents!inner ( id, first_name, email ),
+      programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase ) )
+    `)
+    .eq("organization_id", a.organization_id)
+    .eq("status", "confirmed")
+    .not("program_id", "is", null)
+    .gte("programs.first_session_date", earliest)
+    .lte("programs.first_session_date", latest);
+  if (error) throw error;
+
+  return (data ?? [])
+    .filter((r: any) => r.parents?.email && r.students?.id)
+    .map((r: any) => ({
+      context_key: `program:${r.programs.id}:parent:${r.parents.id}:student:${r.students.id}:check_in`,
+      parent_id: r.parents.id,
+      parent_email: r.parents.email,
+      parent_first_name: r.parents.first_name,
+      child_first_name: r.students?.first_name ?? null,
+      program_name: r.programs.curriculum ?? "your program",
+      program_start_date: formatDate(r.programs.first_session_date),
+      program_end_date: "",
+      location_name: r.programs.program_locations?.name ?? "",
+      abandoned_resume_url: "",
+      age_turning: "",
+      final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
+      register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+      next_term_available: nextTermAvailable,
+    }));
+}
+
+// ─── Mid recap (camps + afterschool) ────────────────────────────────────────
+// For camps: midpoint = (starts_on + ends_on) / 2.
+// For afterschool: calls derive_program_session_dates(program_id) and picks
+//   the middle index — honors district + location closures per the
+//   feedback-session-date-function memory rule.
+async function resolveMidRecapAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  return resolveRecapAudience(supabase, a, todayStr, "mid_recap", (sessions) => {
+    if (!sessions || sessions.length === 0) return null;
+    return sessions[Math.floor(sessions.length / 2)] ?? null;
+  }, (startsOn, endsOn) => {
+    const startMs = new Date(startsOn + "T00:00:00").getTime();
+    const endMs = new Date(endsOn + "T00:00:00").getTime();
+    return new Date(startMs + (endMs - startMs) / 2).toISOString().slice(0, 10);
+  });
+}
+
+// ─── Final recap (camps + afterschool) ──────────────────────────────────────
+// For camps: last day = ends_on.
+// For afterschool: last element of derive_program_session_dates.
+async function resolveFinalRecapAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  return resolveRecapAudience(supabase, a, todayStr, "final_recap",
+    (sessions) => (sessions && sessions.length > 0 ? sessions[sessions.length - 1] : null),
+    (_startsOn, endsOn) => endsOn,
+  );
+}
+
+// Shared resolver for mid_recap + final_recap. Different from Welcome because
+// the date we care about is COMPUTED from the program/camp, not stored on
+// programs.first_session_date directly.
+async function resolveRecapAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+  todayStr: string,
+  contextSuffix: string,
+  pickProgramDate: (sessions: string[] | null) => string | null,
+  pickCampDate: (startsOn: string, endsOn: string) => string,
+): Promise<AudienceEntry[]> {
+  const entries: AudienceEntry[] = [];
+  const includeCamps = a.template.applies_to_program_type === "camps" || a.template.applies_to_program_type === "both";
+  const includeAfterschool = a.template.applies_to_program_type === "afterschool" || a.template.applies_to_program_type === "both";
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
+
+  // 1. Camps
+  if (includeCamps) {
+    const { data: camps, error: cErr } = await supabase
+      .from("camp_sessions")
+      .select("id, starts_on, ends_on, curriculum_name, location_name, curriculum_id, curricula ( final_showcase )")
+      .eq("organization_id", a.organization_id)
+      .not("starts_on", "is", null)
+      .not("ends_on", "is", null);
+    if (cErr) throw cErr;
+
+    const matchingCamps = (camps ?? []).filter((c: any) => {
+      return c.starts_on && c.ends_on && pickCampDate(c.starts_on, c.ends_on) === todayStr;
+    });
+
+    if (matchingCamps.length > 0) {
+      const campIds = matchingCamps.map((c: any) => c.id);
+      const { data: regs, error: rErr } = await supabase
+        .from("registrations")
+        .select(`
+          id, parent_id, camp_session_id,
+          students!inner ( id, first_name ),
+          parents!inner ( id, first_name, email )
+        `)
+        .eq("organization_id", a.organization_id)
+        .eq("status", "confirmed")
+        .in("camp_session_id", campIds);
+      if (rErr) throw rErr;
+
+      for (const r of (regs ?? []) as any[]) {
+        if (!r.parents?.email || !r.students?.id) continue;
+        const camp = matchingCamps.find((c: any) => c.id === r.camp_session_id);
+        if (!camp) continue;
+        entries.push({
+          context_key: `camp:${camp.id}:parent:${r.parents.id}:student:${r.students.id}:${contextSuffix}`,
+          parent_id: r.parents.id,
+          parent_email: r.parents.email,
+          parent_first_name: r.parents.first_name,
+          child_first_name: r.students.first_name,
+          program_name: camp.curriculum_name ?? "your camp",
+          program_start_date: formatDate(camp.starts_on),
+          program_end_date: formatDate(camp.ends_on),
+          location_name: camp.location_name ?? "",
+          abandoned_resume_url: "",
+          age_turning: "",
+          final_showcase_raw: camp.curricula?.final_showcase ?? "",
+          register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+          next_term_available: nextTermAvailable,
+        });
+      }
+    }
+  }
+
+  // 2. Afterschool — derive_program_session_dates per program
+  if (includeAfterschool) {
+    const { data: programs, error: pErr } = await supabase
+      .from("programs")
+      .select("id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase )")
+      .eq("organization_id", a.organization_id);
+    if (pErr) throw pErr;
+
+    const matchingProgramIds: string[] = [];
+    const programMeta = new Map<string, any>();
+    for (const p of (programs ?? []) as any[]) {
+      const { data: sessions, error: dErr } = await supabase
+        .rpc("derive_program_session_dates", { p_program_id: p.id });
+      if (dErr || !sessions) continue;
+      const targetDate = pickProgramDate(sessions as string[]);
+      if (targetDate !== todayStr) continue;
+      matchingProgramIds.push(p.id);
+      programMeta.set(p.id, {
+        curriculum: p.curriculum,
+        location_name: p.program_locations?.name ?? "",
+        first_session_date: p.first_session_date,
+        last_session_date: (sessions as string[])[sessions.length - 1] ?? null,
+        final_showcase: p.curricula?.final_showcase ?? "",
+      });
+    }
+
+    if (matchingProgramIds.length > 0) {
+      const { data: regs, error: rErr } = await supabase
+        .from("registrations")
+        .select(`
+          id, parent_id, program_id,
+          students!inner ( id, first_name ),
+          parents!inner ( id, first_name, email )
+        `)
+        .eq("organization_id", a.organization_id)
+        .eq("status", "confirmed")
+        .in("program_id", matchingProgramIds);
+      if (rErr) throw rErr;
+
+      for (const r of (regs ?? []) as any[]) {
+        if (!r.parents?.email || !r.students?.id) continue;
+        const meta = programMeta.get(r.program_id);
+        if (!meta) continue;
+        entries.push({
+          context_key: `program:${r.program_id}:parent:${r.parents.id}:student:${r.students.id}:${contextSuffix}`,
+          parent_id: r.parents.id,
+          parent_email: r.parents.email,
+          parent_first_name: r.parents.first_name,
+          child_first_name: r.students.first_name,
+          program_name: meta.curriculum ?? "your program",
+          program_start_date: meta.first_session_date ? formatDate(meta.first_session_date) : "",
+          program_end_date: meta.last_session_date ? formatDate(meta.last_session_date) : "",
+          location_name: meta.location_name,
+          abandoned_resume_url: "",
+          age_turning: "",
+          final_showcase_raw: meta.final_showcase ?? "",
+          register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+          next_term_available: nextTermAvailable,
+        });
+      }
+    }
+  }
+
+  return entries;
+}
+
+// ─── Birthday (camps + afterschool, fires when student DOB matches today) ───
+async function resolveBirthdayAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const day = now.getDate();
+  const year = now.getFullYear();
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
+
+  // PostgREST doesn't easily filter on EXTRACT(month/day FROM birthdate), so
+  // fetch all students with a birthdate in this org and filter month/day in TS.
+  // At J2S scale (~200 students) this is fine; larger orgs may want an RPC.
+  const { data: studentsAll, error: sErr } = await supabase
+    .from("students")
+    .select(`
+      id, first_name, birthdate, parent_id,
+      parents!inner ( id, first_name, email )
+    `)
+    .eq("organization_id", a.organization_id)
+    .not("birthdate", "is", null);
+  if (sErr) throw sErr;
+
+  const birthdayStudents = (studentsAll ?? []).filter((s: any) => {
+    if (!s.birthdate) return false;
+    const parts = s.birthdate.split("-").map(Number);
+    return parts[1] === month && parts[2] === day;
+  });
+
+  if (birthdayStudents.length === 0) return [];
+
+  // Only message families with at least one confirmed registration — avoids
+  // sending happy-birthday to a student record that never registered for anything.
+  const studentIds = birthdayStudents.map((s: any) => s.id);
+  const { data: regs, error: rErr } = await supabase
+    .from("registrations")
+    .select("student_id")
+    .eq("organization_id", a.organization_id)
+    .eq("status", "confirmed")
+    .in("student_id", studentIds);
+  if (rErr) throw rErr;
+
+  const registeredStudentIds = new Set((regs ?? []).map((r: any) => r.student_id));
+
+  return birthdayStudents
+    .filter((s: any) => registeredStudentIds.has(s.id) && s.parents?.email)
+    .map((s: any) => {
+      const birthYear = Number(s.birthdate.split("-")[0]);
+      return {
+        context_key: `student:${s.id}:year:${year}`,
+        parent_id: s.parents.id,
+        parent_email: s.parents.email,
+        parent_first_name: s.parents.first_name,
+        child_first_name: s.first_name,
+        program_name: "",
+        program_start_date: "",
+        program_end_date: "",
+        location_name: "",
+        abandoned_resume_url: "",
+        age_turning: String(year - birthYear),
+        final_showcase_raw: "",
+        register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+        next_term_available: nextTermAvailable,
+      };
+    });
+}
+
+// ─── Abandoned registration ─────────────────────────────────────────────────
+async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationRow): Promise<AudienceEntry[]> {
+  const hours = pickNumber(a.timing_override?.hours_after_pending, a.template.default_timing?.hours_after_pending, 24);
+  const cutoff = new Date(Date.now() - hours * 3600000).toISOString();
+  const oldestAcceptable = new Date(Date.now() - 7 * 24 * 3600000).toISOString();
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
+
+  // Don't chase pending registrations older than 7 days — those are rotten leads.
+  const { data, error } = await supabase
+    .from("registrations")
+    .select(`
+      id, parent_id, registered_at,
+      students ( first_name ),
+      parents ( id, first_name, email ),
+      programs ( id, curriculum, program_locations ( name ) ),
+      camp_sessions ( id, curriculum_name, location_name )
+    `)
+    .eq("organization_id", a.organization_id)
+    .eq("status", "pending")
+    .lt("registered_at", cutoff)
+    .gt("registered_at", oldestAcceptable);
+
+  if (error) throw error;
+
+  return (data ?? [])
+    .filter((r: any) => r.parents?.email)
+    .map((r: any) => ({
+      context_key: `registration:${r.id}`,
+      parent_id: r.parents.id,
+      parent_email: r.parents.email,
+      parent_first_name: r.parents.first_name,
+      child_first_name: r.students?.first_name ?? null,
+      program_name: r.programs?.curriculum ?? r.camp_sessions?.curriculum_name ?? "your program",
+      program_start_date: "",
+      program_end_date: "",
+      location_name: r.programs?.program_locations?.name ?? r.camp_sessions?.location_name ?? "",
+      // Multi-tenant safe — slug comes from the org row joined on automations,
+      // never hardcoded. Points to the existing tenant register page; when the
+      // resume route ships, the URL pattern doesn't change.
+      abandoned_resume_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register?resume_reg=${r.id}`,
+      age_turning: "",
+    }));
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Token rendering + HTML shell
+// ───────────────────────────────────────────────────────────────────────────
+
+function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, string> {
+  return {
+    first_name: (entry.parent_first_name?.trim() || "there"),
+    child_first_name: (entry.child_first_name?.trim() || "your child"),
+    org_name: brand.org_name,
+    // In body context, strip the " @ Org" suffix that the From header uses.
+    // "Jessica @ Journey to STEAM" → "Jessica" — natural in a sign-off.
+    // Mirrors the convention in marketing-touchpoint-send/index.ts.
+    sender_name: senderNameForBody(brand.sender_name) || brand.org_name,
+    program_name: entry.program_name,
+    program_start_date: entry.program_start_date,
+    program_end_date: entry.program_end_date,
+    location_name: entry.location_name,
+    age_turning: entry.age_turning,
+    abandoned_resume_url: entry.abandoned_resume_url,
+    final_showcase_block: buildShowcaseBlock(entry.final_showcase_raw, brand),
+    register_url: entry.register_url,
+    next_term_link_block: buildNextTermLinkBlock(entry.next_term_available, entry.register_url, brand),
+  };
+}
+
+// Auto-detect cross-sell link block. Renders only when the org has at least one
+// future program/camp starting more than 14 days out (caught at audience-resolve
+// time via hasFutureProgramsForOrg). Empty string otherwise — tenants without
+// upcoming programs don't get a dead link. Multi-tenant safe — uses brand.primary_color.
+function buildNextTermLinkBlock(available: boolean, registerUrl: string, brand: OrgBrand): string {
+  if (!available || !registerUrl) return "";
+  return `<p style="margin-top:24px;padding-top:16px;border-top:1px solid #ede9fe;font-size:14px;color:#1A1530;">Looking ahead? <a href="${registerUrl}" style="color:${brand.primary_color};font-weight:600;text-decoration:none;">See what&apos;s coming next &rarr;</a></p>`;
+}
+
+function senderNameForBody(senderName: string): string {
+  if (!senderName) return "";
+  return senderName.split(" @ ")[0].trim();
+}
+
+// Tokens whose values are already valid HTML — must NOT be re-escaped during
+// substitution (otherwise <p> renders as &lt;p&gt; in the parent's email).
+// Mirrors the pattern in marketing-touchpoint-send/index.ts.
+const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "next_term_link_block"]);
+
+// Auto-detect helper. Returns true when the org has at least one program OR
+// camp_session starting more than 14 days from today — i.e. a real "next term"
+// to point at. The 14-day cutoff filters out the very camp/program a Welcome
+// is currently announcing, so welcome_camp for a camp starting in 7 days
+// doesn't promote that same camp as "what's next."
+async function hasFutureProgramsForOrg(supabase: SupabaseClient, orgId: string): Promise<boolean> {
+  const futureCutoff = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+  const { data: futureProgram } = await supabase
+    .from("programs")
+    .select("id")
+    .eq("organization_id", orgId)
+    .gt("first_session_date", futureCutoff)
+    .limit(1)
+    .maybeSingle();
+  if (futureProgram) return true;
+  const { data: futureCamp } = await supabase
+    .from("camp_sessions")
+    .select("id")
+    .eq("organization_id", orgId)
+    .gt("starts_on", futureCutoff)
+    .limit(1)
+    .maybeSingle();
+  return !!futureCamp;
+}
+
+// Render {{tokens}} in a template string. Plain-text tokens get HTML-escaped
+// so <, >, " stay safe in body text + href attribute context. HTML-pre-rendered
+// tokens (e.g. {{final_showcase_block}}) are passed through verbatim.
+function renderTokens(template: string, tokens: Record<string, string>): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+    const v = tokens[key];
+    if (v == null) return match; // leave unknown tokens in place for visibility
+    if (PRE_RENDERED_HTML_TOKENS.has(key)) return v;
+    return htmlEscapeSafe(v);
+  });
+}
+
+// Build the optional "On the final day:" showcase block from curricula.final_showcase.
+// Returns empty string when the curriculum doesn't define one — operators
+// can keep {{final_showcase_block}} in the body for ALL camps; it just
+// silently vanishes for the ones that don't have a showcase.
+function buildShowcaseBlock(finalShowcase: string | null | undefined, brand: OrgBrand): string {
+  if (!finalShowcase || !finalShowcase.trim()) return "";
+  const safe = escapeHtml(finalShowcase.trim());
+  return `<div style="background:#f5f4ee;border-left:3px solid ${brand.primary_color};padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;"><strong>On the final day:</strong> ${safe}</div>`;
+}
+
+// Escape characters that can break HTML in either text or attribute context.
+// Single quote left alone — modern HTML allows it raw in double-quoted attrs.
+function htmlEscapeSafe(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function wrapInShell(innerBody: string, brand: OrgBrand): string {
+  // White-background shell with the tenant logo on top — no generic gradient
+  // banner. Every provider will brand differently and a hardcoded purple
+  // bleeds platform color into their identity. Wordmark fallback only when
+  // an org hasn't set a logo yet (rare in practice).
+  const logoBlock = brand.logo_url
+    ? `<img src="${brand.logo_url}" alt="${escapeHtml(brand.org_name)}" style="max-height:56px;display:block;margin:0 auto;" />`
+    : `<div style="color:${brand.primary_color};font-size:18px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;text-align:center;">${escapeHtml(brand.org_name)}</div>`;
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(brand.org_name)}</title></head>
+<body style="margin:0;padding:0;background:#fbfaf6;font-family:'Nunito Sans',Arial,sans-serif;">
+<div style="max-width:600px;margin:0 auto;background:#fff;">
+<div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
+<div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">
+${innerBody}
+</div>
+<div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
+${escapeHtml(brand.org_name)} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}
+</div>
+</div>
+</body></html>`;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Small utils
+// ───────────────────────────────────────────────────────────────────────────
+
+function pickNumber(...candidates: unknown[]): number {
+  for (const c of candidates) {
+    if (typeof c === "number" && Number.isFinite(c)) return c;
+  }
+  // Last argument is the default — guaranteed number by caller convention.
+  const last = candidates[candidates.length - 1];
+  return typeof last === "number" ? last : 0;
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+}

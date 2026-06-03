@@ -302,11 +302,37 @@ serve(async (req) => {
         }
 
         await sendConfirmationEmail({
-          brand,
+          admin, brand,
           to: parentEmail, parentName, registrations: regs,
           totalCents: session.amount_total || 0, sessionId: session.id, useInstallments,
           installmentInfo,
         });
+
+        // Trigger lifecycle-automations-cron in event mode for each newly-
+        // confirmed registration. If the program starts within the next 7
+        // days, the cron fires Welcome immediately so late registrants don't
+        // wait until the daily run. Idempotency UNIQUE constraint prevents
+        // double-sends when the daily cron later includes this registration.
+        // Non-blocking — failures are logged but don't break the webhook.
+        try {
+          const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY');
+          if (SUPABASE_ANON_KEY) {
+            await Promise.allSettled(
+              regs.map((r: { id: string }) =>
+                fetch(`${SUPABASE_URL}/functions/v1/lifecycle-automations-cron`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                  },
+                  body: JSON.stringify({ registration_id: r.id }),
+                })
+              )
+            );
+          }
+        } catch (eventErr) {
+          console.error('[stripe-webhook] lifecycle event-mode POST failed:', eventErr);
+        }
       }
 
       // Auto-create parent account
@@ -453,12 +479,32 @@ async function sendOperatorAlert({ brand, to, subject, body }: { brand: OrgBrand
 }
 
 async function sendConfirmationEmail({
-  brand, to, parentName, registrations, totalCents, sessionId, useInstallments, installmentInfo,
+  admin, brand, to, parentName, registrations, totalCents, sessionId, useInstallments, installmentInfo,
 }: {
+  admin: ReturnType<typeof createClient>;
   brand: OrgBrand;
   to: string; parentName: string; registrations: any[]; totalCents: number; sessionId: string; useInstallments: boolean;
   installmentInfo: { paidToday: number; installment2Amount: number; installment2Date: string; installment3Amount: number; installment3Date: string; } | null;
 }) {
+  // Check the org's thank-you automation toggle + override. The automations row
+  // is created lazily — operators who never visited the Automations tab have no
+  // row and get the default behavior (send the email, use template defaults
+  // baked here). Toggling enabled=false explicitly suppresses the send.
+  const { data: thankYouAutomation } = await admin
+    .from('automations')
+    .select(`
+      enabled, subject_override, body_override,
+      template:automation_templates!inner ( key, default_subject, default_body )
+    `)
+    .eq('organization_id', brand.org_id)
+    .eq('template.key', 'thank_you')
+    .maybeSingle() as { data: { enabled: boolean; subject_override: string | null; body_override: string | null; template: { default_subject: string; default_body: string } } | null };
+
+  if (thankYouAutomation && thankYouAutomation.enabled === false) {
+    console.log(`[stripe-webhook] thank_you disabled for org ${brand.org_id} — skipping confirmation email`);
+    return;
+  }
+
   const fmt = (cents: number) => `$${(cents / 100).toFixed(2)}`;
   const fmtDate = (iso: string) => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) : '';
   const greeting = parentName ? `Hi ${parentName.split(' ')[0]}` : 'Hi there';
@@ -503,44 +549,88 @@ async function sendConfirmationEmail({
     ? `<tr><td colspan="2" style="padding:20px 16px;background:#F5F3FF;"><div style="font-family:'Nunito Sans',sans-serif;font-size:15px;font-weight:700;color:${brand.secondary_color};margin-bottom:12px;">Your payment plan</div><table cellpadding="0" cellspacing="0" style="width:100%;font-family:'Nunito Sans',sans-serif;font-size:14px;color:#1A1530;"><tr><td style="padding:6px 0;">Today (paid)</td><td style="padding:6px 0;text-align:right;font-weight:700;">${fmt(installmentInfo.paidToday)}</td></tr><tr><td style="padding:6px 0;">Installment 2 &middot; ${fmtDate(installmentInfo.installment2Date)}</td><td style="padding:6px 0;text-align:right;">${fmt(installmentInfo.installment2Amount)}</td></tr><tr><td style="padding:6px 0;">Installment 3 &middot; ${fmtDate(installmentInfo.installment3Date)}</td><td style="padding:6px 0;text-align:right;">${fmt(installmentInfo.installment3Amount)}</td></tr><tr><td style="padding:8px 0 0;border-top:1px solid #DDD8FA;font-weight:700;">Total</td><td style="padding:8px 0 0;border-top:1px solid #DDD8FA;text-align:right;font-weight:700;">${fmt(installmentInfo.paidToday + installmentInfo.installment2Amount + installmentInfo.installment3Amount)}</td></tr></table><div style="font-family:'Nunito Sans',sans-serif;font-size:12px;color:#6b6880;margin-top:10px;">Your card on file will be charged automatically on each date. We'll email you before each charge.</div></td></tr>`
     : `<tr><td style="padding:20px 16px;font-family:'Nunito Sans',sans-serif;font-size:18px;font-weight:700;color:#1A1530;">Total paid</td><td style="padding:20px 16px;text-align:right;font-family:'Titan One',Georgia,serif;font-size:24px;color:${brand.accent_color};">${fmt(totalCents)}</td></tr>`;
 
-  const logoBlock = brand.logo_url
-    ? `<img src="${brand.logo_url}" alt="${escapeHtml(brand.org_name)}" style="max-height:48px;display:block;margin:0 auto 12px;" />`
-    : `<div style="color:${brand.accent_color};font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(brand.org_name)}</div>`;
-
-  const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>Registration Confirmation</title></head>
-<body style="margin:0;padding:0;background:${brand.page_bg_color};font-family:'Nunito Sans',Arial,sans-serif;">
-  <div style="max-width:600px;margin:0 auto;background:#fff;">
-    <div style="background:linear-gradient(135deg,${brand.primary_color},${brand.secondary_color});padding:40px 30px;text-align:center;">
-      ${logoBlock}
-      <h1 style="color:#fff;margin:12px 0 0;font-family:'Titan One',Georgia,serif;font-size:32px;">You're registered!</h1>
-    </div>
-    <div style="padding:32px 30px;">
-      <p style="margin:0 0 16px;font-size:16px;color:#1A1530;">${escapeHtml(greeting)},</p>
-      <p style="margin:0 0 24px;font-size:16px;color:#1A1530;line-height:1.6;">
-        Thanks for signing up! Here's everything you need to know for your child's program.
-      </p>
-      <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+  // Build the auto-generated summary block — operators who customize the body
+  // get this slotted in via the {{registration_summary_block}} token. Wraps
+  // the registration table + totals/payment plan in a single <table>.
+  const summaryBlock = `<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:24px;font-family:'Nunito Sans',sans-serif;">
         ${regRows}
         ${totalsBlock}
-      </table>
-      <div style="background:#EDE9FE;border-radius:12px;padding:20px;margin-bottom:24px;">
-        <div style="font-weight:700;color:${brand.secondary_color};margin-bottom:8px;">What happens next?</div>
-        <ul style="margin:0;padding-left:20px;color:#1A1530;font-size:14px;line-height:1.8;">
-          <li>We'll send a reminder email before the first session</li>
-          ${hasAnyArrival ? '<li>Arrival and dismissal details are listed above for each program</li>' : '<li>We\'ll share arrival and dismissal details before the first session</li>'}
-          <li>Check your inbox for a separate email with access to your parent dashboard</li>
-        </ul>
-      </div>
-      <p style="margin:0 0 8px;font-size:14px;color:#6b6880;">Questions? Reach us at <a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p>
-    </div>
-    <div style="background:#1A1530;padding:20px 30px;text-align:center;color:#fff;opacity:0.6;font-size:12px;">
-      ${escapeHtml(brand.org_name)} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}
-    </div>
-  </div>
-</body>
-</html>`;
+      </table>`;
+
+  // White-background email shell — logo on top, no platform-color gradient.
+  // Matches the lifecycle-automations-cron shell so tenants get a consistent
+  // look across every email Enrops sends on their behalf.
+  const logoBlock = brand.logo_url
+    ? `<img src="${brand.logo_url}" alt="${escapeHtml(brand.org_name)}" style="max-height:56px;display:block;margin:0 auto;" />`
+    : `<div style="color:${brand.primary_color};font-size:18px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;text-align:center;">${escapeHtml(brand.org_name)}</div>`;
+
+  const senderShortName = (brand.sender_name?.split(' @ ')[0]?.trim()) || brand.org_name;
+  const childFirstName = registrations[0]?.students?.first_name || 'your child';
+
+  // Render the body — operator's override takes precedence over the template
+  // default. {{registration_summary_block}} resolves to the auto-table here
+  // (stripe-webhook is the only path that emits this token).
+  const overrideBody = thankYouAutomation?.body_override
+    || thankYouAutomation?.template?.default_body
+    || null;
+  const overrideSubject = thankYouAutomation?.subject_override
+    || thankYouAutomation?.template?.default_subject
+    || null;
+
+  let innerBody: string;
+  if (overrideBody) {
+    innerBody = overrideBody
+      .replace(/\{\{first_name\}\}/g, escapeHtml(parentName ? parentName.split(' ')[0] : 'there'))
+      .replace(/\{\{child_first_name\}\}/g, escapeHtml(childFirstName))
+      .replace(/\{\{org_name\}\}/g, escapeHtml(brand.org_name))
+      .replace(/\{\{sender_name\}\}/g, escapeHtml(senderShortName))
+      .replace(/\{\{registration_summary_block\}\}/g, summaryBlock);
+  } else {
+    // No template available yet (org never visited Automations tab AND we
+    // couldn't load the default from automation_templates). Fall back to the
+    // legacy hardcoded structure so existing tenants keep getting confirmation
+    // emails. Same white-shell wrapping as above.
+    const arrivalNote = hasAnyArrival
+      ? "<li>Arrival and dismissal details are listed above for each program</li>"
+      : "<li>We'll share arrival and dismissal details before the first session</li>";
+    innerBody = `<p>${escapeHtml(greeting)},</p>
+<p>Thanks for signing up! Here's everything you need to know for your child's program.</p>
+${summaryBlock}
+<div style="background:#EDE9FE;border-radius:12px;padding:20px;margin-bottom:24px;">
+  <div style="font-weight:700;color:${brand.secondary_color};margin-bottom:8px;">What happens next?</div>
+  <ul style="margin:0;padding-left:20px;color:#1A1530;font-size:14px;line-height:1.8;">
+    <li>We'll send a reminder email before the first session</li>
+    ${arrivalNote}
+    <li>Check your inbox for a separate email with access to your parent dashboard</li>
+  </ul>
+</div>
+<p>Questions? Reach us at <a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p>`;
+  }
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Registration Confirmation</title></head>
+<body style="margin:0;padding:0;background:#fbfaf6;font-family:'Nunito Sans',Arial,sans-serif;">
+<div style="max-width:600px;margin:0 auto;background:#fff;">
+<div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
+<div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">
+${innerBody}
+</div>
+<div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
+${escapeHtml(brand.org_name)} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}
+</div>
+</div>
+</body></html>`;
+
+  // Subject — operator override (with {{tokens}} resolved) wins; else fall
+  // back to the legacy installments-aware subject for backward compatibility.
+  const renderedSubject = overrideSubject
+    ? overrideSubject
+        .replace(/\{\{first_name\}\}/g, parentName ? parentName.split(' ')[0] : 'there')
+        .replace(/\{\{child_first_name\}\}/g, childFirstName)
+        .replace(/\{\{org_name\}\}/g, brand.org_name)
+        .replace(/\{\{sender_name\}\}/g, senderShortName)
+    : useInstallments
+      ? `You're registered! Your payment plan is set — ${brand.org_name}`
+      : `You're registered! — ${brand.org_name}`;
 
   const resendResp = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -548,9 +638,7 @@ async function sendConfirmationEmail({
     body: JSON.stringify({
       from: formatFromAddress(brand), to,
       reply_to: brand.reply_to,
-      subject: useInstallments
-        ? `You're registered! Your payment plan is set — ${brand.org_name}`
-        : `You're registered! — ${brand.org_name}`,
+      subject: renderedSubject,
       html,
       tags: [
         { name: 'type', value: useInstallments ? 'registration_confirmation_installments' : 'registration_confirmation' },

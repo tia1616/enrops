@@ -12,6 +12,7 @@ import AdminLayout from './layouts/AdminLayout.jsx';
 import AdminLogin from './pages/admin/AdminLogin.jsx';
 import AdminOverview from './pages/admin/AdminOverview.jsx';
 import AICampaignBuilder from './pages/admin/marketing-v2/AICampaignBuilder.jsx';
+import AutomationsTab from './pages/admin/marketing-v2/AutomationsTab.jsx';
 import Schedule from './pages/admin/Schedule.jsx';
 import SchedulePrint from './pages/admin/SchedulePrint.jsx';
 import ExtractionTest from './pages/admin/dev/ExtractionTest.jsx';
@@ -107,10 +108,11 @@ export default function App() {
             Sub-routes:
               /admin/family-comms              -> redirects to /marketing (default)
               /admin/family-comms/marketing    -> AI campaign builder (was /marketing-v2)
-              /admin/family-comms/automations  -> Automations sub-tab (build pending, task #13)
+              /admin/family-comms/automations  -> Lifecycle automations dashboard
             /admin/marketing-v2 stays as a redirect for old bookmarks. */}
         <Route path="family-comms" element={<Navigate to="/admin/family-comms/marketing" replace />} />
         <Route path="family-comms/marketing" element={<AICampaignBuilder />} />
+        <Route path="family-comms/automations" element={<AutomationsTab />} />
         <Route path="marketing-v2" element={<Navigate to="/admin/family-comms/marketing" replace />} />
         <Route path="schedule" element={<Schedule />} />
         <Route path="schedule/print" element={<SchedulePrint />} />

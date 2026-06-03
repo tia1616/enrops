@@ -34,6 +34,7 @@ import Q3_Duration from "./questions/Q3_Duration.jsx";
 import Q4_Channels from "./questions/Q4_Channels.jsx";
 import ScheduleReview from "./ScheduleReview.jsx";
 import DraftingScreen from "./DraftingScreen.jsx";
+import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 
 const INITIAL = {
   step: 1,
@@ -594,6 +595,7 @@ export default function AICampaignBuilder() {
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", paddingBottom: 96 }}>
+      <FamilyCommsTabs active="marketing" />
       <ProgressHeader step={state.step} />
       {state.step === 1 && <Q1_What {...sharedProps} />}
       {state.step === 2 && <Q2_Who {...sharedProps} />}
