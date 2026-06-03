@@ -47,8 +47,8 @@ function decodeCommonEntities(s) {
 // useful in sign-offs for a personal touch.
 const TOKENS_BY_TEMPLATE_KEY = {
   thank_you:              ["first_name", "child_first_name", "org_name", "sender_name", "registration_summary_block"],
-  welcome_camp:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "location_name", "final_showcase_block", "next_term_link_block", "register_url"],
-  welcome_afterschool:    ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "location_name", "next_term_link_block", "register_url"],
+  welcome_camp:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "location_name", "arrival_dismissal_block", "final_showcase_block", "next_term_link_block", "register_url"],
+  welcome_afterschool:    ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "location_name", "arrival_dismissal_block", "next_term_link_block", "register_url"],
   check_in:               ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "register_url"],
   mid_recap:              ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "mid_term_skills_block", "register_url"],
   final_recap:            ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_end_date", "final_showcase_block", "final_recap_skills_block", "next_term_link_block", "register_url"],
@@ -58,7 +58,7 @@ const TOKENS_BY_TEMPLATE_KEY = {
 };
 
 // HTML-pre-rendered tokens — preview passes their sample HTML through verbatim.
-const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "registration_summary_block", "next_term_link_block"]);
+const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "arrival_dismissal_block", "registration_summary_block", "next_term_link_block"]);
 
 // Sample values for the live preview. Tenant-aware — pre-rendered blocks
 // use the org's actual primary_color so what operators see matches what
@@ -88,6 +88,8 @@ function sampleTokens(orgName, senderName, primaryColor) {
       `<div style="background:#f5f4ee;padding:16px 20px;margin:16px 0;border-radius:6px;border-left:3px solid ${color};"><p style="margin:0 0 10px;font-weight:700;color:#1A1530;">What they have been working on:</p><ul style="margin:0;padding-left:20px;color:#1A1530;line-height:1.6;"><li>Physics simulation: coding velocity, gravity, and friction with variables</li><li>Collision detection: triggering game events when sprites touch</li><li>Platformer level design: sketching and building jumpable layouts</li><li>Game logic with conditional statements and loops</li></ul></div>`,
     final_recap_skills_block:
       `<div style="background:#f5f4ee;padding:16px 20px;margin:16px 0;border-radius:6px;border-left:3px solid ${color};"><p style="margin:0 0 10px;font-weight:700;color:#1A1530;">What they covered:</p><ul style="margin:0;padding-left:20px;color:#1A1530;line-height:1.6;"><li>Physics simulation: velocity, gravity, and friction using variables</li><li>Event-driven programming with broadcasts and receivers across multiple sprites</li><li>Variable management for score, lives, and game state</li><li>Multi-scene architecture: warp pipes and backdrop switching for multiple levels</li><li>Game design process: sketch, build, playtest, and iterate</li></ul></div>`,
+    arrival_dismissal_block:
+      `<div style="background:#f5f4ee;padding:14px 18px;margin:16px 0;border-radius:6px;border-left:3px solid ${color};"><p style="margin:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${color};">Arrival</p><p style="margin:0;color:#1A1530;font-size:14px;line-height:1.55;margin-bottom:12px;">Doors open at 8:45am. Drop off at the lobby — instructors will check kids in and walk them to the room. Please park in the visitor lot, not the loading zone.</p><p style="margin:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${color};">Dismissal</p><p style="margin:0;color:#1A1530;font-size:14px;line-height:1.55;">Pickup is at the lobby at 12:30pm sharp. Please be on time — instructors need to leave for the afternoon session.</p></div>`,
   };
 }
 

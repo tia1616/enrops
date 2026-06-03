@@ -95,6 +95,8 @@ interface AudienceEntry {
   final_showcase_raw: string;   // raw curricula.final_showcase text (block HTML built in buildTokens where brand is known)
   mid_term_skills_raw: string[]; // raw curricula.mid_term_skills array — drives {{mid_term_skills_block}}
   final_recap_skills_raw: string[]; // raw curricula.final_recap_skills array — drives {{final_recap_skills_block}}
+  arrival_instructions_raw: string; // raw program_locations.arrival_instructions — drives {{arrival_dismissal_block}}
+  dismissal_instructions_raw: string; // raw program_locations.dismissal_instructions — drives {{arrival_dismissal_block}}
   register_url: string;         // org's base registration URL
   next_term_available: boolean; // true if org has programs/camps starting >14 days out — drives {{next_term_link_block}}
 }
@@ -462,6 +464,8 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
     location_name: "Beaverton STEAM Hub",
     abandoned_resume_url: "#",
     age_turning: "8",
+    arrival_instructions_raw: "Doors open at 8:45am. Drop off at the lobby — instructors will check kids in and walk them to the room. Please park in the visitor lot, not the loading zone.",
+    dismissal_instructions_raw: "Pickup is at the lobby at 12:30pm sharp. Please be on time — instructors need to leave for the afternoon session.",
     final_showcase_raw: "Campers host a Playtest Arcade where every kid loads their finished platformer onto a Chromebook and the whole group rotates through playing each other's games.",
     mid_term_skills_raw: [
       "Physics simulation: coding velocity, gravity, and friction with variables",
@@ -557,7 +561,7 @@ async function resolveWelcomeAudience(
         id, parent_id,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+        programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, arrival_instructions, dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
       `)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
@@ -584,6 +588,8 @@ async function resolveWelcomeAudience(
         final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
         mid_term_skills_raw: (r.programs.curricula?.mid_term_skills as string[] | null) ?? [],
         final_recap_skills_raw: (r.programs.curricula?.final_recap_skills as string[] | null) ?? [],
+        arrival_instructions_raw: r.programs.program_locations?.arrival_instructions ?? "",
+        dismissal_instructions_raw: r.programs.program_locations?.dismissal_instructions ?? "",
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
         next_term_available: nextTermAvailable,
       }));
@@ -596,7 +602,7 @@ async function resolveWelcomeAudience(
         id, parent_id,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        camp_sessions!inner ( id, curriculum_name, starts_on, ends_on, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+        camp_sessions!inner ( id, curriculum_name, starts_on, ends_on, location_id, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills ), program_locations ( arrival_instructions, dismissal_instructions ) )
       `)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
@@ -623,6 +629,8 @@ async function resolveWelcomeAudience(
         final_showcase_raw: r.camp_sessions.curricula?.final_showcase ?? "",
         mid_term_skills_raw: (r.camp_sessions.curricula?.mid_term_skills as string[] | null) ?? [],
         final_recap_skills_raw: (r.camp_sessions.curricula?.final_recap_skills as string[] | null) ?? [],
+        arrival_instructions_raw: r.camp_sessions.program_locations?.arrival_instructions ?? "",
+        dismissal_instructions_raw: r.camp_sessions.program_locations?.dismissal_instructions ?? "",
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
         next_term_available: nextTermAvailable,
       }));
@@ -651,7 +659,7 @@ async function resolveCheckInAudience(
       id, parent_id,
       students!inner ( id, first_name ),
       parents!inner ( id, first_name, email ),
-      programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+      programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, arrival_instructions, dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
     `)
     .eq("organization_id", a.organization_id)
     .eq("status", "confirmed")
@@ -790,7 +798,7 @@ async function resolveRecapAudience(
   if (includeAfterschool) {
       const { data: programs, error: pErr } = await supabase
       .from("programs")
-      .select("id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
+      .select("id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, arrival_instructions, dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
       .eq("organization_id", a.organization_id);
     if (pErr) throw pErr;
 
@@ -920,6 +928,8 @@ async function resolveBirthdayAudience(
         final_showcase_raw: "",
         mid_term_skills_raw: [],
         final_recap_skills_raw: [],
+        arrival_instructions_raw: "",
+        dismissal_instructions_raw: "",
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
         next_term_available: nextTermAvailable,
       };
@@ -940,7 +950,7 @@ async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationR
       id, parent_id, registered_at,
       students ( first_name ),
       parents ( id, first_name, email ),
-      programs ( id, curriculum, program_locations ( name ) ),
+      programs ( id, curriculum, program_locations ( name, arrival_instructions, dismissal_instructions ) ),
       camp_sessions ( id, curriculum_name, location_name )
     `)
     .eq("organization_id", a.organization_id)
@@ -992,6 +1002,7 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     final_showcase_block: buildShowcaseBlock(entry.final_showcase_raw, brand),
     mid_term_skills_block: buildSkillsBlock(entry.mid_term_skills_raw, brand, "What they have been working on"),
     final_recap_skills_block: buildSkillsBlock(entry.final_recap_skills_raw, brand, "What they covered"),
+    arrival_dismissal_block: buildArrivalDismissalBlock(entry.arrival_instructions_raw, entry.dismissal_instructions_raw, brand),
     register_url: entry.register_url,
     next_term_link_block: buildNextTermLinkBlock(entry.next_term_available, entry.register_url, brand),
   };
@@ -1029,7 +1040,23 @@ function senderNameForBody(senderName: string): string {
 // Tokens whose values are already valid HTML — must NOT be re-escaped during
 // substitution (otherwise <p> renders as &lt;p&gt; in the parent's email).
 // Mirrors the pattern in marketing-touchpoint-send/index.ts.
-const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "next_term_link_block"]);
+const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "arrival_dismissal_block", "next_term_link_block"]);
+
+// Build the "Arrival" / "Dismissal" location-instructions block. Renders
+// either or both labeled sections when populated, empty string when both
+// are null/empty. Source: program_locations.arrival_instructions and
+// dismissal_instructions — pulled in welcome_camp + welcome_afterschool
+// resolvers via the location join.
+function buildArrivalDismissalBlock(arrival: string | null | undefined, dismissal: string | null | undefined, brand: OrgBrand): string {
+  const a = typeof arrival === "string" ? arrival.trim() : "";
+  const d = typeof dismissal === "string" ? dismissal.trim() : "";
+  if (!a && !d) return "";
+  const labelStyle = `margin:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${brand.primary_color};`;
+  const textStyle = "margin:0;color:#1A1530;font-size:14px;line-height:1.55;";
+  const arrivalSection = a ? `<p style="${labelStyle}">Arrival</p><p style="${textStyle}${d ? "margin-bottom:12px;" : ""}">${escapeHtml(a)}</p>` : "";
+  const dismissalSection = d ? `<p style="${labelStyle}">Dismissal</p><p style="${textStyle}">${escapeHtml(d)}</p>` : "";
+  return `<div style="background:#f5f4ee;padding:14px 18px;margin:16px 0;border-radius:6px;border-left:3px solid ${brand.primary_color};">${arrivalSection}${dismissalSection}</div>`;
+}
 
 // Auto-detect helper. Returns true when the org has at least one program OR
 // camp_session starting more than 14 days from today — i.e. a real "next term"

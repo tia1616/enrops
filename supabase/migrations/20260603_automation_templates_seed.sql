@@ -62,6 +62,7 @@ INSERT INTO automation_templates (
   E'{{child_first_name}}''s camp starts {{program_start_date}}',
   $body$<p>Hi {{first_name}},</p>
 <p>Quick heads-up: {{child_first_name}}'s {{program_name}} camp at {{location_name}} starts {{program_start_date}}.</p>
+{{arrival_dismissal_block}}
 <p><strong>What to bring:</strong> a water bottle, snacks, and a lunch if your child has a full day of camp.</p>
 <p><strong>Pickup:</strong> if your child has your approval for something other than parent pick-up (e.g. they can walk home by themselves), please reply to this email so we can update the instructor.</p>
 {{final_showcase_block}}
@@ -77,7 +78,7 @@ INSERT INTO automation_templates (
   E'{{child_first_name}}''s after-school program starts {{program_start_date}}',
   $body$<p>Hi {{first_name}},</p>
 <p>{{child_first_name}}'s {{program_name}} after-school program starts {{program_start_date}} at {{location_name}}.</p>
-<p>[Customize with pickup details, what they'll be doing, and what to expect on week one.]</p>
+{{arrival_dismissal_block}}
 <p>Excited to have them,<br/>{{sender_name}}</p>$body$,
   '{"days_before": 7}'::jsonb, 3, true, true, 30
 ),
