@@ -20,6 +20,27 @@ import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import { editableToHtml, highlightTokens, htmlToEditable } from "./bodyEditorUtils.js";
 
+// Decode the common HTML entities operators might type or paste into a
+// plain-text input. The big one is &mdash; in subjects — subjects don't
+// render HTML, so the literal 7-char string would land in parents' inboxes.
+// Catches the same bug Jessica caught 2026-06-03.
+function decodeCommonEntities(s) {
+  if (typeof s !== "string" || !s) return s;
+  return s
+    .replace(/&mdash;/g, "—")
+    .replace(/&ndash;/g, "–")
+    .replace(/&rarr;/g, "→")
+    .replace(/&larr;/g, "←")
+    .replace(/&middot;/g, "·")
+    .replace(/&hellip;/g, "…")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, "\"")
+    // &amp; last — otherwise we'd un-double-escape any literal &amp; the
+    // operator put in deliberately (e.g. inside a real URL query string).
+    .replace(/&amp;/g, "&");
+}
+
 // Per-template token availability. Mirrors what the cron's buildTokens emits
 // for each trigger type. Keep in sync with lifecycle-automations-cron/index.ts.
 // {{sender_name}} = the person who sends (stripped of " @ Org" suffix);
@@ -161,10 +182,16 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     setError(null);
     setSuccess(null);
     try {
+      // Decode any HTML entities the operator pasted in. Subjects are
+      // plain text — &mdash; would render as 7 literal chars. Bodies are
+      // HTML and entities render correctly there, but decoded chars look
+      // cleaner in the editor next time they open it.
+      const cleanedSubject = decodeCommonEntities(subject);
+      const cleanedBody = decodeCommonEntities(body);
       // Only set overrides for fields that actually differ from defaults —
       // keeps the table clean and makes "Reset" semantically simple.
-      const subjectOverride = subject !== template.default_subject ? subject : null;
-      const bodyOverride = body !== template.default_body ? body : null;
+      const subjectOverride = cleanedSubject !== template.default_subject ? cleanedSubject : null;
+      const bodyOverride = cleanedBody !== template.default_body ? cleanedBody : null;
       // Capture prior values BEFORE the upsert so we can append edit history.
       const prevSubject = automation?.subject_override ?? null;
       const prevBody = automation?.body_override ?? null;
@@ -336,7 +363,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
           backdrop. The Edit button on the row owns the open/close toggle. */}
       <div style={{ padding: 0 }}>
           {/* Subject */}
-          <label style={{ display: "block", marginBottom: 16 }}>
+          <div style={{ marginBottom: 16 }}>
             <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
               Subject
             </span>
@@ -346,11 +373,19 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               onChange={(e) => setSubject(e.target.value)}
               style={{
                 width: "100%", padding: "10px 12px", fontSize: 14, color: INK,
-                border: `1px solid ${RULE}`, borderRadius: 6, outline: "none",
-                background: "#fff",
+                border: `1px solid ${(subject || "").length > 78 ? WARN : RULE}`,
+                borderRadius: 6, outline: "none", background: "#fff",
               }}
             />
-          </label>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
+              <span>
+                Type em-dashes (—) and arrows (→) directly — HTML codes like <code style={{ fontFamily: "ui-monospace,monospace" }}>&amp;mdash;</code> render literally in subject lines.
+              </span>
+              <span style={{ flexShrink: 0, marginLeft: 8, color: (subject || "").length > 78 ? WARN : (subject || "").length > 60 ? "#b8770b" : MUTED, fontWeight: (subject || "").length > 60 ? 600 : 400 }}>
+                {(subject || "").length}{(subject || "").length > 78 ? " — most clients truncate at 78" : (subject || "").length > 60 ? " — Gmail truncates at ~60" : ""}
+              </span>
+            </div>
+          </div>
 
           {/* Body — toggle between rendered display (default) and markdown-ish
               edit mode. Operators never see raw HTML tags. Pattern mirrors

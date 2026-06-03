@@ -607,18 +607,39 @@ ${summaryBlock}
 <p>Questions? Reach us at <a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p>`;
   }
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Registration Confirmation</title></head>
-<body style="margin:0;padding:0;background:#fbfaf6;font-family:'Nunito Sans',Arial,sans-serif;">
+  // color-scheme meta tags prevent Gmail/Apple Mail from auto-inverting the
+  // white background in dark mode. Matches the lifecycle-cron shell.
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light"><title>Registration Confirmation</title></head>
+<body style="margin:0;padding:0;background:#fbfaf6;font-family:'Nunito Sans',Arial,sans-serif;color-scheme:light only;supported-color-schemes:light;">
 <div style="max-width:600px;margin:0 auto;background:#fff;">
 <div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
 <div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">
 ${innerBody}
 </div>
 <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
-${escapeHtml(brand.org_name)} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}
+${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()}
 </div>
 </div>
 </body></html>`;
+
+  // Plain-text MIME fallback for accessibility tools + Outlook configs that
+  // prefer text/plain. Resend handles multipart packaging when both `html`
+  // and `text` are present.
+  const plainText = innerBody
+    .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<\s*li[^>]*>/gi, "• ")
+    .replace(/<a\s+[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, href, text) => `${text} (${href})`)
+    .replace(/<[^>]+>/g, "")
+    .replace(/&mdash;/g, "—")
+    .replace(/&ndash;/g, "–")
+    .replace(/&rarr;/g, "→")
+    .replace(/&middot;/g, "·")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+/g, " ")
+    .trim();
 
   // Subject — operator override (with {{tokens}} resolved) wins; else fall
   // back to the legacy installments-aware subject for backward compatibility.
@@ -640,6 +661,7 @@ ${escapeHtml(brand.org_name)} &middot; Powered by Enrops &middot; ${new Date().g
       reply_to: brand.reply_to,
       subject: renderedSubject,
       html,
+      text: plainText,
       tags: [
         { name: 'type', value: useInstallments ? 'registration_confirmation_installments' : 'registration_confirmation' },
         { name: 'session', value: sessionId },

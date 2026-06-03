@@ -354,6 +354,7 @@ async function sendOne(
         reply_to: brand.reply_to,
         subject,
         html: fullHtml,
+        text: htmlToPlainText(innerBody),
         tags: [
           { name: "type", value: "lifecycle" },
           { name: "automation", value: a.template.key },
@@ -1105,18 +1106,53 @@ function wrapInShell(innerBody: string, brand: OrgBrand): string {
     ? `<img src="${brand.logo_url}" alt="${escapeHtml(brand.org_name)}" style="max-height:56px;display:block;margin:0 auto;" />`
     : `<div style="color:${brand.primary_color};font-size:18px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;text-align:center;">${escapeHtml(brand.org_name)}</div>`;
 
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(brand.org_name)}</title></head>
-<body style="margin:0;padding:0;background:#fbfaf6;font-family:'Nunito Sans',Arial,sans-serif;">
+  // color-scheme meta tags tell Gmail/Apple Mail not to auto-invert the
+  // white background in dark mode. Outlook ignores but most major clients
+  // respect it — prevents the brand-color border from clashing against a
+  // mail-client-inverted dark background.
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light"><title>${escapeHtml(brand.org_name)}</title></head>
+<body style="margin:0;padding:0;background:#fbfaf6;font-family:'Nunito Sans',Arial,sans-serif;color-scheme:light only;supported-color-schemes:light;">
 <div style="max-width:600px;margin:0 auto;background:#fff;">
 <div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
 <div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">
 ${innerBody}
 </div>
 <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
-${escapeHtml(brand.org_name)} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}
+${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()}
 </div>
 </div>
 </body></html>`;
+}
+
+// Strip HTML to plain text for the multipart text/plain MIME fallback.
+// Accessibility tools, plain-text-only mail readers, and Outlook in some
+// configurations prefer the text version. Resend handles MIME packaging
+// when both `html` and `text` are present.
+function htmlToPlainText(html: string): string {
+  if (!html) return "";
+  return html
+    // Render <br>, </p>, </div>, </li> as a newline before stripping tags
+    .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<\s*li[^>]*>/gi, "• ")
+    .replace(/<a\s+[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, href, text) => `${text} (${href})`)
+    // Strip remaining tags
+    .replace(/<[^>]+>/g, "")
+    // Decode common entities
+    .replace(/&mdash;/g, "—")
+    .replace(/&ndash;/g, "–")
+    .replace(/&rarr;/g, "→")
+    .replace(/&middot;/g, "·")
+    .replace(/&hellip;/g, "…")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, "\"")
+    .replace(/&amp;/g, "&")
+    // Collapse 3+ newlines to 2 (paragraph breaks)
+    .replace(/\n{3,}/g, "\n\n")
+    // Collapse runs of inline whitespace within a line
+    .replace(/[ \t]+/g, " ")
+    .trim();
 }
 
 // ───────────────────────────────────────────────────────────────────────────
