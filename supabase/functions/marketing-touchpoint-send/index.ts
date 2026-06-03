@@ -179,6 +179,12 @@ type CampRow = {
   ends_on: string;
   start_time: string;
   end_time: string;
+  // Pricing. Nullable: partner-run camps (runs_own_registration=false where
+  // the partner sets price) keep these null and the renderer omits price
+  // tokens so we never quote a number we don't control.
+  price_cents: number | null;
+  early_bird_price_cents: number | null;
+  early_bird_deadline: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -352,7 +358,7 @@ serve(async (req: Request) => {
   if (campIds.length > 0) {
     const { data: camps } = await supabase
       .from("camp_sessions")
-      .select("id, curriculum_name, location_id, location_name, starts_on, ends_on, start_time, end_time, program_locations(district)")
+      .select("id, curriculum_name, location_id, location_name, starts_on, ends_on, start_time, end_time, price_cents, early_bird_price_cents, early_bird_deadline, program_locations(district)")
       .eq("organization_id", campaign.organization_id)
       .in("id", campIds);
     pickedCamps = ((camps ?? []) as Array<Record<string, unknown>>).map((c) => {
@@ -368,6 +374,9 @@ serve(async (req: Request) => {
         ends_on: c.ends_on as string,
         start_time: (c.start_time as string) ?? "",
         end_time: (c.end_time as string) ?? "",
+        price_cents: (c.price_cents as number | null) ?? null,
+        early_bird_price_cents: (c.early_bird_price_cents as number | null) ?? null,
+        early_bird_deadline: (c.early_bird_deadline as string | null) ?? null,
       };
     });
   }
@@ -961,7 +970,34 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     });
     tokens.set("camp_details", detailItems.length > 0 ? `<ul>${detailItems.join("")}</ul>` : "");
 
-    for (const k of ["day_of_week", "session_count", "regular_price", "early_bird_price", "early_bird_deadline", "savings", "vip_price"]) {
+    // Per-area camp price tokens. Only emit when ALL camps in the recipient's
+    // area share the same price — otherwise quoting one camp's price for the
+    // batch would mislead parents (e.g., $275 half-day mentioned in an email
+    // that also features a $450 full-day camp). Mixed or any-null → empty so
+    // Ennie's body omits the price line. Partner-run camps keep price_cents
+    // null on purpose (we don't set their prices) which correctly suppresses.
+    const campPrices = camps.map((c) => c.price_cents);
+    const allPriced = campPrices.length > 0 && campPrices.every((p) => p != null);
+    const samePrice = allPriced && campPrices.every((p) => p === campPrices[0]);
+    tokens.set("regular_price", samePrice && campPrices[0] != null ? `$${(campPrices[0] / 100).toFixed(0)}` : "");
+
+    const ebPrices = camps.map((c) => c.early_bird_price_cents);
+    const allEb = ebPrices.length > 0 && ebPrices.every((p) => p != null);
+    const sameEb = allEb && ebPrices.every((p) => p === ebPrices[0]);
+    tokens.set("early_bird_price", sameEb && ebPrices[0] != null ? `$${(ebPrices[0] / 100).toFixed(0)}` : "");
+
+    tokens.set("savings",
+      samePrice && sameEb && campPrices[0] != null && ebPrices[0] != null
+        ? `$${((campPrices[0] - ebPrices[0]) / 100).toFixed(0)}`
+        : "");
+
+    const deadlines = camps.map((c) => c.early_bird_deadline);
+    const allDeadlined = deadlines.length > 0 && deadlines.every((d) => d != null);
+    const sameDeadline = allDeadlined && deadlines.every((d) => d === deadlines[0]);
+    tokens.set("early_bird_deadline", sameDeadline && deadlines[0] != null ? formatHumanDate(deadlines[0]) : "");
+
+    // Camps still don't have per-program session_count, day_of_week, or vip_price.
+    for (const k of ["day_of_week", "session_count", "vip_price"]) {
       tokens.set(k, "");
     }
   } else {
@@ -1328,7 +1364,7 @@ async function renderPreview(
   if (campIds.length > 0) {
     const { data: camps } = await supabase
       .from("camp_sessions")
-      .select("id, curriculum_name, location_id, location_name, starts_on, ends_on, start_time, end_time, program_locations(district)")
+      .select("id, curriculum_name, location_id, location_name, starts_on, ends_on, start_time, end_time, price_cents, early_bird_price_cents, early_bird_deadline, program_locations(district)")
       .eq("organization_id", campaign.organization_id)
       .in("id", campIds);
     pickedCamps = ((camps ?? []) as Array<Record<string, unknown>>).map((c) => {
@@ -1344,6 +1380,9 @@ async function renderPreview(
         ends_on: c.ends_on as string,
         start_time: (c.start_time as string) ?? "",
         end_time: (c.end_time as string) ?? "",
+        price_cents: (c.price_cents as number | null) ?? null,
+        early_bird_price_cents: (c.early_bird_price_cents as number | null) ?? null,
+        early_bird_deadline: (c.early_bird_deadline as string | null) ?? null,
       };
     });
   }

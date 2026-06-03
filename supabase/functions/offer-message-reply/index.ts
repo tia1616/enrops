@@ -101,8 +101,10 @@ serve(async (req: Request) => {
 
     const adminFirstName = userData.user.user_metadata?.full_name?.split(' ')[0] ?? 'your admin';
     const cycleName = session?.cycle_id ? '' : '';
-    const portalUrl = `https://enrops.com/${org?.slug ?? 'j2s'}/instructor`;
-    const subject = `Re: Your ${session?.curriculum_name ?? 'schedule'} — ${org?.name ?? 'Journey to STEAM'}`;
+    if (!org?.slug) throw new Error(`offer-message-reply: org ${org?.id ?? 'null'} has no slug; cannot build portal URL`);
+    if (!org?.name) throw new Error(`offer-message-reply: org ${org?.id ?? 'null'} has no name; cannot build subject line`);
+    const portalUrl = `https://enrops.com/${org.slug}/instructor`;
+    const subject = `Re: Your ${session?.curriculum_name ?? 'schedule'} — ${org.name}`;
 
     const html = `<!doctype html><html lang="en"><body style="margin:0;padding:0;background:${DEFAULT_PAGE_BG};font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif;color:${TEXT};">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${DEFAULT_PAGE_BG};padding:32px 16px;"><tr><td align="center">

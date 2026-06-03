@@ -148,6 +148,10 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
             orgId={org?.id}
             selected={who.filter.school_ids ?? []}
             onChange={(school_ids) => updateFilter({ school_ids })}
+            // Pass Q1 picks so the picker can dim schools where Q1 has no
+            // content (visual constraint — operator can still check them but
+            // gets a clear signal those parents won't see picked programs).
+            programIds={what?.program_ids ?? []}
           />
         )}
         {who.filter?.type === "area" && (
@@ -160,6 +164,7 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
                 : (who.filter.area ? [who.filter.area] : [])
             }
             onChange={(areas) => updateFilter({ areas, area: undefined })}
+            campSessionIds={what?.camp_session_ids ?? []}
           />
         )}
         {who.filter?.type === "segment" && (
@@ -334,7 +339,7 @@ function AutoScopeBanner({ state, filter, what }) {
     );
   }
   if (!state.info) return null;
-  const { headline, sub, tone } = state.info;
+  const { headline, sub, tone, items } = state.info;
   const borderColor = tone === "warn" ? "#ece1bf" : `${OK}55`;
   const bgColor = tone === "warn" ? "#FAEEDA" : "#EAF3DE";
   const accent = tone === "warn" ? WARN : OK;
@@ -344,7 +349,20 @@ function AutoScopeBanner({ state, filter, what }) {
         Audience picked for you
       </div>
       <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{headline}</div>
-      {sub && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>{sub}</div>}
+      {Array.isArray(items) && items.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+          {items.map((it) => (
+            <span key={it.label} style={{
+              fontSize: 12, fontWeight: 600, color: INK,
+              padding: "3px 10px", borderRadius: 999,
+              background: "#fff", border: `1px solid ${borderColor}`,
+            }}>
+              {it.label}{typeof it.count === "number" ? ` · ${it.count}` : ""}
+            </span>
+          ))}
+        </div>
+      )}
+      {sub && <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>{sub}</div>}
     </div>
   );
 }
@@ -374,14 +392,13 @@ async function deriveScopeFromPicks(orgId, what) {
       };
     }
     const names = [...schools.values()];
-    const preview = names.slice(0, 3).join(", ");
-    const extra = names.length > 3 ? ` +${names.length - 3} more` : "";
     return {
       filter: { type: "school", school_ids },
       info: {
-        headline: `Parents at ${names.length} school${names.length === 1 ? "" : "s"}: ${preview}${extra}`,
-        sub: "Derived from the programs you picked. Change the scope below to override.",
+        headline: `Parents at ${names.length} school${names.length === 1 ? "" : "s"}`,
+        sub: "These were added from the programs you picked. Uncheck any below to skip — those parents won't get this email.",
         tone: "ok",
+        items: names.map((label) => ({ label })),
       },
     };
   }
@@ -440,12 +457,14 @@ async function deriveScopeFromPicks(orgId, what) {
 
     if (areasWithParents.length === 1) {
       const [area] = areasWithParents[0];
+      const parents = parentsByArea.get(area) ?? 0;
       return {
         filter: { type: "area", areas: [area] },
         info: {
           headline: `Parents in ${area}`,
-          sub: `Derived from your camps' location districts. ${parentsByArea.get(area) ?? 0} parents in this area. Change the scope below to override.`,
+          sub: `This area was added from your picked camps. ${parents} parents here. Uncheck below to skip — those parents won't get this email.`,
           tone: "ok",
+          items: [{ label: area, count: parents }],
         },
       };
     }
@@ -460,14 +479,13 @@ async function deriveScopeFromPicks(orgId, what) {
       .sort((a, b) => b.campCount - a.campCount || b.parents - a.parents);
     const areaKeys = sorted.map((s) => s.area);
     const totalParents = sorted.reduce((n, s) => n + s.parents, 0);
-    const breakdown = sorted.slice(0, 4).map((s) => `${s.area} (${s.parents})`).join(", ");
-    const extra = sorted.length > 4 ? ` and ${sorted.length - 4} more` : "";
     return {
       filter: { type: "area", areas: areaKeys },
       info: {
         headline: `Parents across ${sorted.length} areas`,
-        sub: `Your camps span ${sorted.length} areas. ~${totalParents} parents in those areas total: ${breakdown}${extra}. Uncheck any below to narrow, or switch scope.`,
+        sub: `These were added from your picked camps. ~${totalParents} parents across all of them. Uncheck any below to skip — those parents won't get this email.`,
         tone: "ok",
+        items: sorted.map((s) => ({ label: s.area, count: s.parents })),
       },
     };
   }
@@ -480,10 +498,29 @@ async function deriveScopeFromPicks(orgId, what) {
 }
 
 // ---------- School multi-select ----------
-function SchoolMultiSelect({ orgId, selected, onChange }) {
+function SchoolMultiSelect({ orgId, selected, onChange, programIds = [] }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
   const [q, setQ] = useState("");
+  // Set of program_location_ids that Q1's picked programs run at. Schools
+  // outside this set get visually dimmed — operator can still pick them,
+  // but those parents won't see any of the picked programs in the email.
+  const [coveredIds, setCoveredIds] = useState(null);
+  const programIdsKey = programIds.join(",");
+  useEffect(() => {
+    if (!orgId || programIds.length === 0) { setCoveredIds(new Set()); return; }
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("programs")
+        .select("program_location_id")
+        .in("id", programIds);
+      if (!alive) return;
+      setCoveredIds(new Set((data ?? []).map((r) => r.program_location_id).filter(Boolean)));
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId, programIdsKey]);
 
   useEffect(() => {
     if (!orgId) return;
@@ -523,15 +560,23 @@ function SchoolMultiSelect({ orgId, selected, onChange }) {
         onNone={() => onChange([])}
       />
       <ListBody loading={!rows} error={err} empty={!err && rows && rows.length === 0 ? "No program_locations yet — add some in Programs." : null}>
-        {(filtered ?? []).map((loc) => (
-          <CheckRow
-            key={loc.id}
-            checked={selected.includes(loc.id)}
-            onChange={() => toggle(loc.id)}
-            label={loc.name}
-            aside={loc.name_aliases?.length ? `${loc.name_aliases.length} alias${loc.name_aliases.length === 1 ? "" : "es"}` : ""}
-          />
-        ))}
+        {(filtered ?? []).map((loc) => {
+          const covered = coveredIds == null || coveredIds.size === 0 || coveredIds.has(loc.id);
+          return (
+            <CheckRow
+              key={loc.id}
+              checked={selected.includes(loc.id)}
+              onChange={() => toggle(loc.id)}
+              label={loc.name}
+              aside={
+                !covered
+                  ? "no picks here"
+                  : (loc.name_aliases?.length ? `${loc.name_aliases.length} alias${loc.name_aliases.length === 1 ? "" : "es"}` : "")
+              }
+              dim={!covered}
+            />
+          );
+        })}
       </ListBody>
       <FooterCount n={selected.length} singular="school selected" plural="schools selected" />
     </ListWrap>
@@ -560,9 +605,32 @@ function AllNoneBar({ onAll, onNone }) {
   );
 }
 
-function AreaMultiSelect({ orgId, selected, onChange }) {
+function AreaMultiSelect({ orgId, selected, onChange, campSessionIds = [] }) {
   const [areas, setAreas] = useState(null);
   const [err, setErr] = useState(null);
+  // Set of area keys (geo_segment / district) that Q1's picked camps run in.
+  // Areas outside this set get dimmed.
+  const [coveredAreas, setCoveredAreas] = useState(null);
+  const campIdsKey = campSessionIds.join(",");
+  useEffect(() => {
+    if (!orgId || campSessionIds.length === 0) { setCoveredAreas(new Set()); return; }
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("camp_sessions")
+        .select("program_locations(district)")
+        .in("id", campSessionIds);
+      if (!alive) return;
+      const dists = new Set();
+      for (const r of data ?? []) {
+        const d = r.program_locations?.district;
+        if (d) dists.add(d);
+      }
+      setCoveredAreas(dists);
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId, campIdsKey]);
 
   useEffect(() => {
     if (!orgId) return;
@@ -613,15 +681,19 @@ function AreaMultiSelect({ orgId, selected, onChange }) {
         onNone={() => onChange([])}
       />
       <ListBody loading={!areas} error={err} empty={!err && areas && areas.length === 0 ? "No areas yet — tag recipients with geo_segment to use this filter." : null}>
-        {(areas ?? []).map((a) => (
-          <CheckRow
-            key={a.key}
-            checked={selected.includes(a.key)}
-            onChange={() => toggle(a.key)}
-            label={a.key}
-            aside={`${a.count} parents`}
-          />
-        ))}
+        {(areas ?? []).map((a) => {
+          const covered = coveredAreas == null || coveredAreas.size === 0 || coveredAreas.has(a.key);
+          return (
+            <CheckRow
+              key={a.key}
+              checked={selected.includes(a.key)}
+              onChange={() => toggle(a.key)}
+              label={a.key}
+              aside={covered ? `${a.count} parents` : `${a.count} parents · no picks here`}
+              dim={!covered}
+            />
+          );
+        })}
       </ListBody>
       <FooterCount n={selected.length} singular="area selected" plural="areas selected" />
     </ListWrap>
@@ -785,16 +857,17 @@ function ListBody({ loading, error, empty, children }) {
   return <div style={{ maxHeight: 220, overflowY: "auto" }}>{children}</div>;
 }
 
-function CheckRow({ checked, onChange, label, aside }) {
+function CheckRow({ checked, onChange, label, aside, dim }) {
   return (
     <label style={{
       display: "flex", alignItems: "center", gap: 8, padding: "8px 10px",
       borderTop: `1px solid ${RULE}`, cursor: "pointer",
       background: checked ? "#faf7ed" : "transparent",
+      opacity: dim ? 0.55 : 1,
     }}>
       <input type="checkbox" checked={checked} onChange={onChange} />
-      <span style={{ fontSize: 13, color: INK, flex: 1 }}>{label}</span>
-      {aside && <span style={{ fontSize: 11, color: MUTED }}>{aside}</span>}
+      <span style={{ fontSize: 13, color: INK, flex: 1, fontStyle: dim ? "italic" : "normal" }}>{label}</span>
+      {aside && <span style={{ fontSize: 11, color: dim ? "#b3261e" : MUTED }}>{aside}</span>}
     </label>
   );
 }

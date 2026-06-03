@@ -261,7 +261,8 @@ serve(async (req: Request) => {
 
       const cycleDisplay = cycleDisplayName(cycle.name);
       const subject = `Your ${cycleDisplay} schedule is ready — please review`;
-      const portalUrl = `https://enrops.com/${org.slug ?? 'j2s'}/instructor`;
+      if (!org.slug) throw new Error(`send-offers: org ${org.id} has no slug; cannot build portal URL`);
+      const portalUrl = `https://enrops.com/${org.slug}/instructor`;
       const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById });
       const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById });
       const recipient = mode === 'send' ? instructor.email! : TEST_INBOX;

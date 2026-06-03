@@ -113,7 +113,8 @@ serve(async (req: Request) => {
     }
 
     const cycleDisplay = cycleDisplayName(cycle.name);
-    const portalUrl = `https://enrops.com/${org.slug ?? 'j2s'}/instructor`;
+    if (!org.slug) throw new Error(`send-availability-survey: org ${org.id} has no slug; cannot build portal URL`);
+    const portalUrl = `https://enrops.com/${org.slug}/instructor`;
     const effectiveDeadline = deadline ?? cycle.survey_deadline ?? null;
     const deadlineLabel = fmtDeadline(effectiveDeadline);
 

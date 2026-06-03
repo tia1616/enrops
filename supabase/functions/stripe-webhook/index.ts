@@ -256,10 +256,17 @@ serve(async (req) => {
         `id, amount_cents, programs(curriculum, day_of_week, start_time, end_time, first_session_date, term, program_locations(name, address, arrival_instructions, dismissal_instructions)), students(first_name, last_name)`,
       ).in('id', regIds);
 
-      let orgSlug = 'j2s';
+      // Tenant slug for portal URLs in the confirmation email. Never default
+      // to a tenant literal — if orgId resolves to an org without a slug,
+      // throw so the payment-processing pipeline alerts; better to fail loud
+      // than silently send wrong-tenant URLs to a paying parent.
+      let orgSlug = '';
       if (orgId) {
         const { data: orgSlugData } = await admin.from('organizations').select('slug').eq('id', orgId).single();
-        if (orgSlugData?.slug) orgSlug = orgSlugData.slug;
+        orgSlug = orgSlugData?.slug ?? '';
+      }
+      if (!orgSlug) {
+        throw new Error(`stripe-webhook: cannot resolve org.slug for orgId=${orgId ?? 'null'}; refusing to send confirmation email with a guessed tenant URL`);
       }
 
       if (parentEmail && regs?.length) {

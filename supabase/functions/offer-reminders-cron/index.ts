@@ -181,7 +181,8 @@ serve(async (req: Request) => {
 
       const deadline = theirRows[0].deadline;
       const cycleDisplay = cycleDisplayName(cycle?.name ?? '');
-      const portalUrl = `https://enrops.com/${org?.slug ?? 'j2s'}/instructor`;
+      if (!org?.slug) throw new Error(`offer-reminders-cron: org ${org?.id ?? 'null'} has no slug; cannot build portal URL`);
+      const portalUrl = `https://enrops.com/${org.slug}/instructor`;
       const subject = `Reminder: please respond to your ${cycleDisplay} schedule`;
       const html = buildReminderHtml({ branding, instructor, camps, cycle, portalUrl, deadline, orgName: org?.name ?? '', locationById });
       const text = buildReminderText({ instructor, camps, cycle, portalUrl, deadline, orgName: org?.name ?? '', locationById });

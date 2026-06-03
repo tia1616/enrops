@@ -148,8 +148,10 @@ serve(async (req) => {
     }
 
     const base = origin || 'https://enrops.com';
-    const successPath = success_path || '/j2s/register/success';
-    const cancelPath = cancel_path || '/j2s';
+    if (!success_path) return json({ error: 'success_path is required (tenant-scoped, e.g., /{slug}/register/success)' }, 400);
+    if (!cancel_path) return json({ error: 'cancel_path is required (tenant-scoped, e.g., /{slug}/register)' }, 400);
+    const successPath = success_path;
+    const cancelPath = cancel_path;
 
     if (use_installments && aggregated && perLine) {
       const c1 = aggregated.find((a) => a.installment_number === 1)!;

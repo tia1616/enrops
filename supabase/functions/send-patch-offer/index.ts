@@ -243,7 +243,8 @@ serve(async (req: Request) => {
       const subject = camps.length === 1
         ? `Another ${unitLabel(cycle.cycle_type, 1)} on your ${cycleDisplay} schedule`
         : `${camps.length} more ${unitLabel(cycle.cycle_type, camps.length)} on your ${cycleDisplay} schedule`;
-      const portalUrl = `https://enrops.com/${org.slug ?? 'j2s'}/instructor`;
+      if (!org.slug) throw new Error(`send-patch-offer: org ${org.id} has no slug; cannot build portal URL`);
+      const portalUrl = `https://enrops.com/${org.slug}/instructor`;
       const html = renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById });
       const text = renderPatchText({ cycle, org, instructor, camps, portalUrl, deadline, locationById });
 
