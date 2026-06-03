@@ -348,6 +348,7 @@ export default function Schedule() {
   const [assignSubFor, setAssignSubFor] = useState(null); // { session, currentAssignment }
   const [changeRequestFor, setChangeRequestFor] = useState(null); // { session, assignment }
   const [notifyRemoval, setNotifyRemoval] = useState(null); // { mode, session, assignment, instructor, onProceed }
+  const [offerNewPrompt, setOfferNewPrompt] = useState(null); // { assignmentId, name, sessionLabel } — nudge to email a freshly-assigned instructor
   // When user reassigns from a change-request modal, we stash the request's id so the
   // candidate-picker's onPick can auto-advance to the next change request afterward.
   const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
@@ -1023,7 +1024,13 @@ export default function Schedule() {
   }
 
   async function doPick(targetSession, currentAssignment, instructorId, role = "lead") {
+    // Capture before the mutation: have any offers in this cycle already gone out?
+    // If so, the new instructor won't be swept up in a future bulk send and needs
+    // their own patch offer — so we'll nudge to email them right after the swap.
+    const cycleMidFlight =
+      state.status === "ready" && state.assignments.some((a) => a.email_sent_at);
     try {
+      let newAssignmentId = null;
       if (currentAssignment) {
         const prevInstructorId = currentAssignment.instructor_id;
         const prevStatus = currentAssignment.status;
@@ -1045,6 +1052,7 @@ export default function Schedule() {
           })
           .eq("id", currentAssignment.id);
         if (updErr) throw updErr;
+        newAssignmentId = currentAssignment.id;
         setLastOp({
           type: "reassign",
           assignmentId: currentAssignment.id,
@@ -1065,6 +1073,7 @@ export default function Schedule() {
           .select("id")
           .single();
         if (insErr) throw insErr;
+        newAssignmentId = inserted.id;
         setLastOp({
           type: "assign",
           assignmentId: inserted.id,
@@ -1074,6 +1083,21 @@ export default function Schedule() {
 
       setCandidatesFor(null);
       await loadAll();
+
+      // Consistent nudge: this cycle's offers already went out, so the instructor
+      // just dropped in won't be emailed by a future bulk send. Offer to send their
+      // patch offer now (works directly on the draft row); "Later" leaves them in
+      // the Hat's "needs an offer email" tip.
+      if (cycleMidFlight && newAssignmentId) {
+        const inst = state.instructors.find((i) => i.id === instructorId);
+        setOfferNewPrompt({
+          assignmentId: newAssignmentId,
+          name: inst
+            ? inst.preferred_name || inst.first_name || "this instructor"
+            : "this instructor",
+          sessionLabel: `${targetSession.location_name}, week ${targetSession.week_num}`,
+        });
+      }
     } catch (err) {
       console.error("Pick failed:", err);
       setSaveError(`Couldn't save: ${err.message ?? "unknown error"}`);
@@ -2086,6 +2110,83 @@ export default function Schedule() {
           onCancel={() => setNotifyRemoval(null)}
           onProceed={notifyRemoval.onProceed}
         />
+      )}
+      {offerNewPrompt && (
+        <div
+          onClick={() => setOfferNewPrompt(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            padding: "40px 16px",
+            zIndex: 115,
+            overflowY: "auto",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff",
+              width: "100%",
+              maxWidth: 440,
+              border: "1px solid #e2dfd5",
+              borderRadius: 10,
+              padding: 22,
+              boxShadow: "0 10px 40px rgba(0,0,0,0.2)",
+            }}
+          >
+            <h2 style={{ fontSize: 17, fontWeight: 700, color: "#1a1a1a", margin: 0 }}>
+              Email {offerNewPrompt.name} their offer?
+            </h2>
+            <p style={{ color: "#6b6b6b", fontSize: 13.5, marginTop: 8, lineHeight: 1.5 }}>
+              {offerNewPrompt.name} is now on {offerNewPrompt.sessionLabel}. Offers for this
+              cycle have already gone out, so they won't be emailed automatically — send their
+              offer now, or do it later from the schedule.
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setOfferNewPrompt(null)}
+                style={{
+                  padding: "9px 14px",
+                  border: "1px solid #e2dfd5",
+                  background: "transparent",
+                  color: "#1a1a1a",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontSize: 14,
+                  fontFamily: "inherit",
+                }}
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = offerNewPrompt.assignmentId;
+                  setOfferNewPrompt(null);
+                  handlePreviewPatchOffers([id]);
+                }}
+                style={{
+                  padding: "9px 14px",
+                  border: "none",
+                  background: "#1C004F",
+                  color: "#fff",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                }}
+              >
+                Email now
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
