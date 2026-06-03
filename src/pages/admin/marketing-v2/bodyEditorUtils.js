@@ -56,8 +56,9 @@ export function highlightTokens(html) {
 // body_override) into the plain-text form an operator edits.
 //
 //   <p>...</p> blocks       → blank-line-separated blocks
-//   <br>/<br/>              → blank-line paragraph break (the editable format
-//                             has no inline line-break syntax)
+//   <br>/<br/>              → single newline (one Enter = a line break inside a
+//                             paragraph, e.g. a stacked sign-off; a BLANK line
+//                             is what starts a new paragraph)
 //   <a href="X">Y</a>       → [Y](X) so the visible text can be edited without
 //                             breaking the URL
 //   <strong>X</strong>/<b>  → **X**
@@ -74,7 +75,7 @@ export function htmlToEditable(html) {
   text = text.replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, inner) => `**${inner}**`);
   text = text.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, inner) => `_${inner}_`);
   text = text.replace(/<\/p>\s*<p[^>]*>/gi, "\n\n");
-  text = text.replace(/<br\s*\/?>/gi, "\n\n");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
   text = text.replace(/<p[^>]*>/gi, "");
   text = text.replace(/<\/p>/gi, "");
   // Safety net: drop any remaining HTML tag (keep its inner text) so unhandled
@@ -110,7 +111,11 @@ export function editableToHtml(text) {
   const out = [];
   let buffer = [];
   const flush = () => {
-    const para = buffer.join("\n").trim();
+    // Join with <br> so adjacent lines (one Enter) become line breaks inside
+    // the paragraph — a literal "\n" here would collapse to a space in HTML,
+    // which is why a stacked sign-off rendered side-by-side. A BLANK line
+    // breaks the buffer into a new <p> via the loop below.
+    const para = buffer.join("<br>").trim();
     if (para) out.push(`<p>${para}</p>`);
     buffer = [];
   };

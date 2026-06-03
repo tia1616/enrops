@@ -60,6 +60,28 @@ const TOKENS_BY_TEMPLATE_KEY = {
 // HTML-pre-rendered tokens — preview passes their sample HTML through verbatim.
 const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "arrival_dismissal_block", "session_dates_block", "registration_summary_block", "next_term_link_block"]);
 
+// Which templates support a real-data test send, and which source(s) to offer
+// in the picker. These pull real curriculum/dates/location/skills so the test
+// email is a true preview. The other templates (thank_you, birthday,
+// abandoned_registration) don't key off a single program — their tests use
+// sample data. Keep in sync with applies_to_program_type in the cron.
+const TEST_SOURCE_BY_TEMPLATE_KEY = {
+  welcome_camp: "camps",
+  welcome_afterschool: "afterschool",
+  check_in: "afterschool",
+  mid_recap: "both",
+  final_recap: "both",
+};
+
+// Short, friendly date for picker labels (e.g. "Jun 17, 2026"). Falls back to
+// the raw value if it isn't a parseable ISO date.
+function shortDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 // Sample values for the live preview. Tenant-aware — pre-rendered blocks
 // use the org's actual primary_color so what operators see matches what
 // parents receive. {{sender_name}} sample is intentionally just a first name
@@ -151,6 +173,113 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
+  // Real-data test picker. testSources holds the org's camps/programs eligible
+  // for this template; selectedSource is "camp:<id>" / "program:<id>" / "" (sample).
+  const sourceType = TEST_SOURCE_BY_TEMPLATE_KEY[template.key] ?? null;
+  const [testSources, setTestSources] = useState([]);
+  const [loadingSources, setLoadingSources] = useState(false);
+  const [selectedSource, setSelectedSource] = useState("");
+
+  // Server-rendered real-data preview (mirrors marketing's mode:"preview").
+  // When a real camp/program is selected, the preview pane shows the SAME HTML
+  // a real send produces — not local sample tokens. null = fall back to sample.
+  const [serverPreview, setServerPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
+  const realSourceSelected = !!sourceType && !!selectedSource;
+
+  useEffect(() => {
+    if (!sourceType || !orgId) return;
+    let cancelled = false;
+    setLoadingSources(true);
+    (async () => {
+      const sources = [];
+      try {
+        if (sourceType === "camps" || sourceType === "both") {
+          const { data: camps } = await supabase
+            .from("camp_sessions")
+            .select("id, curriculum_name, location_name, starts_on")
+            .eq("organization_id", orgId)
+            .order("starts_on", { ascending: false });
+          for (const c of camps ?? []) {
+            sources.push({
+              value: `camp:${c.id}`,
+              label: `Camp · ${c.curriculum_name ?? "Untitled"}${c.location_name ? ` — ${c.location_name}` : ""}${c.starts_on ? ` (${shortDate(c.starts_on)})` : ""}`,
+            });
+          }
+        }
+        if (sourceType === "afterschool" || sourceType === "both") {
+          const { data: progs } = await supabase
+            .from("programs")
+            .select("id, curriculum, first_session_date, program_locations ( name )")
+            .eq("organization_id", orgId)
+            .order("first_session_date", { ascending: false });
+          for (const p of progs ?? []) {
+            sources.push({
+              value: `program:${p.id}`,
+              label: `After-school · ${p.curriculum ?? "Untitled"}${p.program_locations?.name ? ` — ${p.program_locations.name}` : ""}${p.first_session_date ? ` (${shortDate(p.first_session_date)})` : ""}`,
+            });
+          }
+        }
+      } catch {
+        // Non-fatal — picker just falls back to sample data.
+      }
+      if (cancelled) return;
+      setTestSources(sources);
+      // Default to the first real source so the test is a true preview by
+      // default; if the org has none, stay on sample data.
+      setSelectedSource(sources.length > 0 ? sources[0].value : "");
+      setLoadingSources(false);
+    })();
+    return () => { cancelled = true; };
+  }, [sourceType, orgId]);
+
+  // Server-rendered preview. When a real camp/program is picked, ask the cron to
+  // render the SAME pipeline a real send uses (mode:"preview" — no email leaves
+  // the system) so the pane shows true resolved content, not sample tokens.
+  // Debounced so every keystroke in subject/body doesn't hammer the function.
+  useEffect(() => {
+    if (!realSourceSelected) {
+      setServerPreview(null);
+      setPreviewError(null);
+      setPreviewLoading(false);
+      return;
+    }
+    const [srcType, srcId] = selectedSource.split(":");
+    let cancelled = false;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    const t = setTimeout(async () => {
+      try {
+        const { data, error: fnErr } = await supabase.functions.invoke(
+          "lifecycle-automations-cron",
+          {
+            body: {
+              mode: "preview",
+              organization_id: orgId,
+              template_key: template.key,
+              preview_subject: subject,
+              preview_body: body,
+              test_camp_session_id: srcType === "camp" ? srcId : null,
+              test_program_id: srcType === "program" ? srcId : null,
+            },
+          },
+        );
+        if (cancelled) return;
+        if (fnErr) throw fnErr;
+        if (data?.ok === false) throw new Error(data?.error ?? "Preview failed");
+        setServerPreview({ body_html: data?.body_html ?? "", subject: data?.subject ?? "", used_real_data: !!data?.used_real_data });
+      } catch (e) {
+        if (cancelled) return;
+        setServerPreview(null);
+        setPreviewError(e?.message ?? "Couldn't load real-data preview");
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    }, 500);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [realSourceSelected, selectedSource, subject, body, orgId, template.key]);
+
   function toggleBodyEdit() {
     if (editingBody) {
       // Done editing — already pushed each keystroke into body via editableToHtml.
@@ -177,6 +306,20 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     () => buildPreviewHtml(subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug),
     [subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug],
   );
+
+  // What the iframe actually shows. When a real source is picked AND the server
+  // returned HTML, render that (true resolved content). The cron's wrapInShell
+  // doc has no <base target="_blank">, so inject one — keeps in-iframe link
+  // clicks opening a new tab instead of blanking the sandbox. Otherwise fall
+  // back to the local sample render (also used while the server call is loading).
+  const showingServerPreview = realSourceSelected && !!serverPreview?.body_html;
+  const displayedPreviewHtml = useMemo(() => {
+    if (!showingServerPreview) return previewHtml;
+    const html = serverPreview.body_html;
+    return /<head[^>]*>/i.test(html)
+      ? html.replace(/<head([^>]*)>/i, '<head$1><base target="_blank">')
+      : `<base target="_blank">${html}`;
+  }, [showingServerPreview, serverPreview, previewHtml]);
 
   const tokens = TOKENS_BY_TEMPLATE_KEY[template.key] ?? [];
   const hasOverride = (automation?.subject_override != null) || (automation?.body_override != null);
@@ -331,6 +474,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     setError(null);
     setSuccess(null);
     try {
+      // When a real camp/program is selected, send its id so the test resolves
+      // real content. "" = sample data (or templates without a picker).
+      const [srcType, srcId] = selectedSource ? selectedSource.split(":") : ["", ""];
       const { data, error: fnErr } = await supabase.functions.invoke(
         "lifecycle-automations-cron",
         {
@@ -343,6 +489,8 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             // tests what they're looking at right now.
             preview_subject: subject,
             preview_body: body,
+            test_camp_session_id: srcType === "camp" ? srcId : null,
+            test_program_id: srcType === "program" ? srcId : null,
           },
         },
       );
@@ -488,12 +636,20 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
 
           {/* Live preview */}
           <div style={{ marginBottom: 8 }}>
-            <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
-              Live preview · sample data
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1 }}>
+                Live preview · {showingServerPreview ? "real data" : "sample data"}
+              </span>
+              {previewLoading && (
+                <span style={{ fontSize: 11, color: MUTED }}>Loading real data…</span>
+              )}
+              {previewError && !previewLoading && (
+                <span style={{ fontSize: 11, color: WARN }}>Showing sample — {previewError}</span>
+              )}
+            </div>
             <iframe
               title="email preview"
-              srcDoc={previewHtml}
+              srcDoc={displayedPreviewHtml}
               sandbox="allow-popups allow-popups-to-escape-sandbox"
               style={{
                 width: "100%", height: 480, border: `1px solid ${RULE}`, borderRadius: 8,
@@ -523,6 +679,40 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
 
         {/* Action bar — sits below the editor content, no longer a fixed footer */}
         <div style={{ marginTop: 16, padding: "16px", borderTop: `1px solid ${RULE}`, background: "#fbfaf6", borderRadius: 8, display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Real-data test source picker — only for program-based templates */}
+          {sourceType && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: MUTED }}>
+                Preview with real data from
+              </label>
+              {loadingSources ? (
+                <span style={{ fontSize: 13, color: MUTED }}>Loading your camps & programs…</span>
+              ) : testSources.length === 0 ? (
+                <span style={{ fontSize: 13, color: MUTED }}>
+                  No camps or programs yet — the test will use sample data.
+                </span>
+              ) : (
+                <select
+                  value={selectedSource}
+                  onChange={(e) => setSelectedSource(e.target.value)}
+                  style={{
+                    padding: "8px 12px", fontSize: 13, border: `1px solid ${RULE}`,
+                    borderRadius: 6, outline: "none", background: "#fff", color: INK,
+                  }}
+                >
+                  {testSources.map((s) => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                  <option value="">Sample data (placeholder)</option>
+                </select>
+              )}
+            </div>
+          )}
+          {!sourceType && (
+            <div style={{ fontSize: 12, color: MUTED }}>
+              This test uses sample data — its content isn't tied to one camp or program.
+            </div>
+          )}
           {/* Send test row */}
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input

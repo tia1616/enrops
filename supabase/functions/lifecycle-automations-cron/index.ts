@@ -72,12 +72,34 @@ interface TestSendParams {
   test_to_email: string;
   preview_subject: string | null;
   preview_body: string | null;
+  // When the operator picks a real camp/program in the editor, the test send
+  // resolves REAL content (curriculum, dates, location, skills) from that row
+  // instead of the hardcoded sample — a true preview. Only one is set at a time.
+  test_camp_session_id: string | null;
+  test_program_id: string | null;
 }
 
 interface TestSendResult {
   ok: boolean;
   error?: string;
   message_id?: string;
+}
+
+interface PreviewParams {
+  organization_id: string;
+  template_key: string;
+  preview_subject: string | null;
+  preview_body: string | null;
+  test_camp_session_id: string | null;
+  test_program_id: string | null;
+}
+
+interface PreviewResult {
+  ok: boolean;
+  error?: string;
+  subject?: string;
+  body_html?: string;
+  used_real_data?: boolean;
 }
 
 interface AudienceEntry {
@@ -122,6 +144,7 @@ serve(async (req) => {
   //                    automation_run_recipients or time_saved_events.
   let eventRegistrationId: string | null = null;
   let testSendParams: TestSendParams | null = null;
+  let previewParams: PreviewParams | null = null;
   if (req.method === "POST") {
     try {
       const body = await req.json().catch(() => ({}));
@@ -132,6 +155,17 @@ serve(async (req) => {
           test_to_email: body.test_to_email,
           preview_subject: typeof body.preview_subject === "string" ? body.preview_subject : null,
           preview_body: typeof body.preview_body === "string" ? body.preview_body : null,
+          test_camp_session_id: typeof body.test_camp_session_id === "string" ? body.test_camp_session_id : null,
+          test_program_id: typeof body.test_program_id === "string" ? body.test_program_id : null,
+        };
+      } else if (body?.mode === "preview") {
+        previewParams = {
+          organization_id: body.organization_id,
+          template_key: body.template_key,
+          preview_subject: typeof body.preview_subject === "string" ? body.preview_subject : null,
+          preview_body: typeof body.preview_body === "string" ? body.preview_body : null,
+          test_camp_session_id: typeof body.test_camp_session_id === "string" ? body.test_camp_session_id : null,
+          test_program_id: typeof body.test_program_id === "string" ? body.test_program_id : null,
         };
       } else if (typeof body?.registration_id === "string") {
         eventRegistrationId = body.registration_id;
@@ -145,6 +179,15 @@ serve(async (req) => {
   // no idempotency tracking) so handled before the cron-mode automation loop.
   if (testSendParams) {
     const result = await runTestSend(supabase, testSendParams);
+    return new Response(JSON.stringify(result), {
+      status: result.ok ? 200 : 400,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  // On-screen preview — render only, nothing sent.
+  if (previewParams) {
+    const result = await runPreview(supabase, previewParams);
     return new Response(JSON.stringify(result), {
       status: result.ok ? 200 : 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -407,56 +450,64 @@ async function sendOne(
 // Test send (operator-initiated preview from the editor drawer)
 // ───────────────────────────────────────────────────────────────────────────
 
-async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Promise<TestSendResult> {
-  if (!params.organization_id || !params.template_key || !params.test_to_email) {
+// Shared render — the SINGLE place that turns (org, template, chosen
+// camp/program, draft subject/body) into a finished subject + full HTML email.
+// Used by BOTH the test send AND the live on-screen preview so the preview pane,
+// the test email, and a real send all come out of the exact same pipeline
+// (buildTokens → renderTokens → wrapInShell). Mirrors marketing-touchpoint-send's
+// shared preview/send render. When a camp/program is chosen, real content is
+// resolved; otherwise a sample entry fills the blocks so operators still see a
+// styled email. Family names are always sample (a preview isn't one real family).
+interface RenderInput {
+  organization_id: string;
+  template_key: string;
+  preview_subject: string | null;
+  preview_body: string | null;
+  test_camp_session_id: string | null;
+  test_program_id: string | null;
+  to_email?: string; // only used to seed entry.parent_email for a test send
+}
+interface RenderOutput {
+  ok: boolean;
+  error?: string;
+  subject?: string;
+  html?: string;
+  brand?: OrgBrand;
+  template_key?: string;
+  used_real_data?: boolean;
+}
+
+async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput): Promise<RenderOutput> {
+  if (!input.organization_id || !input.template_key) {
     return { ok: false, error: "missing_required_params" };
   }
-  if (!params.test_to_email.includes("@")) {
-    return { ok: false, error: "invalid_test_email" };
-  }
 
-  // Anti-spam: the test recipient must be an admin on this org. Service-role
-  // bypass exists for delivery, but the check is enforced in code so the
-  // endpoint can't be used to spam arbitrary addresses.
-  const { data: member } = await supabase
-    .from("org_members")
-    .select("email")
-    .eq("organization_id", params.organization_id)
-    .ilike("email", params.test_to_email)
-    .maybeSingle();
-  if (!member) {
-    return { ok: false, error: "test_email_not_an_org_admin" };
-  }
-
-  // Look up template
   const { data: template, error: tErr } = await supabase
     .from("automation_templates")
     .select("*")
-    .eq("key", params.template_key)
+    .eq("key", input.template_key)
     .maybeSingle();
   if (tErr || !template) {
     return { ok: false, error: "template_not_found" };
   }
 
-  // Look up org slug for {{register_url}}
   const { data: org, error: oErr } = await supabase
     .from("organizations")
     .select("id, slug, name")
-    .eq("id", params.organization_id)
+    .eq("id", input.organization_id)
     .maybeSingle();
   if (oErr || !org) {
     return { ok: false, error: "org_not_found" };
   }
 
-  // Load brand
-  const brand = await loadOrgBrand(supabase, params.organization_id);
+  const brand = await loadOrgBrand(supabase, input.organization_id);
 
-  // Build a sample audience entry so the same buildTokens + renderTokens +
-  // wrapInShell pipeline as a real send is exercised (eat-the-cooking).
+  // Sample entry — exercises the real pipeline and fills blocks when no real
+  // camp/program is chosen (or for templates that aren't program-based).
   const entry: AudienceEntry = {
     context_key: "test:preview",
     parent_id: null,
-    parent_email: params.test_to_email,
+    parent_email: input.to_email ?? "preview@example.com",
     parent_first_name: "Sarah",
     child_first_name: "Mia",
     program_name: "Mini Robotics",
@@ -483,25 +534,74 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
       "Game design process: sketch, build, playtest, and iterate",
     ],
     register_url: `${PUBLIC_SITE_URL}/${org.slug}/register`,
-    // Test sends always show the "Looking ahead" block so operators see the
-    // styled version regardless of their org's current data.
     next_term_available: true,
   };
 
+  // True preview: when the operator picked a real camp/program, overwrite the
+  // sample CONTENT fields with real data resolved by the same logic the live
+  // cron uses — so the preview pane and a real send can't drift. Empty real
+  // values are kept: an honest preview of what parents would actually get.
+  let usedRealData = false;
+  if (input.test_camp_session_id || input.test_program_id) {
+    const real = await resolveTestEntryContent(
+      supabase,
+      input.organization_id,
+      org.slug,
+      input.test_camp_session_id,
+      input.test_program_id,
+    );
+    if (real) { Object.assign(entry, real); usedRealData = true; }
+  }
+
   const tokens = buildTokens(entry, brand);
-  // For thank_you tests, render the auto-table token as a clear placeholder
-  // since stripe-webhook is what actually fills it on a real send.
+  // stripe-webhook fills the real registration table on a live send; show a
+  // clear placeholder here so operators know where it lands.
   tokens["registration_summary_block"] =
     '<div style="background:#f5f4ee;padding:16px;margin:16px 0;border-radius:6px;color:#6b6880;font-style:italic;">[Auto-generated registration details would appear here on a real send.]</div>';
 
-  // Editor passes in the current draft content; fall back to template defaults
-  // so operators can also test the unmodified template.
-  const subjectTpl = params.preview_subject ?? template.default_subject;
-  const bodyTpl = params.preview_body ?? template.default_body;
+  // Editor passes the current draft; fall back to template defaults so the
+  // unmodified template can also be previewed/tested.
+  const subjectTpl = input.preview_subject ?? template.default_subject;
+  const bodyTpl = input.preview_body ?? template.default_body;
 
   const subject = renderTokens(subjectTpl, tokens);
   const innerBody = renderTokens(bodyTpl, tokens);
   const fullHtml = wrapInShell(innerBody, brand);
+
+  return { ok: true, subject, html: fullHtml, brand, template_key: template.key, used_real_data: usedRealData };
+}
+
+async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Promise<TestSendResult> {
+  if (!params.organization_id || !params.template_key || !params.test_to_email) {
+    return { ok: false, error: "missing_required_params" };
+  }
+  if (!params.test_to_email.includes("@")) {
+    return { ok: false, error: "invalid_test_email" };
+  }
+
+  // Anti-spam: the test recipient must be an admin on this org. Service-role
+  // bypass exists for delivery, but the check is enforced in code so the
+  // endpoint can't be used to spam arbitrary addresses.
+  const { data: member } = await supabase
+    .from("org_members")
+    .select("email")
+    .eq("organization_id", params.organization_id)
+    .ilike("email", params.test_to_email)
+    .maybeSingle();
+  if (!member) {
+    return { ok: false, error: "test_email_not_an_org_admin" };
+  }
+
+  const rendered = await renderLifecycleEmail(supabase, {
+    organization_id: params.organization_id,
+    template_key: params.template_key,
+    preview_subject: params.preview_subject,
+    preview_body: params.preview_body,
+    test_camp_session_id: params.test_camp_session_id,
+    test_program_id: params.test_program_id,
+    to_email: params.test_to_email,
+  });
+  if (!rendered.ok) return { ok: false, error: rendered.error };
 
   try {
     const resp = await fetch("https://api.resend.com/emails", {
@@ -511,14 +611,14 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
         Authorization: `Bearer ${RESEND_API_KEY}`,
       },
       body: JSON.stringify({
-        from: formatFromAddress(brand),
+        from: formatFromAddress(rendered.brand!),
         to: params.test_to_email,
-        reply_to: brand.reply_to,
-        subject: `[TEST] ${subject}`,
-        html: fullHtml,
+        reply_to: rendered.brand!.reply_to,
+        subject: `[TEST] ${rendered.subject}`,
+        html: rendered.html,
         tags: [
           { name: "type", value: "lifecycle_test" },
-          { name: "automation", value: template.key },
+          { name: "automation", value: rendered.template_key! },
         ],
       }),
     });
@@ -531,6 +631,97 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
+}
+
+// On-screen preview — same render as a test/real send, returned as HTML for the
+// editor's iframe instead of emailed. No email sent, no Resend call, no admin
+// check (nothing leaves the system). Mirrors marketing-touchpoint-send mode:"preview".
+async function runPreview(supabase: SupabaseClient, params: PreviewParams): Promise<PreviewResult> {
+  const rendered = await renderLifecycleEmail(supabase, {
+    organization_id: params.organization_id,
+    template_key: params.template_key,
+    preview_subject: params.preview_subject,
+    preview_body: params.preview_body,
+    test_camp_session_id: params.test_camp_session_id,
+    test_program_id: params.test_program_id,
+  });
+  if (!rendered.ok) return { ok: false, error: rendered.error };
+  return { ok: true, subject: rendered.subject, body_html: rendered.html, used_real_data: rendered.used_real_data };
+}
+
+// Resolve the REAL content fields for a test send from one chosen camp/program.
+// Mirrors the field mappings in resolveWelcomeAudience exactly so the preview
+// matches a live send. Returns only the content fields (family names + resume
+// URL stay sample); null if the row isn't found or doesn't belong to the org.
+async function resolveTestEntryContent(
+  supabase: SupabaseClient,
+  organizationId: string,
+  orgSlug: string,
+  campSessionId: string | null,
+  programId: string | null,
+): Promise<Partial<AudienceEntry> | null> {
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, organizationId);
+
+  if (campSessionId) {
+    const { data: c, error } = await supabase
+      .from("camp_sessions")
+      .select(`id, curriculum_name, starts_on, ends_on, location_name, curriculum_id,
+        curricula ( final_showcase, mid_term_skills, final_recap_skills ),
+        program_locations ( parent_arrival_instructions, parent_dismissal_instructions )`)
+      .eq("id", campSessionId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (error || !c) return null;
+    const camp = c as any;
+    return {
+      program_name: camp.curriculum_name ?? "your camp",
+      program_start_date: camp.starts_on ? formatDate(camp.starts_on) : "",
+      program_end_date: camp.ends_on ? formatDate(camp.ends_on) : "",
+      location_name: camp.location_name ?? "",
+      final_showcase_raw: camp.curricula?.final_showcase ?? "",
+      mid_term_skills_raw: (camp.curricula?.mid_term_skills as string[] | null) ?? [],
+      final_recap_skills_raw: (camp.curricula?.final_recap_skills as string[] | null) ?? [],
+      arrival_instructions_raw: camp.program_locations?.parent_arrival_instructions ?? "",
+      dismissal_instructions_raw: camp.program_locations?.parent_dismissal_instructions ?? "",
+      session_dates_raw: [],
+      register_url: `${PUBLIC_SITE_URL}/${orgSlug}/register`,
+      next_term_available: nextTermAvailable,
+    };
+  }
+
+  if (programId) {
+    const { data: p, error } = await supabase
+      .from("programs")
+      .select(`id, curriculum, first_session_date, program_location_id, curriculum_id,
+        program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ),
+        curricula ( final_showcase, mid_term_skills, final_recap_skills )`)
+      .eq("id", programId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (error || !p) return null;
+    const prog = p as any;
+    let sessions: string[] = [];
+    try {
+      const { data: s } = await supabase.rpc("derive_program_session_dates", { p_program_id: prog.id });
+      sessions = (s as string[] | null) ?? [];
+    } catch { sessions = []; }
+    return {
+      program_name: prog.curriculum ?? "your program",
+      program_start_date: prog.first_session_date ? formatDate(prog.first_session_date) : "",
+      program_end_date: sessions.length > 0 ? formatDate(sessions[sessions.length - 1]) : "",
+      location_name: prog.program_locations?.name ?? "",
+      final_showcase_raw: prog.curricula?.final_showcase ?? "",
+      mid_term_skills_raw: (prog.curricula?.mid_term_skills as string[] | null) ?? [],
+      final_recap_skills_raw: (prog.curricula?.final_recap_skills as string[] | null) ?? [],
+      arrival_instructions_raw: prog.program_locations?.parent_arrival_instructions ?? "",
+      dismissal_instructions_raw: prog.program_locations?.parent_dismissal_instructions ?? "",
+      session_dates_raw: sessions,
+      register_url: `${PUBLIC_SITE_URL}/${orgSlug}/register`,
+      next_term_available: nextTermAvailable,
+    };
+  }
+
+  return null;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
