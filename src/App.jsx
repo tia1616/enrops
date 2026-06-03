@@ -20,7 +20,10 @@ import CurriculumNew from './pages/admin/curricula/CurriculumNew.jsx';
 import CurriculumExtracting from './pages/admin/curricula/CurriculumExtracting.jsx';
 import CurriculumReview from './pages/admin/curricula/CurriculumReview.jsx';
 import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
-import ProgramWizardNew from './pages/admin/programs/ProgramWizardNew.jsx';
+// ProgramWizardNew is being built in a separate chat; the .jsx file isn't
+// committed yet. Importing it here was breaking every Netlify deploy since
+// 2026-06-02 13:19 because the file doesn't exist in the git checkout. Re-add
+// this import (and the /programs/new route below) when the wizard ships.
 import LocationsList from './pages/admin/LocationsList.jsx';
 import CalendarsList from './pages/admin/CalendarsList.jsx';
 import AdminContacts from './pages/admin/contacts/AdminContacts.jsx';
@@ -117,7 +120,7 @@ export default function App() {
         <Route path="curricula/:id/review" element={<CurriculumReview />} />
         <Route path="curricula/:id/edit" element={<CurriculumReview />} />
         <Route path="programs" element={<ProgramsCalendar />} />
-        <Route path="programs/new" element={<ProgramWizardNew />} />
+        {/* <Route path="programs/new" element={<ProgramWizardNew />} /> — re-enable when ProgramWizardNew ships from the instructor-schedule-onboarding chat */}
         <Route path="locations" element={<LocationsList />} />
         <Route path="calendars" element={<CalendarsList />} />
         <Route path="contacts" element={<AdminContacts />} />
