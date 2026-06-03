@@ -41,6 +41,10 @@ serve(async (req: Request) => {
     examined: 0,
     fired: 0,
     failed: 0,
+    // partial = touchpoint hit send fn's time budget, re-queued for next tick.
+    // Not a failure; just visibility into how many large touchpoints are
+    // making partial progress across ticks.
+    partial: 0,
     skipped_claim_race: 0,
     durations_ms: [] as number[],
     errors: [] as string[],
@@ -121,7 +125,11 @@ serve(async (req: Request) => {
     }
 
     // Invoke marketing-touchpoint-send (HTTP) with service-role bearer.
-    let sendResult: { ok?: boolean; sent?: number; failed?: number; error?: string };
+    // recipient_ids is intentionally NOT passed — send fn loads from
+    // approved_recipient_ids itself via the get_campaign_recipients SQL fn.
+    // This keeps the request body tiny regardless of campaign size and
+    // avoids client-side chunking through PostgREST URL .in() clauses.
+    let sendResult: { ok?: boolean; partial?: boolean; remaining?: number; sent?: number; failed?: number; error?: string };
     try {
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/marketing-touchpoint-send`, {
         method: "POST",
@@ -133,7 +141,6 @@ serve(async (req: Request) => {
           campaign_id: tp.campaign_id,
           touchpoint_id: tp.id,
           mode: "send",
-          recipient_ids: recipientIds,
         }),
       });
       sendResult = await resp.json();
@@ -145,25 +152,44 @@ serve(async (req: Request) => {
     }
 
     // Update touchpoint status based on result.
+    // - partial=true → send fn hit its time budget mid-loop; re-queue this
+    //   touchpoint so the next cron tick picks up where we left off (dedup
+    //   in the send fn guarantees no duplicates).
     // - Actual sends succeeded (sent > 0, no failures) → 'sent'
     // - Everyone skipped (suppressed / deduped / no-match), zero sent → 'skipped'
-    // - Any per-recipient failures → 'failed' (operator can investigate; cron does not retry)
+    // - Any per-recipient failures → 'failed' (operator can investigate)
     const sentCount = sendResult.sent ?? 0;
     const failedCount = sendResult.failed ?? 0;
     let newStatus: string;
-    if (!sendResult.ok || failedCount > 0) newStatus = "failed";
+    if (!sendResult.ok) newStatus = "failed";
+    else if (sendResult.partial) newStatus = "queued"; // re-queue for next tick
+    else if (failedCount > 0) newStatus = "failed";
     else if (sentCount > 0) newStatus = "sent";
     else newStatus = "skipped";
+
+    // Persist error_message on failure so future debugging doesn't require
+    // diving into edge function logs. Capture either the send fn's error
+    // string or, when it returned per-recipient failures with no top-level
+    // error, a compact summary. On success/skip/partial, clear any prior error.
+    const errMsg = newStatus === "failed"
+      ? (sendResult.error
+          ?? (failedCount > 0 ? `${failedCount} of ${sentCount + failedCount} recipients failed (send fn returned no top-level error)` : "send fn returned ok=false with no error string"))
+      : null;
     await supabase
       .from("marketing_campaign_touchpoints")
       .update({
         status: newStatus,
         updated_at: new Date().toISOString(),
+        error_message: errMsg,
       })
       .eq("id", tp.id);
 
     if (newStatus === "sent") {
       results.fired++;
+    } else if (newStatus === "queued") {
+      // Partial — record progress but don't count as failure.
+      results.partial++;
+      results.errors.push(`touchpoint ${tp.id}: partial — sent ${sentCount}, ${sendResult.remaining ?? "?"} remaining, re-queued`);
     } else {
       results.failed++;
       results.errors.push(`touchpoint ${tp.id}: ${sendResult.error ?? "send returned failures"}`);

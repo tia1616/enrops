@@ -43,13 +43,39 @@ const TEST_SEND_THROTTLE_PER_MINUTE = 30;
 // UUID + delimiter, ~500 UUIDs is a safe URL-length ceiling across providers.
 // Above that the query silently returns empty or 414. Chunk every IN-query
 // over recipient_ids through chunkedIn() before relying on its result.
-const IN_QUERY_CHUNK = 500;
+// Was 500 — at that size, the URL ends up ~18KB (500 UUIDs encoded). For
+// most PostgREST setups that's fine, but the Supabase edge runtime hops
+// through Cloudflare (172.64.0.0/14) which trips an HTTP/2 stream protocol
+// error on the long URL. 918-recipient FA26 EB campaign died here 2026-06-03
+// with: "http2 error: stream error detected: unspecific protocol error
+// detected". Dropping to 200 keeps each URL ~7KB which Cloudflare passes.
+// IN_QUERY_CHUNK removed 2026-06-03 — chunking through PostgREST URL .in()
+// clauses was a workaround for not having a server-side recipient resolver.
+// Replaced by get_campaign_recipients(campaign_id) SQL function (one round
+// trip, no URL chunking) for recipient loading + by a touchpoint-scoped
+// dedup query (no recipient_id IN-clause needed).
 
 // Number of recipients to send to in parallel within a single function
 // invocation. Resend rate-limits at ~10 req/sec on Pro tier; 25-parallel
 // keeps wall-clock fast (≈1s per batch including network) without
 // triggering 429s. Tune down if Resend complains.
-const SEND_PARALLEL_BATCH = 25;
+const SEND_PARALLEL_BATCH = 25; // legacy — only used for token-resolution parallelism now
+// Resend's /emails/batch endpoint takes up to 100 emails per request. Each
+// batch counts as ONE Resend API call (rate limit is 5 req/sec on Pro), so
+// 100 emails/batch × 5 batches/sec = 500 emails/sec capacity. Plenty for
+// any single touchpoint within the 150s edge-function budget.
+const RESEND_BATCH_SIZE = 100;
+
+// Soft time budget for the send loop. Supabase edge functions hard-kill at
+// 150s. Leaving 20s headroom for cleanup + response serialization, we cap
+// the loop at 130s of elapsed wall-clock. When budget is exceeded mid-loop:
+// 1. Break out of the batch loop without firing more sends
+// 2. Mark already-sent recipients in marketing_sends as 'sent' (already done)
+// 3. Return ok:false with a partial-progress error so the cron sees the
+//    touchpoint as failed and the operator can re-queue it
+// Estimated capacity at this budget: ~10,000 recipients per touchpoint per
+// run, allowing for normal Resend latency variance.
+const SEND_TIME_BUDGET_MS = 130_000;
 
 // Tokens Ennie's draft pass approved. Anything outside this set in the touchpoint
 // body is a bug from earlier in the pipeline; we replace with empty string but log.
@@ -215,9 +241,11 @@ serve(async (req: Request) => {
   if (body.mode !== "test" && body.mode !== "send" && body.mode !== "preview") {
     return json({ error: "mode must be 'test', 'send', or 'preview'" }, 400);
   }
-  if (body.mode === "send" && (!Array.isArray(body.recipient_ids) || body.recipient_ids.length === 0)) {
-    return json({ error: "recipient_ids required for mode='send'" }, 400);
-  }
+  // recipient_ids in the body used to be required for mode='send'. It's now
+  // ignored — the function reads campaign.approved_recipient_ids itself via
+  // the get_campaign_recipients(campaign_id) SQL function. Stops the cron
+  // having to ship up to 100k UUIDs through a fetch body + URL chunking.
+  // Old callers that still pass recipient_ids: silently ignored.
   if (body.mode === "preview" && (!body.preview_location_id || typeof body.preview_location_id !== "string")) {
     return json({ error: "preview_location_id required for mode='preview'" }, 400);
   }
@@ -280,13 +308,15 @@ serve(async (req: Request) => {
     return await renderPreview(supabase, campaign, touchpoint, org, body.preview_location_id!);
   }
 
-  // ---- Resolve recipients ----
-  let recipientIds: string[];
+  // ---- Load recipients ----
+  // For mode='test', bootstrap an admin recipient (single row). For mode='send',
+  // call the get_campaign_recipients SQL function which joins through
+  // marketing_campaigns to enforce org match and reads from the campaign's
+  // approved_recipient_ids in one round-trip. No client-side chunking, no
+  // URL-length cliff at 500+ UUIDs, and no need for the cron to ship the
+  // full ID list through a fetch body.
+  let recipientRows: Recipient[] = [];
   if (body.mode === "test") {
-    // For 'test', the caller's user identifies the recipient. Bootstrap an
-    // admin row into marketing_recipients if one doesn't already exist for
-    // their email. Marked with segment '_internal_admin' so it's excluded
-    // from real audience resolution.
     if (!auth.userEmail) {
       return json({ error: "test mode requires authenticated user with email" }, 400);
     }
@@ -294,44 +324,17 @@ serve(async (req: Request) => {
     if (!adminRecipientId) {
       return json({ error: "failed to bootstrap admin recipient for test send" }, 500);
     }
-    recipientIds = [adminRecipientId];
-  } else {
-    // Verify all recipient_ids belong to the campaign's org. Critical
-    // multi-tenant defense — without this a compromised admin could pass
-    // recipient_ids from another tenant and blast their parents.
-    // Chunked through IN_QUERY_CHUNK because at scale (1000+ recipients)
-    // PostgREST's URL-bound IN(...) clause silently fails.
-    const validIds = new Set<string>();
-    for (let i = 0; i < body.recipient_ids!.length; i += IN_QUERY_CHUNK) {
-      const slice = body.recipient_ids!.slice(i, i + IN_QUERY_CHUNK);
-      const { data: verify, error: vErr } = await supabase
-        .from("marketing_recipients")
-        .select("id")
-        .eq("organization_id", campaign.organization_id)
-        .in("id", slice);
-      if (vErr) return json({ error: `recipient verify query failed: ${vErr.message}` }, 500);
-      for (const r of verify ?? []) validIds.add(r.id);
-    }
-    const invalid = body.recipient_ids!.filter((id) => !validIds.has(id));
-    if (invalid.length > 0) {
-      return json({ error: "some recipient_ids do not belong to this campaign's org", invalid_count: invalid.length }, 400);
-    }
-    recipientIds = body.recipient_ids!;
-  }
-
-  // ---- Load recipients ----
-  // Chunked: 700+ UUIDs in a single .in() blows the PostgREST URL limit and
-  // returns empty silently.
-  const recipientRows: Recipient[] = [];
-  for (let i = 0; i < recipientIds.length; i += IN_QUERY_CHUNK) {
-    const slice = recipientIds.slice(i, i + IN_QUERY_CHUNK);
-    const { data: recipients, error: rErr } = await supabase
+    const { data: adminRow, error: aErr } = await supabase
       .from("marketing_recipients")
       .select("id, email, parent_name, child_first_name, child_last_name, school_name, city, zip, geo_segment, segments")
-      .eq("organization_id", campaign.organization_id)
-      .in("id", slice);
-    if (rErr) return json({ error: `recipients query failed: ${rErr.message}` }, 500);
-    for (const r of (recipients ?? []) as Recipient[]) recipientRows.push(r);
+      .eq("id", adminRecipientId)
+      .single<Recipient>();
+    if (aErr || !adminRow) return json({ error: `admin recipient lookup failed: ${aErr?.message ?? "unknown"}` }, 500);
+    recipientRows = [adminRow];
+  } else {
+    const { data: rows, error: rErr } = await supabase.rpc("get_campaign_recipients", { p_campaign_id: campaign.id });
+    if (rErr) return json({ error: `get_campaign_recipients failed: ${rErr.message}` }, 500);
+    recipientRows = (rows ?? []) as Recipient[];
   }
 
   // ---- Load programs the campaign picked (for per-program tokens) ----
@@ -437,20 +440,19 @@ serve(async (req: Request) => {
   // same campaign don't collide with each other; each fires exactly once per
   // recipient. Legacy J2S FA26-launch sends have touchpoint_id NULL so they
   // don't false-positive against the new touchpoint sends.
-  // Chunked through IN_QUERY_CHUNK for the same URL-length reason as above.
+  //
+  // Scoped by (campaign_id, touchpoint_id) so we don't need a recipient_id
+  // IN-clause — the query returns at most one row per recipient who's
+  // already received this touchpoint. Single round-trip.
   const alreadyDelivered = new Set<string>();
-  for (let i = 0; i < recipientIds.length; i += IN_QUERY_CHUNK) {
-    const slice = recipientIds.slice(i, i + IN_QUERY_CHUNK);
-    const { data: prior, error: pErr } = await supabase
-      .from("marketing_sends")
-      .select("recipient_id, status")
-      .eq("campaign_id", campaign.id)
-      .eq("touchpoint_id", touchpoint.id)
-      .in("recipient_id", slice)
-      .in("status", DELIVERED_STATUSES);
-    if (pErr) return json({ error: `dedup query failed: ${pErr.message}` }, 500);
-    for (const r of (prior ?? []) as Array<{ recipient_id: string }>) alreadyDelivered.add(r.recipient_id);
-  }
+  const { data: prior, error: pErr } = await supabase
+    .from("marketing_sends")
+    .select("recipient_id")
+    .eq("campaign_id", campaign.id)
+    .eq("touchpoint_id", touchpoint.id)
+    .in("status", DELIVERED_STATUSES);
+  if (pErr) return json({ error: `dedup query failed: ${pErr.message}` }, 500);
+  for (const r of (prior ?? []) as Array<{ recipient_id: string }>) alreadyDelivered.add(r.recipient_id);
 
   // ---- Optional per-campaign overrides from draft_inputs ----
   const registrationUrlOverride = typeof draftInputs.registration_url_override === "string"
@@ -531,18 +533,39 @@ serve(async (req: Request) => {
     ready.push({ r, program, recipientPrograms, recipientCamps });
   }
 
-  // Second pass: send in parallel batches of SEND_PARALLEL_BATCH. Each batch
-  // races SEND_PARALLEL_BATCH Resend requests + token resolution, then bulk
-  // inserts the marketing_sends rows for that batch in one call.
+  // Second pass: send via Resend's BATCH endpoint (POST /emails/batch, up to
+  // 100 per request). Each batch counts as ONE call toward Resend's 5/sec
+  // rate limit but ships up to 100 emails. For 900 recipients that's ~9
+  // batches taking ~2s of rate-limit budget, well inside the 150s edge
+  // function timeout.
   //
-  // Why this matters: the previous sequential loop took ~350ms/recipient.
-  // At 771 recipients that's 270s — over the 150s edge-function hard timeout.
-  // With 25-parallel batches the wall-clock for 771 is ~30s, well inside
-  // budget. The marketing_sends bulk insert removes ~800 round-trips at scale.
-  for (let i = 0; i < ready.length; i += SEND_PARALLEL_BATCH) {
-    const batch = ready.slice(i, i + SEND_PARALLEL_BATCH);
+  // Why this matters: the previous Promise.all(25 individual /emails calls)
+  // pattern blasted 25 requests at Resend simultaneously and got 429ed on
+  // the 2nd through 25th every batch. 2026-06-03 FA26 EB campaign: 40 of
+  // 903 sent, 863 failed with "rate_limit_exceeded". Batch API fixes it.
+  //
+  // Tradeoff: if a batch call itself fails (auth, rate, malformed), ALL
+  // emails in that batch get the same error. Per-email validation still
+  // happens server-side on Resend's end. The slice of 100 keeps blast
+  // radius bounded if a batch dies.
+  // Soft time budget for the send loop. If we run out, bail with partial
+  // progress reported in the response so the cron + operator can decide
+  // whether to re-queue. The dedup logic guarantees no recipient receives
+  // a duplicate even after a re-queue.
+  const sendLoopStartedAt = Date.now();
+  let timeBudgetExceeded = false;
+  let timeBudgetSkipped = 0;
 
-    const batchResults = await Promise.all(batch.map(async ({ r, program, recipientPrograms, recipientCamps }) => {
+  for (let i = 0; i < ready.length; i += RESEND_BATCH_SIZE) {
+    if (Date.now() - sendLoopStartedAt > SEND_TIME_BUDGET_MS) {
+      timeBudgetExceeded = true;
+      timeBudgetSkipped = ready.length - i;
+      break;
+    }
+    const batch = ready.slice(i, i + RESEND_BATCH_SIZE);
+
+    // Token resolution + HTML rendering — still parallel, no rate limit here.
+    const rendered = await Promise.all(batch.map(async ({ r, program, recipientPrograms, recipientCamps }) => {
       const tokens = await buildTokensForRecipient({
         recipient: r,
         org,
@@ -570,36 +593,46 @@ serve(async (req: Request) => {
         ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
         : stripHtmlToText(innerHtml);
 
-      const sendResult = await sendViaResend({
-        fromName: org.default_sender_name!,
-        fromEmail: org.default_sender_email!,
-        toEmail: r.email,
-        subject,
-        html: bodyHtml,
-        text: bodyText,
-      });
-
-      return { r, subject, sendResult };
+      return { r, subject, bodyHtml, bodyText };
     }));
 
-    // Bulk insert marketing_sends for the whole batch — one round-trip per batch
-    // instead of one per recipient. Column names verified against
-    // information_schema: resend_message_id (NOT resend_id), rendered_subject,
-    // sent_at, etc. suppressed_by_throttle is NOT NULL — explicitly set false.
-    const inserts = batchResults.map(({ r, subject, sendResult }) => ({
-      organization_id: campaign.organization_id,
-      campaign_id: campaign.id,
-      touchpoint_id: touchpoint.id,
-      recipient_id: r.id,
-      email: r.email,
-      status: sendResult.ok ? "sent" : "failed",
-      resend_message_id: sendResult.ok ? sendResult.id : null,
-      rendered_subject: subject,
-      sent_at: sendResult.ok ? new Date().toISOString() : null,
-      school_name: r.school_name ?? null,
-      error_message: sendResult.ok ? null : sendResult.error,
-      suppressed_by_throttle: false,
+    const batchPayload = rendered.map(({ r, subject, bodyHtml, bodyText }) => ({
+      from: `${org.default_sender_name} <${org.default_sender_email}>`,
+      reply_to: org.default_sender_email,
+      to: [r.email],
+      subject,
+      html: bodyHtml,
+      text: bodyText,
     }));
+
+    let batchResp: { ok: true; ids: string[] } | { ok: false; error: string };
+    try {
+      batchResp = await sendBatchViaResend(batchPayload);
+    } catch (e) {
+      // Network errors (DNS, connection reset, abort, TLS) — catch so the
+      // loop can continue with the next batch instead of dying.
+      batchResp = { ok: false, error: `resend batch network error: ${e instanceof Error ? e.message : String(e)}` };
+    }
+
+    // batchResp: either { ok:true, ids: string[] } (one id per email, same order)
+    //         or { ok:false, error: string } (whole batch rejected — all emails fail)
+    const inserts = rendered.map((row, idx) => {
+      const ok = batchResp.ok && idx < batchResp.ids.length && !!batchResp.ids[idx];
+      return {
+        organization_id: campaign.organization_id,
+        campaign_id: campaign.id,
+        touchpoint_id: touchpoint.id,
+        recipient_id: row.r.id,
+        email: row.r.email,
+        status: ok ? "sent" : "failed",
+        resend_message_id: ok ? batchResp.ids[idx] : null,
+        rendered_subject: row.subject,
+        sent_at: ok ? new Date().toISOString() : null,
+        school_name: row.r.school_name ?? null,
+        error_message: ok ? null : (batchResp.ok ? "no id returned for this position in batch response" : batchResp.error),
+        suppressed_by_throttle: false,
+      };
+    });
     const { error: insertErr } = await supabase.from("marketing_sends").insert(inserts);
     if (insertErr) {
       // The emails already shipped — we just failed to log them. Surface in
@@ -607,17 +640,29 @@ serve(async (req: Request) => {
       results.errors.push(`marketing_sends bulk insert failed mid-batch (emails sent, logging lost): ${insertErr.message}`);
     }
 
-    for (const { r, sendResult } of batchResults) {
-      if (sendResult.ok) results.sent++;
+    for (const ins of inserts) {
+      if (ins.status === "sent") results.sent++;
       else {
         results.failed++;
-        results.errors.push(`${r.email}: ${sendResult.error}`);
+        results.errors.push(`${ins.email}: ${ins.error_message ?? "unknown"}`);
       }
+    }
+
+    // Stay under Resend's 5 req/sec — pace batches at 1 per 250ms.
+    if (i + RESEND_BATCH_SIZE < ready.length) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
 
+  // If the time budget cut us off mid-loop, signal "partial" to the cron.
+  // The cron interprets partial:true by re-queueing the touchpoint (status →
+  // 'queued') so the next 5-min cron tick picks it up and continues. Dedup
+  // guarantees no recipient receives a duplicate. Sent + failed counters
+  // reflect THIS run's progress, not cumulative.
   return json({
     ok: true,
+    partial: timeBudgetExceeded,
+    remaining: timeBudgetSkipped,
     campaign_id: campaign.id,
     touchpoint_id: touchpoint.id,
     mode: body.mode,
@@ -1263,6 +1308,42 @@ async function sendViaResend(opts: {
   }
   const data = await res.json();
   return { ok: true, id: data.id ?? "" };
+}
+
+// Resend batch endpoint: POST /emails/batch with an array of email objects
+// (up to 100). Returns { data: [{id}, ...] } on success — one id per email
+// in the SAME ORDER as the request. On rate-limit / auth / validation
+// failure, the entire batch is rejected with a single error.
+async function sendBatchViaResend(
+  emails: Array<{
+    from: string;
+    reply_to: string;
+    to: string[];
+    subject: string;
+    html: string;
+    text: string | null;
+  }>,
+): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
+  const res = await fetch("https://api.resend.com/emails/batch", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${RESEND_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(emails),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    return { ok: false, error: `resend batch ${res.status}: ${body.slice(0, 300)}` };
+  }
+  const data = await res.json();
+  // Resend batch response shape: { data: [{ id: "..." }, ...] }. Defensive
+  // about variants: handle either { data: [...] } or a top-level array.
+  const arr = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : null);
+  if (!arr) {
+    return { ok: false, error: `resend batch returned unexpected shape: ${JSON.stringify(data).slice(0, 200)}` };
+  }
+  return { ok: true, ids: arr.map((it: { id?: string }) => it?.id ?? "") };
 }
 
 // ---------------------------------------------------------------------------
