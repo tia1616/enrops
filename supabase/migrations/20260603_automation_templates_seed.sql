@@ -49,10 +49,10 @@ INSERT INTO automation_templates (
   'event_registration_confirmed', 'both', 'informational',
   E'You''re registered! 🎉',
   $body$<p>Hi {{first_name}}!</p>
-<p>Thanks for signing up &mdash; we're so excited to have {{child_first_name}} with us. Here are the details:</p>
+<p>Thanks for signing up — we're so excited to have {{child_first_name}} with us. Here are the details:</p>
 {{registration_summary_block}}
 <p>We'll send a reminder before the first session. Questions? Hit reply.</p>
-<p>&mdash; {{sender_name}}</p>$body$,
+<p>— {{sender_name}}</p>$body$,
   '{}'::jsonb, 3, true, true, 10
 ),
 (
@@ -88,20 +88,20 @@ INSERT INTO automation_templates (
   E'How''s it going so far?',
   $body$<p>Hi {{first_name}},</p>
 <p>We're two weeks into {{child_first_name}}'s {{program_name}}. Hoping it's clicking!</p>
-<p>Anything you'd want us to know &mdash; favorite parts, things to adjust, questions about what's next? Hit reply.</p>
-<p>&mdash; {{sender_name}}</p>$body$,
+<p>Anything you'd want us to know — favorite parts, things to adjust, questions about what's next? Hit reply.</p>
+<p>— {{sender_name}}</p>$body$,
   '{"days_after": 14}'::jsonb, 4, true, true, 40
 ),
 (
   'mid_recap', 'Mid recap',
   'Sends halfway through your program. Builds parent confidence mid-stride and primes them for re-enrollment. Tip: upload your curriculum to make it easy to reference real skills and projects when you customize the body.',
   'session_midpoint', 'both', 'informational',
-  E'Halfway there &mdash; {{child_first_name}}''s recap',
+  E'Halfway there — {{child_first_name}}''s recap',
   $body$<p>Hi {{first_name}},</p>
 <p>We're halfway through {{child_first_name}}'s {{program_name}}. Here's a quick check-in.</p>
 {{mid_term_skills_block}}
 <p>Questions? Hit reply.</p>
-<p>&mdash; {{sender_name}}</p>$body$,
+<p>— {{sender_name}}</p>$body$,
   '{}'::jsonb, 5, true, true, 50
 ),
 (
@@ -114,7 +114,7 @@ INSERT INTO automation_templates (
 {{final_recap_skills_block}}
 {{final_showcase_block}}
 <p>Thanks for sharing them with us.</p>
-<p>&mdash; {{sender_name}}</p>
+<p>— {{sender_name}}</p>
 {{next_term_link_block}}$body$,
   '{}'::jsonb, 5, true, true, 60
 ),
@@ -124,28 +124,28 @@ INSERT INTO automation_templates (
   'birthday', 'both', 'informational',
   E'Happy birthday, {{child_first_name}}!',
   $body$<p>Hi {{first_name}},</p>
-<p>We couldn't let today go by without saying &mdash; happy birthday to {{child_first_name}}!</p>
+<p>We couldn't let today go by without saying — happy birthday to {{child_first_name}}!</p>
 <p>Hope it's a great one.</p>
-<p>&mdash; {{sender_name}}</p>$body$,
+<p>— {{sender_name}}</p>$body$,
   '{}'::jsonb, 2, true, true, 70
 ),
 (
   'abandoned_registration', 'Abandoned registration',
   'Sends ~24 hours after a parent starts but doesn''t finish registration and checkout on Enrops. Recovers signups you''d otherwise lose — abandoned-cart reminders typically recover 5–15% of drop-offs (e-commerce industry benchmark).',
   'event_registration_abandoned', 'both', 'informational',
-  E'You almost signed up &mdash; want to finish?',
+  E'You almost signed up — want to finish?',
   $body$<p>Hi {{first_name}},</p>
 <p>Looks like you started signing {{child_first_name}} up for {{program_name}} but didn't finish. Want to pick up where you left off?</p>
-<p><a href="{{abandoned_resume_url}}">Finish registering &rarr;</a></p>
+<p><a href="{{abandoned_resume_url}}">Finish registering →</a></p>
 <p>Need a hand? Hit reply.</p>
-<p>&mdash; {{sender_name}}</p>$body$,
+<p>— {{sender_name}}</p>$body$,
   '{"hours_after_pending": 24}'::jsonb, 4, true, true, 80
 ),
 (
   'survey_nudge', 'Survey nudge',
   'Available when the Enrops survey feature ships. Sends a friendly reminder to parents who haven''t responded 2 days after the program ends, so you get the feedback you need to improve your programs.',
   'survey_pending', 'both', 'informational',
-  E'Quick favor &mdash; how was {{program_name}}?',
+  E'Quick favor — how was {{program_name}}?',
   $body$<p>Hi {{first_name}},</p>
 <p>Would you spare 2 minutes to tell us how {{child_first_name}}'s {{program_name}} went? Your feedback shapes what we do next.</p>
 <p>[Survey link will go here when surveys ship.]</p>
