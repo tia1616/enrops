@@ -165,6 +165,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // keeps the table clean and makes "Reset" semantically simple.
       const subjectOverride = subject !== template.default_subject ? subject : null;
       const bodyOverride = body !== template.default_body ? body : null;
+      // Capture prior values BEFORE the upsert so we can append edit history.
+      const prevSubject = automation?.subject_override ?? null;
+      const prevBody = automation?.body_override ?? null;
       let result;
       if (automation?.id) {
         const { data, error: upErr } = await supabase
@@ -190,12 +193,56 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
         if (insErr) throw insErr;
         result = data;
       }
+      // Append voice-signal rows for any field that actually changed. Foundation
+      // for Ennie learning operator voice over time — phrases added/dropped,
+      // structural changes per save. Failure here is non-fatal (the save
+      // already succeeded); just log so the editor doesn't roll back a real save.
+      await appendEditHistory({
+        orgId,
+        templateId: template.id,
+        userId: result?.last_edited_by ?? null,
+        deltas: [
+          subjectOverride !== prevSubject
+            ? { field: "subject_override", previous_value: prevSubject, new_value: subjectOverride }
+            : null,
+          bodyOverride !== prevBody
+            ? { field: "body_override", previous_value: prevBody, new_value: bodyOverride }
+            : null,
+        ].filter(Boolean),
+      });
       setSuccess("Saved.");
       if (onSaved) onSaved(result);
     } catch (e) {
       setError(e?.message ?? "Save failed — try again");
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Foundation for Ennie voice-learning. Appends a row to automation_edits
+  // per changed field. RLS allows org members to INSERT; nothing reads this
+  // table today — turned on when Ennie integration ships for lifecycle
+  // drafts or when marketing-draft-campaign reads lifecycle edits as voice
+  // signal. Non-fatal: a failed history write doesn't fail the user's save.
+  async function appendEditHistory({ orgId: oid, templateId, userId, deltas }) {
+    if (!Array.isArray(deltas) || deltas.length === 0) return;
+    try {
+      const rows = deltas.map((d) => ({
+        organization_id: oid,
+        template_id: templateId,
+        field: d.field,
+        previous_value: d.previous_value,
+        new_value: d.new_value,
+        edited_by: userId,
+      }));
+      const { error: histErr } = await supabase.from("automation_edits").insert(rows);
+      if (histErr) {
+        // eslint-disable-next-line no-console
+        console.warn("[AutomationEditor] history append failed:", histErr.message);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[AutomationEditor] history append threw:", e?.message);
     }
   }
 
@@ -210,6 +257,8 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     setError(null);
     setSuccess(null);
     try {
+      const prevSubject = automation?.subject_override ?? null;
+      const prevBody = automation?.body_override ?? null;
       const { data, error: upErr } = await supabase
         .from("automations")
         .update({ subject_override: null, body_override: null })
@@ -219,6 +268,17 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       if (upErr) throw upErr;
       setSubject(template.default_subject);
       setBody(template.default_body);
+      // Reset is ALSO a voice signal — operator decided their custom version
+      // wasn't right. Append rows for any field that had a non-null override.
+      await appendEditHistory({
+        orgId,
+        templateId: template.id,
+        userId: null,
+        deltas: [
+          prevSubject !== null ? { field: "subject_override", previous_value: prevSubject, new_value: null } : null,
+          prevBody !== null ? { field: "body_override", previous_value: prevBody, new_value: null } : null,
+        ].filter(Boolean),
+      });
       setSuccess("Reset to template defaults.");
       if (onSaved) onSaved(data);
     } catch (e) {
