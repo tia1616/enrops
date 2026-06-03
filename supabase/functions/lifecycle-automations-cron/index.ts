@@ -95,8 +95,9 @@ interface AudienceEntry {
   final_showcase_raw: string;   // raw curricula.final_showcase text (block HTML built in buildTokens where brand is known)
   mid_term_skills_raw: string[]; // raw curricula.mid_term_skills array — drives {{mid_term_skills_block}}
   final_recap_skills_raw: string[]; // raw curricula.final_recap_skills array — drives {{final_recap_skills_block}}
-  arrival_instructions_raw: string; // raw program_locations.arrival_instructions — drives {{arrival_dismissal_block}}
-  dismissal_instructions_raw: string; // raw program_locations.dismissal_instructions — drives {{arrival_dismissal_block}}
+  arrival_instructions_raw: string; // raw program_locations.PARENT_arrival_instructions — drives {{arrival_dismissal_block}}. Parent-safe only — never pulled from the instructor-facing arrival_instructions column.
+  dismissal_instructions_raw: string; // raw program_locations.PARENT_dismissal_instructions — drives {{arrival_dismissal_block}}
+  session_dates_raw: string[];  // derive_program_session_dates output for afterschool — drives {{session_dates_block}}. Empty for camps.
   register_url: string;         // org's base registration URL
   next_term_available: boolean; // true if org has programs/camps starting >14 days out — drives {{next_term_link_block}}
 }
@@ -466,6 +467,7 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
     age_turning: "8",
     arrival_instructions_raw: "Doors open at 8:45am. Drop off at the lobby — instructors will check kids in and walk them to the room. Please park in the visitor lot, not the loading zone.",
     dismissal_instructions_raw: "Pickup is at the lobby at 12:30pm sharp. Please be on time — instructors need to leave for the afternoon session.",
+    session_dates_raw: ["2026-09-07", "2026-09-14", "2026-09-21", "2026-09-28", "2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26", "2026-11-02", "2026-11-09", "2026-11-16", "2026-12-07"],
     final_showcase_raw: "Campers host a Playtest Arcade where every kid loads their finished platformer onto a Chromebook and the whole group rotates through playing each other's games.",
     mid_term_skills_raw: [
       "Physics simulation: coding velocity, gravity, and friction with variables",
@@ -561,7 +563,7 @@ async function resolveWelcomeAudience(
         id, parent_id,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, arrival_instructions, dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+        programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
       `)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
@@ -571,6 +573,22 @@ async function resolveWelcomeAudience(
     if (eventRegistrationId) q = q.eq("id", eventRegistrationId);
     const { data, error } = await q;
     if (error) throw error;
+
+    // Batch-fetch session dates for every unique program in the audience —
+    // {{session_dates_block}} renders "12 weekly sessions, starting Sep 9..."
+    // for afterschool programs. derive_program_session_dates honors location
+    // + district closures, so no per-row math here.
+    const sessionsByProgram = new Map<string, string[]>();
+    const uniqueProgramIds = Array.from(new Set((data ?? []).map((r: any) => r.programs?.id).filter(Boolean)));
+    for (const pid of uniqueProgramIds) {
+      try {
+        const { data: sessions } = await supabase.rpc("derive_program_session_dates", { p_program_id: pid });
+        sessionsByProgram.set(pid, (sessions as string[] | null) ?? []);
+      } catch {
+        sessionsByProgram.set(pid, []);
+      }
+    }
+
     return (data ?? [])
       .filter((r: any) => r.parents?.email && r.students?.id)
       .map((r: any) => ({
@@ -588,8 +606,9 @@ async function resolveWelcomeAudience(
         final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
         mid_term_skills_raw: (r.programs.curricula?.mid_term_skills as string[] | null) ?? [],
         final_recap_skills_raw: (r.programs.curricula?.final_recap_skills as string[] | null) ?? [],
-        arrival_instructions_raw: r.programs.program_locations?.arrival_instructions ?? "",
-        dismissal_instructions_raw: r.programs.program_locations?.dismissal_instructions ?? "",
+        arrival_instructions_raw: r.programs.program_locations?.parent_arrival_instructions ?? "",
+        dismissal_instructions_raw: r.programs.program_locations?.parent_dismissal_instructions ?? "",
+        session_dates_raw: sessionsByProgram.get(r.programs.id) ?? [],
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
         next_term_available: nextTermAvailable,
       }));
@@ -602,7 +621,7 @@ async function resolveWelcomeAudience(
         id, parent_id,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        camp_sessions!inner ( id, curriculum_name, starts_on, ends_on, location_id, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills ), program_locations ( arrival_instructions, dismissal_instructions ) )
+        camp_sessions!inner ( id, curriculum_name, starts_on, ends_on, location_id, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills ), program_locations ( parent_arrival_instructions, parent_dismissal_instructions ) )
       `)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
@@ -629,8 +648,9 @@ async function resolveWelcomeAudience(
         final_showcase_raw: r.camp_sessions.curricula?.final_showcase ?? "",
         mid_term_skills_raw: (r.camp_sessions.curricula?.mid_term_skills as string[] | null) ?? [],
         final_recap_skills_raw: (r.camp_sessions.curricula?.final_recap_skills as string[] | null) ?? [],
-        arrival_instructions_raw: r.camp_sessions.program_locations?.arrival_instructions ?? "",
-        dismissal_instructions_raw: r.camp_sessions.program_locations?.dismissal_instructions ?? "",
+        arrival_instructions_raw: r.camp_sessions.program_locations?.parent_arrival_instructions ?? "",
+        dismissal_instructions_raw: r.camp_sessions.program_locations?.parent_dismissal_instructions ?? "",
+        session_dates_raw: [],
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
         next_term_available: nextTermAvailable,
       }));
@@ -659,7 +679,7 @@ async function resolveCheckInAudience(
       id, parent_id,
       students!inner ( id, first_name ),
       parents!inner ( id, first_name, email ),
-      programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, arrival_instructions, dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+      programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
     `)
     .eq("organization_id", a.organization_id)
     .eq("status", "confirmed")
@@ -685,6 +705,9 @@ async function resolveCheckInAudience(
       final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
       mid_term_skills_raw: (r.programs.curricula?.mid_term_skills as string[] | null) ?? [],
       final_recap_skills_raw: (r.programs.curricula?.final_recap_skills as string[] | null) ?? [],
+      arrival_instructions_raw: r.programs.program_locations?.parent_arrival_instructions ?? "",
+      dismissal_instructions_raw: r.programs.program_locations?.parent_dismissal_instructions ?? "",
+      session_dates_raw: [],
       register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
       next_term_available: nextTermAvailable,
     }));
@@ -787,6 +810,9 @@ async function resolveRecapAudience(
           final_showcase_raw: camp.curricula?.final_showcase ?? "",
           mid_term_skills_raw: (camp.curricula?.mid_term_skills as string[] | null) ?? [],
           final_recap_skills_raw: (camp.curricula?.final_recap_skills as string[] | null) ?? [],
+          arrival_instructions_raw: camp.program_locations?.parent_arrival_instructions ?? "",
+          dismissal_instructions_raw: camp.program_locations?.parent_dismissal_instructions ?? "",
+          session_dates_raw: [],
           register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
           next_term_available: nextTermAvailable,
         });
@@ -798,7 +824,7 @@ async function resolveRecapAudience(
   if (includeAfterschool) {
       const { data: programs, error: pErr } = await supabase
       .from("programs")
-      .select("id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, arrival_instructions, dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
+      .select("id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
       .eq("organization_id", a.organization_id);
     if (pErr) throw pErr;
 
@@ -819,6 +845,9 @@ async function resolveRecapAudience(
         final_showcase: p.curricula?.final_showcase ?? "",
         mid_term_skills: (p.curricula?.mid_term_skills as string[] | null) ?? [],
         final_recap_skills: (p.curricula?.final_recap_skills as string[] | null) ?? [],
+        arrival_instructions: p.program_locations?.parent_arrival_instructions ?? "",
+        dismissal_instructions: p.program_locations?.parent_dismissal_instructions ?? "",
+        session_dates: (sessions as string[]) ?? [],
       });
     }
 
@@ -854,6 +883,9 @@ async function resolveRecapAudience(
           final_showcase_raw: meta.final_showcase ?? "",
           mid_term_skills_raw: meta.mid_term_skills ?? [],
           final_recap_skills_raw: meta.final_recap_skills ?? [],
+          arrival_instructions_raw: meta.arrival_instructions ?? "",
+          dismissal_instructions_raw: meta.dismissal_instructions ?? "",
+          session_dates_raw: meta.session_dates ?? [],
           register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
           next_term_available: nextTermAvailable,
         });
@@ -930,7 +962,10 @@ async function resolveBirthdayAudience(
         final_recap_skills_raw: [],
         arrival_instructions_raw: "",
         dismissal_instructions_raw: "",
+        session_dates_raw: [],
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+        // ⓘ default-zero defaults for resolvers that don't carry per-program
+        // arrival/dismissal/session data (birthday, abandoned).
         next_term_available: nextTermAvailable,
       };
     });
@@ -950,7 +985,7 @@ async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationR
       id, parent_id, registered_at,
       students ( first_name ),
       parents ( id, first_name, email ),
-      programs ( id, curriculum, program_locations ( name, arrival_instructions, dismissal_instructions ) ),
+      programs ( id, curriculum, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ) ),
       camp_sessions ( id, curriculum_name, location_name )
     `)
     .eq("organization_id", a.organization_id)
@@ -977,6 +1012,14 @@ async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationR
       // resume route ships, the URL pattern doesn't change.
       abandoned_resume_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register?resume_reg=${r.id}`,
       age_turning: "",
+      final_showcase_raw: "",
+      mid_term_skills_raw: [],
+      final_recap_skills_raw: [],
+      arrival_instructions_raw: "",
+      dismissal_instructions_raw: "",
+      session_dates_raw: [],
+      register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+      next_term_available: nextTermAvailable,
     }));
 }
 
@@ -1003,6 +1046,7 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     mid_term_skills_block: buildSkillsBlock(entry.mid_term_skills_raw, brand, "What they have been working on"),
     final_recap_skills_block: buildSkillsBlock(entry.final_recap_skills_raw, brand, "What they covered"),
     arrival_dismissal_block: buildArrivalDismissalBlock(entry.arrival_instructions_raw, entry.dismissal_instructions_raw, brand),
+    session_dates_block: buildSessionDatesBlock(entry.session_dates_raw, brand),
     register_url: entry.register_url,
     next_term_link_block: buildNextTermLinkBlock(entry.next_term_available, entry.register_url, brand),
   };
@@ -1040,7 +1084,25 @@ function senderNameForBody(senderName: string): string {
 // Tokens whose values are already valid HTML — must NOT be re-escaped during
 // substitution (otherwise <p> renders as &lt;p&gt; in the parent's email).
 // Mirrors the pattern in marketing-touchpoint-send/index.ts.
-const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "arrival_dismissal_block", "next_term_link_block"]);
+const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "arrival_dismissal_block", "session_dates_block", "next_term_link_block"]);
+
+// Build the upcoming-session-dates block from derive_program_session_dates
+// output. Renders the program's session count + first/last dates as a tight
+// summary parents can scan. Empty when there are no dates (camps, or
+// afterschool programs whose session list hasn't been derived yet).
+function buildSessionDatesBlock(sessions: string[] | null | undefined, brand: OrgBrand): string {
+  if (!sessions || sessions.length === 0) return "";
+  const valid = sessions.filter((s) => typeof s === "string" && s.trim().length > 0);
+  if (valid.length === 0) return "";
+  const first = formatDate(valid[0]);
+  const last = formatDate(valid[valid.length - 1]);
+  const count = valid.length;
+  const sessionWord = count === 1 ? "session" : "sessions";
+  const summary = count === 1
+    ? `One session on ${first}.`
+    : `${count} weekly ${sessionWord}, starting ${first} and ending ${last}.`;
+  return `<div style="background:#f5f4ee;padding:14px 18px;margin:16px 0;border-radius:6px;border-left:3px solid ${brand.primary_color};"><p style="margin:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${brand.primary_color};">Schedule</p><p style="margin:0;color:#1A1530;font-size:14px;line-height:1.55;">${escapeHtml(summary)}</p></div>`;
+}
 
 // Build the "Arrival" / "Dismissal" location-instructions block. Renders
 // either or both labeled sections when populated, empty string when both

@@ -78,6 +78,7 @@ INSERT INTO automation_templates (
   E'{{child_first_name}}''s after-school program starts {{program_start_date}}',
   $body$<p>Hi {{first_name}},</p>
 <p>{{child_first_name}}'s {{program_name}} after-school program starts {{program_start_date}} at {{location_name}}.</p>
+{{session_dates_block}}
 {{arrival_dismissal_block}}
 <p>Excited to have them,<br/>{{sender_name}}</p>$body$,
   '{"days_before": 7}'::jsonb, 3, true, true, 30
