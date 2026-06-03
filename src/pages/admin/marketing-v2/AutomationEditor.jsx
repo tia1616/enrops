@@ -64,8 +64,11 @@ const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skil
 // use the org's actual primary_color so what operators see matches what
 // parents receive. {{sender_name}} sample is intentionally just a first name
 // to demonstrate the stripped form that lands in sign-offs.
-function sampleTokens(orgName, senderName, primaryColor) {
+function sampleTokens(orgName, senderName, primaryColor, orgSlug) {
   const color = primaryColor || "#1C004F";
+  // Real tenant registration URL so the preview matches the live send. Cron
+  // builds the same `${site}/${slug}/register` from the org's slug.
+  const registerUrl = orgSlug ? `https://enrops.com/${orgSlug}/register` : "https://enrops.com/your-org";
   return {
     first_name: "Sarah",
     child_first_name: "Mia",
@@ -77,13 +80,13 @@ function sampleTokens(orgName, senderName, primaryColor) {
     location_name: "Beaverton STEAM Hub",
     age_turning: "8",
     abandoned_resume_url: "#",
-    register_url: "https://enrops.com/your-org",
+    register_url: registerUrl,
     final_showcase_block:
       `<div style="background:#f5f4ee;border-left:3px solid ${color};padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;"><strong>On the final day:</strong> Campers host a Playtest Arcade where every kid loads their finished platformer onto a Chromebook and the whole group rotates through playing each other's games.</div>`,
     registration_summary_block:
       '<div style="background:#f5f4ee;padding:16px;margin:16px 0;border-radius:6px;color:#6b6880;font-style:italic;">[Auto-generated registration details will appear here in the real send — program rows, location, day/time, payment summary.]</div>',
     next_term_link_block:
-      `<p style="margin-top:24px;padding-top:16px;border-top:1px solid #ede9fe;font-size:14px;color:#1A1530;">Looking ahead? <a href="#" style="color:${color};font-weight:600;text-decoration:none;">See what's coming next &rarr;</a></p>`,
+      `<p style="margin-top:24px;padding-top:16px;border-top:1px solid #ede9fe;font-size:14px;color:#1A1530;">Looking ahead? <a href="${registerUrl}" style="color:${color};font-weight:600;text-decoration:none;">See what's coming next &rarr;</a></p>`,
     mid_term_skills_block:
       `<div style="background:#f5f4ee;padding:16px 20px;margin:16px 0;border-radius:6px;border-left:3px solid ${color};"><p style="margin:0 0 10px;font-weight:700;color:#1A1530;">What they have been working on:</p><ul style="margin:0;padding-left:20px;color:#1A1530;line-height:1.6;"><li>Physics simulation: coding velocity, gravity, and friction with variables</li><li>Collision detection: triggering game events when sprites touch</li><li>Platformer level design: sketching and building jumpable layouts</li><li>Game logic with conditional statements and loops</li></ul></div>`,
     final_recap_skills_block:
@@ -112,8 +115,8 @@ function renderTokens(template, tokens) {
   });
 }
 
-function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryColor) {
-  const tokens = sampleTokens(orgName, senderName, primaryColor);
+function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryColor, orgSlug) {
+  const tokens = sampleTokens(orgName, senderName, primaryColor, orgSlug);
   const renderedSubject = renderTokens(subject, tokens);
   const renderedBody = renderTokens(body, tokens);
   // Shell matches the cron's wrapInShell — tenant logo on white, no generic
@@ -134,7 +137,7 @@ function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryCo
 </body></html>`;
 }
 
-export default function AutomationEditor({ template, automation, orgId, orgName, orgLogoUrl, orgSenderName, orgPrimaryColor, userEmail, onClose, onSaved }) {
+export default function AutomationEditor({ template, automation, orgId, orgName, orgSlug, orgLogoUrl, orgSenderName, orgPrimaryColor, userEmail, onClose, onSaved }) {
   const [subject, setSubject] = useState(automation?.subject_override ?? template.default_subject);
   const [body, setBody] = useState(automation?.body_override ?? template.default_body);
   // Toggle: false = render the HTML with token pills; true = textarea with
@@ -171,8 +174,8 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   }, [success, error]);
 
   const previewHtml = useMemo(
-    () => buildPreviewHtml(subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor),
-    [subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor],
+    () => buildPreviewHtml(subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug),
+    [subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug],
   );
 
   const tokens = TOKENS_BY_TEMPLATE_KEY[template.key] ?? [];

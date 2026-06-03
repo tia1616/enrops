@@ -344,6 +344,7 @@ export default function AutomationsTab() {
                   automation={automationByTpl[tpl.id] ?? null}
                   orgId={org.id}
                   orgName={org.name}
+                  orgSlug={org.slug}
                   orgLogoUrl={orgLogoUrl}
                   orgSenderName={orgSenderName}
                   orgPrimaryColor={orgPrimaryColor}
