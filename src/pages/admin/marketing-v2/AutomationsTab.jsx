@@ -223,11 +223,13 @@ export default function AutomationsTab() {
                       disabledTemplate={disabledTemplate}
                       enabled={enabled}
                     />
-                    {tpl.applies_to_program_type !== "both" && (
-                      <Chip color={INFO} bg="#eef4fc">
-                        {tpl.applies_to_program_type === "camps" ? "Camps only" : "After-school only"}
-                      </Chip>
-                    )}
+                    <Chip color={INFO} bg="#eef4fc">
+                      {tpl.applies_to_program_type === "camps"
+                        ? "Camps only"
+                        : tpl.applies_to_program_type === "afterschool"
+                          ? "After-school only"
+                          : "Camps + after-school"}
+                    </Chip>
                   </div>
                   <p style={{ color: MUTED, fontSize: 14, margin: "4px 0 10px", lineHeight: 1.5 }}>
                     {tpl.description}
