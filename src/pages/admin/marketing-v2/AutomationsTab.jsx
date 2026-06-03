@@ -33,6 +33,10 @@ export default function AutomationsTab() {
   const [orgLogoUrl, setOrgLogoUrl] = useState(null);
   const [orgSenderName, setOrgSenderName] = useState(null);
   const [orgPrimaryColor, setOrgPrimaryColor] = useState(null);
+  // Templates currently celebrating — when an operator flips off → on, the
+  // row plays a brief "🎉 Live!" chip that pops in, stays visible, then
+  // fades. Cleared by a timeout so the celebration doesn't linger forever.
+  const [celebratingId, setCelebratingId] = useState(null);
 
   const [templates, setTemplates] = useState([]);
   const [automationByTpl, setAutomationByTpl] = useState({});
@@ -118,6 +122,7 @@ export default function AutomationsTab() {
     setSavingTplId(tpl.id);
     setError(null);
     const existing = automationByTpl[tpl.id];
+    const wasEnabled = !!existing?.enabled;
     try {
       if (existing) {
         const { error: upErr } = await supabase
@@ -138,6 +143,13 @@ export default function AutomationsTab() {
         if (insErr) throw insErr;
         setAutomationByTpl((prev) => ({ ...prev, [tpl.id]: data }));
       }
+      // Off → On transition: kick off the celebration. Already-on or just-
+      // toggled-off transitions don't celebrate (would feel sarcastic on an
+      // off toggle and overwhelming when re-flipping a working automation).
+      if (!wasEnabled) {
+        setCelebratingId(tpl.id);
+        setTimeout(() => setCelebratingId((cur) => (cur === tpl.id ? null : cur)), 3500);
+      }
     } catch (e) {
       setError(e?.message ?? "Couldn't update — try again");
     } finally {
@@ -156,6 +168,24 @@ export default function AutomationsTab() {
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
+      {/* Celebration animation keyframes — used on the row chip when an
+          operator flips an automation from Off → On. Defined here once
+          rather than per-Chip so React reconciler keeps the animation
+          fresh across re-renders. */}
+      <style>{`
+        @keyframes automation-celebrate-in {
+          0%   { opacity: 0; transform: translateY(-4px) scale(0.85); }
+          40%  { opacity: 1; transform: translateY(0) scale(1.1); }
+          70%  { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: translateY(-2px) scale(0.95); }
+        }
+        @keyframes automation-confetti-float {
+          0%   { opacity: 0; transform: translate(var(--cx, 0), 0) rotate(0deg) scale(0.6); }
+          15%  { opacity: 1; }
+          80%  { opacity: 1; }
+          100% { opacity: 0; transform: translate(var(--cx, 0), -36px) rotate(var(--cr, 80deg)) scale(1); }
+        }
+      `}</style>
       <FamilyCommsTabs active="automations" />
 
       <header style={{ marginBottom: 28 }}>
@@ -210,6 +240,7 @@ export default function AutomationsTab() {
                 marginBottom: 14,
                 background: "#fff",
                 opacity: disabledTemplate ? 0.65 : 1,
+                position: "relative",
               }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
@@ -245,11 +276,6 @@ export default function AutomationsTab() {
                         ⏱ {formatTimeSaved(stats.total_time_saved)}
                         {" · "}
                         {stats.total_sent} {stats.total_sent === 1 ? "send" : "sends"}
-                      </Chip>
-                    )}
-                    {!stats && enabled && (
-                      <Chip color={MUTED} bg="#f5f4ee">
-                        Hasn&apos;t sent yet — sends when audience matches
                       </Chip>
                     )}
                     {locked && (
@@ -308,6 +334,10 @@ export default function AutomationsTab() {
                 </div>
               </div>
 
+              {celebratingId === tpl.id && (
+                <CelebrationOverlay templateName={tpl.display_name} />
+              )}
+
               {editingTpl?.id === tpl.id && (
                 <AutomationEditor
                   template={tpl}
@@ -328,6 +358,48 @@ export default function AutomationsTab() {
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+// Brief celebratory overlay rendered inside a row's `<li>` when the operator
+// flips an automation Off → On. Auto-removes after 3.5s via the parent's
+// setTimeout. Three floating confetti emojis drift up while the central
+// "🎉 Live!" chip pops + holds + fades.
+function CelebrationOverlay({ templateName }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: "absolute",
+        top: 8,
+        right: 8,
+        pointerEvents: "none",
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
+      <span style={{ position: "relative", display: "inline-block", width: 0, height: 0 }}>
+        <span style={{ position: "absolute", left: -14, top: 10, fontSize: 16, animation: "automation-confetti-float 1.6s ease-out 0.05s both", ["--cx"]: "-14px", ["--cr"]: "-60deg" }}>✨</span>
+        <span style={{ position: "absolute", left: 0,   top: 8,  fontSize: 18, animation: "automation-confetti-float 1.8s ease-out 0.15s both", ["--cx"]: "2px",   ["--cr"]: "20deg" }}>🎊</span>
+        <span style={{ position: "absolute", left: 14,  top: 12, fontSize: 16, animation: "automation-confetti-float 1.7s ease-out 0.10s both", ["--cx"]: "10px",  ["--cr"]: "55deg" }}>✨</span>
+      </span>
+      <span
+        style={{
+          background: "#ecf6ec",
+          color: OK,
+          padding: "4px 12px",
+          borderRadius: 999,
+          fontSize: 12,
+          fontWeight: 700,
+          boxShadow: "0 2px 8px rgba(78, 145, 78, 0.25)",
+          animation: "automation-celebrate-in 3.5s ease-out both",
+        }}
+      >
+        🎉 {templateName} is live!
+      </span>
     </div>
   );
 }
