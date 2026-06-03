@@ -93,6 +93,8 @@ interface AudienceEntry {
   abandoned_resume_url: string; // empty unless workflow uses it
   age_turning: string;          // empty unless birthday
   final_showcase_raw: string;   // raw curricula.final_showcase text (block HTML built in buildTokens where brand is known)
+  mid_term_skills_raw: string[]; // raw curricula.mid_term_skills array — drives {{mid_term_skills_block}}
+  final_recap_skills_raw: string[]; // raw curricula.final_recap_skills array — drives {{final_recap_skills_block}}
   register_url: string;         // org's base registration URL
   next_term_available: boolean; // true if org has programs/camps starting >14 days out — drives {{next_term_link_block}}
 }
@@ -460,6 +462,19 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
     abandoned_resume_url: "#",
     age_turning: "8",
     final_showcase_raw: "Campers host a Playtest Arcade where every kid loads their finished platformer onto a Chromebook and the whole group rotates through playing each other's games.",
+    mid_term_skills_raw: [
+      "Physics simulation: coding velocity, gravity, and friction with variables",
+      "Collision detection: triggering game events when sprites touch",
+      "Platformer level design: sketching and building jumpable layouts",
+      "Game logic with conditional statements and loops",
+    ],
+    final_recap_skills_raw: [
+      "Physics simulation: velocity, gravity, and friction using variables",
+      "Event-driven programming with broadcasts and receivers across multiple sprites",
+      "Variable management for score, lives, and game state",
+      "Multi-scene architecture: warp pipes and backdrop switching for multiple levels",
+      "Game design process: sketch, build, playtest, and iterate",
+    ],
     register_url: `${PUBLIC_SITE_URL}/${org.slug}/register`,
     // Test sends always show the "Looking ahead" block so operators see the
     // styled version regardless of their org's current data.
@@ -541,7 +556,7 @@ async function resolveWelcomeAudience(
         id, parent_id,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase ) )
+        programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
       `)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
@@ -566,6 +581,8 @@ async function resolveWelcomeAudience(
         abandoned_resume_url: "",
         age_turning: "",
         final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
+        mid_term_skills_raw: (r.programs.curricula?.mid_term_skills as string[] | null) ?? [],
+        final_recap_skills_raw: (r.programs.curricula?.final_recap_skills as string[] | null) ?? [],
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
         next_term_available: nextTermAvailable,
       }));
@@ -578,7 +595,7 @@ async function resolveWelcomeAudience(
         id, parent_id,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        camp_sessions!inner ( id, curriculum_name, starts_on, ends_on, location_name, curriculum_id, curricula ( final_showcase ) )
+        camp_sessions!inner ( id, curriculum_name, starts_on, ends_on, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
       `)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
@@ -603,6 +620,8 @@ async function resolveWelcomeAudience(
         abandoned_resume_url: "",
         age_turning: "",
         final_showcase_raw: r.camp_sessions.curricula?.final_showcase ?? "",
+        mid_term_skills_raw: (r.camp_sessions.curricula?.mid_term_skills as string[] | null) ?? [],
+        final_recap_skills_raw: (r.camp_sessions.curricula?.final_recap_skills as string[] | null) ?? [],
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
         next_term_available: nextTermAvailable,
       }));
@@ -631,7 +650,7 @@ async function resolveCheckInAudience(
       id, parent_id,
       students!inner ( id, first_name ),
       parents!inner ( id, first_name, email ),
-      programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase ) )
+      programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
     `)
     .eq("organization_id", a.organization_id)
     .eq("status", "confirmed")
@@ -655,6 +674,8 @@ async function resolveCheckInAudience(
       abandoned_resume_url: "",
       age_turning: "",
       final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
+      mid_term_skills_raw: (r.programs.curricula?.mid_term_skills as string[] | null) ?? [],
+      final_recap_skills_raw: (r.programs.curricula?.final_recap_skills as string[] | null) ?? [],
       register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
       next_term_available: nextTermAvailable,
     }));
@@ -714,7 +735,7 @@ async function resolveRecapAudience(
   if (includeCamps) {
     const { data: camps, error: cErr } = await supabase
       .from("camp_sessions")
-      .select("id, starts_on, ends_on, curriculum_name, location_name, curriculum_id, curricula ( final_showcase )")
+      .select("id, starts_on, ends_on, curriculum_name, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills )")
       .eq("organization_id", a.organization_id)
       .not("starts_on", "is", null)
       .not("ends_on", "is", null);
@@ -755,6 +776,8 @@ async function resolveRecapAudience(
           abandoned_resume_url: "",
           age_turning: "",
           final_showcase_raw: camp.curricula?.final_showcase ?? "",
+          mid_term_skills_raw: (camp.curricula?.mid_term_skills as string[] | null) ?? [],
+          final_recap_skills_raw: (camp.curricula?.final_recap_skills as string[] | null) ?? [],
           register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
           next_term_available: nextTermAvailable,
         });
@@ -764,9 +787,9 @@ async function resolveRecapAudience(
 
   // 2. Afterschool — derive_program_session_dates per program
   if (includeAfterschool) {
-    const { data: programs, error: pErr } = await supabase
+      const { data: programs, error: pErr } = await supabase
       .from("programs")
-      .select("id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase )")
+      .select("id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
       .eq("organization_id", a.organization_id);
     if (pErr) throw pErr;
 
@@ -785,6 +808,8 @@ async function resolveRecapAudience(
         first_session_date: p.first_session_date,
         last_session_date: (sessions as string[])[sessions.length - 1] ?? null,
         final_showcase: p.curricula?.final_showcase ?? "",
+        mid_term_skills: (p.curricula?.mid_term_skills as string[] | null) ?? [],
+        final_recap_skills: (p.curricula?.final_recap_skills as string[] | null) ?? [],
       });
     }
 
@@ -818,6 +843,8 @@ async function resolveRecapAudience(
           abandoned_resume_url: "",
           age_turning: "",
           final_showcase_raw: meta.final_showcase ?? "",
+          mid_term_skills_raw: meta.mid_term_skills ?? [],
+          final_recap_skills_raw: meta.final_recap_skills ?? [],
           register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
           next_term_available: nextTermAvailable,
         });
@@ -890,6 +917,8 @@ async function resolveBirthdayAudience(
         abandoned_resume_url: "",
         age_turning: String(year - birthYear),
         final_showcase_raw: "",
+        mid_term_skills_raw: [],
+        final_recap_skills_raw: [],
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
         next_term_available: nextTermAvailable,
       };
@@ -960,9 +989,26 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     age_turning: entry.age_turning,
     abandoned_resume_url: entry.abandoned_resume_url,
     final_showcase_block: buildShowcaseBlock(entry.final_showcase_raw, brand),
+    mid_term_skills_block: buildSkillsBlock(entry.mid_term_skills_raw, brand, "What they have been working on"),
+    final_recap_skills_block: buildSkillsBlock(entry.final_recap_skills_raw, brand, "What they covered"),
     register_url: entry.register_url,
     next_term_link_block: buildNextTermLinkBlock(entry.next_term_available, entry.register_url, brand),
   };
+}
+
+// Build a "What they have been working on" / "What they covered" block from
+// curricula.mid_term_skills or curricula.final_recap_skills. Returns empty
+// string when the curriculum hasn't been uploaded or has no skills set, so
+// templates can include the token unconditionally without producing an
+// awkward empty header. Uses brand.primary_color for the left border.
+function buildSkillsBlock(skills: string[] | null | undefined, brand: OrgBrand, headerText: string): string {
+  if (!skills || skills.length === 0) return "";
+  const items = skills
+    .filter((s) => typeof s === "string" && s.trim().length > 0)
+    .map((s) => `<li style="margin-bottom:4px;">${escapeHtml(s.trim())}</li>`)
+    .join("");
+  if (!items) return "";
+  return `<div style="background:#f5f4ee;padding:16px 20px;margin:16px 0;border-radius:6px;border-left:3px solid ${brand.primary_color};"><p style="margin:0 0 10px;font-weight:700;color:#1A1530;">${escapeHtml(headerText)}:</p><ul style="margin:0;padding-left:20px;color:#1A1530;line-height:1.6;">${items}</ul></div>`;
 }
 
 // Auto-detect cross-sell link block. Renders only when the org has at least one
@@ -982,7 +1028,7 @@ function senderNameForBody(senderName: string): string {
 // Tokens whose values are already valid HTML — must NOT be re-escaped during
 // substitution (otherwise <p> renders as &lt;p&gt; in the parent's email).
 // Mirrors the pattern in marketing-touchpoint-send/index.ts.
-const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "next_term_link_block"]);
+const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "next_term_link_block"]);
 
 // Auto-detect helper. Returns true when the org has at least one program OR
 // camp_session starting more than 14 days from today — i.e. a real "next term"

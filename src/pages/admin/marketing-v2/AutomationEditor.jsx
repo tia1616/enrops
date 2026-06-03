@@ -29,15 +29,15 @@ const TOKENS_BY_TEMPLATE_KEY = {
   welcome_camp:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "location_name", "final_showcase_block", "next_term_link_block", "register_url"],
   welcome_afterschool:    ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "location_name", "next_term_link_block", "register_url"],
   check_in:               ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "register_url"],
-  mid_recap:              ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "register_url"],
-  final_recap:            ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_end_date", "final_showcase_block", "next_term_link_block", "register_url"],
+  mid_recap:              ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "mid_term_skills_block", "register_url"],
+  final_recap:            ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_end_date", "final_showcase_block", "final_recap_skills_block", "next_term_link_block", "register_url"],
   birthday:               ["first_name", "child_first_name", "org_name", "sender_name", "age_turning"],
   abandoned_registration: ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "abandoned_resume_url"],
   survey_nudge:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name"],
 };
 
 // HTML-pre-rendered tokens — preview passes their sample HTML through verbatim.
-const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "registration_summary_block", "next_term_link_block"]);
+const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "registration_summary_block", "next_term_link_block"]);
 
 // Sample values for the live preview. Tenant-aware — pre-rendered blocks
 // use the org's actual primary_color so what operators see matches what
@@ -63,6 +63,10 @@ function sampleTokens(orgName, senderName, primaryColor) {
       '<div style="background:#f5f4ee;padding:16px;margin:16px 0;border-radius:6px;color:#6b6880;font-style:italic;">[Auto-generated registration details will appear here in the real send — program rows, location, day/time, payment summary.]</div>',
     next_term_link_block:
       `<p style="margin-top:24px;padding-top:16px;border-top:1px solid #ede9fe;font-size:14px;color:#1A1530;">Looking ahead? <a href="#" style="color:${color};font-weight:600;text-decoration:none;">See what's coming next &rarr;</a></p>`,
+    mid_term_skills_block:
+      `<div style="background:#f5f4ee;padding:16px 20px;margin:16px 0;border-radius:6px;border-left:3px solid ${color};"><p style="margin:0 0 10px;font-weight:700;color:#1A1530;">What they have been working on:</p><ul style="margin:0;padding-left:20px;color:#1A1530;line-height:1.6;"><li>Physics simulation: coding velocity, gravity, and friction with variables</li><li>Collision detection: triggering game events when sprites touch</li><li>Platformer level design: sketching and building jumpable layouts</li><li>Game logic with conditional statements and loops</li></ul></div>`,
+    final_recap_skills_block:
+      `<div style="background:#f5f4ee;padding:16px 20px;margin:16px 0;border-radius:6px;border-left:3px solid ${color};"><p style="margin:0 0 10px;font-weight:700;color:#1A1530;">What they covered:</p><ul style="margin:0;padding-left:20px;color:#1A1530;line-height:1.6;"><li>Physics simulation: velocity, gravity, and friction using variables</li><li>Event-driven programming with broadcasts and receivers across multiple sprites</li><li>Variable management for score, lives, and game state</li><li>Multi-scene architecture: warp pipes and backdrop switching for multiple levels</li><li>Game design process: sketch, build, playtest, and iterate</li></ul></div>`,
   };
 }
 

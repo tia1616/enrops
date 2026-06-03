@@ -99,7 +99,7 @@ INSERT INTO automation_templates (
   E'Halfway there &mdash; {{child_first_name}}''s recap',
   $body$<p>Hi {{first_name}},</p>
 <p>We're halfway through {{child_first_name}}'s {{program_name}}. Here's a quick check-in.</p>
-<p>[Customize with what kids have been working on, what's coming next, photos if you have them.]</p>
+{{mid_term_skills_block}}
 <p>Questions? Hit reply.</p>
 <p>&mdash; {{sender_name}}</p>$body$,
   '{}'::jsonb, 5, true, true, 50
@@ -111,8 +111,8 @@ INSERT INTO automation_templates (
   E'{{child_first_name}}''s last day with us!',
   $body$<p>Hi {{first_name}},</p>
 <p>Today is {{child_first_name}}'s last day of {{program_name}}. We loved having them.</p>
+{{final_recap_skills_block}}
 {{final_showcase_block}}
-<p>[Customize with photos and what they accomplished.]</p>
 <p>Thanks for sharing them with us.</p>
 <p>&mdash; {{sender_name}}</p>
 {{next_term_link_block}}$body$,
