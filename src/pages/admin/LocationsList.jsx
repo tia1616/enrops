@@ -35,6 +35,8 @@ const EMPTY_DRAFT = {
   contact_email: "",
   arrival_instructions: "",
   dismissal_instructions: "",
+  parent_arrival_instructions: "",
+  parent_dismissal_instructions: "",
   food_drink_policy: "",
   notes: "",
 };
@@ -58,7 +60,7 @@ export default function LocationsList() {
     setLoading(true);
     const { data, error: err } = await supabase
       .from("program_locations")
-      .select("id, name, district, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, food_drink_policy, notes, created_at")
+      .select("id, name, district, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, parent_arrival_instructions, parent_dismissal_instructions, food_drink_policy, notes, created_at")
       .eq("organization_id", org.id)
       .order("name", { ascending: true });
     if (err) {
@@ -105,6 +107,8 @@ export default function LocationsList() {
       contact_email: loc.contact_email ?? "",
       arrival_instructions: loc.arrival_instructions ?? "",
       dismissal_instructions: loc.dismissal_instructions ?? "",
+      parent_arrival_instructions: loc.parent_arrival_instructions ?? "",
+      parent_dismissal_instructions: loc.parent_dismissal_instructions ?? "",
       food_drink_policy: loc.food_drink_policy ?? "",
       notes: loc.notes ?? "",
     });
@@ -364,12 +368,20 @@ function EditCard({ title, draft, bind, error, saving, onSave, onCancel, isNew }
         </Field>
       </div>
 
-      <Field label="Arrival instructions" hint="Park where? Enter which door? Sign in where?" instructorFacing>
-        <textarea {...bind("arrival_instructions")} placeholder="e.g. Park in the back lot, enter through the gym door, sign in at the front desk." rows={3} style={textareaStyle} />
+      <Field label="Arrival instructions (instructor)" hint="Park where? Door codes? Sign-in routine? Keys? — only seen by instructors, never sent to parents." instructorFacing>
+        <textarea {...bind("arrival_instructions")} placeholder="e.g. Park in the back lot, enter through the gym door, sign in at the front desk. Door code: 4827#." rows={3} style={textareaStyle} />
       </Field>
 
-      <Field label="Dismissal instructions" hint="Where does the instructor walk students to for pickup? Front door? Back parking lot?" instructorFacing>
-        <textarea {...bind("dismissal_instructions")} placeholder="e.g. Walk students out the front doors to the parking lot and wait until each one is picked up." rows={3} style={textareaStyle} />
+      <Field label="Arrival instructions (parents)" hint="What parents need to know to drop their kid off — sent in welcome emails 7 days before the first session. Leave blank to skip the arrival block in parent welcomes.">
+        <textarea {...bind("parent_arrival_instructions")} placeholder="e.g. A school staff member will bring students to the lunchroom at 3pm. Pickup at 4pm from the front parking lot." rows={3} style={textareaStyle} />
+      </Field>
+
+      <Field label="Dismissal instructions (instructor)" hint="Where the instructor walks students to for pickup, including any key/badge return routine — instructor-only." instructorFacing>
+        <textarea {...bind("dismissal_instructions")} placeholder="e.g. Walk students out to the front parking lot. Return classroom key to the office." rows={3} style={textareaStyle} />
+      </Field>
+
+      <Field label="Dismissal instructions (parents)" hint="Parent-safe dismissal text — sent in welcome emails. Often already covered in the arrival paragraph; leave blank if so.">
+        <textarea {...bind("parent_dismissal_instructions")} placeholder="e.g. Pickup is at the lobby at 12:30pm sharp." rows={3} style={textareaStyle} />
       </Field>
 
       <Field label="Food / drink policy" instructorFacing>
