@@ -86,22 +86,25 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
           // auto-match a partner with the same name in this org and wire it up.
           // This is why contacts "weren't showing": locations were never linked
           // to their identically-named partner. Persist the link so it sticks.
-          const { data: match } = await supabase
+          // Fetch up to 2 same-named partners. Only auto-link on an UNAMBIGUOUS
+          // single match — if there are two "Lincoln Elementary" partners we
+          // must not guess, and maybeSingle() would throw on >1. Zero or many
+          // matches fall through to the manual picker.
+          const { data: matches } = await supabase
             .from("partners")
             .select("id")
             .eq("organization_id", orgId)
             .eq("inactive", false)
             .ilike("partner_name", loc.name ?? "")
-            .limit(1)
-            .maybeSingle();
-          if (match?.id && loc.id) {
+            .limit(2);
+          if (matches && matches.length === 1 && loc.id) {
             await supabase
               .from("program_locations")
-              .update({ partner_id: match.id })
+              .update({ partner_id: matches[0].id })
               .eq("id", loc.id);
             if (cancelled) return;
-            setLocation((l) => (l ? { ...l, partner_id: match.id } : l));
-            await loadPartner(match.id);
+            setLocation((l) => (l ? { ...l, partner_id: matches[0].id } : l));
+            await loadPartner(matches[0].id);
             return;
           }
           setPhase("pick_partner");
