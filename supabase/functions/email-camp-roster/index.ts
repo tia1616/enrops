@@ -81,7 +81,7 @@ serve(async (req: Request) => {
 
     const { data: org } = await supabase
       .from('organizations')
-      .select('id, name, slug')
+      .select('id, name, slug, sending_domain, default_sender_email, default_sender_name')
       .eq('id', camp.organization_id)
       .maybeSingle();
     if (!org) return json({ error: 'org not found' }, 404);
@@ -92,7 +92,7 @@ serve(async (req: Request) => {
       .eq('organization_id', camp.organization_id)
       .maybeSingle();
     const primaryColor = branding?.primary_color ?? DEFAULT_PRIMARY;
-    const fromName = branding?.email_from_name ?? org.name;
+    const fromName = branding?.email_from_name ?? org.default_sender_name ?? org.name;
     const replyTo = branding?.email_reply_to ?? null;
 
     let location: any = null;
@@ -221,8 +221,16 @@ serve(async (req: Request) => {
     const pdfFilename = makePdfFilename({ campName: camp.curriculum_name, startsOn: camp.starts_on, locationName: camp.location_name });
 
     // ── Compose email ──────────────────────────────────────────────────────
-    const fromDomain = 'updates.journeytosteam.com';
-    const fromEmail = `${fromName} <hello@${fromDomain}>`;
+    // Sender is tenant-driven — never hardcode one tenant's domain. Prefer the
+    // org's configured sender email; else hello@ on its verified sending domain.
+    // A tenant with neither configured returns a clear error instead of
+    // misbranding as another tenant.
+    const senderEmail = org.default_sender_email
+      || (org.sending_domain ? `hello@${org.sending_domain}` : null);
+    if (!senderEmail) {
+      return json({ error: 'no_sender_configured', detail: 'Add a sending email or verified domain in Settings before emailing rosters.' }, 400);
+    }
+    const fromEmail = `${fromName} <${senderEmail}>`;
     const subjectPartner = partner?.partner_name ?? location?.name ?? camp.location_name;
     const subject = `Roster: ${camp.curriculum_name} — ${fmtDateRange(camp.starts_on, camp.ends_on)}${subjectPartner ? ` @ ${subjectPartner}` : ''}`;
 
