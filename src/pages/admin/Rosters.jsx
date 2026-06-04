@@ -10,7 +10,7 @@
 // limits everything to the operator's org.
 
 import { useEffect, useMemo, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import EmailRosterModal from "./EmailRosterModal";
 
@@ -218,9 +218,13 @@ export default function Rosters() {
           Rosters
         </h1>
         <p style={{ color: MUTED, marginTop: 6, fontSize: 14 }}>
-          Upload per-camper data so your instructors see names, allergies, emergency contacts when they open a camp.
+          Fall afterschool rosters pull from registrations automatically. Camp rosters come from your uploads.
         </p>
       </header>
+
+      <AfterschoolRostersSection org={org} />
+
+      <h2 style={{ fontSize: 18, fontWeight: 700, color: PURPLE, margin: "0 0 10px" }}>Camps</h2>
 
       {error && (
         <div style={{ background: `${RED}1A`, color: RED, padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 14 }}>
@@ -1677,4 +1681,138 @@ function quickFillBtnStyle(disabled) {
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
   };
+}
+
+// ─── Afterschool program rosters ───────────────────────────────────────────
+// Fall/afterschool registration is native, so these rosters already exist —
+// this lists programs for a term with their enrolled count (matching
+// ProgramsCalendar: un-cancelled, paid OR confirmed), each linking to the
+// per-program roster view + a partner-email action.
+
+const DAY_SHORT = { monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat", sunday: "Sun" };
+function dayShort(d) { return DAY_SHORT[(d ?? "").toLowerCase()] ?? (d ?? ""); }
+
+function AfterschoolRostersSection({ org }) {
+  const [term, setTerm] = useState("FA26");
+  const [programs, setPrograms] = useState(null);
+  const [error, setError] = useState("");
+  const [emailingProgram, setEmailingProgram] = useState(null);
+
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      setPrograms(null);
+      setError("");
+      try {
+        const { data: progRows, error: pErr } = await supabase
+          .from("programs")
+          .select("id, curriculum, day_of_week, start_time, end_time, max_capacity, program_location_id, first_session_date, session_count, program_locations ( name, district )")
+          .eq("organization_id", org.id)
+          .eq("term", term);
+        if (pErr) throw pErr;
+        const ids = (progRows ?? []).map((p) => p.id);
+        const counts = new Map();
+        const lastEmailed = new Map();
+        if (ids.length > 0) {
+          const { data: regs } = await supabase
+            .from("registrations")
+            .select("program_id, status, payment_status")
+            .in("program_id", ids)
+            .is("cancelled_at", null);
+          for (const r of regs ?? []) {
+            if (r.payment_status === "paid" || r.status === "confirmed") {
+              counts.set(r.program_id, (counts.get(r.program_id) ?? 0) + 1);
+            }
+          }
+          const { data: emails } = await supabase
+            .from("roster_email_sends")
+            .select("program_id, sent_at, status")
+            .in("program_id", ids)
+            .eq("status", "sent")
+            .order("sent_at", { ascending: false });
+          for (const e of emails ?? []) {
+            if (e.program_id && !lastEmailed.has(e.program_id)) lastEmailed.set(e.program_id, e.sent_at);
+          }
+        }
+        if (!cancelled) {
+          setPrograms((progRows ?? [])
+            .map((p) => ({ ...p, enrolled: counts.get(p.id) ?? 0, last_emailed_at: lastEmailed.get(p.id) ?? null }))
+            .sort((a, b) => (b.enrolled - a.enrolled) || (a.curriculum ?? "").localeCompare(b.curriculum ?? "")));
+        }
+      } catch (e) {
+        if (!cancelled) { setError(e.message ?? "Couldn't load afterschool programs."); setPrograms([]); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id, term]);
+
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 18, fontWeight: 700, color: PURPLE, margin: 0 }}>Afterschool programs</h2>
+        <select value={term} onChange={(e) => setTerm(e.target.value)} style={{ padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", fontSize: 13, background: "#fff", color: INK }}>
+          <option value="FA26">Fall 2026 (FA26)</option>
+          <option value="WI27">Winter 2027 (WI27)</option>
+          <option value="SP27">Spring 2027 (SP27)</option>
+        </select>
+      </div>
+
+      {error && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 10 }}>{error}</div>}
+      {programs === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
+      {programs !== null && programs.length === 0 && !error && (
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 20, color: MUTED, textAlign: "center", fontSize: 13 }}>
+          No afterschool programs for {term} yet.
+        </div>
+      )}
+      {programs !== null && programs.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {programs.map((p) => (
+            <div key={p.id} style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: p.enrolled > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`, borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 0, flex: "1 1 220px" }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{p.curriculum ?? "Untitled"}</div>
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+                  {p.program_locations?.name ?? ""}
+                  {p.day_of_week ? ` · ${dayShort(p.day_of_week)}` : ""}
+                  {p.start_time ? ` · ${p.start_time}` : ""}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <Link to={`/admin/programs/${p.id}/roster`} style={{ fontSize: 13, color: PURPLE, fontWeight: 600, textDecoration: "none" }}>
+                  {p.enrolled} enrolled
+                  {p.max_capacity ? <span style={{ color: MUTED, fontWeight: 400 }}> / {p.max_capacity}</span> : null} ›
+                </Link>
+                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6 }}>
+                  <Link to={`/admin/programs/${p.id}/roster`} style={{ padding: "5px 10px", background: PURPLE, color: "#fff", borderRadius: 6, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>View roster →</Link>
+                  {p.enrolled > 0 && (
+                    <button type="button" onClick={() => setEmailingProgram(p)} style={{ padding: "5px 10px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
+                      Email roster →
+                    </button>
+                  )}
+                </div>
+                {p.last_emailed_at && <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>Last emailed {new Date(p.last_emailed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {emailingProgram && (
+        <EmailRosterModal
+          orgId={org?.id}
+          target={{
+            kind: "program",
+            id: emailingProgram.id,
+            locationId: emailingProgram.program_location_id,
+            title: emailingProgram.curriculum,
+            subtitle: `${emailingProgram.program_locations?.name ?? ""}${emailingProgram.day_of_week ? ` · ${dayShort(emailingProgram.day_of_week)}s` : ""}`,
+            functionName: "email-program-roster",
+            bodyKey: "program_id",
+          }}
+          onClose={() => setEmailingProgram(null)}
+          onSent={() => setEmailingProgram(null)}
+        />
+      )}
+    </div>
+  );
 }

@@ -24,7 +24,24 @@ function fmtDate(d) {
   return new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export default function EmailRosterModal({ camp, orgId, onClose, onSent }) {
+// Normalize a legacy `camp` prop into the generic target shape.
+function campToTarget(camp) {
+  return {
+    kind: "camp",
+    id: camp.id,
+    locationId: camp.location_id,
+    title: camp.curriculum_name,
+    subtitle: `${fmtDate(camp.starts_on)}–${fmtDate(camp.ends_on)}${camp.location_name ? ` · ${camp.location_name}` : ""}`,
+    functionName: "email-camp-roster",
+    bodyKey: "camp_session_id",
+  };
+}
+
+// Accepts either a legacy `camp` prop (camps) or a generic `target`
+// (afterschool programs). target = { kind, id, locationId, title, subtitle,
+// functionName, bodyKey }.
+export default function EmailRosterModal({ camp, target: targetProp, orgId, onClose, onSent }) {
+  const target = targetProp ?? campToTarget(camp);
   // Phase: 'loading' | 'pick_partner' | 'compose' | 'sending' | 'done'
   const [phase, setPhase] = useState("loading");
   const [location, setLocation] = useState(null);
@@ -49,7 +66,7 @@ export default function EmailRosterModal({ camp, orgId, onClose, onSent }) {
         // If the camp isn't linked to a program_location row at all, jump
         // straight to the partner picker — we'll write partner_id back
         // once the operator picks (handled by the pick_partner step).
-        if (!camp.location_id) {
+        if (!target.locationId) {
           setLocation(null);
           setPhase("pick_partner");
           return;
@@ -58,7 +75,7 @@ export default function EmailRosterModal({ camp, orgId, onClose, onSent }) {
         const { data: loc, error: locErr } = await supabase
           .from("program_locations")
           .select("id, name, contact_name, contact_email, partner_id")
-          .eq("id", camp.location_id)
+          .eq("id", target.locationId)
           .maybeSingle();
         if (locErr) throw locErr;
         if (cancelled) return;
@@ -79,7 +96,7 @@ export default function EmailRosterModal({ camp, orgId, onClose, onSent }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [camp.location_id]);
+  }, [target.locationId]);
 
   async function loadPartner(partnerId) {
     const { data: p, error: pErr } = await supabase
@@ -116,7 +133,7 @@ export default function EmailRosterModal({ camp, orgId, onClose, onSent }) {
       const token = session?.access_token;
       if (!token) return;
       const resp = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/email-camp-roster`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${target.functionName}`,
         {
           method: "POST",
           headers: {
@@ -125,7 +142,7 @@ export default function EmailRosterModal({ camp, orgId, onClose, onSent }) {
             apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
-            camp_session_id: camp.id,
+            [target.bodyKey]: target.id,
             recipient_contact_ids: contactIds,
             mode: "preview",
           }),
@@ -172,7 +189,7 @@ export default function EmailRosterModal({ camp, orgId, onClose, onSent }) {
       const token = session?.access_token;
       if (!token) throw new Error("Not signed in.");
       const resp = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/email-camp-roster`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${target.functionName}`,
         {
           method: "POST",
           headers: {
@@ -181,7 +198,7 @@ export default function EmailRosterModal({ camp, orgId, onClose, onSent }) {
             apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
-            camp_session_id: camp.id,
+            [target.bodyKey]: target.id,
             recipient_contact_ids: Array.from(selected),
             include_location_contact: includeLocationContact,
             cc: parseCcEmails(ccText),
@@ -226,10 +243,10 @@ export default function EmailRosterModal({ camp, orgId, onClose, onSent }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
           <div>
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: INK }}>
-              Email roster: {camp.curriculum_name}
+              Email roster: {target.title}
             </h2>
             <p style={{ margin: "4px 0 0", fontSize: 12, color: MUTED }}>
-              {fmtDate(camp.starts_on)}–{fmtDate(camp.ends_on)} · {camp.location_name}
+              {target.subtitle}
             </p>
           </div>
           <button

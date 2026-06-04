@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import EmailRosterModal from "../EmailRosterModal.jsx";
 
 const PURPLE = "#1C004F";
 const INK = "#1a1a1a";
@@ -92,7 +93,8 @@ export default function ProgramRoster() {
           .from("programs")
           .select(`
             id, curriculum, term, day_of_week, start_time, end_time, room,
-            instructor_name, max_capacity, status,
+            instructor_name, max_capacity, status, program_location_id,
+            first_session_date, session_count,
             program_locations ( name, district )
           `)
           .eq("id", programId)
@@ -200,25 +202,8 @@ export default function ProgramRoster() {
     URL.revokeObjectURL(url);
   }
 
-  const familyEmails = useMemo(
-    () => Array.from(new Set(enrolled.map((r) => r.parent?.email).filter(Boolean))),
-    [enrolled],
-  );
-
-  function emailFamilies() {
-    if (familyEmails.length === 0) return;
-    const subject = encodeURIComponent(`${program?.curriculum ?? "Program"} — update`);
-    // BCC keeps family emails private from each other.
-    window.location.href = `mailto:?bcc=${encodeURIComponent(familyEmails.join(","))}&subject=${subject}`;
-  }
-
-  const [copied, setCopied] = useState(false);
-  function copyEmails() {
-    navigator.clipboard?.writeText(familyEmails.join(", ")).then(
-      () => { setCopied(true); setTimeout(() => setCopied(false), 1500); },
-      () => {},
-    );
-  }
+  // Rosters go to the PARTNER (school/venue logistics) — never to families.
+  const [emailing, setEmailing] = useState(false);
 
   // ---- Render ----
 
@@ -281,11 +266,8 @@ export default function ProgramRoster() {
           <button type="button" onClick={() => window.print()} disabled={enrolled.length === 0} style={ghostBtn(enrolled.length === 0)}>
             Print
           </button>
-          <button type="button" onClick={emailFamilies} disabled={familyEmails.length === 0} style={ghostBtn(familyEmails.length === 0)} title="Opens your email app with families BCC'd">
-            Email families
-          </button>
-          <button type="button" onClick={copyEmails} disabled={familyEmails.length === 0} style={ghostBtn(familyEmails.length === 0)}>
-            {copied ? "✓ Copied" : "Copy emails"}
+          <button type="button" onClick={() => setEmailing(true)} disabled={enrolled.length === 0} style={ghostBtn(enrolled.length === 0)} title="Email a branded PDF roster to this location's partner / logistics contacts">
+            Email roster to partner
           </button>
         </div>
       </div>
@@ -300,6 +282,23 @@ export default function ProgramRoster() {
           </div>
         )}
       </div>
+
+      {emailing && program && (
+        <EmailRosterModal
+          orgId={org?.id}
+          target={{
+            kind: "program",
+            id: program.id,
+            locationId: program.program_location_id,
+            title: program.curriculum,
+            subtitle: meta,
+            functionName: "email-program-roster",
+            bodyKey: "program_id",
+          }}
+          onClose={() => setEmailing(false)}
+          onSent={() => setEmailing(false)}
+        />
+      )}
     </div>
   );
 }
