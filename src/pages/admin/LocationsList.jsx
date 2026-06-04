@@ -152,9 +152,14 @@ export default function LocationsList() {
         payload[k] = typeof v === "string" && v.trim() === "" ? null : (typeof v === "string" ? v.trim() : v);
       }
       if (editingId === "new") {
+        // program_locations.slug is NOT NULL and globally UNIQUE, but the form
+        // doesn't collect one. Generate it from the name with a short random
+        // suffix so it's unique even if another tenant has the same venue name.
+        const base = (draft.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40)) || "venue";
+        const slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
         const { error: insErr } = await supabase
           .from("program_locations")
-          .insert({ ...payload, organization_id: org.id });
+          .insert({ ...payload, slug, organization_id: org.id });
         if (insErr) throw insErr;
       } else {
         const { error: updErr } = await supabase
