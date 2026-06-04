@@ -42,8 +42,116 @@ const ROLES = [
   { v: 'approval_gatekeeper', label: 'Approval gatekeeper' },
 ];
 
+// Deterministic column mapping for the file path (no AI). Each row in the
+// upload is one contact; rows sharing a partner name group into one partner.
+const PARTNER_FIELDS = [
+  { key: 'partner_name', label: 'Partner / school name', required: true,
+    aliases: ['partner', 'partnername', 'school', 'schoolname', 'organization', 'organisation', 'org', 'site', 'sitename', 'venue', 'district', 'company'] },
+  { key: 'partner_type', label: 'Partner type',
+    aliases: ['type', 'partnertype', 'category', 'schooltype'] },
+  { key: 'location_area', label: 'Area / city',
+    aliases: ['area', 'city', 'region', 'locationarea', 'neighborhood', 'neighbourhood', 'town'] },
+  { key: 'contact_name', label: 'Contact name',
+    aliases: ['contactname', 'name', 'contact', 'fullname', 'person', 'contactperson'] },
+  { key: 'contact_email', label: 'Contact email',
+    aliases: ['email', 'contactemail', 'emailaddress', 'email_address', 'e-mail', 'mail'] },
+  { key: 'contact_phone', label: 'Contact phone',
+    aliases: ['phone', 'contactphone', 'phonenumber', 'tel', 'telephone', 'mobile', 'cell'] },
+  { key: 'contact_role', label: 'Contact role / title',
+    aliases: ['role', 'contactrole', 'title', 'position', 'jobtitle', 'job', 'responsibility'] },
+  { key: 'role_description', label: 'Role description',
+    aliases: ['roledescription', 'description', 'notes', 'responsibilities', 'details'] },
+];
+
+function normHeader(h) {
+  return (h ?? '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function autoMapColumns(headers) {
+  const map = {};
+  const norm = headers.map(normHeader);
+  for (const def of PARTNER_FIELDS) {
+    for (const alias of def.aliases) {
+      const idx = norm.indexOf(normHeader(alias));
+      if (idx !== -1) { map[def.key] = headers[idx]; break; }
+    }
+  }
+  return map;
+}
+
+// Map a free-text role/title to one of the four enum roles, deterministically
+// (mirrors the rules the AI extractor used).
+function normalizeRole(raw) {
+  const s = (raw ?? '').toString().toLowerCase();
+  if (/market|flyer|\bpto\b|communicat|newsletter|outreach/.test(s)) return 'marketing';
+  if (/invoic|billing|\bap\b|account|payable|finance|bursar/.test(s)) return 'invoicing';
+  if (/principal|director|head of school|superintend|approv|gatekeep|admin head/.test(s)) return 'approval_gatekeeper';
+  return 'operational';
+}
+
+function looksLikeOrgInbox(email) {
+  const local = (email.split('@')[0] ?? '').toLowerCase();
+  return ['info', 'office', 'contact', 'hello', 'ops', 'mainoffice', 'main', 'admin',
+    'frontoffice', 'reception', 'enrollment', 'enrolment', 'registration', 'registrar', 'team']
+    .some((p) => local === p);
+}
+
+function normalizePartnerType(raw) {
+  const s = (raw ?? '').toString().toLowerCase();
+  if (/public/.test(s)) return 'public_school';
+  if (/private|independent/.test(s)) return 'private_school';
+  if (/charter/.test(s)) return 'charter_school';
+  if (/district/.test(s)) return 'school_district';
+  if (/church|parish|faith|temple|synagogue|mosque/.test(s)) return 'church';
+  if (/parks|recreation|\brec\b/.test(s)) return 'parks_rec';
+  if (/community|nonprofit|non-profit|\borg\b/.test(s)) return 'community_org';
+  return null;
+}
+
+// Group mapped rows into the same partners[] shape the AI extractor returns,
+// so the existing review + write steps work unchanged.
+function buildPartnersFromGrid(headers, rows, mapping) {
+  const idx = {};
+  for (const f of PARTNER_FIELDS) idx[f.key] = mapping[f.key] ? headers.indexOf(mapping[f.key]) : -1;
+  const at = (row, key) => (idx[key] >= 0 ? (row[idx[key]] ?? '').toString().trim() : '');
+  const byKey = new Map();
+  const order = [];
+  for (const row of rows) {
+    const pname = at(row, 'partner_name');
+    if (!pname) continue;
+    const key = normName(pname);
+    let p = byKey.get(key);
+    if (!p) {
+      p = {
+        partner_name: pname,
+        partner_type: normalizePartnerType(at(row, 'partner_type')),
+        location_area: at(row, 'location_area') || null,
+        locations_managed: null, marketing_notes: null, invoicing_notes: null,
+        planning_notes: null, implementation_notes: null, other_notes: null,
+        contacts: [],
+        _selected: true,
+      };
+      byKey.set(key, p);
+      order.push(p);
+    }
+    const email = at(row, 'contact_email').toLowerCase();
+    if (email && !p.contacts.some((c) => c.contact_email === email)) {
+      p.contacts.push({
+        contact_name: at(row, 'contact_name') || null,
+        contact_email: email,
+        contact_phone: at(row, 'contact_phone') || null,
+        contact_role: normalizeRole(at(row, 'contact_role')),
+        role_description: at(row, 'role_description') || null,
+        is_org_inbox: looksLikeOrgInbox(email),
+        _selected: true,
+      });
+    }
+  }
+  return order;
+}
+
 export default function ImportContactsModal({ orgId, onClose, onImported }) {
-  const [step, setStep] = useState('source'); // source | extracting | review | writing | done
+  const [step, setStep] = useState('source'); // source | parsing | mapping | extracting | review | writing | done
   const [mode, setMode] = useState('file'); // file | text
   const [file, setFile] = useState(null);
   const [text, setText] = useState('');
@@ -51,6 +159,10 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
   const [existingByName, setExistingByName] = useState(new Map());
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
+  // Deterministic file path: raw grid + column mapping.
+  const [rawHeaders, setRawHeaders] = useState([]);
+  const [rawRows, setRawRows] = useState([]);
+  const [mapping, setMapping] = useState({});
 
   // Pre-load existing partners to compute match badges client-side.
   useEffect(() => {
@@ -66,34 +178,92 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
     })();
   }, [orgId]);
 
-  async function startExtract() {
+  // FILE path (default): parse the upload deterministically on our own server
+  // (no AI), then map columns. The file never leaves our infrastructure.
+  async function startParse() {
     setError('');
-    if (mode === 'file' && !file) { setError('Pick a file first.'); return; }
-    if (mode === 'text' && !text.trim()) { setError('Paste some text first.'); return; }
-
-    setStep('extracting');
+    if (!file) { setError('Pick a file first.'); return; }
+    setStep('parsing');
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
       if (!token) throw new Error('Not signed in.');
 
-      let payload, source, filename;
-      if (mode === 'text') {
-        source = 'text';
-        payload = text.slice(0, 60000);
+      const ext = (file.name.split('.').pop() ?? '').toLowerCase();
+      let source, payload;
+      if (ext === 'csv' || ext === 'txt') {
+        source = 'csv';
+        payload = await file.text();
+      } else if (ext === 'xlsx' || ext === 'xls' || ext === 'xlsm') {
+        source = 'xlsx';
+        payload = await fileToBase64(file);
       } else {
-        filename = file.name;
-        const ext = (file.name.split('.').pop() ?? '').toLowerCase();
-        if (ext === 'csv' || ext === 'txt') {
-          source = 'csv';
-          payload = await file.text();
-        } else if (ext === 'xlsx' || ext === 'xls' || ext === 'xlsm') {
-          source = 'xlsx';
-          payload = await fileToBase64(file);
-        } else {
-          throw new Error(`Unsupported file type: .${ext}. Use CSV or XLSX.`);
-        }
+        throw new Error(`Unsupported file type: .${ext}. Use CSV or XLSX.`);
       }
+
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/import-partners-parse`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({ source, payload, filename: file.name }),
+        }
+      );
+      const json = await resp.json();
+      if (!resp.ok) {
+        setError(json?.error || `Couldn't read that file (${resp.status}).`);
+        setStep('source');
+        return;
+      }
+      const headers = json.headers ?? [];
+      const rows = json.rows ?? [];
+      if (headers.length === 0 || rows.length === 0) {
+        setError("That file didn't have any rows we could read.");
+        setStep('source');
+        return;
+      }
+      setRawHeaders(headers);
+      setRawRows(rows);
+      setMapping(autoMapColumns(headers));
+      setStep('mapping');
+    } catch (e) {
+      console.error('[ImportContactsModal] parse failed', e);
+      setError(e.message ?? "Couldn't read that file.");
+      setStep('source');
+    }
+  }
+
+  // Turn the confirmed column mapping into partners[] (same shape the review
+  // step expects), entirely client-side.
+  function applyMapping() {
+    setError('');
+    if (!mapping.partner_name) {
+      setError('Map the “Partner / school name” column first.');
+      return;
+    }
+    const partners = buildPartnersFromGrid(rawHeaders, rawRows, mapping);
+    if (partners.length === 0) {
+      setError('No partners found with the current mapping — check the partner-name column.');
+      return;
+    }
+    setExtracted(partners);
+    setStep('review');
+  }
+
+  // TEXT path (fallback only): freeform paste has no columns, so we ask Claude
+  // to extract structure. This is the only place that uses the AI.
+  async function startExtract() {
+    setError('');
+    if (!text.trim()) { setError('Paste some text first.'); return; }
+    setStep('extracting');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error('Not signed in.');
 
       const resp = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/import-partners-extract`,
@@ -104,7 +274,7 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
             Authorization: `Bearer ${token}`,
             apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
           },
-          body: JSON.stringify({ source, payload, filename }),
+          body: JSON.stringify({ source: 'text', payload: text.slice(0, 60000) }),
         }
       );
       const json = await resp.json();
@@ -119,7 +289,7 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
         contacts: (p.contacts ?? []).map((c) => ({ ...c, _selected: true })),
       }));
       if (partners.length === 0) {
-        setError("We couldn't find any partner organisations or contacts in that input.");
+        setError("We couldn't find any partner organisations or contacts in that text.");
         setStep('source');
         return;
       }
@@ -239,8 +409,10 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
               Import partners &amp; contacts
             </h2>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: MUTED }}>
-              {step === 'source' && 'Upload a list or paste freeform text. We extract structured rows for you to review.'}
-              {step === 'extracting' && 'Working through the file…'}
+              {step === 'source' && 'Upload a spreadsheet and map the columns, or paste freeform text for AI to read.'}
+              {step === 'parsing' && 'Reading your file…'}
+              {step === 'mapping' && 'Tell us which column is which, then continue.'}
+              {step === 'extracting' && 'Working through the text…'}
               {step === 'review' && 'Review what we found, edit anything that looks off, then save.'}
               {step === 'writing' && 'Saving to your contacts…'}
               {step === 'done' && 'Done.'}
@@ -266,13 +438,30 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
             file={file} setFile={setFile}
             text={text} setText={setText}
             onCancel={onClose}
-            onNext={startExtract}
+            onNext={() => (mode === 'file' ? startParse() : startExtract())}
+          />
+        )}
+
+        {step === 'parsing' && (
+          <div style={{ padding: '40px 0', textAlign: 'center', color: MUTED, fontSize: 14 }}>
+            Reading your file…
+          </div>
+        )}
+
+        {step === 'mapping' && (
+          <MappingStep
+            headers={rawHeaders}
+            rows={rawRows}
+            mapping={mapping}
+            setMapping={setMapping}
+            onBack={() => setStep('source')}
+            onContinue={applyMapping}
           />
         )}
 
         {step === 'extracting' && (
           <div style={{ padding: '40px 0', textAlign: 'center', color: MUTED, fontSize: 14 }}>
-            Reading and extracting structured data… This usually takes 10–30 seconds.
+            Reading the text with AI… This usually takes 10–30 seconds.
           </div>
         )}
 
@@ -308,15 +497,16 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
   return (
     <div>
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 14 }}>
-        <TabBtn active={mode === 'file'} onClick={() => setMode('file')} label="Upload file" />
-        <TabBtn active={mode === 'text'} onClick={() => setMode('text')} label="Paste text" />
+        <TabBtn active={mode === 'file'} onClick={() => setMode('file')} label="Upload spreadsheet" />
+        <TabBtn active={mode === 'text'} onClick={() => setMode('text')} label="Paste text (AI)" />
       </div>
 
       {mode === 'file' && (
         <div>
           <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.5 }}>
             Drop in a <strong>CSV</strong> or <strong>XLSX</strong> exported from Drive,
-            Sheets, or your own master list. Headers can be in any format — we'll figure out which column is which.
+            Sheets, or your own master list. We read it instantly and let you confirm
+            which column is which — <strong>no AI, and your file isn't sent anywhere outside your account.</strong>
           </p>
           <input
             type="file"
@@ -335,9 +525,10 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
       {mode === 'text' && (
         <div>
           <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.5 }}>
-            Paste an email thread, a copied Drive doc, or any messy text that
-            mentions schools / partners + their contacts. We'll do our best to
-            pull out the structured data.
+            Only for messy, column-less input — an email thread or a copied doc.
+            This option <strong>uses AI</strong> to pull out the structure, so the
+            text is sent to our AI provider to read. For a normal spreadsheet, use
+            <strong> Upload spreadsheet</strong> instead.
           </p>
           <textarea
             rows={12}
@@ -360,7 +551,70 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
           type="button"
           onClick={onNext}
           style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}
-        >Extract →</button>
+        >{mode === 'file' ? 'Read file →' : 'Read with AI →'}</button>
+      </div>
+    </div>
+  );
+}
+
+// Deterministic column-mapping step for the file path. Mirrors the roster CSV
+// import: confirm which column maps to each field, see a preview, continue.
+function MappingStep({ headers, rows, mapping, setMapping, onBack, onContinue }) {
+  const emailCol = mapping.contact_email;
+  const nameCol = mapping.contact_name;
+  const partnerCol = mapping.partner_name;
+  const colIdx = (h) => (h ? headers.indexOf(h) : -1);
+  return (
+    <div>
+      <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: INK, lineHeight: 1.5 }}>
+        Read <strong>{rows.length}</strong> row{rows.length === 1 ? '' : 's'}. Confirm which column is which —
+        we guessed where we could. Rows sharing a partner name are grouped into one partner.
+        Only <strong>Partner / school name</strong> is required.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
+        {PARTNER_FIELDS.map((def) => (
+          <div key={def.key} style={{ padding: '4px 2px' }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: INK, marginBottom: 2 }}>
+              {def.label}{def.required && <span style={{ color: RED, marginLeft: 3 }}>*</span>}
+            </div>
+            <select
+              value={mapping[def.key] || ''}
+              onChange={(e) => setMapping({ ...mapping, [def.key]: e.target.value || undefined })}
+              style={{ width: '100%', padding: '5px 8px', border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 12, fontFamily: 'inherit', background: '#fff', color: INK }}
+            >
+              <option value="">— not in this file —</option>
+              {headers.map((h, i) => <option key={i} value={h}>{h}</option>)}
+            </select>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>
+        Preview (first 3 rows)
+      </div>
+      <div style={{ background: CREAM, padding: 10, borderRadius: 6, marginBottom: 14, maxHeight: 160, overflow: 'auto' }}>
+        {rows.slice(0, 3).map((row, i) => (
+          <div key={i} style={{ fontSize: 12, color: INK, padding: '3px 0', borderBottom: i < 2 ? `1px dashed ${RULE}` : 'none' }}>
+            <strong>{partnerCol ? row[colIdx(partnerCol)] : <span style={{ color: RED }}>?</span>}</strong>
+            {nameCol && <span style={{ color: MUTED }}> · {row[colIdx(nameCol)]}</span>}
+            {emailCol && <span style={{ color: MUTED }}> · {row[colIdx(emailCol)]}</span>}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
+        <button
+          type="button"
+          onClick={onBack}
+          style={{ padding: '8px 14px', background: 'transparent', color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: 'inherit', cursor: 'pointer' }}
+        >← Back</button>
+        <button
+          type="button"
+          onClick={onContinue}
+          disabled={!partnerCol}
+          style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: partnerCol ? 'pointer' : 'not-allowed', opacity: partnerCol ? 1 : 0.5 }}
+        >Continue →</button>
       </div>
     </div>
   );

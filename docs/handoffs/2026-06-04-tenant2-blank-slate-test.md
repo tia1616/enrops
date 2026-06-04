@@ -18,13 +18,16 @@ Login at https://enrops-staging.netlify.app/admin/login (email/password, not Goo
 
 (Login verified working against staging GoTrue.)
 
-## One setup step needed first: ANTHROPIC_API_KEY
+## Partner import: spreadsheet uploads need NO AI / no key
 
-The partner-import "extract" step uses Claude to parse the spreadsheet. Staging
-does NOT have an `ANTHROPIC_API_KEY` set, so the import will fail at the extract
-step until one is added. Either:
-- paste the key to Claude and it sets it via `supabase secrets set` on staging, OR
-- add it in the staging dashboard: Project Settings -> Edge Functions -> Secrets.
+The partner importer now parses CSV/XLSX uploads deterministically on our own
+server (function `import-partners-parse`) and you map the columns — no AI, no
+`ANTHROPIC_API_KEY`, file never sent to a third party. So a spreadsheet upload
+works on staging as-is.
+
+The AI path is now ONLY the optional "Paste text (AI)" tab for messy column-less
+input. THAT still needs `ANTHROPIC_API_KEY` on staging (not set) — but you don't
+need it for the normal spreadsheet test.
 
 ## Known caveats (expected, not bugs)
 
