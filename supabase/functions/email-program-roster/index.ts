@@ -180,10 +180,28 @@ serve(async (req: Request) => {
         return an.localeCompare(bn);
       });
 
-    // Instructor: afterschool programs store the instructor as text on the program.
-    const instructors = program.instructor_name
-      ? [{ name: program.instructor_name, phone: '', email: '', role: 'lead' }]
-      : [];
+    // Instructor(s): mirror the camp pattern (camp_assignments) — afterschool
+    // scheduling writes program_assignments. Fall back to the denormalized
+    // program.instructor_name text only if no assignment row exists yet.
+    // (program_assignments status enum: proposed/confirmed/change_requested/
+    //  published/withdrawn/declined — "on it" = confirmed or published.)
+    const { data: pasgs } = await supabase
+      .from('program_assignments')
+      .select('role, status, instructor:instructors ( first_name, last_name, email, phone )')
+      .eq('program_id', program.id)
+      .in('status', ['confirmed', 'published'])
+      .order('role', { ascending: true });
+    let instructors = (pasgs ?? [])
+      .filter((a: any) => a.instructor)
+      .map((a: any) => ({
+        name: `${a.instructor.first_name ?? ''} ${a.instructor.last_name ?? ''}`.trim(),
+        phone: a.instructor.phone ?? '',
+        email: a.instructor.email ?? '',
+        role: a.role,
+      }));
+    if (instructors.length === 0 && program.instructor_name) {
+      instructors = [{ name: program.instructor_name, phone: '', email: '', role: 'lead' }];
+    }
 
     if (mode === 'preview') {
       return json({
