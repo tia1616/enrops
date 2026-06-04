@@ -44,6 +44,7 @@ import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.t
 import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
 import { handleTransferReversed as sharedHandleTransferReversed } from '../_shared/handleTransferReversed.ts';
+import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -127,6 +128,18 @@ serve(async (req) => {
         status: 'confirmed', payment_status: 'paid',
         stripe_payment_intent_id: session.payment_intent as string,
       }).in('id', regIds);
+
+      // intelligence: log payment_completed (one per registration; fail-safe, never blocks).
+      // dedupe on the Stripe event id so a webhook retry can't double-count.
+      for (const regId of regIds) {
+        await logEnrollmentEvent(admin, {
+          actionType: ENROLLMENT_ACTIONS.PAYMENT_COMPLETED,
+          organizationId: orgId,
+          registrationId: regId,
+          metadata: { amount_total_cents: session.amount_total ?? null, use_installments: useInstallments },
+          dedupeKey: `payment_completed:${event.id}:${regId}`,
+        });
+      }
 
       if (useInstallments) {
         try {

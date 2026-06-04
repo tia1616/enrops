@@ -27,6 +27,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildConnectChargeParams, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
+import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -267,6 +268,17 @@ serve(async (req) => {
         return json({ error: 'Could not persist installment schedule. Please try again.' }, 500);
       }
 
+      // intelligence: log enrollment initiated (one per registration; fail-safe, never blocks)
+      for (const regId of registration_ids) {
+        await logEnrollmentEvent(admin, {
+          actionType: ENROLLMENT_ACTIONS.INITIATED,
+          organizationId: orgId,
+          registrationId: regId,
+          metadata: { total_cents, use_installments: true, line_item_count: line_items.length },
+          dedupeKey: `initiated:${session.id}:${regId}`,
+        });
+      }
+
       return json({ url: session.url, sessionId: session.id });
     }
 
@@ -334,6 +346,17 @@ serve(async (req) => {
       },
       ...(piData ? { payment_intent_data: piData } : {}),
     });
+
+    // intelligence: log enrollment initiated (one per registration; fail-safe, never blocks)
+    for (const regId of registration_ids) {
+      await logEnrollmentEvent(adminStd, {
+        actionType: ENROLLMENT_ACTIONS.INITIATED,
+        organizationId: orgIdStd,
+        registrationId: regId,
+        metadata: { total_cents, use_installments: false, line_item_count: line_items.length },
+        dedupeKey: `initiated:${session.id}:${regId}`,
+      });
+    }
 
     return json({ url: session.url, sessionId: session.id });
   } catch (err) {
