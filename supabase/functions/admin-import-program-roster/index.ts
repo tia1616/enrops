@@ -1,0 +1,386 @@
+// admin-import-program-roster — bulk upsert per-student data for an afterschool
+// PROGRAM. Sibling of admin-import-camp-roster (camps), keyed on program_id.
+//
+// Called by /admin/rosters (Afterschool tab) after the operator picks a CSV
+// or types a student by hand — for offline / partner-provided kids who didn't
+// come through native registration. Each registrant is normalized into
+// parent + student + registration rows; idempotent via select-then-insert on
+// (program_id, student_id).
+//
+// Body:
+//   {
+//     program_id: string,
+//     registrants: [ { student_first_name (required), ...same fields as camps,
+//                      photo_release_consent? }, ... ]
+//   }
+//
+// Auth: caller must be an org_members row with role owner/admin in the
+// program's organization.
+//
+// IMPORTANT — registration shape mirrors REAL native afterschool registrations
+// (verified 2026-06-04: 100% status='confirmed', photo_release_consent=true).
+// The DB CHECK `photo_release_required_when_confirmed` forbids
+// status='confirmed' unless photo_release_consent=true. So:
+//   - default missing photo consent to TRUE (J2S requires photo release to
+//     register; an operator adding their own enrolled student is asserting the
+//     same offline terms) → status='confirmed' (counts as enrolled)
+//   - an explicit "no" → photo_release_consent=false, status='pending'
+//     (can't be enrolled without consent; surfaced in the result)
+//   - payment is NOT claimed: payment_method=null, payment_status='unpaid'
+//     (money for offline adds is handled outside Enrops).
+//
+// Returns: { imported, updated, skipped, pending, errors: [{row_index, error}] }
+
+import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...corsHeaders },
+  });
+}
+
+function adminClient() {
+  return createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  );
+}
+
+interface Registrant {
+  student_first_name?: string;
+  student_last_name?: string;
+  grade?: number | string;
+  birthdate?: string;
+  pronouns?: string;
+  allergies?: string;
+  dietary_restrictions?: string;
+  medical_notes?: string;
+  medical_conditions?: string;
+  epipen_required?: boolean | string;
+  medications_at_program?: string;
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
+  special_needs_accommodations?: string;
+  homeroom_teacher?: string;
+  photo_release_consent?: boolean | string;
+  authorized_pickup_contacts?: string;
+  notes?: string;
+  parent_first_name?: string;
+  parent_last_name?: string;
+  parent_email?: string;
+  parent_phone?: string;
+}
+
+interface RequestBody {
+  program_id?: string;
+  registrants?: Registrant[];
+}
+
+const FORBIDDEN = json({ error: 'forbidden' }, 403);
+
+serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+
+  try {
+    // 1. Auth
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) return json({ error: 'auth_required' }, 401);
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    if (!token) return json({ error: 'auth_required' }, 401);
+
+    const supabase = adminClient();
+    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+    if (userErr || !userData?.user) return json({ error: 'invalid_auth' }, 401);
+    const callerAuthId = userData.user.id;
+
+    // 2. Body
+    let body: RequestBody;
+    try {
+      body = (await req.json()) as RequestBody;
+    } catch {
+      return json({ error: 'invalid_json' }, 400);
+    }
+    const programId = body.program_id?.trim();
+    const registrants = Array.isArray(body.registrants) ? body.registrants : null;
+    if (!programId) return json({ error: 'program_id_required' }, 400);
+    if (!registrants || registrants.length === 0) {
+      return json({ error: 'registrants_required' }, 400);
+    }
+    if (registrants.length > 500) {
+      return json({ error: 'too_many_rows', limit: 500 }, 413);
+    }
+
+    // 3. Resolve program + verify caller authorized for that org
+    const { data: program, error: pgErr } = await supabase
+      .from('programs')
+      .select('id, organization_id, curriculum')
+      .eq('id', programId)
+      .maybeSingle();
+    if (pgErr) {
+      console.error('program lookup failed:', pgErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
+    if (!program) return FORBIDDEN;
+
+    const { data: member, error: memErr } = await supabase
+      .from('org_members')
+      .select('organization_id')
+      .eq('auth_user_id', callerAuthId)
+      .eq('organization_id', program.organization_id)
+      .in('role', ['owner', 'admin'])
+      .maybeSingle();
+    if (memErr) {
+      console.error('org_members lookup failed:', memErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
+    if (!member) return FORBIDDEN;
+
+    const orgId = program.organization_id;
+
+    // 4. Process rows
+    const results = {
+      imported: 0,
+      updated: 0,
+      skipped: 0,
+      pending: 0, // added but not enrolled (no photo release)
+      errors: [] as Array<{ row_index: number; error: string }>,
+    };
+
+    for (let i = 0; i < registrants.length; i++) {
+      const r = registrants[i];
+      try {
+        const studentFirst = String(r.student_first_name ?? '').trim();
+        if (!studentFirst) {
+          results.skipped++;
+          results.errors.push({ row_index: i, error: 'missing_student_first_name' });
+          continue;
+        }
+        const studentLast = String(r.student_last_name ?? '').trim();
+
+        // PARENT — match by email (lowercase) if present, else by name+phone.
+        let parentId: string | null = null;
+        const parentEmail = String(r.parent_email ?? '').trim().toLowerCase();
+        const parentFirst = String(r.parent_first_name ?? '').trim();
+        const parentLast = String(r.parent_last_name ?? '').trim();
+        const parentPhone = String(r.parent_phone ?? '').trim();
+
+        if (parentEmail) {
+          const { data: existingParent } = await supabase
+            .from('parents')
+            .select('id')
+            .ilike('email', parentEmail)
+            .limit(1)
+            .maybeSingle();
+          if (existingParent) parentId = existingParent.id;
+        }
+
+        if (!parentId && parentFirst && parentLast) {
+          let q = supabase
+            .from('parents')
+            .select('id')
+            .ilike('first_name', parentFirst)
+            .ilike('last_name', parentLast);
+          if (parentPhone) q = q.eq('phone', parentPhone);
+          const { data: parentByName } = await q.limit(1).maybeSingle();
+          if (parentByName) parentId = parentByName.id;
+        }
+
+        if (!parentId) {
+          // Create. parents.email is NOT NULL — fall back to a placeholder
+          // when the operator didn't provide one.
+          const fallbackEmail = parentEmail
+            || `${studentFirst.toLowerCase()}.${studentLast.toLowerCase() || 'unknown'}.${Date.now()}.${i}@import.local`;
+          const { data: newParent, error: pErr } = await supabase
+            .from('parents')
+            .insert({
+              first_name: parentFirst || studentFirst,
+              last_name: parentLast || studentLast || 'Unknown',
+              email: fallbackEmail,
+              phone: parentPhone || null,
+            })
+            .select('id')
+            .single();
+          if (pErr) throw new Error(`parent_create_failed: ${pErr.message}`);
+          parentId = newParent.id;
+        }
+
+        // STUDENT — match by (parent_id, first_name, last_name).
+        let studentId: string | null = null;
+        {
+          const { data: existingStudent } = await supabase
+            .from('students')
+            .select('id')
+            .eq('parent_id', parentId)
+            .ilike('first_name', studentFirst)
+            .ilike('last_name', studentLast || '')
+            .limit(1)
+            .maybeSingle();
+          if (existingStudent) studentId = existingStudent.id;
+        }
+
+        const studentFields = {
+          parent_id: parentId,
+          organization_id: orgId,
+          first_name: studentFirst,
+          last_name: studentLast || null,
+          grade: parseGrade(r.grade),
+          birthdate: parseDate(r.birthdate),
+          pronouns: emptyToNull(r.pronouns),
+          allergies: emptyToNull(r.allergies),
+          dietary_restrictions: emptyToNull(r.dietary_restrictions),
+          medical_notes: emptyToNull(r.medical_notes),
+          medical_conditions: emptyToNull(r.medical_conditions),
+          epipen_required: parseBool(r.epipen_required),
+          medications_at_program: emptyToNull(r.medications_at_program),
+          emergency_contact_name: emptyToNull(r.emergency_contact_name),
+          emergency_contact_phone: emptyToNull(r.emergency_contact_phone),
+          special_needs_accommodations: emptyToNull(r.special_needs_accommodations),
+          homeroom_teacher: emptyToNull(r.homeroom_teacher),
+        };
+
+        if (studentId) {
+          // Only overwrite with non-null incoming values.
+          const updateFields: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(studentFields)) {
+            if (k === 'parent_id' || k === 'organization_id') continue;
+            if (v !== null && v !== undefined) updateFields[k] = v;
+          }
+          if (Object.keys(updateFields).length > 0) {
+            const { error: sErr } = await supabase
+              .from('students')
+              .update(updateFields)
+              .eq('id', studentId);
+            if (sErr) throw new Error(`student_update_failed: ${sErr.message}`);
+          }
+        } else {
+          const { data: newStudent, error: sErr } = await supabase
+            .from('students')
+            .insert(studentFields)
+            .select('id')
+            .single();
+          if (sErr) throw new Error(`student_create_failed: ${sErr.message}`);
+          studentId = newStudent.id;
+        }
+
+        // Photo release / enrollment status. See header note + the
+        // photo_release_required_when_confirmed CHECK.
+        const photo = parseBool(r.photo_release_consent);
+        const consent = photo === false ? false : true; // default missing → true
+        const regStatus = consent ? 'confirmed' : 'pending';
+        const nowIso = new Date().toISOString();
+
+        // REGISTRATION — select-then-insert on (program_id, student_id).
+        const regFields = {
+          program_id: programId,
+          student_id: studentId,
+          parent_id: parentId,
+          organization_id: orgId,
+          status: regStatus,
+          payment_method: null,
+          payment_status: 'unpaid',
+          registered_at: nowIso,
+          notes: emptyToNull(r.notes),
+          photo_release_consent: consent,
+          photo_release_consent_at: consent ? nowIso : null,
+          authorized_pickup_contacts: emptyToNull(r.authorized_pickup_contacts),
+        };
+
+        const { data: existingReg } = await supabase
+          .from('registrations')
+          .select('id, status')
+          .eq('program_id', programId)
+          .eq('student_id', studentId)
+          .maybeSingle();
+
+        if (existingReg) {
+          const updateFields: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(regFields)) {
+            if (k === 'program_id' || k === 'student_id' || k === 'parent_id' || k === 'organization_id') continue;
+            if (k === 'registered_at') continue; // preserve original date
+            // Don't downgrade an already-confirmed (enrolled) registration to
+            // pending just because this row lacked photo data.
+            if (k === 'status' && existingReg.status === 'confirmed' && v === 'pending') continue;
+            if (v !== null && v !== undefined) updateFields[k] = v;
+          }
+          if (Object.keys(updateFields).length > 0) {
+            const { error: rErr } = await supabase
+              .from('registrations')
+              .update(updateFields)
+              .eq('id', existingReg.id);
+            if (rErr) throw new Error(`registration_update_failed: ${rErr.message}`);
+          }
+          results.updated++;
+          if (regStatus === 'pending' && existingReg.status !== 'confirmed') results.pending++;
+        } else {
+          const { error: rErr } = await supabase
+            .from('registrations')
+            .insert(regFields);
+          if (rErr) throw new Error(`registration_insert_failed: ${rErr.message}`);
+          results.imported++;
+          if (regStatus === 'pending') results.pending++;
+        }
+      } catch (err) {
+        const msg = (err as Error).message ?? String(err);
+        console.error(`row ${i} failed:`, msg);
+        results.errors.push({ row_index: i, error: msg });
+        results.skipped++;
+      }
+    }
+
+    return json(results);
+  } catch (err) {
+    console.error('admin-import-program-roster fatal:', err);
+    return json({ error: 'internal_error' }, 500);
+  }
+});
+
+function emptyToNull(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s === '' ? null : s;
+}
+
+function parseGrade(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = parseInt(String(v).replace(/[^\d-]/g, ''), 10);
+  if (Number.isNaN(n)) return null;
+  if (n < -1 || n > 16) return null; // K=0, pre-K=-1
+  return n;
+}
+
+function parseDate(v: unknown): string | null {
+  if (!v) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const mo = m[1].padStart(2, '0');
+    const d = m[2].padStart(2, '0');
+    return `${m[3]}-${mo}-${d}`;
+  }
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+function parseBool(v: unknown): boolean | null {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'boolean') return v;
+  const s = String(v).trim().toLowerCase();
+  if (['y', 'yes', 'true', '1', 'consent', 'granted', 'agreed'].includes(s)) return true;
+  if (['n', 'no', 'false', '0', 'declined', 'denied'].includes(s)) return false;
+  return null;
+}

@@ -142,6 +142,7 @@ export default function Rosters() {
   const [uploadingFor, setUploadingFor] = useState(null); // camp_session row
   const [emailingFor, setEmailingFor] = useState(null); // camp_session row
   const [refundingFor, setRefundingFor] = useState(null); // { registration, camp }
+  const [view, setView] = useState("afterschool"); // 'afterschool' | 'camps'
   const canRefund = orgMember?.role === "owner" || orgMember?.role === "admin";
 
   useEffect(() => {
@@ -218,54 +219,62 @@ export default function Rosters() {
           Rosters
         </h1>
         <p style={{ color: MUTED, marginTop: 6, fontSize: 14 }}>
-          Fall afterschool rosters pull from registrations automatically. Camp rosters come from your uploads.
+          View, edit, add, and email rosters. Afterschool rosters fill in as families register; you can also add kids by hand.
         </p>
       </header>
 
-      <AfterschoolRostersSection org={org} />
+      {/* Tabs: each roster group is its own tab so neither buries the other. */}
+      <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 18 }}>
+        <TabBtn active={view === "afterschool"} onClick={() => setView("afterschool")} label="Afterschool" />
+        <TabBtn active={view === "camps"} onClick={() => setView("camps")} label="Camps" />
+      </div>
 
-      <h2 style={{ fontSize: 18, fontWeight: 700, color: PURPLE, margin: "0 0 10px" }}>Camps</h2>
+      {view === "afterschool" && <AfterschoolRostersSection org={org} canEdit={canRefund} />}
 
-      {error && (
-        <div style={{ background: `${RED}1A`, color: RED, padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 14 }}>
-          {error}
-        </div>
-      )}
+      {view === "camps" && (
+        <>
+          {error && (
+            <div style={{ background: `${RED}1A`, color: RED, padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 14 }}>
+              {error}
+            </div>
+          )}
 
-      {camps === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
+          {camps === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
 
-      {camps !== null && camps.length === 0 && !error && (
-        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 28, color: MUTED, textAlign: "center" }}>
-          No camps in this org yet.
-        </div>
-      )}
+          {camps !== null && camps.length === 0 && !error && (
+            <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 28, color: MUTED, textAlign: "center" }}>
+              No camps in this org yet.
+            </div>
+          )}
 
-      {camps !== null && camps.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {camps.map((c) => (
-            <CampRow
-              key={c.id}
-              camp={c}
-              onUpload={() => setUploadingFor(c)}
-              onEmail={() => setEmailingFor(c)}
-              orgId={org?.id}
-              canRefund={canRefund}
-              onRefund={(reg) => setRefundingFor({ registration: reg, camp: c })}
-              onRosterChanged={() => {
-                // Re-fetch this camp's roster_count after an edit/delete
-                // by triggering a top-level reload. Cheap and simple.
-                if (!org?.id) return;
-                supabase
-                  .from("registrations")
-                  .select("camp_session_id", { count: "exact", head: true })
-                  .eq("camp_session_id", c.id)
-                  .then(({ count }) => {
-                    setCamps((cs) => (cs ?? []).map((cc) => cc.id === c.id ? { ...cc, roster_count: count ?? 0 } : cc));
-                  });
-              }}
-            />
-          ))}
-        </div>
+          {camps !== null && camps.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {camps.map((c) => (
+                <CampRow
+                  key={c.id}
+                  camp={c}
+                  onUpload={() => setUploadingFor(c)}
+                  onEmail={() => setEmailingFor(c)}
+                  orgId={org?.id}
+                  canRefund={canRefund}
+                  onRefund={(reg) => setRefundingFor({ registration: reg, camp: c })}
+                  onRosterChanged={() => {
+                    // Re-fetch this camp's roster_count after an edit/delete
+                    // by triggering a top-level reload. Cheap and simple.
+                    if (!org?.id) return;
+                    supabase
+                      .from("registrations")
+                      .select("camp_session_id", { count: "exact", head: true })
+                      .eq("camp_session_id", c.id)
+                      .then(({ count }) => {
+                        setCamps((cs) => (cs ?? []).map((cc) => cc.id === c.id ? { ...cc, roster_count: count ?? 0 } : cc));
+                      });
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {refundingFor && (
@@ -290,7 +299,14 @@ export default function Rosters() {
 
       {uploadingFor && (
         <RosterUploadModal
-          camp={uploadingFor}
+          target={{
+            id: uploadingFor.id,
+            functionName: "admin-import-camp-roster",
+            bodyKey: "camp_session_id",
+            noun: "camper",
+            title: uploadingFor.curriculum_name,
+            subtitle: `${fmtDate(uploadingFor.starts_on)}–${fmtDate(uploadingFor.ends_on)}${uploadingFor.location_name ? ` · ${uploadingFor.location_name}` : ""}`,
+          }}
           onClose={() => setUploadingFor(null)}
           onImported={(summary) => {
             // Bump roster_count optimistically so the operator sees it
@@ -431,7 +447,7 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canRefund, o
 
       {expanded && camp.roster_count > 0 && (
         <RosterEditor
-          campSessionId={camp.id}
+          target={{ column: "camp_session_id", id: camp.id }}
           orgId={orgId}
           onChanged={onRosterChanged}
           canRefund={canRefund}
@@ -443,7 +459,11 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canRefund, o
   );
 }
 
-function RosterEditor({ campSessionId, orgId, onChanged, canRefund, onRefund, refreshToken }) {
+// target = { column: 'camp_session_id' | 'program_id', id }. Shared by the
+// camp roster and the afterschool program roster so both edit through one
+// implementation. excludeCancelled hides cancelled registrations (programs do;
+// camps show everything).
+function RosterEditor({ target, orgId, onChanged, canRefund, onRefund, refreshToken, excludeCancelled }) {
   const [campers, setCampers] = useState(null); // null = loading
   const [editingId, setEditingId] = useState(null);
   const [err, setErr] = useState("");
@@ -451,7 +471,7 @@ function RosterEditor({ campSessionId, orgId, onChanged, canRefund, onRefund, re
   async function load() {
     setErr("");
     setCampers(null);
-    const { data, error } = await supabase
+    let q = supabase
       .from("registrations")
       .select(`
         id, status, notes, authorized_pickup_contacts, photo_release_consent,
@@ -464,8 +484,9 @@ function RosterEditor({ campSessionId, orgId, onChanged, canRefund, onRefund, re
           special_needs_accommodations, homeroom_teacher
         )
       `)
-      .eq("camp_session_id", campSessionId)
-      .order("registered_at", { ascending: true });
+      .eq(target.column, target.id);
+    if (excludeCancelled) q = q.is("cancelled_at", null);
+    const { data, error } = await q.order("registered_at", { ascending: true });
     if (error) {
       console.error("[RosterEditor] load failed", error);
       setErr("Couldn't load the roster. Refresh.");
@@ -478,9 +499,9 @@ function RosterEditor({ campSessionId, orgId, onChanged, canRefund, onRefund, re
   useEffect(() => {
     load();
     // refreshToken bumps after a refund to force a re-fetch so payment_status
-    // and registration.status are current. campSessionId obviously also.
+    // and registration.status are current. target obviously also.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campSessionId, refreshToken]);
+  }, [target.column, target.id, refreshToken]);
 
   return (
     <div style={{ marginTop: 12, borderTop: `1px solid ${RULE}`, paddingTop: 10 }}>
@@ -817,7 +838,10 @@ function FullField({ label, children }) {
   );
 }
 
-function RosterUploadModal({ camp, onClose, onImported }) {
+// target = { id, functionName, bodyKey, title, subtitle, noun }.
+// Shared by camps (admin-import-camp-roster / camp_session_id) and afterschool
+// programs (admin-import-program-roster / program_id).
+function RosterUploadModal({ target, onClose, onImported }) {
   const [mode, setMode] = useState("csv"); // 'csv' or 'manual'
   const [csvHeaders, setCsvHeaders] = useState(null);
   const [csvRows, setCsvRows] = useState(null);
@@ -874,8 +898,8 @@ function RosterUploadModal({ camp, onClose, onImported }) {
     setResult(null);
     try {
       const registrants = csvRows.map(mapRow);
-      const { data, error } = await supabase.functions.invoke("admin-import-camp-roster", {
-        body: { camp_session_id: camp.id, registrants },
+      const { data, error } = await supabase.functions.invoke(target.functionName, {
+        body: { [target.bodyKey]: target.id, registrants },
       });
       if (error || data?.error) {
         setParseError(data?.error || error?.message || "Import failed.");
@@ -922,11 +946,13 @@ function RosterUploadModal({ camp, onClose, onImported }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: INK, margin: 0 }}>
-              Roster: {camp.curriculum_name}
+              Roster: {target.title}
             </h2>
-            <p style={{ color: MUTED, fontSize: 12, marginTop: 4 }}>
-              {fmtDate(camp.starts_on)}–{fmtDate(camp.ends_on)} · {camp.location_name}
-            </p>
+            {target.subtitle && (
+              <p style={{ color: MUTED, fontSize: 12, marginTop: 4 }}>
+                {target.subtitle}
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -961,7 +987,7 @@ function RosterUploadModal({ camp, onClose, onImported }) {
 
         {mode === "manual" && (
           <ManualPanel
-            campSessionId={camp.id}
+            target={target}
             busy={busy}
             setBusy={setBusy}
             onSaved={(summary) => {
@@ -1133,8 +1159,11 @@ function CsvPanel({ csvHeaders, csvRows, mapping, setMapping, parseError, result
   );
 }
 
-function ManualPanel({ campSessionId, busy, setBusy, onSaved, onClose }) {
-  const [form, setForm] = useState({
+function ManualPanel({ target, busy, setBusy, onSaved, onClose }) {
+  const noun = target?.noun === "student" ? "student" : "camper";
+  const nounCap = noun.charAt(0).toUpperCase() + noun.slice(1);
+  const isProgram = target?.bodyKey === "program_id";
+  const EMPTY = {
     student_first_name: "",
     student_last_name: "",
     grade: "",
@@ -1148,7 +1177,12 @@ function ManualPanel({ campSessionId, busy, setBusy, onSaved, onClose }) {
     parent_last_name: "",
     parent_email: "",
     parent_phone: "",
-  });
+    // Photo release is required to ENROLL (DB rule). Default true — every native
+    // registration agreed to it; an offline add is the operator attesting the
+    // same. Unchecking adds them as pending (not enrolled).
+    photo_release_consent: true,
+  };
+  const [form, setForm] = useState(EMPTY);
   const [error, setError] = useState("");
   const [savedFlash, setSavedFlash] = useState("");
 
@@ -1159,15 +1193,16 @@ function ManualPanel({ campSessionId, busy, setBusy, onSaved, onClose }) {
   async function save() {
     if (busy) return;
     if (!form.student_first_name.trim()) {
-      setError("Camper first name is required.");
+      setError(`${nounCap} first name is required.`);
       return;
     }
     setBusy(true);
     setError("");
     setSavedFlash("");
     try {
-      const { data, error } = await supabase.functions.invoke("admin-import-camp-roster", {
-        body: { camp_session_id: campSessionId, registrants: [form] },
+      const payload = { ...form, photo_release_consent: form.photo_release_consent ? "yes" : "no" };
+      const { data, error } = await supabase.functions.invoke(target.functionName, {
+        body: { [target.bodyKey]: target.id, registrants: [payload] },
       });
       if (error || data?.error) {
         setError(data?.error || error?.message || "Couldn't save.");
@@ -1175,24 +1210,12 @@ function ManualPanel({ campSessionId, busy, setBusy, onSaved, onClose }) {
         return;
       }
       const name = `${form.student_first_name} ${form.student_last_name}`.trim();
-      setSavedFlash(`Added ${name} to the roster.`);
+      const asPending = isProgram && !form.photo_release_consent;
+      setSavedFlash(asPending
+        ? `Added ${name} as pending — they need photo release on file to count as enrolled.`
+        : `Added ${name} to the roster.`);
       if (onSaved) onSaved(data);
-      // Clear form for next entry
-      setForm({
-        student_first_name: "",
-        student_last_name: "",
-        grade: "",
-        birthdate: "",
-        allergies: "",
-        medical_notes: "",
-        emergency_contact_name: "",
-        emergency_contact_phone: "",
-        homeroom_teacher: "",
-        parent_first_name: "",
-        parent_last_name: "",
-        parent_email: "",
-        parent_phone: "",
-      });
+      setForm(EMPTY); // clear for next entry
     } catch (err) {
       console.error("[ManualPanel] save failed", err);
       setError(err.message ?? "Couldn't save.");
@@ -1204,7 +1227,9 @@ function ManualPanel({ campSessionId, busy, setBusy, onSaved, onClose }) {
   return (
     <div>
       <div style={{ fontSize: 12, color: MUTED, marginBottom: 12, lineHeight: 1.5 }}>
-        Add one camper at a time — useful for partner-venue camps that don&rsquo;t come through Squarespace, or last-minute adds.
+        {isProgram
+          ? "Add one student at a time — for kids who registered offline or were added by a partner, not through Enrops."
+          : "Add one camper at a time — useful for partner-venue camps that don’t come through Squarespace, or last-minute adds."}
       </div>
 
       {savedFlash && (
@@ -1220,10 +1245,10 @@ function ManualPanel({ campSessionId, busy, setBusy, onSaved, onClose }) {
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-        <Lbl label="Camper first name *">
+        <Lbl label={`${nounCap} first name *`}>
           <Inp value={form.student_first_name} onChange={(v) => update("student_first_name", v)} />
         </Lbl>
-        <Lbl label="Camper last name">
+        <Lbl label={`${nounCap} last name`}>
           <Inp value={form.student_last_name} onChange={(v) => update("student_last_name", v)} />
         </Lbl>
         <Lbl label="Grade">
@@ -1259,6 +1284,22 @@ function ManualPanel({ campSessionId, busy, setBusy, onSaved, onClose }) {
         <Lbl label="Parent phone">
           <Inp value={form.parent_phone} onChange={(v) => update("parent_phone", v)} />
         </Lbl>
+        <div style={{ gridColumn: "1 / -1", marginTop: 2 }}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, color: INK, lineHeight: 1.4 }}>
+            <input
+              type="checkbox"
+              checked={form.photo_release_consent}
+              onChange={(e) => update("photo_release_consent", e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              Family has agreed to the photo release.
+              {isProgram && (
+                <span style={{ color: MUTED }}> Required to count as enrolled — uncheck only if this family declined (they'll be added as pending).</span>
+              )}
+            </span>
+          </label>
+        </div>
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
@@ -1692,11 +1733,13 @@ function quickFillBtnStyle(disabled) {
 const DAY_SHORT = { monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat", sunday: "Sun" };
 function dayShort(d) { return DAY_SHORT[(d ?? "").toLowerCase()] ?? (d ?? ""); }
 
-function AfterschoolRostersSection({ org }) {
+function AfterschoolRostersSection({ org, canEdit }) {
   const [term, setTerm] = useState("FA26");
   const [programs, setPrograms] = useState(null);
   const [error, setError] = useState("");
   const [emailingProgram, setEmailingProgram] = useState(null);
+  const [uploadingProgram, setUploadingProgram] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -1747,11 +1790,34 @@ function AfterschoolRostersSection({ org }) {
     return () => { cancelled = true; };
   }, [org?.id, term]);
 
+  // Re-count one program's enrolled (paid OR confirmed) after an edit/import.
+  function refreshProgramCount(programId, bump = 0) {
+    supabase
+      .from("registrations")
+      .select("status, payment_status")
+      .eq("program_id", programId)
+      .is("cancelled_at", null)
+      .then(({ data }) => {
+        const n = (data ?? []).filter((r) => r.payment_status === "paid" || r.status === "confirmed").length;
+        setPrograms((ps) => (ps ?? []).map((p) => p.id === programId ? { ...p, enrolled: n, refresh_token: (p.refresh_token || 0) + bump } : p));
+      });
+  }
+
+  function subtitleFor(p) {
+    return [
+      p.program_locations?.name,
+      p.day_of_week ? `${dayShort(p.day_of_week)}s` : null,
+      p.start_time || null,
+    ].filter(Boolean).join(" · ");
+  }
+
   return (
     <div style={{ marginBottom: 28 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
-        <h2 style={{ fontSize: 18, fontWeight: 700, color: PURPLE, margin: 0 }}>Afterschool programs</h2>
-        <select value={term} onChange={(e) => setTerm(e.target.value)} style={{ padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", fontSize: 13, background: "#fff", color: INK }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13, color: MUTED }}>
+          Rosters fill in as families register. Add offline / partner kids by hand or by CSV.
+        </div>
+        <select value={term} onChange={(e) => { setTerm(e.target.value); setExpandedId(null); }} style={{ padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", fontSize: 13, background: "#fff", color: INK }}>
           <option value="FA26">Fall 2026 (FA26)</option>
           <option value="WI27">Winter 2027 (WI27)</option>
           <option value="SP27">Spring 2027 (SP27)</option>
@@ -1766,33 +1832,20 @@ function AfterschoolRostersSection({ org }) {
         </div>
       )}
       {programs !== null && programs.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {programs.map((p) => (
-            <div key={p.id} style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: p.enrolled > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`, borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <div style={{ minWidth: 0, flex: "1 1 220px" }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{p.curriculum ?? "Untitled"}</div>
-                <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-                  {p.program_locations?.name ?? ""}
-                  {p.day_of_week ? ` · ${dayShort(p.day_of_week)}` : ""}
-                  {p.start_time ? ` · ${p.start_time}` : ""}
-                </div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <Link to={`/admin/programs/${p.id}/roster`} style={{ fontSize: 13, color: PURPLE, fontWeight: 600, textDecoration: "none" }}>
-                  {p.enrolled} enrolled
-                  {p.max_capacity ? <span style={{ color: MUTED, fontWeight: 400 }}> / {p.max_capacity}</span> : null} ›
-                </Link>
-                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6 }}>
-                  <Link to={`/admin/programs/${p.id}/roster`} style={{ padding: "5px 10px", background: PURPLE, color: "#fff", borderRadius: 6, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>View roster →</Link>
-                  {p.enrolled > 0 && (
-                    <button type="button" onClick={() => setEmailingProgram(p)} style={{ padding: "5px 10px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-                      Email roster →
-                    </button>
-                  )}
-                </div>
-                {p.last_emailed_at && <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>Last emailed {new Date(p.last_emailed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div>}
-              </div>
-            </div>
+            <ProgramRosterRow
+              key={p.id}
+              program={p}
+              orgId={org?.id}
+              canEdit={canEdit}
+              expanded={expandedId === p.id}
+              onToggle={() => setExpandedId((cur) => (cur === p.id ? null : p.id))}
+              onUpload={() => setUploadingProgram(p)}
+              onEmail={() => setEmailingProgram(p)}
+              subtitle={subtitleFor(p)}
+              onChanged={() => refreshProgramCount(p.id)}
+            />
           ))}
         </div>
       )}
@@ -1805,12 +1858,91 @@ function AfterschoolRostersSection({ org }) {
             id: emailingProgram.id,
             locationId: emailingProgram.program_location_id,
             title: emailingProgram.curriculum,
-            subtitle: `${emailingProgram.program_locations?.name ?? ""}${emailingProgram.day_of_week ? ` · ${dayShort(emailingProgram.day_of_week)}s` : ""}`,
+            subtitle: subtitleFor(emailingProgram),
             functionName: "email-program-roster",
             bodyKey: "program_id",
           }}
           onClose={() => setEmailingProgram(null)}
           onSent={() => setEmailingProgram(null)}
+        />
+      )}
+
+      {uploadingProgram && (
+        <RosterUploadModal
+          target={{
+            id: uploadingProgram.id,
+            functionName: "admin-import-program-roster",
+            bodyKey: "program_id",
+            noun: "student",
+            title: uploadingProgram.curriculum,
+            subtitle: subtitleFor(uploadingProgram),
+          }}
+          onClose={() => setUploadingProgram(null)}
+          onImported={() => {
+            // New rows just landed — refresh count + force the editor to re-fetch.
+            refreshProgramCount(uploadingProgram.id, 1);
+            setExpandedId(uploadingProgram.id);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// One afterschool program in the roster list. Mirrors CampRow: expand to edit
+// enrolled kids inline, plus add/upload + email + view/print actions.
+function ProgramRosterRow({ program: p, orgId, canEdit, expanded, onToggle, onUpload, onEmail, subtitle, onChanged }) {
+  const lastEmailedLabel = p.last_emailed_at
+    ? new Date(p.last_emailed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : null;
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: p.enrolled > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`, borderRadius: 8, padding: "12px 16px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          onClick={onToggle}
+          style={{ minWidth: 0, flex: "1 1 220px", background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}
+        >
+          <div style={{ fontSize: 14, fontWeight: 600, color: INK, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: PURPLE, fontSize: 12, fontWeight: 700 }}>{expanded ? "▾" : "▸"}</span>
+            <span>{p.curriculum ?? "Untitled"}</span>
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 2, paddingLeft: 18 }}>{subtitle || "—"}</div>
+        </button>
+
+        <div style={{ textAlign: "right", minWidth: 180 }}>
+          <div style={{ fontSize: 12, color: INK, lineHeight: 1.4 }}>
+            <strong>{p.enrolled}</strong> enrolled
+            {p.max_capacity ? <span style={{ color: MUTED }}> / {p.max_capacity} seats</span> : null}
+          </div>
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6, flexWrap: "wrap" }}>
+            {canEdit && (
+              <button type="button" onClick={onUpload} style={{ padding: "6px 12px", background: PURPLE, color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
+                Add / upload →
+              </button>
+            )}
+            {p.enrolled > 0 && (
+              <button type="button" onClick={onEmail} style={{ padding: "6px 12px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }} title="Send a branded PDF roster to this location's partner contacts">
+                Email roster →
+              </button>
+            )}
+            <Link to={`/admin/programs/${p.id}/roster`} style={{ padding: "6px 12px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12, fontWeight: 600, textDecoration: "none" }} title="Open the printable roster">
+              View / print →
+            </Link>
+          </div>
+          {lastEmailedLabel && <div style={{ fontSize: 11, color: MUTED, marginTop: 4, textAlign: "right" }}>Last emailed {lastEmailedLabel}</div>}
+        </div>
+      </div>
+
+      {expanded && (
+        <RosterEditor
+          target={{ column: "program_id", id: p.id }}
+          orgId={orgId}
+          onChanged={onChanged}
+          canRefund={false}
+          onRefund={null}
+          refreshToken={p.refresh_token || 0}
+          excludeCancelled
         />
       )}
     </div>
