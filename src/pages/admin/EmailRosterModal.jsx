@@ -82,6 +82,28 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
         setLocation(loc ?? null);
 
         if (!loc?.partner_id) {
+          // The school IS the partner — before asking the operator to pick one,
+          // auto-match a partner with the same name in this org and wire it up.
+          // This is why contacts "weren't showing": locations were never linked
+          // to their identically-named partner. Persist the link so it sticks.
+          const { data: match } = await supabase
+            .from("partners")
+            .select("id")
+            .eq("organization_id", orgId)
+            .eq("inactive", false)
+            .ilike("partner_name", loc.name ?? "")
+            .limit(1)
+            .maybeSingle();
+          if (match?.id && loc.id) {
+            await supabase
+              .from("program_locations")
+              .update({ partner_id: match.id })
+              .eq("id", loc.id);
+            if (cancelled) return;
+            setLocation((l) => (l ? { ...l, partner_id: match.id } : l));
+            await loadPartner(match.id);
+            return;
+          }
           setPhase("pick_partner");
           return;
         }
