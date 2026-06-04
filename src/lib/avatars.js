@@ -4,9 +4,13 @@
 // stores an avatar KEY (e.g. "bottts-1"), not a URL. avatarUrl() resolves
 // a key to the actual hosted Supabase Storage URL.
 //
-// The 8 SVGs are pre-hosted in the public-assets bucket (verified
-// 2026-05-22). DiceBear bottts style is free for commercial use without
-// attribution.
+// The 8 SVGs are bundled as static assets in public/avatars/ and served
+// from the app's own origin (/avatars/bottts-N.svg). DiceBear bottts style
+// is free for commercial use without attribution.
+//
+// They used to be fetched from a hardcoded prod Supabase Storage URL, which
+// broke multi-environment isolation (staging loaded them from prod). Bundling
+// makes them environment-independent — no Supabase project reference at all.
 //
 // IMPORTANT: the canonical list of valid avatar keys lives here. The
 // edge function update-instructor-profile hardcodes its own copy of the
@@ -14,8 +18,7 @@
 // comment pointing at the other. Drift risk is low — 8 short strings —
 // but flagged so it's not silent.
 
-const STORAGE_BASE =
-  'https://iuasfpztkmrtagivlhtj.supabase.co/storage/v1/object/public/public-assets/avatars';
+const STORAGE_BASE = '/avatars';
 
 export const AVATARS = [
   { key: 'bottts-1', seed: 'astro', label: 'Robot 1' },
