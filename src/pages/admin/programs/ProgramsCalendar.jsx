@@ -706,11 +706,16 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
         }} />
       </div>
 
-      {/* Count + breakdown */}
+      {/* Count + breakdown — click to open this program's roster */}
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>
+        <Link
+          to={`/admin/programs/${p.id}/roster`}
+          title="View the enrolled students (roster, allergies, contacts)"
+          style={{ fontSize: 13, fontWeight: 600, color: PURPLE, textDecoration: "none" }}
+        >
           {enrolled}<span style={{ color: MUTED, fontWeight: 400 }}>{capacity > 0 ? ` / ${capacity}` : ""}</span>
-        </div>
+          <span style={{ fontSize: 10, marginLeft: 3 }}>›</span>
+        </Link>
         {breakdown && (
           <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{breakdown}</div>
         )}

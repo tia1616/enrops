@@ -22,6 +22,7 @@ import CurriculumExtracting from './pages/admin/curricula/CurriculumExtracting.j
 import CurriculumReview from './pages/admin/curricula/CurriculumReview.jsx';
 import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
 import ProgramWizardNew from './pages/admin/programs/ProgramWizardNew.jsx';
+import ProgramRoster from './pages/admin/programs/ProgramRoster.jsx';
 import LocationsList from './pages/admin/LocationsList.jsx';
 import CalendarsList from './pages/admin/CalendarsList.jsx';
 import AdminContacts from './pages/admin/contacts/AdminContacts.jsx';
@@ -120,6 +121,7 @@ export default function App() {
         <Route path="curricula/:id/edit" element={<CurriculumReview />} />
         <Route path="programs" element={<ProgramsCalendar />} />
         <Route path="programs/new" element={<ProgramWizardNew />} />
+        <Route path="programs/:programId/roster" element={<ProgramRoster />} />
         <Route path="locations" element={<LocationsList />} />
         <Route path="calendars" element={<CalendarsList />} />
         <Route path="contacts" element={<AdminContacts />} />
