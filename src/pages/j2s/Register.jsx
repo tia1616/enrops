@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase, API_BASE } from '../../lib/supabase.js';
 import { VIP_PRICE_PER_TERM_CENTS } from '../../lib/pricing.js';
 import { useCart } from '../../context/CartContext.jsx';
@@ -10,11 +10,13 @@ import StepWaivers from './register-steps/StepWaivers.jsx';
 import StepReview from './register-steps/StepReview.jsx';
 import StepPay from './register-steps/StepPay.jsx';
 
-const ORG_SLUG = 'j2s';
-// Hardcoded J2S org ID — single-tenant for now but read from URL for future operators.
-const J2S_ORG_ID = '1adf10ad-d091-4aa0-82e3-af331468ea2b';
-
+// Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
+// via Outlet context — see src/layouts/PublicLayout.jsx. No more hardcoded
+// ORG_ID / ORG_SLUG. Every query scopes by org.id; navigations use org.slug.
 export default function Register() {
+  const { org } = useOutletContext();
+  const ORG_SLUG = org.slug;
+  const ORG_ID = org.id;
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const {
@@ -222,18 +224,18 @@ export default function Register() {
       supabase
         .from('program_locations')
         .select('id, name, district, address')
-        .eq('organization_id', J2S_ORG_ID)
+        .eq('organization_id', ORG_ID)
         .order('name'),
       supabase
         .from('programs')
         .select('*')
-        .eq('organization_id', J2S_ORG_ID)
+        .eq('organization_id', ORG_ID)
         .eq('status', 'open')
         .order('day_of_week'),
       supabase
         .from('waivers')
         .select('*')
-        .eq('organization_id', J2S_ORG_ID)
+        .eq('organization_id', ORG_ID)
         .eq('active', true),
     ]);
 

@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import { useSearchParams, Link, useOutletContext } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useCart } from '../../context/CartContext.jsx';
 
 export default function RegisterSuccess() {
+  const { org } = useOutletContext();
+  const ORG_SLUG = org.slug;
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get('session_id');
   const { user, signInWithGoogle, signInWithMagicLink, signUpWithPassword } = useAuth();
@@ -28,7 +30,7 @@ export default function RegisterSuccess() {
     setError('');
     const { error: err } = await signInWithMagicLink(
       email,
-      `${window.location.origin}/j2s/dashboard`,
+      `${window.location.origin}/${ORG_SLUG}/dashboard`,
     );
     setLoading(false);
     if (err) setError(err.message);
@@ -48,7 +50,7 @@ export default function RegisterSuccess() {
   async function handleGoogle() {
     setLoading(true);
     const { error: err } = await signInWithGoogle(
-      `${window.location.origin}/j2s/dashboard`,
+      `${window.location.origin}/${ORG_SLUG}/dashboard`,
     );
     if (err) {
       setError(err.message);
@@ -133,7 +135,7 @@ export default function RegisterSuccess() {
       ) : (
         <div className="mt-8 rounded-3xl bg-j2s-purple-soft p-8 text-center">
           <p className="font-titan text-xl text-j2s-ink">Welcome back!</p>
-          <Link to="/j2s/dashboard" className="btn-j2s-primary mt-4 inline-block">
+          <Link to={`/${ORG_SLUG}/dashboard`} className="btn-j2s-primary mt-4 inline-block">
             Go to your dashboard →
           </Link>
         </div>

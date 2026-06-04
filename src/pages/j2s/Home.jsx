@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { districtFullName } from '../../lib/tenants.js';
 import { useCart } from '../../context/CartContext.jsx';
@@ -14,16 +14,20 @@ import {
   standardPriceFor,
 } from '../../lib/pricing.js';
 
-const ORG_SLUG = 'j2s';
-
+// Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
+// via Outlet context. Page reads org.id / org.slug from there instead of
+// hardcoding 'j2s'. The FA26 term filter is still hardcoded here — separate
+// backlog item to derive "current active term" from scheduling_cycles.
 export default function J2SHome() {
+  const { org } = useOutletContext();
+  const ORG_SLUG = org.slug;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   // ?keep=1 means we arrived here from the wizard's "Add another child" flow.
   // Skip clearCart so the in-progress sibling registration keeps its parent + child 1 state.
   const keepCart = searchParams.get('keep') === '1';
   const { clearCart } = useCart();
-  const [orgId, setOrgId] = useState(null);
+  const [orgId, setOrgId] = useState(org?.id ?? null);
   const [branding, setBranding] = useState(null);
   const [schools, setSchools] = useState([]);
   const [programs, setPrograms] = useState([]);
@@ -35,15 +39,10 @@ export default function J2SHome() {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
     load();
-  }, []);
+  }, [org?.id]);
 
   async function load() {
-    const { data: org } = await supabase
-      .from('organizations')
-      .select('id')
-      .eq('slug', ORG_SLUG)
-      .single();
-    if (!org) {
+    if (!org?.id) {
       setLoading(false);
       return;
     }

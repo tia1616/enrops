@@ -1,7 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import EnropsLanding from './pages/enrops/Landing.jsx';
-import J2SLayout from './layouts/J2SLayout.jsx';
+import PublicLayout from './layouts/PublicLayout.jsx';
 import J2SHome from './pages/j2s/Home.jsx';
 import J2SRegister from './pages/j2s/Register.jsx';
 import J2SRegisterSuccess from './pages/j2s/RegisterSuccess.jsx';
@@ -55,11 +55,18 @@ export default function App() {
       <Route path="/data-retention" element={<PolicyPage policyType="data-retention" orgSlug="enrops" />} />
       <Route path="/subprocessors" element={<PolicyPage policyType="subprocessors" orgSlug="enrops" />} />
       <Route path="/dpa" element={<PolicyPage policyType="dpa" orgSlug="enrops" />} />
+      {/* Public per-tenant tree: /:slug/* resolves the org from the URL slug.
+          J2S still hits this (slug='j2s') so /j2s/register etc. keep working
+          unchanged. The `/:slug/instructor` and `/:slug/admin/*` routes below
+          are matched explicitly (more-specific match wins), so they aren't
+          shadowed by this wildcard. Per-tenant branding is handled inside
+          PublicLayout; for now J2S renders its existing look and every other
+          tenant gets the Enrops base brand. */}
       <Route
-        path="/j2s"
+        path="/:slug"
         element={
           <CartProvider>
-            <J2SLayout />
+            <PublicLayout />
           </CartProvider>
         }
       >
