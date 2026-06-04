@@ -53,6 +53,19 @@ select gen_random_uuid(), u.id, u.id::text, 'email',
        now(), now(), now()
 from auth.users u where u.email like '%@staging.enrops.test';
 
+-- GoTrue returns 500 on password login when these token columns are NULL on a
+-- SQL-created user. Set them to '' so email/password login works.
+update auth.users set
+  confirmation_token         = coalesce(confirmation_token, ''),
+  recovery_token             = coalesce(recovery_token, ''),
+  email_change               = coalesce(email_change, ''),
+  email_change_token_new     = coalesce(email_change_token_new, ''),
+  email_change_token_current = coalesce(email_change_token_current, ''),
+  phone_change               = coalesce(phone_change, ''),
+  phone_change_token         = coalesce(phone_change_token, ''),
+  reauthentication_token     = coalesce(reauthentication_token, '')
+where email like '%@staging.enrops.test';
+
 -- ---- Admin membership in the real J2S org ----------------------------------
 insert into public.org_members (organization_id, auth_user_id, email, name, role, accepted_at)
 values ('1adf10ad-d091-4aa0-82e3-af331468ea2b','00a00000-0000-0000-0000-000000000001',
