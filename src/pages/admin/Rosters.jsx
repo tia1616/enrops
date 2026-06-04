@@ -257,6 +257,7 @@ export default function Rosters() {
                   onUpload={() => setUploadingFor(c)}
                   onEmail={() => setEmailingFor(c)}
                   orgId={org?.id}
+                  canManage={canManage}
                   onRosterChanged={() => {
                     // Re-fetch this camp's roster_count after an edit/delete
                     // by triggering a top-level reload. Cheap and simple.
@@ -317,7 +318,7 @@ export default function Rosters() {
   );
 }
 
-function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged }) {
+function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage }) {
   const [expanded, setExpanded] = useState(false);
   const gap = (camp.current_enrollment ?? 0) - (camp.roster_count ?? 0);
   const lastEmailedLabel = camp.last_emailed_at
@@ -431,6 +432,7 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged }) {
           orgId={orgId}
           onChanged={onRosterChanged}
           refreshToken={camp.refresh_token || 0}
+          canManage={canManage}
         />
       )}
     </div>
@@ -441,7 +443,7 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged }) {
 // camp roster and the afterschool program roster so both edit through one
 // implementation. excludeCancelled hides cancelled registrations (programs do;
 // camps show everything).
-function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled }) {
+function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled, canManage }) {
   const [campers, setCampers] = useState(null); // null = loading
   const [editingId, setEditingId] = useState(null);
   const [err, setErr] = useState("");
@@ -505,7 +507,13 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
               isEditing={editingId === reg.id}
               onToggleEdit={() => setEditingId((cur) => (cur === reg.id ? null : reg.id))}
               orgId={orgId}
+              canManage={canManage}
               onSaved={() => {
+                setEditingId(null);
+                load();
+                if (onChanged) onChanged();
+              }}
+              onRemoved={() => {
                 setEditingId(null);
                 load();
                 if (onChanged) onChanged();
@@ -518,8 +526,9 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
   );
 }
 
-function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSaved }) {
+function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved }) {
   const s = registration.student;
+  const [confirming, setConfirming] = useState(false);
   if (!s) return null;
   const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed";
   const hasAllergies = (s.allergies ?? "").trim().length > 0;
@@ -578,8 +587,38 @@ function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSav
             >
               Edit →
             </button>
+            {canManage && (
+              <button
+                type="button"
+                onClick={() => setConfirming(true)}
+                style={{
+                  padding: "5px 10px",
+                  background: "transparent",
+                  color: MUTED,
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 5,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+                title="Remove this student from the roster"
+              >
+                Remove
+              </button>
+            )}
           </div>
         </div>
+      )}
+
+      {confirming && (
+        <RemoveConfirm
+          registration={registration}
+          name={displayName}
+          onClose={() => setConfirming(false)}
+          onRemoved={() => { setConfirming(false); if (onRemoved) onRemoved(); }}
+        />
       )}
 
       {isEditing && (
@@ -590,6 +629,82 @@ function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSav
           onSaved={onSaved}
         />
       )}
+    </div>
+  );
+}
+
+// Styled "are you sure" popup for removing a kid from a roster. Calls
+// admin-remove-registration (money-safe hard delete). A registration with a
+// real payment is refused server-side → we explain to use the Money tab.
+function RemoveConfirm({ registration, name, onClose, onRemoved }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function remove() {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const { data, error } = await supabase.functions.invoke("admin-remove-registration", {
+        body: { registration_id: registration.id },
+      });
+      if (error || data?.error) {
+        const code = data?.error || error?.message;
+        if (code === "has_payment") {
+          setErr("This family has a payment on file, so they can't be deleted here. Cancel or refund them from the Money tab instead.");
+        } else {
+          setErr(typeof code === "string" ? code : "Couldn't remove. Try again.");
+        }
+        setBusy(false);
+        return;
+      }
+      if (onRemoved) onRemoved();
+    } catch (e) {
+      console.error("[RemoveConfirm] failed", e);
+      setErr(e.message ?? "Couldn't remove. Try again.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 16px", zIndex: 200 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: "#fff", width: "100%", maxWidth: 420, border: `1px solid ${RULE}`, borderRadius: 10, padding: 22, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}
+      >
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: INK }}>Remove {name}?</h3>
+        <p style={{ color: MUTED, fontSize: 13, marginTop: 8, lineHeight: 1.5 }}>
+          This permanently deletes their spot on this roster. You can&rsquo;t undo it.
+        </p>
+
+        {err && (
+          <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginTop: 10, lineHeight: 1.5 }}>
+            {err}
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            style={{ padding: "8px 14px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={remove}
+            disabled={busy}
+            style={{ padding: "8px 16px", background: RED, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1 }}
+          >
+            {busy ? "Removing…" : "Remove"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1548,6 +1663,7 @@ function ProgramRosterRow({ program: p, orgId, canEdit, expanded, onToggle, onUp
           onChanged={onChanged}
           refreshToken={p.refresh_token || 0}
           excludeCancelled
+          canManage={canEdit}
         />
       )}
     </div>
