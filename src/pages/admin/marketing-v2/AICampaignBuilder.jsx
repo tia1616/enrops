@@ -35,9 +35,12 @@ import Q4_Channels from "./questions/Q4_Channels.jsx";
 import ScheduleReview from "./ScheduleReview.jsx";
 import DraftingScreen from "./DraftingScreen.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
+import CampaignsList from "./CampaignsList.jsx";
 
 const INITIAL = {
-  step: 1,
+  // "list" = the Campaigns landing (scheduled-campaign list + Build button).
+  // The numbered wizard (1..4 → "review") is entered via START_NEW.
+  step: "list",
   inputs: {
     what: {
       mode: "programs",
@@ -182,6 +185,12 @@ function reducer(state, action) {
     }
     case "APPROVE_SCHEDULED":
       return { ...state, scheduled: true };
+    case "START_NEW":
+      // Fresh wizard from the list (or "Build another" on the success screen).
+      return { ...INITIAL, step: 1 };
+    case "GO_LIST":
+      // Back to the Campaigns landing, discarding any in-progress wizard state.
+      return { ...INITIAL, step: "list" };
     case "RESET":
       return INITIAL;
     default:
@@ -266,11 +275,11 @@ export default function AICampaignBuilder() {
     dispatch({ type: "NEXT" });
   };
   const next = () => dispatch({ type: "NEXT" });
-  // On step 1 there's no previous question, so Back exits the builder back
-  // to the admin overview instead of being a dead button. Q2/3/4 use the
+  // On step 1 there's no previous question, so Back returns to the Campaigns
+  // list (the tab's landing) instead of being a dead button. Q2/3/4 use the
   // normal in-flow dispatch.
   const back = () => {
-    if (state.step === 1) { navigate("/admin"); return; }
+    if (state.step === 1) { dispatch({ type: "GO_LIST" }); return; }
     dispatch({ type: "BACK" });
   };
 
@@ -544,11 +553,16 @@ export default function AICampaignBuilder() {
     );
   }
 
+  if (state.step === "list") {
+    return <CampaignsList onNew={() => dispatch({ type: "START_NEW" })} />;
+  }
+
   if (state.step === "review" && state.scheduled) {
     return (
       <CelebrationScreen
         draft={state.draft}
-        onReset={() => dispatch({ type: "RESET" })}
+        onReset={() => dispatch({ type: "START_NEW" })}
+        onHome={() => navigate("/admin")}
       />
     );
   }
@@ -626,7 +640,7 @@ function ProgressHeader({ step }) {
   );
 }
 
-function CelebrationScreen({ draft, onReset }) {
+function CelebrationScreen({ draft, onReset, onHome }) {
   const count = draft?.schedule?.touchpoints?.length ?? 0;
   const recipientCount = draft?.recipients?.count ?? 0;
   const first = draft?.schedule?.touchpoints?.[0];
@@ -662,7 +676,7 @@ function CelebrationScreen({ draft, onReset }) {
 
       <div style={{ marginTop: 24, display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
         <button
-          onClick={() => navigate("/admin")}
+          onClick={onHome}
           style={{
             padding: "10px 16px", background: "#fff", color: INK,
             border: `1px solid ${RULE}`, borderRadius: 6, cursor: "pointer",
