@@ -26,6 +26,7 @@ import ProgramRoster from './pages/admin/programs/ProgramRoster.jsx';
 import LocationsList from './pages/admin/LocationsList.jsx';
 import CalendarsList from './pages/admin/CalendarsList.jsx';
 import AdminContacts from './pages/admin/contacts/AdminContacts.jsx';
+import SchoolsLocations from './pages/admin/SchoolsLocations.jsx';
 import InstructorsPage from './pages/admin/instructors/InstructorsPage.jsx';
 import Payroll from './pages/admin/Payroll.jsx';
 import Rosters from './pages/admin/Rosters.jsx';
@@ -129,6 +130,8 @@ export default function App() {
         <Route path="programs" element={<ProgramsCalendar />} />
         <Route path="programs/new" element={<ProgramWizardNew />} />
         <Route path="programs/:programId/roster" element={<ProgramRoster />} />
+        <Route path="schools" element={<SchoolsLocations />} />
+        {/* Legacy URLs kept alive so bookmarks/email links still resolve. */}
         <Route path="locations" element={<LocationsList />} />
         <Route path="calendars" element={<CalendarsList />} />
         <Route path="contacts" element={<AdminContacts />} />

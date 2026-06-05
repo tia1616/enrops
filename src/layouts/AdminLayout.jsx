@@ -31,7 +31,7 @@ const NAV = [
       { to: "/admin/curricula", label: "Curricula" },
       { to: "/admin/programs", label: "Scheduled programs" },
       { to: "/admin/rosters", label: "Class rosters" },
-      { to: "/admin/locations", label: "Locations" },
+      { to: "/admin/schools", label: "Schools & locations" },
       { to: "/admin/calendars", label: "School calendars" },
     ],
   },
@@ -43,7 +43,6 @@ const NAV = [
       { to: "/admin/schedule", label: "Instructor schedule" },
     ],
   },
-  { to: "/admin/contacts", label: "Contacts" },
   {
     label: "Money",
     group: "money",

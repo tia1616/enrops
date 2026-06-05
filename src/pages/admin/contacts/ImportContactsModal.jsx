@@ -69,15 +69,38 @@ function normHeader(h) {
 }
 
 function autoMapColumns(headers) {
+  // Match real-world headers like "School or organization", "Contact's Email
+  // Address", "Phone #". Strategy: longest alias that appears as a substring
+  // of the normalized header wins. Falls back to exact equality.
   const map = {};
   const norm = headers.map(normHeader);
+  const claimedHeaders = new Set();
   for (const def of PARTNER_FIELDS) {
-    for (const alias of def.aliases) {
-      const idx = norm.indexOf(normHeader(alias));
-      if (idx !== -1) { map[def.key] = headers[idx]; break; }
+    // Try aliases in order: longest first (more specific beats more generic).
+    const aliases = [...def.aliases].sort((a, b) => b.length - a.length);
+    let pickIdx = -1;
+    for (const alias of aliases) {
+      const a = normHeader(alias);
+      // Exact match first.
+      const exact = norm.findIndex((h, i) => h === a && !claimedHeaders.has(headers[i]));
+      if (exact !== -1) { pickIdx = exact; break; }
+      // Then substring (so "schoolororganization" matches "school", "Phone Number" → "phone").
+      const sub = norm.findIndex((h, i) => h.includes(a) && !claimedHeaders.has(headers[i]));
+      if (sub !== -1) { pickIdx = sub; break; }
+    }
+    if (pickIdx !== -1) {
+      map[def.key] = headers[pickIdx];
+      claimedHeaders.add(headers[pickIdx]);
     }
   }
   return map;
+}
+
+// "Confident enough to skip the mapping step": we have the only required
+// field (partner_name) AND at least one contact-identifying field, so the
+// review screen can show real rows. Operators can still edit anything there.
+function autoMapIsConfident(mapping) {
+  return !!mapping.partner_name && !!(mapping.contact_email || mapping.contact_name);
 }
 
 // Map a free-text role/title to one of the four enum roles, deterministically
@@ -229,7 +252,18 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
       }
       setRawHeaders(headers);
       setRawRows(rows);
-      setMapping(autoMapColumns(headers));
+      const guessed = autoMapColumns(headers);
+      setMapping(guessed);
+      // If we confidently mapped the required + contact fields, skip the
+      // mapping screen entirely. Operators can still fix anything in review.
+      if (autoMapIsConfident(guessed)) {
+        const partners = buildPartnersFromGrid(headers, rows, guessed);
+        if (partners.length > 0) {
+          setExtracted(partners);
+          setStep('review');
+          return;
+        }
+      }
       setStep('mapping');
     } catch (e) {
       console.error('[ImportContactsModal] parse failed', e);
@@ -410,7 +444,7 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
               Import partners &amp; contacts
             </h2>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: MUTED }}>
-              {step === 'source' && 'Upload a spreadsheet and map the columns, or paste freeform text for AI to read.'}
+              {step === 'source' && 'Upload a spreadsheet of your schools and contacts — or paste a list from an email.'}
               {step === 'parsing' && 'Reading your file…'}
               {step === 'mapping' && 'Tell us which column is which, then continue.'}
               {step === 'extracting' && 'Working through the text…'}
@@ -494,22 +528,67 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
 
 // ─── Step components ────────────────────────────────────────────────────────
 
+// Generate a starter CSV with normal-English headers + 2 example rows so a
+// non-technical operator has something to fill in. Opens in Google Sheets,
+// Excel, and Numbers identically. Kept tiny on purpose.
+function downloadTemplate() {
+  const csv = [
+    'School or organization,Type,City,Contact name,Email,Phone,Role',
+    'Maplewood Elementary,Public school,Portland,Sarah Hill,sarah.hill@maplewood.example,(503) 555-0142,Front office',
+    'Maplewood Elementary,Public school,Portland,Dr. James Park,james.park@maplewood.example,(503) 555-0148,Principal',
+    '',
+    '# Delete the two example rows above and add your own. Column names can stay as-is.',
+  ].join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'enrops-partners-template.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onNext }) {
   return (
     <div>
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 14 }}>
-        <TabBtn active={mode === 'file'} onClick={() => setMode('file')} label="Upload spreadsheet" />
-        <TabBtn active={mode === 'text'} onClick={() => setMode('text')} label="Paste text (AI)" />
+        <TabBtn active={mode === 'file'} onClick={() => setMode('file')} label="Upload a spreadsheet" />
+        <TabBtn active={mode === 'text'} onClick={() => setMode('text')} label="My list is in an email or document" />
       </div>
 
       {mode === 'file' && (
         <div>
-          <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.5 }}>
-            Drop in a <strong>CSV</strong> or <strong>XLSX</strong> exported from Drive,
-            Sheets, or your own master list. We read it instantly and let you confirm
-            which column is which — <strong>no AI, and your file isn't sent anywhere outside your account.</strong>
+          <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.55 }}>
+            Add all your schools and contacts in one go. Upload a spreadsheet from
+            <strong> Google Sheets, Excel, or Numbers</strong> — your column names don’t
+            have to match ours exactly, we’ll figure them out. You’ll get to review
+            everything before anything saves.
           </p>
+
+          <div style={{ background: `${PURPLE}08`, border: `1px solid ${PURPLE}22`, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 13, color: INK, lineHeight: 1.5 }}>
+                <strong>Don’t have a spreadsheet yet?</strong>
+                <div style={{ color: MUTED, fontSize: 12.5, marginTop: 2 }}>
+                  Download our template, open it in Google Sheets or Excel, fill in your schools, save it, then upload here.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={downloadTemplate}
+                style={{ padding: '7px 14px', background: '#fff', color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >📄 Download template</button>
+            </div>
+          </div>
+
+          <label
+            htmlFor="partner-import-file"
+            style={{ display: 'block', fontSize: 12.5, color: MUTED, marginBottom: 6 }}
+          >Choose your spreadsheet:</label>
           <input
+            id="partner-import-file"
             type="file"
             accept=".csv,.xlsx,.xls,.xlsm,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
@@ -525,11 +604,11 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
 
       {mode === 'text' && (
         <div>
-          <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.5 }}>
-            Only for messy, column-less input — an email thread or a copied doc.
-            This option <strong>uses AI</strong> to pull out the structure, so the
-            text is sent to our AI provider to read. For a normal spreadsheet, use
-            <strong> Upload spreadsheet</strong> instead.
+          <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.55 }}>
+            Got your list in an email or a Word doc? Paste the whole thing below and
+            we’ll pull out the schools and contacts for you. You’ll review everything
+            before it saves.{' '}
+            <span style={{ color: MUTED }}>(Uses AI to read messy text, so it’s sent to our AI provider.)</span>
           </p>
           <textarea
             rows={12}
