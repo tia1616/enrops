@@ -89,6 +89,81 @@ export default function ProgramsCalendar() {
     }
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "open" } : p)));
   }
+
+  // Flip open → draft so the operator can pause a program without deleting it
+  // (a typo, a rethink, a cancellation in negotiation). Hides it from the
+  // public catalog and marketing audience filters again.
+  async function unpublishProgram(programId) {
+    if (!confirm("Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.")) return;
+    const { error: unpubErr } = await supabase
+      .from("programs")
+      .update({ status: "draft" })
+      .eq("id", programId);
+    if (unpubErr) {
+      alert(`Couldn't unpublish: ${unpubErr.message}`);
+      return;
+    }
+    setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "draft" } : p)));
+  }
+
+  // Delete a program. Hard-blocked when there are active (non-cancelled)
+  // registrations — those families would lose the link to their enrollment.
+  // Operator must either cancel the registrations first or just unpublish.
+  async function deleteProgram(programId) {
+    // Real-time registration check, not a stale enrollment count from page load.
+    const { data: regRows, error: regErr } = await supabase
+      .from("registrations")
+      .select("id", { count: "exact" })
+      .eq("program_id", programId)
+      .is("cancelled_at", null);
+    if (regErr) {
+      alert(`Couldn't check registrations: ${regErr.message}`);
+      return;
+    }
+    if ((regRows?.length ?? 0) > 0) {
+      alert(`This program has ${regRows.length} active registration${regRows.length === 1 ? "" : "s"}. Cancel them first, or unpublish the program instead of deleting.`);
+      return;
+    }
+    if (!confirm("Delete this program permanently? This can't be undone.")) return;
+    const { error: delErr } = await supabase
+      .from("programs")
+      .delete()
+      .eq("id", programId);
+    if (delErr) {
+      alert(`Couldn't delete: ${delErr.message}`);
+      return;
+    }
+    setPrograms((prev) => prev.filter((p) => p.id !== programId));
+  }
+
+  // Generic field update used by the inline expand-edit form. Mirrors the
+  // facility-save pattern. Updates local state on success so the row reflects
+  // the change without a full reload.
+  async function updateProgramFields(programId, patch) {
+    const { error: updErr } = await supabase
+      .from("programs")
+      .update(patch)
+      .eq("id", programId);
+    if (updErr) throw updErr;
+    setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, ...patch } : p)));
+  }
+
+  // Locations + curricula for the inline edit form's dropdowns. Loaded once
+  // per org so every expand-row has the picker ready.
+  const [locationsForPicker, setLocationsForPicker] = useState([]);
+  useEffect(() => {
+    if (!org?.id) return;
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("program_locations")
+        .select("id, name, district")
+        .eq("organization_id", org.id)
+        .order("name");
+      if (alive) setLocationsForPicker(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [org?.id]);
   const [sessionDatesByProgram, setSessionDatesByProgram] = useState({});
   const [expandedDates, setExpandedDates] = useState(() => new Set());
   // Set of district strings that DO have a saved calendar for this term's
@@ -318,6 +393,10 @@ export default function ProgramsCalendar() {
               onEdit={setEditingProgram}
               onEditFacility={setEditingFacility}
               onPublish={publishProgram}
+              onUnpublish={unpublishProgram}
+              onDelete={deleteProgram}
+              onUpdate={updateProgramFields}
+              locations={locationsForPicker}
             />
           : <BySchoolView
               programs={programs}
@@ -330,6 +409,10 @@ export default function ProgramsCalendar() {
               onEdit={setEditingProgram}
               onEditFacility={setEditingFacility}
               onPublish={publishProgram}
+              onUnpublish={unpublishProgram}
+              onDelete={deleteProgram}
+              onUpdate={updateProgramFields}
+              locations={locationsForPicker}
             />
       )}
 
@@ -367,7 +450,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -411,6 +494,10 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWi
               onEdit={onEdit}
               onEditFacility={onEditFacility}
               onPublish={onPublish}
+              onUnpublish={onUnpublish}
+              onDelete={onDelete}
+              onUpdate={onUpdate}
+              locations={locations}
             />
           ))}
         </div>
@@ -419,7 +506,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWi
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -523,6 +610,10 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWi
                 onEdit={onEdit}
                 onEditFacility={onEditFacility}
                 onPublish={onPublish}
+                onUnpublish={onUnpublish}
+                onDelete={onDelete}
+                onUpdate={onUpdate}
+                locations={locations}
                 showDay
               />
             ))}
@@ -570,7 +661,7 @@ function districtHasCal(program, districtsWithCalendar) {
   return districtsWithCalendar.has(district);
 }
 
-function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -661,31 +752,29 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
               )}
             </>
           )}
-          {hasDates && (
-            <button
-              type="button"
-              onClick={() => onToggleDates?.(p.id)}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "2px 10px",
-                background: isDatesExpanded ? PURPLE : `${PURPLE}14`,
-                color: isDatesExpanded ? "#fff" : PURPLE,
-                border: `1px solid ${PURPLE}`,
-                borderRadius: 999,
-                fontSize: 11,
-                fontWeight: 600,
-                fontFamily: "inherit",
-                cursor: "pointer",
-                flexShrink: 0,
-              }}
-              title="Show / hide session dates and instructor"
-            >
-              <span style={{ fontSize: 9, lineHeight: 1 }}>{isDatesExpanded ? "▴" : "▾"}</span>
-              {isDatesExpanded ? "Hide" : "Expand"}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => onToggleDates?.(p.id)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "2px 10px",
+              background: isDatesExpanded ? PURPLE : `${PURPLE}14`,
+              color: isDatesExpanded ? "#fff" : PURPLE,
+              border: `1px solid ${PURPLE}`,
+              borderRadius: 999,
+              fontSize: 11,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+            title="Expand to edit dates, time, capacity, status, and more"
+          >
+            <span style={{ fontSize: 9, lineHeight: 1 }}>{isDatesExpanded ? "▴" : "▾"}</span>
+            {isDatesExpanded ? "Hide" : "Expand"}
+          </button>
           <FacilityPill program={p} onClick={() => onEditFacility?.(p)} />
         </div>
         <div style={{ color: MUTED, fontSize: 12, marginTop: 2 }}>
@@ -740,14 +829,221 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
         )}
       </div>
     </div>
-    {isDatesExpanded && hasDates && (
-      <SessionDatesPanel program={p} dates={datesArr} districtHasCalendar={districtHasCalendar} />
+    {isDatesExpanded && (
+      <ExpandedProgramPanel
+        program={p}
+        dates={datesArr}
+        districtHasCalendar={districtHasCalendar}
+        onUpdate={onUpdate}
+        onPublish={onPublish}
+        onUnpublish={onUnpublish}
+        onDelete={onDelete}
+        locations={locations}
+      />
     )}
     </>
   );
 }
 
-function SessionDatesPanel({ program, dates, districtHasCalendar }) {
+// Inline expand-edit panel. Shows the existing session-dates view at the
+// bottom, an editable form for day/time/dates/capacity/price/location at
+// the top, and the unpublish + delete actions on a footer row. The panel
+// only renders when the operator clicks "Expand" on a program row.
+function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, locations }) {
+  // Local draft so the operator can edit several fields and save in one go
+  // (avoid round-tripping the DB on every keystroke).
+  const [draft, setDraft] = useState({
+    day_of_week: program.day_of_week ?? "",
+    start_time: program.start_time ?? "",
+    end_time: program.end_time ?? "",
+    first_session_date: program.first_session_date ?? "",
+    session_count: program.session_count ?? "",
+    max_capacity: program.max_capacity ?? "",
+    price_cents: program.price_cents ?? "",
+    program_location_id: program.program_location_id ?? "",
+    room: program.room ?? "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  function set(field, value) {
+    setDraft((d) => ({ ...d, [field]: value }));
+    setSaveError(null);
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const patch = {
+        day_of_week: draft.day_of_week || null,
+        start_time: draft.start_time || null,
+        end_time: draft.end_time || null,
+        first_session_date: draft.first_session_date || null,
+        session_count: draft.session_count === "" || draft.session_count === null ? null : Number(draft.session_count),
+        max_capacity: draft.max_capacity === "" || draft.max_capacity === null ? null : Number(draft.max_capacity),
+        price_cents: draft.price_cents === "" || draft.price_cents === null ? null : Number(draft.price_cents),
+        program_location_id: draft.program_location_id || null,
+        room: draft.room || null,
+      };
+      await onUpdate(program.id, patch);
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 1500);
+    } catch (err) {
+      setSaveError(err.message ?? String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const isDraft = program.status === "draft";
+  const isOpen = program.status === "open";
+
+  return (
+    <div style={{
+      padding: "14px 16px 16px 16px",
+      background: "#fafaf5",
+      borderBottom: `1px solid ${RULE}`,
+      fontSize: 13,
+    }}>
+      {/* Edit form — sectioned grid */}
+      <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+        Edit program
+      </div>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+        gap: 12,
+        marginBottom: 12,
+      }}>
+        <ExpandField label="Day of week">
+          <select value={draft.day_of_week ?? ""} onChange={(e) => set("day_of_week", e.target.value)} style={expandInputStyle}>
+            <option value="">—</option>
+            {DAYS_OF_WEEK.map((d) => (
+              <option key={d} value={d}>{DAY_LABELS[d]}</option>
+            ))}
+          </select>
+        </ExpandField>
+        <ExpandField label="Start time">
+          <input type="time" value={draft.start_time ?? ""} onChange={(e) => set("start_time", e.target.value)} style={expandInputStyle} />
+        </ExpandField>
+        <ExpandField label="End time">
+          <input type="time" value={draft.end_time ?? ""} onChange={(e) => set("end_time", e.target.value)} style={expandInputStyle} />
+        </ExpandField>
+        <ExpandField label="First session">
+          <input type="date" value={draft.first_session_date ?? ""} onChange={(e) => set("first_session_date", e.target.value)} style={expandInputStyle} />
+        </ExpandField>
+        <ExpandField label="Sessions">
+          <input type="number" min="1" max="40" value={draft.session_count ?? ""} onChange={(e) => set("session_count", e.target.value)} style={expandInputStyle} />
+        </ExpandField>
+        <ExpandField label="Capacity">
+          <input type="number" min="0" max="999" value={draft.max_capacity ?? ""} onChange={(e) => set("max_capacity", e.target.value)} style={expandInputStyle} />
+        </ExpandField>
+        <ExpandField label="Price ($)">
+          <input
+            type="number" min="0" step="1"
+            value={draft.price_cents == null || draft.price_cents === "" ? "" : Math.round(Number(draft.price_cents) / 100)}
+            onChange={(e) => set("price_cents", e.target.value === "" ? "" : Math.round(Number(e.target.value) * 100))}
+            style={expandInputStyle}
+          />
+        </ExpandField>
+        <ExpandField label="Location">
+          <select value={draft.program_location_id ?? ""} onChange={(e) => set("program_location_id", e.target.value)} style={expandInputStyle}>
+            <option value="">— pick a location —</option>
+            {(locations ?? []).map((l) => (
+              <option key={l.id} value={l.id}>{l.name}{l.district ? ` (${l.district})` : ""}</option>
+            ))}
+          </select>
+        </ExpandField>
+        <ExpandField label="Room">
+          <input type="text" value={draft.room ?? ""} onChange={(e) => set("room", e.target.value)} placeholder="e.g. Room 12" style={expandInputStyle} />
+        </ExpandField>
+      </div>
+
+      {saveError && (
+        <div style={{ background: "#fde7e7", color: "#b53737", padding: "8px 12px", borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>
+          Couldn't save: {saveError}
+        </div>
+      )}
+
+      {/* Action row: Save · Publish/Unpublish · Delete */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${RULE}` }}>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          style={{
+            background: PURPLE, color: "#fff", border: "none", padding: "8px 16px",
+            borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit",
+            cursor: saving ? "wait" : "pointer", opacity: saving ? 0.6 : 1,
+          }}
+        >{saving ? "Saving…" : "Save changes"}</button>
+        {savedFlash && <span style={{ color: OK_GREEN, fontWeight: 600, fontSize: 12 }}>✓ Saved</span>}
+
+        <div style={{ flex: 1 }} />
+
+        {isDraft && (
+          <button
+            type="button"
+            onClick={() => onPublish?.(program.id)}
+            style={{
+              background: OK_GREEN, color: "#fff", border: "none", padding: "8px 14px",
+              borderRadius: 6, fontSize: 12.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer",
+            }}
+            title="Publish — show in catalog + marketing"
+          >Publish →</button>
+        )}
+        {isOpen && (
+          <button
+            type="button"
+            onClick={() => onUnpublish?.(program.id)}
+            style={{
+              background: "transparent", color: AMBER, border: `1px solid ${AMBER}`, padding: "7px 14px",
+              borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+            }}
+            title="Unpublish — hide from catalog and stop appearing in marketing"
+          >Unpublish</button>
+        )}
+        <button
+          type="button"
+          onClick={() => onDelete?.(program.id)}
+          style={{
+            background: "transparent", color: "#b53737", border: `1px solid #b53737`, padding: "7px 14px",
+            borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+          }}
+          title="Delete this program permanently (blocked if registrations exist)"
+        >Delete</button>
+      </div>
+
+      {/* Session dates view (existing) */}
+      <SessionDatesPanel program={program} dates={dates} districtHasCalendar={districtHasCalendar} inline />
+    </div>
+  );
+}
+
+function ExpandField({ label, children }) {
+  return (
+    <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.3 }}>
+      {label}
+      <div style={{ marginTop: 4 }}>{children}</div>
+    </label>
+  );
+}
+
+const expandInputStyle = {
+  width: "100%",
+  padding: "6px 8px",
+  fontSize: 13,
+  color: INK,
+  border: `1px solid ${RULE}`,
+  borderRadius: 5,
+  fontFamily: "inherit",
+  background: "#fff",
+  boxSizing: "border-box",
+};
+
+function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false }) {
   const [copied, setCopied] = useState(false);
 
   function copyList() {
@@ -764,13 +1060,25 @@ function SessionDatesPanel({ program, dates, districtHasCalendar }) {
   const district = program.program_locations?.district ?? null;
   const showMissingCalendarWarning = districtHasCalendar === false;
 
+  // No dates to show? Skip the panel entirely.
+  if (!Array.isArray(dates) || dates.length === 0) {
+    if (inline) return null;
+    return null;
+  }
+
+  // When nested inside ExpandedProgramPanel ("inline"), drop our outer box
+  // (the parent already provides padding + background + border) so the
+  // section reads as a continuation of the edit form, not a fresh card.
+  const Wrapper = inline ? "div" : "div";
+  const wrapperStyle = inline ? { fontSize: 13 } : {
+    padding: "12px 16px 14px 90px",
+    background: "#fafaf5",
+    borderBottom: `1px solid ${RULE}`,
+    fontSize: 13,
+  };
+
   return (
-    <div style={{
-      padding: "12px 16px 14px 90px", // align under "Curriculum" column
-      background: "#fafaf5",
-      borderBottom: `1px solid ${RULE}`,
-      fontSize: 13,
-    }}>
+    <Wrapper style={wrapperStyle}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5 }}>
           Session dates · {dates.length}
@@ -840,7 +1148,7 @@ function SessionDatesPanel({ program, dates, districtHasCalendar }) {
           </div>
         ))}
       </div>
-    </div>
+    </Wrapper>
   );
 }
 
