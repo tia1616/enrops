@@ -62,6 +62,15 @@ const PARTNER_FIELDS = [
     aliases: ['role', 'contactrole', 'title', 'position', 'jobtitle', 'job', 'responsibility'] },
   { key: 'role_description', label: 'Role description',
     aliases: ['roledescription', 'description', 'notes', 'responsibilities', 'details'] },
+  // Location fields — written to program_locations when the partner is a venue
+  // (school / community org) and we auto-create or fill in a location row.
+  // Auto-create: all three are persisted. Link-existing: only fills blanks.
+  { key: 'location_address', label: 'Street address',
+    aliases: ['address', 'streetaddress', 'street', 'addr', 'addressline', 'mailingaddress'] },
+  { key: 'location_room_number', label: 'Room number',
+    aliases: ['room', 'roomnumber', 'roomno', 'roomname', 'classroom', 'suite'] },
+  { key: 'location_district', label: 'School district',
+    aliases: ['schooldistrict', 'district', 'districtname'] },
 ];
 
 function normHeader(h) {
@@ -152,11 +161,20 @@ function buildPartnersFromGrid(headers, rows, mapping) {
         location_area: at(row, 'location_area') || null,
         locations_managed: null, marketing_notes: null, invoicing_notes: null,
         planning_notes: null, implementation_notes: null, other_notes: null,
+        // Location fields — first non-empty wins (rows-per-contact repeat them).
+        location_address: at(row, 'location_address') || null,
+        location_room_number: at(row, 'location_room_number') || null,
+        location_district: at(row, 'location_district') || null,
         contacts: [],
         _selected: true,
       };
       byKey.set(key, p);
       order.push(p);
+    } else {
+      // Fill any partner-level location fields the first row left blank.
+      if (!p.location_address) p.location_address = at(row, 'location_address') || null;
+      if (!p.location_room_number) p.location_room_number = at(row, 'location_room_number') || null;
+      if (!p.location_district) p.location_district = at(row, 'location_district') || null;
     }
     const email = at(row, 'contact_email').toLowerCase();
     if (email && !p.contacts.some((c) => c.contact_email === email)) {
@@ -369,6 +387,9 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
           planning_notes: p.planning_notes,
           implementation_notes: p.implementation_notes,
           other_notes: p.other_notes,
+          location_address: p.location_address ?? null,
+          location_room_number: p.location_room_number ?? null,
+          location_district: p.location_district ?? null,
           action: match ? 'merge' : 'create',
           match_partner_id: match?.id ?? null,
           contacts: (p.contacts ?? []).map((c) => ({
@@ -551,11 +572,11 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
 // Excel, and Numbers identically. Kept tiny on purpose.
 function downloadTemplate() {
   const csv = [
-    'School or organization,Type,City,Contact name,Email,Phone,Role',
-    'Maplewood Elementary,Public school,Portland,Sarah Hill,sarah.hill@maplewood.example,(503) 555-0142,Front office',
-    'Maplewood Elementary,Public school,Portland,Dr. James Park,james.park@maplewood.example,(503) 555-0148,Principal',
+    'School or organization,Type,City,Street address,Room number,School district,Contact name,Email,Phone,Role',
+    'Maplewood Elementary,Public school,Portland,3315 SE Lincoln St,Room 12,Portland Public,Sarah Hill,sarah.hill@maplewood.example,(503) 555-0142,Front office',
+    'Maplewood Elementary,Public school,Portland,3315 SE Lincoln St,Room 12,Portland Public,Dr. James Park,james.park@maplewood.example,(503) 555-0148,Principal',
     '',
-    '# Delete the two example rows above and add your own. Column names can stay as-is.',
+    '# Delete the example rows above and add your own. Required: School name. Everything else is optional — leave a column blank if you don\'t have that info yet.',
   ].join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -913,13 +934,20 @@ const TYPE_LABEL = {
 function DoneStep({ result, orgId, onClose }) {
   const navigate = useNavigate();
   const [pending, setPending] = useState(() => Array.isArray(result.partners_without_location) ? result.partners_without_location : []);
-  const [addedNames, setAddedNames] = useState([]);
+  const [added, setAdded] = useState([]); // [{ location_id, location_name }]
   const [busyId, setBusyId] = useState(null);
   const [rowErr, setRowErr] = useState(null);
 
   const locsCreated = result.locations_created ?? 0;
   const locsLinked = result.locations_linked ?? 0;
-  const locTotal = locsCreated + locsLinked + addedNames.length;
+  const locTotal = locsCreated + locsLinked + added.length;
+  // All venue locations the import touched + any the operator just added
+  // inline. Each gets an "Edit details" link so paragraph fields (arrival
+  // instructions, food policy, notes) are one click away.
+  const touched = [
+    ...((Array.isArray(result.touched_locations) ? result.touched_locations : [])),
+    ...added,
+  ];
 
   async function addAsLocation(partner) {
     setBusyId(partner.partner_id);
@@ -927,11 +955,13 @@ function DoneStep({ result, orgId, onClose }) {
     try {
       const base = (partner.partner_name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)) || 'venue';
       const slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('program_locations')
-        .insert({ organization_id: orgId, name: partner.partner_name, slug, partner_id: partner.partner_id });
+        .insert({ organization_id: orgId, name: partner.partner_name, slug, partner_id: partner.partner_id })
+        .select('id')
+        .maybeSingle();
       if (error) throw error;
-      setAddedNames((a) => [...a, partner.partner_name]);
+      setAdded((a) => [...a, { location_id: data?.id, location_name: partner.partner_name, was_created: true }]);
       setPending((p) => p.filter((x) => x.partner_id !== partner.partner_id));
     } catch (e) {
       setRowErr(`Couldn't add ${partner.partner_name} as a location: ${e.message}`);
@@ -957,11 +987,27 @@ function DoneStep({ result, orgId, onClose }) {
       {/* Locations narration */}
       {(locsCreated > 0 || locsLinked > 0) && (
         <div style={{ background: `${OK}12`, border: `1px solid ${OK}44`, padding: 14, borderRadius: 8, fontSize: 14, color: INK, lineHeight: 1.6 }}>
-          🏫 We set up{' '}
-          {locsCreated > 0 && <strong>{locsCreated} school{locsCreated === 1 ? '' : 's'} as location{locsCreated === 1 ? '' : 's'}</strong>}
-          {locsCreated > 0 && locsLinked > 0 && ' and '}
-          {locsLinked > 0 && <strong>linked {locsLinked} you already had</strong>}
-          . You can rename, add room numbers, or edit any of these anytime under <strong>Locations</strong>.
+          <div>
+            🏫 We set up{' '}
+            {locsCreated > 0 && <strong>{locsCreated} school{locsCreated === 1 ? '' : 's'} as location{locsCreated === 1 ? '' : 's'}</strong>}
+            {locsCreated > 0 && locsLinked > 0 && ' and '}
+            {locsLinked > 0 && <strong>linked {locsLinked} you already had</strong>}.
+          </div>
+          {touched.length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 13, color: MUTED }}>
+              Add arrival instructions, room numbers, food policies, and more:
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                {touched.map((t) => (
+                  <button
+                    key={t.location_id}
+                    type="button"
+                    onClick={() => { onClose(); navigate(`/admin/schools?tab=locations&edit=${t.location_id}`); }}
+                    style={{ textAlign: 'left', background: 'transparent', border: 'none', padding: 0, color: PURPLE, fontSize: 13, fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'underline' }}
+                  >✏️ {t.location_name}</button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -995,9 +1041,9 @@ function DoneStep({ result, orgId, onClose }) {
         </div>
       )}
 
-      {addedNames.length > 0 && (
+      {added.length > 0 && (
         <div style={{ marginTop: 10, fontSize: 12.5, color: OK }}>
-          ✓ Added {addedNames.length} more location{addedNames.length === 1 ? '' : 's'}.
+          ✓ Added {added.length} more location{added.length === 1 ? '' : 's'}.
         </div>
       )}
 

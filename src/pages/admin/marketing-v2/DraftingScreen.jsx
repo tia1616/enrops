@@ -83,7 +83,9 @@ export default function DraftingScreen() {
       </ul>
 
       <p style={{ marginTop: 22, fontSize: 12, color: MUTED }}>
-        {elapsed}s elapsed
+        <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontVariantNumeric: 'tabular-nums' }}>
+          {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
+        </span> elapsed
       </p>
     </div>
   );

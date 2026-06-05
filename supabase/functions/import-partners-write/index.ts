@@ -141,6 +141,9 @@ serve(async (req: Request) => {
     // Umbrella partners (district / Parks & Rec) imported this batch — the UI
     // asks the operator whether to add a venue for each.
     const partnersWithoutLocation: Array<{ partner_id: string; partner_name: string; partner_type: string | null }> = [];
+    // Every venue location touched this run, so the UI can offer per-row
+    // "Edit details" links (arrival instructions, food policy, etc).
+    const touchedLocations: Array<{ location_id: string; location_name: string; was_created: boolean }> = [];
     const errors: Array<{ partner: string; reason: string }> = [];
 
     for (const p of partners) {
@@ -246,39 +249,52 @@ serve(async (req: Request) => {
       // many venues, so we never auto-create one — we surface them so the
       // operator can add their real venues by hand.
       if (VENUE_TYPES.has(ptype ?? '')) {
+        // Pull optional location fields off the payload — written on create,
+        // only fill blanks on link-existing (never overwrite operator data).
+        const locAddress = strOrNull(p.location_address);
+        const locRoom = strOrNull(p.location_room_number);
+        const locDistrict = strOrNull(p.location_district);
         const existingLoc = locByNorm.get(normName(name));
         if (existingLoc) {
           if (!existingLoc.partner_id) {
-            // Existing location is unclaimed → link it to this partner.
+            // Existing location is unclaimed → link it AND fill any blanks.
+            const patch: Record<string, unknown> = { partner_id: partnerId };
+            // Read the full row so we know which fields are blank.
+            const { data: currentLoc } = await supabase
+              .from('program_locations').select('address, room_number, district')
+              .eq('id', existingLoc.id).maybeSingle();
+            if (locAddress && !(currentLoc?.address)) patch.address = locAddress;
+            if (locRoom && !(currentLoc?.room_number)) patch.room_number = locRoom;
+            if (locDistrict && !(currentLoc?.district)) patch.district = locDistrict;
             const { error: linkErr } = await supabase
-              .from('program_locations')
-              .update({ partner_id: partnerId })
-              .eq('id', existingLoc.id)
-              .is('partner_id', null);
+              .from('program_locations').update(patch).eq('id', existingLoc.id).is('partner_id', null);
             if (linkErr) {
               errors.push({ partner: name, reason: `location link: ${linkErr.message}` });
             } else {
               existingLoc.partner_id = partnerId;
               locationsLinked++;
+              touchedLocations.push({ location_id: existingLoc.id, location_name: name, was_created: false });
             }
           } else if (existingLoc.partner_id !== partnerId) {
-            // A same-named location is already claimed by a different partner.
-            // Don't overwrite — surface to the operator so they can decide.
+            // Same-named location is claimed by another partner → surface, don't overwrite.
             partnersWithoutLocation.push({ partner_id: partnerId, partner_name: name, partner_type: ptype });
           }
-          // Else: already linked to THIS partner — no action.
         } else {
-          // No matching location → create one and link it.
+          // No matching location → create with whatever location fields were on the row.
+          const insertLoc: Record<string, unknown> = {
+            organization_id: orgId, name, slug: makeSlug(name), partner_id: partnerId,
+          };
+          if (locAddress) insertLoc.address = locAddress;
+          if (locRoom) insertLoc.room_number = locRoom;
+          if (locDistrict) insertLoc.district = locDistrict;
           const { data: newLoc, error: locErr } = await supabase
-            .from('program_locations')
-            .insert({ organization_id: orgId, name, slug: makeSlug(name), partner_id: partnerId })
-            .select('id')
-            .maybeSingle();
+            .from('program_locations').insert(insertLoc).select('id').maybeSingle();
           if (locErr || !newLoc) {
             errors.push({ partner: name, reason: `location create: ${locErr?.message ?? 'insert failed'}` });
           } else {
             locByNorm.set(normName(name), { id: newLoc.id, partner_id: partnerId });
             locationsCreated++;
+            touchedLocations.push({ location_id: newLoc.id, location_name: name, was_created: true });
           }
         }
       } else if (ptype === 'school_district' || ptype === 'parks_rec') {
@@ -295,6 +311,7 @@ serve(async (req: Request) => {
       locations_created: locationsCreated,
       locations_linked: locationsLinked,
       partners_without_location: partnersWithoutLocation,
+      touched_locations: touchedLocations,
       errors,
     });
   } catch (err) {

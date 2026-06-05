@@ -7,7 +7,7 @@
 // Multi-tenant: all reads + writes scoped by org from useOutletContext.
 
 import { useEffect, useMemo, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 
 const PURPLE = "#1C004F";
@@ -43,6 +43,7 @@ const EMPTY_DRAFT = {
 
 export default function LocationsList() {
   const { org } = useOutletContext() ?? {};
+  const [searchParams, setSearchParams] = useSearchParams();
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null); // null | location id | 'new'
@@ -55,6 +56,27 @@ export default function LocationsList() {
     fetchLocations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id]);
+
+  // Auto-open a specific location's editor when arriving with ?edit=<id> —
+  // used by ImportContactsModal's "Edit details" links so the operator lands
+  // directly on the row that needs arrival instructions, food policy, etc.
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId || locations.length === 0) return;
+    const target = locations.find((l) => l.id === editId);
+    if (target) {
+      startEdit(target);
+      // Strip the param so refresh doesn't re-open.
+      const next = new URLSearchParams(searchParams);
+      next.delete('edit');
+      setSearchParams(next, { replace: true });
+      // Bring the row into view in case the list is long.
+      setTimeout(() => {
+        document.getElementById(`location-row-${editId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locations, searchParams]);
 
   async function fetchLocations() {
     setLoading(true);
@@ -249,7 +271,7 @@ export default function LocationsList() {
             </div>
           ) : (
             locations.map((loc) => (
-              <div key={loc.id}>
+              <div key={loc.id} id={`location-row-${loc.id}`}>
                 {editingId === loc.id ? (
                   <EditCard
                     title={loc.name}
