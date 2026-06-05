@@ -221,6 +221,11 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
   const [text, setText] = useState('');
   const [extracted, setExtracted] = useState([]); // partners array
   const [existingByName, setExistingByName] = useState(new Map());
+  // partner_name (normalized) → { address, room_number, district } for any
+  // existing partner whose linked location has data. Used to show "Already
+  // on file:" hints under the Location details inputs so the operator can
+  // see what's already saved (the edge fn never overwrites existing values).
+  const [existingLocByPartner, setExistingLocByPartner] = useState(new Map());
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   // Deterministic file path: raw grid + column mapping.
@@ -228,17 +233,31 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
   const [rawRows, setRawRows] = useState([]);
   const [mapping, setMapping] = useState({});
 
-  // Pre-load existing partners to compute match badges client-side.
+  // Pre-load existing partners + their linked location data so the review
+  // screen can show match badges AND "Already on file:" hints for venue
+  // partners with addresses/rooms/districts already saved.
   useEffect(() => {
     if (!orgId) return;
     (async () => {
-      const { data } = await supabase
-        .from('partners')
-        .select('id, partner_name')
-        .eq('organization_id', orgId);
+      const [{ data: partners }, { data: locs }] = await Promise.all([
+        supabase.from('partners').select('id, partner_name').eq('organization_id', orgId),
+        supabase.from('program_locations').select('partner_id, address, room_number, district').eq('organization_id', orgId).not('partner_id', 'is', null),
+      ]);
       const m = new Map();
-      for (const p of data ?? []) m.set(normName(p.partner_name), { id: p.id, name: p.partner_name });
+      const partnerNameById = new Map();
+      for (const p of partners ?? []) {
+        m.set(normName(p.partner_name), { id: p.id, name: p.partner_name });
+        partnerNameById.set(p.id, p.partner_name);
+      }
       setExistingByName(m);
+      const lm = new Map();
+      for (const l of locs ?? []) {
+        const pname = partnerNameById.get(l.partner_id);
+        if (!pname) continue;
+        if (!(l.address || l.room_number || l.district)) continue;
+        lm.set(normName(pname), { address: l.address, room_number: l.room_number, district: l.district });
+      }
+      setExistingLocByPartner(lm);
     })();
   }, [orgId]);
 
@@ -552,6 +571,7 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
           <ReviewStep
             partners={extracted}
             existingByName={existingByName}
+            existingLocByPartner={existingLocByPartner}
             selectedCount={selectedCount}
             updatePartner={updatePartner}
             updateContact={updateContact}
@@ -764,7 +784,7 @@ function TabBtn({ active, onClick, label }) {
   );
 }
 
-function ReviewStep({ partners, existingByName, selectedCount, updatePartner, updateContact, onBack, onCommit }) {
+function ReviewStep({ partners, existingByName, existingLocByPartner, selectedCount, updatePartner, updateContact, onBack, onCommit }) {
   const newPartners = partners.filter((p) => !existingByName.has(normName(p.partner_name))).length;
   const matchedPartners = partners.length - newPartners;
   return (
@@ -783,11 +803,13 @@ function ReviewStep({ partners, existingByName, selectedCount, updatePartner, up
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
         {partners.map((p, pIdx) => {
           const match = existingByName.get(normName(p.partner_name));
+          const existingLoc = existingLocByPartner?.get(normName(p.partner_name));
           return (
             <PartnerCard
               key={pIdx}
               p={p}
               match={match}
+              existingLoc={existingLoc}
               onChange={(patch) => updatePartner(pIdx, patch)}
               onContactChange={(cIdx, patch) => updateContact(pIdx, cIdx, patch)}
             />
@@ -812,7 +834,7 @@ function ReviewStep({ partners, existingByName, selectedCount, updatePartner, up
   );
 }
 
-function PartnerCard({ p, match, onChange, onContactChange }) {
+function PartnerCard({ p, match, existingLoc, onChange, onContactChange }) {
   const isMatch = !!match;
   return (
     <div style={{
@@ -869,14 +891,24 @@ function PartnerCard({ p, match, onChange, onContactChange }) {
             </Field>
           </div>
 
-          {/* Location details — only meaningful for single-venue partners
-              (schools, community orgs). Shown if any of the three came in,
-              OR if the operator picked a venue type so they can fill them in. */}
+          {/* Location details — shown when the partner is a venue type OR
+              the import brought any of the three values OR an existing
+              location is already linked with data on file. Existing values
+              are surfaced as "Already on file:" hints; the import never
+              overwrites them (edge fn fills blanks only). */}
           {(p.location_address || p.location_room_number || p.location_district ||
+            existingLoc ||
             (p.partner_type && ['public_school','private_school','charter_school','community_org','church'].includes(p.partner_type))) && (
             <div style={{ marginTop: 10, padding: '8px 10px', background: `${PURPLE}06`, border: `1px dashed ${PURPLE}33`, borderRadius: 6 }}>
-              <div style={{ fontSize: 10, color: PURPLE, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', marginBottom: 4 }}>
-                Location details
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                <div style={{ fontSize: 10, color: PURPLE, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+                  Location details
+                </div>
+                {existingLoc && (
+                  <div style={{ fontSize: 10.5, color: MUTED, fontStyle: 'italic' }}>
+                    Already on file — leave blank to keep as-is.
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <Field label="Street address">
@@ -884,27 +916,36 @@ function PartnerCard({ p, match, onChange, onContactChange }) {
                     type="text"
                     value={p.location_address ?? ''}
                     onChange={(e) => onChange({ location_address: e.target.value || null })}
-                    placeholder="e.g. 3315 SE Lincoln St"
+                    placeholder={existingLoc?.address ? `Already: ${existingLoc.address}` : 'e.g. 3315 SE Lincoln St'}
                     style={{ padding: '4px 8px', fontSize: 12, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', width: 240 }}
                   />
+                  {existingLoc?.address && !p.location_address && (
+                    <div style={{ fontSize: 10.5, color: OK, marginTop: 2 }}>✓ {existingLoc.address}</div>
+                  )}
                 </Field>
                 <Field label="Room">
                   <input
                     type="text"
                     value={p.location_room_number ?? ''}
                     onChange={(e) => onChange({ location_room_number: e.target.value || null })}
-                    placeholder="e.g. Room 12"
+                    placeholder={existingLoc?.room_number ? `Already: ${existingLoc.room_number}` : 'e.g. Room 12'}
                     style={{ padding: '4px 8px', fontSize: 12, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', width: 110 }}
                   />
+                  {existingLoc?.room_number && !p.location_room_number && (
+                    <div style={{ fontSize: 10.5, color: OK, marginTop: 2 }}>✓ {existingLoc.room_number}</div>
+                  )}
                 </Field>
                 <Field label="District">
                   <input
                     type="text"
                     value={p.location_district ?? ''}
                     onChange={(e) => onChange({ location_district: e.target.value || null })}
-                    placeholder="e.g. Portland Public"
+                    placeholder={existingLoc?.district ? `Already: ${existingLoc.district}` : 'e.g. Portland Public'}
                     style={{ padding: '4px 8px', fontSize: 12, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', width: 160 }}
                   />
+                  {existingLoc?.district && !p.location_district && (
+                    <div style={{ fontSize: 10.5, color: OK, marginTop: 2 }}>✓ {existingLoc.district}</div>
+                  )}
                 </Field>
               </div>
             </div>
