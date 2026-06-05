@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { INK, MUTED, PURPLE, RULE, VIOLET } from "../marketing/tokens.jsx";
+import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
 
 const STEPS = [
   { at: 0,  label: "Finding the parents you asked for…" },
@@ -82,8 +83,8 @@ export default function DraftingScreen() {
         })}
       </ul>
 
-      <p style={{ marginTop: 22, fontSize: 12, color: MUTED }}>
-        {elapsed}s elapsed
+      <p style={{ marginTop: 22 }}>
+        <ElapsedTimer seconds={elapsed} />
       </p>
     </div>
   );

@@ -117,7 +117,7 @@ export default function ProgramPrereqEmptyState({ hasCurricula, hasLocations, he
           title="Add your program locations"
           blurb="Where your programs run — schools, studios, anywhere. For school-based programs, link each one to its district so I can pull in the school calendar."
           ctaLabel="Add locations"
-          ctaTo="/admin/locations"
+          ctaTo="/admin/schools?tab=locations"
         />
         <StepRow
           number={3}

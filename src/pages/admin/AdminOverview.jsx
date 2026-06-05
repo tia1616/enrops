@@ -181,10 +181,10 @@ export default function AdminOverview() {
           ready
         />
         <Card
-          title="Contacts"
-          body="Partner organizations and parent families."
-          to="/admin/contacts"
-          cta="Open Contacts"
+          title="Schools & partners"
+          body="Schools, districts, community orgs, and the contacts at each."
+          to="/admin/schools?tab=partners"
+          cta="Open Schools & partners"
           ready
         />
         <Card

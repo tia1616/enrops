@@ -1,0 +1,76 @@
+// /admin/schools — combined surface for the schools/partners/locations concept.
+//
+// Today these are two tables in the schema (partners + program_locations) joined
+// by partner_id, but to an operator a school is ONE thing. This page surfaces
+// them under tabs so there's a single "where my schools live" home in the nav.
+//
+// Post-Italy: the partners↔locations unification (see
+// project_enrops_partners_locations_link) collapses these into one table; the
+// tabs go away then and the page becomes a single list. Same URL, same nav slot.
+
+import { useSearchParams, useOutletContext } from 'react-router-dom';
+import PartnersTab from './contacts/PartnersTab';
+import LocationsList from './LocationsList';
+
+const PURPLE = '#1C004F';
+const INK = '#1a1a1a';
+const MUTED = '#6b6b6b';
+const RULE = '#e2dfd5';
+
+const TABS = [
+  { key: 'partners',  label: 'Schools & partners', help: 'The schools, districts, and orgs you partner with.' },
+  { key: 'locations', label: 'Locations',          help: 'Where programs actually run — venues with addresses, room numbers, and arrival info.' },
+];
+
+export default function SchoolsLocations() {
+  const { org } = useOutletContext() ?? {};
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') || 'partners';
+  const active = TABS.find((t) => t.key === tab) ?? TABS[0];
+
+  function selectTab(key) { setParams({ tab: key }, { replace: true }); }
+
+  return (
+    <div>
+      <header style={{ marginBottom: 12 }}>
+        <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.3 }}>
+          Schools &amp; locations
+        </h1>
+        <p style={{ color: MUTED, marginTop: 6, fontSize: 13.5, lineHeight: 1.5 }}>
+          {active.help}
+        </p>
+      </header>
+
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 18 }}>
+        {TABS.map((t) => {
+          const isActive = t.key === tab;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => selectTab(t.key)}
+              style={{
+                padding: '8px 14px',
+                background: 'transparent',
+                border: 'none',
+                borderBottom: isActive ? `2px solid ${PURPLE}` : '2px solid transparent',
+                color: isActive ? PURPLE : MUTED,
+                fontWeight: isActive ? 700 : 500,
+                fontSize: 13,
+                fontFamily: 'inherit',
+                cursor: 'pointer',
+                position: 'relative',
+                top: 1,
+              }}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === 'partners'  && <PartnersTab org={org} />}
+      {tab === 'locations' && <LocationsList />}
+    </div>
+  );
+}

@@ -13,7 +13,9 @@
 // Multi-tenant: all writes go through edge fns that validate org membership.
 
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
+import ElapsedTimer from '../../../components/ElapsedTimer';
 
 const PURPLE = '#1C004F';
 const INK = '#1a1a1a';
@@ -61,6 +63,15 @@ const PARTNER_FIELDS = [
     aliases: ['role', 'contactrole', 'title', 'position', 'jobtitle', 'job', 'responsibility'] },
   { key: 'role_description', label: 'Role description',
     aliases: ['roledescription', 'description', 'notes', 'responsibilities', 'details'] },
+  // Location fields — written to program_locations when the partner is a venue
+  // (school / community org) and we auto-create or fill in a location row.
+  // Auto-create: all three are persisted. Link-existing: only fills blanks.
+  { key: 'location_address', label: 'Street address',
+    aliases: ['address', 'streetaddress', 'street', 'addr', 'addressline', 'mailingaddress'] },
+  { key: 'location_room_number', label: 'Room number',
+    aliases: ['room', 'roomnumber', 'roomno', 'roomname', 'classroom', 'suite'] },
+  { key: 'location_district', label: 'School district',
+    aliases: ['schooldistrict', 'district', 'districtname'] },
 ];
 
 function normHeader(h) {
@@ -68,15 +79,38 @@ function normHeader(h) {
 }
 
 function autoMapColumns(headers) {
+  // Match real-world headers like "School or organization", "Contact's Email
+  // Address", "Phone #". Strategy: longest alias that appears as a substring
+  // of the normalized header wins. Falls back to exact equality.
   const map = {};
   const norm = headers.map(normHeader);
+  const claimedHeaders = new Set();
   for (const def of PARTNER_FIELDS) {
-    for (const alias of def.aliases) {
-      const idx = norm.indexOf(normHeader(alias));
-      if (idx !== -1) { map[def.key] = headers[idx]; break; }
+    // Try aliases in order: longest first (more specific beats more generic).
+    const aliases = [...def.aliases].sort((a, b) => b.length - a.length);
+    let pickIdx = -1;
+    for (const alias of aliases) {
+      const a = normHeader(alias);
+      // Exact match first.
+      const exact = norm.findIndex((h, i) => h === a && !claimedHeaders.has(headers[i]));
+      if (exact !== -1) { pickIdx = exact; break; }
+      // Then substring (so "schoolororganization" matches "school", "Phone Number" → "phone").
+      const sub = norm.findIndex((h, i) => h.includes(a) && !claimedHeaders.has(headers[i]));
+      if (sub !== -1) { pickIdx = sub; break; }
+    }
+    if (pickIdx !== -1) {
+      map[def.key] = headers[pickIdx];
+      claimedHeaders.add(headers[pickIdx]);
     }
   }
   return map;
+}
+
+// "Confident enough to skip the mapping step": we have the only required
+// field (partner_name) AND at least one contact-identifying field, so the
+// review screen can show real rows. Operators can still edit anything there.
+function autoMapIsConfident(mapping) {
+  return !!mapping.partner_name && !!(mapping.contact_email || mapping.contact_name);
 }
 
 // Map a free-text role/title to one of the four enum roles, deterministically
@@ -119,6 +153,8 @@ function buildPartnersFromGrid(headers, rows, mapping) {
   for (const row of rows) {
     const pname = at(row, 'partner_name');
     if (!pname) continue;
+    // Skip comment / instruction rows (common spreadsheet conventions).
+    if (/^[#/]/.test(pname.trim())) continue;
     const key = normName(pname);
     let p = byKey.get(key);
     if (!p) {
@@ -128,11 +164,20 @@ function buildPartnersFromGrid(headers, rows, mapping) {
         location_area: at(row, 'location_area') || null,
         locations_managed: null, marketing_notes: null, invoicing_notes: null,
         planning_notes: null, implementation_notes: null, other_notes: null,
+        // Location fields — first non-empty wins (rows-per-contact repeat them).
+        location_address: at(row, 'location_address') || null,
+        location_room_number: at(row, 'location_room_number') || null,
+        location_district: at(row, 'location_district') || null,
         contacts: [],
         _selected: true,
       };
       byKey.set(key, p);
       order.push(p);
+    } else {
+      // Fill any partner-level location fields the first row left blank.
+      if (!p.location_address) p.location_address = at(row, 'location_address') || null;
+      if (!p.location_room_number) p.location_room_number = at(row, 'location_room_number') || null;
+      if (!p.location_district) p.location_district = at(row, 'location_district') || null;
     }
     const email = at(row, 'contact_email').toLowerCase();
     if (email && !p.contacts.some((c) => c.contact_email === email)) {
@@ -152,6 +197,16 @@ function buildPartnersFromGrid(headers, rows, mapping) {
 
 export default function ImportContactsModal({ orgId, onClose, onImported }) {
   const [step, setStep] = useState('source'); // source | parsing | mapping | extracting | review | writing | done
+  // Elapsed-time counter for the AI extraction step. Memory rule
+  // feedback_ai_wait_ui: any AI extract/generate must show a live m:ss timer
+  // alongside the recommended duration so the operator knows we're alive.
+  const [extractElapsed, setExtractElapsed] = useState(0);
+  useEffect(() => {
+    if (step !== 'extracting') { setExtractElapsed(0); return; }
+    const startedAt = Date.now();
+    const id = setInterval(() => setExtractElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [step]);
   const [mode, setMode] = useState('file'); // file | text
   const [file, setFile] = useState(null);
   const [text, setText] = useState('');
@@ -228,7 +283,18 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
       }
       setRawHeaders(headers);
       setRawRows(rows);
-      setMapping(autoMapColumns(headers));
+      const guessed = autoMapColumns(headers);
+      setMapping(guessed);
+      // If we confidently mapped the required + contact fields, skip the
+      // mapping screen entirely. Operators can still fix anything in review.
+      if (autoMapIsConfident(guessed)) {
+        const partners = buildPartnersFromGrid(headers, rows, guessed);
+        if (partners.length > 0) {
+          setExtracted(partners);
+          setStep('review');
+          return;
+        }
+      }
       setStep('mapping');
     } catch (e) {
       console.error('[ImportContactsModal] parse failed', e);
@@ -324,6 +390,9 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
           planning_notes: p.planning_notes,
           implementation_notes: p.implementation_notes,
           other_notes: p.other_notes,
+          location_address: p.location_address ?? null,
+          location_room_number: p.location_room_number ?? null,
+          location_district: p.location_district ?? null,
           action: match ? 'merge' : 'create',
           match_partner_id: match?.id ?? null,
           contacts: (p.contacts ?? []).map((c) => ({
@@ -409,7 +478,7 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
               Import partners &amp; contacts
             </h2>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: MUTED }}>
-              {step === 'source' && 'Upload a spreadsheet and map the columns, or paste freeform text for AI to read.'}
+              {step === 'source' && 'Upload a spreadsheet of your schools and contacts — or paste a list from an email.'}
               {step === 'parsing' && 'Reading your file…'}
               {step === 'mapping' && 'Tell us which column is which, then continue.'}
               {step === 'extracting' && 'Working through the text…'}
@@ -460,8 +529,13 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
         )}
 
         {step === 'extracting' && (
-          <div style={{ padding: '40px 0', textAlign: 'center', color: MUTED, fontSize: 14 }}>
-            Reading the text with AI… This usually takes 10–30 seconds.
+          <div style={{ padding: '40px 0', textAlign: 'center', color: MUTED, fontSize: 14, lineHeight: 1.7 }}>
+            <div style={{ fontSize: 22, marginBottom: 8 }}>📖</div>
+            <div>Reading your text with AI…</div>
+            <div style={{ fontSize: 12.5, marginTop: 2 }}>Usually takes 10–30 seconds.</div>
+            <div style={{ marginTop: 14 }}>
+              <ElapsedTimer seconds={extractElapsed} />
+            </div>
           </div>
         )}
 
@@ -484,7 +558,7 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
         )}
 
         {step === 'done' && result && (
-          <DoneStep result={result} onClose={() => { onImported && onImported(); }} />
+          <DoneStep result={result} orgId={orgId} onClose={() => { onImported && onImported(); }} />
         )}
       </div>
     </div>
@@ -493,22 +567,68 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
 
 // ─── Step components ────────────────────────────────────────────────────────
 
+// Generate a starter CSV with normal-English headers + 2 example rows so a
+// non-technical operator has something to fill in. Opens in Google Sheets,
+// Excel, and Numbers identically. Kept tiny on purpose.
+function downloadTemplate() {
+  // Two example rows so operators can see the format (same school, two
+  // contacts → folded into one partner). No instruction row — comments in
+  // a CSV get treated as data by most spreadsheet apps.
+  const csv = [
+    'School or organization,Type,City,Street address,Room number,School district,Contact name,Email,Phone,Role',
+    'Maplewood Elementary,Public school,Portland,3315 SE Lincoln St,Room 12,Portland Public,Sarah Hill,sarah.hill@maplewood.example,(503) 555-0142,Front office',
+    'Maplewood Elementary,Public school,Portland,3315 SE Lincoln St,Room 12,Portland Public,Dr. James Park,james.park@maplewood.example,(503) 555-0148,Principal',
+  ].join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'enrops-partners-template.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onNext }) {
   return (
     <div>
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 14 }}>
-        <TabBtn active={mode === 'file'} onClick={() => setMode('file')} label="Upload spreadsheet" />
-        <TabBtn active={mode === 'text'} onClick={() => setMode('text')} label="Paste text (AI)" />
+        <TabBtn active={mode === 'file'} onClick={() => setMode('file')} label="Upload a spreadsheet" />
+        <TabBtn active={mode === 'text'} onClick={() => setMode('text')} label="My list is in an email or document" />
       </div>
 
       {mode === 'file' && (
         <div>
-          <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.5 }}>
-            Drop in a <strong>CSV</strong> or <strong>XLSX</strong> exported from Drive,
-            Sheets, or your own master list. We read it instantly and let you confirm
-            which column is which — <strong>no AI, and your file isn't sent anywhere outside your account.</strong>
+          <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.55 }}>
+            Add all your schools and contacts in one go. Upload a spreadsheet from
+            <strong> Google Sheets, Excel, or a CSV</strong> — your column names don’t
+            have to match ours exactly, we’ll figure them out. You’ll get to review
+            everything before anything saves.
           </p>
+
+          <div style={{ background: `${PURPLE}08`, border: `1px solid ${PURPLE}22`, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 13, color: INK, lineHeight: 1.5 }}>
+                <strong>Don’t have a spreadsheet yet?</strong>
+                <div style={{ color: MUTED, fontSize: 12.5, marginTop: 2 }}>
+                  Download our template, open it in Google Sheets or Excel, fill in your schools, save it, then upload here.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={downloadTemplate}
+                style={{ padding: '7px 14px', background: '#fff', color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >📄 Download template</button>
+            </div>
+          </div>
+
+          <label
+            htmlFor="partner-import-file"
+            style={{ display: 'block', fontSize: 12.5, color: MUTED, marginBottom: 6 }}
+          >Choose your spreadsheet:</label>
           <input
+            id="partner-import-file"
             type="file"
             accept=".csv,.xlsx,.xls,.xlsm,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
@@ -524,11 +644,11 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
 
       {mode === 'text' && (
         <div>
-          <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.5 }}>
-            Only for messy, column-less input — an email thread or a copied doc.
-            This option <strong>uses AI</strong> to pull out the structure, so the
-            text is sent to our AI provider to read. For a normal spreadsheet, use
-            <strong> Upload spreadsheet</strong> instead.
+          <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.55 }}>
+            Got your list in an email or a Word doc? Paste the whole thing below and
+            we’ll pull out the schools and contacts for you. You’ll review everything
+            before it saves.{' '}
+            <span style={{ color: MUTED }}>(Uses AI to read messy text, so it’s sent to our AI provider.)</span>
           </p>
           <textarea
             rows={12}
@@ -740,6 +860,47 @@ function PartnerCard({ p, match, onChange, onContactChange }) {
             </Field>
           </div>
 
+          {/* Location details — only meaningful for single-venue partners
+              (schools, community orgs). Shown if any of the three came in,
+              OR if the operator picked a venue type so they can fill them in. */}
+          {(p.location_address || p.location_room_number || p.location_district ||
+            (p.partner_type && ['public_school','private_school','charter_school','community_org','church'].includes(p.partner_type))) && (
+            <div style={{ marginTop: 10, padding: '8px 10px', background: `${PURPLE}06`, border: `1px dashed ${PURPLE}33`, borderRadius: 6 }}>
+              <div style={{ fontSize: 10, color: PURPLE, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', marginBottom: 4 }}>
+                Location details
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Field label="Street address">
+                  <input
+                    type="text"
+                    value={p.location_address ?? ''}
+                    onChange={(e) => onChange({ location_address: e.target.value || null })}
+                    placeholder="e.g. 3315 SE Lincoln St"
+                    style={{ padding: '4px 8px', fontSize: 12, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', width: 240 }}
+                  />
+                </Field>
+                <Field label="Room">
+                  <input
+                    type="text"
+                    value={p.location_room_number ?? ''}
+                    onChange={(e) => onChange({ location_room_number: e.target.value || null })}
+                    placeholder="e.g. Room 12"
+                    style={{ padding: '4px 8px', fontSize: 12, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', width: 110 }}
+                  />
+                </Field>
+                <Field label="District">
+                  <input
+                    type="text"
+                    value={p.location_district ?? ''}
+                    onChange={(e) => onChange({ location_district: e.target.value || null })}
+                    placeholder="e.g. Portland Public"
+                    style={{ padding: '4px 8px', fontSize: 12, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', width: 160 }}
+                  />
+                </Field>
+              </div>
+            </div>
+          )}
+
           <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
             {(p.contacts ?? []).map((c, cIdx) => (
               <ContactRow key={cIdx} c={c} onChange={(patch) => onContactChange(cIdx, patch)} />
@@ -807,31 +968,162 @@ function Field({ label, children }) {
   );
 }
 
-function DoneStep({ result, onClose }) {
+const TYPE_LABEL = {
+  public_school: 'Public school', private_school: 'Private school', charter_school: 'Charter school',
+  school_district: 'School district', parks_rec: 'Parks & Rec', community_org: 'Community org', church: 'Church',
+};
+
+function DoneStep({ result, orgId, onClose }) {
+  const navigate = useNavigate();
+  const [pending, setPending] = useState(() => Array.isArray(result.partners_without_location) ? result.partners_without_location : []);
+  const [added, setAdded] = useState([]); // [{ location_id, location_name }]
+  const [busyId, setBusyId] = useState(null);
+  const [rowErr, setRowErr] = useState(null);
+
+  const locsCreated = result.locations_created ?? 0;
+  const locsLinked = result.locations_linked ?? 0;
+  const locTotal = locsCreated + locsLinked + added.length;
+  // All venue locations the import touched + any the operator just added
+  // inline. Each gets an "Edit details" link so paragraph fields (arrival
+  // instructions, food policy, notes) are one click away.
+  const touched = [
+    ...((Array.isArray(result.touched_locations) ? result.touched_locations : [])),
+    ...added,
+  ];
+
+  async function addAsLocation(partner) {
+    setBusyId(partner.partner_id);
+    setRowErr(null);
+    try {
+      const base = (partner.partner_name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)) || 'venue';
+      const slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
+      const { data, error } = await supabase
+        .from('program_locations')
+        .insert({ organization_id: orgId, name: partner.partner_name, slug, partner_id: partner.partner_id })
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      setAdded((a) => [...a, { location_id: data?.id, location_name: partner.partner_name, was_created: true }]);
+      setPending((p) => p.filter((x) => x.partner_id !== partner.partner_id));
+    } catch (e) {
+      setRowErr(`Couldn't add ${partner.partner_name} as a location: ${e.message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div>
-      <div style={{ background: `${OK}1A`, border: `1px solid ${OK}55`, padding: 14, borderRadius: 8, fontSize: 14, color: INK, lineHeight: 1.6 }}>
-        <strong style={{ color: OK }}>Saved.</strong><br />
-        <strong>{result.partners_created}</strong> new partner{result.partners_created === 1 ? '' : 's'},{' '}
-        <strong>{result.partners_merged}</strong> merged into existing,{' '}
-        <strong>{result.contacts_created}</strong> new contact{result.contacts_created === 1 ? '' : 's'}.{' '}
-        {result.contacts_skipped > 0 && <span style={{ color: MUTED }}>{result.contacts_skipped} skipped (duplicates or unselected).</span>}
+      {/* Celebration */}
+      <div style={{ textAlign: 'center', padding: '8px 0 14px' }}>
+        <div style={{ fontSize: 40, lineHeight: 1 }}>🎉</div>
+        <h3 style={{ margin: '8px 0 2px', fontSize: 18, fontWeight: 800, color: PURPLE }}>Your contacts are in.</h3>
+        <p style={{ margin: 0, fontSize: 13, color: MUTED }}>
+          {result.partners_created} new partner{result.partners_created === 1 ? '' : 's'}
+          {result.partners_merged > 0 && `, ${result.partners_merged} updated`}
+          {' · '}{result.contacts_created} contact{result.contacts_created === 1 ? '' : 's'} added
+          {result.contacts_skipped > 0 && ` · ${result.contacts_skipped} skipped (already on file)`}
+        </p>
       </div>
+
+      {/* Locations narration */}
+      {(locsCreated > 0 || locsLinked > 0) && (
+        <div style={{ background: `${OK}12`, border: `1px solid ${OK}44`, padding: 14, borderRadius: 8, fontSize: 14, color: INK, lineHeight: 1.6 }}>
+          <div>
+            🏫 We set up{' '}
+            {locsCreated > 0 && <strong>{locsCreated} school{locsCreated === 1 ? '' : 's'} as location{locsCreated === 1 ? '' : 's'}</strong>}
+            {locsCreated > 0 && locsLinked > 0 && ' and '}
+            {locsLinked > 0 && <strong>linked {locsLinked} you already had</strong>}.
+          </div>
+          {touched.length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 13, color: MUTED }}>
+              Add arrival instructions, room numbers, food policies, and more:
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                {touched.map((t) => (
+                  <button
+                    key={t.location_id}
+                    type="button"
+                    onClick={() => { onClose(); navigate(`/admin/schools?tab=locations&edit=${t.location_id}`); }}
+                    style={{ textAlign: 'left', background: 'transparent', border: 'none', padding: 0, color: PURPLE, fontSize: 13, fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'underline' }}
+                  >✏️ {t.location_name}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Umbrella partners — invite the operator to add their real venues */}
+      {pending.length > 0 && (
+        <div style={{ marginTop: 12, border: `1px solid ${RULE}`, borderRadius: 8, padding: 14 }}>
+          <p style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 700, color: INK }}>
+            Add a location for these?
+          </p>
+          <p style={{ margin: '0 0 10px', fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
+            A district or Parks &amp; Rec usually covers several sites, so we didn’t guess.
+            Add the specific venue where you’ll run programs — or skip and add them later under Locations.
+          </p>
+          {rowErr && <div style={{ background: `${RED}1A`, color: RED, padding: 8, borderRadius: 6, fontSize: 12.5, marginBottom: 8 }}>{rowErr}</div>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {pending.map((p) => (
+              <div key={p.partner_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: '8px 10px' }}>
+                <span style={{ fontSize: 13, color: INK }}>
+                  {p.partner_name}{' '}
+                  <span style={{ fontSize: 11, color: MUTED }}>· {TYPE_LABEL[p.partner_type] ?? p.partner_type}</span>
+                </span>
+                <button
+                  type="button"
+                  disabled={busyId === p.partner_id}
+                  onClick={() => addAsLocation(p)}
+                  style={{ padding: '5px 12px', background: '#fff', color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap', opacity: busyId === p.partner_id ? 0.6 : 1 }}
+                >{busyId === p.partner_id ? 'Adding…' : 'Add as location'}</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {added.length > 0 && (
+        <div style={{ marginTop: 10, fontSize: 12.5, color: OK }}>
+          ✓ Added {added.length} more location{added.length === 1 ? '' : 's'}.
+        </div>
+      )}
+
+      {/* What this unlocks */}
+      {locTotal > 0 && (
+        <div style={{ marginTop: 14, background: `${PURPLE}0A`, border: `1px solid ${PURPLE}22`, borderRadius: 8, padding: 14 }}>
+          <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 700, color: PURPLE }}>What this unlocks</p>
+          <p style={{ margin: 0, fontSize: 13, color: INK, lineHeight: 1.6 }}>
+            With {locTotal} location{locTotal === 1 ? '' : 's'} set up, you’re ready to <strong>schedule programs</strong> there and
+            open <strong>registration</strong> to families. And because each school’s contacts are attached, your
+            class rosters will email the right people automatically — no lookups.
+          </p>
+        </div>
+      )}
+
       {Array.isArray(result.errors) && result.errors.length > 0 && (
-        <div style={{ marginTop: 10, background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13 }}>
-          <strong>{result.errors.length} row{result.errors.length === 1 ? '' : 's'} had problems:</strong>
+        <div style={{ marginTop: 10, background: `${AMBER}1A`, color: AMBER, padding: 10, borderRadius: 6, fontSize: 12.5 }}>
+          <strong>{result.errors.length} row{result.errors.length === 1 ? '' : 's'} need a second look:</strong>
           <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
-            {result.errors.slice(0, 10).map((e, i) => <li key={i}>{e.partner}: {e.reason}</li>)}
-            {result.errors.length > 10 && <li>…and {result.errors.length - 10} more</li>}
+            {result.errors.slice(0, 8).map((e, i) => <li key={i}>{e.partner}: {e.reason}</li>)}
+            {result.errors.length > 8 && <li>…and {result.errors.length - 8} more</li>}
           </ul>
         </div>
       )}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
         <button
           type="button"
           onClick={onClose}
-          style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}
-        >Done</button>
+          style={{ padding: '8px 16px', background: '#fff', color: INK, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}
+        >I’ll do this later</button>
+        {locTotal > 0 && (
+          <button
+            type="button"
+            onClick={() => { onClose(); navigate('/admin/programs/new'); }}
+            style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer' }}
+          >Create a program →</button>
+        )}
       </div>
     </div>
   );
