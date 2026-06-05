@@ -47,6 +47,9 @@ const SCHEMA = {
       planning_notes: 'string or null',
       implementation_notes: 'string or null',
       other_notes: 'string or null — anything unclassified',
+      location_address: 'string — street address of the physical venue (school building, rec center). null if not present. Only fill for single-venue partners (schools, community orgs, churches) — leave null for districts or umbrella partners that cover multiple sites.',
+      location_room_number: 'string — room/classroom/suite identifier at the venue (e.g. "Room 12", "Gym B", "Suite 201"). null if not present.',
+      location_district: 'string — school district or governing body the venue belongs to (e.g. "Portland Public", "Beaverton SD"). null if not present.',
       contacts: [
         {
           contact_name: 'string or null',
@@ -70,11 +73,16 @@ ${JSON.stringify(SCHEMA, null, 2)}
 Rules:
 1. Skip any contact row that has no email.
 2. If two rows clearly refer to the same partner organisation, merge them into ONE partner with multiple contacts.
-3. partner_type: only use one of the listed enums; null if unsure. Do NOT invent new types.
+3. partner_type: only use one of the listed enums; null if unsure. Do NOT invent new types. Distinctions that matter:
+   - 'parks_rec' = the umbrella Parks & Recreation department/agency (e.g. "City of Portland Parks & Rec", "Beaverton Parks & Recreation Dept"). Use this ONLY when the partner runs many venues.
+   - 'community_org' = a single named community venue (e.g. "Riverbend Community Rec Center", "Mt Scott Community Center", a YMCA branch). Even if Parks & Rec operates it, the named building itself is community_org.
+   - 'school_district' = the umbrella district office; never an individual school.
+   - 'public_school' / 'private_school' / 'charter_school' = a single named school building.
 4. contact_role: only use 'operational', 'marketing', 'invoicing', or 'approval_gatekeeper'. Default to 'operational' if the role is "logistics", "site coordinator", "registrar", "afterschool coordinator", or similar. Use 'marketing' for "flyer distribution", "communications", "PTO president". Use 'approval_gatekeeper' for principals/directors who must sign off on communications. Use 'invoicing' only for billing/AP roles.
 5. is_org_inbox: true for emails like info@, contact@, hello@, ops@, mainoffice@. False for a named person's email.
 6. Preserve every distinct contact you see — do NOT dedupe across partners.
 7. If the data is messy or freeform (e.g. an email thread), do your best to identify school/org names + the relevant people; ignore unrelated conversation.
+8. location_address / location_room_number / location_district: extract these when they appear NEAR the partner name (signature blocks, address lines, "Room X" mentions). Only attach them to SINGLE-VENUE partners (schools, community centers, churches). For multi-site partners (school districts, Parks & Rec departments that run several venues), leave all three null — the operator will add the individual venue addresses separately. Do not invent or guess; if you don't see it in the text, return null.
 
 Return ONLY the JSON, starting with { and ending with }.`;
 
@@ -260,6 +268,9 @@ function sanitisePartners(input: unknown): unknown[] {
       planning_notes: strOrNull(p.planning_notes),
       implementation_notes: strOrNull(p.implementation_notes),
       other_notes: strOrNull(p.other_notes),
+      location_address: strOrNull(p.location_address),
+      location_room_number: strOrNull(p.location_room_number),
+      location_district: strOrNull(p.location_district),
       contacts,
     });
   }
