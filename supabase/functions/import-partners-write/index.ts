@@ -279,9 +279,24 @@ serve(async (req: Request) => {
             // Same-named location is claimed by another partner → surface, don't overwrite.
             partnersWithoutLocation.push({ partner_id: partnerId, partner_name: name, partner_type: ptype });
           } else {
-            // Already correctly linked to THIS partner — no change, but still
-            // surface so the operator gets an Edit-details link on the result
-            // screen. Otherwise re-imports show an empty celebration.
+            // Already correctly linked to THIS partner. Still fill any blank
+            // address/room/district fields from the import (never overwrite
+            // existing values) so address/room/district from a spreadsheet
+            // actually persist for partners that were already linked.
+            const patch: Record<string, unknown> = {};
+            if (locAddress || locRoom || locDistrict) {
+              const { data: currentLoc } = await supabase
+                .from('program_locations').select('address, room_number, district')
+                .eq('id', existingLoc.id).maybeSingle();
+              if (locAddress && !(currentLoc?.address)) patch.address = locAddress;
+              if (locRoom && !(currentLoc?.room_number)) patch.room_number = locRoom;
+              if (locDistrict && !(currentLoc?.district)) patch.district = locDistrict;
+            }
+            if (Object.keys(patch).length > 0) {
+              const { error: fillErr } = await supabase
+                .from('program_locations').update(patch).eq('id', existingLoc.id);
+              if (fillErr) errors.push({ partner: name, reason: `location fill: ${fillErr.message}` });
+            }
             touchedLocations.push({ location_id: existingLoc.id, location_name: name, was_created: false });
           }
         } else {
