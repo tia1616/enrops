@@ -27,11 +27,26 @@ const FIELDS_INSTRUCTOR_FACING = new Set([
   "arrival_instructions", "dismissal_instructions", "food_drink_policy", "notes",
 ]);
 
+// Friendly labels for partner type — used in the Linked partner dropdown so
+// the operator sees "Vancouver Parks & Rec · Parks & Rec" instead of the
+// raw enum value.
+const PARTNER_TYPE_LABELS = {
+  public_school: "Public school",
+  private_school: "Private school",
+  charter_school: "Charter school",
+  school_district: "School district",
+  parks_rec: "Parks & Rec",
+  community_org: "Community org",
+  church: "Church",
+};
+function partnerTypeLabel(t) { return PARTNER_TYPE_LABELS[t] ?? t; }
+
 const EMPTY_DRAFT = {
   name: "",
   district: "",
   address: "",
   room_number: "",
+  partner_id: "",
   contact_name: "",
   contact_phone: "",
   contact_email: "",
@@ -93,7 +108,7 @@ export default function LocationsList() {
     setLoading(true);
     const { data, error: err } = await supabase
       .from("program_locations")
-      .select("id, name, district, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, parent_arrival_instructions, parent_dismissal_instructions, food_drink_policy, notes, created_at")
+      .select("id, name, district, address, room_number, partner_id, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, parent_arrival_instructions, parent_dismissal_instructions, food_drink_policy, notes, created_at")
       .eq("organization_id", org.id)
       .order("name", { ascending: true });
     if (err) {
@@ -105,6 +120,26 @@ export default function LocationsList() {
     setLocations(data ?? []);
     setLoading(false);
   }
+
+  // Active partners for the Partner dropdown on the edit form — lets the
+  // operator manually link any location to its umbrella partner (e.g.
+  // Firstenburg → Vancouver Parks & Rec) when the import's auto-link
+  // couldn't infer it from names alone.
+  const [partners, setPartners] = useState([]);
+  useEffect(() => {
+    if (!org?.id) return;
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("partners")
+        .select("id, partner_name, partner_type")
+        .eq("organization_id", org.id)
+        .eq("inactive", false)
+        .order("partner_name", { ascending: true });
+      if (alive) setPartners(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [org?.id]);
 
   // Linked camp counts per location (per current cycles) — helps admin understand
   // what a venue's used for before they edit.
@@ -135,6 +170,7 @@ export default function LocationsList() {
       district: loc.district ?? "",
       address: loc.address ?? "",
       room_number: loc.room_number ?? "",
+      partner_id: loc.partner_id ?? "",
       contact_name: loc.contact_name ?? "",
       contact_phone: loc.contact_phone ?? "",
       contact_email: loc.contact_email ?? "",
@@ -305,6 +341,7 @@ export default function LocationsList() {
               draft={draft}
               bind={bind}
               applyPlace={applyPlace}
+              partners={partners}
               error={editingId === "new" ? error : null}
               saving={saving}
               onSave={save}
@@ -333,6 +370,7 @@ export default function LocationsList() {
                     draft={draft}
                     bind={bind}
                     applyPlace={applyPlace}
+                    partners={partners}
                     error={error}
                     saving={saving}
                     onSave={save}
@@ -416,7 +454,7 @@ function DisplayCard({ loc, campCount, onEdit }) {
   );
 }
 
-function EditCard({ title, draft, bind, applyPlace, error, saving, onSave, onCancel, isNew }) {
+function EditCard({ title, draft, bind, applyPlace, partners, error, saving, onSave, onCancel, isNew }) {
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   return (
     <div style={{
@@ -469,6 +507,20 @@ function EditCard({ title, draft, bind, applyPlace, error, saving, onSave, onCan
           <input type="text" {...bind("district")} placeholder="e.g. Hillsboro" style={inputStyle} />
         </Field>
       </div>
+
+      <Field
+        label="Linked partner"
+        hint="The org that operates this venue — usually the school itself, or the umbrella for community venues (e.g. Firstenburg → Vancouver Parks & Rec). Roster emails go to this partner's contacts."
+      >
+        <select {...bind("partner_id")} style={inputStyle}>
+          <option value="">— not linked —</option>
+          {(partners ?? []).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.partner_name}{p.partner_type ? ` · ${partnerTypeLabel(p.partner_type)}` : ""}
+            </option>
+          ))}
+        </select>
+      </Field>
 
       <Field label="Arrival instructions (instructor)" hint="Park where? Door codes? Sign-in routine? Keys? — only seen by instructors, never sent to parents." instructorFacing>
         <textarea {...bind("arrival_instructions")} placeholder="e.g. Park in the back lot, enter through the gym door, sign in at the front desk. Door code: 4827#." rows={3} style={textareaStyle} />
