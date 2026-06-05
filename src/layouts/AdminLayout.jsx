@@ -30,14 +30,20 @@ const NAV = [
     children: [
       { to: "/admin/curricula", label: "Curricula" },
       { to: "/admin/programs", label: "Scheduled programs" },
+      { to: "/admin/rosters", label: "Class rosters" },
       { to: "/admin/locations", label: "Locations" },
       { to: "/admin/calendars", label: "School calendars" },
     ],
   },
-  { to: "/admin/instructors", label: "Instructors" },
+  {
+    label: "Instructors",
+    group: "instructors",
+    children: [
+      { to: "/admin/instructors", label: "Roster" },
+      { to: "/admin/schedule", label: "Schedule" },
+    ],
+  },
   { to: "/admin/contacts", label: "Contacts" },
-  { to: "/admin/schedule", label: "Schedule" },
-  { to: "/admin/rosters", label: "Rosters" },
   {
     label: "Money",
     group: "money",
