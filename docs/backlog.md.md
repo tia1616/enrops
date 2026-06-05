@@ -2,6 +2,18 @@
 
 
 
+\## 2026-06-05
+
+\- \[cleanup] **Drop duplicate contact fields on `program_locations`.** `program_locations.contact_name` + `contact_email` predate `partner_contacts` and are now a parallel source of truth. Editing a location vs editing the linked partner's contacts updates different rows. Now that partner import auto-links a location, the location row should be display-only for contacts (pulled from `partner_contacts` via `partner_id`) — and the legacy columns dropped. Also see backlog 276. Small-to-medium task.
+
+\- \[cleanup] **"Settings" card on `/admin` (AdminOverview) says "Coming soon"** but `AdminSettings.jsx` exists and routes. Remove the "Coming soon" badge.
+
+\- \[cleanup] **Top-level "Contacts" nav is misleading now.** With partner import auto-creating partners + locations + contacts in one shot, `/admin/contacts` is mostly the Families tab. Options: rename top-level **Contacts → Families**, or fold it under a future "Communications" group when Family Comms grows post-Italy. Decide when Settings sub-nav lands.
+
+\- \[cleanup] **"Family Comms" → "Communications" group later.** Currently a single top-level item. When templates, sender domains, automations editor, etc. grow, promote it to a group with sub-nav. Not today.
+
+\- \[cleanup] **Settings will need sub-nav** (Profile / Brand / Registration / Waivers / Pricing / Communications / Team / Billing) per the post-Italy Settings architecture. Already on the post-Italy list — note here so cleanup-list audits don't double-flag.
+
 \## 2026-06-04
 
 \- \[task] **Venue/location create form ignores already-imported partners — third surface where the locations↔partners split bites.** Surfaced 2026-06-04 in the Tenant 2 dry-run. Operator imported partner contacts (her J2S school list) via the deterministic importer, then went to add a venue and the form was completely blank. In the operator's mental model the school IS the partner; in the schema they're two separate tables (`partners` + `program_locations`) joined by `partner_id`. The form should at minimum type-ahead from existing partners and pre-fill name + auto-link `partner_id`. Better: auto-create a `program_locations` row when a school-type partner is imported. Best: merge the surfaces for school-type partners (one "Schools" tab, no separate "Add venue" step) — `program_locations` becomes a derived/embedded concept on the partner row. This is the THIRD surface where the split has caused operator confusion (email roster modal contacts, partner picker, now this) — see [[project_enrops_partners_locations_link]]. Treat as one architectural fix, not three drive-by patches. Hard blocker for clean tenant 2 onboarding.
