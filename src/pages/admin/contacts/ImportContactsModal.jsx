@@ -152,6 +152,8 @@ function buildPartnersFromGrid(headers, rows, mapping) {
   for (const row of rows) {
     const pname = at(row, 'partner_name');
     if (!pname) continue;
+    // Skip comment / instruction rows (common spreadsheet conventions).
+    if (/^[#/]/.test(pname.trim())) continue;
     const key = normName(pname);
     let p = byKey.get(key);
     if (!p) {
@@ -571,12 +573,13 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
 // non-technical operator has something to fill in. Opens in Google Sheets,
 // Excel, and Numbers identically. Kept tiny on purpose.
 function downloadTemplate() {
+  // Two example rows so operators can see the format (same school, two
+  // contacts → folded into one partner). No instruction row — comments in
+  // a CSV get treated as data by most spreadsheet apps.
   const csv = [
     'School or organization,Type,City,Street address,Room number,School district,Contact name,Email,Phone,Role',
     'Maplewood Elementary,Public school,Portland,3315 SE Lincoln St,Room 12,Portland Public,Sarah Hill,sarah.hill@maplewood.example,(503) 555-0142,Front office',
     'Maplewood Elementary,Public school,Portland,3315 SE Lincoln St,Room 12,Portland Public,Dr. James Park,james.park@maplewood.example,(503) 555-0148,Principal',
-    '',
-    '# Delete the example rows above and add your own. Required: School name. Everything else is optional — leave a column blank if you don\'t have that info yet.',
   ].join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -858,6 +861,47 @@ function PartnerCard({ p, match, onChange, onContactChange }) {
               />
             </Field>
           </div>
+
+          {/* Location details — only meaningful for single-venue partners
+              (schools, community orgs). Shown if any of the three came in,
+              OR if the operator picked a venue type so they can fill them in. */}
+          {(p.location_address || p.location_room_number || p.location_district ||
+            (p.partner_type && ['public_school','private_school','charter_school','community_org','church'].includes(p.partner_type))) && (
+            <div style={{ marginTop: 10, padding: '8px 10px', background: `${PURPLE}06`, border: `1px dashed ${PURPLE}33`, borderRadius: 6 }}>
+              <div style={{ fontSize: 10, color: PURPLE, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', marginBottom: 4 }}>
+                Location details
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Field label="Street address">
+                  <input
+                    type="text"
+                    value={p.location_address ?? ''}
+                    onChange={(e) => onChange({ location_address: e.target.value || null })}
+                    placeholder="e.g. 3315 SE Lincoln St"
+                    style={{ padding: '4px 8px', fontSize: 12, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', width: 240 }}
+                  />
+                </Field>
+                <Field label="Room">
+                  <input
+                    type="text"
+                    value={p.location_room_number ?? ''}
+                    onChange={(e) => onChange({ location_room_number: e.target.value || null })}
+                    placeholder="e.g. Room 12"
+                    style={{ padding: '4px 8px', fontSize: 12, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', width: 110 }}
+                  />
+                </Field>
+                <Field label="District">
+                  <input
+                    type="text"
+                    value={p.location_district ?? ''}
+                    onChange={(e) => onChange({ location_district: e.target.value || null })}
+                    placeholder="e.g. Portland Public"
+                    style={{ padding: '4px 8px', fontSize: 12, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', width: 160 }}
+                  />
+                </Field>
+              </div>
+            </div>
+          )}
 
           <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
             {(p.contacts ?? []).map((c, cIdx) => (
