@@ -278,6 +278,11 @@ serve(async (req: Request) => {
           } else if (existingLoc.partner_id !== partnerId) {
             // Same-named location is claimed by another partner → surface, don't overwrite.
             partnersWithoutLocation.push({ partner_id: partnerId, partner_name: name, partner_type: ptype });
+          } else {
+            // Already correctly linked to THIS partner — no change, but still
+            // surface so the operator gets an Edit-details link on the result
+            // screen. Otherwise re-imports show an empty celebration.
+            touchedLocations.push({ location_id: existingLoc.id, location_name: name, was_created: false });
           }
         } else {
           // No matching location → create with whatever location fields were on the row.
