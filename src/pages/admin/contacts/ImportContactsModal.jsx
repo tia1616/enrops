@@ -176,6 +176,16 @@ function buildPartnersFromGrid(headers, rows, mapping) {
 
 export default function ImportContactsModal({ orgId, onClose, onImported }) {
   const [step, setStep] = useState('source'); // source | parsing | mapping | extracting | review | writing | done
+  // Elapsed-time counter for the AI extraction step. Memory rule
+  // feedback_ai_wait_ui: any AI extract/generate must show a live m:ss timer
+  // alongside the recommended duration so the operator knows we're alive.
+  const [extractElapsed, setExtractElapsed] = useState(0);
+  useEffect(() => {
+    if (step !== 'extracting') { setExtractElapsed(0); return; }
+    const startedAt = Date.now();
+    const id = setInterval(() => setExtractElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [step]);
   const [mode, setMode] = useState('file'); // file | text
   const [file, setFile] = useState(null);
   const [text, setText] = useState('');
@@ -495,8 +505,16 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
         )}
 
         {step === 'extracting' && (
-          <div style={{ padding: '40px 0', textAlign: 'center', color: MUTED, fontSize: 14 }}>
-            Reading the text with AI… This usually takes 10–30 seconds.
+          <div style={{ padding: '40px 0', textAlign: 'center', color: MUTED, fontSize: 14, lineHeight: 1.7 }}>
+            <div style={{ fontSize: 22, marginBottom: 8 }}>📖</div>
+            <div>Reading your text with AI…</div>
+            <div style={{ fontSize: 12.5, marginTop: 2 }}>Usually takes 10–30 seconds.</div>
+            <div style={{ marginTop: 14, fontSize: 13, color: INK }}>
+              <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontVariantNumeric: 'tabular-nums' }}>
+                {Math.floor(extractElapsed / 60)}:{String(extractElapsed % 60).padStart(2, '0')}
+              </span>{' '}
+              <span style={{ color: MUTED, fontSize: 12 }}>elapsed</span>
+            </div>
           </div>
         )}
 
