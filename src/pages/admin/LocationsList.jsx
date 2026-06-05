@@ -324,9 +324,11 @@ function DisplayCard({ loc, campCount, onEdit }) {
               {loc.district}
             </div>
           )}
-          <div style={{ fontSize: 12, color: MUTED }}>
-            {campCount} camp{campCount === 1 ? "" : "s"} scheduled here
-          </div>
+          {campCount > 0 && (
+            <div style={{ fontSize: 12, color: MUTED }}>
+              {campCount} camp{campCount === 1 ? "" : "s"} scheduled here
+            </div>
+          )}
         </div>
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
           {populatedFields.length === 0 && contactBits.length === 0 ? (
