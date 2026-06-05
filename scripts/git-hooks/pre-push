@@ -1,0 +1,36 @@
+#!/bin/sh
+# ----------------------------------------------------------------------------
+# Pre-push deploy-verify gate (added 2026-06-04).
+#
+# Netlify deploys `main` to production (enrops.com) using `vite build` in strict
+# production mode. This hook runs that SAME build locally BEFORE a push to main
+# and aborts the push if it fails — catching the silent-deploy-failure class
+# (missing/renamed imports, deleted files) that dev mode tolerates but prod does not.
+#
+# Scope: only blocks pushes to main. Feature branches (deploy-preview only) pass through.
+# Emergency bypass: git push --no-verify   (use sparingly, and only knowingly.)
+#
+# This folder is version-controlled. To activate on a fresh clone, run once:
+#   git config core.hooksPath scripts/git-hooks
+# ----------------------------------------------------------------------------
+
+push_to_main=0
+while read local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main) push_to_main=1 ;;
+  esac
+done
+
+if [ "$push_to_main" -eq 1 ]; then
+  echo "[pre-push] Push to main detected — running production build (npm run build)..."
+  if ! npm run build; then
+    echo ""
+    echo "[pre-push] X  Build FAILED — push to main aborted."
+    echo "[pre-push]    Fix the build, then push again."
+    echo "[pre-push]    (Emergency bypass: git push --no-verify)"
+    exit 1
+  fi
+  echo "[pre-push] OK  Build passed — continuing push to main."
+fi
+
+exit 0
