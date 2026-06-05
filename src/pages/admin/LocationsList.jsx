@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import PlacesAutocomplete from "../../components/PlacesAutocomplete";
+import FindMissingAddressesModal from "./FindMissingAddressesModal";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -51,6 +52,15 @@ export default function LocationsList() {
   const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [findingAddresses, setFindingAddresses] = useState(false);
+
+  // Bulk "find missing addresses" requires Maps to be configured + at least
+  // one location missing an address. Hidden otherwise.
+  const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+  const missingAddressCount = useMemo(
+    () => locations.filter((l) => !l.address || !String(l.address).trim()).length,
+    [locations],
+  );
 
   useEffect(() => {
     if (!org?.id) return;
@@ -240,15 +250,46 @@ export default function LocationsList() {
             in mind.
           </div>
         </div>
-        <button
-          type="button"
-          onClick={startNew}
-          disabled={editingId === "new"}
-          style={btn(PURPLE, "#fff", false, editingId === "new")}
-        >
-          + Add new venue
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {placesEnabled && missingAddressCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setFindingAddresses(true)}
+              title="Look up addresses for every location that doesn't have one yet"
+              style={{
+                padding: "10px 14px",
+                background: "transparent",
+                color: PURPLE,
+                border: `1.5px solid ${PURPLE}`,
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 700,
+                fontFamily: "inherit",
+                cursor: "pointer",
+              }}
+            >
+              ✨ Find missing addresses ({missingAddressCount})
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={startNew}
+            disabled={editingId === "new"}
+            style={btn(PURPLE, "#fff", false, editingId === "new")}
+          >
+            + Add new venue
+          </button>
+        </div>
       </header>
+
+      {findingAddresses && (
+        <FindMissingAddressesModal
+          orgId={org.id}
+          locations={locations}
+          onClose={() => setFindingAddresses(false)}
+          onSaved={() => { fetchLocations(); setFindingAddresses(false); }}
+        />
+      )}
 
       {error && editingId === null && (
         <div style={errorBanner}>{error}</div>

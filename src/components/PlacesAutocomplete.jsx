@@ -43,7 +43,7 @@ function ensurePacCss() {
 }
 
 let loaderPromise = null;
-function loadGoogleMaps(apiKey) {
+export function loadGoogleMaps(apiKey) {
   if (loaderPromise) return loaderPromise;
   if (typeof window !== 'undefined' && window.google?.maps?.places?.Autocomplete) {
     loaderPromise = Promise.resolve(window.google);
