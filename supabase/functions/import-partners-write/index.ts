@@ -31,7 +31,14 @@
 //   }
 //
 // Output:
-//   { partners_created, partners_merged, partners_skipped, contacts_created, contacts_skipped, errors[] }
+//   { partners_created, partners_merged, partners_skipped, contacts_created,
+//     contacts_skipped, locations_created, locations_linked,
+//     partners_without_location[], errors[] }
+//
+// Location linkage: a venue-type partner (school / community org) auto-creates
+// or links a 1:1 program_location. Umbrella partners (district / Parks & Rec)
+// never auto-create one — they're returned in partners_without_location so the
+// UI can invite the operator to add their real venues.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
@@ -48,8 +55,21 @@ const corsHeaders = {
 const PARTNER_TYPES = new Set(['public_school','private_school','charter_school','school_district','church','parks_rec','community_org']);
 const ROLES = new Set(['operational','marketing','invoicing','approval_gatekeeper']);
 
+// Partner types that ARE a single physical venue → a school/community org maps
+// 1:1 to a program_location. Umbrella types (a district, a Parks & Rec dept)
+// manage MANY venues, so importing them must NOT auto-create a location — their
+// real venues are added separately, and the operator is prompted about them.
+const VENUE_TYPES = new Set(['public_school','private_school','charter_school','community_org']);
+
 function normName(s: string | null | undefined): string {
   return (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Mirror the client-side venue-add slug rule (LocationsList.jsx): slug is
+// NOT NULL + globally UNIQUE, so derive from the name + a short random suffix.
+function makeSlug(name: string): string {
+  const base = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'venue';
+  return `${base}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 serve(async (req: Request) => {
@@ -92,11 +112,35 @@ serve(async (req: Request) => {
       byNormName.set(normName(p.partner_name), p.id);
     }
 
+    // Build a normalized-name → location index for the org so a venue partner
+    // can be linked to an existing location (by name OR a recorded alias)
+    // instead of creating a duplicate. Conservative: exact normalized match
+    // only — anything that doesn't match is surfaced to the operator, never
+    // silently linked to the wrong school.
+    const { data: existingLocs } = await supabase
+      .from('program_locations')
+      .select('id, name, name_aliases, partner_id')
+      .eq('organization_id', orgId);
+    const locByNorm = new Map<string, { id: string; partner_id: string | null }>();
+    for (const l of existingLocs ?? []) {
+      const entry = { id: l.id as string, partner_id: (l.partner_id as string | null) ?? null };
+      locByNorm.set(normName(l.name), entry);
+      for (const a of (l.name_aliases as string[] | null) ?? []) {
+        const k = normName(a);
+        if (k) locByNorm.set(k, entry);
+      }
+    }
+
     let partnersCreated = 0;
     let partnersMerged = 0;
     let partnersSkipped = 0;
     let contactsCreated = 0;
     let contactsSkipped = 0;
+    let locationsCreated = 0;
+    let locationsLinked = 0;
+    // Umbrella partners (district / Parks & Rec) imported this batch — the UI
+    // asks the operator whether to add a venue for each.
+    const partnersWithoutLocation: Array<{ partner_id: string; partner_name: string; partner_type: string | null }> = [];
     const errors: Array<{ partner: string; reason: string }> = [];
 
     for (const p of partners) {
@@ -104,6 +148,8 @@ serve(async (req: Request) => {
       const name = (p.partner_name ?? '').toString().trim();
       if (!name) { partnersSkipped++; continue; }
       if (action === 'skip') { partnersSkipped++; continue; }
+
+      const ptype = typeof p.partner_type === 'string' && PARTNER_TYPES.has(p.partner_type) ? p.partner_type : null;
 
       let partnerId: string | null = null;
 
@@ -117,11 +163,10 @@ serve(async (req: Request) => {
 
       // Create if no existing partner resolved
       if (!partnerId) {
-        const partnerType = typeof p.partner_type === 'string' && PARTNER_TYPES.has(p.partner_type) ? p.partner_type : null;
         const insertRow: Record<string, unknown> = {
           organization_id: orgId,
           partner_name: name,
-          partner_type: partnerType,
+          partner_type: ptype,
           location_area: strOrNull(p.location_area),
           locations_managed: strOrNull(p.locations_managed),
           marketing_notes: strOrNull(p.marketing_notes),
@@ -194,6 +239,47 @@ serve(async (req: Request) => {
           contactsCreated += count ?? toInsert.length;
         }
       }
+
+      // ── Location linkage ──────────────────────────────────────────────
+      // A single-venue partner (school, community org) maps 1:1 to a
+      // program_location. Umbrella partners (district, Parks & Rec) manage
+      // many venues, so we never auto-create one — we surface them so the
+      // operator can add their real venues by hand.
+      if (VENUE_TYPES.has(ptype ?? '')) {
+        const existingLoc = locByNorm.get(normName(name));
+        if (existingLoc) {
+          // Link an existing location to this partner only if it's unclaimed.
+          if (!existingLoc.partner_id) {
+            const { error: linkErr } = await supabase
+              .from('program_locations')
+              .update({ partner_id: partnerId })
+              .eq('id', existingLoc.id)
+              .is('partner_id', null);
+            if (linkErr) {
+              errors.push({ partner: name, reason: `location link: ${linkErr.message}` });
+            } else {
+              existingLoc.partner_id = partnerId;
+              locationsLinked++;
+            }
+          }
+          // Already linked (to this or another partner) → leave as-is.
+        } else {
+          // No matching location → create one and link it.
+          const { data: newLoc, error: locErr } = await supabase
+            .from('program_locations')
+            .insert({ organization_id: orgId, name, slug: makeSlug(name), partner_id: partnerId })
+            .select('id')
+            .maybeSingle();
+          if (locErr || !newLoc) {
+            errors.push({ partner: name, reason: `location create: ${locErr?.message ?? 'insert failed'}` });
+          } else {
+            locByNorm.set(normName(name), { id: newLoc.id, partner_id: partnerId });
+            locationsCreated++;
+          }
+        }
+      } else if (ptype === 'school_district' || ptype === 'parks_rec') {
+        partnersWithoutLocation.push({ partner_id: partnerId, partner_name: name, partner_type: ptype });
+      }
     }
 
     return json({
@@ -202,6 +288,9 @@ serve(async (req: Request) => {
       partners_skipped: partnersSkipped,
       contacts_created: contactsCreated,
       contacts_skipped: contactsSkipped,
+      locations_created: locationsCreated,
+      locations_linked: locationsLinked,
+      partners_without_location: partnersWithoutLocation,
       errors,
     });
   } catch (err) {
