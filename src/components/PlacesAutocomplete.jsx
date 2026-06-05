@@ -45,16 +45,43 @@ function ensurePacCss() {
 let loaderPromise = null;
 function loadGoogleMaps(apiKey) {
   if (loaderPromise) return loaderPromise;
-  if (typeof window !== 'undefined' && window.google?.maps?.places) {
+  if (typeof window !== 'undefined' && window.google?.maps?.places?.Autocomplete) {
     loaderPromise = Promise.resolve(window.google);
     return loaderPromise;
   }
   loaderPromise = new Promise((resolve, reject) => {
     if (typeof document === 'undefined') return reject(new Error('no document'));
+    // Helper: wait for the places library to actually be ready. With
+    // loading=async (Google's new recommended pattern), `script.onload`
+    // fires before libraries finish loading — `google.maps.places` is
+    // briefly undefined. Either await importLibrary('places') (new API)
+    // or fall back to polling for the legacy global, then resolve.
+    const afterScriptLoad = async () => {
+      const g = window.google;
+      try {
+        if (g?.maps?.importLibrary) {
+          await g.maps.importLibrary('places');
+        } else {
+          // Older API path — poll briefly until the places namespace appears.
+          const started = performance?.now?.() ?? 0;
+          while (!(g?.maps?.places?.Autocomplete)) {
+            if (((performance?.now?.() ?? 0) - started) > 5000) break;
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        }
+        resolve(window.google);
+      } catch (e) {
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    };
     const existing = document.querySelector('script[data-enrops-gmaps]');
     if (existing) {
-      existing.addEventListener('load', () => resolve(window.google), { once: true });
-      existing.addEventListener('error', () => reject(new Error('gmaps load failed')), { once: true });
+      if (window.google?.maps) {
+        afterScriptLoad();
+      } else {
+        existing.addEventListener('load', afterScriptLoad, { once: true });
+        existing.addEventListener('error', () => reject(new Error('gmaps load failed')), { once: true });
+      }
       return;
     }
     const script = document.createElement('script');
@@ -62,7 +89,7 @@ function loadGoogleMaps(apiKey) {
     script.async = true;
     script.defer = true;
     script.dataset.enropsGmaps = 'true';
-    script.onload = () => resolve(window.google);
+    script.onload = afterScriptLoad;
     script.onerror = () => reject(new Error('gmaps load failed'));
     document.head.appendChild(script);
   });
