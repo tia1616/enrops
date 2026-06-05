@@ -65,6 +65,36 @@ function normName(s: string | null | undefined): string {
   return (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+// School-name normalization for the location-matching path: strip suffixes
+// that vary between partner-side and location-side ("Ainsworth Elementary"
+// partner ↔ "Ainsworth" location). Conservative: only strip well-known
+// suffix words; if stripping empties the string, fall back to normName.
+function normSchoolName(s: string | null | undefined): string {
+  let n = normName(s);
+  if (!n) return n;
+  // Order matters — strip longer phrases first so "elementary school"
+  // doesn't leave a dangling "school".
+  const suffixes = [
+    'elementary school', 'middle school', 'high school', 'charter school',
+    'summer camp',
+    'elementary', 'academy', 'school', 'church',
+    'sun', 'k 8', 'k 12', 'k8', 'k12', 'pre k', 'prek',
+  ];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const sfx of suffixes) {
+      if (n === sfx) break;
+      if (n.endsWith(' ' + sfx)) {
+        n = n.slice(0, -sfx.length - 1).trim();
+        changed = true;
+        break;
+      }
+    }
+  }
+  return n || normName(s);
+}
+
 // Mirror the client-side venue-add slug rule (LocationsList.jsx): slug is
 // NOT NULL + globally UNIQUE, so derive from the name + a short random suffix.
 function makeSlug(name: string): string {
@@ -122,12 +152,23 @@ serve(async (req: Request) => {
       .select('id, name, name_aliases, partner_id')
       .eq('organization_id', orgId);
     const locByNorm = new Map<string, { id: string; partner_id: string | null }>();
+    // Secondary index for suffix-stripped matching ("ainsworth" → row whose
+    // name was "Ainsworth Elementary"). Stores arrays so we can detect
+    // ambiguity — if more than one location shares the same stripped form,
+    // we refuse to auto-link to avoid picking the wrong school.
+    const locsBySchool = new Map<string, Array<{ id: string; partner_id: string | null }>>();
     for (const l of existingLocs ?? []) {
       const entry = { id: l.id as string, partner_id: (l.partner_id as string | null) ?? null };
       locByNorm.set(normName(l.name), entry);
       for (const a of (l.name_aliases as string[] | null) ?? []) {
         const k = normName(a);
         if (k) locByNorm.set(k, entry);
+      }
+      const sk = normSchoolName(l.name);
+      if (sk) {
+        const arr = locsBySchool.get(sk) ?? [];
+        arr.push(entry);
+        locsBySchool.set(sk, arr);
       }
     }
 
@@ -254,7 +295,15 @@ serve(async (req: Request) => {
         const locAddress = strOrNull(p.location_address);
         const locRoom = strOrNull(p.location_room_number);
         const locDistrict = strOrNull(p.location_district);
-        const existingLoc = locByNorm.get(normName(name));
+        // Primary lookup: exact-name match (existing behavior).
+        // Fallback: suffix-stripped match — but ONLY when exactly one location
+        // matches, so "Ainsworth Elementary" partner finds the "Ainsworth"
+        // location without accidentally clobbering a same-stem sibling.
+        let existingLoc = locByNorm.get(normName(name));
+        if (!existingLoc) {
+          const candidates = locsBySchool.get(normSchoolName(name)) ?? [];
+          if (candidates.length === 1) existingLoc = candidates[0];
+        }
         if (existingLoc) {
           if (!existingLoc.partner_id) {
             // Existing location is unclaimed → link it AND fill any blanks.
@@ -312,7 +361,14 @@ serve(async (req: Request) => {
           if (locErr || !newLoc) {
             errors.push({ partner: name, reason: `location create: ${locErr?.message ?? 'insert failed'}` });
           } else {
-            locByNorm.set(normName(name), { id: newLoc.id, partner_id: partnerId });
+            const newEntry = { id: newLoc.id as string, partner_id: partnerId };
+            locByNorm.set(normName(name), newEntry);
+            const sk = normSchoolName(name);
+            if (sk) {
+              const arr = locsBySchool.get(sk) ?? [];
+              arr.push(newEntry);
+              locsBySchool.set(sk, arr);
+            }
             locationsCreated++;
             touchedLocations.push({ location_id: newLoc.id, location_name: name, was_created: true });
           }
