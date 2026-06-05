@@ -21,6 +21,7 @@ export const ENROLLMENT_ACTIONS = {
   WAITLIST_CONVERTED: 'waitlist_converted',
   CANCELLED: 'cancelled',
   REFUNDED: 'refunded',
+  MARKETING_SENT: 'marketing_sent',           // a campaign touchpoint email blast completed (aggregate, one per touchpoint)
 } as const;
 
 export type EnrollmentAction = typeof ENROLLMENT_ACTIONS[keyof typeof ENROLLMENT_ACTIONS];

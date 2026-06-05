@@ -65,19 +65,68 @@ serve(async (req: Request) => {
     } else {
       const bytes = base64ToBytes(payload);
       const wb = XLSX.read(bytes, { type: 'array' });
-      // Use the first sheet that has any data.
-      let chosen: string[][] = [];
+      // Read every sheet; the operator may have Partners and Contacts split
+      // across two tabs (this is how master-dashboard exports typically look).
+      const sheetsRaw: Array<{ name: string; grid: string[][] }> = [];
       for (const name of wb.SheetNames) {
         const ws = wb.Sheets[name];
         const g = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false }) as unknown[][];
         const cleaned = (g as unknown[][]).map((r) => (r as unknown[]).map((c) => String(c ?? '')));
-        if (cleaned.some((r) => r.some((c) => c.trim().length > 0))) {
-          chosen = cleaned;
-          sheet = name;
-          break;
-        }
+        const nonEmpty = cleaned.filter((r) => r.some((c) => c.trim().length > 0));
+        if (nonEmpty.length > 1) sheetsRaw.push({ name, grid: nonEmpty });
       }
-      grid = chosen;
+      if (sheetsRaw.length === 0) return json({ error: 'no rows found in file' }, 400);
+
+      // If multiple sheets all carry a partner-name column, merge them by
+      // taking the union of headers and concatenating all data rows. The
+      // client groups by partner_name afterwards, so partner-level data from
+      // one sheet and contact-level data from another fold into the same
+      // partner.
+      const partnerColIdx = (headers: string[]): number => {
+        const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const aliases = ['partnername', 'partner', 'schoolname', 'school', 'organization', 'organisation', 'org', 'sitename', 'site', 'venue', 'district', 'company'];
+        for (let i = 0; i < headers.length; i++) {
+          const h = norm(headers[i]);
+          if (!h) continue;
+          if (aliases.includes(h)) return i;
+          if (aliases.some((a) => h.includes(a))) return i;
+        }
+        return -1;
+      };
+      const sheetsWithPartner = sheetsRaw.filter((s) => partnerColIdx(s.grid[0]) >= 0);
+
+      if (sheetsRaw.length > 1 && sheetsWithPartner.length === sheetsRaw.length) {
+        // Multi-sheet merge.
+        const headerSet = new Set<string>();
+        const headerOrder: string[] = [];
+        for (const s of sheetsRaw) {
+          for (const h of s.grid[0]) {
+            if (h && !headerSet.has(h)) { headerSet.add(h); headerOrder.push(h); }
+          }
+        }
+        const idxByHeaderBySheet: Record<string, Record<string, number>> = {};
+        for (const s of sheetsRaw) {
+          idxByHeaderBySheet[s.name] = {};
+          s.grid[0].forEach((h, i) => { idxByHeaderBySheet[s.name][h] = i; });
+        }
+        const mergedRows: string[][] = [];
+        for (const s of sheetsRaw) {
+          const idx = idxByHeaderBySheet[s.name];
+          for (const row of s.grid.slice(1)) {
+            const newRow = headerOrder.map((h) => {
+              const i = idx[h];
+              return i === undefined ? '' : (row[i] ?? '');
+            });
+            mergedRows.push(newRow);
+          }
+        }
+        grid = [headerOrder, ...mergedRows];
+        sheet = `merged (${sheetsRaw.map((s) => s.name).join(' + ')})`;
+      } else {
+        // Single sheet (or sheets don't all carry partner_name — fall back).
+        grid = sheetsRaw[0].grid;
+        sheet = sheetsRaw[0].name;
+      }
     }
 
     // Drop fully-empty rows, find the header row (first non-empty), normalise

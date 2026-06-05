@@ -62,7 +62,9 @@ const PARTNER_FIELDS = [
   { key: 'contact_role', label: 'Contact role / title',
     aliases: ['role', 'contactrole', 'title', 'position', 'jobtitle', 'job', 'responsibility'] },
   { key: 'role_description', label: 'Role description',
-    aliases: ['roledescription', 'description', 'notes', 'responsibilities', 'details'] },
+    // Conservative aliases — generic words like `notes`/`description`/`details`
+    // substring-match too aggressively and grab columns like `marketing_notes`.
+    aliases: ['roledescription', 'rolenotes', 'responsibilities'] },
   // Location fields — written to program_locations when the partner is a venue
   // (school / community org) and we auto-create or fill in a location row.
   // Auto-create: all three are persisted. Link-existing: only fills blanks.
@@ -106,11 +108,18 @@ function autoMapColumns(headers) {
   return map;
 }
 
-// "Confident enough to skip the mapping step": we have the only required
-// field (partner_name) AND at least one contact-identifying field, so the
-// review screen can show real rows. Operators can still edit anything there.
-function autoMapIsConfident(mapping) {
-  return !!mapping.partner_name && !!(mapping.contact_email || mapping.contact_name);
+// "Confident enough to skip the mapping step": we have partner_name AND
+// either (a) a contact field auto-mapped, or (b) no contact-looking column
+// exists in the file at all (a partner-only import — no need to map
+// something that isn't there). Operators can still edit on the review screen.
+function autoMapIsConfident(mapping, headers) {
+  if (!mapping.partner_name) return false;
+  if (mapping.contact_email || mapping.contact_name) return true;
+  const fileHasContactLikeColumn = (headers ?? []).some((h) => {
+    const n = normHeader(h);
+    return n.includes('email') || n.includes('phone') || n.includes('contact');
+  });
+  return !fileHasContactLikeColumn;
 }
 
 // Map a free-text role/title to one of the four enum roles, deterministically
@@ -287,7 +296,7 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
       setMapping(guessed);
       // If we confidently mapped the required + contact fields, skip the
       // mapping screen entirely. Operators can still fix anything in review.
-      if (autoMapIsConfident(guessed)) {
+      if (autoMapIsConfident(guessed, headers)) {
         const partners = buildPartnersFromGrid(headers, rows, guessed);
         if (partners.length > 0) {
           setExtracted(partners);
@@ -983,6 +992,11 @@ function DoneStep({ result, orgId, onClose }) {
   const locsCreated = result.locations_created ?? 0;
   const locsLinked = result.locations_linked ?? 0;
   const locTotal = locsCreated + locsLinked + added.length;
+  // Drive the unlocks card + Create-a-program button off touched locations
+  // (which includes idempotent re-imports), not just net-new counts. Otherwise
+  // a re-upload with everything already linked leaves only an orphan
+  // "I'll do this later" button.
+  const hasUsableLocations = locTotal > 0 || (Array.isArray(result.touched_locations) && result.touched_locations.length > 0);
   // All venue locations the import touched + any the operator just added
   // inline. Each gets an "Edit details" link so paragraph fields (arrival
   // instructions, food policy, notes) are one click away.
@@ -1027,14 +1041,18 @@ function DoneStep({ result, orgId, onClose }) {
       </div>
 
       {/* Locations narration */}
-      {(locsCreated > 0 || locsLinked > 0) && (
+      {hasUsableLocations && (
         <div style={{ background: `${OK}12`, border: `1px solid ${OK}44`, padding: 14, borderRadius: 8, fontSize: 14, color: INK, lineHeight: 1.6 }}>
-          <div>
-            🏫 We set up{' '}
-            {locsCreated > 0 && <strong>{locsCreated} school{locsCreated === 1 ? '' : 's'} as location{locsCreated === 1 ? '' : 's'}</strong>}
-            {locsCreated > 0 && locsLinked > 0 && ' and '}
-            {locsLinked > 0 && <strong>linked {locsLinked} you already had</strong>}.
-          </div>
+          {(locsCreated > 0 || locsLinked > 0) ? (
+            <div>
+              🏫 We set up{' '}
+              {locsCreated > 0 && <strong>{locsCreated} school{locsCreated === 1 ? '' : 's'} as location{locsCreated === 1 ? '' : 's'}</strong>}
+              {locsCreated > 0 && locsLinked > 0 && ' and '}
+              {locsLinked > 0 && <strong>linked {locsLinked} you already had</strong>}.
+            </div>
+          ) : (
+            <div>🏫 Your <strong>{touched.length} school location{touched.length === 1 ? '' : 's'}</strong> are already set up.</div>
+          )}
           {touched.length > 0 && (
             <div style={{ marginTop: 10, fontSize: 13, color: MUTED }}>
               Add arrival instructions, room numbers, food policies, and more:
@@ -1090,11 +1108,11 @@ function DoneStep({ result, orgId, onClose }) {
       )}
 
       {/* What this unlocks */}
-      {locTotal > 0 && (
+      {hasUsableLocations && (
         <div style={{ marginTop: 14, background: `${PURPLE}0A`, border: `1px solid ${PURPLE}22`, borderRadius: 8, padding: 14 }}>
           <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 700, color: PURPLE }}>What this unlocks</p>
           <p style={{ margin: 0, fontSize: 13, color: INK, lineHeight: 1.6 }}>
-            With {locTotal} location{locTotal === 1 ? '' : 's'} set up, you’re ready to <strong>schedule programs</strong> there and
+            With {touched.length} location{touched.length === 1 ? '' : 's'} set up, you’re ready to <strong>schedule programs</strong> there and
             open <strong>registration</strong> to families. And because each school’s contacts are attached, your
             class rosters will email the right people automatically — no lookups.
           </p>
@@ -1117,7 +1135,7 @@ function DoneStep({ result, orgId, onClose }) {
           onClick={onClose}
           style={{ padding: '8px 16px', background: '#fff', color: INK, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}
         >I’ll do this later</button>
-        {locTotal > 0 && (
+        {hasUsableLocations && (
           <button
             type="button"
             onClick={() => { onClose(); navigate('/admin/programs/new'); }}
