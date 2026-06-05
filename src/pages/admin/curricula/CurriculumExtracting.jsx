@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { supabase, API_BASE } from "../../../lib/supabase.js";
+import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -242,16 +243,8 @@ export default function CurriculumExtracting() {
               : "This usually takes 30–45 seconds. You can stay here or come back later — we'll keep going either way."}
         </p>
         {isWorking && (
-          <div style={{
-            textAlign: "center",
-            fontSize: 22,
-            fontWeight: 700,
-            color: PURPLE,
-            fontVariantNumeric: "tabular-nums",
-            marginTop: -8,
-            marginBottom: 4,
-          }}>
-            {formatElapsed(elapsedSec)}
+          <div style={{ textAlign: "center", marginTop: -2, marginBottom: 4 }}>
+            <ElapsedTimer seconds={elapsedSec} />
           </div>
         )}
 

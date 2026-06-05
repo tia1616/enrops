@@ -4,6 +4,8 @@
 
 \## 2026-06-05
 
+\- \[cleanup] **"Add partner" + "Add new venue" are redundant manual flows** for the single-venue case (school / community org). In the operator's mental model a school is one thing; today they're two buttons on two tabs creating two rows. Right fix is the post-Italy partners↔locations unification — when that lands, the two buttons collapse into a single "Add a school manually" flow that creates partner + auto-linked location together. Don't fix in isolation; rebuilding twice. (Confirmed live 2026-06-05 in Tenant 2 dry-run.)
+
 \- \[cleanup] **Drop duplicate contact fields on `program_locations`.** `program_locations.contact_name` + `contact_email` predate `partner_contacts` and are now a parallel source of truth. Editing a location vs editing the linked partner's contacts updates different rows. Now that partner import auto-links a location, the location row should be display-only for contacts (pulled from `partner_contacts` via `partner_id`) — and the legacy columns dropped. Also see backlog 276. Small-to-medium task.
 
 \- \[cleanup] **"Settings" card on `/admin` (AdminOverview) says "Coming soon"** but `AdminSettings.jsx` exists and routes. Remove the "Coming soon" badge.

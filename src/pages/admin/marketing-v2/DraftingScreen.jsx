@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { INK, MUTED, PURPLE, RULE, VIOLET } from "../marketing/tokens.jsx";
+import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
 
 const STEPS = [
   { at: 0,  label: "Finding the parents you asked for…" },
@@ -82,10 +83,8 @@ export default function DraftingScreen() {
         })}
       </ul>
 
-      <p style={{ marginTop: 22, fontSize: 12, color: MUTED }}>
-        <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontVariantNumeric: 'tabular-nums' }}>
-          {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
-        </span> elapsed
+      <p style={{ marginTop: 22 }}>
+        <ElapsedTimer seconds={elapsed} />
       </p>
     </div>
   );

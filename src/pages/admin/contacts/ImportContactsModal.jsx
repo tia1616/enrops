@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
+import ElapsedTimer from '../../../components/ElapsedTimer';
 
 const PURPLE = '#1C004F';
 const INK = '#1a1a1a';
@@ -532,11 +533,8 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
             <div style={{ fontSize: 22, marginBottom: 8 }}>📖</div>
             <div>Reading your text with AI…</div>
             <div style={{ fontSize: 12.5, marginTop: 2 }}>Usually takes 10–30 seconds.</div>
-            <div style={{ marginTop: 14, fontSize: 13, color: INK }}>
-              <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontVariantNumeric: 'tabular-nums' }}>
-                {Math.floor(extractElapsed / 60)}:{String(extractElapsed % 60).padStart(2, '0')}
-              </span>{' '}
-              <span style={{ color: MUTED, fontSize: 12 }}>elapsed</span>
+            <div style={{ marginTop: 14 }}>
+              <ElapsedTimer seconds={extractElapsed} />
             </div>
           </div>
         )}
