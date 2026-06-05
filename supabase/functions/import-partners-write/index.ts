@@ -248,8 +248,8 @@ serve(async (req: Request) => {
       if (VENUE_TYPES.has(ptype ?? '')) {
         const existingLoc = locByNorm.get(normName(name));
         if (existingLoc) {
-          // Link an existing location to this partner only if it's unclaimed.
           if (!existingLoc.partner_id) {
+            // Existing location is unclaimed → link it to this partner.
             const { error: linkErr } = await supabase
               .from('program_locations')
               .update({ partner_id: partnerId })
@@ -261,8 +261,12 @@ serve(async (req: Request) => {
               existingLoc.partner_id = partnerId;
               locationsLinked++;
             }
+          } else if (existingLoc.partner_id !== partnerId) {
+            // A same-named location is already claimed by a different partner.
+            // Don't overwrite — surface to the operator so they can decide.
+            partnersWithoutLocation.push({ partner_id: partnerId, partner_name: name, partner_type: ptype });
           }
-          // Already linked (to this or another partner) → leave as-is.
+          // Else: already linked to THIS partner — no action.
         } else {
           // No matching location → create one and link it.
           const { data: newLoc, error: locErr } = await supabase

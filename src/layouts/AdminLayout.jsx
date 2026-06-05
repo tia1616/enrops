@@ -39,8 +39,8 @@ const NAV = [
     label: "Instructors",
     group: "instructors",
     children: [
-      { to: "/admin/instructors", label: "Roster" },
-      { to: "/admin/schedule", label: "Schedule" },
+      { to: "/admin/instructors", label: "Instructor roster" },
+      { to: "/admin/schedule", label: "Instructor schedule" },
     ],
   },
   { to: "/admin/contacts", label: "Contacts" },
