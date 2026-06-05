@@ -562,7 +562,7 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
         <div>
           <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.55 }}>
             Add all your schools and contacts in one go. Upload a spreadsheet from
-            <strong> Google Sheets, Excel, or Numbers</strong> — your column names don’t
+            <strong> Google Sheets, Excel, or a CSV</strong> — your column names don’t
             have to match ours exactly, we’ll figure them out. You’ll get to review
             everything before anything saves.
           </p>
