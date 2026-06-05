@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import PlacesAutocomplete from "../../components/PlacesAutocomplete";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -156,6 +157,18 @@ export default function LocationsList() {
     };
   }
 
+  // Called from PlacesAutocomplete when the operator picks a place from the
+  // Google Places dropdown. Fills the canonical name and address — never
+  // overwrites a non-empty address the operator already typed (in case they
+  // pasted before clicking the suggestion).
+  function applyPlace({ name, address }) {
+    setDraft((d) => ({
+      ...d,
+      name: name || d.name,
+      address: d.address && d.address.trim() ? d.address : (address || d.address),
+    }));
+  }
+
   async function save() {
     if (!draft.name?.trim()) {
       setError("Name is required.");
@@ -250,6 +263,7 @@ export default function LocationsList() {
               title="New venue"
               draft={draft}
               bind={bind}
+              applyPlace={applyPlace}
               error={editingId === "new" ? error : null}
               saving={saving}
               onSave={save}
@@ -277,6 +291,7 @@ export default function LocationsList() {
                     title={loc.name}
                     draft={draft}
                     bind={bind}
+                    applyPlace={applyPlace}
                     error={error}
                     saving={saving}
                     onSave={save}
@@ -360,7 +375,8 @@ function DisplayCard({ loc, campCount, onEdit }) {
   );
 }
 
-function EditCard({ title, draft, bind, error, saving, onSave, onCancel, isNew }) {
+function EditCard({ title, draft, bind, applyPlace, error, saving, onSave, onCancel, isNew }) {
+  const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   return (
     <div style={{
       background: "#fff",
@@ -380,8 +396,24 @@ function EditCard({ title, draft, bind, error, saving, onSave, onCancel, isNew }
         </div>
       </div>
 
-      <Field label="Venue name *" hint="The human-readable label that shows on the calendar and in emails." instructorFacing>
-        <input type="text" {...bind("name")} placeholder="e.g. Hillsboro Tyson Rec Center" style={inputStyle} />
+      <Field
+        label="Venue name *"
+        hint={placesEnabled
+          ? "Start typing — we'll find the school or venue and fill in the address for you. Or just type the name."
+          : "The human-readable label that shows on the calendar and in emails."}
+        instructorFacing
+      >
+        {placesEnabled ? (
+          <PlacesAutocomplete
+            value={draft.name ?? ""}
+            onChange={(v) => bind("name").onChange({ target: { value: v } })}
+            onSelect={applyPlace}
+            placeholder="e.g. Ainsworth Elementary, Portland"
+            style={inputStyle}
+          />
+        ) : (
+          <input type="text" {...bind("name")} placeholder="e.g. Hillsboro Tyson Rec Center" style={inputStyle} />
+        )}
       </Field>
 
       <Field label="Address" instructorFacing>
