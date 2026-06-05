@@ -737,7 +737,7 @@ function Step1WhatAndWhere({
         </select>
         <div style={{ marginTop: 8, fontSize: 13 }}>
           <a
-            href="/admin/locations"
+            href="/admin/schools?tab=locations"
             target="_blank"
             rel="noreferrer"
             style={{ color: PURPLE, textDecoration: "none" }}

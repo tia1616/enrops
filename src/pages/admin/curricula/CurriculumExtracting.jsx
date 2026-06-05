@@ -193,12 +193,6 @@ export default function CurriculumExtracting() {
     return () => clearInterval(id);
   }, [isWorking, extractStartedAt]);
 
-  function formatElapsed(sec) {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  }
-
   if (loading) {
     return <div style={{ color: MUTED, padding: 24 }}>Loading…</div>;
   }
