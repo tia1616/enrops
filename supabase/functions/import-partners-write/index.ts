@@ -135,11 +135,15 @@ serve(async (req: Request) => {
     // batch.
     const { data: existing } = await supabase
       .from('partners')
-      .select('id, partner_name')
+      .select('id, partner_name, partner_type')
       .eq('organization_id', orgId);
     const byNormName = new Map<string, string>();
+    // Track existing partner_type by partner_id so a merge whose payload type
+    // is null can fall back to whatever's already saved on the partner.
+    const existingTypeById = new Map<string, string | null>();
     for (const p of existing ?? []) {
       byNormName.set(normName(p.partner_name), p.id);
+      existingTypeById.set(p.id, (p.partner_type as string | null) ?? null);
     }
 
     // Build a normalized-name → location index for the org so a venue partner
@@ -193,15 +197,19 @@ serve(async (req: Request) => {
       if (!name) { partnersSkipped++; continue; }
       if (action === 'skip') { partnersSkipped++; continue; }
 
-      const ptype = typeof p.partner_type === 'string' && PARTNER_TYPES.has(p.partner_type) ? p.partner_type : null;
+      let ptype: string | null = typeof p.partner_type === 'string' && PARTNER_TYPES.has(p.partner_type) ? p.partner_type : null;
 
       let partnerId: string | null = null;
 
       if (action === 'merge') {
         partnerId = (p.match_partner_id as string | null) || byNormName.get(normName(name)) || null;
-        if (!partnerId) {
-          // Fell through — merge requested but no match found; treat as create.
-          partnerId = null;
+        // Fall back to the existing partner's saved type when the import
+        // didn't carry one (common when partner-level data lives on a
+        // different sheet than contacts — Contacts-sheet rows have no
+        // partner_type column). Required for the venue auto-link check.
+        if (partnerId && !ptype) {
+          const saved = existingTypeById.get(partnerId);
+          if (saved && PARTNER_TYPES.has(saved)) ptype = saved;
         }
       }
 

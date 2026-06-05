@@ -183,7 +183,12 @@ function buildPartnersFromGrid(headers, rows, mapping) {
       byKey.set(key, p);
       order.push(p);
     } else {
-      // Fill any partner-level location fields the first row left blank.
+      // Multi-sheet workbooks split partner-level vs contact-level data
+      // across sheets. The first row creates the partner; later rows may
+      // be the only place partner-level fields appear. Fill blanks across
+      // every partner-level column — never overwrite existing values.
+      if (!p.partner_type) p.partner_type = normalizePartnerType(at(row, 'partner_type'));
+      if (!p.location_area) p.location_area = at(row, 'location_area') || null;
       if (!p.location_address) p.location_address = at(row, 'location_address') || null;
       if (!p.location_room_number) p.location_room_number = at(row, 'location_room_number') || null;
       if (!p.location_district) p.location_district = at(row, 'location_district') || null;
