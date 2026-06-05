@@ -11,6 +11,7 @@ import { defaultTenantSlug } from "../../lib/tenants.js";
 import HatGuide from "../../components/HatGuide";
 import NotifyRemovalModal from "./NotifyRemovalModal";
 import AssignSubModal from "./AssignSubModal";
+import AfterschoolSchedule from "./AfterschoolSchedule";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -362,6 +363,13 @@ export default function Schedule() {
   // viewed one. selectedCycleId=null means "use the latest one I find" (default).
   const [allCycles, setAllCycles] = useState([]);
   const [selectedCycleId, setSelectedCycleId] = useState(null);
+  // After-school terms run on the same /admin/schedule page via a unified term
+  // selector. scheduleMode 'afterschool' short-circuits the entire camp UI and
+  // renders <AfterschoolSchedule> instead. afterschoolTerms is the distinct list
+  // of term codes this org has programs or an open survey for.
+  const [afterschoolTerms, setAfterschoolTerms] = useState([]);
+  const [scheduleMode, setScheduleMode] = useState("camp"); // "camp" | "afterschool"
+  const [selectedTerm, setSelectedTerm] = useState(null); // afterschool term code, e.g. "FA26"
   const [recentlyUpdated, setRecentlyUpdated] = useState(() => new Set()); // assignment ids that flashed via realtime
 
   const dragStateRef = useRef(null);
@@ -487,6 +495,26 @@ export default function Schedule() {
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id, selectedCycleId]);
+
+  // Discover which after-school terms this org has so the term selector can offer
+  // them. Union of programs.term and afterschool_survey_state.term. Independent of
+  // the camp load so it works even when there are no camp cycles yet.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!org?.id) return;
+      const [progRes, surveyRes] = await Promise.all([
+        supabase.from("programs").select("term").eq("organization_id", org.id).not("term", "is", null),
+        supabase.from("afterschool_survey_state").select("term").eq("organization_id", org.id),
+      ]);
+      if (!alive) return;
+      const terms = new Set();
+      (progRes.data ?? []).forEach((r) => { if (r.term) terms.add(r.term); });
+      (surveyRes.data ?? []).forEach((r) => { if (r.term) terms.add(r.term); });
+      setAfterschoolTerms([...terms].sort().reverse());
+    })();
+    return () => { alive = false; };
+  }, [org?.id]);
 
   // Realtime: when an instructor accepts or requests a change in the portal, the
   // camp_assignments row updates. Subscribe so the calendar reflects the change
@@ -853,6 +881,19 @@ export default function Schedule() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enriched, focusedWeek, searchText, selectedInstructors, selectedLocations, selectedStatuses]);
 
+  // After-school mode short-circuits the entire camp UI. The afterschool component
+  // renders its own header with the unified term selector (camp cycles + terms).
+  if (scheduleMode === "afterschool" && selectedTerm) return (
+    <AfterschoolSchedule
+      org={org}
+      term={selectedTerm}
+      campCycles={allCycles}
+      afterschoolTerms={afterschoolTerms}
+      onSwitchTerm={(t) => setSelectedTerm(t)}
+      onSwitchToCamp={(cid) => { setScheduleMode("camp"); setSelectedCycleId(cid); }}
+    />
+  );
+
   if (state.status === "loading") return <div style={{ color: MUTED, fontSize: 14 }}>Loading schedule…</div>;
   if (state.status === "empty") return (
     <>
@@ -861,6 +902,20 @@ export default function Schedule() {
         body="A scheduling cycle is one term of camps or classes (e.g. SU26, FA26). Create one to start matching instructors to programs."
         action={{ label: "+ Create your first cycle", onClick: () => setNewCycleOpen(true) }}
       />
+      {afterschoolTerms.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <button
+            type="button"
+            onClick={() => { setScheduleMode("afterschool"); setSelectedTerm(afterschoolTerms[0]); }}
+            style={{
+              background: PURPLE, color: "#fff", border: "none", borderRadius: 8,
+              padding: "10px 18px", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            View after-school schedule ({cycleDisplayName(afterschoolTerms[0])})
+          </button>
+        </div>
+      )}
       {newCycleOpen && (
         <NewCycleModal
           orgId={org?.id}
@@ -1796,7 +1851,9 @@ export default function Schedule() {
       <HeaderStrip
         cycle={cycle}
         allCycles={allCycles}
+        afterschoolTerms={afterschoolTerms}
         onSwitchCycle={setSelectedCycleId}
+        onSwitchToAfterschool={(t) => { setScheduleMode("afterschool"); setSelectedTerm(t); }}
         onOpenNewCycle={() => setNewCycleOpen(true)}
         phaseLabel={derivedPhase}
         counts={counts}
@@ -2198,8 +2255,9 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
+function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
   const otherCycles = (allCycles ?? []).filter((c) => c.id !== cycle.id);
+  const hasOtherViews = otherCycles.length > 0 || (afterschoolTerms ?? []).length > 0;
   return (
     <header style={{
       background: "#fff",
@@ -2217,11 +2275,15 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
     }}>
       <div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-          {otherCycles.length > 0 ? (
+          {hasOtherViews ? (
             <select
               value={cycle.id}
-              onChange={(e) => onSwitchCycle && onSwitchCycle(e.target.value)}
-              title="Switch to another scheduling cycle"
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v.startsWith("as:")) { onSwitchToAfterschool && onSwitchToAfterschool(v.slice(3)); }
+                else { onSwitchCycle && onSwitchCycle(v); }
+              }}
+              title="Switch to another scheduling cycle or after-school term"
               style={{
                 fontSize: 26,
                 fontWeight: 700,
@@ -2240,10 +2302,19 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
                 backgroundRepeat: "no-repeat",
               }}
             >
-              <option value={cycle.id}>{cycleDisplayName(cycle.name)}</option>
-              {otherCycles.map((c) => (
-                <option key={c.id} value={c.id}>{cycleDisplayName(c.name)}</option>
-              ))}
+              <optgroup label="Camps">
+                <option value={cycle.id}>{cycleDisplayName(cycle.name)}</option>
+                {otherCycles.map((c) => (
+                  <option key={c.id} value={c.id}>{cycleDisplayName(c.name)}</option>
+                ))}
+              </optgroup>
+              {(afterschoolTerms ?? []).length > 0 && (
+                <optgroup label="After-school">
+                  {afterschoolTerms.map((t) => (
+                    <option key={`as:${t}`} value={`as:${t}`}>{cycleDisplayName(t)}</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           ) : (
             <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>{cycleDisplayName(cycle.name)}</h1>

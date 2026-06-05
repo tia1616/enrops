@@ -2,14 +2,17 @@
 // Mid-recap, etc.) once per day. Reads enabled automations across all orgs,
 // resolves per-trigger audience, and sends via Resend with idempotency.
 //
-// v1 wired triggers:
-//   - days_before_first_session  (welcome_camp, welcome_afterschool)
+// Wired triggers (resolve a real audience and send):
+//   - days_before_first_session    (welcome_camp, welcome_afterschool)
 //   - event_registration_abandoned (abandoned_registration, 24h pending)
+//   - days_after_first_session     (check_in)
+//   - session_midpoint             (mid_recap)
+//   - session_last_day             (final_recap)
+//   - birthday                     (birthday)
 //
-// Stubbed triggers (return empty audience, no fire):
-//   - session_midpoint, session_last_day, days_after_first_session, birthday
-//   - event_registration_confirmed (handled by stripe-webhook, not here)
-//   - survey_pending (template-only until surveys ship)
+// Intentionally not fired here:
+//   - event_registration_confirmed (handled by stripe-webhook, not cron)
+//   - survey_pending (template stays is_v1_enabled=false until surveys ship)
 //
 // Idempotency: automation_run_recipients has UNIQUE(automation_id, context_key).
 // Re-running this cron same day is safe — duplicates fail the insert silently.

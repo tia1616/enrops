@@ -8,6 +8,7 @@ import { supabase } from "../../lib/supabase";
 import { displayFirstName } from "../../lib/instructorName";
 import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
+import AfterschoolAvailabilityForm from "./AfterschoolAvailabilityForm.jsx";
 import InstructorProfile from "./InstructorProfile.jsx";
 import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
@@ -78,6 +79,8 @@ export default function InstructorPortal() {
   const [impersonating, setImpersonating] = useState(null);
   const [cycles, setCycles] = useState([]);
   const [editingCycleId, setEditingCycleId] = useState(null);
+  const [afterschoolSurveys, setAfterschoolSurveys] = useState([]); // [{ term, opened_at, deadline, submitted_at }]
+  const [editingTerm, setEditingTerm] = useState(null);
   const [view, setView] = useState("schedule");
   const [showPast, setShowPast] = useState(false);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState(null);
@@ -128,7 +131,7 @@ export default function InstructorPortal() {
             last_name: target.last_name,
             preferred_name: target.preferred_name,
           };
-          await Promise.all([loadAssignments(target.id), loadSubAssignments(target.id), loadCycles(targetInst)]);
+          await Promise.all([loadAssignments(target.id), loadSubAssignments(target.id), loadCycles(targetInst), loadAfterschoolSurveys(targetInst)]);
           setPhase("ready");
           return;
         }
@@ -208,7 +211,7 @@ export default function InstructorPortal() {
 
       // No onboarding row OR overall_status='complete' OR 'not_invited':
       // they're a regular onboarded instructor; render the schedule.
-      await Promise.all([loadAssignments(linkData.instructor_id), loadSubAssignments(linkData.instructor_id), loadCycles(linkData)]);
+      await Promise.all([loadAssignments(linkData.instructor_id), loadSubAssignments(linkData.instructor_id), loadCycles(linkData), loadAfterschoolSurveys(linkData)]);
       setPhase("ready");
     } catch (err) {
       setError(err.message ?? "Couldn't link your account.");
@@ -231,7 +234,7 @@ export default function InstructorPortal() {
     if (row.overall_status === "complete" || row.completed_at) {
       // Either freshly complete or already-been-complete — drop into the
       // schedule view immediately.
-      await Promise.all([loadAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor)]);
+      await Promise.all([loadAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor), loadAfterschoolSurveys(instructor)]);
       setPhase("ready");
     }
   }
@@ -348,6 +351,34 @@ export default function InstructorPortal() {
     setCycles((cycleRows ?? []).map((c) => ({
       ...c,
       submitted_at: submittedMap[c.id] ?? null,
+    })));
+  }
+
+  async function loadAfterschoolSurveys(loadedInstructor) {
+    if (!loadedInstructor?.organization_id || !loadedInstructor?.instructor_id) return;
+    // Only surface terms where the admin has released the afterschool survey.
+    const { data: stateRows, error: sErr } = await supabase
+      .from("afterschool_survey_state")
+      .select("term, opened_at, deadline")
+      .eq("organization_id", loadedInstructor.organization_id)
+      .order("opened_at", { ascending: true });
+    if (sErr) {
+      console.warn("Couldn't load afterschool surveys:", sErr);
+      return;
+    }
+    const terms = (stateRows ?? []).map((r) => r.term);
+    let submittedMap = {};
+    if (terms.length > 0) {
+      const { data: availRows } = await supabase
+        .from("instructor_term_availability")
+        .select("term, submitted_at")
+        .eq("instructor_id", loadedInstructor.instructor_id)
+        .in("term", terms);
+      for (const r of availRows ?? []) submittedMap[r.term] = r.submitted_at;
+    }
+    setAfterschoolSurveys((stateRows ?? []).map((r) => ({
+      ...r,
+      submitted_at: submittedMap[r.term] ?? null,
     })));
   }
 
@@ -671,7 +702,7 @@ export default function InstructorPortal() {
             // Pending_* and payouts_disabled statuses won't flip to 'complete',
             // but the contractor still wants out of the completion card and
             // into the schedule view. Load schedule data and switch phases.
-            await Promise.all([loadAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor)]);
+            await Promise.all([loadAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor), loadAfterschoolSurveys(instructor)]);
             setPhase("ready");
           }}
         />
@@ -710,6 +741,8 @@ export default function InstructorPortal() {
   const editingCycle = editingCycleId ? cycles.find((c) => c.id === editingCycleId) : null;
   const needsSurvey = cycles.filter((c) => !c.submitted_at);
   const updatableSurveys = cycles.filter((c) => !!c.submitted_at && c.status !== "archived");
+  const needsAfterschoolSurvey = afterschoolSurveys.filter((s) => !s.submitted_at);
+  const updatableAfterschoolSurveys = afterschoolSurveys.filter((s) => !!s.submitted_at);
 
   // While editing availability for a cycle, hide the assignment list entirely.
   if (editingCycle) {
@@ -737,6 +770,37 @@ export default function InstructorPortal() {
             await loadCycles(instructor);
           }}
           onCancel={() => setEditingCycleId(null)}
+        />
+      </Shell>
+    );
+  }
+
+  // While editing afterschool availability for a term, hide the assignment list.
+  if (editingTerm) {
+    return (
+      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+        {impersonating && (
+          <div style={{
+            background: `${VIOLET}1F`,
+            border: `1px solid ${VIOLET}`,
+            borderRadius: 8,
+            padding: "10px 14px",
+            marginBottom: 14,
+            fontSize: 13,
+            color: INK,
+            lineHeight: 1.5,
+          }}>
+            <strong>Admin preview</strong> — saving will write to <em>{impersonating.asEmail}</em>'s availability.
+          </div>
+        )}
+        <AfterschoolAvailabilityForm
+          instructor={instructor}
+          term={editingTerm}
+          onSaved={async () => {
+            setEditingTerm(null);
+            await loadAfterschoolSurveys(instructor);
+          }}
+          onCancel={() => setEditingTerm(null)}
         />
       </Shell>
     );
@@ -927,6 +991,18 @@ export default function InstructorPortal() {
         </div>
       )}
 
+      {needsAfterschoolSurvey.length > 0 && (
+        <div style={{ marginBottom: 18, display: "flex", flexDirection: "column", gap: 10 }}>
+          {needsAfterschoolSurvey.map((s) => (
+            <AfterschoolSurveyBanner
+              key={s.term}
+              survey={s}
+              onStart={() => setEditingTerm(s.term)}
+            />
+          ))}
+        </div>
+      )}
+
       {subAssignments.filter((s) => s.status === "pending").length > 0 && (
         <Section title="Sub day offers">
           {subAssignments.filter((s) => s.status === "pending").map((s) => (
@@ -979,7 +1055,7 @@ export default function InstructorPortal() {
         </Section>
       )}
 
-      {currentAssignments.length === 0 && needsSurvey.length === 0 && pastAssignments.length === 0 && (
+      {currentAssignments.length === 0 && needsSurvey.length === 0 && needsAfterschoolSurvey.length === 0 && pastAssignments.length === 0 && (
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, color: MUTED, textAlign: "center" }}>
           No schedule yet. Your admin will email you when it's ready.
         </div>
@@ -1039,6 +1115,30 @@ export default function InstructorPortal() {
         </div>
       )}
 
+      {updatableAfterschoolSurveys.length > 0 && (
+        <div style={{ marginTop: 24, paddingTop: 18, borderTop: `1px solid ${RULE}` }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>
+            Your after-school availability
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {updatableAfterschoolSurveys.map((s) => (
+              <div key={s.term} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, fontSize: 13, color: INK }}>
+                <span>
+                  {termLabel(s.term)} <span style={{ color: MUTED }}>· submitted {fmtShort(s.submitted_at?.slice(0, 10))}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setEditingTerm(s.term)}
+                  style={{ background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}
+                >
+                  Update availability
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {changeFor && (
         <ChangeRequestDialog
           assignment={changeFor}
@@ -1086,6 +1186,64 @@ function SurveyBanner({ cycle, onStart }) {
           {fmtShort(cycle.starts_on)} – {fmtShort(cycle.ends_on)} · ~2 minutes
           {cycle.survey_deadline && (
             <> · <span style={{ color: CORAL, fontWeight: 600 }}>please submit by {fmtShort(cycle.survey_deadline.slice(0, 10))}</span></>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onStart}
+        style={{
+          padding: "9px 14px",
+          background: PURPLE,
+          color: "#fff",
+          border: "none",
+          borderRadius: 6,
+          fontSize: 13,
+          fontWeight: 600,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          whiteSpace: "nowrap",
+        }}
+      >
+        Start
+      </button>
+    </div>
+  );
+}
+
+function termLabel(term) {
+  if (!term) return "Term";
+  const m = /^(SU|FA|WI|SP)(\d{2})$/.exec(term);
+  if (!m) return term;
+  const terms = { SU: "Summer", FA: "Fall", WI: "Winter", SP: "Spring" };
+  return `${terms[m[1]]} 20${m[2]}`;
+}
+
+function AfterschoolSurveyBanner({ survey, onStart }) {
+  const title = termLabel(survey.term);
+  return (
+    <div style={{
+      background: `${VIOLET}1F`,
+      border: `1px solid ${VIOLET}`,
+      borderRadius: 10,
+      padding: "14px 16px",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 12,
+      flexWrap: "wrap",
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.6 }}>
+          New: set up your after-school availability
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginTop: 2 }}>
+          Tell us which days you can teach this {title}
+        </div>
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 2, lineHeight: 1.4 }}>
+          ~2 minutes
+          {survey.deadline && (
+            <> · <span style={{ color: CORAL, fontWeight: 600 }}>please submit by {fmtShort(survey.deadline.slice(0, 10))}</span></>
           )}
         </div>
       </div>
@@ -2236,6 +2394,7 @@ function RosterSection({ campSessionId, enrollment, startsOn }) {
             )
           `)
           .eq("camp_session_id", campSessionId)
+          .not("status", "in", "(cancelled,withdrawn)")
           .order("registered_at", { ascending: true });
         if (cancelled) return;
         if (error) {
