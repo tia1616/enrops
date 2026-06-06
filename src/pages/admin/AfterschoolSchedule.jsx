@@ -172,6 +172,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [surveyDialog, setSurveyDialog] = useState(null); // { mode:'choose'|'result', payload }
   const [surveyDeadline, setSurveyDeadline] = useState(() => businessDaysFromToday(10));
   const [matchResult, setMatchResult] = useState(null);
+  const [view, setView] = useState("list"); // 'list' | 'grid'
 
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
@@ -183,7 +184,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes] = await Promise.all([
         supabase
           .from("programs")
-          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status")
+          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max")
           .eq("organization_id", org.id)
           .eq("term", term)
           .not("status", "in", '("cancelled","archived")'),
@@ -232,6 +233,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         : { data: [], error: null };
       if (assignRes.error) throw assignRes.error;
 
+      const enrollRes = programIds.length
+        ? await supabase.from("program_enrollment").select("program_id, enrolled, max_capacity").in("program_id", programIds)
+        : { data: [], error: null };
+      const enrollment = {};
+      for (const r of enrollRes.data ?? []) enrollment[r.program_id] = { enrolled: Number(r.enrolled ?? 0), max: r.max_capacity ?? null };
+
       const assignments = (assignRes.data ?? []).map((a) => ({
         id: a.id,
         program_id: a.program_id,
@@ -259,6 +266,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         locations: locRes.data ?? [],
         survey: surveyRes.data ?? null,
         areaPrefs: areaPrefRes.data ?? [],
+        enrollment,
       });
     } catch (err) {
       console.error("AfterschoolSchedule load error:", err);
@@ -606,10 +614,35 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         setSelectedStatuses={setSelectedStatuses}
       />
 
+      {state.programs.length > 0 && (
+        <InstructorLoadStrip instructors={state.instructors} loadCount={loadCount} availByInstr={availByInstr} />
+      )}
+
+      {state.programs.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ display: "inline-flex", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+            {[["list", "List"], ["grid", "Week grid"]].map(([v, label]) => (
+              <button key={v} type="button" onClick={() => setView(v)} style={{ border: "none", background: view === v ? `${PURPLE}12` : "#fff", color: view === v ? PURPLE : MUTED, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {state.programs.length === 0 ? (
         <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 8, padding: 28, textAlign: "center", color: MUTED }}>
           No {termDisplayName(term)} after-school classes yet. Classes you schedule for this term will appear here.
         </div>
+      ) : view === "list" ? (
+        <StaffingList
+          programs={state.programs.filter(matchesFilters)}
+          enriched={enriched}
+          enrollment={state.enrollment}
+          locName={locName}
+          locArea={locArea}
+          onRowClick={(p) => setPicker({ program: p })}
+        />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: `repeat(5, minmax(0, 1fr))`, gap: 12, alignItems: "start" }}>
           {DAYS.map((d) => {
@@ -692,7 +725,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             value={value}
             onChange={onChange}
             title="Switch term"
-            style={{ fontSize: 26, fontWeight: 700, color: INK, letterSpacing: -0.4, fontFamily: "inherit", background: "transparent", border: "none", borderBottom: `2px dotted ${RULE}`, padding: "0 22px 2px 0", cursor: "pointer", appearance: "none",
+            style={{ fontSize: 20, fontWeight: 700, color: INK, letterSpacing: -0.3, fontFamily: "inherit", background: "transparent", border: "none", borderBottom: `2px dotted ${RULE}`, padding: "0 22px 2px 0", cursor: "pointer", appearance: "none",
               backgroundImage: `linear-gradient(45deg, transparent 50%, ${MUTED} 50%), linear-gradient(135deg, ${MUTED} 50%, transparent 50%)`,
               backgroundPosition: "calc(100% - 12px) center, calc(100% - 7px) center",
               backgroundSize: "5px 5px, 5px 5px",
@@ -807,6 +840,117 @@ function chip(active, color) {
     background: active ? `${color}18` : "#fff",
     color: active ? color : MUTED,
   };
+}
+
+function gradeLabel(g) {
+  if (g === 0) return "K";
+  return g == null ? "?" : String(g);
+}
+
+function Pill({ status }) {
+  const c = statusColor(status);
+  return (
+    <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, color: c, background: `${c}1F`, whiteSpace: "nowrap", display: "inline-block" }}>
+      {statusLabel(status)}
+    </span>
+  );
+}
+
+function InstructorLoadStrip({ instructors, loadCount, availByInstr }) {
+  const rows = instructors.map((i) => {
+    const av = availByInstr.get(i.id);
+    const submitted = av && Object.values(av.weekday_availability || {}).some((w) => w && w.from);
+    return {
+      id: i.id,
+      name: (i.preferred_name || i.first_name) + (i.last_name ? ` ${i.last_name}` : ""),
+      n: loadCount.get(i.id) ?? 0,
+      cap: av?.max_days ?? null,
+      submitted,
+    };
+  }).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+  if (rows.length === 0) return null;
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 14px", display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
+      <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, fontWeight: 700, marginRight: 4 }}>Instructor load</span>
+      {rows.map((r) => {
+        const full = r.cap != null && r.n >= r.cap;
+        return (
+          <span key={r.id} style={{ fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 999, border: `1px solid ${full ? OK_GREEN : RULE}`, color: !r.submitted ? MUTED : (full ? OK_GREEN : INK), background: "#fff", opacity: r.submitted ? 1 : 0.7 }}>
+            {r.name}
+            <span style={{ color: MUTED, fontWeight: 500 }}>
+              {" · "}
+              {r.submitted ? `${r.n}${r.cap != null ? ` / ${r.cap}${full ? " (full)" : ""}` : ""}` : "no availability yet"}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowClick }) {
+  const byDay = new Map(DAYS.map((d) => [d.code, []]));
+  for (const p of programs) {
+    const code = DAY_TO_CODE[dayKey(p.day_of_week)];
+    if (byDay.has(code)) byDay.get(code).push(p);
+  }
+  for (const arr of byDay.values()) arr.sort((a, b) => (parse12h(a.start_time) ?? 0) - (parse12h(b.start_time) ?? 0));
+  const anyRows = DAYS.some((d) => (byDay.get(d.code) ?? []).length > 0);
+  if (!anyRows) {
+    return <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 8, padding: 24, textAlign: "center", color: MUTED }}>No classes match your filters.</div>;
+  }
+  const td = { padding: "11px 14px", borderTop: "1px solid #f0eee6", fontSize: 13.5, verticalAlign: "middle" };
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+      {DAYS.map((d) => {
+        const items = byDay.get(d.code) ?? [];
+        if (items.length === 0) return null;
+        return (
+          <div key={d.code}>
+            <div style={{ background: CREAM, padding: "7px 14px", fontSize: 12, fontWeight: 700, color: PURPLE, borderTop: `1px solid ${RULE}` }}>
+              {d.label} <span style={{ color: MUTED, fontWeight: 500 }}>· {items.length} class{items.length === 1 ? "" : "es"}</span>
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <tbody>
+                {items.map((p) => {
+                  const e = enriched.get(p.id);
+                  const loc = locName.get(p.program_location_id) ?? "—";
+                  const area = locArea.get(p.program_location_id);
+                  const lead = e?.lead;
+                  const who = lead ? ((lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "")) : null;
+                  const enr = enrollment?.[p.id];
+                  return (
+                    <tr key={p.id} onClick={() => onRowClick(p)} style={{ cursor: "pointer" }}>
+                      <td style={{ ...td, width: "26%" }}>
+                        <div style={{ fontWeight: 700, color: INK }}>{p.curriculum || "Class"}</div>
+                        {(p.grade_min != null || p.grade_max != null) && (
+                          <div style={{ fontSize: 11.5, color: MUTED }}>Grades {gradeLabel(p.grade_min)}–{gradeLabel(p.grade_max)}</div>
+                        )}
+                      </td>
+                      <td style={{ ...td, width: "20%" }}>
+                        {loc}{area && <span style={{ color: MUTED }}> · {area}</span>}
+                      </td>
+                      <td style={{ ...td, width: "20%" }}>
+                        <span style={{ fontWeight: 600, color: INK }}>{fmtTimeRange(p.start_time, p.end_time)}</span>
+                        <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>all term</div>
+                      </td>
+                      <td style={{ ...td, width: "10%" }}>
+                        {enr ? <><span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span></> : <span style={{ color: MUTED }}>—</span>}
+                      </td>
+                      <td style={{ ...td, width: "13%" }}>
+                        {who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: CORAL, fontWeight: 700 }}>Needs instructor</span>}
+                      </td>
+                      <td style={{ ...td, width: "11%" }}><Pill status={e?.status} /></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function ProgramCard({ program, loc, tint, status, lead, onClick }) {
