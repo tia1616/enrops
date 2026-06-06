@@ -1494,6 +1494,23 @@ export default function Schedule() {
     }
   }
 
+  // In-app preview: renders the real offer email(s) without sending. Returns
+  // [{ instructor_id, to, subject, html, text }].
+  async function previewOffers() {
+    if (state.status !== "ready") return [];
+    const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
+    const { data, error } = await supabase.functions.invoke("send-offers", {
+      body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline },
+    });
+    if (error) {
+      let realMsg = error.message ?? "function error";
+      try { const body = await error.context?.json?.(); if (body?.error) realMsg = body.error; } catch {}
+      throw new Error(realMsg);
+    }
+    if (data?.error) throw new Error(data.error);
+    return data.preview || [];
+  }
+
   async function handleRollback() {
     if (state.status !== "ready") return;
     const confirmed = window.confirm(
@@ -2007,6 +2024,7 @@ export default function Schedule() {
           })()}
           selectedInstructorIds={selectedInstructorIds}
           onSelectedInstructorIdsChange={setSelectedInstructorIds}
+          onPreview={previewOffers}
         />
       )}
       {newCycleOpen && (
@@ -3686,7 +3704,24 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
   );
 }
 
-function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange }) {
+function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange, onPreview }) {
+  const [previews, setPreviews] = useState(null);
+  const [pvIdx, setPvIdx] = useState(0);
+  const [pvBusy, setPvBusy] = useState(false);
+  const [pvErr, setPvErr] = useState(null);
+  const hasPreview = previews && previews.length > 0;
+  const nameById = new Map(eligibleInstructors.map((i) => [i.id, i.name]));
+  async function doPreview() {
+    setPvBusy(true); setPvErr(null);
+    try {
+      const p = await onPreview();
+      setPreviews(p); setPvIdx(0);
+      if (!p.length) setPvErr("Nothing to preview — approve some assignments first.");
+    } catch (e) {
+      setPvErr(e.message || "Couldn't build the preview.");
+    } finally { setPvBusy(false); }
+  }
+
   if (dialog.mode === "result" && dialog.payload?.kind === "approve") {
     return (
       <ModalShell onClose={onClose} title="Approved">
@@ -3839,7 +3874,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
 
   // mode === "choose"
   return (
-    <ModalShell onClose={onClose} title="Send offers">
+    <ModalShell onClose={onClose} title="Send offers" maxWidth={hasPreview ? 760 : 480}>
       <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ color: MUTED }}>
           Pick the date you want instructors to respond by, then choose how to send.
@@ -3874,7 +3909,30 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           onChange={onSelectedInstructorIdsChange}
         />
         <DialogChoice
-          title="Send to me first (recommended)"
+          title={pvBusy ? "Building preview…" : hasPreview ? "Refresh preview" : "Preview the email (recommended)"}
+          subtitle="See exactly what instructors will receive — rendered right here, no email sent."
+          disabled={pvBusy || (selectedInstructorIds && selectedInstructorIds.size === 0)}
+          onClick={doPreview}
+        />
+        {pvErr && <div style={{ color: CORAL, fontSize: 12 }}>{pvErr}</div>}
+        {hasPreview && (
+          <div style={{ border: `1px solid ${RULE}`, borderRadius: 6, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${RULE}`, background: "#faf9f6" }}>
+              <span style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>Previewing</span>
+              {previews.length > 1 ? (
+                <select value={pvIdx} onChange={(e) => setPvIdx(Number(e.target.value))} style={{ fontSize: 12, fontFamily: "inherit", border: `1px solid ${RULE}`, borderRadius: 6, padding: "3px 6px", maxWidth: 320 }}>
+                  {previews.map((p, i) => <option key={i} value={i}>{nameById.get(p.instructor_id) || p.to}</option>)}
+                </select>
+              ) : (
+                <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>{nameById.get(previews[0].instructor_id) || previews[0].to}</span>
+              )}
+              <span style={{ marginLeft: "auto", fontSize: 11, color: MUTED }}>No email sent</span>
+            </div>
+            <iframe title="Offer email preview" srcDoc={previews[pvIdx]?.html} style={{ width: "100%", height: 440, border: "none", background: "#fff", display: "block" }} />
+          </div>
+        )}
+        <DialogChoice
+          title="Send to me first"
           subtitle={selectedInstructorIds
             ? `Generates only the ${selectedInstructorIds.size} selected instructor${selectedInstructorIds.size === 1 ? "'s" : "s'"} offer${selectedInstructorIds.size === 1 ? "" : "s"} and routes to your inbox. Nothing else changes.`
             : "Every instructor's offer arrives in your inbox so you can read exactly what they'll see. Nothing else changes — run this as many times as you want."}
@@ -5005,7 +5063,7 @@ function DialogChoice({ title, subtitle, onClick, disabled, tone }) {
   );
 }
 
-function ModalShell({ title, children, onClose }) {
+function ModalShell({ title, children, onClose, maxWidth = 480 }) {
   return (
     <div
       onClick={onClose}
@@ -5022,7 +5080,7 @@ function ModalShell({ title, children, onClose }) {
     >
       <div onClick={(e) => e.stopPropagation()} style={{
         width: "100%",
-        maxWidth: 480,
+        maxWidth,
         maxHeight: "90vh",
         background: "#fff",
         border: `1px solid ${RULE}`,
