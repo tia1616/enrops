@@ -4288,7 +4288,7 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
           ends_on: isAfterschool ? null : endsOn,
           status: "collecting",
           weeks: isAfterschool ? [] : derivedWeeks,
-          auto_reminders_enabled: autoReminders,
+          auto_reminders_enabled: isAfterschool ? false : autoReminders,
         })
         .select("id")
         .single();
@@ -4412,12 +4412,14 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
           </div>
         )}
 
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK, cursor: "pointer" }}>
-          <input type="checkbox" checked={autoReminders} onChange={(e) => setAutoReminders(e.target.checked)} />
-          <span>
-            <strong>Auto-send reminders</strong> 3 days before each deadline (recommended)
-          </span>
-        </label>
+        {cycleType !== "afterschool" && (
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: INK, cursor: "pointer" }}>
+            <input type="checkbox" checked={autoReminders} onChange={(e) => setAutoReminders(e.target.checked)} style={{ marginTop: 2 }} />
+            <span>
+              <strong>Auto-send offer reminders</strong> — email any instructor who hasn't responded to their offer 3 days before the accept-by deadline (recommended).
+            </span>
+          </label>
+        )}
 
         {error && (
           <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, borderRadius: 6, padding: "8px 12px", color: CORAL, fontWeight: 500, fontSize: 13 }}>
