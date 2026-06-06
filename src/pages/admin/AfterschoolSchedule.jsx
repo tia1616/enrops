@@ -880,7 +880,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       />
 
       {state.programs.length > 0 && (
-        <InstructorLoadStrip instructors={state.instructors} loadCount={loadCount} availByInstr={availByInstr} />
+        <InstructorLoadStrip
+          instructors={state.instructors}
+          loadCount={loadCount}
+          availByInstr={availByInstr}
+          selectedInstructors={selectedInstructors}
+          onToggleInstructor={(id) => setSelectedInstructors((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; })}
+        />
       )}
 
       {state.programs.length > 0 && (
@@ -1293,7 +1299,7 @@ function Pill({ status }) {
   );
 }
 
-function InstructorLoadStrip({ instructors, loadCount, availByInstr }) {
+function InstructorLoadStrip({ instructors, loadCount, availByInstr, selectedInstructors, onToggleInstructor }) {
   const rows = instructors.map((i) => {
     const av = availByInstr.get(i.id);
     const submitted = av && Object.values(av.weekday_availability || {}).some((w) => w && w.from);
@@ -1308,17 +1314,28 @@ function InstructorLoadStrip({ instructors, loadCount, availByInstr }) {
   if (rows.length === 0) return null;
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 14px", display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
-      <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, fontWeight: 700, marginRight: 4 }}>Instructor load</span>
+      <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, fontWeight: 700, marginRight: 4 }}>Instructor load <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>· tap to filter</span></span>
       {rows.map((r) => {
         const full = r.cap != null && r.n >= r.cap;
+        const active = selectedInstructors?.has(r.id);
         return (
-          <span key={r.id} style={{ fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 999, border: `1px solid ${full ? OK_GREEN : RULE}`, color: !r.submitted ? MUTED : (full ? OK_GREEN : INK), background: "#fff", opacity: r.submitted ? 1 : 0.7 }}>
+          <button
+            key={r.id}
+            type="button"
+            onClick={() => onToggleInstructor(r.id)}
+            title={active ? "Showing only this instructor — tap to clear" : "Show only this instructor's classes"}
+            style={{ fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 999, cursor: "pointer", fontFamily: "inherit",
+              border: `1.5px solid ${active ? PURPLE : (full ? OK_GREEN : RULE)}`,
+              color: active ? PURPLE : (!r.submitted ? MUTED : (full ? OK_GREEN : INK)),
+              background: active ? `${PURPLE}12` : "#fff",
+              opacity: r.submitted ? 1 : 0.7 }}
+          >
             {r.name}
             <span style={{ color: MUTED, fontWeight: 500 }}>
               {" · "}
               {r.submitted ? `${r.n}${r.cap != null ? ` / ${r.cap}${full ? " (full)" : ""}` : ""}` : "no availability yet"}
             </span>
-          </span>
+          </button>
         );
       })}
     </div>
