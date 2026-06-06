@@ -900,19 +900,34 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
   if (!anyRows) {
     return <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 8, padding: 24, textAlign: "center", color: MUTED }}>No classes match your filters.</div>;
   }
+  const th = { fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, fontWeight: 700, textAlign: "left", padding: "10px 14px", borderBottom: `1px solid ${RULE}` };
   const td = { padding: "11px 14px", borderTop: "1px solid #f0eee6", fontSize: 13.5, verticalAlign: "middle" };
+  const widths = ["24%", "19%", "19%", "9%", "16%", "13%"];
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
-      {DAYS.map((d) => {
-        const items = byDay.get(d.code) ?? [];
-        if (items.length === 0) return null;
-        return (
-          <div key={d.code}>
-            <div style={{ background: CREAM, padding: "7px 14px", fontSize: 12, fontWeight: 700, color: PURPLE, borderTop: `1px solid ${RULE}` }}>
-              {d.label} <span style={{ color: MUTED, fontWeight: 500 }}>· {items.length} class{items.length === 1 ? "" : "es"}</span>
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <tbody>
+      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <colgroup>{widths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+        <thead>
+          <tr>
+            <th style={th}>Class</th>
+            <th style={th}>School · Area</th>
+            <th style={th}>When</th>
+            <th style={th}>Enrolled</th>
+            <th style={th}>Instructor</th>
+            <th style={th}>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {DAYS.map((d) => {
+            const items = byDay.get(d.code) ?? [];
+            if (items.length === 0) return null;
+            return (
+              <React.Fragment key={d.code}>
+                <tr>
+                  <td colSpan={6} style={{ background: CREAM, padding: "7px 14px", fontSize: 12, fontWeight: 700, color: PURPLE, borderTop: `1px solid ${RULE}` }}>
+                    {d.label} <span style={{ color: MUTED, fontWeight: 500 }}>· {items.length} class{items.length === 1 ? "" : "es"}</span>
+                  </td>
+                </tr>
                 {items.map((p) => {
                   const e = enriched.get(p.id);
                   const loc = locName.get(p.program_location_id) ?? "—";
@@ -922,34 +937,28 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                   const enr = enrollment?.[p.id];
                   return (
                     <tr key={p.id} onClick={() => onRowClick(p)} style={{ cursor: "pointer" }}>
-                      <td style={{ ...td, width: "26%" }}>
+                      <td style={{ ...td, overflow: "hidden", textOverflow: "ellipsis" }}>
                         <div style={{ fontWeight: 700, color: INK }}>{p.curriculum || "Class"}</div>
                         {(p.grade_min != null || p.grade_max != null) && (
                           <div style={{ fontSize: 11.5, color: MUTED }}>Grades {gradeLabel(p.grade_min)}–{gradeLabel(p.grade_max)}</div>
                         )}
                       </td>
-                      <td style={{ ...td, width: "20%" }}>
-                        {loc}{area && <span style={{ color: MUTED }}> · {area}</span>}
-                      </td>
-                      <td style={{ ...td, width: "20%" }}>
+                      <td style={td}>{loc}{area && <span style={{ color: MUTED }}> · {area}</span>}</td>
+                      <td style={td}>
                         <span style={{ fontWeight: 600, color: INK }}>{fmtTimeRange(p.start_time, p.end_time)}</span>
                         <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>all term</div>
                       </td>
-                      <td style={{ ...td, width: "10%" }}>
-                        {enr ? <><span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span></> : <span style={{ color: MUTED }}>—</span>}
-                      </td>
-                      <td style={{ ...td, width: "13%" }}>
-                        {who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>}
-                      </td>
-                      <td style={{ ...td, width: "11%" }}><Pill status={e?.status} /></td>
+                      <td style={td}>{enr ? <><span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span></> : <span style={{ color: MUTED }}>—</span>}</td>
+                      <td style={td}>{who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>}</td>
+                      <td style={td}><Pill status={e?.status} /></td>
                     </tr>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-        );
-      })}
+              </React.Fragment>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
