@@ -2,6 +2,12 @@
 
 
 
+\## 2026-06-07
+
+\- \[cleanup] **Locations area cleanup — do during the schools nav/subnav redo.** `program_locations.area` is now used by the afterschool availability survey + matcher (instructors rank areas, matching keys off it). It's auto-defaulted from the address city, but a chunk of J2S schools need manual correction (mailing-city != real area: Bonny Slope/Springville are Beaverton with Portland ZIPs; Atfalati Ridge mails North Plains but is Hillsboro; Cascadia->Vancouver; school-name districts like Catlin Gabel/NCCS/OES). Rule applied for J2S on staging: "district wins when it's a real place name." When we redo the schools nav/subnav, fold an area-review/cleanup pass into that surface so the operator confirms each school's area once. Don't do it in isolation.
+
+\- \[later] **Finer-grained areas (neighborhood / borough) for large metros.** The single-level `area` (city) works for J2S's metro spread, but in big cities "everything is "New York"" — operators will want borough/neighborhood granularity (Queens, Midtown, Uptown...). Our model is one flat `area` string per location today; it does NOT account for sub-city granularity. Later problem — revisit when a metro-dense tenant onboards. Likely a hierarchical area (city > neighborhood) or a free area label the operator defines, with the survey ranking whatever granularity they choose.
+
 \## 2026-06-05
 
 \- \[cleanup] **"Add partner" + "Add new venue" are redundant manual flows** for the single-venue case (school / community org). In the operator's mental model a school is one thing; today they're two buttons on two tabs creating two rows. Right fix is the post-Italy partners↔locations unification — when that lands, the two buttons collapse into a single "Add a school manually" flow that creates partner + auto-linked location together. Don't fix in isolation; rebuilding twice. (Confirmed live 2026-06-05 in Tenant 2 dry-run.)

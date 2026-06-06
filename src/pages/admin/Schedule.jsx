@@ -391,6 +391,7 @@ export default function Schedule() {
         .from("scheduling_cycles")
         .select("id, name, cycle_type, starts_on, ends_on, status, weeks, auto_reminders_enabled, availability_survey_opened_at, survey_deadline")
         .eq("organization_id", org.id)
+        .eq("cycle_type", "summer_camp")
         .neq("status", "archived")
         .order("starts_on", { ascending: false, nullsFirst: false });
       if (cyclesErr) throw cyclesErr;
@@ -503,14 +504,16 @@ export default function Schedule() {
     let alive = true;
     (async () => {
       if (!org?.id) return;
-      const [progRes, surveyRes] = await Promise.all([
+      const [progRes, surveyRes, cycleRes] = await Promise.all([
         supabase.from("programs").select("term").eq("organization_id", org.id).not("term", "is", null),
         supabase.from("afterschool_survey_state").select("term").eq("organization_id", org.id),
+        supabase.from("scheduling_cycles").select("name").eq("organization_id", org.id).eq("cycle_type", "afterschool").neq("status", "archived"),
       ]);
       if (!alive) return;
       const terms = new Set();
       (progRes.data ?? []).forEach((r) => { if (r.term) terms.add(r.term); });
       (surveyRes.data ?? []).forEach((r) => { if (r.term) terms.add(r.term); });
+      (cycleRes.data ?? []).forEach((r) => { if (r.name) terms.add(r.name); });
       setAfterschoolTerms([...terms].sort().reverse());
     })();
     return () => { alive = false; };
@@ -920,7 +923,11 @@ export default function Schedule() {
         <NewCycleModal
           orgId={org?.id}
           onClose={() => setNewCycleOpen(false)}
-          onCreated={(newId) => { setNewCycleOpen(false); setSelectedCycleId(newId); }}
+          onCreated={(c) => {
+            setNewCycleOpen(false);
+            if (c.cycle_type === "afterschool") { setScheduleMode("afterschool"); setSelectedTerm(c.name); }
+            else { setSelectedCycleId(c.id); }
+          }}
         />
       )}
     </>
@@ -1999,7 +2006,11 @@ export default function Schedule() {
         <NewCycleModal
           orgId={org?.id}
           onClose={() => setNewCycleOpen(false)}
-          onCreated={(newId) => { setNewCycleOpen(false); setSelectedCycleId(newId); }}
+          onCreated={(c) => {
+            setNewCycleOpen(false);
+            if (c.cycle_type === "afterschool") { setScheduleMode("afterschool"); setSelectedTerm(c.name); }
+            else { setSelectedCycleId(c.id); }
+          }}
         />
       )}
       {surveyDialog && (
@@ -4257,9 +4268,12 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
     setError(null);
     if (!/^(SU|FA|WI|SP)$/.test(term)) { setError("Pick a term."); return; }
     if (!/^\d{2}$/.test(year)) { setError("Year should be 2 digits (e.g. 27)."); return; }
-    if (!startsOn || !endsOn) { setError("Pick both a start date and an end date."); return; }
-    if (startsOn >= endsOn) { setError("End date has to be after start date."); return; }
-    if (derivedWeeks.length === 0) { setError("Date range doesn't include any full Mon–Fri weeks."); return; }
+    const isAfterschool = cycleType === "afterschool";
+    if (!isAfterschool) {
+      if (!startsOn || !endsOn) { setError("Pick both a start date and an end date."); return; }
+      if (startsOn >= endsOn) { setError("End date has to be after start date."); return; }
+      if (derivedWeeks.length === 0) { setError("Date range doesn't include any full Mon–Fri weeks."); return; }
+    }
 
     setSaving(true);
     try {
@@ -4269,16 +4283,17 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
           organization_id: orgId,
           name: cycleName,
           cycle_type: cycleType,
-          starts_on: startsOn,
-          ends_on: endsOn,
+          // After-school is registration-driven: dates come from programs, not here.
+          starts_on: isAfterschool ? null : startsOn,
+          ends_on: isAfterschool ? null : endsOn,
           status: "collecting",
-          weeks: derivedWeeks,
+          weeks: isAfterschool ? [] : derivedWeeks,
           auto_reminders_enabled: autoReminders,
         })
         .select("id")
         .single();
       if (insErr) throw insErr;
-      onCreated?.(data.id);
+      onCreated?.({ id: data.id, cycle_type: cycleType, name: cycleName });
     } catch (err) {
       console.error("Create cycle failed:", err);
       const msg = err.message || "Couldn't create cycle.";
@@ -4363,18 +4378,27 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>First day of the term</label>
-            <input type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} style={fieldStyle} />
+        {cycleType === "afterschool" ? (
+          <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 10, fontSize: 12, color: INK, lineHeight: 1.5 }}>
+            After-school class dates, schools, curriculum, and enrollment all come from your
+            registration on Enrops — there's nothing to set here. As families register, this
+            term's classes fill in automatically. (Not running registration on Enrops? You'll
+            be able to upload your schedule instead.)
           </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>Last day of the term</label>
-            <input type="date" value={endsOn} onChange={(e) => setEndsOn(e.target.value)} style={fieldStyle} />
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>First day of the term</label>
+              <input type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} style={fieldStyle} />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>Last day of the term</label>
+              <input type="date" value={endsOn} onChange={(e) => setEndsOn(e.target.value)} style={fieldStyle} />
+            </div>
           </div>
-        </div>
+        )}
 
-        {derivedWeeks.length > 0 && (
+        {cycleType !== "afterschool" && derivedWeeks.length > 0 && (
           <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 10, fontSize: 12, color: INK, lineHeight: 1.5 }}>
             <strong>Auto-derived:</strong> {derivedWeeks.length} week{derivedWeeks.length === 1 ? "" : "s"} (Mon–Fri)
             {" — "}
