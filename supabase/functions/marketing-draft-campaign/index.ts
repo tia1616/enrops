@@ -1303,13 +1303,14 @@ TENANT ISOLATION
 You never reference any other provider's data, copy, instructors, parents, or numbers when working for ${sender}. No "most providers do X" comparisons. ${sender} is the only tenant you're thinking about right now.
 
 VOICE DETAILS
+- NEVER use em dashes (—) or en dashes (–). They read as AI-written and are an instant tell. Use a comma, a period, a colon, or a plain hyphen (-) instead. For ranges write "9am-3pm" with a plain hyphen.
 - One exclamation point per email max; zero in subject lines unless one really earns it.
 - Address the parent, not the kid. "Your student" not "you."
 - Subject line under 60 characters; no all-caps; no clickbait.
 - Preheader (first ~80 chars of body) extends the subject, never repeats it.
 - Match length to purpose: a kickoff can be substantial — paint the picture. A 24-hour reminder is three or four sentences, but still warm, not curt.
 - Leave the parent feeling something positive after reading: curiosity, anticipation, that "this sounds like my kid" hum. Don't just inform — connect.
-- SIGN-OFF: end the body content with a sign-off line using ONLY {{sender_name}} on its own paragraph (e.g. "— {{sender_name}}"). Do NOT append {{org_name}} after the sender — tenants frequently set their sender_name as "First Last @ Org" so the org is already conveyed; appending it again duplicates the provider name in the closer. Skip the comma + org_name.
+- SIGN-OFF: end the body content with a sign-off line using ONLY {{sender_name}} on its own paragraph (e.g. "- {{sender_name}}" with a plain hyphen, or just {{sender_name}} on its own line — never an em dash). Do NOT append {{org_name}} after the sender — tenants frequently set their sender_name as "First Last @ Org" so the org is already conveyed; appending it again duplicates the provider name in the closer. Skip the comma + org_name.
 - End every email body with the closer line on its own paragraph AFTER the sign-off: "${v.closer ?? "(no closer set)"}" — only if a closer is set, otherwise omit.
 
 ${tokenList}
@@ -1490,6 +1491,20 @@ const PARENT_SUBJECT_CANCEL_PATTERN = /\bcancel(?:l?ed)?\b/i;
 
 // (Instructor subject cancel/removed/terminated rule deferred — will fire
 // once audience='instructors' is wired through Ennie's drafting path.)
+
+// Deterministic backstop: strip em/en dashes from generated copy. They're an
+// AI tell, so the prompt forbids them — but a regex guarantees zero slip-through
+// without burning a regeneration. Covers the literal chars and the HTML entity
+// forms Claude sometimes emits in body_html. Spaced dash -> spaced hyphen
+// (" - "), unspaced (ranges like "9am–3pm") -> plain hyphen.
+function stripAiDashes(text: string | undefined): string | undefined {
+  if (text == null) return text;
+  return text
+    // HTML entity forms first, normalized to the literal char.
+    .replace(/&mdash;|&#8212;|&#x2014;|&ndash;|&#8211;|&#x2013;/gi, "—")
+    // Spaced em/en dash -> spaced hyphen; unspaced -> plain hyphen.
+    .replace(/\s*[—–]\s*/g, (m) => (/\s/.test(m) ? " - " : "-"));
+}
 
 const MONTH_DATE_PATTERN = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?\b/i;
 const NUMERIC_DATE_PATTERN = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
@@ -1952,6 +1967,15 @@ serve(async (req: Request) => {
         label: first.label || "send",
       }];
     }
+  }
+
+  // Backstop: strip em/en dashes from every touchpoint before persistence, so
+  // no AI-tell punctuation reaches the saved draft or the sent email even if
+  // Claude ignored the prompt rule.
+  for (const tp of schedule.touchpoints) {
+    tp.subject = stripAiDashes(tp.subject);
+    tp.body_html = stripAiDashes(tp.body_html);
+    tp.body_text = stripAiDashes(tp.body_text);
   }
 
   // First touchpoint = the "lead" email; its subject/body populate the parent

@@ -45,6 +45,19 @@ For Mode B output where the audience is `instructor`, if the subject line contai
 
 ---
 
+## Auto-fixes (silently corrected, no regeneration)
+
+### Em-dash / en-dash strip
+
+Em dashes (`—`) and en dashes (`–`) are an AI tell. Ennie's prompt forbids them, but a deterministic pass strips any that slip through — cheaper and more reliable than a regeneration. Applied to subject + body (and the HTML-entity forms `&mdash;`, `&ndash;`, `&#8212;`, `&#8211;`):
+
+- A spaced dash (`a — b`) becomes a spaced hyphen (`a - b`).
+- An unspaced dash (a range like `9am–3pm`) becomes a plain hyphen (`9am-3pm`).
+
+No flag to the operator — the output is just clean. Live in `marketing-draft-campaign` at draft time.
+
+---
+
 ## Soft warnings (allow but flag for operator review)
 
 ### Exclamation count
