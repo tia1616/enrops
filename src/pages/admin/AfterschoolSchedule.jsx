@@ -981,8 +981,10 @@ function ProgramCard({ program, loc, tint, status, lead, onClick }) {
       {(program.start_time || program.end_time) && (
         <div style={{ fontSize: 11, color: MUTED }}>{fmtTimeRange(program.start_time, program.end_time)}</div>
       )}
-      <div style={{ marginTop: 2, fontSize: 12, color: who ? INK : sc, fontWeight: who ? 500 : 600 }}>
-        {who || "+ Assign"}
+      <div style={{ marginTop: 2 }}>
+        <span style={{ display: "inline-block", fontSize: 12, fontWeight: 600, padding: "3px 9px", borderRadius: 999, background: who ? `${PURPLE}10` : `${CORAL}14`, color: who ? PURPLE : CORAL, border: `1px solid ${who ? `${PURPLE}33` : `${CORAL}55`}` }}>
+          {who || "+ Assign"}
+        </span>
       </div>
       <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
       {status === "flagged" && lead && Array.isArray(lead.flags) && lead.flags.length > 0 && (
