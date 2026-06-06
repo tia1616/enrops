@@ -24,6 +24,7 @@ import {
 
 interface RequestBody {
   camp_assignment_id?: string;
+  program_assignment_id?: string;
   action?: 'accept' | 'request_change';
   message?: string;
 }
@@ -47,13 +48,20 @@ serve(async (req: Request) => {
     }
 
     const action = body.action;
-    const assignmentId = body.camp_assignment_id?.trim();
     if (action !== 'accept' && action !== 'request_change') {
       return json({ error: 'invalid_action' }, 400);
     }
-    if (!assignmentId) {
-      return json({ error: 'camp_assignment_id_required' }, 400);
+    // Polymorphic: a camp assignment OR an after-school program assignment.
+    const campId = body.camp_assignment_id?.trim();
+    const programId = body.program_assignment_id?.trim();
+    if (!campId && !programId) {
+      return json({ error: 'assignment_id_required' }, 400);
     }
+    const isProgram = !!programId;
+    const table = isProgram ? 'program_assignments' : 'camp_assignments';
+    const fkCol = isProgram ? 'program_assignment_id' : 'camp_assignment_id';
+    const sessionCol = isProgram ? 'program_id' : 'camp_session_id';
+    const assignmentId = (isProgram ? programId : campId)!;
 
     let message: string | null = null;
     if (action === 'request_change') {
@@ -67,8 +75,8 @@ serve(async (req: Request) => {
     // Fetch the assignment (service role bypasses RLS — we authorize via
     // instructor.id comparison below).
     const { data: assignment, error: fetchErr } = await supabase
-      .from('camp_assignments')
-      .select('id, instructor_id, status, published_at, organization_id, camp_session_id')
+      .from(table)
+      .select(`id, instructor_id, status, published_at, organization_id, ${sessionCol}`)
       .eq('id', assignmentId)
       .maybeSingle();
     if (fetchErr) {
@@ -104,7 +112,7 @@ serve(async (req: Request) => {
         .from('instructor_offer_messages')
         .insert({
           organization_id: assignment.organization_id,
-          camp_assignment_id: assignment.id,
+          [fkCol]: assignment.id,
           sender_role: 'instructor',
           sender_instructor_id: me.id,
           message,
@@ -117,7 +125,7 @@ serve(async (req: Request) => {
       // Step 2: update the assignment status. If THIS fails, we leave the
       // orphan message in place — admin-visible, instructor can retry.
       const { error: updErr } = await supabase
-        .from('camp_assignments')
+        .from(table)
         .update({
           status: 'change_requested',
           change_request_message: message,
@@ -134,7 +142,7 @@ serve(async (req: Request) => {
 
     // action === 'accept' — single statement, no message row.
     const { error: updErr } = await supabase
-      .from('camp_assignments')
+      .from(table)
       .update({
         status: 'confirmed',
         instructor_response_at: nowIso,
