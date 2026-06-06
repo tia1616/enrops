@@ -71,6 +71,7 @@ export default function InstructorPortal() {
   const [instructor, setInstructor] = useState(null);
   const [onboarding, setOnboarding] = useState(null);
   const [assignments, setAssignments] = useState([]);
+  const [programAssignments, setProgramAssignments] = useState([]); // after-school offers
   const [subAssignments, setSubAssignments] = useState([]); // assignment_substitutions where I'm the sub
   const [actingOn, setActingOn] = useState(null);
   const [subActingOn, setSubActingOn] = useState(null); // { id, action } for in-flight Accept/Decline
@@ -131,7 +132,7 @@ export default function InstructorPortal() {
             last_name: target.last_name,
             preferred_name: target.preferred_name,
           };
-          await Promise.all([loadAssignments(target.id), loadSubAssignments(target.id), loadCycles(targetInst), loadAfterschoolSurveys(targetInst)]);
+          await Promise.all([loadAssignments(target.id), loadAfterschoolAssignments(target.id), loadSubAssignments(target.id), loadCycles(targetInst), loadAfterschoolSurveys(targetInst)]);
           setPhase("ready");
           return;
         }
@@ -211,7 +212,7 @@ export default function InstructorPortal() {
 
       // No onboarding row OR overall_status='complete' OR 'not_invited':
       // they're a regular onboarded instructor; render the schedule.
-      await Promise.all([loadAssignments(linkData.instructor_id), loadSubAssignments(linkData.instructor_id), loadCycles(linkData), loadAfterschoolSurveys(linkData)]);
+      await Promise.all([loadAssignments(linkData.instructor_id), loadAfterschoolAssignments(linkData.instructor_id), loadSubAssignments(linkData.instructor_id), loadCycles(linkData), loadAfterschoolSurveys(linkData)]);
       setPhase("ready");
     } catch (err) {
       setError(err.message ?? "Couldn't link your account.");
@@ -234,7 +235,7 @@ export default function InstructorPortal() {
     if (row.overall_status === "complete" || row.completed_at) {
       // Either freshly complete or already-been-complete — drop into the
       // schedule view immediately.
-      await Promise.all([loadAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor), loadAfterschoolSurveys(instructor)]);
+      await Promise.all([loadAssignments(instructor.id), loadAfterschoolAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor), loadAfterschoolSurveys(instructor)]);
       setPhase("ready");
     }
   }
@@ -270,6 +271,25 @@ export default function InstructorPortal() {
     // Load everything; we partition into current vs archived at render time
     // so a "Show past camps" toggle can pull them in without a re-fetch.
     setAssignments(data ?? []);
+  }
+
+  // After-school offers (program_assignments). Mirrors loadAssignments but for
+  // the term/program-shaped offer loop. Tagged kind:'program' so the shared
+  // accept / request-change handlers route to respond-to-assignment with
+  // program_assignment_id.
+  async function loadAfterschoolAssignments(instructorId) {
+    const { data, error: aErr } = await supabase
+      .from("program_assignments")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, curriculum, day_of_week, start_time, end_time, session_count, term, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
+      .eq("instructor_id", instructorId)
+      .not("published_at", "is", null)
+      .in("status", ["published", "change_requested", "confirmed"]);
+    if (aErr) {
+      console.warn("[loadAfterschoolAssignments] failed:", aErr.message);
+      setProgramAssignments([]);
+      return;
+    }
+    setProgramAssignments((data ?? []).map((a) => ({ ...a, kind: "program" })));
   }
 
   // Single-day sub assignments where this instructor is the SUB (not the
@@ -423,37 +443,50 @@ export default function InstructorPortal() {
     await supabase.auth.signOut();
     setInstructor(null);
     setAssignments([]);
+    setProgramAssignments([]);
     setPhase("login");
   }
 
   // Chunk F: Accept + Request Change now route through respond-to-assignment.
   // Direct UPDATE on camp_assignments is being removed once this UI ships —
   // the edge function is the sole instructor write path going forward.
+  async function reloadAssignmentLists() {
+    if (!instructor?.instructor_id) return;
+    await Promise.all([
+      loadAssignments(instructor.instructor_id),
+      loadAfterschoolAssignments(instructor.instructor_id),
+    ]);
+  }
+
+  function assignmentIdKey(assignment) {
+    return assignment?.kind === "program" ? "program_assignment_id" : "camp_assignment_id";
+  }
+
   async function handleAccept(assignment) {
     setActingOn(assignment.id);
     setError("");
     try {
       const { data, error: fnErr } = await supabase.functions.invoke(
         "respond-to-assignment",
-        { body: { camp_assignment_id: assignment.id, action: "accept" } }
+        { body: { [assignmentIdKey(assignment)]: assignment.id, action: "accept" } }
       );
       if (fnErr || data?.error) {
         // already_confirmed is treated as success — admin or another tab
         // beat us to it. Refetch and move on.
         if (data?.error === "already_confirmed") {
-          await loadAssignments(instructor.instructor_id);
+          await reloadAssignmentLists();
           return;
         }
         if (data?.error === "assignment_closed" || data?.error === "forbidden") {
           // Admin withdrew it (or reassigned). Quiet refetch so the stale
           // card disappears with a small note.
           setError("That assignment is no longer available — your coordinator may have made a change.");
-          await loadAssignments(instructor.instructor_id);
+          await reloadAssignmentLists();
           return;
         }
         throw new Error(data?.error || fnErr?.message || "Couldn't accept.");
       }
-      await loadAssignments(instructor.instructor_id);
+      await reloadAssignmentLists();
     } catch (err) {
       setError(err.message ?? "Couldn't accept.");
     } finally {
@@ -470,7 +503,7 @@ export default function InstructorPortal() {
         "respond-to-assignment",
         {
           body: {
-            camp_assignment_id: changeFor.id,
+            [assignmentIdKey(changeFor)]: changeFor.id,
             action: "request_change",
             message: changeText.trim(),
           },
@@ -483,21 +516,21 @@ export default function InstructorPortal() {
           setError("You already accepted this — refresh and you'll see it confirmed.");
           setChangeFor(null);
           setChangeText("");
-          await loadAssignments(instructor.instructor_id);
+          await reloadAssignmentLists();
           return;
         }
         if (data?.error === "assignment_closed" || data?.error === "forbidden") {
           setError("That assignment is no longer available — your coordinator may have made a change.");
           setChangeFor(null);
           setChangeText("");
-          await loadAssignments(instructor.instructor_id);
+          await reloadAssignmentLists();
           return;
         }
         throw new Error(data?.error || fnErr?.message || "Couldn't send your request.");
       }
       setChangeFor(null);
       setChangeText("");
-      await loadAssignments(instructor.instructor_id);
+      await reloadAssignmentLists();
     } catch (err) {
       setError(err.message ?? "Couldn't send your request.");
     } finally {
@@ -702,7 +735,7 @@ export default function InstructorPortal() {
             // Pending_* and payouts_disabled statuses won't flip to 'complete',
             // but the contractor still wants out of the completion card and
             // into the schedule view. Load schedule data and switch phases.
-            await Promise.all([loadAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor), loadAfterschoolSurveys(instructor)]);
+            await Promise.all([loadAssignments(instructor.id), loadAfterschoolAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor), loadAfterschoolSurveys(instructor)]);
             setPhase("ready");
           }}
         />
@@ -721,6 +754,11 @@ export default function InstructorPortal() {
     (a) => a.status === "published" || a.status === "change_requested"
   );
   const accepted = currentAssignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
+  // After-school offers (no cycle archive concept yet — show all loaded).
+  const needsResponseAS = programAssignments.filter(
+    (a) => a.status === "published" || a.status === "change_requested"
+  );
+  const acceptedAS = programAssignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
 
   // CPR cert expiry nudge: render a clickable pill if the cert is expired or
   // within 60 days of expiring. Tap → opens the profile screen where the
@@ -885,8 +923,8 @@ export default function InstructorPortal() {
               Hi {displayFirstName(instructor)} 👋
             </h1>
             <p style={{ color: MUTED, margin: "4px 0 0", fontSize: 14 }}>
-              You have {totalCount} camp{totalCount === 1 ? "" : "s"} on your schedule
-              {needsResponse.length > 0 && ` · ${needsResponse.length} awaiting your response`}.
+              You have {totalCount + programAssignments.length} {programAssignments.length > 0 && totalCount === 0 ? `class${programAssignments.length === 1 ? "" : "es"}` : `camp${totalCount + programAssignments.length === 1 ? "" : "s"}`} on your schedule
+              {(needsResponse.length + needsResponseAS.length) > 0 && ` · ${needsResponse.length + needsResponseAS.length} awaiting your response`}.
             </p>
           </div>
         </div>
@@ -1018,7 +1056,7 @@ export default function InstructorPortal() {
         </Section>
       )}
 
-      {needsResponse.length > 0 && (
+      {(needsResponse.length > 0 || needsResponseAS.length > 0) && (
         <Section title="Needs your response">
           {needsResponse.map((a) => (
             <AssignmentCard
@@ -1030,10 +1068,20 @@ export default function InstructorPortal() {
               onRequestChange={() => { setChangeFor(a); setChangeText(""); }}
             />
           ))}
+          {needsResponseAS.map((a) => (
+            <AfterschoolAssignmentCard
+              key={a.id}
+              assignment={a}
+              messages={a.instructor_offer_messages || []}
+              busy={actingOn === a.id}
+              onAccept={() => handleAccept(a)}
+              onRequestChange={() => { setChangeFor(a); setChangeText(""); }}
+            />
+          ))}
         </Section>
       )}
 
-      {(accepted.length > 0 || subAssignments.some((s) => s.status === "confirmed" || s.status === "taught")) && (
+      {(accepted.length > 0 || acceptedAS.length > 0 || subAssignments.some((s) => s.status === "confirmed" || s.status === "taught")) && (
         <Section title="Confirmed schedule">
           {accepted.map((a) => (
             <AssignmentCard
@@ -1042,6 +1090,9 @@ export default function InstructorPortal() {
               readOnly
               onOpen={() => { setSelectedAssignmentId(a.id); setView("assignment-detail"); }}
             />
+          ))}
+          {acceptedAS.map((a) => (
+            <AfterschoolAssignmentCard key={a.id} assignment={a} readOnly />
           ))}
           {subAssignments.filter((s) => s.status === "confirmed" || s.status === "taught").map((s) => (
             <SubOfferCard
@@ -1055,7 +1106,7 @@ export default function InstructorPortal() {
         </Section>
       )}
 
-      {currentAssignments.length === 0 && needsSurvey.length === 0 && needsAfterschoolSurvey.length === 0 && pastAssignments.length === 0 && (
+      {currentAssignments.length === 0 && programAssignments.length === 0 && needsSurvey.length === 0 && needsAfterschoolSurvey.length === 0 && pastAssignments.length === 0 && (
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, color: MUTED, textAlign: "center" }}>
           No schedule yet. Your admin will email you when it's ready.
         </div>
@@ -1601,6 +1652,103 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
   );
 }
 
+function AfterschoolAssignmentCard({ assignment, messages = [], busy, onAccept, onRequestChange, readOnly }) {
+  const p = assignment.programs;
+  if (!p) return null;
+  const statusColor =
+    assignment.status === "confirmed" ? OK_GREEN :
+    assignment.status === "change_requested" ? VIOLET :
+    PURPLE;
+  const statusLabel =
+    assignment.status === "confirmed" ? "Confirmed ✓" :
+    assignment.status === "change_requested" ? "Change requested — waiting on admin" :
+    "Awaiting your response";
+
+  const sortedMsgs = [...messages].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const latestMsg = sortedMsgs[0];
+  const awaitingAdminReply = assignment.status === "change_requested" && latestMsg?.sender_role === "instructor";
+  const requestChangeDisabled = busy || awaitingAdminReply;
+
+  const when = [asDayName(p.day_of_week), [p.start_time, p.end_time].filter(Boolean).join("–")].filter(Boolean).join(" · ");
+  const loc = p.program_locations;
+
+  return (
+    <div style={{
+      background: "#fff",
+      border: `1px solid ${RULE}`,
+      borderLeft: `3px solid ${statusColor}`,
+      borderRadius: 8,
+      padding: "14px 16px",
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
+            {p.curriculum || "Class"} <span style={{ fontWeight: 400, color: PURPLE, fontSize: 12, marginLeft: 4 }}>· after-school</span>
+          </div>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.4 }}>
+            {when} · <strong style={{ color: PURPLE, fontWeight: 600 }}>all term</strong><br />
+            {loc?.name || ""}{loc?.room_number ? ` · Room ${loc.room_number}` : ""}
+          </div>
+        </div>
+        <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap", textAlign: "right", maxWidth: 140 }}>
+          {statusLabel}
+        </span>
+      </div>
+
+      {assignment.distance_bonus_cents ? (
+        <div style={{ fontSize: 13, color: PURPLE, fontWeight: 600 }}>
+          + {dollars(assignment.distance_bonus_cents)} bonus
+        </div>
+      ) : null}
+
+      {assignment.status === "change_requested" && messages.length > 0 && (
+        <div style={{ marginTop: 4, padding: 10, background: `${VIOLET}10`, border: `1px solid ${VIOLET}`, borderRadius: 6 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+            Messages
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {[...messages]
+              .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+              .map((m) => (
+                <div key={m.id} style={{ fontSize: 13, color: INK, lineHeight: 1.4 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: m.sender_role === "admin" ? PURPLE : MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 6 }}>
+                    {m.sender_role === "admin" ? "Admin" : "You"}
+                  </span>
+                  {m.message}
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {!readOnly && (
+        <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={onAccept}
+            disabled={busy}
+            style={{ padding: "8px 14px", background: PURPLE, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1 }}
+          >
+            {busy ? "Saving…" : "Accept"}
+          </button>
+          <button
+            type="button"
+            onClick={onRequestChange}
+            disabled={requestChangeDisabled}
+            title={awaitingAdminReply ? "You already requested a change — wait for your coordinator to reply, then you can send another." : ""}
+            style={{ padding: "8px 14px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 13, fontWeight: 500, fontFamily: "inherit", cursor: requestChangeDisabled ? "not-allowed" : "pointer", opacity: requestChangeDisabled ? 0.5 : 1 }}
+          >
+            {assignment.status === "change_requested" ? "Send another change request" : "Request change"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GoogleG() {
   return (
     <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -1612,8 +1760,21 @@ function GoogleG() {
   );
 }
 
+function asDayName(dow) {
+  if (dow == null) return "";
+  const k = String(dow).trim().toLowerCase();
+  const map = { monday: "Mondays", tuesday: "Tuesdays", wednesday: "Wednesdays", thursday: "Thursdays", friday: "Fridays" };
+  return map[k] || (k ? k.charAt(0).toUpperCase() + k.slice(1) : "");
+}
+
 function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onClose }) {
+  const isProgram = assignment.kind === "program";
   const s = assignment.camp_sessions;
+  const p = assignment.programs;
+  const crTitle = isProgram ? (p?.curriculum ?? "Class") : s?.curriculum_name;
+  const crSub = isProgram
+    ? [asDayName(p?.day_of_week), p?.program_locations?.name].filter(Boolean).join(" · ")
+    : `Week ${s?.week_num} · ${s?.location_name}`;
   return (
     <div
       onClick={onClose}
@@ -1632,10 +1793,10 @@ function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onCl
             Request change
           </div>
           <h2 style={{ margin: "4px 0 0", fontSize: 17, fontWeight: 700, color: INK }}>
-            {s?.curriculum_name}
+            {crTitle}
           </h2>
           <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
-            Week {s?.week_num} · {s?.location_name}
+            {crSub}
           </div>
         </div>
         <div style={{ padding: 20 }}>
