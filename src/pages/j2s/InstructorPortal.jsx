@@ -1552,7 +1552,7 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
             {s.location_name} · {titleCase(s.session_type)} {fmtTime(s.start_time)}–{fmtTime(s.end_time)}
           </div>
         </div>
-        <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap", textAlign: "right", maxWidth: 140 }}>
+        <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right", maxWidth: 130, flexShrink: 0, lineHeight: 1.35 }}>
           {statusLabel}
         </span>
       </div>
@@ -1694,7 +1694,7 @@ function AfterschoolAssignmentCard({ assignment, messages = [], busy, onAccept, 
             {loc?.name || ""}{loc?.room_number ? ` · Room ${loc.room_number}` : ""}
           </div>
         </div>
-        <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap", textAlign: "right", maxWidth: 140 }}>
+        <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right", maxWidth: 130, flexShrink: 0, lineHeight: 1.35 }}>
           {statusLabel}
         </span>
       </div>
