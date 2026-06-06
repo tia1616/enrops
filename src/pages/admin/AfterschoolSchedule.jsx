@@ -12,6 +12,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import NotifyRemovalModal from "./NotifyRemovalModal.jsx";
+import HatGuide from "../../components/HatGuide";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -177,6 +178,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [searchText, setSearchText] = useState("");
   const [selectedLocations, setSelectedLocations] = useState(() => new Set());
   const [selectedStatuses, setSelectedStatuses] = useState(() => new Set());
+  const [selectedInstructors, setSelectedInstructors] = useState(() => new Set());
   const [saveError, setSaveError] = useState(null);
   const [busy, setBusy] = useState(null); // 'matching' | 'survey' | null
   const [picker, setPicker] = useState(null); // { program }
@@ -473,6 +475,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const loc = locName.get(p.program_location_id) ?? "—";
     if (selectedLocations.size && !selectedLocations.has(loc)) return false;
     if (selectedStatuses.size && !selectedStatuses.has(e?.status)) return false;
+    if (selectedInstructors.size && !(e?.lead?.instructor_id && selectedInstructors.has(e.lead.instructor_id))) return false;
     const q = searchText.trim().toLowerCase();
     if (q) {
       const hay = [p.curriculum, loc, e?.lead?.instructor_first, e?.lead?.instructor_last].filter(Boolean).join(" ").toLowerCase();
@@ -498,7 +501,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
     return byDay;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, enriched, searchText, selectedLocations, selectedStatuses, locName]);
+  }, [state, enriched, searchText, selectedLocations, selectedStatuses, selectedInstructors, locName]);
 
   const locationOptions = useMemo(() => {
     if (state.status !== "ready") return [];
@@ -795,12 +798,33 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const survey = state.survey;
   const submittedCount = state.availability.filter((a) => a.submitted_at).length;
 
+  // Change-request notification (mirrors camp's Hat tip): surface a prompt to
+  // review when instructors ask to change their schedule.
+  const changeReqProgram = state.programs.find((p) => enriched.get(p.id)?.status === "change_requested");
+  const changeReqLead = changeReqProgram ? enriched.get(changeReqProgram.id)?.lead : null;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {saveError && (
         <div style={{ background: "#fdecea", border: "1px solid #f5c6cb", color: "#842029", borderRadius: 8, padding: "12px 16px", fontSize: 14 }}>
           {saveError}
         </div>
+      )}
+
+      {counts.changeRequested > 0 && changeReqLead && (
+        <HatGuide
+          character="instructor"
+          tip={{
+            key: `as-${term}-changereq-${counts.changeRequested}`,
+            message: counts.changeRequested === 1
+              ? `${changeReqLead.instructor_preferred || changeReqLead.instructor_first || "An instructor"} asked to change their schedule. Want to review the request?`
+              : `${counts.changeRequested} instructors asked to change their schedule. Want to review the requests?`,
+            primary: {
+              label: counts.changeRequested === 1 ? "Review change request" : `Review ${counts.changeRequested} change requests`,
+              onClick: () => setReviewFor({ program: changeReqProgram, assignment: changeReqLead }),
+            },
+          }}
+        />
       )}
 
       <Header
@@ -842,12 +866,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
       <FilterBar
         searchText={searchText}
-        setSearchText={setSearchText}
-        locationOptions={locationOptions}
+        onSearchChange={setSearchText}
+        instructors={state.instructors}
+        selectedInstructors={selectedInstructors}
+        onToggleInstructor={(id) => setSelectedInstructors((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; })}
+        locations={locationOptions}
         selectedLocations={selectedLocations}
-        setSelectedLocations={setSelectedLocations}
+        onToggleLocation={(name) => setSelectedLocations((prev) => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; })}
         selectedStatuses={selectedStatuses}
-        setSelectedStatuses={setSelectedStatuses}
+        onToggleStatus={(k) => setSelectedStatuses((prev) => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; })}
+        onClear={() => { setSearchText(""); setSelectedInstructors(new Set()); setSelectedLocations(new Set()); setSelectedStatuses(new Set()); }}
+        hasFilters={!!searchText || selectedInstructors.size > 0 || selectedLocations.size > 0 || selectedStatuses.size > 0}
       />
 
       {state.programs.length > 0 && (
@@ -1102,59 +1131,152 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
 
 const btnStyle = { padding: "10px 16px", borderRadius: 8, fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: "inherit" };
 
-function FilterBar({ searchText, setSearchText, locationOptions, selectedLocations, setSelectedLocations, selectedStatuses, setSelectedStatuses }) {
-  function toggle(set, setter, key) {
-    const next = new Set(set);
-    next.has(key) ? next.delete(key) : next.add(key);
-    setter(next);
-  }
-  const hasFilters = searchText || selectedLocations.size || selectedStatuses.size;
+// Mirrors the camp schedule FilterBar (Schedule.jsx) so both scheduling pages
+// render identically: search + Instructors/Locations/Status multi-selects +
+// Clear + active pills.
+function FilterBar({
+  searchText, onSearchChange,
+  instructors, selectedInstructors, onToggleInstructor,
+  locations, selectedLocations, onToggleLocation,
+  selectedStatuses, onToggleStatus,
+  onClear, hasFilters,
+}) {
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "12px 16px", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-      <input
-        value={searchText}
-        onChange={(e) => setSearchText(e.target.value)}
-        placeholder="Search class, school, instructor…"
-        style={{ flex: "1 1 220px", minWidth: 180, padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit" }}
-      />
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {FILTER_STATUSES.map((s) => (
-          <button
-            key={s.key}
-            onClick={() => toggle(selectedStatuses, setSelectedStatuses, s.key)}
-            style={chip(selectedStatuses.has(s.key), statusColor(s.key))}
-          >
-            {s.label}
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <input
+          type="search"
+          value={searchText}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Search classes, instructors, locations…"
+          name="schedule-search-filter"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          style={{ flex: "1 1 240px", minWidth: 200, padding: "8px 12px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", color: INK, background: "#fff" }}
+        />
+        <MultiSelect
+          label="Instructors"
+          options={instructors.map((i) => ({ key: i.id, label: `${i.preferred_name || i.first_name}${i.last_name ? " " + i.last_name : ""}` }))}
+          selected={selectedInstructors}
+          onToggle={onToggleInstructor}
+        />
+        <MultiSelect
+          label="Locations"
+          options={locations.map((name) => ({ key: name, label: name }))}
+          selected={selectedLocations}
+          onToggle={onToggleLocation}
+        />
+        <MultiSelect
+          label="Status"
+          options={FILTER_STATUSES.map((s) => ({ key: s.key, label: s.label }))}
+          selected={selectedStatuses}
+          onToggle={onToggleStatus}
+        />
+        {hasFilters && (
+          <button type="button" onClick={onClear} style={{ padding: "6px 10px", fontSize: 12, fontWeight: 600, background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, cursor: "pointer", fontFamily: "inherit" }}>
+            Clear
           </button>
-        ))}
+        )}
       </div>
-      {locationOptions.length > 0 && (
-        <select
-          onChange={(e) => { if (e.target.value) { toggle(selectedLocations, setSelectedLocations, e.target.value); e.target.value = ""; } }}
-          value=""
-          style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 13, fontFamily: "inherit", color: MUTED }}
-        >
-          <option value="">+ Filter school…</option>
-          {locationOptions.filter((l) => !selectedLocations.has(l)).map((l) => <option key={l} value={l}>{l}</option>)}
-        </select>
-      )}
-      {[...selectedLocations].map((l) => (
-        <button key={l} onClick={() => toggle(selectedLocations, setSelectedLocations, l)} style={chip(true, PURPLE)}>{l} ✕</button>
-      ))}
       {hasFilters && (
-        <button onClick={() => { setSearchText(""); setSelectedLocations(new Set()); setSelectedStatuses(new Set()); }} style={linkBtn}>Clear</button>
+        <ActivePills
+          searchText={searchText}
+          onClearSearch={() => onSearchChange("")}
+          instructors={instructors}
+          selectedInstructors={selectedInstructors}
+          onToggleInstructor={onToggleInstructor}
+          selectedLocations={selectedLocations}
+          onToggleLocation={onToggleLocation}
+          selectedStatuses={selectedStatuses}
+          onToggleStatus={onToggleStatus}
+        />
       )}
     </div>
   );
 }
 
-function chip(active, color) {
-  return {
-    padding: "5px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-    border: `1.5px solid ${active ? color : RULE}`,
-    background: active ? `${color}18` : "#fff",
-    color: active ? color : MUTED,
-  };
+function MultiSelect({ label, options, selected, onToggle }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const count = selected.size;
+  return (
+    <div style={{ position: "relative" }} ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{ padding: "7px 10px", fontSize: 13, fontWeight: 500, background: "#fff", color: INK, border: `1px solid ${count > 0 ? PURPLE : RULE}`, borderRadius: 6, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}
+      >
+        <span>{label}</span>
+        {count > 0 && (
+          <span style={{ background: PURPLE, color: "#fff", borderRadius: 999, padding: "0 7px", fontSize: 11, fontWeight: 600 }}>{count}</span>
+        )}
+        <span style={{ fontSize: 10, color: MUTED }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, minWidth: 220, maxHeight: 280, overflowY: "auto", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 6, boxShadow: "0 4px 14px rgba(0,0,0,0.08)", zIndex: 10, padding: 6 }}>
+          {options.length === 0 && (
+            <div style={{ padding: "8px 10px", color: MUTED, fontSize: 12 }}>None</div>
+          )}
+          {options.map((opt) => {
+            const isOn = selected.has(opt.key);
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => onToggle(opt.key)}
+                style={{ width: "100%", textAlign: "left", padding: "7px 10px", background: isOn ? `${VIOLET}1A` : "transparent", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 13, fontFamily: "inherit", color: INK, display: "flex", alignItems: "center", gap: 8 }}
+              >
+                <span style={{ width: 14, height: 14, borderRadius: 3, border: `1.5px solid ${isOn ? PURPLE : RULE}`, background: isOn ? PURPLE : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, lineHeight: 1, flex: "0 0 auto" }}>{isOn ? "✓" : ""}</span>
+                <span style={{ flex: 1 }}>{opt.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActivePills({
+  searchText, onClearSearch,
+  instructors, selectedInstructors, onToggleInstructor,
+  selectedLocations, onToggleLocation,
+  selectedStatuses, onToggleStatus,
+}) {
+  const pills = [];
+  if (searchText) pills.push({ key: "_search", label: `"${searchText}"`, onRemove: onClearSearch });
+  for (const id of selectedInstructors) {
+    const i = instructors.find((x) => x.id === id);
+    if (i) pills.push({ key: `i:${id}`, label: i.preferred_name || i.first_name, onRemove: () => onToggleInstructor(id) });
+  }
+  for (const name of selectedLocations) {
+    pills.push({ key: `l:${name}`, label: name, onRemove: () => onToggleLocation(name) });
+  }
+  for (const k of selectedStatuses) {
+    const s = FILTER_STATUSES.find((x) => x.key === k);
+    pills.push({ key: `s:${k}`, label: s?.label ?? k, onRemove: () => onToggleStatus(k) });
+  }
+  if (pills.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {pills.map((p) => (
+        <span key={p.key} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 4px 3px 10px", background: `${VIOLET}1A`, border: `1px solid ${RULE}`, borderRadius: 999, fontSize: 12, color: INK }}>
+          <span>{p.label}</span>
+          <button type="button" onClick={p.onRemove} aria-label="Remove filter" style={{ border: "none", background: "transparent", cursor: "pointer", padding: "0 4px", fontSize: 14, color: MUTED, lineHeight: 1 }}>×</button>
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function gradeLabel(g) {
