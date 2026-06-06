@@ -403,6 +403,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return c;
   }, [state, enriched]);
 
+  // Instructors who actually have approved (confirmed, not-yet-emailed) classes —
+  // the real recipients of a Send. The Send modal lists + pre-selects exactly these.
+  const sendableInstructors = useMemo(() => {
+    if (state.status !== "ready") return [];
+    const ids = new Set();
+    for (const a of state.assignments) {
+      if (a.status === "confirmed" && !a.email_sent_at && a.instructor_id) ids.add(a.instructor_id);
+    }
+    return state.instructors.filter((i) => ids.has(i.id));
+  }, [state]);
+
   // Eligibility for a target program: returns { ok, reason, pref, warnings }.
   function evaluate(instructorId, program) {
     const av = availByInstr.get(instructorId);
@@ -729,6 +740,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     await loadAll();
   }
 
+  function openSendOffers() {
+    // Pre-select every instructor with approved classes — "sending to all" by default;
+    // the admin unchecks to narrow.
+    setSelectedInstructorIds(new Set(sendableInstructors.map((i) => i.id)));
+    setOfferDialog({ mode: "choose", payload: null });
+  }
+
   function openRow(program) {
     const e = enriched.get(program.id);
     const lead = e?.lead ?? null;
@@ -773,7 +791,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         onOpenSurvey={() => setSurveyDialog({ mode: "choose", payload: null })}
         onMatch={handleMatch}
         onApprove={handleApprove}
-        onSendOffers={() => setOfferDialog({ mode: "choose", payload: null })}
+        onSendOffers={openSendOffers}
         hasPrograms={state.programs.length > 0}
       />
 
@@ -902,7 +920,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           dialog={offerDialog}
           term={term}
           counts={counts}
-          instructors={state.instructors}
+          instructors={sendableInstructors}
           selectedInstructorIds={selectedInstructorIds}
           setSelectedInstructorIds={setSelectedInstructorIds}
           deadline={offerDeadline}
@@ -1413,9 +1431,11 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
   function toggle(id) {
     const next = new Set(selectedInstructorIds ?? []);
     next.has(id) ? next.delete(id) : next.add(id);
-    setSelectedInstructorIds(next.size ? next : null);
+    setSelectedInstructorIds(next);
   }
+  const total = instructors.length;
   const selCount = selectedInstructorIds?.size ?? 0;
+  const allSelected = total > 0 && selCount === total;
   return (
     <Overlay onClose={onClose}>
       <div style={{ padding: 24, maxWidth: 480 }}>
@@ -1424,13 +1444,23 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
           Emails each instructor their approved classes with Accept / Request change.{" "}
           <strong style={{ color: INK }}>{counts.sendable}</strong> class{counts.sendable === 1 ? "" : "es"} ready to send.
         </p>
-        <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 }}>Response deadline (optional)</label>
-        <input type="date" value={deadline ?? ""} onChange={(e) => setDeadline(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit", marginBottom: 16 }} />
-        <details style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: INK }}>Response deadline (optional)</label>
+          {deadline ? <button type="button" onClick={() => setDeadline("")} style={linkBtn}>Clear (no deadline)</button> : null}
+        </div>
+        <input type="date" value={deadline ?? ""} onChange={(e) => setDeadline(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit", marginBottom: 4 }} />
+        <div style={{ fontSize: 12, color: MUTED, marginBottom: 16 }}>{deadline ? "Instructors are asked to respond by this date." : "No deadline — instructors are asked to respond, but no date is shown."}</div>
+        <details style={{ marginBottom: 16 }} open>
           <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600, color: PURPLE }}>
-            {selCount ? `Sending to ${selCount} selected instructor${selCount === 1 ? "" : "s"}` : "Sending to all instructors with approved classes"}
+            {allSelected ? `Sending to all ${total} instructor${total === 1 ? "" : "s"} with approved classes` : selCount === 0 ? "No instructors selected" : `Sending to ${selCount} of ${total} instructors`}
           </summary>
-          <div style={{ maxHeight: 180, overflowY: "auto", marginTop: 8, border: `1px solid ${RULE}`, borderRadius: 8, padding: 8 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+            <button type="button" onClick={() => setSelectedInstructorIds(allSelected ? new Set() : new Set(instructors.map((i) => i.id)))} style={linkBtn}>
+              {allSelected ? "Clear all" : "Select all"}
+            </button>
+          </div>
+          <div style={{ maxHeight: 180, overflowY: "auto", marginTop: 4, border: `1px solid ${RULE}`, borderRadius: 8, padding: 8 }}>
+            {total === 0 && <div style={{ fontSize: 13, color: MUTED, padding: "4px 6px" }}>No instructors have approved classes yet — Approve some matches first.</div>}
             {instructors.map((i) => {
               const checked = selectedInstructorIds?.has(i.id) ?? false;
               return (
@@ -1443,9 +1473,9 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
           </div>
         </details>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
-          <button onClick={() => onRun("test")} disabled={busy} style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}` }}>Send test to me</button>
-          <button onClick={() => onRun("send")} disabled={busy} style={{ ...btnStyle, background: PURPLE, color: "#fff" }}>
-            {busy ? "Sending…" : (selCount ? `Send to ${selCount}` : "Send to all")}
+          <button onClick={() => onRun("test")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}`, opacity: selCount === 0 ? 0.5 : 1 }}>Send test to me</button>
+          <button onClick={() => onRun("send")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: PURPLE, color: "#fff", opacity: busy || selCount === 0 ? 0.6 : 1 }}>
+            {busy ? "Sending…" : allSelected ? "Send to all" : `Send to ${selCount}`}
           </button>
         </div>
         <div style={{ textAlign: "right", marginTop: 12 }}>
