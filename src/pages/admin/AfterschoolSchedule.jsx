@@ -725,7 +725,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             value={value}
             onChange={onChange}
             title="Switch term"
-            style={{ fontSize: 20, fontWeight: 700, color: INK, letterSpacing: -0.3, fontFamily: "inherit", background: "transparent", border: "none", borderBottom: `2px dotted ${RULE}`, padding: "0 22px 2px 0", cursor: "pointer", appearance: "none",
+            style={{ fontSize: 16, fontWeight: 700, color: INK, letterSpacing: -0.2, fontFamily: "inherit", background: "transparent", border: "none", borderBottom: `2px dotted ${RULE}`, padding: "0 22px 2px 0", cursor: "pointer", appearance: "none",
               backgroundImage: `linear-gradient(45deg, transparent 50%, ${MUTED} 50%), linear-gradient(135deg, ${MUTED} 50%, transparent 50%)`,
               backgroundPosition: "calc(100% - 12px) center, calc(100% - 7px) center",
               backgroundSize: "5px 5px, 5px 5px",

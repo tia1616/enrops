@@ -2303,10 +2303,10 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
               }}
               title="Switch to another scheduling cycle or after-school term"
               style={{
-                fontSize: 26,
+                fontSize: 16,
                 fontWeight: 700,
                 color: INK,
-                letterSpacing: -0.4,
+                letterSpacing: -0.2,
                 fontFamily: "inherit",
                 background: "transparent",
                 border: "none",
