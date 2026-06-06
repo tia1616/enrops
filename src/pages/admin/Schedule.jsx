@@ -514,7 +514,14 @@ export default function Schedule() {
       (progRes.data ?? []).forEach((r) => { if (r.term) terms.add(r.term); });
       (surveyRes.data ?? []).forEach((r) => { if (r.term) terms.add(r.term); });
       (cycleRes.data ?? []).forEach((r) => { if (r.name) terms.add(r.name); });
-      setAfterschoolTerms([...terms].sort().reverse());
+      // Chronological order (e.g. Fall 2026 -> Winter 2027 -> Spring 2027), not alphabetical.
+      const SEASON_MONTH = { SU: 6, FA: 9, WI: 1, SP: 4 };
+      const termSortKey = (code) => {
+        const m = /^(SU|FA|WI|SP)(\d{2})$/.exec(code || "");
+        if (!m) return 0;
+        return (2000 + parseInt(m[2], 10)) * 100 + (SEASON_MONTH[m[1]] || 0);
+      };
+      setAfterschoolTerms([...terms].sort((a, b) => termSortKey(a) - termSortKey(b)));
     })();
     return () => { alive = false; };
   }, [org?.id]);
