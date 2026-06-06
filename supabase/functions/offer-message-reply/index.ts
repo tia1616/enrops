@@ -3,6 +3,8 @@
 // instructor_offer_messages so the thread is preserved in-product.
 //
 // Input: { camp_assignment_id: string, message: string }
+//    OR: { program_assignment_id: string, message: string }  (after-school)
+// Polymorphic (camp | program) — mirrors respond-to-assignment.
 // Auth: admin/owner of the assignment's org (verified via JWT).
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
@@ -29,6 +31,12 @@ function escape(s: string | null | undefined) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+function dayLabel(dow: string | null): string {
+  if (!dow) return '';
+  const d = dow.trim().toLowerCase();
+  return d.charAt(0).toUpperCase() + d.slice(1) + 's'; // "Mondays"
+}
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -40,9 +48,17 @@ serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
-    const { camp_assignment_id, message } = await req.json();
-    if (!camp_assignment_id) return json({ error: 'camp_assignment_id required' }, 400);
+    const reqBody = await req.json();
+    const message = reqBody.message;
+    const campId = reqBody.camp_assignment_id?.trim?.() || null;
+    const programId = reqBody.program_assignment_id?.trim?.() || null;
+    if (!campId && !programId) return json({ error: 'camp_assignment_id or program_assignment_id required' }, 400);
     if (!message || !message.trim()) return json({ error: 'message required' }, 400);
+
+    const isProgram = !!programId;
+    const table = isProgram ? 'program_assignments' : 'camp_assignments';
+    const fkCol = isProgram ? 'program_assignment_id' : 'camp_assignment_id';
+    const assignmentId = (isProgram ? programId : campId)!;
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -52,10 +68,11 @@ serve(async (req: Request) => {
     const { data: userData, error: userErr } = await supabase.auth.getUser(token);
     if (userErr || !userData?.user) return json({ error: 'invalid auth' }, 401);
 
+    const sessionCol = isProgram ? 'program_id' : 'camp_session_id';
     const { data: assignment, error: aErr } = await supabase
-      .from('camp_assignments')
-      .select('id, organization_id, camp_session_id, instructor_id, change_request_message, status')
-      .eq('id', camp_assignment_id)
+      .from(table)
+      .select(`id, organization_id, ${sessionCol}, instructor_id, change_request_message, status`)
+      .eq('id', assignmentId)
       .maybeSingle();
     if (aErr || !assignment) return json({ error: 'assignment not found' }, 404);
 
@@ -76,11 +93,36 @@ serve(async (req: Request) => {
       .maybeSingle();
     if (!instructor?.email) return json({ error: 'instructor has no email' }, 400);
 
-    const { data: session } = await supabase
-      .from('camp_sessions')
-      .select('location_name, week_num, session_type, curriculum_name, cycle_id')
-      .eq('id', assignment.camp_session_id)
-      .maybeSingle();
+    // Normalize display context across camp (camp_sessions) and program (programs).
+    let curriculumName = 'schedule';
+    let subLine = '';
+    if (isProgram) {
+      const { data: prog } = await supabase
+        .from('programs')
+        .select('curriculum, day_of_week, program_location_id')
+        .eq('id', (assignment as any).program_id)
+        .maybeSingle();
+      if (prog) {
+        curriculumName = prog.curriculum ?? 'class';
+        let locName = '';
+        if (prog.program_location_id) {
+          const { data: loc } = await supabase
+            .from('program_locations').select('name').eq('id', prog.program_location_id).maybeSingle();
+          locName = loc?.name ?? '';
+        }
+        subLine = [dayLabel(prog.day_of_week), locName].filter(Boolean).join(' · ');
+      }
+    } else {
+      const { data: session } = await supabase
+        .from('camp_sessions')
+        .select('location_name, week_num, session_type, curriculum_name, cycle_id')
+        .eq('id', (assignment as any).camp_session_id)
+        .maybeSingle();
+      if (session) {
+        curriculumName = session.curriculum_name ?? 'schedule';
+        subLine = `Week ${session.week_num} · ${session.location_name ?? ''}`;
+      }
+    }
 
     const { data: org } = await supabase
       .from('organizations')
@@ -100,19 +142,18 @@ serve(async (req: Request) => {
     const replyTo = brandingRow?.email_reply_to ?? undefined;
 
     const adminFirstName = userData.user.user_metadata?.full_name?.split(' ')[0] ?? 'your admin';
-    const cycleName = session?.cycle_id ? '' : '';
     if (!org?.slug) throw new Error(`offer-message-reply: org ${org?.id ?? 'null'} has no slug; cannot build portal URL`);
     if (!org?.name) throw new Error(`offer-message-reply: org ${org?.id ?? 'null'} has no name; cannot build subject line`);
     const portalUrl = `https://enrops.com/${org.slug}/instructor`;
-    const subject = `Re: Your ${session?.curriculum_name ?? 'schedule'} — ${org.name}`;
+    const subject = `Re: Your ${curriculumName} — ${org.name}`;
 
     const html = `<!doctype html><html lang="en"><body style="margin:0;padding:0;background:${DEFAULT_PAGE_BG};font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif;color:${TEXT};">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${DEFAULT_PAGE_BG};padding:32px 16px;"><tr><td align="center">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;width:100%;background:#fff;border:1px solid ${BORDER};border-radius:10px;">
 <tr><td style="padding:28px 32px 8px;">
 <div style="font-size:13px;color:${MUTED};text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">${escape(org?.name ?? '')}</div>
-<h1 style="margin:6px 0 0;font-size:20px;color:${TEXT};font-weight:700;">A message about your ${escape(session?.curriculum_name ?? 'schedule')}</h1>
-${session ? `<div style="font-size:13px;color:${MUTED};margin-top:4px;">Week ${session.week_num} · ${escape(session.location_name ?? '')}</div>` : ''}
+<h1 style="margin:6px 0 0;font-size:20px;color:${TEXT};font-weight:700;">A message about your ${escape(curriculumName)}</h1>
+${subLine ? `<div style="font-size:13px;color:${MUTED};margin-top:4px;">${escape(subLine)}</div>` : ''}
 </td></tr>
 <tr><td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
 Hi ${escape(instructor.first_name ?? 'there')},<br /><br />
@@ -162,7 +203,7 @@ Just reply to this email if you want to keep the conversation going.<br /><br />
 
     await supabase.from('instructor_offer_messages').insert({
       organization_id: assignment.organization_id,
-      camp_assignment_id: assignment.id,
+      [fkCol]: assignment.id,
       sender_role: 'admin',
       message: message.trim(),
     });
