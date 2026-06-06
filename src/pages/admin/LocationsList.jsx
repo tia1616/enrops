@@ -25,9 +25,17 @@ const FIELDS_INSTRUCTOR_FACING = new Set([
   "arrival_instructions", "dismissal_instructions", "food_drink_policy", "notes",
 ]);
 
+// Pull the city out of a US address like "123 Main St, Portland, OR 97201".
+function parseCity(address) {
+  if (!address) return "";
+  const m = /,\s*([^,]+),\s*[A-Za-z]{2}\b/.exec(address);
+  return m ? m[1].trim() : "";
+}
+
 const EMPTY_DRAFT = {
   name: "",
   district: "",
+  area: "",
   address: "",
   room_number: "",
   contact_name: "",
@@ -82,7 +90,7 @@ export default function LocationsList() {
     setLoading(true);
     const { data, error: err } = await supabase
       .from("program_locations")
-      .select("id, name, district, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, parent_arrival_instructions, parent_dismissal_instructions, food_drink_policy, notes, created_at")
+      .select("id, name, district, area, address, room_number, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, parent_arrival_instructions, parent_dismissal_instructions, food_drink_policy, notes, created_at")
       .eq("organization_id", org.id)
       .order("name", { ascending: true });
     if (err) {
@@ -122,6 +130,7 @@ export default function LocationsList() {
     setDraft({
       name: loc.name ?? "",
       district: loc.district ?? "",
+      area: loc.area ?? "",
       address: loc.address ?? "",
       room_number: loc.room_number ?? "",
       contact_name: loc.contact_name ?? "",
@@ -173,6 +182,8 @@ export default function LocationsList() {
       for (const [k, v] of Object.entries(draft)) {
         payload[k] = typeof v === "string" && v.trim() === "" ? null : (typeof v === "string" ? v.trim() : v);
       }
+      // Area defaults to the address city when left blank (matches the availability survey + matcher).
+      payload.area = (draft.area && draft.area.trim()) ? draft.area.trim() : (parseCity(draft.address) || null);
       if (editingId === "new") {
         // program_locations.slug is NOT NULL and globally UNIQUE, but the form
         // doesn't collect one. Generate it from the name with a short random
@@ -384,6 +395,19 @@ function EditCard({ title, draft, bind, error, saving, onSave, onCancel, isNew }
 
       <Field label="Address" instructorFacing>
         <input type="text" {...bind("address")} placeholder="e.g. 2037 Douglas St, Forest Grove, OR 97116" style={inputStyle} />
+      </Field>
+
+      <Field label="Area" hint="The area this venue is in (e.g. Portland, Hillsboro). Instructors rank areas in their availability survey, and instructor matching uses it. Defaults to the city from the address.">
+        <input type="text" {...bind("area")} placeholder={parseCity(draft.address) ? `e.g. ${parseCity(draft.address)} (from address)` : "e.g. Portland"} style={inputStyle} />
+        {!draft.area?.trim() && parseCity(draft.address) && (
+          <button
+            type="button"
+            onClick={() => setDraft((d) => ({ ...d, area: parseCity(d.address) }))}
+            style={{ marginTop: 6, background: "transparent", border: "none", color: "#1C004F", fontSize: 12, fontWeight: 600, cursor: "pointer", padding: 0 }}
+          >
+            Use &quot;{parseCity(draft.address)}&quot;
+          </button>
+        )}
       </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
