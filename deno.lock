@@ -1755,16 +1755,21 @@
   "workspace": {
     "packageJson": {
       "dependencies": [
+        "npm:@react-pdf/renderer@^4.5.1",
         "npm:@supabase/supabase-js@^2.39.0",
+        "npm:@vite-pwa/assets-generator@^1.0.2",
         "npm:@vitejs/plugin-react@^4.2.1",
         "npm:autoprefixer@^10.4.17",
+        "npm:heic2any@^0.0.4",
         "npm:postcss@^8.4.33",
         "npm:react-dom@^18.2.0",
         "npm:react-markdown@^10.1.0",
         "npm:react-router-dom@^6.21.0",
         "npm:react@^18.2.0",
         "npm:tailwindcss@^3.4.1",
-        "npm:vite@^5.0.12"
+        "npm:vite-plugin-pwa@^1.3.0",
+        "npm:vite@^5.0.12",
+        "npm:workbox-window@^7.4.1"
       ]
     }
   }

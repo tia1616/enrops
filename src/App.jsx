@@ -43,12 +43,20 @@ import AbandonedPage from './pages/onboarding/AbandonedPage.jsx';
 import { CartProvider } from './context/CartContext.jsx';
 import PwaUpdateToast from './components/pwa/PwaUpdateToast.jsx';
 
+// On the staging site, the public marketing landing at "/" just gets in the way
+// (staging exists to exercise the app). Host-gated so prod (enrops.com) and any
+// tenant domains keep the marketing page — only *.enrops-staging.netlify.app
+// (primary, branch, and deploy-permalink subdomains) skip straight to admin login.
+const IS_STAGING =
+  typeof window !== 'undefined' &&
+  window.location.hostname.endsWith('enrops-staging.netlify.app');
+
 export default function App() {
   return (
     <>
     <PwaUpdateToast />
     <Routes>
-      <Route path="/" element={<EnropsLanding />} />
+      <Route path="/" element={IS_STAGING ? <Navigate to="/admin/login" replace /> : <EnropsLanding />} />
       <Route path="/privacy" element={<PolicyPage policyType="privacy" orgSlug="enrops" />} />
       <Route path="/terms" element={<PolicyPage policyType="terms" orgSlug="enrops" />} />
       <Route path="/acceptable-use" element={<PolicyPage policyType="acceptable-use" orgSlug="enrops" />} />

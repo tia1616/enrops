@@ -11,6 +11,7 @@ import { defaultTenantSlug } from "../../lib/tenants.js";
 import HatGuide from "../../components/HatGuide";
 import NotifyRemovalModal from "./NotifyRemovalModal";
 import AssignSubModal from "./AssignSubModal";
+import AfterschoolSchedule from "./AfterschoolSchedule";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -362,6 +363,13 @@ export default function Schedule() {
   // viewed one. selectedCycleId=null means "use the latest one I find" (default).
   const [allCycles, setAllCycles] = useState([]);
   const [selectedCycleId, setSelectedCycleId] = useState(null);
+  // After-school terms run on the same /admin/schedule page via a unified term
+  // selector. scheduleMode 'afterschool' short-circuits the entire camp UI and
+  // renders <AfterschoolSchedule> instead. afterschoolTerms is the distinct list
+  // of term codes this org has programs or an open survey for.
+  const [afterschoolTerms, setAfterschoolTerms] = useState([]);
+  const [scheduleMode, setScheduleMode] = useState("camp"); // "camp" | "afterschool"
+  const [selectedTerm, setSelectedTerm] = useState(null); // afterschool term code, e.g. "FA26"
   const [recentlyUpdated, setRecentlyUpdated] = useState(() => new Set()); // assignment ids that flashed via realtime
 
   const dragStateRef = useRef(null);
@@ -383,6 +391,7 @@ export default function Schedule() {
         .from("scheduling_cycles")
         .select("id, name, cycle_type, starts_on, ends_on, status, weeks, auto_reminders_enabled, availability_survey_opened_at, survey_deadline")
         .eq("organization_id", org.id)
+        .eq("cycle_type", "summer_camp")
         .neq("status", "archived")
         .order("starts_on", { ascending: false, nullsFirst: false });
       if (cyclesErr) throw cyclesErr;
@@ -487,6 +496,35 @@ export default function Schedule() {
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id, selectedCycleId]);
+
+  // Discover which after-school terms this org has so the term selector can offer
+  // them. Union of programs.term and afterschool_survey_state.term. Independent of
+  // the camp load so it works even when there are no camp cycles yet.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!org?.id) return;
+      const [progRes, surveyRes, cycleRes] = await Promise.all([
+        supabase.from("programs").select("term").eq("organization_id", org.id).not("term", "is", null),
+        supabase.from("afterschool_survey_state").select("term").eq("organization_id", org.id),
+        supabase.from("scheduling_cycles").select("name").eq("organization_id", org.id).eq("cycle_type", "afterschool").neq("status", "archived"),
+      ]);
+      if (!alive) return;
+      const terms = new Set();
+      (progRes.data ?? []).forEach((r) => { if (r.term) terms.add(r.term); });
+      (surveyRes.data ?? []).forEach((r) => { if (r.term) terms.add(r.term); });
+      (cycleRes.data ?? []).forEach((r) => { if (r.name) terms.add(r.name); });
+      // Chronological order (e.g. Fall 2026 -> Winter 2027 -> Spring 2027), not alphabetical.
+      const SEASON_MONTH = { SU: 6, FA: 9, WI: 1, SP: 4 };
+      const termSortKey = (code) => {
+        const m = /^(SU|FA|WI|SP)(\d{2})$/.exec(code || "");
+        if (!m) return 0;
+        return (2000 + parseInt(m[2], 10)) * 100 + (SEASON_MONTH[m[1]] || 0);
+      };
+      setAfterschoolTerms([...terms].sort((a, b) => termSortKey(a) - termSortKey(b)));
+    })();
+    return () => { alive = false; };
+  }, [org?.id]);
 
   // Realtime: when an instructor accepts or requests a change in the portal, the
   // camp_assignments row updates. Subscribe so the calendar reflects the change
@@ -853,6 +891,19 @@ export default function Schedule() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enriched, focusedWeek, searchText, selectedInstructors, selectedLocations, selectedStatuses]);
 
+  // After-school mode short-circuits the entire camp UI. The afterschool component
+  // renders its own header with the unified term selector (camp cycles + terms).
+  if (scheduleMode === "afterschool" && selectedTerm) return (
+    <AfterschoolSchedule
+      org={org}
+      term={selectedTerm}
+      campCycles={allCycles}
+      afterschoolTerms={afterschoolTerms}
+      onSwitchTerm={(t) => setSelectedTerm(t)}
+      onSwitchToCamp={(cid) => { setScheduleMode("camp"); setSelectedCycleId(cid); }}
+    />
+  );
+
   if (state.status === "loading") return <div style={{ color: MUTED, fontSize: 14 }}>Loading schedule…</div>;
   if (state.status === "empty") return (
     <>
@@ -861,11 +912,29 @@ export default function Schedule() {
         body="A scheduling cycle is one term of camps or classes (e.g. SU26, FA26). Create one to start matching instructors to programs."
         action={{ label: "+ Create your first cycle", onClick: () => setNewCycleOpen(true) }}
       />
+      {afterschoolTerms.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <button
+            type="button"
+            onClick={() => { setScheduleMode("afterschool"); setSelectedTerm(afterschoolTerms[0]); }}
+            style={{
+              background: PURPLE, color: "#fff", border: "none", borderRadius: 8,
+              padding: "10px 18px", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            View after-school schedule ({cycleDisplayName(afterschoolTerms[0])})
+          </button>
+        </div>
+      )}
       {newCycleOpen && (
         <NewCycleModal
           orgId={org?.id}
           onClose={() => setNewCycleOpen(false)}
-          onCreated={(newId) => { setNewCycleOpen(false); setSelectedCycleId(newId); }}
+          onCreated={(c) => {
+            setNewCycleOpen(false);
+            if (c.cycle_type === "afterschool") { setScheduleMode("afterschool"); setSelectedTerm(c.name); }
+            else { setSelectedCycleId(c.id); }
+          }}
         />
       )}
     </>
@@ -1425,6 +1494,23 @@ export default function Schedule() {
     }
   }
 
+  // In-app preview: renders the real offer email(s) without sending. Returns
+  // [{ instructor_id, to, subject, html, text }].
+  async function previewOffers() {
+    if (state.status !== "ready") return [];
+    const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
+    const { data, error } = await supabase.functions.invoke("send-offers", {
+      body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline },
+    });
+    if (error) {
+      let realMsg = error.message ?? "function error";
+      try { const body = await error.context?.json?.(); if (body?.error) realMsg = body.error; } catch {}
+      throw new Error(realMsg);
+    }
+    if (data?.error) throw new Error(data.error);
+    return data.preview || [];
+  }
+
   async function handleRollback() {
     if (state.status !== "ready") return;
     const confirmed = window.confirm(
@@ -1796,7 +1882,9 @@ export default function Schedule() {
       <HeaderStrip
         cycle={cycle}
         allCycles={allCycles}
+        afterschoolTerms={afterschoolTerms}
         onSwitchCycle={setSelectedCycleId}
+        onSwitchToAfterschool={(t) => { setScheduleMode("afterschool"); setSelectedTerm(t); }}
         onOpenNewCycle={() => setNewCycleOpen(true)}
         phaseLabel={derivedPhase}
         counts={counts}
@@ -1936,13 +2024,18 @@ export default function Schedule() {
           })()}
           selectedInstructorIds={selectedInstructorIds}
           onSelectedInstructorIdsChange={setSelectedInstructorIds}
+          onPreview={previewOffers}
         />
       )}
       {newCycleOpen && (
         <NewCycleModal
           orgId={org?.id}
           onClose={() => setNewCycleOpen(false)}
-          onCreated={(newId) => { setNewCycleOpen(false); setSelectedCycleId(newId); }}
+          onCreated={(c) => {
+            setNewCycleOpen(false);
+            if (c.cycle_type === "afterschool") { setScheduleMode("afterschool"); setSelectedTerm(c.name); }
+            else { setSelectedCycleId(c.id); }
+          }}
         />
       )}
       {surveyDialog && (
@@ -2198,8 +2291,9 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
+function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
   const otherCycles = (allCycles ?? []).filter((c) => c.id !== cycle.id);
+  const hasOtherViews = otherCycles.length > 0 || (afterschoolTerms ?? []).length > 0;
   return (
     <header style={{
       background: "#fff",
@@ -2217,16 +2311,20 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
     }}>
       <div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-          {otherCycles.length > 0 ? (
+          {hasOtherViews ? (
             <select
               value={cycle.id}
-              onChange={(e) => onSwitchCycle && onSwitchCycle(e.target.value)}
-              title="Switch to another scheduling cycle"
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v.startsWith("as:")) { onSwitchToAfterschool && onSwitchToAfterschool(v.slice(3)); }
+                else { onSwitchCycle && onSwitchCycle(v); }
+              }}
+              title="Switch to another scheduling cycle or after-school term"
               style={{
-                fontSize: 26,
+                fontSize: 16,
                 fontWeight: 700,
                 color: INK,
-                letterSpacing: -0.4,
+                letterSpacing: -0.2,
                 fontFamily: "inherit",
                 background: "transparent",
                 border: "none",
@@ -2240,10 +2338,19 @@ function HeaderStrip({ cycle, allCycles, onSwitchCycle, onOpenNewCycle, phaseLab
                 backgroundRepeat: "no-repeat",
               }}
             >
-              <option value={cycle.id}>{cycleDisplayName(cycle.name)}</option>
-              {otherCycles.map((c) => (
-                <option key={c.id} value={c.id}>{cycleDisplayName(c.name)}</option>
-              ))}
+              <optgroup label="Camps">
+                <option value={cycle.id}>{cycleDisplayName(cycle.name)}</option>
+                {otherCycles.map((c) => (
+                  <option key={c.id} value={c.id}>{cycleDisplayName(c.name)}</option>
+                ))}
+              </optgroup>
+              {(afterschoolTerms ?? []).length > 0 && (
+                <optgroup label="After-school">
+                  {afterschoolTerms.map((t) => (
+                    <option key={`as:${t}`} value={`as:${t}`}>{cycleDisplayName(t)}</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           ) : (
             <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>{cycleDisplayName(cycle.name)}</h1>
@@ -3597,7 +3704,24 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
   );
 }
 
-function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange }) {
+function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange, onPreview }) {
+  const [previews, setPreviews] = useState(null);
+  const [pvIdx, setPvIdx] = useState(0);
+  const [pvBusy, setPvBusy] = useState(false);
+  const [pvErr, setPvErr] = useState(null);
+  const hasPreview = previews && previews.length > 0;
+  const nameById = new Map(eligibleInstructors.map((i) => [i.id, i.name]));
+  async function doPreview() {
+    setPvBusy(true); setPvErr(null);
+    try {
+      const p = await onPreview();
+      setPreviews(p); setPvIdx(0);
+      if (!p.length) setPvErr("Nothing to preview — approve some assignments first.");
+    } catch (e) {
+      setPvErr(e.message || "Couldn't build the preview.");
+    } finally { setPvBusy(false); }
+  }
+
   if (dialog.mode === "result" && dialog.payload?.kind === "approve") {
     return (
       <ModalShell onClose={onClose} title="Approved">
@@ -3750,7 +3874,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
 
   // mode === "choose"
   return (
-    <ModalShell onClose={onClose} title="Send offers">
+    <ModalShell onClose={onClose} title="Send offers" maxWidth={hasPreview ? 760 : 480}>
       <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ color: MUTED }}>
           Pick the date you want instructors to respond by, then choose how to send.
@@ -3785,7 +3909,30 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           onChange={onSelectedInstructorIdsChange}
         />
         <DialogChoice
-          title="Send to me first (recommended)"
+          title={pvBusy ? "Building preview…" : hasPreview ? "Refresh preview" : "Preview the email (recommended)"}
+          subtitle="See exactly what instructors will receive — rendered right here, no email sent."
+          disabled={pvBusy || (selectedInstructorIds && selectedInstructorIds.size === 0)}
+          onClick={doPreview}
+        />
+        {pvErr && <div style={{ color: CORAL, fontSize: 12 }}>{pvErr}</div>}
+        {hasPreview && (
+          <div style={{ border: `1px solid ${RULE}`, borderRadius: 6, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${RULE}`, background: "#faf9f6" }}>
+              <span style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>Previewing</span>
+              {previews.length > 1 ? (
+                <select value={pvIdx} onChange={(e) => setPvIdx(Number(e.target.value))} style={{ fontSize: 12, fontFamily: "inherit", border: `1px solid ${RULE}`, borderRadius: 6, padding: "3px 6px", maxWidth: 320 }}>
+                  {previews.map((p, i) => <option key={i} value={i}>{nameById.get(p.instructor_id) || p.to}</option>)}
+                </select>
+              ) : (
+                <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>{nameById.get(previews[0].instructor_id) || previews[0].to}</span>
+              )}
+              <span style={{ marginLeft: "auto", fontSize: 11, color: MUTED }}>No email sent</span>
+            </div>
+            <iframe title="Offer email preview" srcDoc={previews[pvIdx]?.html} style={{ width: "100%", height: 440, border: "none", background: "#fff", display: "block" }} />
+          </div>
+        )}
+        <DialogChoice
+          title="Send to me first"
           subtitle={selectedInstructorIds
             ? `Generates only the ${selectedInstructorIds.size} selected instructor${selectedInstructorIds.size === 1 ? "'s" : "s'"} offer${selectedInstructorIds.size === 1 ? "" : "s"} and routes to your inbox. Nothing else changes.`
             : "Every instructor's offer arrives in your inbox so you can read exactly what they'll see. Nothing else changes — run this as many times as you want."}
@@ -4186,9 +4333,12 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
     setError(null);
     if (!/^(SU|FA|WI|SP)$/.test(term)) { setError("Pick a term."); return; }
     if (!/^\d{2}$/.test(year)) { setError("Year should be 2 digits (e.g. 27)."); return; }
-    if (!startsOn || !endsOn) { setError("Pick both a start date and an end date."); return; }
-    if (startsOn >= endsOn) { setError("End date has to be after start date."); return; }
-    if (derivedWeeks.length === 0) { setError("Date range doesn't include any full Mon–Fri weeks."); return; }
+    const isAfterschool = cycleType === "afterschool";
+    if (!isAfterschool) {
+      if (!startsOn || !endsOn) { setError("Pick both a start date and an end date."); return; }
+      if (startsOn >= endsOn) { setError("End date has to be after start date."); return; }
+      if (derivedWeeks.length === 0) { setError("Date range doesn't include any full Mon–Fri weeks."); return; }
+    }
 
     setSaving(true);
     try {
@@ -4198,16 +4348,17 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
           organization_id: orgId,
           name: cycleName,
           cycle_type: cycleType,
-          starts_on: startsOn,
-          ends_on: endsOn,
+          // After-school is registration-driven: dates come from programs, not here.
+          starts_on: isAfterschool ? null : startsOn,
+          ends_on: isAfterschool ? null : endsOn,
           status: "collecting",
-          weeks: derivedWeeks,
-          auto_reminders_enabled: autoReminders,
+          weeks: isAfterschool ? [] : derivedWeeks,
+          auto_reminders_enabled: isAfterschool ? false : autoReminders,
         })
         .select("id")
         .single();
       if (insErr) throw insErr;
-      onCreated?.(data.id);
+      onCreated?.({ id: data.id, cycle_type: cycleType, name: cycleName });
     } catch (err) {
       console.error("Create cycle failed:", err);
       const msg = err.message || "Couldn't create cycle.";
@@ -4292,18 +4443,27 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>First day of the term</label>
-            <input type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} style={fieldStyle} />
+        {cycleType === "afterschool" ? (
+          <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 10, fontSize: 12, color: INK, lineHeight: 1.5 }}>
+            After-school class dates, schools, curriculum, and enrollment all come from your
+            registration on Enrops — there's nothing to set here. As families register, this
+            term's classes fill in automatically. (Not running registration on Enrops? You'll
+            be able to upload your schedule instead.)
           </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>Last day of the term</label>
-            <input type="date" value={endsOn} onChange={(e) => setEndsOn(e.target.value)} style={fieldStyle} />
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>First day of the term</label>
+              <input type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} style={fieldStyle} />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: INK, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>Last day of the term</label>
+              <input type="date" value={endsOn} onChange={(e) => setEndsOn(e.target.value)} style={fieldStyle} />
+            </div>
           </div>
-        </div>
+        )}
 
-        {derivedWeeks.length > 0 && (
+        {cycleType !== "afterschool" && derivedWeeks.length > 0 && (
           <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 10, fontSize: 12, color: INK, lineHeight: 1.5 }}>
             <strong>Auto-derived:</strong> {derivedWeeks.length} week{derivedWeeks.length === 1 ? "" : "s"} (Mon–Fri)
             {" — "}
@@ -4317,12 +4477,14 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
           </div>
         )}
 
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK, cursor: "pointer" }}>
-          <input type="checkbox" checked={autoReminders} onChange={(e) => setAutoReminders(e.target.checked)} />
-          <span>
-            <strong>Auto-send reminders</strong> 3 days before each deadline (recommended)
-          </span>
-        </label>
+        {cycleType !== "afterschool" && (
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: INK, cursor: "pointer" }}>
+            <input type="checkbox" checked={autoReminders} onChange={(e) => setAutoReminders(e.target.checked)} style={{ marginTop: 2 }} />
+            <span>
+              <strong>Auto-send offer reminders</strong> — email any instructor who hasn't responded to their offer 3 days before the accept-by deadline (recommended).
+            </span>
+          </label>
+        )}
 
         {error && (
           <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, borderRadius: 6, padding: "8px 12px", color: CORAL, fontWeight: 500, fontSize: 13 }}>
@@ -4901,7 +5063,7 @@ function DialogChoice({ title, subtitle, onClick, disabled, tone }) {
   );
 }
 
-function ModalShell({ title, children, onClose }) {
+function ModalShell({ title, children, onClose, maxWidth = 480 }) {
   return (
     <div
       onClick={onClose}
@@ -4918,7 +5080,7 @@ function ModalShell({ title, children, onClose }) {
     >
       <div onClick={(e) => e.stopPropagation()} style={{
         width: "100%",
-        maxWidth: 480,
+        maxWidth,
         maxHeight: "90vh",
         background: "#fff",
         border: `1px solid ${RULE}`,

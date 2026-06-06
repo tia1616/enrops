@@ -176,6 +176,36 @@ serve(async (req: Request) => {
       }
     }
 
+    // Build a normalized-name → location index for the org so a venue partner
+    // can be linked to an existing location (by name OR a recorded alias)
+    // instead of creating a duplicate. Conservative: exact normalized match
+    // only — anything that doesn't match is surfaced to the operator, never
+    // silently linked to the wrong school.
+    const { data: existingLocs } = await supabase
+      .from('program_locations')
+      .select('id, name, name_aliases, partner_id')
+      .eq('organization_id', orgId);
+    const locByNorm = new Map<string, { id: string; partner_id: string | null }>();
+    // Secondary index for suffix-stripped matching ("ainsworth" → row whose
+    // name was "Ainsworth Elementary"). Stores arrays so we can detect
+    // ambiguity — if more than one location shares the same stripped form,
+    // we refuse to auto-link to avoid picking the wrong school.
+    const locsBySchool = new Map<string, Array<{ id: string; partner_id: string | null }>>();
+    for (const l of existingLocs ?? []) {
+      const entry = { id: l.id as string, partner_id: (l.partner_id as string | null) ?? null };
+      locByNorm.set(normName(l.name), entry);
+      for (const a of (l.name_aliases as string[] | null) ?? []) {
+        const k = normName(a);
+        if (k) locByNorm.set(k, entry);
+      }
+      const sk = normSchoolName(l.name);
+      if (sk) {
+        const arr = locsBySchool.get(sk) ?? [];
+        arr.push(entry);
+        locsBySchool.set(sk, arr);
+      }
+    }
+
     let partnersCreated = 0;
     let partnersMerged = 0;
     let partnersSkipped = 0;

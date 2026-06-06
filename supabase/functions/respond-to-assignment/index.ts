@@ -24,8 +24,13 @@ import {
 
 interface RequestBody {
   camp_assignment_id?: string;
+  program_assignment_id?: string;
   action?: 'accept' | 'request_change';
   message?: string;
+  // Admin-impersonation: when an org owner/admin acts from an instructor's
+  // portal (?as=), this is the instructor they're acting for. Authorized via
+  // org_members, not the JWT being that instructor.
+  acting_instructor_id?: string;
 }
 
 const FORBIDDEN = json({ error: 'forbidden' }, 403);
@@ -35,10 +40,6 @@ serve(async (req: Request) => {
   if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
 
   try {
-    const { instructor, error } = await resolveInstructor(req);
-    if (error) return error;
-    const me = instructor!;
-
     let body: RequestBody;
     try {
       body = (await req.json()) as RequestBody;
@@ -47,13 +48,20 @@ serve(async (req: Request) => {
     }
 
     const action = body.action;
-    const assignmentId = body.camp_assignment_id?.trim();
     if (action !== 'accept' && action !== 'request_change') {
       return json({ error: 'invalid_action' }, 400);
     }
-    if (!assignmentId) {
-      return json({ error: 'camp_assignment_id_required' }, 400);
+    // Polymorphic: a camp assignment OR an after-school program assignment.
+    const campId = body.camp_assignment_id?.trim();
+    const programId = body.program_assignment_id?.trim();
+    if (!campId && !programId) {
+      return json({ error: 'assignment_id_required' }, 400);
     }
+    const isProgram = !!programId;
+    const table = isProgram ? 'program_assignments' : 'camp_assignments';
+    const fkCol = isProgram ? 'program_assignment_id' : 'camp_assignment_id';
+    const sessionCol = isProgram ? 'program_id' : 'camp_session_id';
+    const assignmentId = (isProgram ? programId : campId)!;
 
     let message: string | null = null;
     if (action === 'request_change') {
@@ -67,8 +75,8 @@ serve(async (req: Request) => {
     // Fetch the assignment (service role bypasses RLS — we authorize via
     // instructor.id comparison below).
     const { data: assignment, error: fetchErr } = await supabase
-      .from('camp_assignments')
-      .select('id, instructor_id, status, published_at, organization_id, camp_session_id')
+      .from(table)
+      .select(`id, instructor_id, status, published_at, organization_id, ${sessionCol}`)
       .eq('id', assignmentId)
       .maybeSingle();
     if (fetchErr) {
@@ -78,7 +86,35 @@ serve(async (req: Request) => {
 
     // Anti-enumeration: missing row + wrong instructor both 403, same body.
     if (!assignment) return FORBIDDEN;
-    if (assignment.instructor_id !== me.id) return FORBIDDEN;
+
+    // Resolve who is acting. Normal path: the JWT must BE the instructor.
+    // Impersonation path: an org owner/admin (per org_members) acts for the
+    // assignment's instructor, passed as acting_instructor_id.
+    const actingId = typeof body.acting_instructor_id === 'string' ? body.acting_instructor_id.trim() : '';
+    let actorInstructorId: string;
+    if (actingId) {
+      const authHeader = req.headers.get('Authorization');
+      if (!authHeader) return json({ error: 'auth_required' }, 401);
+      const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+      const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+      if (userErr || !userData?.user) return json({ error: 'invalid_auth' }, 401);
+      const { data: member } = await supabase
+        .from('org_members').select('role')
+        .eq('auth_user_id', userData.user.id)
+        .eq('organization_id', assignment.organization_id)
+        .maybeSingle();
+      if (!member || !['owner', 'admin'].includes(member.role)) return FORBIDDEN;
+      const { data: actInst } = await supabase
+        .from('instructors').select('id, organization_id').eq('id', actingId).maybeSingle();
+      if (!actInst || actInst.organization_id !== assignment.organization_id) return FORBIDDEN;
+      actorInstructorId = actingId;
+    } else {
+      const { instructor, error } = await resolveInstructor(req);
+      if (error) return error;
+      actorInstructorId = instructor!.id;
+    }
+
+    if (assignment.instructor_id !== actorInstructorId) return FORBIDDEN;
 
     if (!assignment.published_at) {
       return json({ error: 'not_published' }, 400);
@@ -104,9 +140,9 @@ serve(async (req: Request) => {
         .from('instructor_offer_messages')
         .insert({
           organization_id: assignment.organization_id,
-          camp_assignment_id: assignment.id,
+          [fkCol]: assignment.id,
           sender_role: 'instructor',
-          sender_instructor_id: me.id,
+          sender_instructor_id: actorInstructorId,
           message,
         });
       if (msgErr) {
@@ -117,7 +153,7 @@ serve(async (req: Request) => {
       // Step 2: update the assignment status. If THIS fails, we leave the
       // orphan message in place — admin-visible, instructor can retry.
       const { error: updErr } = await supabase
-        .from('camp_assignments')
+        .from(table)
         .update({
           status: 'change_requested',
           change_request_message: message,
@@ -134,7 +170,7 @@ serve(async (req: Request) => {
 
     // action === 'accept' — single statement, no message row.
     const { error: updErr } = await supabase
-      .from('camp_assignments')
+      .from(table)
       .update({
         status: 'confirmed',
         instructor_response_at: nowIso,

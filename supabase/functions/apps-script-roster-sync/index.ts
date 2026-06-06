@@ -34,8 +34,17 @@
 //   - Extract venue keyword (everything between session_type and "Summer Camp:")
 //   - Curriculum text used as tiebreaker if multiple camps match
 //
+// Lacamas Lodge fan-out (added 2026-06-01):
+//   The J2S Lacamas Lodge series is one Squarespace listing (one filename,
+//   one CSV) but FOUR DB rows (one per Mon/Wed week). When the matched
+//   camp session is at Lacamas Lodge, we fan out — apply ALL registration
+//   writes and the implicit-cancellation sweep to every Lacamas sibling
+//   session sharing the same (session_type, curriculum_name). Without
+//   fan-out, weeks 2–4 stayed permanently frozen at zero confirmed regs.
+//
 // Returns:
-//   { camp_session_id, camp_name, imported, updated, cancelled, skipped, errors[] }
+//   { camp_session_id, camp_session_ids, camp_session_count, camp_name,
+//     imported, updated, cancelled, skipped, errors[] }
 //
 // Multi-tenant: org_id resolved from secret. All DB operations scoped to
 // that org. A leaked secret only exposes its own tenant.
@@ -170,10 +179,34 @@ serve(async (req: Request) => {
       }, 404);
     }
 
+    // Lacamas Lodge fan-out: one Squarespace listing maps to multiple weekly
+    // DB rows. When the matched camp is at Lacamas Lodge, find every sibling
+    // session sharing (session_type, curriculum_name) and apply every write
+    // to all of them — including the implicit-cancellation sweep below.
+    let campSessions: typeof filtered = [campSession];
+    if ((campSession.location_name ?? '').toLowerCase() === 'lacamas lodge') {
+      const { data: siblings, error: sibErr } = await supabase
+        .from('camp_sessions')
+        .select('id, starts_on, ends_on, session_type, location_name, curriculum_name')
+        .eq('organization_id', org.id)
+        .eq('location_name', campSession.location_name)
+        .eq('session_type', campSession.session_type)
+        .eq('curriculum_name', campSession.curriculum_name)
+        .neq('id', campSession.id);
+      if (sibErr) {
+        console.error('lacamas siblings lookup failed:', sibErr);
+      } else if (siblings && siblings.length > 0) {
+        campSessions = [campSession, ...siblings];
+      }
+    }
+    const campSessionIds = campSessions.map((c) => c.id);
+
     // 3. Process rows.
     const results = {
       camp_session_id: campSession.id,
-      camp_name: `${campSession.curriculum_name} (${campSession.location_name})`,
+      camp_session_ids: campSessionIds,
+      camp_session_count: campSessions.length,
+      camp_name: `${campSession.curriculum_name} (${campSession.location_name}${campSessions.length > 1 ? ` ×${campSessions.length} weeks` : ''})`,
       orphan_remapped: orphanRemap,
       imported: 0,
       updated: 0,
@@ -309,14 +342,9 @@ serve(async (req: Request) => {
 
         touchedStudentIds.add(studentId!);
 
-        // REGISTRATION: upsert by (camp_session_id, student_id).
-        const { data: existingReg } = await supabase
-          .from('registrations')
-          .select('id, status')
-          .eq('camp_session_id', campSession.id)
-          .eq('student_id', studentId)
-          .maybeSingle();
-
+        // REGISTRATION: upsert by (camp_session_id, student_id) for EVERY
+        // session in the fan-out set (one for non-Lacamas, all 4 weeks for
+        // Lacamas Lodge).
         const desiredStatus = fullyRefunded ? 'cancelled' : 'confirmed';
         const regFields: Record<string, unknown> = {
           status: desiredStatus,
@@ -328,38 +356,46 @@ serve(async (req: Request) => {
           regFields.photo_release_consent_at = new Date().toISOString();
         }
 
-        if (existingReg) {
-          if (existingReg.status !== desiredStatus) {
-            const { error: uErr } = await supabase
-              .from('registrations')
-              .update(regFields)
-              .eq('id', existingReg.id);
-            if (uErr) throw new Error(`registration_update_failed: ${uErr.message}`);
-            if (desiredStatus === 'cancelled') results.cancelled++;
-            else results.updated++;
-          } else {
-            // No-op
-          }
-        } else {
-          if (fullyRefunded) {
-            // Refunded row + no existing registration: skip; nothing to
-            // cancel. (Could insert with status=cancelled but that adds
-            // noise to the roster for no benefit.)
-            results.skipped++;
-            continue;
-          }
-          const { error: iErr } = await supabase
+        for (const cs of campSessions) {
+          const { data: existingReg } = await supabase
             .from('registrations')
-            .insert({
-              camp_session_id: campSession.id,
-              student_id: studentId,
-              parent_id: parentId,
-              organization_id: org.id,
-              registered_at: new Date().toISOString(),
-              ...regFields,
-            });
-          if (iErr) throw new Error(`registration_insert_failed: ${iErr.message}`);
-          results.imported++;
+            .select('id, status')
+            .eq('camp_session_id', cs.id)
+            .eq('student_id', studentId)
+            .maybeSingle();
+
+          if (existingReg) {
+            if (existingReg.status !== desiredStatus) {
+              const { error: uErr } = await supabase
+                .from('registrations')
+                .update(regFields)
+                .eq('id', existingReg.id);
+              if (uErr) throw new Error(`registration_update_failed: ${uErr.message}`);
+              if (desiredStatus === 'cancelled') results.cancelled++;
+              else results.updated++;
+            }
+            // else: already in desired state, no-op
+          } else {
+            if (fullyRefunded) {
+              // Refunded row + no existing registration: skip; nothing to
+              // cancel. (Could insert with status=cancelled but that adds
+              // noise to the roster for no benefit.)
+              results.skipped++;
+              continue;
+            }
+            const { error: iErr } = await supabase
+              .from('registrations')
+              .insert({
+                camp_session_id: cs.id,
+                student_id: studentId,
+                parent_id: parentId,
+                organization_id: org.id,
+                registered_at: new Date().toISOString(),
+                ...regFields,
+              });
+            if (iErr) throw new Error(`registration_insert_failed: ${iErr.message}`);
+            results.imported++;
+          }
         }
       } catch (err) {
         const msg = (err as Error).message ?? String(err);
@@ -369,15 +405,16 @@ serve(async (req: Request) => {
       }
     }
 
-    // 4. Detect implicit cancellations: registrations in our DB for this
-    //    camp_session whose student wasn't seen in the incoming rows at
-    //    all. Mark cancelled. Only soft (status update), never delete.
+    // 4. Detect implicit cancellations: registrations in our DB for ANY
+    //    session in the fan-out set, where the student wasn't seen in the
+    //    incoming rows at all. Mark cancelled. Only soft (status update),
+    //    never delete.
     if (touchedStudentIds.size > 0) {
       const touched = [...touchedStudentIds];
       const { data: existingRegs } = await supabase
         .from('registrations')
         .select('id, student_id')
-        .eq('camp_session_id', campSession.id)
+        .in('camp_session_id', campSessionIds)
         .eq('status', 'confirmed');
       const orphaned = (existingRegs ?? []).filter((r) => !touched.includes(r.student_id));
       if (orphaned.length > 0) {

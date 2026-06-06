@@ -18,6 +18,7 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from "../_shared/logEnrollmentEvent.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -186,6 +187,48 @@ serve(async (req: Request) => {
 
     if (newStatus === "sent") {
       results.fired++;
+
+      // ---- Intelligence layer: log the completed send (aggregate, fail-safe) ----
+      // Fires once per touchpoint, at the moment it fully completes — partials
+      // go to 'queued' and only the final tick reaches 'sent'. Captures the
+      // send + its dates (scheduled_at / sent_at) for the moat. Cumulative
+      // counts come from marketing_sends so multi-tick partial sends sum
+      // correctly. Never blocks the cron: logEnrollmentEvent swallows its own
+      // errors and the surrounding count query is guarded. No PII — only the
+      // campaign subject line + counts (rule #4).
+      try {
+        const { data: tally } = await supabase
+          .from("marketing_sends")
+          .select("status")
+          .eq("campaign_id", tp.campaign_id)
+          .eq("touchpoint_id", tp.id);
+        const tallyRows = (tally ?? []) as Array<{ status: string }>;
+        const DELIVERED = new Set(["sent", "delivered", "opened", "clicked"]);
+        const recipientsSent = tallyRows.filter((r) => DELIVERED.has(r.status)).length;
+        const recipientsFailed = tallyRows.filter((r) => r.status === "failed").length;
+        const payload = (tp.payload ?? {}) as { label?: string; subject?: string | null };
+        await logEnrollmentEvent(supabase, {
+          actionType: ENROLLMENT_ACTIONS.MARKETING_SENT,
+          organizationId: tp.organization_id,
+          // Org-level campaign event — no parent/student/registration linkage.
+          metadata: {
+            channel: "email",
+            campaign_id: tp.campaign_id,
+            campaign_name: campaign?.name ?? null,
+            touchpoint_id: tp.id,
+            touchpoint_label: payload.label ?? null,
+            subject: payload.subject ?? null, // campaign subject line — not PII
+            scheduled_at: tp.scheduled_at ?? null,
+            sent_at: new Date().toISOString(),
+            recipients_sent: recipientsSent,
+            recipients_failed: recipientsFailed,
+          },
+          dedupeKey: `marketing_sent:${tp.id}`,
+        });
+      } catch (e) {
+        // Telemetry must never break the cron.
+        results.errors.push(`touchpoint ${tp.id}: intelligence log skipped (${e instanceof Error ? e.message : String(e)})`);
+      }
     } else if (newStatus === "queued") {
       // Partial — record progress but don't count as failure.
       results.partial++;
