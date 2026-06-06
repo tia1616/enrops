@@ -468,7 +468,7 @@ export default function InstructorPortal() {
     try {
       const { data, error: fnErr } = await supabase.functions.invoke(
         "respond-to-assignment",
-        { body: { [assignmentIdKey(assignment)]: assignment.id, action: "accept" } }
+        { body: { [assignmentIdKey(assignment)]: assignment.id, action: "accept", ...(impersonating ? { acting_instructor_id: instructor.instructor_id } : {}) } }
       );
       if (fnErr || data?.error) {
         // already_confirmed is treated as success — admin or another tab
@@ -506,6 +506,7 @@ export default function InstructorPortal() {
             [assignmentIdKey(changeFor)]: changeFor.id,
             action: "request_change",
             message: changeText.trim(),
+            ...(impersonating ? { acting_instructor_id: instructor.instructor_id } : {}),
           },
         }
       );
