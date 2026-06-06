@@ -20,6 +20,7 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const OK_GREEN = "#3a7c3a";
 const CHANGE_REQ = "#8B4FB5";
+const CREAM = "#FBFBFB";
 
 const DAYS = [
   { key: "monday", code: "mon", label: "Monday", short: "Mon" },
