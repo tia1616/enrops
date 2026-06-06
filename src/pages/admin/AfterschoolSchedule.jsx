@@ -57,6 +57,10 @@ function termDisplayName(code) {
 
 function fmtTime(t) {
   if (!t) return "";
+  // programs.start_time/end_time are 12-hour text ("2:05 PM").
+  const ampm = /^\s*(\d{1,2}):(\d{2})\s*([AaPp][Mm])\s*$/.exec(t);
+  if (ampm) return `${parseInt(ampm[1], 10)}:${ampm[2]} ${ampm[3].toUpperCase()}`;
+  // Legacy 24-hour fallback.
   const [h, m] = t.split(":").map(Number);
   if (Number.isNaN(h)) return t;
   const hr12 = ((h + 11) % 12) + 1;
@@ -67,6 +71,28 @@ function fmtTimeRange(start, end) {
   if (!start && !end) return "";
   if (start && end) return `${fmtTime(start)}–${fmtTime(end)}`;
   return fmtTime(start || end);
+}
+
+const ARRIVAL_BUFFER_MIN = 15;
+
+// programs.start_time/end_time are 12-hour text ("2:05 PM"). -> minutes, or null.
+function parse12h(t) {
+  if (!t) return null;
+  const m = /^\s*(\d{1,2}):(\d{2})\s*([AaPp][Mm])\s*$/.exec(t);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (h === 12) h = 0;
+  if (m[3].toLowerCase() === "pm") h += 12;
+  return h * 60 + min;
+}
+
+// availability from/until are 24-hour "HH:MM" (from the form's time input). -> minutes.
+function parseHHMM(t) {
+  if (!t) return null;
+  const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(t);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
 }
 
 function fmtDeadline(d) {
@@ -154,7 +180,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (!org?.id || !term) return;
     setState({ status: "loading" });
     try {
-      const [progRes, locRes, instRes, availRes, surveyRes] = await Promise.all([
+      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes] = await Promise.all([
         supabase
           .from("programs")
           .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status")
@@ -163,7 +189,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .not("status", "in", '("cancelled","archived")'),
         supabase
           .from("program_locations")
-          .select("id, name")
+          .select("id, name, area")
           .eq("organization_id", org.id),
         supabase
           .from("instructors")
@@ -173,7 +199,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .order("first_name", { ascending: true }),
         supabase
           .from("instructor_term_availability")
-          .select("instructor_id, available_days, earliest_start, latest_end, max_days, location_preferences, needs_confirmation, notes, submitted_at")
+          .select("instructor_id, weekday_availability, max_days, needs_confirmation, notes, submitted_at")
           .eq("organization_id", org.id)
           .eq("term", term),
         supabase
@@ -182,12 +208,18 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .eq("organization_id", org.id)
           .eq("term", term)
           .maybeSingle(),
+        supabase
+          .from("instructor_term_area_preferences")
+          .select("instructor_id, area, preference")
+          .eq("organization_id", org.id)
+          .eq("term", term),
       ]);
       if (progRes.error) throw progRes.error;
       if (locRes.error) throw locRes.error;
       if (instRes.error) throw instRes.error;
       if (availRes.error) throw availRes.error;
       if (surveyRes.error) throw surveyRes.error;
+      if (areaPrefRes.error) throw areaPrefRes.error;
 
       const programs = (progRes.data ?? []).filter((p) => DAY_TO_CODE[dayKey(p.day_of_week)]);
       const programIds = programs.map((p) => p.id);
@@ -226,6 +258,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         availability: availRes.data ?? [],
         locations: locRes.data ?? [],
         survey: surveyRes.data ?? null,
+        areaPrefs: areaPrefRes.data ?? [],
       });
     } catch (err) {
       console.error("AfterschoolSchedule load error:", err);
@@ -247,6 +280,23 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const availByInstr = useMemo(() => {
     const m = new Map();
     if (state.status === "ready") for (const a of state.availability) m.set(a.instructor_id, a);
+    return m;
+  }, [state]);
+
+  const locArea = useMemo(() => {
+    const m = new Map();
+    if (state.status === "ready") for (const l of state.locations) m.set(l.id, l.area ?? null);
+    return m;
+  }, [state]);
+
+  const areaPrefByInstr = useMemo(() => {
+    const m = new Map();
+    if (state.status === "ready") {
+      for (const r of state.areaPrefs ?? []) {
+        if (!m.has(r.instructor_id)) m.set(r.instructor_id, {});
+        m.get(r.instructor_id)[r.area] = r.preference;
+      }
+    }
     return m;
   }, [state]);
 
@@ -315,17 +365,28 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const inst = state.status === "ready" ? state.instructors.find((i) => i.id === instructorId) : null;
     const first = inst?.preferred_name || inst?.first_name || "This instructor";
     const warnings = [];
-    if (!av || !Array.isArray(av.available_days) || av.available_days.length === 0) {
+    const wd = av?.weekday_availability || {};
+    const code = DAY_TO_CODE[dayKey(program.day_of_week)];
+    const dayLabel = DAYS.find((d) => d.code === code)?.label ?? "that day";
+    if (!av || !Object.values(wd).some((w) => w && w.from)) {
       return { ok: false, reason: `${first} hasn't submitted availability for this term.`, warnings };
     }
-    const code = DAY_TO_CODE[dayKey(program.day_of_week)];
-    if (!av.available_days.includes(code)) {
-      return { ok: false, reason: `${first} isn't available on ${DAYS.find((d) => d.code === code)?.label ?? "that day"}.`, warnings };
+    const avail = wd[code];
+    if (!avail || !avail.from) {
+      return { ok: false, reason: `${first} isn't available on ${dayLabel}.`, warnings };
+    }
+    const start = parse12h(program.start_time), end = parse12h(program.end_time);
+    if (start == null || end == null) {
+      return { ok: false, reason: `This class is missing a start/end time.`, warnings };
+    }
+    const from = parseHHMM(avail.from), until = avail.until ? parseHHMM(avail.until) : null;
+    if (from == null || start - ARRIVAL_BUFFER_MIN < from || (until != null && end > until)) {
+      return { ok: false, reason: `${first}'s ${dayLabel} hours don't cover this class time (needs to arrive ${ARRIVAL_BUFFER_MIN} min early).`, warnings };
     }
     // Double-booking: already holds a (different) program that same weekday.
     const committed = committedDays.get(instructorId);
     if (committed && committed.has(code) && committed.get(code) !== program.id) {
-      return { ok: false, reason: `${first} already teaches another class on ${DAYS.find((d) => d.code === code)?.label} — can't be at two schools that afternoon.`, warnings };
+      return { ok: false, reason: `${first} already teaches another class on ${dayLabel} — can't be at two schools that afternoon.`, warnings };
     }
     // Max-days cap (count excludes this program if they already hold it).
     if (av.max_days != null) {
@@ -335,9 +396,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         return { ok: false, reason: `${first} is at their ${av.max_days}-day limit.`, warnings };
       }
     }
-    const pref = program.program_location_id ? (av.location_preferences || {})[program.program_location_id] : undefined;
-    if (pref === "not_preferred") warnings.push(`${first} marked ${locName.get(program.program_location_id) ?? "this school"} as not preferred.`);
-    if (pref === "unavailable") warnings.push(`${first} marked ${locName.get(program.program_location_id) ?? "this school"} as a place they can't go.`);
+    const area = program.program_location_id ? (locArea.get(program.program_location_id) ?? null) : null;
+    const pref = area ? (areaPrefByInstr.get(instructorId) || {})[area] : undefined;
+    if (pref === "not_preferred") warnings.push(`${first} marked ${area} as not preferred.`);
+    if (pref === "unavailable") warnings.push(`${first} marked ${area} as a place they can't go.`);
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
     return { ok: true, reason: null, pref, warnings };
   }
@@ -765,6 +827,15 @@ function ProgramCard({ program, loc, tint, status, lead, onClick }) {
         {who || "Needs instructor"}
       </div>
       <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
+      {status === "flagged" && lead && Array.isArray(lead.flags) && lead.flags.length > 0 && (
+        <div style={{ fontSize: 10, color: VIOLET, fontWeight: 600, lineHeight: 1.3 }}>
+          {lead.flags.includes("location_override")
+            ? `In an area they marked unavailable · +$${Math.round((lead.distance_bonus_cents || 0) / 100)} bonus`
+            : lead.flags.includes("location_low_pref")
+            ? `In a not-preferred area · +$${Math.round((lead.distance_bonus_cents || 0) / 100)} bonus`
+            : null}
+        </div>
+      )}
     </button>
   );
 }
@@ -800,8 +871,8 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
           >
             <span style={{ fontSize: 14, color: INK, fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
             <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {ev.pref === "highly_preferred" && <Tag color={OK_GREEN}>Loves this school</Tag>}
-              {ev.pref === "preferred" && <Tag color={PURPLE}>Prefers here</Tag>}
+              {ev.pref === "highly_preferred" && <Tag color={OK_GREEN}>Loves this area</Tag>}
+              {ev.pref === "preferred" && <Tag color={PURPLE}>Prefers this area</Tag>}
               {ev.warnings.length > 0 && <Tag color={CORAL}>⚠ {ev.warnings.length}</Tag>}
             </span>
           </button>

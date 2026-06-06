@@ -1,17 +1,20 @@
 // src/pages/j2s/AfterschoolAvailabilityForm.jsx
-// Afterschool availability survey. Unlike the camp form (weeks + am/pm/full_day
-// + curriculum + role tier), afterschool is one class an hour a week on a fixed
-// weekday for the whole term. So we ask only what the afterschool matcher needs:
-//   - which weekdays you can teach
-//   - the afternoon window you're free (most afterschool runs after dismissal)
-//   - specific dates you can't make
-//   - how many days a week you want (your target load / seniority)
-//   - which schools/locations you prefer
+// Afterschool availability survey (v2). Mirrors the real provider availability form:
+//   - per-WEEKDAY time availability ("available from [time]", optional "until")
+//   - how many days a week you want (a range)
+//   - which AREAS you prefer to teach in (ranked)
+// After-school is one class an hour, the same weekday all term, after dismissal —
+// so we ask only what the matcher uses. No curriculum, no blackout dates.
+// "Available from 1:00" means we can place you in any class you can reach in time
+// (arrive ~15 min before it starts) — so a part-time job until 1 doesn't cost you
+// the 2:00 classes you could actually teach.
 //
-// Writes one row to instructor_term_availability, keyed by (org, instructor,
-// term). Pre-fills from any existing row so instructors can come back and edit.
+// Writes:
+//   - one row to instructor_term_availability (weekday_availability, min/max_days, notes)
+//   - rows to instructor_term_area_preferences (one per area the instructor ranked)
+// keyed by (org, instructor, term). Pre-fills from existing rows so instructors can edit.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
 const PURPLE = "#1C004F";
@@ -31,6 +34,13 @@ const DAYS = [
   { value: "fri", label: "Friday" },
 ];
 
+const DAYS_RANGES = [
+  { value: "", label: "No limit", min: null, max: null },
+  { value: "1-2", label: "1–2 days a week", min: 1, max: 2 },
+  { value: "3-4", label: "3–4 days a week", min: 3, max: 4 },
+  { value: "4-5", label: "4–5 days a week", min: 4, max: 5 },
+];
+
 const PREF_OPTIONS = [
   { value: "highly_preferred", label: "Highly preferred", color: OK_GREEN },
   { value: "preferred", label: "Preferred", color: OK_GREEN },
@@ -46,12 +56,13 @@ function termTitle(term) {
   return `${names[m[1]]} 20${m[2]}`;
 }
 
-function fmtLong(date) {
-  if (!date) return "";
-  return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
-    weekday: "short", month: "short", day: "numeric",
-  });
-}
+const EMPTY_WEEK = () => ({
+  mon: { from: "", until: "" },
+  tue: { from: "", until: "" },
+  wed: { from: "", until: "" },
+  thu: { from: "", until: "" },
+  fri: { from: "", until: "" },
+});
 
 export default function AfterschoolAvailabilityForm({ instructor, term, onSaved, onCancel }) {
   const orgId = instructor?.organization_id;
@@ -61,102 +72,136 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
-  const [availableDays, setAvailableDays] = useState(new Set());
-  const [earliestStart, setEarliestStart] = useState("");
-  const [latestEnd, setLatestEnd] = useState("");
-  const [maxDays, setMaxDays] = useState("");
-  const [unavailableDates, setUnavailableDates] = useState([]); // array of "YYYY-MM-DD"
-  const [newDate, setNewDate] = useState("");
+  const [week, setWeek] = useState(EMPTY_WEEK());   // { mon: { from: "13:00", until: "17:00" }, ... }
+  const [daysRange, setDaysRange] = useState("");
   const [notes, setNotes] = useState("");
-  const [locPrefs, setLocPrefs] = useState({}); // location_id -> preference
+  const [areaPrefs, setAreaPrefs] = useState({});   // area -> preference
 
-  const [locations, setLocations] = useState([]);
+  const [areas, setAreas] = useState([]);
   const [hasExisting, setHasExisting] = useState(false);
 
   useEffect(() => {
     if (!instructorId || !orgId || !term) return;
     let alive = true;
     (async () => {
-      const [availRes, venuesRes] = await Promise.all([
+      const [availRes, locRes, areaPrefRes] = await Promise.all([
         supabase
           .from("instructor_term_availability")
-          .select("available_days, earliest_start, latest_end, max_days, unavailable_dates, location_preferences, notes, submitted_at")
+          .select("weekday_availability, min_days, max_days, notes, submitted_at")
           .eq("instructor_id", instructorId)
           .eq("term", term)
           .maybeSingle(),
         supabase
           .from("program_locations")
-          .select("id, name")
+          .select("area")
           .eq("organization_id", orgId)
-          .order("name", { ascending: true }),
+          .not("area", "is", null),
+        supabase
+          .from("instructor_term_area_preferences")
+          .select("area, preference")
+          .eq("instructor_id", instructorId)
+          .eq("term", term),
       ]);
       if (!alive) return;
 
       if (availRes.data) {
         setHasExisting(!!availRes.data.submitted_at);
-        setAvailableDays(new Set(availRes.data.available_days ?? []));
-        setEarliestStart((availRes.data.earliest_start ?? "").slice(0, 5));
-        setLatestEnd((availRes.data.latest_end ?? "").slice(0, 5));
-        setMaxDays(availRes.data.max_days != null ? String(availRes.data.max_days) : "");
-        setUnavailableDates(availRes.data.unavailable_dates ?? []);
+        const wd = availRes.data.weekday_availability ?? {};
+        const next = EMPTY_WEEK();
+        for (const d of DAYS) {
+          next[d.value] = { from: wd[d.value]?.from ?? "", until: wd[d.value]?.until ?? "" };
+        }
+        setWeek(next);
+        const r = DAYS_RANGES.find(
+          (x) => x.min === (availRes.data.min_days ?? null) && x.max === (availRes.data.max_days ?? null),
+        );
+        setDaysRange(r ? r.value : "");
         setNotes(availRes.data.notes ?? "");
-        setLocPrefs(availRes.data.location_preferences ?? {});
       }
-      setLocations(venuesRes.data ?? []);
+
+      const distinctAreas = Array.from(
+        new Set((locRes.data ?? []).map((l) => l.area).filter(Boolean)),
+      ).sort((a, b) => a.localeCompare(b));
+      setAreas(distinctAreas);
+
+      const prefs = {};
+      for (const r of areaPrefRes.data ?? []) prefs[r.area] = r.preference;
+      setAreaPrefs(prefs);
+
       setLoaded(true);
     })();
     return () => { alive = false; };
   }, [instructorId, orgId, term]);
 
-  function toggleDay(value) {
-    setAvailableDays((prev) => {
-      const next = new Set(prev);
-      if (next.has(value)) next.delete(value); else next.add(value);
-      return next;
-    });
+  function setDayTime(day, field, value) {
+    setWeek((prev) => ({ ...prev, [day]: { ...prev[day], [field]: value } }));
   }
 
-  function addUnavailableDate() {
-    if (!newDate) return;
-    setUnavailableDates((prev) => (prev.includes(newDate) ? prev : [...prev, newDate].sort()));
-    setNewDate("");
-  }
-
-  function removeUnavailableDate(d) {
-    setUnavailableDates((prev) => prev.filter((x) => x !== d));
-  }
-
-  function setLocPref(locationId, preference) {
-    setLocPrefs((prev) => ({ ...prev, [locationId]: preference }));
+  function setAreaPref(area, preference) {
+    setAreaPrefs((prev) => ({ ...prev, [area]: preference }));
   }
 
   async function save() {
     setError(null);
-    if (availableDays.size === 0) { setError("Pick at least one weekday you can teach."); return; }
-    if (earliestStart && latestEnd && latestEnd <= earliestStart) {
-      setError("Your latest end time needs to be after your earliest start time."); return;
+    const anyDay = DAYS.some((d) => week[d.value]?.from);
+    if (!anyDay) { setError("Add a 'from' time for at least one weekday you can teach."); return; }
+    for (const d of DAYS) {
+      const w = week[d.value];
+      if (w.from && w.until && w.until <= w.from) {
+        setError(`On ${d.label}, the 'until' time needs to be after the 'from' time.`); return;
+      }
     }
 
     setSaving(true);
     try {
-      const payload = {
-        organization_id: orgId,
-        instructor_id: instructorId,
-        term,
-        available_days: DAYS.map((d) => d.value).filter((v) => availableDays.has(v)),
-        earliest_start: earliestStart || null,
-        latest_end: latestEnd || null,
-        max_days: maxDays ? Number(maxDays) : null,
-        unavailable_dates: unavailableDates,
-        location_preferences: locPrefs,
-        notes: notes.trim() || null,
-        submitted_at: new Date().toISOString(),
-        needs_confirmation: false,
-      };
-      const { error: saveErr } = await supabase
+      const range = DAYS_RANGES.find((x) => x.value === daysRange) ?? DAYS_RANGES[0];
+      // Only persist weekdays that have a 'from' time.
+      const weekday_availability = {};
+      for (const d of DAYS) {
+        const w = week[d.value];
+        if (w && w.from) weekday_availability[d.value] = w.until ? { from: w.from, until: w.until } : { from: w.from };
+      }
+
+      const { error: availErr } = await supabase
         .from("instructor_term_availability")
-        .upsert(payload, { onConflict: "organization_id,instructor_id,term" });
-      if (saveErr) throw saveErr;
+        .upsert(
+          {
+            organization_id: orgId,
+            instructor_id: instructorId,
+            term,
+            weekday_availability,
+            min_days: range.min,
+            max_days: range.max,
+            notes: notes.trim() || null,
+            submitted_at: new Date().toISOString(),
+            needs_confirmation: false,
+          },
+          { onConflict: "organization_id,instructor_id,term" },
+        );
+      if (availErr) throw availErr;
+
+      // Replace this instructor's area preferences for the term.
+      const { error: delErr } = await supabase
+        .from("instructor_term_area_preferences")
+        .delete()
+        .eq("instructor_id", instructorId)
+        .eq("term", term);
+      if (delErr) throw delErr;
+
+      const prefRows = areas
+        .filter((a) => areaPrefs[a])
+        .map((a) => ({
+          organization_id: orgId,
+          instructor_id: instructorId,
+          term,
+          area: a,
+          preference: areaPrefs[a],
+        }));
+      if (prefRows.length > 0) {
+        const { error: insErr } = await supabase.from("instructor_term_area_preferences").insert(prefRows);
+        if (insErr) throw insErr;
+      }
+
       onSaved?.();
     } catch (err) {
       console.error("Afterschool availability save failed:", err);
@@ -183,95 +228,52 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         </h1>
         <p style={{ color: MUTED, fontSize: 14, margin: 0, lineHeight: 1.5 }}>
           After-school classes run once a week on the same weekday all term. Tell us
-          which days you can teach and where — you'll still get to accept or request
-          changes on each class before it's confirmed.
+          which days and times you can teach and which areas you prefer — you'll still
+          get to accept or request changes on each class before it's confirmed.
         </p>
       </header>
 
-      <Card title="Which weekdays can you teach?" subtitle="Pick every weekday you're open to. We'll only ever assign you classes that fit.">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
+      <Card title="Which days and times can you teach?" subtitle="For each weekday you can work, set the earliest you can start. Add an 'until' time only if you have to leave by a certain point. Leave a day blank if you can't teach that day. We'll only assign a class you can reach in time (about 15 minutes before it starts).">
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {DAYS.map((d) => {
-            const on = availableDays.has(d.value);
+            const w = week[d.value];
             return (
-              <button
-                key={d.value}
-                type="button"
-                onClick={() => toggleDay(d.value)}
-                style={{
-                  padding: "12px 14px",
-                  background: on ? `${PURPLE}10` : "#fff",
-                  border: `1px solid ${on ? PURPLE : RULE}`,
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  textAlign: "left",
-                  fontFamily: "inherit",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  color: on ? PURPLE : INK,
-                }}
-              >
-                {d.label}
-              </button>
+              <div key={d.value} style={{ display: "grid", gridTemplateColumns: "minmax(96px, 110px) 1fr", gap: 12, alignItems: "center" }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{d.label}</div>
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: MUTED }}>
+                    From
+                    <input type="time" value={w.from} onChange={(e) => setDayTime(d.value, "from", e.target.value)} style={inputStyle} />
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: MUTED }}>
+                    Until <span style={{ fontSize: 11 }}>(optional)</span>
+                    <input type="time" value={w.until} onChange={(e) => setDayTime(d.value, "until", e.target.value)} style={inputStyle} disabled={!w.from} />
+                  </label>
+                  {!w.from && <span style={{ fontSize: 12, color: MUTED }}>Not available</span>}
+                </div>
+              </div>
             );
           })}
         </div>
       </Card>
 
-      <Card title="What time can you work?" subtitle="Most after-school classes start right after dismissal. Set the earliest you can start and the latest you can stay. Leave blank if you're flexible.">
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, color: MUTED }}>
-            Earliest start
-            <input type="time" value={earliestStart} onChange={(e) => setEarliestStart(e.target.value)} style={inputStyle} />
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, color: MUTED }}>
-            Latest end
-            <input type="time" value={latestEnd} onChange={(e) => setLatestEnd(e.target.value)} style={inputStyle} />
-          </label>
-        </div>
-      </Card>
-
-      <Card title="How many days a week do you want?" subtitle="Your target — we'll try not to assign you more classes than this. Leave blank for no limit.">
-        <select value={maxDays} onChange={(e) => setMaxDays(e.target.value)} style={{ ...inputStyle, width: 180 }}>
-          <option value="">No limit</option>
-          {[1, 2, 3, 4, 5].map((n) => (
-            <option key={n} value={n}>{n} {n === 1 ? "day" : "days"} a week</option>
+      <Card title="How many days a week do you want?" subtitle="Your target — we'll try not to assign you more classes than the top of this range.">
+        <select value={daysRange} onChange={(e) => setDaysRange(e.target.value)} style={{ ...inputStyle, width: 220 }}>
+          {DAYS_RANGES.map((r) => (
+            <option key={r.value} value={r.value}>{r.label}</option>
           ))}
         </select>
       </Card>
 
-      <Card title="Specific dates you can't make" subtitle="Add any weekday you'll be out (a trip, an appointment). We'll skip classes that land on these dates when we match you.">
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: unavailableDates.length ? 12 : 0 }}>
-          <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} style={inputStyle} />
-          <button type="button" onClick={addUnavailableDate} disabled={!newDate} style={smallBtn}>Add date</button>
-        </div>
-        {unavailableDates.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {unavailableDates.map((d) => (
-              <span key={d} style={{
-                display: "inline-flex", alignItems: "center", gap: 6,
-                background: `${CORAL}14`, border: `1px solid ${CORAL}`, color: CORAL,
-                borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 600,
-              }}>
-                {fmtLong(d)}
-                <button type="button" onClick={() => removeUnavailableDate(d)} style={{
-                  background: "none", border: "none", color: CORAL, cursor: "pointer",
-                  fontSize: 15, lineHeight: 1, padding: 0, fontFamily: "inherit",
-                }} aria-label={`Remove ${d}`}>×</button>
-              </span>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      <Card title="Where do you want to teach?" subtitle="Set your preference for each school. We'll prioritize highly preferred and avoid unavailable ones.">
-        {locations.length === 0 ? (
+      <Card title="Which areas do you want to teach in?" subtitle="Set your preference for each area. We'll prioritize highly preferred and only assign an unavailable area as a last resort (with an extra bonus).">
+        {areas.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
-            Your admin hasn't added any schools yet.
+            Your admin hasn't set up teaching areas yet.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {locations.map((loc) => (
-              <PrefRow key={loc.id} label={loc.name} value={locPrefs[loc.id]} onChange={(v) => setLocPref(loc.id, v)} />
+            {areas.map((area) => (
+              <PrefRow key={area} label={area} value={areaPrefs[area]} onChange={(v) => setAreaPref(area, v)} />
             ))}
           </div>
         )}
@@ -282,7 +284,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={3}
-          placeholder="e.g. I can do Mondays only if it's the school near my house."
+          placeholder="e.g. I can do Mondays only if it's an area near my house."
           style={textareaStyle}
         />
       </Card>
@@ -363,11 +365,6 @@ const textareaStyle = {
   width: "100%", padding: "10px 12px", border: `1px solid ${RULE}`, borderRadius: 6,
   fontSize: 14, fontFamily: "inherit", background: "#fff", color: INK, outline: "none",
   boxSizing: "border-box", resize: "vertical", minHeight: 60,
-};
-
-const smallBtn = {
-  padding: "9px 14px", background: "transparent", border: `1px solid ${RULE}`,
-  borderRadius: 6, fontSize: 13, fontFamily: "inherit", color: PURPLE, cursor: "pointer",
 };
 
 function primaryBtn(disabled) {
