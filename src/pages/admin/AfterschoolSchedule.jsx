@@ -701,6 +701,22 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
   }
 
+  // In-app preview: renders the real offer email(s) without sending anything.
+  // Returns [{ instructor_id, to, subject, html, text }].
+  async function previewOffers() {
+    const instructor_ids = selectedInstructorIds && selectedInstructorIds.size > 0 ? Array.from(selectedInstructorIds) : null;
+    const { data, error } = await supabase.functions.invoke("send-afterschool-offers", {
+      body: { organization_id: org.id, term, mode: "preview", instructor_ids, deadline: offerDeadline || null },
+    });
+    if (error) {
+      let msg = error.message ?? "function error";
+      try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+      throw new Error(msg);
+    }
+    if (data?.error) throw new Error(data.error);
+    return data.preview || [];
+  }
+
   async function deleteAssignment(assignmentId) {
     const { error } = await supabase.from("program_assignments").delete().eq("id", assignmentId);
     if (error) throw error;
@@ -936,6 +952,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           setDeadline={setOfferDeadline}
           busy={busy === "offers"}
           onRun={runOffers}
+          onPreview={previewOffers}
           onClose={() => setOfferDialog(null)}
         />
       )}
@@ -1402,7 +1419,12 @@ function SurveyDialog({ dialog, term, instructorCount, deadline, setDeadline, bu
   );
 }
 
-function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds, setSelectedInstructorIds, deadline, setDeadline, busy, onRun, onClose }) {
+function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds, setSelectedInstructorIds, deadline, setDeadline, busy, onRun, onPreview, onClose }) {
+  const [previews, setPreviews] = useState(null);
+  const [pvIdx, setPvIdx] = useState(0);
+  const [pvBusy, setPvBusy] = useState(false);
+  const [pvErr, setPvErr] = useState(null);
+
   if (dialog.mode === "result") {
     const { mode, data } = dialog.payload;
     const failed = Array.isArray(data?.failed) ? data.failed : [];
@@ -1446,9 +1468,21 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
   const total = instructors.length;
   const selCount = selectedInstructorIds?.size ?? 0;
   const allSelected = total > 0 && selCount === total;
+  const nameById = new Map(instructors.map((i) => [i.id, (i.preferred_name || i.first_name) + (i.last_name ? ` ${i.last_name}` : "")]));
+  const hasPreview = previews && previews.length > 0;
+  async function doPreview() {
+    setPvBusy(true); setPvErr(null);
+    try {
+      const p = await onPreview();
+      setPreviews(p); setPvIdx(0);
+      if (!p.length) setPvErr("Nothing to preview — approve some matches first.");
+    } catch (e) {
+      setPvErr(e.message || "Couldn't build the preview.");
+    } finally { setPvBusy(false); }
+  }
   return (
-    <Overlay onClose={onClose}>
-      <div style={{ padding: 24, maxWidth: 480 }}>
+    <Overlay onClose={onClose} maxWidth={hasPreview ? 720 : 520}>
+      <div style={{ padding: 24, overflowY: "auto" }}>
         <h3 style={{ margin: "0 0 6px", color: INK }}>Send {termDisplayName(term)} offers</h3>
         <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px" }}>
           Emails each instructor their approved classes with Accept / Request change.{" "}
@@ -1482,14 +1516,39 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
             })}
           </div>
         </details>
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
-          <button onClick={() => onRun("test")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}`, opacity: selCount === 0 ? 0.5 : 1 }}>Send test to me</button>
-          <button onClick={() => onRun("send")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: PURPLE, color: "#fff", opacity: busy || selCount === 0 ? 0.6 : 1 }}>
-            {busy ? "Sending…" : allSelected ? "Send to all" : `Send to ${selCount}`}
-          </button>
-        </div>
-        <div style={{ textAlign: "right", marginTop: 12 }}>
+        <button
+          type="button"
+          onClick={doPreview}
+          disabled={pvBusy || selCount === 0}
+          style={{ ...btnStyle, width: "100%", background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}`, opacity: pvBusy || selCount === 0 ? 0.5 : 1, marginBottom: 10 }}
+        >
+          {pvBusy ? "Building preview…" : hasPreview ? "Refresh preview" : "Preview the email"}
+        </button>
+        {pvErr && <div style={{ color: "#b53737", fontSize: 13, marginBottom: 10 }}>{pvErr}</div>}
+        {hasPreview && (
+          <div style={{ marginBottom: 14, border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${RULE}`, background: CREAM }}>
+              <span style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>Previewing</span>
+              {previews.length > 1 ? (
+                <select value={pvIdx} onChange={(e) => setPvIdx(Number(e.target.value))} style={{ fontSize: 12, fontFamily: "inherit", border: `1px solid ${RULE}`, borderRadius: 6, padding: "3px 6px", maxWidth: 320 }}>
+                  {previews.map((p, i) => <option key={i} value={i}>{nameById.get(p.instructor_id) || p.to}</option>)}
+                </select>
+              ) : (
+                <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>{nameById.get(previews[0].instructor_id) || previews[0].to}</span>
+              )}
+              <span style={{ marginLeft: "auto", fontSize: 11, color: MUTED }}>No email sent</span>
+            </div>
+            <iframe title="Offer email preview" srcDoc={previews[pvIdx]?.html} style={{ width: "100%", height: 460, border: "none", background: "#fff", display: "block" }} />
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
           <button onClick={onClose} style={linkBtn}>Cancel</button>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={() => onRun("test")} disabled={busy || selCount === 0} title="Optional — also emails a copy to your own inbox" style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}`, opacity: selCount === 0 ? 0.5 : 1 }}>Email a test to me</button>
+            <button onClick={() => onRun("send")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: PURPLE, color: "#fff", opacity: busy || selCount === 0 ? 0.6 : 1 }}>
+              {busy ? "Sending…" : allSelected ? "Send to all" : `Send to ${selCount}`}
+            </button>
+          </div>
         </div>
       </div>
     </Overlay>
@@ -1590,13 +1649,13 @@ function OfferReviewModal({ program, assignment, loc, onReply, onReassign, onRem
   );
 }
 
-function Overlay({ children, onClose }) {
+function Overlay({ children, onClose, maxWidth = 560 }) {
   return (
     <div
       onClick={onClose}
       style={{ position: "fixed", inset: 0, background: "rgba(20,12,40,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}
     >
-      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 560, maxHeight: "85vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth, maxHeight: "85vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
         {children}
       </div>
     </div>
