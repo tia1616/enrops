@@ -1543,12 +1543,9 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
         )}
         <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
           <button onClick={onClose} style={linkBtn}>Cancel</button>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button onClick={() => onRun("test")} disabled={busy || selCount === 0} title="Optional — also emails a copy to your own inbox" style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}`, opacity: selCount === 0 ? 0.5 : 1 }}>Email a test to me</button>
-            <button onClick={() => onRun("send")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: PURPLE, color: "#fff", opacity: busy || selCount === 0 ? 0.6 : 1 }}>
-              {busy ? "Sending…" : allSelected ? "Send to all" : `Send to ${selCount}`}
-            </button>
-          </div>
+          <button onClick={() => onRun("send")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: PURPLE, color: "#fff", opacity: busy || selCount === 0 ? 0.6 : 1 }}>
+            {busy ? "Sending…" : allSelected ? "Send to all" : `Send to ${selCount}`}
+          </button>
         </div>
       </div>
     </Overlay>
