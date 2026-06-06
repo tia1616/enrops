@@ -1007,14 +1007,30 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
         >
           {survey?.opened_at ? "Resend survey" : "Open availability survey"}
         </button>
-        <button
-          type="button"
-          onClick={onMatch}
-          disabled={!!busy || !hasPrograms}
-          style={{ ...btnStyle, background: counts.proposed > 0 || counts.sendable > 0 ? "#fff" : PURPLE, color: counts.proposed > 0 || counts.sendable > 0 ? PURPLE : "#fff", border: `1.5px solid ${PURPLE}`, opacity: busy === "matching" ? 0.7 : 1 }}
-        >
-          {busy === "matching" ? "Matching…" : "Match instructors"}
-        </button>
+        {(() => {
+          // The matcher only fills EMPTY classes (idempotent; never touches accepted).
+          // With nothing unfilled it's a no-op, so grey it out — it re-enables the
+          // moment a slot opens (unassign someone). De-emphasize once offers exist.
+          const nothingToMatch = counts.needsHire === 0;
+          const someStaffed = (counts.assigned + counts.accepted + counts.flagged + counts.changeRequested) > 0;
+          const secondary = nothingToMatch || counts.proposed > 0 || counts.sendable > 0;
+          return (
+            <button
+              type="button"
+              onClick={onMatch}
+              disabled={!!busy || !hasPrograms || nothingToMatch}
+              title={nothingToMatch ? "Every class already has an instructor — nothing to match. Unassign someone to re-open a slot." : ""}
+              style={{ ...btnStyle,
+                background: nothingToMatch ? "#f3f1ea" : (secondary ? "#fff" : PURPLE),
+                color: nothingToMatch ? MUTED : (secondary ? PURPLE : "#fff"),
+                border: `1.5px solid ${nothingToMatch ? RULE : PURPLE}`,
+                cursor: nothingToMatch ? "default" : "pointer",
+                opacity: busy === "matching" ? 0.7 : 1 }}
+            >
+              {busy === "matching" ? "Matching…" : nothingToMatch ? "All classes staffed" : someStaffed ? "Match remaining" : "Match instructors"}
+            </button>
+          );
+        })()}
         {counts.proposed > 0 && (
           <button
             type="button"
