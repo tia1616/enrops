@@ -38,6 +38,7 @@ export default function NotifyRemovalModal({
   session,
   org,
   remainingActiveCount, // number of other active (non-withdrawn) confirmed/published assignments this instructor still has in this cycle
+  unitNoun = "camp", // "camp" (default) or "class" (after-school) — keeps copy on-domain
   onProceed,
   onCancel,
 }) {
@@ -57,8 +58,9 @@ export default function NotifyRemovalModal({
     );
     lines.push("");
     if (remainingActiveCount > 0) {
+      const plural = remainingActiveCount === 1 ? unitNoun : unitNoun === "class" ? "classes" : `${unitNoun}s`;
       lines.push(
-        `You're still on for ${remainingActiveCount} other camp${remainingActiveCount === 1 ? "" : "s"} this cycle — log in to your portal any time to see your current schedule.`,
+        `You're still on for ${remainingActiveCount} other ${plural} this cycle — log in to your portal any time to see your current schedule.`,
       );
     } else {
       lines.push(

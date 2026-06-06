@@ -11,6 +11,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
+import NotifyRemovalModal from "./NotifyRemovalModal.jsx";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -158,7 +159,7 @@ function statusLabel(status) {
     change_requested: "Change requested",
     accepted: "Accepted",
     confirmed: "Awaiting response",
-    ok: "Draft",
+    ok: "Not yet sent",
   })[status] || status;
 }
 
@@ -174,6 +175,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [surveyDeadline, setSurveyDeadline] = useState(() => businessDaysFromToday(10));
   const [matchResult, setMatchResult] = useState(null);
   const [view, setView] = useState("list"); // 'list' | 'grid'
+  // Stage B — offer loop.
+  const [offerDialog, setOfferDialog] = useState(null); // { mode:'choose'|'result', payload }
+  const [offerDeadline, setOfferDeadline] = useState(() => businessDaysFromToday(5));
+  const [selectedInstructorIds, setSelectedInstructorIds] = useState(null); // Set<id> | null (=all)
+  const [reviewFor, setReviewFor] = useState(null); // { program, assignment } — offer review / change-request modal
+  const [notifyRemoval, setNotifyRemoval] = useState(null); // { mode, program, assignment, instructor, remaining, onProceed }
+  const [approveResult, setApproveResult] = useState(null);
 
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
@@ -229,7 +237,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const assignRes = programIds.length
         ? await supabase
             .from("program_assignments")
-            .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, change_request_message, flagged_reason, instructor:instructors(id, first_name, last_name, preferred_name, email)")
+            .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, change_request_message, flagged_reason, deadline, published_at, instructor:instructors(id, first_name, last_name, preferred_name, email)")
             .in("program_id", programIds)
         : { data: [], error: null };
       if (assignRes.error) throw assignRes.error;
@@ -252,6 +260,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         email_sent_at: a.email_sent_at ?? null,
         change_request_message: a.change_request_message ?? null,
         flagged_reason: a.flagged_reason ?? null,
+        deadline: a.deadline ?? null,
+        published_at: a.published_at ?? null,
         instructor_first: a.instructor?.first_name ?? null,
         instructor_last: a.instructor?.last_name ?? null,
         instructor_preferred: a.instructor?.preferred_name ?? null,
@@ -277,6 +287,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   useEffect(() => {
     loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [org?.id, term]);
+
+  // Realtime: when an instructor accepts / requests a change in their portal,
+  // the board updates without a manual refresh. Reload on any program_assignments
+  // change that touches a program in the current term.
+  useEffect(() => {
+    if (!org?.id || !term) return;
+    const channel = supabase
+      .channel(`as-assignments-${org.id}-${term}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "program_assignments", filter: `organization_id=eq.${org.id}` },
+        (payload) => {
+          const pid = payload.new?.program_id ?? payload.old?.program_id;
+          const progs = stateRef.current?.programs ?? [];
+          if (pid && progs.some((p) => p.id === pid)) loadAll();
+        },
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id, term]);
 
@@ -355,7 +386,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   }, [state]);
 
   const counts = useMemo(() => {
-    const c = { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, instructors: 0 };
+    const c = { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, instructors: 0, proposed: 0, sendable: 0 };
     if (state.status !== "ready") return c;
     for (const e of enriched.values()) {
       if (e.status === "needs_hire") c.needsHire++;
@@ -363,6 +394,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       else if (e.status === "flagged") c.flagged++;
       else if (e.status === "accepted") c.accepted++;
       else c.assigned++;
+    }
+    for (const a of state.assignments) {
+      if (a.status === "proposed") c.proposed++;
+      else if (a.status === "confirmed" && !a.email_sent_at) c.sendable++;
     }
     c.instructors = state.instructors.length;
     return c;
@@ -451,12 +486,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return Array.from(set).sort();
   }, [state, locName]);
 
-  async function handleAssign(program, instructorId) {
-    const e = enriched.get(program.id);
-    const current = e?.lead ?? null;
+  // Clears all offer state on reassign (mirrors camps) so the new instructor
+  // starts fresh at 'proposed' and surfaces as needing a (re)send.
+  async function performAssign(program, instructorId, current) {
     try {
       if (current) {
-        if (current.instructor_id === instructorId) { setPicker(null); return; }
         const { error } = await supabase
           .from("program_assignments")
           .update({
@@ -466,6 +500,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             instructor_response_at: null,
             flagged_reason: null,
             change_request_message: null,
+            published_at: null,
+            deadline: null,
+            reminder_sent_at: null,
             flags: [],
           })
           .eq("id", current.id);
@@ -491,20 +528,33 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
   }
 
+  async function handleAssign(program, instructorId) {
+    const e = enriched.get(program.id);
+    const current = e?.lead ?? null;
+    if (current && current.instructor_id === instructorId) { setPicker(null); return; }
+    // Reassigning away from an already-emailed instructor → warm heads-up first.
+    if (current && current.instructor_id && current.email_sent_at) {
+      const displaced = current;
+      setPicker(null);
+      setNotifyRemoval({
+        mode: "reassign",
+        program,
+        assignment: displaced,
+        instructor: { id: displaced.instructor_id, first_name: displaced.instructor_first, preferred_name: displaced.instructor_preferred, email: displaced.instructor_email },
+        remaining: remainingActiveFor(displaced.instructor_id, displaced.id),
+        onProceed: async () => { await performAssign(program, instructorId, displaced); setNotifyRemoval(null); },
+      });
+      return;
+    }
+    await performAssign(program, instructorId, current);
+  }
+
   async function handleRemove(program) {
     const e = enriched.get(program.id);
     const current = e?.lead ?? null;
     if (!current) { setPicker(null); return; }
-    try {
-      const { error } = await supabase.from("program_assignments").delete().eq("id", current.id);
-      if (error) throw error;
-      setPicker(null);
-      await loadAll();
-    } catch (err) {
-      console.error("Remove failed:", err);
-      setSaveError(`Couldn't remove: ${err.message ?? "unknown error"}`);
-      setTimeout(() => setSaveError(null), 6000);
-    }
+    setPicker(null);
+    await handleReviewRemove(program, current);
   }
 
   async function handleMatch() {
@@ -560,6 +610,137 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
   }
 
+  const programIds = useMemo(() => (state.status === "ready" ? state.programs.map((p) => p.id) : []), [state]);
+
+  function remainingActiveFor(instructorId, exceptAssignmentId) {
+    if (state.status !== "ready") return 0;
+    return state.assignments.filter(
+      (a) => a.instructor_id === instructorId && a.id !== exceptAssignmentId && a.status !== "withdrawn" && a.status !== "declined",
+    ).length;
+  }
+
+  function removalSession(program) {
+    const loc = program?.program_location_id ? locName.get(program.program_location_id) : "";
+    const label = [program?.curriculum, loc].filter(Boolean).join(" at ");
+    return { location_name: label || "your class", starts_on: null };
+  }
+
+  // Approve: flip every proposed match in this term to confirmed (ready to send).
+  // Never touches rows an instructor already accepted.
+  async function handleApprove() {
+    if (programIds.length === 0) return;
+    const ok = window.confirm(
+      "Approve all proposed matches for this term? This moves them to ‘ready to send’ so you can email offers. It won’t change anything an instructor has already accepted."
+    );
+    if (!ok) return;
+    setBusy("approving");
+    setSaveError(null);
+    setApproveResult(null);
+    try {
+      const { data, error } = await supabase
+        .from("program_assignments")
+        .update({ status: "confirmed" })
+        .eq("organization_id", org.id)
+        .eq("status", "proposed")
+        .in("program_id", programIds)
+        .select("id");
+      if (error) throw error;
+      setApproveResult({ count: (data ?? []).length });
+      await loadAll();
+    } catch (err) {
+      console.error("Approve failed:", err);
+      setSaveError(`Couldn't approve: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 8000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runOffers(mode) {
+    setBusy("offers");
+    setSaveError(null);
+    try {
+      const instructor_ids = selectedInstructorIds && selectedInstructorIds.size > 0 ? Array.from(selectedInstructorIds) : null;
+      const { data, error } = await supabase.functions.invoke("send-afterschool-offers", {
+        body: { organization_id: org.id, term, mode, instructor_ids, deadline: offerDeadline || null },
+      });
+      if (error) {
+        let msg = error.message ?? "function error";
+        try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+        throw new Error(msg);
+      }
+      if (data?.error) throw new Error(data.error);
+      setOfferDialog({ mode: "result", payload: { mode, data } });
+      if (mode === "send") await loadAll();
+    } catch (err) {
+      console.error("Send offers failed:", err);
+      setSaveError(`Couldn't send offers: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 8000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deleteAssignment(assignmentId) {
+    const { error } = await supabase.from("program_assignments").delete().eq("id", assignmentId);
+    if (error) throw error;
+  }
+
+  // Remove from the schedule. If the offer email already went out, warm-notify first.
+  async function handleReviewRemove(program, assignment) {
+    if (assignment.email_sent_at) {
+      setReviewFor(null);
+      setNotifyRemoval({
+        mode: "remove",
+        program,
+        assignment,
+        instructor: {
+          id: assignment.instructor_id,
+          first_name: assignment.instructor_first,
+          preferred_name: assignment.instructor_preferred,
+          email: assignment.instructor_email,
+        },
+        remaining: remainingActiveFor(assignment.instructor_id, assignment.id),
+        onProceed: async () => { await deleteAssignment(assignment.id); setNotifyRemoval(null); await loadAll(); },
+      });
+      return;
+    }
+    try {
+      await deleteAssignment(assignment.id);
+      setReviewFor(null);
+      await loadAll();
+    } catch (err) {
+      console.error("Remove failed:", err);
+      setSaveError(`Couldn't remove: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
+    }
+  }
+
+  async function submitReply(assignment, message) {
+    const { data, error } = await supabase.functions.invoke("offer-message-reply", {
+      body: { program_assignment_id: assignment.id, message },
+    });
+    if (error) {
+      let msg = error.message ?? "function error";
+      try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+      throw new Error(msg);
+    }
+    if (data?.error) throw new Error(data.error);
+    await loadAll();
+  }
+
+  function openRow(program) {
+    const e = enriched.get(program.id);
+    const lead = e?.lead ?? null;
+    // Offer in flight (emailed, responded, or change requested) → review modal.
+    // Otherwise the picker for free (re)assignment before anything is sent.
+    if (lead && (lead.email_sent_at || lead.status === "change_requested" || lead.instructor_response_at)) {
+      setReviewFor({ program, assignment: lead });
+    } else {
+      setPicker({ program });
+    }
+  }
+
   if (state.status === "loading") return <div style={{ color: MUTED, fontSize: 14 }}>Loading schedule…</div>;
   if (state.status === "error") return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 28 }}>
@@ -591,8 +772,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         busy={busy}
         onOpenSurvey={() => setSurveyDialog({ mode: "choose", payload: null })}
         onMatch={handleMatch}
+        onApprove={handleApprove}
+        onSendOffers={() => setOfferDialog({ mode: "choose", payload: null })}
         hasPrograms={state.programs.length > 0}
       />
+
+      {approveResult && (
+        <div style={{ background: `${OK_GREEN}14`, border: `1px solid ${OK_GREEN}55`, borderRadius: 8, padding: "12px 16px", fontSize: 14, color: INK }}>
+          {approveResult.count > 0
+            ? <>Approved <strong>{approveResult.count}</strong> match{approveResult.count === 1 ? "" : "es"}. They're ready to send — click <strong>Send offers</strong>.</>
+            : <>No proposed matches to approve.</>}
+          <button onClick={() => setApproveResult(null)} style={linkBtn}>Dismiss</button>
+        </div>
+      )}
 
       {matchResult && (
         <div style={{ background: `${VIOLET}14`, border: `1px solid ${VIOLET}55`, borderRadius: 8, padding: "12px 16px", fontSize: 14, color: INK }}>
@@ -642,7 +834,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           enrollment={state.enrollment}
           locName={locName}
           locArea={locArea}
-          onRowClick={(p) => setPicker({ program: p })}
+          onRowClick={openRow}
         />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: `repeat(5, minmax(0, 1fr))`, gap: 12, alignItems: "start" }}>
@@ -668,7 +860,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         tint={colorMap.get(loc)}
                         status={e?.status}
                         lead={e?.lead}
-                        onClick={() => setPicker({ program: p })}
+                        onClick={() => openRow(p)}
                       />
                     );
                   })
@@ -704,13 +896,55 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           onClose={() => setSurveyDialog(null)}
         />
       )}
+
+      {offerDialog && (
+        <OfferDialog
+          dialog={offerDialog}
+          term={term}
+          counts={counts}
+          instructors={state.instructors}
+          selectedInstructorIds={selectedInstructorIds}
+          setSelectedInstructorIds={setSelectedInstructorIds}
+          deadline={offerDeadline}
+          setDeadline={setOfferDeadline}
+          busy={busy === "offers"}
+          onRun={runOffers}
+          onClose={() => setOfferDialog(null)}
+        />
+      )}
+
+      {reviewFor && (
+        <OfferReviewModal
+          program={reviewFor.program}
+          assignment={reviewFor.assignment}
+          loc={locName.get(reviewFor.program.program_location_id) ?? "—"}
+          onReply={(msg) => submitReply(reviewFor.assignment, msg)}
+          onReassign={() => { const p = reviewFor.program; setReviewFor(null); setPicker({ program: p }); }}
+          onRemove={() => handleReviewRemove(reviewFor.program, reviewFor.assignment)}
+          onClose={() => setReviewFor(null)}
+        />
+      )}
+
+      {notifyRemoval && (
+        <NotifyRemovalModal
+          mode={notifyRemoval.mode}
+          instructor={notifyRemoval.instructor}
+          assignment={notifyRemoval.assignment}
+          session={removalSession(notifyRemoval.program)}
+          org={org}
+          unitNoun="class"
+          remainingActiveCount={notifyRemoval.remaining}
+          onProceed={notifyRemoval.onProceed}
+          onCancel={() => setNotifyRemoval(null)}
+        />
+      )}
     </div>
   );
 }
 
 const linkBtn = { background: "transparent", border: "none", color: PURPLE, fontWeight: 600, cursor: "pointer", marginLeft: 10, fontSize: 13, textDecoration: "underline" };
 
-function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, hasPrograms }) {
+function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms }) {
   // Unified term selector: afterschool terms (this view) + camp cycles (switches back to Schedule).
   const value = `as:${term}`;
   function onChange(e) {
@@ -777,10 +1011,30 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
           type="button"
           onClick={onMatch}
           disabled={!!busy || !hasPrograms}
-          style={{ ...btnStyle, background: PURPLE, color: "#fff", border: `1.5px solid ${PURPLE}`, opacity: busy === "matching" ? 0.7 : 1 }}
+          style={{ ...btnStyle, background: counts.proposed > 0 || counts.sendable > 0 ? "#fff" : PURPLE, color: counts.proposed > 0 || counts.sendable > 0 ? PURPLE : "#fff", border: `1.5px solid ${PURPLE}`, opacity: busy === "matching" ? 0.7 : 1 }}
         >
           {busy === "matching" ? "Matching…" : "Match instructors"}
         </button>
+        {counts.proposed > 0 && (
+          <button
+            type="button"
+            onClick={onApprove}
+            disabled={!!busy}
+            style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}`, opacity: busy === "approving" ? 0.7 : 1 }}
+          >
+            {busy === "approving" ? "Approving…" : `Approve ${counts.proposed} match${counts.proposed === 1 ? "" : "es"}`}
+          </button>
+        )}
+        {counts.sendable > 0 && (
+          <button
+            type="button"
+            onClick={onSendOffers}
+            disabled={!!busy}
+            style={{ ...btnStyle, background: PURPLE, color: "#fff", border: `1.5px solid ${PURPLE}`, opacity: busy === "offers" ? 0.7 : 1 }}
+          >
+            {busy === "offers" ? "Sending…" : `Send offers (${counts.sendable})`}
+          </button>
+        )}
       </div>
     </header>
   );
@@ -1099,6 +1353,181 @@ function SurveyDialog({ dialog, term, instructorCount, deadline, setDeadline, bu
         </div>
         <div style={{ textAlign: "right", marginTop: 12 }}>
           <button onClick={onClose} style={linkBtn}>Cancel</button>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds, setSelectedInstructorIds, deadline, setDeadline, busy, onRun, onClose }) {
+  if (dialog.mode === "result") {
+    const { mode, data } = dialog.payload;
+    const failed = Array.isArray(data?.failed) ? data.failed : [];
+    return (
+      <Overlay onClose={onClose}>
+        <div style={{ padding: 24 }}>
+          <h3 style={{ margin: "0 0 10px", color: INK }}>
+            {mode === "send" ? "Offers sent" : mode === "test" ? "Test sent to you" : "Preview ready"}
+          </h3>
+          <p style={{ color: MUTED, fontSize: 14, margin: "0 0 12px" }}>
+            {data?.note
+              ? data.note
+              : mode === "preview"
+              ? `${data?.preview?.length ?? 0} instructor email(s) rendered — nothing sent.`
+              : <><strong style={{ color: INK }}>{data?.sent ?? 0}</strong> of {data?.recipient_count ?? 0} instructor email(s) delivered.</>}
+            {failed.length > 0 && ` ${failed.length} failed.`}
+          </p>
+          {mode === "test" && (
+            <div style={{ background: `${VIOLET}14`, border: `1px solid ${VIOLET}55`, borderRadius: 8, padding: "10px 12px", fontSize: 13, color: INK, marginBottom: 12 }}>
+              All emails went to your inbox only — instructors weren't contacted.
+            </div>
+          )}
+          {failed.length > 0 && (
+            <div style={{ background: "#fdecea", border: "1px solid #f5c6cb", color: "#842029", borderRadius: 8, padding: "10px 12px", fontSize: 13, marginBottom: 12 }}>
+              {failed.map((f, i) => <div key={i}>{(f.instructor_id || "").slice(0, 8)}…: {f.reason}</div>)}
+            </div>
+          )}
+          <div style={{ textAlign: "right" }}>
+            <button onClick={onClose} style={{ ...btnStyle, background: PURPLE, color: "#fff" }}>Done</button>
+          </div>
+        </div>
+      </Overlay>
+    );
+  }
+  function toggle(id) {
+    const next = new Set(selectedInstructorIds ?? []);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelectedInstructorIds(next.size ? next : null);
+  }
+  const selCount = selectedInstructorIds?.size ?? 0;
+  return (
+    <Overlay onClose={onClose}>
+      <div style={{ padding: 24, maxWidth: 480 }}>
+        <h3 style={{ margin: "0 0 6px", color: INK }}>Send {termDisplayName(term)} offers</h3>
+        <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px" }}>
+          Emails each instructor their approved classes with Accept / Request change.{" "}
+          <strong style={{ color: INK }}>{counts.sendable}</strong> class{counts.sendable === 1 ? "" : "es"} ready to send.
+        </p>
+        <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 }}>Response deadline (optional)</label>
+        <input type="date" value={deadline ?? ""} onChange={(e) => setDeadline(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit", marginBottom: 16 }} />
+        <details style={{ marginBottom: 16 }}>
+          <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600, color: PURPLE }}>
+            {selCount ? `Sending to ${selCount} selected instructor${selCount === 1 ? "" : "s"}` : "Sending to all instructors with approved classes"}
+          </summary>
+          <div style={{ maxHeight: 180, overflowY: "auto", marginTop: 8, border: `1px solid ${RULE}`, borderRadius: 8, padding: 8 }}>
+            {instructors.map((i) => {
+              const checked = selectedInstructorIds?.has(i.id) ?? false;
+              return (
+                <label key={i.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", fontSize: 13, cursor: "pointer" }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggle(i.id)} />
+                  {(i.preferred_name || i.first_name)}{i.last_name ? ` ${i.last_name}` : ""}
+                </label>
+              );
+            })}
+          </div>
+        </details>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <button onClick={() => onRun("test")} disabled={busy} style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}` }}>Send test to me</button>
+          <button onClick={() => onRun("send")} disabled={busy} style={{ ...btnStyle, background: PURPLE, color: "#fff" }}>
+            {busy ? "Sending…" : (selCount ? `Send to ${selCount}` : "Send to all")}
+          </button>
+        </div>
+        <div style={{ textAlign: "right", marginTop: 12 }}>
+          <button onClick={onClose} style={linkBtn}>Cancel</button>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+function OfferReviewModal({ program, assignment, loc, onReply, onReassign, onRemove, onClose }) {
+  const [thread, setThread] = useState(null);
+  const [reply, setReply] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [sent, setSent] = useState(false);
+
+  async function loadThread() {
+    const { data } = await supabase
+      .from("instructor_offer_messages")
+      .select("id, sender_role, sender_instructor_id, message, created_at")
+      .eq("program_assignment_id", assignment.id)
+      .order("created_at", { ascending: true });
+    return data ?? [];
+  }
+
+  useEffect(() => {
+    let active = true;
+    loadThread().then((d) => { if (active) setThread(d); });
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignment.id]);
+
+  const who = (assignment.instructor_preferred || assignment.instructor_first || "Instructor") + (assignment.instructor_last ? ` ${assignment.instructor_last}` : "");
+  const isChange = assignment.status === "change_requested";
+  const pillStatus = isChange ? "change_requested" : (assignment.instructor_response_at ? "accepted" : "confirmed");
+
+  async function send() {
+    if (!reply.trim() || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      await onReply(reply.trim());
+      setSent(true); setReply("");
+      setThread(await loadThread());
+    } catch (e) {
+      setErr(e.message ?? "Couldn't send.");
+    } finally { setBusy(false); }
+  }
+
+  function senderLabel(m) {
+    if (m.sender_role === "instructor") return who;
+    if (m.sender_role === "admin") return "You";
+    return "System";
+  }
+  function bubbleBg(role) {
+    if (role === "instructor") return `${CHANGE_REQ}12`;
+    if (role === "admin") return `${PURPLE}10`;
+    return "#f5f3ed";
+  }
+
+  return (
+    <Overlay onClose={onClose}>
+      <div style={{ padding: "20px 22px", borderBottom: `1px solid ${RULE}` }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: INK }}>{program.curriculum || "Class"}</div>
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc} · {program.day_of_week}{program.start_time ? ` · ${fmtTimeRange(program.start_time, program.end_time)}` : ""}</div>
+        <div style={{ fontSize: 13, color: INK, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 600 }}>{who}</span> <Pill status={pillStatus} /></div>
+        {assignment.deadline && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Response due {fmtDeadline(assignment.deadline)}</div>}
+      </div>
+      <div style={{ maxHeight: "46vh", overflowY: "auto", padding: "14px 18px" }}>
+        {isChange && assignment.change_request_message && (
+          <div style={{ background: `${CHANGE_REQ}12`, border: `1px solid ${CHANGE_REQ}44`, borderRadius: 8, padding: "10px 12px", fontSize: 13.5, color: INK, marginBottom: 14 }}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700, color: CHANGE_REQ, marginBottom: 4 }}>Change requested</div>
+            {assignment.change_request_message}
+          </div>
+        )}
+        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700, color: MUTED, marginBottom: 8 }}>Email activity</div>
+        {thread == null ? <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>
+          : thread.length === 0 ? <div style={{ color: MUTED, fontSize: 13 }}>No messages yet.</div>
+          : thread.map((m) => (
+            <div key={m.id} style={{ background: bubbleBg(m.sender_role), borderRadius: 8, padding: "8px 11px", marginBottom: 8 }}>
+              <div style={{ fontSize: 11, color: MUTED, marginBottom: 2 }}>{senderLabel(m)} · {new Date(m.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
+              <div style={{ fontSize: 13.5, color: INK, whiteSpace: "pre-wrap" }}>{m.message}</div>
+            </div>
+          ))}
+      </div>
+      <div style={{ padding: "12px 18px", borderTop: `1px solid ${RULE}` }}>
+        {sent && <div style={{ color: OK_GREEN, fontSize: 13, marginBottom: 8 }}>✓ Sent.</div>}
+        {err && <div style={{ color: "#b53737", fontSize: 13, marginBottom: 8 }}>{err}</div>}
+        <textarea value={reply} onChange={(e) => { setReply(e.target.value); setSent(false); }} rows={3} placeholder={isChange ? `Reply to ${who}…` : `Message ${who}…`} style={{ width: "100%", padding: "9px 11px", border: `1px solid ${RULE}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }} />
+        <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onReassign} style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1px solid ${RULE}` }}>Reassign</button>
+            <button onClick={onRemove} style={{ ...btnStyle, background: "#fff", color: CORAL, border: `1px solid ${RULE}` }}>Remove</button>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onClose} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}>Close</button>
+            <button onClick={send} disabled={busy || !reply.trim()} style={{ ...btnStyle, background: PURPLE, color: "#fff", opacity: busy || !reply.trim() ? 0.6 : 1 }}>{busy ? "Sending…" : "Send reply"}</button>
+          </div>
         </div>
       </div>
     </Overlay>
