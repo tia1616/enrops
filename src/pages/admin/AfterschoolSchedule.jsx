@@ -103,6 +103,15 @@ function fmtDeadline(d) {
   return date.toLocaleDateString(undefined, { weekday: "short", month: "long", day: "numeric" });
 }
 
+// Map raw edge-function/Resend failure strings to plain English (no codes/JSON in UI).
+function friendlyFailReason(reason) {
+  const r = (reason || "").toLowerCase();
+  if (r.includes("api key is invalid") || r.includes("resend 401") || r.includes("401")) return "Email service rejected the key — staging’s email key isn’t set up yet, so nothing was sent.";
+  if (r.includes("missing email") || r.includes("no email")) return "No email address on file for this instructor.";
+  if (r.includes("resend") || r.includes("email")) return "The email service couldn’t send right now — nothing was sent.";
+  return "Couldn’t send to this instructor.";
+}
+
 function businessDaysFromToday(days) {
   const d = new Date();
   let added = 0;
@@ -1418,7 +1427,8 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
           )}
           {failed.length > 0 && (
             <div style={{ background: "#fdecea", border: "1px solid #f5c6cb", color: "#842029", borderRadius: 8, padding: "10px 12px", fontSize: 13, marginBottom: 12 }}>
-              {failed.map((f, i) => <div key={i}>{(f.instructor_id || "").slice(0, 8)}…: {f.reason}</div>)}
+              {Object.entries(failed.reduce((m, f) => { const k = friendlyFailReason(f.reason); m[k] = (m[k] || 0) + 1; return m; }, {}))
+                .map(([reason, n], i) => <div key={i}>{reason}{n > 1 ? ` (${n} instructors)` : ""}</div>)}
             </div>
           )}
           <div style={{ textAlign: "right" }}>
