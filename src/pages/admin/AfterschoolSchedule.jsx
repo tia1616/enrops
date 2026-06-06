@@ -939,7 +939,7 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                         {enr ? <><span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span></> : <span style={{ color: MUTED }}>—</span>}
                       </td>
                       <td style={{ ...td, width: "13%" }}>
-                        {who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: CORAL, fontWeight: 700 }}>Needs instructor</span>}
+                        {who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>}
                       </td>
                       <td style={{ ...td, width: "11%" }}><Pill status={e?.status} /></td>
                     </tr>
@@ -973,7 +973,7 @@ function ProgramCard({ program, loc, tint, status, lead, onClick }) {
         <div style={{ fontSize: 11, color: MUTED }}>{fmtTimeRange(program.start_time, program.end_time)}</div>
       )}
       <div style={{ marginTop: 2, fontSize: 12, color: who ? INK : sc, fontWeight: who ? 500 : 600 }}>
-        {who || "Needs instructor"}
+        {who || "+ Assign"}
       </div>
       <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
       {status === "flagged" && lead && Array.isArray(lead.flags) && lead.flags.length > 0 && (
