@@ -71,6 +71,7 @@ export default function InstructorPortal() {
   const [instructor, setInstructor] = useState(null);
   const [onboarding, setOnboarding] = useState(null);
   const [assignments, setAssignments] = useState([]);
+  const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role }] } — who I'm co-teaching each camp with
   const [programAssignments, setProgramAssignments] = useState([]); // after-school offers
   const [subAssignments, setSubAssignments] = useState([]); // assignment_substitutions where I'm the sub
   const [actingOn, setActingOn] = useState(null);
@@ -271,6 +272,24 @@ export default function InstructorPortal() {
     // Load everything; we partition into current vs archived at render time
     // so a "Show past camps" toggle can pull them in without a re-fetch.
     setAssignments(data ?? []);
+
+    // Co-instructors on the same camp sessions (e.g. a lead's developing
+    // instructor and vice-versa). camp_assignments RLS scopes instructors to
+    // their own rows, so the co-instructor's name comes from a SECURITY DEFINER
+    // RPC that self-scopes to sessions this instructor is actually on. Names
+    // only — no contact info. Best-effort: a failure here never blocks the
+    // schedule from rendering.
+    const { data: coRows, error: coErr } = await supabase.rpc("get_my_camp_coinstructors");
+    if (coErr) {
+      console.warn("[loadAssignments] co-instructors fetch failed:", coErr.message);
+      setCoInstructors({});
+    } else {
+      const bySession = {};
+      for (const r of coRows ?? []) {
+        (bySession[r.camp_session_id] ||= []).push({ name: r.name, role: r.role });
+      }
+      setCoInstructors(bySession);
+    }
   }
 
   // After-school offers (program_assignments). Mirrors loadAssignments but for
@@ -443,6 +462,7 @@ export default function InstructorPortal() {
     await supabase.auth.signOut();
     setInstructor(null);
     setAssignments([]);
+    setCoInstructors({});
     setProgramAssignments([]);
     setPhase("login");
   }
@@ -888,6 +908,7 @@ export default function InstructorPortal() {
       <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <AssignmentDetailView
           assignment={selected}
+          coInstructors={coInstructors[selected.camp_session_id] || []}
           onBack={() => { setView("schedule"); setSelectedAssignmentId(null); }}
         />
       </Shell>
@@ -1063,6 +1084,7 @@ export default function InstructorPortal() {
             <AssignmentCard
               key={a.id}
               assignment={a}
+              coInstructors={coInstructors[a.camp_session_id] || []}
               messages={a.instructor_offer_messages || []}
               busy={actingOn === a.id}
               onAccept={() => handleAccept(a)}
@@ -1088,6 +1110,7 @@ export default function InstructorPortal() {
             <AssignmentCard
               key={a.id}
               assignment={a}
+              coInstructors={coInstructors[a.camp_session_id] || []}
               readOnly
               onOpen={() => { setSelectedAssignmentId(a.id); setView("assignment-detail"); }}
             />
@@ -1503,7 +1526,29 @@ function fmtTimePretty(t) {
   return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
-function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestChange, readOnly, onOpen }) {
+function roleLabel(r) {
+  return r === "developing" ? "Developing" : "Lead";
+}
+
+// One line naming the other instructor(s) on the same camp — a lead sees their
+// developing instructor, a developing instructor sees their lead. Names only.
+function CoInstructorLine({ coInstructors = [] }) {
+  if (!coInstructors.length) return null;
+  return (
+    <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.4 }}>
+      Teaching with:{" "}
+      {coInstructors.map((c, i) => (
+        <span key={`${c.name}-${i}`}>
+          {i > 0 ? ", " : ""}
+          <span style={{ color: INK, fontWeight: 600 }}>{c.name}</span>
+          {" "}<span style={{ fontSize: 12 }}>({roleLabel(c.role)})</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, onAccept, onRequestChange, readOnly, onOpen }) {
   const s = assignment.camp_sessions;
   if (!s) return null;
   const role = assignment.role === "developing" ? "Developing" : "Lead";
@@ -1556,6 +1601,8 @@ function AssignmentCard({ assignment, messages = [], busy, onAccept, onRequestCh
           {statusLabel}
         </span>
       </div>
+
+      <CoInstructorLine coInstructors={coInstructors} />
 
       {assignment.distance_bonus_cents ? (
         <div style={{ fontSize: 13, color: PURPLE, fontWeight: 600 }}>
@@ -2113,7 +2160,7 @@ function StripeExpressDeepLink({ variant = "button", title, subtitle }) {
   );
 }
 
-function AssignmentDetailView({ assignment, onBack }) {
+function AssignmentDetailView({ assignment, coInstructors = [], onBack }) {
   const s = assignment.camp_sessions;
   const role = assignment.role === "developing" ? "Developing" : "Lead";
 
@@ -2157,6 +2204,11 @@ function AssignmentDetailView({ assignment, onBack }) {
           {role} instructor
           {(s.ages_min || s.ages_max) ? ` · ages ${s.ages_min ?? "?"}–${s.ages_max ?? "?"}` : ""}
         </div>
+        {coInstructors.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <CoInstructorLine coInstructors={coInstructors} />
+          </div>
+        )}
         {assignment.distance_bonus_cents ? (
           <div style={{ marginTop: 8, fontSize: 13, color: PURPLE, fontWeight: 600 }}>
             + {dollars(assignment.distance_bonus_cents)} distance bonus
