@@ -18,6 +18,8 @@ Hi Darren — here's the isolated staging site to poke at while Jessica's away.
 
 **Stripe test card** (payments are in test mode — no real money): `4242 4242 4242 4242`, any future expiry, any CVC, any ZIP. (`4000 0000 0000 0002` simulates a decline.)
 
+**Second provider (for cross-tenant isolation testing).** There's a *second*, completely separate fake provider on the same site — "Cascade Enrichment Co." at `/tenant-two-test`. Its families, instructors, and programs are unrelated to the first provider's. Operator login: `owner@tenant2.staging.enrops.test` / `DemoPass123!`. Use it to check that **one provider can never see another provider's data** (see priority tests below) — this is just as important as the per-user checks.
+
 ---
 
 ## What this is
@@ -30,7 +32,9 @@ storage policies as production, but:
   test mode, no email sending. Break it freely.
 
 The program catalog (curricula, venues, programs, camps) mirrors the real provider's setup
-so it feels realistic.
+so it feels realistic. **Both program types are live**: summer **camps** *and* the
+**after-school** term flow (instructor availability survey → matching → offers → accept/decline
+in the instructor portal). Both are fair game to test.
 
 ## What we'd love you to do
 
@@ -49,6 +53,10 @@ so it feels realistic.
      sensitive — reaching any of it from a role that shouldn't have it is the most important
      kind of finding. (Also worth probing: any endpoint that returns *all* minors at once
      rather than in pages.)
+   - **Cross-provider:** signed in to one provider, try to reach the *other* provider's
+     families, instructors, rosters, or payroll (by guessing URLs/IDs or calling the API).
+     You should get nothing. Test both directions (first provider → Cascade, and Cascade →
+     first provider).
 3. **Exercise the money path** — register a fake child and pay with the test card above.
    Try to break registration/checkout however you like.
 4. **Report what broke and how you got there** — steps to reproduce, screenshots, the
@@ -60,6 +68,9 @@ so it feels realistic.
   those backends aren't wired in staging on purpose (no real payouts or emails). A one-line
   note is plenty; no need to dig into those.
 - Some uploaded files/documents are missing — staging has no uploaded files.
+- **The site root (`/`) redirects you** based on whether you're signed in and your role —
+  that's intentional, not a bug. Deep-link to a specific path (e.g. `/j2s/register`,
+  `/tenant-two-test/register`) if you want to land somewhere specific.
 
 ## How to report
 Keep a running list (doc or email): what you did → what you expected → what happened →
