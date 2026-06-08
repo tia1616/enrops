@@ -447,10 +447,16 @@ export default function InstructorPortal() {
     setSendMsg("");
     setError("");
     try {
+      // Return the user to whatever tenant portal they're signing in from
+      // (derive the slug from the current path; never hardcode a tenant).
+      const seg = window.location.pathname.split("/").filter(Boolean)[0];
+      const returnTo = seg
+        ? `${window.location.origin}/${seg}/instructor`
+        : `${window.location.origin}${window.location.pathname}`;
       const { data, error: fnErr } = await supabase.functions.invoke("auth-send-magic-link", {
         body: {
           email,
-          redirect_to: `${window.location.origin}/j2s/instructor`,
+          redirect_to: returnTo,
           context: "instructor",
         },
       });
@@ -467,9 +473,13 @@ export default function InstructorPortal() {
   async function handleGoogle() {
     setSendBusy(true);
     setError("");
+    const seg = window.location.pathname.split("/").filter(Boolean)[0];
+    const returnTo = seg
+      ? `${window.location.origin}/${seg}/instructor`
+      : `${window.location.origin}${window.location.pathname}`;
     const { error: err } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/j2s/instructor` },
+      options: { redirectTo: returnTo },
     });
     if (err) {
       setError(err.message);
