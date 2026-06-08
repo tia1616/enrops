@@ -689,11 +689,21 @@ export default function Schedule() {
       if (a.status === "confirmed" && a.instructor_response_at) { accepted++; continue; }
       assigned++;
     }
-    // Needs-hire stays session-level: it's the count of camps with no active assignments.
+    // Needs-hire is per OPEN SLOT, matching the coral "Needs hire" badges on the
+    // cards: a camp always needs a lead, and a camp with >= DEVELOPING_THRESHOLD
+    // enrolled also wants a developing instructor. Count each unfilled slot so the
+    // header agrees with what's visible on the board. (Was session-level — only
+    // counted camps with ZERO assignments, so a filled-lead/empty-developing camp
+    // read as 0 needs-hire while the card showed a coral "Needs hire".)
     let needsHire = 0;
     if (enriched) {
       for (const e of enriched.values()) {
-        if (e.status === "needs_hire") needsHire++;
+        const active = e.activeAssignments ?? [];
+        const hasLead = active.some((a) => a.role === "lead");
+        const hasDeveloping = active.some((a) => a.role === "developing");
+        const wantsDeveloping = (e.session.current_enrollment ?? 0) >= DEVELOPING_THRESHOLD;
+        if (!hasLead) needsHire++;
+        if (wantsDeveloping && !hasDeveloping) needsHire++;
       }
     }
     return { assigned, accepted, flagged, changeRequested, needsHire, activeInstructors: state.instructors.length };
