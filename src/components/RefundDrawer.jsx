@@ -89,9 +89,12 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         ]);
         if (!alive) return;
         const paidInst = (inst ?? []).filter((i) => i.status === "paid");
+        // Mirror the edge fn's eligibility exactly: a single-pay registration
+        // is only refundable if it actually carries a Stripe PaymentIntent.
+        // (Seeded/imported "paid" rows without a PI are NOT refundable.)
         const paid = paidInst.length > 0
           ? paidInst.reduce((s, i) => s + (i.amount_cents || 0), 0)
-          : (reg.payment_status === "paid" ? (reg.amount_cents || 0) : 0);
+          : (reg.payment_status === "paid" && reg.stripe_payment_intent_id ? (reg.amount_cents || 0) : 0);
         const refunded = (refs ?? []).reduce((s, r) => s + (r.amount_cents || 0), 0);
         setPaidCents(paid);
         setRefundedCents(refunded);
@@ -184,7 +187,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
 
             {refundableCents <= 0 ? (
               <p style={{ color: MUTED, fontSize: 13, marginTop: 14, lineHeight: 1.5 }}>
-                This registration has already been fully refunded. There's nothing left to refund.
+                There's nothing left to refund on this registration — it's either already fully refunded or has no Stripe payment to refund against.
               </p>
             ) : (
               <>
