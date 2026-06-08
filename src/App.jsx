@@ -56,7 +56,11 @@ export default function App() {
     <>
     <PwaUpdateToast />
     <Routes>
-      <Route path="/" element={IS_STAGING ? <Navigate to="/admin/login" replace /> : <EnropsLanding />} />
+      {/* Staging also runs EnropsLanding's smart-redirect, but sends signed-OUT
+          visitors to /admin/login instead of the marketing homepage. The old
+          hard redirect to /admin/login skipped the smart-redirect, so a freshly
+          signed-in user looped back to the login page. */}
+      <Route path="/" element={IS_STAGING ? <EnropsLanding signedOutTo="/admin/login" /> : <EnropsLanding />} />
       <Route path="/privacy" element={<PolicyPage policyType="privacy" orgSlug="enrops" />} />
       <Route path="/terms" element={<PolicyPage policyType="terms" orgSlug="enrops" />} />
       <Route path="/acceptable-use" element={<PolicyPage policyType="acceptable-use" orgSlug="enrops" />} />

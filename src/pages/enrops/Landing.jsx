@@ -20,7 +20,7 @@ import EnropsWordmark from '../../components/EnropsWordmark.jsx';
 //   - signed-in but neither (parent / family)   -> /j2s (parent portal)
 //   - not signed in + PWA                       -> /admin/login (universal)
 //   - not signed in + browser                   -> stay on Enrops homepage
-export default function EnropsLanding() {
+export default function EnropsLanding({ signedOutTo = null } = {}) {
   const navigate = useNavigate();
   // Track whether we've finished the role check so we don't flash marketing
   // copy for a split second before the redirect lands.
@@ -45,8 +45,12 @@ export default function EnropsLanding() {
           const inPwa =
             window.matchMedia?.('(display-mode: standalone)').matches ||
             window.navigator.standalone === true;
-          if (inPwa) {
-            navigate('/admin/login', { replace: true });
+          // signedOutTo lets a caller (e.g. the staging root route) send
+          // signed-out visitors straight to a sign-in page instead of the
+          // marketing homepage. PWA users still default to /admin/login.
+          const signedOutTarget = signedOutTo || (inPwa ? '/admin/login' : null);
+          if (signedOutTarget) {
+            navigate(signedOutTarget, { replace: true });
             return;
           }
           setRoleChecked(true);
@@ -103,7 +107,7 @@ export default function EnropsLanding() {
       }
     })();
     return () => { cancelled = true; };
-  }, [navigate]);
+  }, [navigate, signedOutTo]);
 
   // Hide the marketing flash while we're still resolving the role. ~100ms
   // typical, much less if the session is empty.
