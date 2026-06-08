@@ -72,6 +72,7 @@ function adminClient() {
 interface Registrant {
   student_first_name?: string;
   student_last_name?: string;
+  student_full_name?: string;
   grade?: number | string;
   birthdate?: string;
   pronouns?: string;
@@ -90,6 +91,7 @@ interface Registrant {
   notes?: string;
   parent_first_name?: string;
   parent_last_name?: string;
+  parent_full_name?: string;
   parent_email?: string;
   parent_phone?: string;
 }
@@ -172,19 +174,24 @@ serve(async (req: Request) => {
     for (let i = 0; i < registrants.length; i++) {
       const r = registrants[i];
       try {
-        const studentFirst = String(r.student_first_name ?? '').trim();
+        // Accept either split first/last columns OR a single full-name column
+        // ("participant name", "parent name") — split the latter into first +
+        // last. Explicit split columns win when both are present.
+        const studentSplit = splitName(r.student_full_name);
+        const studentFirst = (String(r.student_first_name ?? '').trim() || studentSplit.first);
         if (!studentFirst) {
           results.skipped++;
           results.errors.push({ row_index: i, error: 'missing_student_first_name' });
           continue;
         }
-        const studentLast = String(r.student_last_name ?? '').trim();
+        const studentLast = (String(r.student_last_name ?? '').trim() || studentSplit.last);
 
         // PARENT — match by email (lowercase) if present, else by name+phone.
         let parentId: string | null = null;
         const parentEmail = String(r.parent_email ?? '').trim().toLowerCase();
-        const parentFirst = String(r.parent_first_name ?? '').trim();
-        const parentLast = String(r.parent_last_name ?? '').trim();
+        const parentSplit = splitName(r.parent_full_name);
+        const parentFirst = (String(r.parent_first_name ?? '').trim() || parentSplit.first);
+        const parentLast = (String(r.parent_last_name ?? '').trim() || parentSplit.last);
         const parentPhone = String(r.parent_phone ?? '').trim();
 
         if (parentEmail) {
@@ -245,7 +252,9 @@ serve(async (req: Request) => {
           parent_id: parentId,
           organization_id: orgId,
           first_name: studentFirst,
-          last_name: studentLast || null,
+          // students.last_name is NOT NULL — never write null. Empty string is
+          // the safe fallback for single-word names so the row imports.
+          last_name: studentLast || '',
           grade: parseGrade(r.grade),
           birthdate: parseDate(r.birthdate),
           pronouns: emptyToNull(r.pronouns),
@@ -348,6 +357,17 @@ function emptyToNull(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
   return s === '' ? null : s;
+}
+
+// Split a single full-name string ("Liam Fullerton", "Mary Anne Smith") into
+// first + last. Last whitespace-delimited token is the surname; everything
+// before it is the given name(s). Single-token names get an empty last name.
+function splitName(v: unknown): { first: string; last: string } {
+  const s = String(v ?? '').trim().replace(/\s+/g, ' ');
+  if (!s) return { first: '', last: '' };
+  const parts = s.split(' ');
+  if (parts.length === 1) return { first: parts[0], last: '' };
+  return { first: parts.slice(0, -1).join(' '), last: parts[parts.length - 1] };
 }
 
 function parseGrade(v: unknown): number | null {

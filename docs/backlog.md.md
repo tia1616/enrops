@@ -2,6 +2,10 @@
 
 
 
+\## 2026-06-08
+
+\- \[task] **FA26 refund button is stubbed — wire it up before the alpha.** Surfaced 2026-06-08. The Money/Finances → Refunds tab (`Finances.jsx` `RefundsTab`) is a placeholder that just points operators to "Rosters → row → Refund…", but no Refund action actually exists on the Rosters page — only **Remove** (`admin-remove-registration`), which refuses any registration with a payment (`has_payment`) and tells the operator to refund from the Money tab. That's a dead loop: paid FA26 registrations can't be cancelled/refunded anywhere in the UI. The `refund-registration` edge function exists but is never invoked from the frontend. Build: a "Refund…" row action on Rosters (and/or the Finances Refunds tab) that calls `refund-registration` (Stripe refund + sets `cancelled_at` + frees the seat), with an amount field (full / partial / keep-admin-fee per [[feedback_refund_admin_fee_pattern]]) and a confirm. Needed for the July alpha — native FA26 registration is live and a paid withdrawal+refund has no path today.
+
 \## 2026-06-07
 
 \- \[cleanup] **Locations area cleanup — do during the schools nav/subnav redo.** `program_locations.area` is now used by the afterschool availability survey + matcher (instructors rank areas, matching keys off it). It's auto-defaulted from the address city, but a chunk of J2S schools need manual correction (mailing-city != real area: Bonny Slope/Springville are Beaverton with Portland ZIPs; Atfalati Ridge mails North Plains but is Hillsboro; Cascadia->Vancouver; school-name districts like Catlin Gabel/NCCS/OES). Rule applied for J2S on staging: "district wins when it's a real place name." When we redo the schools nav/subnav, fold an area-review/cleanup pass into that surface so the operator confirms each school's area once. Don't do it in isolation.

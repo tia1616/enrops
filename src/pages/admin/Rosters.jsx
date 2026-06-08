@@ -37,6 +37,11 @@ const FIELD_DEFS = [
     aliases: ["camperfirstname", "studentfirstname", "childfirstname", "firstname", "first"] },
   { key: "student_last_name", label: "Camper last name", required: false,
     aliases: ["camperlastname", "studentlastname", "childlastname", "lastname", "last", "surname"] },
+  // Single full-name column ("participant name", "camper name") — split into
+  // first/last at import time. Common in Squarespace / hand-built rosters.
+  { key: "student_full_name", label: "Camper full name", required: false,
+    aliases: ["participantname", "participant", "campername", "camper", "studentname", "studentfullname",
+      "childname", "childfullname", "kidname", "attendeename", "fullname"] },
   { key: "grade", label: "Grade", required: false,
     aliases: ["grade", "gradelevel", "currentgrade", "school grade"] },
   { key: "birthdate", label: "Birthdate", required: false,
@@ -48,7 +53,7 @@ const FIELD_DEFS = [
   { key: "dietary_restrictions", label: "Dietary restrictions", required: false,
     aliases: ["dietary", "dietaryrestrictions", "dietneeds", "foodrestrictions"] },
   { key: "medical_notes", label: "Medical notes", required: false,
-    aliases: ["medicalnotes", "medicalinfo", "medicalconcerns"] },
+    aliases: ["medicalnotes", "medicalinfo", "medicalconcerns", "healthnotes", "health"] },
   { key: "medical_conditions", label: "Medical conditions", required: false,
     aliases: ["medicalconditions"] },
   { key: "epipen_required", label: "EpiPen required (Y/N)", required: false,
@@ -73,6 +78,8 @@ const FIELD_DEFS = [
     aliases: ["parentfirstname", "guardianfirstname", "parentfirst"] },
   { key: "parent_last_name", label: "Parent last name", required: false,
     aliases: ["parentlastname", "guardianlastname", "parentlast"] },
+  { key: "parent_full_name", label: "Parent full name", required: false,
+    aliases: ["parentname", "guardianname", "parentfullname", "guardianfullname", "parentguardian", "guardian"] },
   { key: "parent_email", label: "Parent email", required: false,
     aliases: ["parentemail", "guardianemail", "email", "emailaddress"] },
   { key: "parent_phone", label: "Parent phone", required: false,
@@ -96,6 +103,46 @@ function autoMap(headers) {
     }
   }
   return map;
+}
+
+// Split a single full-name string ("Liam Fullerton", "Mary Anne Smith") into
+// first + last. Last whitespace token is the surname; the rest is the given
+// name(s). Single-token names get an empty last name. Mirrors the server.
+function splitName(v) {
+  const s = (v ?? "").toString().trim().replace(/\s+/g, " ");
+  if (!s) return { first: "", last: "" };
+  const parts = s.split(" ");
+  if (parts.length === 1) return { first: parts[0], last: "" };
+  return { first: parts.slice(0, -1).join(" "), last: parts[parts.length - 1] };
+}
+
+// Turn parsed CSV rows into editable registrant objects using the column
+// mapping. Full-name columns are split into first/last here so the review
+// list shows real names; explicit first/last columns always win.
+function buildRegistrants(rows, headers, mapping) {
+  return rows.map((row) => {
+    const out = {};
+    for (const def of FIELD_DEFS) {
+      const headerName = mapping[def.key];
+      if (!headerName) continue;
+      const idx = headers.indexOf(headerName);
+      if (idx === -1) continue;
+      out[def.key] = (row[idx] ?? "").toString().trim();
+    }
+    if (out.student_full_name) {
+      const s = splitName(out.student_full_name);
+      if (!out.student_first_name) out.student_first_name = s.first;
+      if (!out.student_last_name) out.student_last_name = s.last;
+      delete out.student_full_name;
+    }
+    if (out.parent_full_name) {
+      const p = splitName(out.parent_full_name);
+      if (!out.parent_first_name) out.parent_first_name = p.first;
+      if (!out.parent_last_name) out.parent_last_name = p.last;
+      delete out.parent_full_name;
+    }
+    return out;
+  });
 }
 
 // Tiny CSV parser. Handles quoted fields with embedded commas + escaped
@@ -915,6 +962,8 @@ function RosterUploadModal({ target, onClose, onImported }) {
   const [csvHeaders, setCsvHeaders] = useState(null);
   const [csvRows, setCsvRows] = useState(null);
   const [mapping, setMapping] = useState({});
+  const [reviewRows, setReviewRows] = useState(null); // editable registrant list
+  const [showMapping, setShowMapping] = useState(false); // detection escape hatch
   const [parseError, setParseError] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
@@ -924,49 +973,59 @@ function RosterUploadModal({ target, onClose, onImported }) {
     if (!f) return;
     setParseError("");
     setResult(null);
+    setShowMapping(false);
     const reader = new FileReader();
     reader.onload = () => {
       try {
         const text = String(reader.result);
         const { headers, data } = parseCsv(text);
         if (headers.length === 0) {
-          setParseError("That file doesn't look like a CSV.");
+          setParseError("That file doesn't look like a spreadsheet. Save it as a CSV and try again.");
           return;
         }
+        const autoMapped = autoMap(headers);
         setCsvHeaders(headers);
         setCsvRows(data);
-        setMapping(autoMap(headers));
+        setMapping(autoMapped);
+        setReviewRows(buildRegistrants(data, headers, autoMapped));
       } catch (err) {
         console.error("[RosterUploadModal] parse failed", err);
-        setParseError("Couldn't parse that CSV. Try a different file.");
+        setParseError("Couldn't read that file. Try saving it as a CSV.");
       }
     };
     reader.readAsText(f);
   }
 
-  function mapRow(row) {
-    const out = {};
-    for (const def of FIELD_DEFS) {
-      const headerName = mapping[def.key];
-      if (!headerName) continue;
-      const idx = csvHeaders.indexOf(headerName);
-      if (idx === -1) continue;
-      out[def.key] = row[idx];
+  // Re-detect from a (possibly hand-corrected) column mapping. Discards inline
+  // edits made in the review list, so only used from the "adjust columns" panel.
+  function reDetect(nextMapping) {
+    setMapping(nextMapping);
+    if (csvRows && csvHeaders) {
+      setReviewRows(buildRegistrants(csvRows, csvHeaders, nextMapping));
     }
-    return out;
+  }
+
+  function editReviewRow(index, key, value) {
+    setReviewRows((rows) => rows.map((r, i) => (i === index ? { ...r, [key]: value } : r)));
+  }
+
+  function removeReviewRow(index) {
+    setReviewRows((rows) => rows.filter((_, i) => i !== index));
   }
 
   async function submitCsv() {
     if (busy) return;
-    if (!mapping.student_first_name) {
-      setParseError("You need to map a 'Camper first name' column before importing.");
+    const registrants = (reviewRows || []).filter(
+      (r) => (r.student_first_name || "").trim(),
+    );
+    if (registrants.length === 0) {
+      setParseError("No campers to import — every row is missing a first name. Check the 'adjust columns' panel.");
       return;
     }
     setBusy(true);
     setParseError("");
     setResult(null);
     try {
-      const registrants = csvRows.map(mapRow);
       const { data, error } = await supabase.functions.invoke(target.functionName, {
         body: { [target.bodyKey]: target.id, registrants },
       });
@@ -1041,10 +1100,16 @@ function RosterUploadModal({ target, onClose, onImported }) {
 
         {mode === "csv" && (
           <CsvPanel
+            target={target}
             csvHeaders={csvHeaders}
             csvRows={csvRows}
             mapping={mapping}
-            setMapping={setMapping}
+            reDetect={reDetect}
+            reviewRows={reviewRows}
+            onEditRow={editReviewRow}
+            onRemoveRow={removeReviewRow}
+            showMapping={showMapping}
+            setShowMapping={setShowMapping}
             parseError={parseError}
             result={result}
             busy={busy}
@@ -1094,7 +1159,31 @@ function TabBtn({ active, onClick, label }) {
   );
 }
 
-function CsvPanel({ csvHeaders, csvRows, mapping, setMapping, parseError, result, busy, onFile, onSubmit, onClose }) {
+// Small labeled input used in the review list.
+function ReviewInput({ label, value, onChange, width, placeholder }) {
+  return (
+    <label style={{ display: "block", flex: width ? `0 0 ${width}` : 1, minWidth: 0 }}>
+      <span style={{ fontSize: 9.5, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 1 }}>
+        {label}
+      </span>
+      <input
+        value={value ?? ""}
+        placeholder={placeholder || ""}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          width: "100%", padding: "5px 7px", border: `1px solid ${RULE}`, borderRadius: 4,
+          fontSize: 12.5, fontFamily: "inherit", background: "#fff", color: INK, boxSizing: "border-box",
+        }}
+      />
+    </label>
+  );
+}
+
+function CsvPanel({ target, csvHeaders, csvRows, mapping, reDetect, reviewRows, onEditRow, onRemoveRow, showMapping, setShowMapping, parseError, result, busy, onFile, onSubmit, onClose }) {
+  const noun = target?.noun === "student" ? "student" : "camper";
+  const nounCap = noun.charAt(0).toUpperCase() + noun.slice(1);
+  const validCount = (reviewRows || []).filter((r) => (r.student_first_name || "").trim()).length;
+
   return (
     <div>
       <input
@@ -1104,7 +1193,7 @@ function CsvPanel({ csvHeaders, csvRows, mapping, setMapping, parseError, result
         style={{ fontSize: 13, marginBottom: 10 }}
       />
       <div style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 1.5 }}>
-        Export from Squarespace / your registration platform. We&rsquo;ll guess which column is which; you confirm before we save.
+        Export from Squarespace / your registration platform. We&rsquo;ll detect the names and details automatically — then you check the list below and fix anything before saving.
       </div>
 
       {parseError && (
@@ -1132,55 +1221,86 @@ function CsvPanel({ csvHeaders, csvRows, mapping, setMapping, parseError, result
         </div>
       )}
 
-      {csvHeaders && csvRows && (
+      {!result && reviewRows && (
         <>
           <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>
-            Map your CSV columns ({csvRows.length} rows detected)
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16, maxHeight: 280, overflowY: "auto", padding: 4, border: `1px solid ${RULE}`, borderRadius: 6 }}>
-            {FIELD_DEFS.map((def) => (
-              <div key={def.key} style={{ padding: "6px 8px" }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: INK, marginBottom: 2 }}>
-                  {def.label}{def.required && <span style={{ color: RED, marginLeft: 3 }}>*</span>}
-                </div>
-                <select
-                  value={mapping[def.key] || ""}
-                  onChange={(e) => setMapping({ ...mapping, [def.key]: e.target.value || undefined })}
-                  style={{
-                    width: "100%",
-                    padding: "5px 8px",
-                    border: `1px solid ${RULE}`,
-                    borderRadius: 4,
-                    fontSize: 12,
-                    fontFamily: "inherit",
-                    background: "#fff",
-                    color: INK,
-                  }}
-                >
-                  <option value="">— not in this file —</option>
-                  {csvHeaders.map((h, i) => (
-                    <option key={i} value={h}>{h}</option>
-                  ))}
-                </select>
-              </div>
-            ))}
+            Review {validCount} {validCount === 1 ? noun : `${noun}s`} — edit anything that looks off, then import
           </div>
 
-          <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>
-            Preview (first 3 rows)
-          </div>
-          <div style={{ background: CREAM, padding: 10, borderRadius: 6, marginBottom: 14, maxHeight: 200, overflow: "auto" }}>
-            {csvRows.slice(0, 3).map((row, i) => {
-              const first = row[csvHeaders.indexOf(mapping.student_first_name)] ?? "";
-              const last = row[csvHeaders.indexOf(mapping.student_last_name)] ?? "";
-              const email = row[csvHeaders.indexOf(mapping.parent_email)] ?? "";
+          <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 8, padding: 8, marginBottom: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+            {reviewRows.map((r, i) => {
+              const missingName = !(r.student_first_name || "").trim();
               return (
-                <div key={i} style={{ fontSize: 12, color: INK, padding: "3px 0", borderBottom: i < 2 ? `1px dashed ${RULE}` : "none" }}>
-                  <strong>{first} {last}</strong> {email && <span style={{ color: MUTED }}>· {email}</span>}
+                <div key={i} style={{ border: `1px solid ${missingName ? RED + "66" : RULE}`, borderRadius: 6, padding: 8, background: missingName ? `${RED}0A` : "#fff" }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+                    <ReviewInput label={`${nounCap} first`} value={r.student_first_name} onChange={(v) => onEditRow(i, "student_first_name", v)} placeholder="required" />
+                    <ReviewInput label="Last" value={r.student_last_name} onChange={(v) => onEditRow(i, "student_last_name", v)} />
+                    <ReviewInput label="Grade" value={r.grade} onChange={(v) => onEditRow(i, "grade", v)} width="58px" />
+                    <button
+                      type="button"
+                      onClick={() => onRemoveRow(i)}
+                      title="Remove this row"
+                      style={{ flex: "0 0 auto", background: "transparent", border: `1px solid ${RULE}`, color: MUTED, borderRadius: 4, width: 28, height: 30, cursor: "pointer", fontSize: 14, lineHeight: 1 }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <ReviewInput label="Parent first" value={r.parent_first_name} onChange={(v) => onEditRow(i, "parent_first_name", v)} />
+                    <ReviewInput label="Parent last" value={r.parent_last_name} onChange={(v) => onEditRow(i, "parent_last_name", v)} />
+                    <ReviewInput label="Email" value={r.parent_email} onChange={(v) => onEditRow(i, "parent_email", v)} />
+                    <ReviewInput label="Phone" value={r.parent_phone} onChange={(v) => onEditRow(i, "parent_phone", v)} width="120px" />
+                  </div>
+                  {(r.allergies || r.medical_notes) && (
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <ReviewInput label="Allergies" value={r.allergies} onChange={(v) => onEditRow(i, "allergies", v)} />
+                      <ReviewInput label="Medical / health notes" value={r.medical_notes} onChange={(v) => onEditRow(i, "medical_notes", v)} />
+                    </div>
+                  )}
                 </div>
               );
             })}
+            {reviewRows.length === 0 && (
+              <div style={{ fontSize: 12.5, color: MUTED, padding: 8 }}>No rows found in that file.</div>
+            )}
           </div>
+
+          {/* Escape hatch: only needed when auto-detection got a column wrong. */}
+          {csvHeaders && (
+            <div style={{ marginBottom: 14 }}>
+              <button
+                type="button"
+                onClick={() => setShowMapping(!showMapping)}
+                style={{ background: "transparent", border: "none", color: PURPLE, fontSize: 12, fontFamily: "inherit", cursor: "pointer", padding: 0, textDecoration: "underline" }}
+              >
+                {showMapping ? "Hide column detection" : "Something look wrong? Adjust which column is which"}
+              </button>
+              {showMapping && (
+                <>
+                  <div style={{ fontSize: 11, color: MUTED, margin: "8px 0 6px", lineHeight: 1.5 }}>
+                    Changing a column re-reads the whole file, so it&rsquo;ll discard edits you made above.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, maxHeight: 240, overflowY: "auto", padding: 4, border: `1px solid ${RULE}`, borderRadius: 6 }}>
+                    {FIELD_DEFS.map((def) => (
+                      <div key={def.key} style={{ padding: "6px 8px" }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: INK, marginBottom: 2 }}>{def.label}</div>
+                        <select
+                          value={mapping[def.key] || ""}
+                          onChange={(e) => reDetect({ ...mapping, [def.key]: e.target.value || undefined })}
+                          style={{ width: "100%", padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 12, fontFamily: "inherit", background: "#fff", color: INK }}
+                        >
+                          <option value="">— not in this file —</option>
+                          {csvHeaders.map((h, idx) => (
+                            <option key={idx} value={h}>{h || `(column ${idx + 1})`}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </>
       )}
 
@@ -1202,11 +1322,11 @@ function CsvPanel({ csvHeaders, csvRows, mapping, setMapping, parseError, result
         >
           {result ? "Done" : "Cancel"}
         </button>
-        {!result && csvHeaders && csvRows && (
+        {!result && reviewRows && (
           <button
             type="button"
             onClick={onSubmit}
-            disabled={busy}
+            disabled={busy || validCount === 0}
             style={{
               padding: "8px 16px",
               background: PURPLE,
@@ -1216,11 +1336,11 @@ function CsvPanel({ csvHeaders, csvRows, mapping, setMapping, parseError, result
               fontSize: 13,
               fontWeight: 600,
               fontFamily: "inherit",
-              cursor: busy ? "wait" : "pointer",
-              opacity: busy ? 0.5 : 1,
+              cursor: busy || validCount === 0 ? "not-allowed" : "pointer",
+              opacity: busy || validCount === 0 ? 0.5 : 1,
             }}
           >
-            {busy ? "Importing…" : `Import ${csvRows.length} rows`}
+            {busy ? "Importing…" : `Import ${validCount} ${validCount === 1 ? noun : `${noun}s`}`}
           </button>
         )}
       </div>
