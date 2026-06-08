@@ -13,6 +13,7 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const OK_GREEN = "#3a7c3a";
 const AMBER = "#b67e00";
+const CORAL = "#D9694F"; // matches the "Needs hire" badge on the schedule board
 
 // Bucketed view of contractor_onboarding_status used by the pipeline card.
 // Order matters: rendered top-to-bottom in the card.
@@ -36,6 +37,11 @@ export default function AdminOverview() {
   // both stay null when the admin doesn't teach (most operators).
   const [teaching, setTeaching] = useState(null);
   // null = loading, false = not an instructor, object = { instructorId, assignments: [...] }
+
+  // Open-hires notification: how many instructor slots still need filling across
+  // the cycles/terms you're actively staffing. Surfaced as a banner at the top so
+  // it reads as a sign-in alert. null = loading; { camp, afterschool, total }.
+  const [openHires, setOpenHires] = useState(null);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -135,6 +141,99 @@ export default function AdminOverview() {
     return () => { cancelled = true; };
   }, [user?.id, org?.id]);
 
+  // Open-hires load. Counts unfilled instructor slots so the home can warn at
+  // sign-in. Two sources, each scoped to what's actually being worked:
+  //   • Camps: every camp needs a lead; a camp with >= DEVELOPING_THRESHOLD (12)
+  //     enrolled also wants a developing instructor. Only active cycles
+  //     (not archived, not already ended). Mirrors Schedule.jsx's counter.
+  //   • After-school: every program needs a lead — but ONLY for terms that have
+  //     started staffing (>=1 active assignment). Otherwise a fresh term with
+  //     dozens of un-staffed programs would drown the alert in noise.
+  // All queries are org-scoped (RLS + explicit org filter); no tenant hardcoding.
+  useEffect(() => {
+    if (!org?.id) return;
+    const DEVELOPING_THRESHOLD = 12; // keep in sync with Schedule.jsx
+    let cancelled = false;
+    (async () => {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+
+        // ---- Camps ----
+        const { data: cycles } = await supabase
+          .from("scheduling_cycles")
+          .select("id")
+          .eq("organization_id", org.id)
+          .eq("cycle_type", "summer_camp")
+          .neq("status", "archived")
+          .or(`ends_on.gte.${today},ends_on.is.null`);
+        const cycleIds = (cycles ?? []).map((c) => c.id);
+
+        let campOpen = 0;
+        if (cycleIds.length) {
+          const { data: sessions } = await supabase
+            .from("camp_sessions")
+            .select("id, current_enrollment")
+            .in("cycle_id", cycleIds);
+          const sessIds = (sessions ?? []).map((s) => s.id);
+          let camp = [];
+          if (sessIds.length) {
+            const { data: ca } = await supabase
+              .from("camp_assignments")
+              .select("camp_session_id, role, status")
+              .in("camp_session_id", sessIds);
+            camp = (ca ?? []).filter((a) => a.status !== "withdrawn");
+          }
+          for (const s of sessions ?? []) {
+            const own = camp.filter((a) => a.camp_session_id === s.id);
+            const hasLead = own.some((a) => a.role === "lead");
+            const hasDeveloping = own.some((a) => a.role === "developing");
+            const wantsDeveloping = (s.current_enrollment ?? 0) >= DEVELOPING_THRESHOLD;
+            if (!hasLead) campOpen++;
+            if (wantsDeveloping && !hasDeveloping) campOpen++;
+          }
+        }
+
+        // ---- After-school ----
+        const { data: programs } = await supabase
+          .from("programs")
+          .select("id, term")
+          .eq("organization_id", org.id)
+          .eq("status", "open");
+        const progIds = (programs ?? []).map((p) => p.id);
+
+        let afterschoolOpen = 0;
+        if (progIds.length) {
+          const { data: pa } = await supabase
+            .from("program_assignments")
+            .select("program_id, role, status")
+            .in("program_id", progIds);
+          const active = (pa ?? []).filter(
+            (a) => a.status !== "withdrawn" && a.status !== "declined"
+          );
+          const progById = new Map((programs ?? []).map((p) => [p.id, p]));
+          const termsInStaffing = new Set();
+          for (const a of active) {
+            const p = progById.get(a.program_id);
+            if (p) termsInStaffing.add(p.term);
+          }
+          for (const p of programs ?? []) {
+            if (!termsInStaffing.has(p.term)) continue; // skip terms not yet being staffed
+            const hasLead = active.some((a) => a.program_id === p.id && a.role === "lead");
+            if (!hasLead) afterschoolOpen++;
+          }
+        }
+
+        if (!cancelled) {
+          setOpenHires({ camp: campOpen, afterschool: afterschoolOpen, total: campOpen + afterschoolOpen });
+        }
+      } catch (err) {
+        console.error("[admin/overview] open-hires load failed", err);
+        if (!cancelled) setOpenHires({ camp: 0, afterschool: 0, total: 0 });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
   // Display name: take the bit before the @ in the email and Title-Case it.
   // Splits on dots/underscores too so "jessica.vorster" -> "Jessica Vorster".
   // No DB lookup needed for v1; we can move to a stored display_name later if
@@ -159,6 +258,8 @@ export default function AdminOverview() {
           {org?.name ? `Operating as ${org.name}.` : "Admin overview."}
         </p>
       </header>
+
+      {openHires?.total > 0 && <OpenHiresBanner openHires={openHires} />}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
         {/* Renders only when this admin is also in the instructors table.
@@ -207,6 +308,53 @@ export default function AdminOverview() {
           soon
         />
       </div>
+    </div>
+  );
+}
+
+function OpenHiresBanner({ openHires }) {
+  const { camp, afterschool, total } = openHires;
+  // Plain-English breakdown, only naming the sources that actually have openings.
+  const parts = [];
+  if (camp > 0) parts.push(`${camp} camp ${camp === 1 ? "slot" : "slots"}`);
+  if (afterschool > 0) parts.push(`${afterschool} after-school ${afterschool === 1 ? "class" : "classes"}`);
+  const breakdown = parts.join(" and ");
+
+  return (
+    <div style={{
+      background: `${CORAL}12`,
+      border: `1px solid ${CORAL}55`,
+      borderLeft: `4px solid ${CORAL}`,
+      borderRadius: 8,
+      padding: "14px 18px",
+      marginBottom: 20,
+      display: "flex",
+      flexWrap: "wrap",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 12,
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>
+          {total === 1 ? "1 open hire needs your attention" : `${total} open hires need your attention`}
+        </div>
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+          {breakdown} still {total === 1 ? "needs" : "need"} an instructor. Assign someone or send offers from the schedule.
+        </div>
+      </div>
+      <Link to="/admin/schedule" style={{
+        flexShrink: 0,
+        display: "inline-block",
+        padding: "8px 16px",
+        background: CORAL,
+        color: "#fff",
+        borderRadius: 6,
+        fontSize: 13,
+        fontWeight: 600,
+        textDecoration: "none",
+      }}>
+        Review open hires →
+      </Link>
     </div>
   );
 }
