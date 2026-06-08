@@ -91,6 +91,14 @@ export default function Payroll() {
   const [markingGroup, setMarkingGroup] = useState(null);
   const [withholdingRow, setWithholdingRow] = useState(null); // { groupKey, confirmation_id, isGroup?: bool }
   const [adjustTarget, setAdjustTarget] = useState(null); // { mode:'line'|'bonus', ... } — manual adjust / bonus
+  const [payRoute, setPayRoute] = useState(null); // org's pay model — gates whether "Pay via Stripe" shows
+
+  // Only show "Pay via Stripe" when the tenant actually has a LIVE Stripe payout
+  // rail. Today that's legacy_own_platform (their own Connect). enrops_platform
+  // is "coming soon" (blocked) and manual/not-connected tenants have no rail, so
+  // they get manual-only ("Mark paid manually"). Expand this when enrops_platform
+  // ships. Defaults to false until loaded so we never show a dead Pay button.
+  const canStripePayout = payRoute?.instructor_pay_model === 'legacy_own_platform';
 
   function toggleExpand(key) {
     setExpanded((prev) => {
@@ -109,6 +117,21 @@ export default function Payroll() {
     setSavedToast(msg);
     setTimeout(() => setSavedToast(null), 2000);
   }
+
+  // Load the org's pay model so we know whether to offer "Pay via Stripe".
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('organizations')
+        .select('instructor_pay_model, stripe_account_status, stripe_charges_enabled')
+        .eq('id', org.id)
+        .maybeSingle();
+      if (!cancelled) setPayRoute(data ?? null);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
 
   // ── load ───────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -442,6 +465,7 @@ export default function Payroll() {
                 label: fmtDate(r.session_date),
               })}
               onAddBonus={() => setAdjustTarget({ mode: 'bonus', group: g, label: shortName(g.instructor) })}
+              canStripePayout={canStripePayout}
               canManage={canManage}
               busy={busy}
             />
@@ -747,6 +771,7 @@ function GroupRow({
   onApproveGroup, onWithholdGroup, onPay, onMarkPaid,
   onApproveRow, onWithholdRow, onReapproveRow,
   onAdjustRow, onAddBonus,
+  canStripePayout,
   canManage, busy,
 }) {
   const g = group;
@@ -822,7 +847,7 @@ function GroupRow({
           {hasPending && (
             <ActionButton onClick={onApproveGroup} disabled={busy} tone="primary">Approve all</ActionButton>
           )}
-          {hasEligible && (
+          {hasEligible && canStripePayout && (
             <ActionButton onClick={onPay} disabled={busy} tone="primary">Pay via Stripe</ActionButton>
           )}
           {hasEligible && (
