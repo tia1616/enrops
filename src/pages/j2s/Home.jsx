@@ -354,9 +354,10 @@ export default function J2SHome() {
 
                           {/* Fall Only column (RIGHT) */}
                           <div className="p-5">
-                            {/* #3: "Fall only" */}
+                            {/* "Fall only" reads as a contrast to the VIP all-terms column;
+                                when Fall is the only option (no VIP bundle), drop the "only". */}
                             <p className="font-titan text-xs uppercase tracking-widest text-j2s-ink/50">
-                              Fall only
+                              {vipEligible ? 'Fall only' : 'Fall'}
                             </p>
                             <div className="mt-2">
                               {fallShowsEarlyBird ? (
@@ -386,7 +387,7 @@ export default function J2SHome() {
                               onClick={() => startRegistration(p.id, false)}
                               className="btn-j2s-secondary mt-4 w-full text-sm"
                             >
-                              Register for fall only
+                              {vipEligible ? 'Register for fall only' : 'Register for fall'}
                             </button>
                           </div>
                         </div>
