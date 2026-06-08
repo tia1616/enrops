@@ -90,6 +90,7 @@ export default function Payroll() {
   const [payingGroup, setPayingGroup] = useState(null);
   const [markingGroup, setMarkingGroup] = useState(null);
   const [withholdingRow, setWithholdingRow] = useState(null); // { groupKey, confirmation_id, isGroup?: bool }
+  const [adjustTarget, setAdjustTarget] = useState(null); // { mode:'line'|'bonus', ... } — manual adjust / bonus
 
   function toggleExpand(key) {
     setExpanded((prev) => {
@@ -317,6 +318,64 @@ export default function Payroll() {
     bumpRefresh();
   }
 
+  // Manual adjust / bonus. Non-destructive: the original computed amount
+  // (pay_amount_cents) is preserved; the change is recorded as a tracked
+  // pay_adjustment_cents + reason + who/when (admin_override_*). Both the
+  // group total and the Stripe payout already sum pay_adjustment_cents.
+  async function submitAdjust(target, { amountCents, reason }) {
+    if (!canManage || !target) return;
+    if (!reason || !reason.trim()) { setError('A reason is required for any pay adjustment.'); return; }
+    setBusy(true);
+    setError('');
+    try {
+      const { data: au } = await supabase.auth.getUser();
+      const uid = au?.user?.id ?? null;
+      const nowIso = new Date().toISOString();
+      const audit = { admin_override: true, admin_override_by: uid, admin_override_at: nowIso };
+
+      if (target.mode === 'line') {
+        // amountCents = the NEW total for this day (override UX). Keep the
+        // computed base and store the difference as the adjustment, so the
+        // original is never lost. If there was no computed base, set it.
+        if (amountCents < 0) { setError('Amount can’t be negative.'); setBusy(false); return; }
+        const update = target.baseNull
+          ? { pay_amount_cents: amountCents, pay_adjustment_cents: 0 }
+          : { pay_adjustment_cents: amountCents - target.baseCents };
+        update.pay_status = 'adjusted';
+        update.pay_adjustment_reason = reason.trim();
+        Object.assign(update, audit);
+        const { error: err } = await supabase
+          .from('session_delivery_confirmations').update(update).eq('id', target.confirmationId);
+        if (err) throw err;
+      } else {
+        // Week bonus: attach to a payable line on this group (sum if one
+        // already carries an adjustment). Reason is prefixed "Bonus:".
+        const row = target.group.rows.find((r) => r.pay_status !== 'paid') ?? target.group.rows[0];
+        if (!row) throw new Error('No pay line to attach the bonus to.');
+        const newAdj = (row.pay_adjustment_cents ?? 0) + amountCents;
+        if ((row.pay_amount_cents ?? 0) + newAdj < 0) { setError('That deduction is larger than the pay.'); setBusy(false); return; }
+        const prev = row.pay_adjustment_reason ? `${row.pay_adjustment_reason} | ` : '';
+        const { error: err } = await supabase
+          .from('session_delivery_confirmations')
+          .update({
+            pay_adjustment_cents: newAdj,
+            pay_status: row.pay_status === 'paid' ? row.pay_status : 'adjusted',
+            pay_adjustment_reason: `${prev}Bonus: ${reason.trim()}`,
+            ...audit,
+          })
+          .eq('id', row.confirmation_id);
+        if (err) throw err;
+      }
+      setAdjustTarget(null);
+      toast(target.mode === 'bonus' ? 'Bonus added' : 'Pay adjusted');
+      bumpRefresh();
+    } catch (e) {
+      setError(e.message ?? 'Could not save the adjustment.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function approveGroup(group) {
     if (!canManage) return;
     const ids = group.rows
@@ -374,6 +433,15 @@ export default function Payroll() {
               onApproveRow={approveRow}
               onWithholdRow={(cid) => setWithholdingRow({ groupKey: g.key, confirmation_ids: [cid], isGroup: false })}
               onReapproveRow={reapproveRow}
+              onAdjustRow={(r) => setAdjustTarget({
+                mode: 'line',
+                confirmationId: r.confirmation_id,
+                baseCents: r.pay_amount_cents ?? 0,
+                baseNull: r.pay_amount_cents == null,
+                adjCents: r.pay_adjustment_cents ?? 0,
+                label: fmtDate(r.session_date),
+              })}
+              onAddBonus={() => setAdjustTarget({ mode: 'bonus', group: g, label: shortName(g.instructor) })}
               canManage={canManage}
               busy={busy}
             />
@@ -400,6 +468,14 @@ export default function Payroll() {
           payload={withholdingRow}
           onCancel={() => setWithholdingRow(null)}
           onConfirm={(reason) => submitWithhold(withholdingRow.confirmation_ids, reason)}
+          busy={busy}
+        />
+      )}
+      {adjustTarget && (
+        <AdjustDialog
+          target={adjustTarget}
+          onCancel={() => setAdjustTarget(null)}
+          onConfirm={(payload) => submitAdjust(adjustTarget, payload)}
           busy={busy}
         />
       )}
@@ -670,6 +746,7 @@ function GroupRow({
   group, expanded, onToggle,
   onApproveGroup, onWithholdGroup, onPay, onMarkPaid,
   onApproveRow, onWithholdRow, onReapproveRow,
+  onAdjustRow, onAddBonus,
   canManage, busy,
 }) {
   const g = group;
@@ -752,6 +829,9 @@ function GroupRow({
             <ActionButton onClick={onMarkPaid} disabled={busy} tone="secondary">Mark paid manually</ActionButton>
           )}
           {(hasPending || hasEligible) && (
+            <ActionButton onClick={onAddBonus} disabled={busy} tone="secondary">+ Add bonus</ActionButton>
+          )}
+          {(hasPending || hasEligible) && (
             <ActionButton onClick={onWithholdGroup} disabled={busy} tone="danger">Withhold all</ActionButton>
           )}
         </div>
@@ -764,6 +844,7 @@ function GroupRow({
           onApproveRow={onApproveRow}
           onWithholdRow={onWithholdRow}
           onReapproveRow={onReapproveRow}
+          onAdjustRow={onAdjustRow}
           canManage={canManage}
           busy={busy}
           groupSource={g.source}
@@ -773,7 +854,7 @@ function GroupRow({
   );
 }
 
-function DayBreakdown({ rows, originalInstructor, onApproveRow, onWithholdRow, onReapproveRow, canManage, busy, groupSource }) {
+function DayBreakdown({ rows, originalInstructor, onApproveRow, onWithholdRow, onReapproveRow, onAdjustRow, canManage, busy, groupSource }) {
   return (
     <div style={{ borderTop: `1px solid ${RULE}`, padding: 12, background: '#fafafa' }}>
       {rows.map((r) => {
@@ -801,6 +882,11 @@ function DayBreakdown({ rows, originalInstructor, onApproveRow, onWithholdRow, o
             </div>
             {canManage && r.pay_status !== 'paid' && (
               <div style={{ display: 'flex', gap: 6 }}>
+                {onAdjustRow && !isCovered && (
+                  <MicroButton onClick={() => onAdjustRow(r)} disabled={busy} tone="adjust">
+                    {(r.pay_adjustment_cents ?? 0) !== 0 ? 'Edit $' : 'Adjust'}
+                  </MicroButton>
+                )}
                 {(r.pay_status === 'pending' || r.pay_status === 'adjusted') && (
                   <MicroButton onClick={() => onApproveRow(r.confirmation_id)} disabled={busy}>Approve</MicroButton>
                 )}
@@ -849,7 +935,7 @@ function ActionButton({ onClick, disabled, tone = 'primary', children }) {
 }
 
 function MicroButton({ onClick, disabled, tone, children }) {
-  const color = tone === 'danger' ? RED : PURPLE;
+  const color = tone === 'danger' ? RED : tone === 'adjust' ? VIOLET : PURPLE;
   return (
     <button
       type="button"
@@ -904,6 +990,55 @@ function WithholdDialog({ payload, onCancel, onConfirm, busy }) {
         <ActionButton tone="secondary" onClick={onCancel} disabled={busy}>Cancel</ActionButton>
         <ActionButton tone="danger" onClick={() => onConfirm(reason.trim() || null)} disabled={busy}>
           {busy ? 'Withholding…' : 'Withhold'}
+        </ActionButton>
+      </div>
+    </DrawerShell>
+  );
+}
+
+// Adjust / bonus dialog. `mode` is 'line' (override one day's total) or
+// 'bonus' (add a week-level amount). Override UX (type the new total) but
+// stored non-destructively as a tracked adjustment; reason is required.
+function AdjustDialog({ target, onCancel, onConfirm, busy }) {
+  const isBonus = target.mode === 'bonus';
+  const initial = isBonus ? '' : (((target.baseCents ?? 0) + (target.adjCents ?? 0)) / 100).toFixed(2);
+  const [amount, setAmount] = useState(initial);
+  const [reason, setReason] = useState('');
+  const parsed = parseFloat(String(amount).replace(/[^0-9.\-]/g, ''));
+  const cents = Number.isFinite(parsed) ? Math.round(parsed * 100) : NaN;
+  const amountOk = Number.isFinite(cents) && (isBonus ? cents !== 0 : cents >= 0);
+  const valid = amountOk && reason.trim().length > 0;
+  return (
+    <DrawerShell title={isBonus ? `Add bonus — ${target.label}` : `Correct pay — ${target.label}`} onClose={onCancel}>
+      <p style={{ margin: '0 0 12px', color: INK, fontSize: 14 }}>
+        {isBonus
+          ? 'Add a one-off amount to this instructor’s pay for the week. It’s recorded with your note and added to the Stripe payout.'
+          : 'Set the correct total for this day. The original calculated amount is kept; your change is tracked with your note.'}
+      </p>
+      <label style={{ display: 'block', fontSize: 13, color: MUTED, marginBottom: 6 }}>
+        {isBonus ? 'Bonus amount (use a minus sign to deduct)' : 'New amount for this day'}
+      </label>
+      <input
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        inputMode="decimal"
+        placeholder={isBonus ? '$50.00' : '$0.00'}
+        style={{ width: '100%', padding: 8, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', fontSize: 14 }}
+      />
+      <label style={{ display: 'block', fontSize: 13, color: MUTED, margin: '14px 0 6px' }}>
+        Reason (required)
+      </label>
+      <textarea
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        rows={2}
+        placeholder={isBonus ? 'e.g., End-of-camp bonus, picked up an extra session…' : 'e.g., Covered an extra hour, rate correction…'}
+        style={{ width: '100%', padding: 8, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', fontSize: 13, resize: 'vertical' }}
+      />
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+        <ActionButton tone="secondary" onClick={onCancel} disabled={busy}>Cancel</ActionButton>
+        <ActionButton tone="primary" onClick={() => onConfirm({ amountCents: cents, reason: reason.trim() })} disabled={!valid || busy}>
+          {busy ? 'Saving…' : (isBonus ? 'Add bonus' : 'Save')}
         </ActionButton>
       </div>
     </DrawerShell>
