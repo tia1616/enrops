@@ -140,8 +140,18 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           cancel_registration: seatChoice === "withdraw",
         },
       });
-      if (error || data?.error) {
-        setErr(humanError(data?.error || error?.message, data));
+      if (error) {
+        // supabase-js puts the edge fn's JSON body on error.context (a Response)
+        // for non-2xx replies — read it so the operator sees the real reason,
+        // not the generic "non-2xx status code".
+        let payload = null;
+        try { payload = await error.context?.json?.(); } catch { /* not JSON */ }
+        setErr(humanError(payload?.error || error.message, payload));
+        setBusy(false);
+        return;
+      }
+      if (data?.error) {
+        setErr(humanError(data.error, data));
         setBusy(false);
         return;
       }
