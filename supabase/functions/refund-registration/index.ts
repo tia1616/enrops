@@ -35,6 +35,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -55,6 +56,10 @@ interface RegistrationRow {
   payment_status: string | null;
   stripe_payment_intent_id: string | null;
   amount_cents: number | null;
+  student_id: string | null;
+  parent_id: string | null;
+  program_id: string | null;
+  camp_session_id: string | null;
 }
 
 interface InstallmentRow {
@@ -109,7 +114,7 @@ serve(async (req: Request) => {
     // ── load registration ─────────────────────────────────────────────────
     const { data: regData, error: regErr } = await supabase
       .from('registrations')
-      .select('id, organization_id, status, payment_status, stripe_payment_intent_id, amount_cents')
+      .select('id, organization_id, status, payment_status, stripe_payment_intent_id, amount_cents, student_id, parent_id, program_id, camp_session_id')
       .eq('id', registrationId)
       .maybeSingle();
     if (regErr) {
@@ -354,10 +359,43 @@ serve(async (req: Request) => {
       }
     }
 
+    // ── intelligence layer (fail-safe; never blocks the refund) ───────────
+    // A refund — and especially a withdrawal — is a real churn signal worth
+    // capturing. logEnrollmentEvent swallows its own errors.
+    const refundedThisCall = refundsCreated.reduce((s, r) => s + r.amount_cents, 0);
+    const eventBase = {
+      organizationId: reg.organization_id,
+      parentId: reg.parent_id,
+      studentId: reg.student_id,
+      programId: reg.program_id,
+      campSessionId: reg.camp_session_id,
+      registrationId: registrationId,
+    };
+    await logEnrollmentEvent(supabase, {
+      ...eventBase,
+      actionType: ENROLLMENT_ACTIONS.REFUNDED,
+      metadata: {
+        amount_refunded_cents: refundedThisCall,
+        total_refunded_cents: newTotalRefunded,
+        total_paid_cents: totalPaid,
+        partial: newTotalRefunded < totalPaid,
+        withdrew: cancelRegistration,
+      },
+      dedupeKey: `refunded:${refundsCreated.map((r) => r.refund_row_id).join('_')}`,
+    });
+    if (cancelRegistration) {
+      await logEnrollmentEvent(supabase, {
+        ...eventBase,
+        actionType: ENROLLMENT_ACTIONS.CANCELLED,
+        metadata: { via: 'refund' },
+        dedupeKey: `cancelled:${registrationId}`,
+      });
+    }
+
     return json({
       success: true,
       refunds: refundsCreated,
-      total_refunded_cents: refundsCreated.reduce((s, r) => s + r.amount_cents, 0),
+      total_refunded_cents: refundedThisCall,
       cancelled: cancelRegistration,
     });
   } catch (err) {

@@ -705,17 +705,78 @@ function InvoicesTab() {
   );
 }
 
+// Read-only refund history. Refunds are issued from Rosters (row → Refund…);
+// this is the money-side record of what happened. RLS scopes rows to the org.
 function RefundsTab() {
+  const [rows, setRows] = useState(null); // null = loading
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("refunds")
+        .select("id, amount_cents, reason, status, cancelled_registration, created_at, succeeded_at, registration:registrations(student:students(first_name, last_name))")
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (!alive) return;
+      if (error) {
+        console.error("[RefundsTab] load failed", error);
+        setErr("Couldn't load refund history. Refresh.");
+        setRows([]);
+        return;
+      }
+      setRows(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const fmtWhen = (iso) =>
+    iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+  const nameOf = (r) => {
+    const s = r.registration?.student;
+    return s ? `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "—" : "—";
+  };
+
   return (
     <Card>
-      <div style={{ color: MUTED, fontSize: 14, textAlign: "center", padding: "32px 16px" }}>
-        Issue refunds and view refund history.
-        <div style={{ fontSize: 12, marginTop: 8 }}>
-          For now, refund a specific registration from the{" "}
-          <a href="/admin/rosters" style={{ color: PURPLE }}>Rosters</a> page →
-          row → Refund…
+      <h2 style={{ margin: "0 0 4px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Refund history</h2>
+      <p style={{ margin: "0 0 16px", color: MUTED, fontSize: 13 }}>
+        Issue a refund from <a href="/admin/rosters" style={{ color: PURPLE }}>Rosters</a> → a family's row → <strong>Refund…</strong>. Every refund is recorded here.
+      </p>
+
+      {err && (
+        <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 12 }}>{err}</div>
+      )}
+
+      {rows === null && <div style={{ color: MUTED, fontSize: 13, padding: "16px 0" }}>Loading…</div>}
+
+      {rows !== null && rows.length === 0 && !err && (
+        <div style={{ color: MUTED, fontSize: 13, textAlign: "center", padding: "24px 16px" }}>
+          No refunds yet.
         </div>
-      </div>
+      )}
+
+      {rows !== null && rows.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 12, fontSize: 11, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, padding: "0 4px 4px" }}>
+            <span>Family</span><span>Amount</span><span>Date</span>
+          </div>
+          {rows.map((r) => (
+            <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 12, alignItems: "baseline", border: `1px solid ${RULE}`, borderRadius: 6, padding: "8px 10px", fontSize: 13 }}>
+              <span style={{ minWidth: 0 }}>
+                <span style={{ fontWeight: 600, color: INK }}>{nameOf(r)}</span>
+                {r.cancelled_registration && <span style={{ marginLeft: 8, fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${RULE}`, borderRadius: 4, padding: "1px 5px" }}>Withdrew</span>}
+                {r.status === "failed" && <span style={{ marginLeft: 8, fontSize: 10, color: RED, fontWeight: 700, textTransform: "uppercase" }}>Failed</span>}
+                {r.status === "pending" && <span style={{ marginLeft: 8, fontSize: 10, color: AMBER, fontWeight: 700, textTransform: "uppercase" }}>Pending</span>}
+                {r.reason && <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>{r.reason}</span>}
+              </span>
+              <span style={{ fontWeight: 600, color: r.status === "succeeded" ? OK : MUTED, whiteSpace: "nowrap" }}>{fmtCents(r.amount_cents)}</span>
+              <span style={{ color: MUTED, whiteSpace: "nowrap" }}>{fmtWhen(r.succeeded_at || r.created_at)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }

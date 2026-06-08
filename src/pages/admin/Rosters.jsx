@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import EmailRosterModal from "./EmailRosterModal";
+import RefundDrawer from "../../components/RefundDrawer";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -502,7 +503,7 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
       .from("registrations")
       .select(`
         id, status, notes, authorized_pickup_contacts, photo_release_consent,
-        payment_status, amount_cents, stripe_payment_intent_id, organization_id,
+        payment_status, amount_cents, stripe_payment_intent_id, organization_id, cancelled_at,
         student:students (
           id, first_name, last_name, grade, birthdate, pronouns,
           allergies, dietary_restrictions, medical_notes, medical_conditions,
@@ -576,10 +577,24 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
 function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved }) {
   const s = registration.student;
   const [confirming, setConfirming] = useState(false);
+  const [refunding, setRefunding] = useState(false);
   if (!s) return null;
   const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed";
   const hasAllergies = (s.allergies ?? "").trim().length > 0;
   const flagged = hasAllergies || s.epipen_required;
+  // A registration has money on it once it's paid or carries a Stripe charge.
+  // Those can't be hard-deleted (Remove refuses them) — they're refunded instead.
+  const hasPayment = registration.payment_status === "paid" || !!registration.stripe_payment_intent_id;
+  const isCancelled = !!registration.cancelled_at || registration.status === "cancelled";
+  const payStatus = registration.payment_status;
+  // Small status pill: cancelled regs still show on camp rosters, so label them.
+  const badge = isCancelled
+    ? { text: payStatus === "refunded" ? "Cancelled · Refunded" : payStatus === "partial" ? "Cancelled · Partial refund" : "Cancelled", color: MUTED }
+    : payStatus === "refunded"
+      ? { text: "Refunded", color: MUTED }
+      : payStatus === "partial"
+        ? { text: "Partially refunded", color: AMBER }
+        : null;
 
   return (
     <div
@@ -604,6 +619,11 @@ function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSav
               {s.epipen_required && (
                 <span style={{ marginLeft: 8, fontSize: 10, color: RED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
                   EpiPen
+                </span>
+              )}
+              {badge && (
+                <span style={{ marginLeft: 8, fontSize: 10, color: badge.color, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${badge.color}`, borderRadius: 4, padding: "1px 5px" }}>
+                  {badge.text}
                 </span>
               )}
             </div>
@@ -634,7 +654,28 @@ function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSav
             >
               Edit →
             </button>
-            {canManage && (
+            {canManage && hasPayment && payStatus !== "refunded" && (
+              <button
+                type="button"
+                onClick={() => setRefunding(true)}
+                style={{
+                  padding: "5px 10px",
+                  background: "transparent",
+                  color: INK,
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 5,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+                title="Refund this family's payment (and optionally free their spot)"
+              >
+                Refund…
+              </button>
+            )}
+            {canManage && !hasPayment && (
               <button
                 type="button"
                 onClick={() => setConfirming(true)}
@@ -665,6 +706,21 @@ function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSav
           name={displayName}
           onClose={() => setConfirming(false)}
           onRemoved={() => { setConfirming(false); if (onRemoved) onRemoved(); }}
+        />
+      )}
+
+      {refunding && (
+        <RefundDrawer
+          registration={{
+            id: registration.id,
+            organization_id: registration.organization_id,
+            amount_cents: registration.amount_cents,
+            payment_status: registration.payment_status,
+            stripe_payment_intent_id: registration.stripe_payment_intent_id,
+            studentName: displayName,
+          }}
+          onClose={() => setRefunding(false)}
+          onDone={() => { setRefunding(false); if (onRemoved) onRemoved(); }}
         />
       )}
 
