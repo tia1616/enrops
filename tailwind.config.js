@@ -4,15 +4,19 @@ export default {
   theme: {
     extend: {
       colors: {
-        // J2S brand (parent-facing surfaces only — register / login / dashboard / home)
-        // Per the Journey to STEAM Brandboard.
+        // J2S brand (parent-facing surfaces only — register / login / dashboard / home).
+        // These tokens resolve from CSS variables whose defaults ARE the J2S
+        // Brandboard values (set in index.css :root), so J2S renders exactly as
+        // before everywhere. The Enrops public shell (non-J2S tenants) overrides
+        // the variables to the Enrops palette, so a tenant like Cascade gets
+        // Enrops-branded parent pages without touching any of the 180+ class uses.
         j2s: {
-          purple: '#674EE8',
-          'purple-dark': '#4430AC',
-          'purple-soft': '#EDE9FE',
-          orange: '#F8A638',
-          'orange-dark': '#E85B37',
-          ink: '#1A1530',
+          purple: 'rgb(var(--j2s-purple) / <alpha-value>)',
+          'purple-dark': 'rgb(var(--j2s-purple-dark) / <alpha-value>)',
+          'purple-soft': 'rgb(var(--j2s-purple-soft) / <alpha-value>)',
+          orange: 'rgb(var(--j2s-orange) / <alpha-value>)',
+          'orange-dark': 'rgb(var(--j2s-orange-dark) / <alpha-value>)',
+          ink: 'rgb(var(--j2s-ink) / <alpha-value>)',
         },
         // Enrops brand (admin, contractor portal, contractor onboarding,
         // marketing landing — everything that's not parent-facing).
@@ -33,9 +37,11 @@ export default {
         },
       },
       fontFamily: {
-        // J2S parent surfaces
-        titan: ['"Titan One"', 'ui-sans-serif', 'system-ui'],
-        nunito: ['"Nunito Sans"', 'ui-sans-serif', 'system-ui'],
+        // J2S parent surfaces — variable-driven so the Enrops public shell can
+        // swap them to Poppins for non-J2S tenants (default = J2S fonts, set in
+        // index.css :root). J2S is unchanged.
+        titan: ['var(--brand-display)', 'ui-sans-serif', 'system-ui'],
+        nunito: ['var(--brand-body)', 'ui-sans-serif', 'system-ui'],
         // Enrops surfaces
         poppins: ['Poppins', 'ui-sans-serif', 'system-ui'],
         // Legacy alias — still referenced by some files; resolves to Poppins

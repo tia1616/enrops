@@ -160,7 +160,7 @@ function J2SBrandedShell({ org, user, signOut, location }) {
 function EnropsBrandedShell({ org, user, signOut, location }) {
   const home = `/${org.slug}`;
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: ENROPS_CREAM, color: '#1a1a1a', fontFamily: 'inherit' }}>
+    <div className="brand-enrops-public" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: ENROPS_CREAM, color: '#1a1a1a', fontFamily: 'inherit' }}>
       <header style={{ position: 'sticky', top: 0, zIndex: 30, background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(6px)', borderBottom: '1px solid #e2dfd5' }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
           <Link to={home} style={{ display: 'flex', alignItems: 'center', gap: 10, color: ENROPS_PURPLE, fontWeight: 700, fontSize: 18, textDecoration: 'none' }}>

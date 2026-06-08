@@ -18,6 +18,34 @@
   .brand-enrops {
     @apply font-poppins text-enrops-ink;
   }
+
+  /* Parent-surface brand tokens. Defaults ARE the J2S Brandboard values, so
+     J2S (and every existing surface) renders exactly as before. RGB triplets
+     so Tailwind opacity modifiers (bg-j2s-purple/10 etc.) keep working. */
+  :root {
+    --j2s-purple: 103 78 232;        /* #674EE8 */
+    --j2s-purple-dark: 68 48 172;    /* #4430AC */
+    --j2s-purple-soft: 237 233 254;  /* #EDE9FE */
+    --j2s-orange: 248 166 56;        /* #F8A638 */
+    --j2s-orange-dark: 232 91 55;    /* #E85B37 */
+    --j2s-ink: 26 21 48;             /* #1A1530 */
+    --brand-display: "Titan One";
+    --brand-body: "Nunito Sans";
+  }
+
+  /* Non-J2S public tenants (the Enrops public shell): swap parent-surface
+     tokens to the Enrops palette + Poppins so their catalog/register pages
+     read as Enrops, not J2S. Scoped to this wrapper only — admin + J2S untouched. */
+  .brand-enrops-public {
+    --j2s-purple: 28 0 79;           /* Enrops Deep Purple #1C004F */
+    --j2s-purple-dark: 13 0 36;      /* #0D0024 */
+    --j2s-purple-soft: 242 240 255;  /* Soft Lilac #F2F0FF */
+    --j2s-orange: 140 136 255;       /* Vivid Violet #8C88FF (Enrops has no orange) */
+    --j2s-orange-dark: 104 87 225;   /* Deep Violet #6857E1 */
+    --j2s-ink: 28 14 21;             /* Enrops ink #1C0E15 */
+    --brand-display: "Poppins";
+    --brand-body: "Poppins";
+  }
 }
 
 @layer components {
