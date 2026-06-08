@@ -968,28 +968,66 @@ function RosterUploadModal({ target, onClose, onImported }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
 
+  // Shared landing point once a file (CSV or Excel) is parsed into a header
+  // row + data rows. Auto-detects columns and builds the editable review list.
+  function ingest(headers, data) {
+    if (!headers || headers.length === 0) {
+      setParseError("That file doesn't have a header row we can read. Make sure the first row is column titles.");
+      return;
+    }
+    const autoMapped = autoMap(headers);
+    setCsvHeaders(headers);
+    setCsvRows(data);
+    setMapping(autoMapped);
+    setReviewRows(buildRegistrants(data, headers, autoMapped));
+  }
+
   function handleFile(e) {
     const f = e.target.files?.[0];
     if (!f) return;
     setParseError("");
     setResult(null);
     setShowMapping(false);
+    const name = (f.name || "").toLowerCase();
+    const isExcel = name.endsWith(".xlsx") || name.endsWith(".xls")
+      || /spreadsheetml|ms-excel/.test(f.type || "");
+
+    if (isExcel) {
+      // Excel / Google-Sheets export. Parse the first sheet into an
+      // array-of-arrays; SheetJS is dynamically imported so it only loads when
+      // someone actually uploads a spreadsheet (keeps it out of the main bundle).
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const XLSX = await import("xlsx");
+          const wb = XLSX.read(new Uint8Array(reader.result), { type: "array" });
+          const sheet = wb.Sheets[wb.SheetNames[0]];
+          if (!sheet) {
+            setParseError("That spreadsheet has no sheets we could read.");
+            return;
+          }
+          const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" });
+          const headers = (aoa[0] || []).map((c) => (c == null ? "" : String(c)));
+          const data = aoa.slice(1)
+            .map((row) => row.map((c) => (c == null ? "" : String(c))))
+            .filter((row) => row.some((c) => c.trim() !== ""));
+          ingest(headers, data);
+        } catch (err) {
+          console.error("[RosterUploadModal] excel parse failed", err);
+          setParseError("Couldn't read that Excel file. Try saving it as a CSV and uploading that.");
+        }
+      };
+      reader.readAsArrayBuffer(f);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const text = String(reader.result);
-        const { headers, data } = parseCsv(text);
-        if (headers.length === 0) {
-          setParseError("That file doesn't look like a spreadsheet. Save it as a CSV and try again.");
-          return;
-        }
-        const autoMapped = autoMap(headers);
-        setCsvHeaders(headers);
-        setCsvRows(data);
-        setMapping(autoMapped);
-        setReviewRows(buildRegistrants(data, headers, autoMapped));
+        const { headers, data } = parseCsv(String(reader.result));
+        ingest(headers, data);
       } catch (err) {
-        console.error("[RosterUploadModal] parse failed", err);
+        console.error("[RosterUploadModal] csv parse failed", err);
         setParseError("Couldn't read that file. Try saving it as a CSV.");
       }
     };
@@ -1188,12 +1226,12 @@ function CsvPanel({ target, csvHeaders, csvRows, mapping, reDetect, reviewRows, 
     <div>
       <input
         type="file"
-        accept=".csv,text/csv"
+        accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
         onChange={onFile}
         style={{ fontSize: 13, marginBottom: 10 }}
       />
       <div style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 1.5 }}>
-        Export from Squarespace / your registration platform. We&rsquo;ll detect the names and details automatically — then you check the list below and fix anything before saving.
+        Upload a CSV or Excel file (.csv, .xlsx) — exported from Squarespace, Google Sheets, or your registration platform. We&rsquo;ll detect the names and details automatically, then you check the list below and fix anything before saving.
       </div>
 
       {parseError && (
