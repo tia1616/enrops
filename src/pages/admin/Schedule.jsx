@@ -877,7 +877,23 @@ export default function Schedule() {
       if (hasFilters && !matchesFilters(e)) continue;
       const wn = e.session.week_num;
       if (!m.has(wn)) m.set(wn, []);
-      m.get(wn).push(e.status);
+      const bucket = m.get(wn);
+      // Primary dot: the camp's overall (lead) status. Already 'needs_hire'
+      // (coral) when the camp has zero instructors.
+      bucket.push(e.status);
+      // Slot-aware coral dots so the board matches the header "Needs hire"
+      // counter, which counts unfilled LEAD + DEVELOPING slots — not whole
+      // empty camps. Without this, a camp with its lead but missing the
+      // developing co-instructor it wants (enrollment >= threshold) showed a
+      // green dot while the header read "1 needs hire". One coral per gap:
+      const active = e.activeAssignments ?? [];
+      const hasLead = active.some((a) => a.role === "lead");
+      const hasDeveloping = active.some((a) => a.role === "developing");
+      const wantsDeveloping = (e.session.current_enrollment ?? 0) >= DEVELOPING_THRESHOLD;
+      // Has assignments but no lead — primary dot won't be coral, so add one.
+      if (!hasLead && active.length > 0) bucket.push("needs_hire");
+      // Big-enough camp missing its developing co-instructor.
+      if (wantsDeveloping && !hasDeveloping) bucket.push("needs_hire");
     }
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
