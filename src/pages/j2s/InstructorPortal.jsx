@@ -71,7 +71,8 @@ export default function InstructorPortal() {
   const [instructor, setInstructor] = useState(null);
   const [onboarding, setOnboarding] = useState(null);
   const [assignments, setAssignments] = useState([]);
-  const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role }] } — who I'm co-teaching each camp with
+  const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role, email, phone }] } — camp co-teachers
+  const [coInstructorsProgram, setCoInstructorsProgram] = useState({}); // { [program_id]: [...] } — after-school co-teachers
   const [programAssignments, setProgramAssignments] = useState([]); // after-school offers
   const [subAssignments, setSubAssignments] = useState([]); // assignment_substitutions where I'm the sub
   const [actingOn, setActingOn] = useState(null);
@@ -286,7 +287,9 @@ export default function InstructorPortal() {
     } else {
       const bySession = {};
       for (const r of coRows ?? []) {
-        (bySession[r.camp_session_id] ||= []).push({ name: r.name, role: r.role });
+        (bySession[r.camp_session_id] ||= []).push({
+          instructor_id: r.instructor_id, name: r.name, role: r.role, email: r.email, phone: r.phone,
+        });
       }
       setCoInstructors(bySession);
     }
@@ -309,6 +312,22 @@ export default function InstructorPortal() {
       return;
     }
     setProgramAssignments((data ?? []).map((a) => ({ ...a, kind: "program" })));
+
+    // After-school co-instructors (mirrors the camp path). Self-scoped RPC; names
+    // + contact for the other instructor(s) on the same class. Best-effort.
+    const { data: coRows, error: coErr } = await supabase.rpc("get_my_program_coinstructors");
+    if (coErr) {
+      console.warn("[loadAfterschoolAssignments] co-instructors fetch failed:", coErr.message);
+      setCoInstructorsProgram({});
+    } else {
+      const byProgram = {};
+      for (const r of coRows ?? []) {
+        (byProgram[r.program_id] ||= []).push({
+          instructor_id: r.instructor_id, name: r.name, role: r.role, email: r.email, phone: r.phone,
+        });
+      }
+      setCoInstructorsProgram(byProgram);
+    }
   }
 
   // Single-day sub assignments where this instructor is the SUB (not the
@@ -463,6 +482,7 @@ export default function InstructorPortal() {
     setInstructor(null);
     setAssignments([]);
     setCoInstructors({});
+    setCoInstructorsProgram({});
     setProgramAssignments([]);
     setPhase("login");
   }
@@ -1095,6 +1115,7 @@ export default function InstructorPortal() {
             <AfterschoolAssignmentCard
               key={a.id}
               assignment={a}
+              coInstructors={coInstructorsProgram[a.program_id] || []}
               messages={a.instructor_offer_messages || []}
               busy={actingOn === a.id}
               onAccept={() => handleAccept(a)}
@@ -1116,7 +1137,7 @@ export default function InstructorPortal() {
             />
           ))}
           {acceptedAS.map((a) => (
-            <AfterschoolAssignmentCard key={a.id} assignment={a} readOnly />
+            <AfterschoolAssignmentCard key={a.id} assignment={a} coInstructors={coInstructorsProgram[a.program_id] || []} readOnly />
           ))}
           {subAssignments.filter((s) => s.status === "confirmed" || s.status === "taught").map((s) => (
             <SubOfferCard
@@ -1530,20 +1551,34 @@ function roleLabel(r) {
   return r === "developing" ? "Developing" : "Lead";
 }
 
-// One line naming the other instructor(s) on the same camp — a lead sees their
-// developing instructor, a developing instructor sees their lead. Names only.
+// Names the other instructor(s) on the same camp/class — a lead sees their
+// developing instructor, a developing instructor sees their lead — with each
+// other's email + phone so co-teachers can coordinate directly.
 function CoInstructorLine({ coInstructors = [] }) {
   if (!coInstructors.length) return null;
   return (
-    <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.4 }}>
-      Teaching with:{" "}
-      {coInstructors.map((c, i) => (
-        <span key={`${c.name}-${i}`}>
-          {i > 0 ? ", " : ""}
-          <span style={{ color: INK, fontWeight: 600 }}>{c.name}</span>
-          {" "}<span style={{ fontSize: 12 }}>({roleLabel(c.role)})</span>
-        </span>
-      ))}
+    <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+      {coInstructors.map((c, i) => {
+        const tel = c.phone ? c.phone.replace(/[^0-9+]/g, "") : "";
+        return (
+          <div key={`${c.instructor_id || c.name}-${i}`} style={{ marginTop: i > 0 ? 4 : 0 }}>
+            Teaching with ({roleLabel(c.role)}){" "}
+            <span style={{ color: INK, fontWeight: 600 }}>{c.name}</span>
+            {(c.email || c.phone) && (
+              <span>
+                {" — "}
+                {c.email && (
+                  <a href={`mailto:${c.email}`} style={{ color: PURPLE, textDecoration: "underline" }}>{c.email}</a>
+                )}
+                {c.email && c.phone ? " · " : ""}
+                {c.phone && (
+                  <a href={`tel:${tel}`} style={{ color: PURPLE, textDecoration: "underline" }}>{c.phone}</a>
+                )}
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1700,7 +1735,7 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
   );
 }
 
-function AfterschoolAssignmentCard({ assignment, messages = [], busy, onAccept, onRequestChange, readOnly }) {
+function AfterschoolAssignmentCard({ assignment, coInstructors = [], messages = [], busy, onAccept, onRequestChange, readOnly }) {
   const p = assignment.programs;
   if (!p) return null;
   const statusColor =
@@ -1745,6 +1780,8 @@ function AfterschoolAssignmentCard({ assignment, messages = [], busy, onAccept, 
           {statusLabel}
         </span>
       </div>
+
+      <CoInstructorLine coInstructors={coInstructors} />
 
       {assignment.distance_bonus_cents ? (
         <div style={{ fontSize: 13, color: PURPLE, fontWeight: 600 }}>
