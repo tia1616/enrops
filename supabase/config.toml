@@ -1,0 +1,55 @@
+# Supabase project config — primarily codifies per-function verify_jwt so
+# deploys can't silently flip a webhook to require-JWT (which breaks Stripe/
+# Checkr) or expose an authed endpoint. Values mirror PROD's live settings
+# (verified 2026-06-08). Functions not listed default to verify_jwt = true.
+project_id = "enrops"
+
+# ── verify_jwt = false (public / webhook / cron entrypoints) ──
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.create-registration]
+verify_jwt = false
+
+[functions.process-installments]
+verify_jwt = false
+
+[functions.auth-send-magic-link]
+verify_jwt = false
+
+[functions.regenerate-email-logo]
+verify_jwt = false
+
+[functions.marketing-unsubscribe]
+verify_jwt = false
+
+[functions.checkr-webhook]
+verify_jwt = false
+
+[functions.session-confirmation-cron]
+verify_jwt = false
+
+[functions.contractor-onboarding-reminders]
+verify_jwt = false
+
+[functions.resend-onboarding-invite]
+verify_jwt = false
+
+[functions.stripe-connect-instructor-webhook]
+verify_jwt = false
+
+[functions.apps-script-roster-sync]
+verify_jwt = false
+
+[functions.marketing-touchpoint-send]
+verify_jwt = false
+
+[functions.lifecycle-automations-cron]
+verify_jwt = false
+
+[functions.marketing-resend-webhook]
+verify_jwt = false
+
+# Note: prod also has admin-convert-logo, sync-operator-stripe-status,
+# dev-seed-designer-access as verify_jwt=false, but those are NOT in this
+# repo (prod-only / legacy), so they're intentionally omitted here.
