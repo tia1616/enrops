@@ -147,6 +147,24 @@ serve(async (req: Request) => {
       });
     }
 
+    // Substitution guard: if a sub was confirmed to cover THIS assignment on
+    // THIS date, the assigned instructor must not self-confirm it — the sub is
+    // the payee, and the auto-confirm cron (Job B) records/pays the sub. Block
+    // with a clear 409 so we never create a duplicate payable row for the
+    // person who was covered. (Keyed to the camp_assignment + date, matching
+    // assignment_substitutions.)
+    const { data: cover } = await supabase
+      .from('assignment_substitutions')
+      .select('id')
+      .eq('parent_assignment_id', assignment.id)
+      .eq('parent_assignment_type', 'camp')
+      .eq('date', sessionDate)
+      .in('status', ['confirmed', 'taught'])
+      .maybeSingle();
+    if (cover) {
+      return json({ error: 'session_covered_by_substitute' }, 409);
+    }
+
     // Pay computation: flat per-day rate from the table, keyed by the
     // assignment role + session_type. If the role is missing/unexpected or
     // the session_type isn't a camp day type, leave pay null so the admin

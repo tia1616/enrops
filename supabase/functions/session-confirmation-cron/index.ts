@@ -47,6 +47,7 @@ serve(async (req: Request) => {
   const summary = {
     job_a_rows_created: 0,
     job_b_rows_auto_confirmed: 0,
+    job_b_rows_substituted: 0,
     job_b_rows_flagged: 0,
     errors: [] as string[],
   };
@@ -160,19 +161,18 @@ serve(async (req: Request) => {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Job B: auto-confirm everything pending with session_date < today.
-    // WARNING: this auto-confirms the instructor assigned via camp_assignments.
-    // If a substitute taught the session, admin must manually update the
-    // confirmation row BEFORE payroll export. Sub request + approval flow is
-    // a separate feature — when built, it will update camp_assignments so the
-    // confirmed instructor reflects who actually taught.
+    // Job B: auto-confirm everything pending with session_date < today, and
+    // resolve substitutions so the SUB (not the originally-assigned instructor)
+    // is paid for any day a confirmed/taught substitute covered. Job B runs the
+    // day after the session, by which point a sub is already confirmed — so this
+    // is the right place to settle "who actually taught → who gets paid."
     //
     // Camps only — Job B does not touch program_id rows (after-school is
     // deferred until program_assignments lands).
     // ─────────────────────────────────────────────────────────────────────
     const { data: pending, error: pendingErr } = await supabase
       .from('session_delivery_confirmations')
-      .select('id, instructor_id, camp_session_id, session_type')
+      .select('id, instructor_id, camp_session_id, session_type, session_date')
       .lt('session_date', today)
       .eq('confirmed_by', 'pending')
       .eq('admin_override', false)
@@ -182,14 +182,24 @@ serve(async (req: Request) => {
       console.error('Job B pending query failed:', pendingErr);
       summary.errors.push(`job_b_query: ${pendingErr.message}`);
     } else if (pending && pending.length > 0) {
-      // For each pending row, look up role from camp_assignments and compute pay.
-      // Done in JS instead of a giant SQL CASE expression for maintainability.
+      // For each pending row, resolve the payee + tier (assigned instructor, or
+      // the sub if one covered) and compute pay. Done in JS for clarity; volume
+      // is a handful of camp-days per run.
       const nowIso = new Date().toISOString();
 
       for (const row of pending) {
+        const sessionType = row.session_type as SessionType;
+
+        // Skip non-camp session types (after_school out of scope for v1).
+        if (sessionType !== 'morning' && sessionType !== 'afternoon' && sessionType !== 'full_day') {
+          continue;
+        }
+
+        // The assigned instructor's camp_assignment gives the default payee +
+        // role, and its id is how we look up a substitution for the day.
         const { data: assignment, error: aErr } = await supabase
           .from('camp_assignments')
-          .select('role')
+          .select('id, role')
           .eq('camp_session_id', row.camp_session_id)
           .eq('instructor_id', row.instructor_id)
           .maybeSingle();
@@ -199,16 +209,38 @@ serve(async (req: Request) => {
           continue;
         }
 
-        const role = assignment?.role as Role | undefined;
-        const sessionType = row.session_type as SessionType;
+        // Effective tier: the SUB's tier when a confirmed/taught sub covered
+        // THIS assignment on THIS date, else the assigned instructor's role.
+        // We do NOT reassign instructor_id — the payout resolver view
+        // (v_effective_pay_lines) already maps the row to the sub as the payee
+        // at read time via assignment_substitutions. We only need the stored
+        // pay_amount_cents to reflect the tier of whoever actually taught, so
+        // the amount payroll sums + displays matches the payee.
+        let tier = assignment?.role as Role | undefined;
+        let wasSub = false;
 
-        // Skip session_type='after_school' (out of scope for v1).
-        if (sessionType !== 'morning' && sessionType !== 'afternoon' && sessionType !== 'full_day') {
-          continue;
+        if (assignment?.id) {
+          const { data: sub, error: subErr } = await supabase
+            .from('assignment_substitutions')
+            .select('sub_tier')
+            .eq('parent_assignment_id', assignment.id)
+            .eq('parent_assignment_type', 'camp')
+            .eq('date', row.session_date)
+            .in('status', ['confirmed', 'taught'])
+            .maybeSingle();
+          if (subErr) {
+            summary.errors.push(`job_b_sub_${row.id}: ${subErr.message}`);
+            continue;
+          }
+          if (sub) {
+            tier = sub.sub_tier as Role;
+            wasSub = true;
+          }
         }
 
-        if (role !== 'lead' && role !== 'developing') {
-          // Assignment missing or unexpected role — flag for admin review, skip auto-pay.
+        if (tier !== 'lead' && tier !== 'developing') {
+          // No assignment and no sub, or an unexpected tier — flag for admin
+          // review, skip auto-pay.
           await supabase
             .from('session_delivery_confirmations')
             .update({
@@ -221,7 +253,7 @@ serve(async (req: Request) => {
           continue;
         }
 
-        const payCents = AUTO_PAY[role][sessionType];
+        const payCents = AUTO_PAY[tier][sessionType];
 
         const { error: updErr } = await supabase
           .from('session_delivery_confirmations')
@@ -239,6 +271,7 @@ serve(async (req: Request) => {
           continue;
         }
         summary.job_b_rows_auto_confirmed++;
+        if (wasSub) summary.job_b_rows_substituted++;
       }
     }
 
