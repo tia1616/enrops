@@ -13,7 +13,6 @@ import { phoneIsValid, looksLikeName, emailIsValid } from '../../../lib/validati
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
-const VIOLET = '#8C88FF';
 const CREAM = '#FBFBFB';
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
@@ -319,7 +318,7 @@ export default function InstructorsTab({ org }) {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {filtered.length === 0 && (
-          <div style={{ color: MUTED, fontSize: 13, padding: 14, background: '#fff', border: `1px solid ${RULE}`, borderRadius: 8 }}>
+          <div style={{ color: MUTED, fontSize: 13, padding: 14, background: '#fff', border: `1px solid ${RULE}`, borderRadius: 12 }}>
             No instructors match that search.
           </div>
         )}
@@ -427,7 +426,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
         background: '#fff',
         border: `1px solid ${RULE}`,
         borderLeft: `3px solid ${statusColor}`,
-        borderRadius: 8,
+        borderRadius: 12,
         padding: '10px 14px',
         opacity: row.is_active ? 1 : 0.55,
       }}
@@ -465,7 +464,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
                   fontSize: 10,
                   fontWeight: 700,
                   color: '#fff',
-                  background: VIOLET,
+                  background: BRIGHT,
                   padding: '1px 6px',
                   borderRadius: 4,
                   textTransform: 'uppercase',
@@ -822,7 +821,7 @@ function EditNameForm({ row, onCancel, onSave }) {
       style={{
         background: CREAM,
         border: `1px solid ${RULE}`,
-        borderRadius: 8,
+        borderRadius: 12,
         padding: 12,
         marginBottom: 12,
         display: 'grid',
@@ -1063,7 +1062,7 @@ function BackgroundCheckUploadModal({ instructors, initialInstructorId, onClose,
           width: '100%',
           maxWidth: 520,
           border: `1px solid ${RULE}`,
-          borderRadius: 10,
+          borderRadius: 12,
           padding: 22,
           boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
         }}
@@ -1370,7 +1369,7 @@ function AddInstructorModal({ org, onClose, onAdded }) {
           width: '100%',
           maxWidth: 520,
           border: `1px solid ${RULE}`,
-          borderRadius: 10,
+          borderRadius: 12,
           padding: 22,
           boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
         }}
