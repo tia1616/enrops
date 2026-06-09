@@ -12,7 +12,7 @@ import { defaultTenantSlug } from "../lib/tenants.js";
 
 // Enrops brand tokens
 const PURPLE = "#1C004F";   // deep plum — wordmark, headings, body accents
-const BRIGHT = "#6857E1";   // bright indigo — primary actions + active nav (sampled from Figma)
+const BRIGHT = "#5847C9";   // indigo — primary actions + active nav (sampled #6857E1, darkened a step per Jessica)
 const LAVENDER = "#F2F0FF"; // sidebar background (sampled from Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";

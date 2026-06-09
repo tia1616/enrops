@@ -9,7 +9,7 @@ import { supabase } from "../../../lib/supabase.js";
 import { CAPABILITY_ICONS, deriveOrgStatesForCurriculum, isCapabilityUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 
 const PURPLE = "#1C004F";   // deep plum — headings
-const BRIGHT = "#6857E1";   // bright indigo — primary actions (sampled from Figma)
+const BRIGHT = "#5847C9";   // indigo — primary actions (sampled #6857E1, darkened a step per Jessica)
 const VIOLET = "#8C88FF";
 const GOLD_SOFT = "rgba(207, 177, 47, 0.13)";
 const GOLD_BORDER = "rgba(207, 177, 47, 0.55)";

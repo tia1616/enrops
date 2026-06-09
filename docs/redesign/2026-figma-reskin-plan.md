@@ -109,7 +109,7 @@ Replace the current mixed model (some expandable groups, some single items) with
 
 ## Design tokens (sampled from Figma PNGs via System.Drawing, 2026-06-08)
 - **`#1C004F`** deep plum — wordmark, headings, body text accents (keep)
-- **`#6857E1`** bright indigo — primary buttons, active nav, active tabs (NEW; replaces plum on actions)
+- **`#5847C9`** indigo — primary buttons, active nav, active tabs (NEW; replaces plum on actions). Sampled `#6857E1` from Figma, darkened a step per Jessica 2026-06-08.
 - **`#F2F0FF`** lavender — sidebar background (NEW; was white)
 - App-wide button-color sweep to `#6857E1` is pending — done so far in AdminLayout chrome + CurriculaList; other screens still use plum until swept (ideally via a shared token module).
 
