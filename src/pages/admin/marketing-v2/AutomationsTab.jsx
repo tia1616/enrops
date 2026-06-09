@@ -102,8 +102,12 @@ export default function AutomationsTab() {
       });
       setRunStats(stats);
 
+      // 'active' is the only stripe_account_status that means payments flow.
+      // (The CHECK constraint permits not_connected/onboarding/active/
+      // disconnected/restricted — there is no 'enabled' value, so the old
+      // `=== "enabled"` branch was always dead.)
       const status = orgRes.data?.stripe_account_status;
-      setStripeReady(status === "enabled" || status === "active");
+      setStripeReady(status === "active");
       setOrgLogoUrl(orgRes.data?.logo_email_url ?? null);
       setOrgSenderName(orgRes.data?.default_sender_name ?? null);
       // Fall back to the Enrops default purple when an org hasn't set a
