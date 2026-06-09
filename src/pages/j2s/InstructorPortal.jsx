@@ -716,7 +716,7 @@ export default function InstructorPortal() {
                 marginTop: 12,
                 width: "100%",
                 padding: "10px 14px",
-                background: PURPLE,
+                background: BRIGHT,
                 color: "#fff",
                 border: "none",
                 borderRadius: 6,
@@ -1301,7 +1301,7 @@ function SurveyBanner({ cycle, onStart }) {
         onClick={onStart}
         style={{
           padding: "9px 14px",
-          background: PURPLE,
+          background: BRIGHT,
           color: "#fff",
           border: "none",
           borderRadius: 6,
@@ -1359,7 +1359,7 @@ function AfterschoolSurveyBanner({ survey, onStart }) {
         onClick={onStart}
         style={{
           padding: "9px 14px",
-          background: PURPLE,
+          background: BRIGHT,
           color: "#fff",
           border: "none",
           borderRadius: 6,
@@ -1707,7 +1707,7 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
             disabled={busy}
             style={{
               padding: "8px 14px",
-              background: PURPLE,
+              background: BRIGHT,
               color: "#fff",
               border: "none",
               borderRadius: 6,
@@ -2333,7 +2333,7 @@ function LocationSection({ location, fallbackName }) {
               style={{
                 display: "inline-block",
                 padding: "6px 12px",
-                background: PURPLE,
+                background: BRIGHT,
                 color: "#fff",
                 borderRadius: 6,
                 fontSize: 13,
@@ -2564,7 +2564,7 @@ function DayRow({ date, isToday, isFuture, existing, loading, busy, onMark }) {
           disabled={busy || loading}
           style={{
             padding: "6px 12px",
-            background: PURPLE,
+            background: BRIGHT,
             color: "#fff",
             border: "none",
             borderRadius: 6,
