@@ -2614,6 +2614,7 @@ function humanizeConfirmError(code) {
   if (code === "session_date_out_of_range") return "That date isn't within this camp's range.";
   if (code === "assignment_not_confirmed") return "This camp isn't fully confirmed yet — talk to your admin.";
   if (code === "forbidden") return "You're not assigned to this camp.";
+  if (code === "session_covered_by_substitute") return "A substitute is covering this day — they'll handle the check-in.";
   return "Couldn't save your check-in. Try again.";
 }
 
