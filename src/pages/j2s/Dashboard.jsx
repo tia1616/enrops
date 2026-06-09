@@ -1,97 +1,110 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { getTenant } from '../../lib/tenants.js';
 
 /* ------------------------------------------------------------------ */
-/*  Term helpers                                                       */
+/*  Constants                                                          */
 /* ------------------------------------------------------------------ */
-const TERM_ORDER = ['SU26', 'FA26', 'WI27', 'SP27', 'SU27'];
-const TERM_LABELS = {
-  SU26: 'Summer 2026',
-  FA26: 'Fall 2026',
-  WI27: 'Winter 2027',
-  SP27: 'Spring 2027',
-  SU27: 'Summer 2027',
-};
-
-function nextAvailableTerm(enrolledTerms) {
-  return TERM_ORDER.find((t) => !enrolledTerms.has(t) && TERM_LABELS[t]);
-}
-
-/* ------------------------------------------------------------------ */
-/*  Formatting helpers                                                 */
-/* ------------------------------------------------------------------ */
-function formatDate(dateStr) {
-  if (!dateStr) return null;
-  const date = new Date(dateStr + 'T00:00:00');
-  return date.toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
-
-function formatDateShort(dateStr) {
-  if (!dateStr) return '';
-  const date = new Date(dateStr + 'T00:00:00');
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-function formatTime(timeStr) {
-  if (!timeStr) return '';
-  if (timeStr.includes('AM') || timeStr.includes('PM')) return timeStr;
-  const [h, m] = timeStr.split(':').map(Number);
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  const hour = h % 12 || 12;
-  return `${hour}:${String(m).padStart(2, '0')} ${ampm}`;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Notification pref labels                                           */
-/* ------------------------------------------------------------------ */
-const PREF_OPTIONS = [
-  {
-    key: 'email_registration_updates',
-    label: 'Registration confirmations and updates',
-    description: 'Receipts, schedule changes, and enrollment details',
-  },
-  {
-    key: 'email_session_recaps',
-    label: 'Class recaps and session notes',
-    description: 'What your child learned and questions to ask at home',
-  },
-  {
-    key: 'email_reenrollment_prompts',
-    label: 'New term enrollment reminders',
-    description: 'Early access to register for the next session',
-  },
+const TABS = [
+  { key: 'today', label: 'Today' },
+  { key: 'schedule', label: 'Schedule' },
+  { key: 'classes', label: 'Classes' },
+  { key: 'settings', label: 'Settings' },
 ];
 
-const DEFAULT_PREFS = {
-  email_registration_updates: true,
-  email_session_recaps: true,
-  email_reenrollment_prompts: true,
+const TERM_ORDER = ['SU26', 'FA26', 'WI27', 'SP27', 'SU27'];
+const TERM_LABELS = {
+  SU26: 'Summer 2026', FA26: 'Fall 2026', WI27: 'Winter 2027',
+  SP27: 'Spring 2027', SU27: 'Summer 2027',
 };
 
+const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+const PREF_OPTIONS = [
+  { key: 'email_registration_updates', label: 'Registration updates', desc: 'Confirmations, schedule changes, and enrollment details' },
+  { key: 'email_session_recaps', label: 'Class recaps', desc: 'What your child learned and conversation starters' },
+  { key: 'email_reenrollment_prompts', label: 'Enrollment reminders', desc: 'Early access to register for the next term' },
+];
+const DEFAULT_PREFS = { email_registration_updates: true, email_session_recaps: true, email_reenrollment_prompts: true };
+
 /* ------------------------------------------------------------------ */
-/*  Chevron icon                                                       */
+/*  Formatting                                                         */
 /* ------------------------------------------------------------------ */
+function fmtDate(d) {
+  if (!d) return '';
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+function fmtDateShort(d) {
+  if (!d) return '';
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+function fmtTime(t) {
+  if (!t) return '';
+  if (t.includes('AM') || t.includes('PM')) return t;
+  const [h, m] = t.split(':').map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Session math                                                       */
+/* ------------------------------------------------------------------ */
+function getSessionInfo(program, sessions) {
+  if (!program?.first_session_date || !sessions?.length) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const first = new Date(program.first_session_date + 'T00:00:00');
+  if (today < first) return { state: 'upcoming', nextDate: program.first_session_date, session: sessions[0] };
+
+  const diffWeeks = Math.floor((today - first) / (1000 * 60 * 60 * 24 * 7));
+  const sessionIdx = Math.min(diffWeeks, sessions.length - 1);
+  if (diffWeeks >= sessions.length) return { state: 'complete' };
+
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const isClassDay = dayNames[today.getDay()].toLowerCase() === (program.day_of_week || '').toLowerCase();
+
+  return {
+    state: isClassDay ? 'today' : 'in-progress',
+    session: sessions[sessionIdx],
+    sessionNumber: sessionIdx + 1,
+    totalSessions: sessions.length,
+    nextSession: sessionIdx + 1 < sessions.length ? sessions[sessionIdx + 1] : null,
+    nextSessionNumber: sessionIdx + 2,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Icons (inline SVG, no deps)                                        */
+/* ------------------------------------------------------------------ */
+function IconToday({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 11H9v-1h2v1zm0-3H9V6h2v4z" /></svg>
+  );
+}
+function IconSchedule({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" /></svg>
+  );
+}
+function IconClasses({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838l-3.14 1.346L10 11.12l6.606-2.83a1 1 0 000-1.84l-7-3zM3.31 9.397L5 10.12v4.102a8.969 8.969 0 00-1.05-.174 1 1 0 01-.89-.89 11.115 11.115 0 01.25-3.762zM9.3 16.573A9.026 9.026 0 007 14.935v-3.957l1.818.78a3 3 0 002.364 0l5.508-2.361a11.026 11.026 0 01.25 3.762 1 1 0 01-.89.89 8.968 8.968 0 00-5.35 2.524 1 1 0 01-1.4 0z" /></svg>
+  );
+}
+function IconSettings({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" /></svg>
+  );
+}
 function ChevronDown({ open, className = '' }) {
   return (
-    <svg
-      className={`h-5 w-5 transition-transform duration-200 ${open ? 'rotate-180' : ''} ${className}`}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
+    <svg className={`h-5 w-5 transition-transform duration-200 ${open ? 'rotate-180' : ''} ${className}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
     </svg>
   );
 }
+const TAB_ICONS = { today: IconToday, schedule: IconSchedule, classes: IconClasses, settings: IconSettings };
 
 /* ------------------------------------------------------------------ */
 /*  Main component                                                     */
@@ -100,20 +113,15 @@ export default function Dashboard() {
   const { org } = useOutletContext();
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
-
-  // Fallback: if org doesn't carry supportEmail, use tenant config
   const tenant = getTenant(org?.slug || 'j2s');
   const supportEmail = tenant?.supportEmail || 'support@enrops.com';
 
   const [parent, setParent] = useState(null);
-  const [afterschoolRegs, setAfterschoolRegs] = useState([]);
-  const [campRegs, setCampRegs] = useState([]);
-  const [nextTerm, setNextTerm] = useState(null);
+  const [enrollments, setEnrollments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [tab, setTab] = useState('today');
   const [expandedCards, setExpandedCards] = useState(new Set());
-
-  // Notification preferences
   const [prefs, setPrefs] = useState(null);
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [prefsSaved, setPrefsSaved] = useState(false);
@@ -121,107 +129,111 @@ export default function Dashboard() {
   const toggleCard = useCallback((id) => {
     setExpandedCards((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   }, []);
 
-  /* ---- Redirect if not authenticated ---- */
   useEffect(() => {
     if (!authLoading && !user) {
       navigate(`/${org?.slug || 'j2s'}/login`, { replace: true });
       return;
     }
-    if (user) fetchDashboardData();
+    if (user) fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, authLoading]);
 
-  /* ---- Main data fetch ---- */
-  async function fetchDashboardData() {
+  async function fetchData() {
     try {
       setLoading(true);
       setError(null);
 
-      // 1. Parent row
-      const { data: parentData, error: parentError } = await supabase
+      const { data: p, error: pErr } = await supabase
         .from('parents')
         .select('id, first_name, last_name, communication_preferences')
         .eq('auth_id', user.id)
         .maybeSingle();
+      if (pErr) { setError('fetch_failed'); setLoading(false); return; }
+      if (!p) { setError('no_parent'); setLoading(false); return; }
+      setParent(p);
+      setPrefs({ ...DEFAULT_PREFS, ...(p.communication_preferences || {}) });
 
-      if (parentError) {
-        console.error('Parent fetch error:', parentError);
-        setError('fetch_failed');
-        setLoading(false);
-        return;
-      }
-      if (!parentData) {
-        setError('no_parent');
-        setLoading(false);
-        return;
-      }
-      setParent(parentData);
-      setPrefs({ ...DEFAULT_PREFS, ...(parentData.communication_preferences || {}) });
-
-      // 2a. Afterschool registrations (program_id path)
-      const { data: asRegs, error: asErr } = await supabase
+      const { data: asRegs } = await supabase
         .from('registrations')
-        .select(
-          `id, status, registered_at, program_id,
-           students(first_name, last_name),
-           programs(
-             id, curriculum, curriculum_id, day_of_week, start_time, end_time,
-             first_session_date, term, session_count,
-             program_locations(name, arrival_instructions, dismissal_instructions),
-             curricula(
-               id, name, skills_overall,
-               curriculum_sessions(session_number, title, description, skills_practiced, parent_engagement_question)
-             )
-           )`
-        )
-        .eq('parent_id', parentData.id)
+        .select(`id, status, registered_at, program_id,
+          students(first_name, last_name),
+          programs(
+            id, curriculum, curriculum_id, day_of_week, start_time, end_time,
+            first_session_date, term, session_count,
+            program_locations(name, arrival_instructions, dismissal_instructions),
+            curricula(id, name, skills_overall,
+              curriculum_sessions(session_number, title, description, skills_practiced, parent_engagement_question)
+            )
+          )`)
+        .eq('parent_id', p.id)
         .in('status', ['confirmed'])
         .not('program_id', 'is', null)
         .order('registered_at', { ascending: true });
 
-      if (asErr) console.error('Afterschool fetch error:', asErr);
-      setAfterschoolRegs(asRegs || []);
-
-      // 2b. Camp registrations (camp_session_id path)
-      const { data: cRegs, error: cErr } = await supabase
+      const { data: cRegs } = await supabase
         .from('registrations')
-        .select(
-          `id, status, registered_at, camp_session_id,
-           students(first_name, last_name),
-           camp_sessions(
-             id, curriculum_name, curriculum_id, location_name,
-             starts_on, ends_on, start_time, end_time, session_type, week_num,
-             curricula(
-               id, name, skills_overall,
-               curriculum_sessions(session_number, title, description, skills_practiced, parent_engagement_question)
-             )
-           )`
-        )
-        .eq('parent_id', parentData.id)
+        .select(`id, status, registered_at, camp_session_id,
+          students(first_name, last_name),
+          camp_sessions(
+            id, curriculum_name, curriculum_id, location_name,
+            starts_on, ends_on, start_time, end_time, session_type, week_num,
+            curricula(id, name, skills_overall,
+              curriculum_sessions(session_number, title, description, skills_practiced, parent_engagement_question)
+            )
+          )`)
+        .eq('parent_id', p.id)
         .in('status', ['confirmed'])
         .not('camp_session_id', 'is', null)
         .order('registered_at', { ascending: true });
 
-      if (cErr) console.error('Camp fetch error:', cErr);
-      setCampRegs(cRegs || []);
-
-      // 3. Detect next available term for re-enrollment CTA
-      const enrolledTerms = new Set();
+      const merged = [];
       (asRegs || []).forEach((r) => {
-        if (r.programs?.term) enrolledTerms.add(r.programs.term);
+        const pr = r.programs;
+        const cur = pr?.curricula;
+        const sessions = cur?.curriculum_sessions
+          ? [...cur.curriculum_sessions].sort((a, b) => a.session_number - b.session_number)
+          : [];
+        merged.push({
+          id: r.id, type: 'afterschool',
+          student: r.students,
+          name: pr?.curriculum || 'Class',
+          location: pr?.program_locations?.name,
+          arrival: pr?.program_locations?.arrival_instructions,
+          dismissal: pr?.program_locations?.dismissal_instructions,
+          day: pr?.day_of_week,
+          startTime: pr?.start_time, endTime: pr?.end_time,
+          term: pr?.term, firstDate: pr?.first_session_date,
+          sessions,
+          sessionInfo: getSessionInfo(pr, sessions),
+          skillsOverall: cur?.skills_overall,
+        });
       });
-      // Camp sessions are SU26 by convention
-      if ((cRegs || []).length > 0) enrolledTerms.add('SU26');
+      (cRegs || []).forEach((r) => {
+        const cs = r.camp_sessions;
+        const cur = cs?.curricula;
+        const sessions = cur?.curriculum_sessions
+          ? [...cur.curriculum_sessions].sort((a, b) => a.session_number - b.session_number)
+          : [];
+        merged.push({
+          id: r.id, type: 'camp',
+          student: r.students,
+          name: cs?.curriculum_name || cur?.name || 'Camp',
+          location: cs?.location_name,
+          day: null,
+          startTime: cs?.start_time, endTime: cs?.end_time,
+          term: 'SU26', firstDate: cs?.starts_on, lastDate: cs?.ends_on,
+          sessionType: cs?.session_type, weekNum: cs?.week_num,
+          sessions, sessionInfo: null,
+          skillsOverall: cur?.skills_overall,
+        });
+      });
 
-      const next = nextAvailableTerm(enrolledTerms);
-      setNextTerm(next);
-
+      setEnrollments(merged);
       setLoading(false);
     } catch (err) {
       console.error('Dashboard error:', err);
@@ -230,245 +242,408 @@ export default function Dashboard() {
     }
   }
 
-  /* ---- Save notification prefs ---- */
-  async function savePrefs(newPrefs) {
+  async function savePrefs(updated) {
     setSavingPrefs(true);
     setPrefsSaved(false);
-    const { error: upErr } = await supabase
-      .from('parents')
-      .update({ communication_preferences: newPrefs })
-      .eq('id', parent.id);
+    const { error: e } = await supabase
+      .from('parents').update({ communication_preferences: updated }).eq('id', parent.id);
     setSavingPrefs(false);
-    if (!upErr) {
-      setPrefs(newPrefs);
-      setPrefsSaved(true);
-      setTimeout(() => setPrefsSaved(false), 2000);
-    }
+    if (!e) { setPrefs(updated); setPrefsSaved(true); setTimeout(() => setPrefsSaved(false), 2000); }
   }
 
-  function togglePref(key) {
-    const updated = { ...prefs, [key]: !prefs[key] };
-    savePrefs(updated);
-  }
+  const enrolledTerms = useMemo(() => new Set(enrollments.map((e) => e.term).filter(Boolean)), [enrollments]);
+  const nextTerm = useMemo(() => TERM_ORDER.find((t) => !enrolledTerms.has(t)), [enrolledTerms]);
+  const todayClasses = useMemo(() => enrollments.filter((e) => e.sessionInfo?.state === 'today'), [enrollments]);
+  const upcomingClasses = useMemo(() =>
+    enrollments.filter((e) => e.sessionInfo?.state === 'upcoming' || e.sessionInfo?.state === 'in-progress')
+      .sort((a, b) => (a.firstDate || '').localeCompare(b.firstDate || '')),
+    [enrollments]);
+  const weekSchedule = useMemo(() => {
+    const byDay = {};
+    DAY_ORDER.forEach((d) => { byDay[d] = []; });
+    enrollments.forEach((e) => { if (e.day && byDay[e.day]) byDay[e.day].push(e); });
+    return byDay;
+  }, [enrollments]);
 
-  /* ================================================================ */
-  /*  Render states                                                    */
-  /* ================================================================ */
+  /* ---- Render gates ---- */
   if (authLoading) {
-    return (
-      <div className="flex min-h-[50vh] items-center justify-center">
-        <div className="animate-pulse text-j2s-ink/50">Loading&hellip;</div>
-      </div>
-    );
+    return <div className="flex min-h-[50vh] items-center justify-center"><div className="animate-pulse text-j2s-ink/50">Loading&hellip;</div></div>;
   }
-
   if (loading) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
         <div className="text-center">
           <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-b-2 border-j2s-purple" />
-          <p className="text-j2s-ink/50">Loading your enrollments&hellip;</p>
+          <p className="text-j2s-ink/50">Loading your dashboard&hellip;</p>
         </div>
       </div>
     );
   }
-
   if (error === 'no_parent') {
     return (
       <div className="mx-auto max-w-xl px-4 py-12 text-center">
-        <h2 className="font-titan text-2xl text-j2s-purple">
-          Hmm, we couldn't find your enrollments.
-        </h2>
-        <p className="mt-3 text-j2s-ink/70">
-          This sometimes happens if your account is still being set up. Please
-          email us and we'll sort it out right away.
-        </p>
-        <a
-          href={`mailto:${supportEmail}`}
-          className="mt-6 inline-block rounded-lg bg-j2s-purple px-6 py-3 font-bold text-white transition hover:bg-j2s-purple-dark"
-        >
-          Email {supportEmail}
-        </a>
+        <h2 className="font-titan text-2xl text-j2s-purple">Hmm, we couldn't find your account.</h2>
+        <p className="mt-3 text-j2s-ink/70">This sometimes happens if your account is still being set up. Please email us and we'll sort it out right away.</p>
+        <a href={`mailto:${supportEmail}`} className="mt-6 inline-block rounded-lg bg-j2s-purple px-6 py-3 font-bold text-white transition hover:bg-j2s-purple-dark">Email {supportEmail}</a>
       </div>
     );
   }
-
   if (error === 'fetch_failed') {
     return (
       <div className="mx-auto max-w-xl px-4 py-12 text-center">
         <h2 className="font-titan text-2xl text-j2s-purple">Something went wrong</h2>
-        <p className="mt-3 text-j2s-ink/70">
-          We had trouble loading your enrollments. Please try refreshing, or
-          email us if the problem continues.
-        </p>
-        <a
-          href={`mailto:${supportEmail}`}
-          className="mt-4 inline-block font-bold text-j2s-purple underline"
-        >
-          {supportEmail}
-        </a>
+        <p className="mt-3 text-j2s-ink/70">We had trouble loading your dashboard. Please try refreshing, or email us if the problem continues.</p>
+        <a href={`mailto:${supportEmail}`} className="mt-4 inline-block font-bold text-j2s-purple underline">{supportEmail}</a>
       </div>
     );
   }
 
-  const totalEnrollments = afterschoolRegs.length + campRegs.length;
-
-  /* ================================================================ */
-  /*  Happy path                                                       */
-  /* ================================================================ */
   return (
-    <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
-      {/* ---- Header ---- */}
-      <h1 className="font-titan text-3xl text-j2s-ink">
-        Hi {parent?.first_name || user?.email?.split('@')[0] || 'there'}!
-      </h1>
+    <div className="mx-auto max-w-2xl px-4 pb-8 sm:px-6">
+      <div className="pb-2 pt-6 sm:pt-10">
+        <h1 className="font-titan text-2xl text-j2s-ink sm:text-3xl">
+          Hi {parent?.first_name || 'there'}!
+        </h1>
+      </div>
 
-      {/* ---- Zero enrollments ---- */}
-      {totalEnrollments === 0 ? (
-        <div className="mt-10 rounded-2xl border border-j2s-purple/10 bg-white p-8 text-center shadow-card">
-          <p className="text-lg text-j2s-ink/70">
-            You don't have any enrollments yet.
-          </p>
-          <Link
-            to={`/${org.slug}`}
-            className="mt-5 inline-block rounded-lg bg-j2s-purple px-6 py-3 font-bold text-white transition hover:bg-j2s-purple-dark"
-          >
-            Browse programs &rarr;
-          </Link>
-        </div>
-      ) : (
+      {/* Tab bar */}
+      <div className="sticky top-0 z-10 -mx-4 bg-white/95 px-4 backdrop-blur sm:-mx-6 sm:px-6">
+        <nav className="flex border-b border-j2s-purple/10">
+          {TABS.map((t) => {
+            const Icon = TAB_ICONS[t.key];
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`flex flex-1 flex-col items-center gap-0.5 py-3 text-xs font-semibold transition sm:flex-row sm:justify-center sm:gap-1.5 sm:text-sm ${
+                  active ? 'border-b-2 border-j2s-purple text-j2s-purple' : 'text-j2s-ink/40 hover:text-j2s-ink/70'
+                }`}
+              >
+                <Icon className="h-5 w-5" />
+                {t.label}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+
+      <div className="mt-6">
+        {tab === 'today' && <TodayTab todayClasses={todayClasses} upcomingClasses={upcomingClasses} enrollments={enrollments} slug={org.slug} />}
+        {tab === 'schedule' && <ScheduleTab weekSchedule={weekSchedule} enrollments={enrollments} />}
+        {tab === 'classes' && <ClassesTab enrollments={enrollments} expandedCards={expandedCards} toggleCard={toggleCard} nextTerm={nextTerm} slug={org.slug} />}
+        {tab === 'settings' && <SettingsTab prefs={prefs} savingPrefs={savingPrefs} prefsSaved={prefsSaved} onToggle={(key) => savePrefs({ ...prefs, [key]: !prefs[key] })} supportEmail={supportEmail} />}
+      </div>
+    </div>
+  );
+}
+
+/* ==================================================================== */
+/*  TODAY TAB                                                            */
+/* ==================================================================== */
+function TodayTab({ todayClasses, upcomingClasses, enrollments, slug }) {
+  if (enrollments.length === 0) {
+    return <EmptyState title="No enrollments yet" body="Once you register for a class, you'll see what your child is learning each day." cta="Browse programs" to={`/${slug}`} />;
+  }
+
+  return (
+    <div className="space-y-6">
+      {todayClasses.length > 0 ? (
         <>
-          {/* ============================================================ */}
-          {/*  CAMP ENROLLMENTS                                             */}
-          {/* ============================================================ */}
-          {campRegs.length > 0 && (
-            <>
-              <h2 className="mt-8 font-titan text-xl text-j2s-ink">
-                Summer camps
-              </h2>
-              <div className="mt-4 space-y-4">
-                {campRegs.map((reg) => (
-                  <CampCard
-                    key={reg.id}
-                    reg={reg}
-                    expanded={expandedCards.has(reg.id)}
-                    onToggle={() => toggleCard(reg.id)}
-                  />
-                ))}
-              </div>
-            </>
-          )}
+          <SectionLabel>Today in class</SectionLabel>
+          {todayClasses.map((e) => <TodayCard key={e.id} enrollment={e} />)}
+        </>
+      ) : (
+        <div className="rounded-2xl border border-j2s-purple/10 bg-white p-6 text-center shadow-card">
+          <p className="text-sm text-j2s-ink/50">No classes today</p>
+        </div>
+      )}
 
-          {/* ============================================================ */}
-          {/*  AFTERSCHOOL ENROLLMENTS                                      */}
-          {/* ============================================================ */}
-          {afterschoolRegs.length > 0 && (
-            <>
-              <h2 className="mt-8 font-titan text-xl text-j2s-ink">
-                After-school classes
-              </h2>
-              <div className="mt-4 space-y-4">
-                {afterschoolRegs.map((reg) => (
-                  <AfterschoolCard
-                    key={reg.id}
-                    reg={reg}
-                    expanded={expandedCards.has(reg.id)}
-                    onToggle={() => toggleCard(reg.id)}
-                  />
-                ))}
+      {upcomingClasses.length > 0 && (
+        <>
+          <SectionLabel>Coming up</SectionLabel>
+          {upcomingClasses.slice(0, 3).map((e) => <UpcomingCard key={e.id} enrollment={e} />)}
+        </>
+      )}
+    </div>
+  );
+}
+
+function TodayCard({ enrollment: e }) {
+  const s = e.sessionInfo?.session;
+  if (!s) return null;
+  return (
+    <div className="rounded-2xl border border-j2s-purple/10 bg-white shadow-card overflow-hidden">
+      <div className="h-1 bg-j2s-purple" />
+      <div className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-bold uppercase tracking-wider text-j2s-purple/70">
+              Session {e.sessionInfo.sessionNumber} of {e.sessionInfo.totalSessions}
+            </p>
+            <p className="mt-1 text-lg font-bold text-j2s-ink">{s.title}</p>
+          </div>
+          <span className="shrink-0 rounded-full bg-j2s-green/10 px-2.5 py-1 text-xs font-bold text-j2s-green-dark">
+            Today
+          </span>
+        </div>
+
+        <p className="mt-1 text-sm text-j2s-ink/60">
+          {e.student?.first_name} &middot; {e.name}{e.location ? ` at ${e.location}` : ''}
+        </p>
+
+        {s.description && (
+          <p className="mt-3 text-sm leading-relaxed text-j2s-ink/70">{s.description}</p>
+        )}
+
+        {s.skills_practiced?.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {s.skills_practiced.filter(Boolean).map((skill, i) => (
+              <span key={i} className="rounded-full bg-j2s-purple/10 px-2.5 py-0.5 text-xs font-medium text-j2s-purple">{skill}</span>
+            ))}
+          </div>
+        )}
+
+        {s.parent_engagement_question && (
+          <div className="mt-4 rounded-xl bg-amber-50 p-4">
+            <p className="text-xs font-bold uppercase tracking-wider text-amber-700">Ask your child tonight</p>
+            <p className="mt-1 text-sm leading-relaxed text-amber-900">{s.parent_engagement_question}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UpcomingCard({ enrollment: e }) {
+  const info = e.sessionInfo;
+  const session = info?.state === 'upcoming' ? info.session : info?.nextSession || info?.session;
+  const sessionNum = info?.state === 'upcoming' ? 1 : (info?.nextSessionNumber || info?.sessionNumber);
+
+  return (
+    <div className="rounded-2xl border border-j2s-purple/10 bg-white p-4 shadow-card">
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-j2s-purple/10 text-xs font-bold text-j2s-purple">
+          {e.day ? e.day.slice(0, 3).toUpperCase() : '---'}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-j2s-ink truncate">{session?.title || e.name}</p>
+          <p className="text-xs text-j2s-ink/50">
+            {e.student?.first_name} &middot; {e.name}{e.startTime ? ` &middot; ${fmtTime(e.startTime)}` : ''}
+          </p>
+        </div>
+        {info?.state === 'upcoming' && e.firstDate && (
+          <span className="shrink-0 text-xs text-j2s-ink/40">Starts {fmtDateShort(e.firstDate)}</span>
+        )}
+        {sessionNum && info?.totalSessions && (
+          <span className="shrink-0 rounded-full bg-j2s-purple/5 px-2 py-0.5 text-xs text-j2s-purple/60">
+            {sessionNum}/{info.totalSessions}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ==================================================================== */
+/*  SCHEDULE TAB                                                        */
+/* ==================================================================== */
+function ScheduleTab({ weekSchedule, enrollments }) {
+  const hasAnyClasses = Object.values(weekSchedule).some((arr) => arr.length > 0);
+  const todayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date().getDay()];
+
+  if (!hasAnyClasses && enrollments.filter((e) => e.type === 'camp').length === 0) {
+    return (
+      <div className="rounded-2xl border border-j2s-purple/10 bg-white p-6 text-center shadow-card">
+        <p className="text-j2s-ink/50">No classes scheduled yet.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {hasAnyClasses && (
+        <>
+          <SectionLabel>Weekly schedule</SectionLabel>
+          {DAY_ORDER.map((day) => {
+            const classes = weekSchedule[day];
+            const isToday = day === todayName;
+            return (
+              <div key={day} className={`rounded-2xl border bg-white p-4 shadow-card ${isToday ? 'border-j2s-purple/30 ring-1 ring-j2s-purple/10' : 'border-j2s-purple/10'}`}>
+                <div className="flex items-center gap-2">
+                  <p className={`text-sm font-bold ${isToday ? 'text-j2s-purple' : 'text-j2s-ink/70'}`}>{day}</p>
+                  {isToday && <span className="rounded-full bg-j2s-purple px-2 py-0.5 text-[10px] font-bold text-white">TODAY</span>}
+                </div>
+                {classes.length === 0 ? (
+                  <p className="mt-1 text-xs text-j2s-ink/30">No classes</p>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    {classes.map((e) => (
+                      <div key={e.id} className="flex items-center gap-3">
+                        <p className="w-24 shrink-0 text-xs font-medium text-j2s-ink/50">
+                          {fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}
+                        </p>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-j2s-ink truncate">{e.name}</p>
+                          <p className="text-xs text-j2s-ink/50">{e.student?.first_name}{e.location ? ` · ${e.location}` : ''}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </>
-          )}
+            );
+          })}
         </>
       )}
 
-      {/* ============================================================ */}
-      {/*  REGISTER-FOR-NEXT-TERM CTA                                   */}
-      {/* ============================================================ */}
+      {enrollments.filter((e) => e.type === 'camp').length > 0 && (
+        <>
+          <SectionLabel className="mt-4">Camp sessions</SectionLabel>
+          {enrollments.filter((e) => e.type === 'camp').map((e) => (
+            <div key={e.id} className="rounded-2xl border border-j2s-purple/10 bg-white p-4 shadow-card">
+              <p className="text-sm font-semibold text-j2s-ink">{e.name}</p>
+              <p className="mt-0.5 text-xs text-j2s-ink/50">
+                {e.student?.first_name}{e.location ? ` · ${e.location}` : ''}
+                {e.firstDate && e.lastDate ? ` · ${fmtDateShort(e.firstDate)}–${fmtDateShort(e.lastDate)}` : ''}
+                {e.startTime ? ` · ${fmtTime(e.startTime)}–${fmtTime(e.endTime)}` : ''}
+              </p>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ==================================================================== */
+/*  CLASSES TAB                                                         */
+/* ==================================================================== */
+function ClassesTab({ enrollments, expandedCards, toggleCard, nextTerm, slug }) {
+  if (enrollments.length === 0) {
+    return <EmptyState title="No enrollments yet" body="Browse programs to get started." cta="Browse programs" to={`/${slug}`} />;
+  }
+
+  const byStudent = {};
+  enrollments.forEach((e) => {
+    const key = e.student ? `${e.student.first_name} ${e.student.last_name}` : 'Unknown';
+    if (!byStudent[key]) byStudent[key] = [];
+    byStudent[key].push(e);
+  });
+
+  return (
+    <div className="space-y-6">
+      {Object.entries(byStudent).map(([name, classes]) => (
+        <div key={name}>
+          <SectionLabel>{name}</SectionLabel>
+          <div className="mt-2 space-y-3">
+            {classes.map((e) => (
+              <ClassCard key={e.id} enrollment={e} expanded={expandedCards.has(e.id)} onToggle={() => toggleCard(e.id)} />
+            ))}
+          </div>
+        </div>
+      ))}
+
       {nextTerm && (
-        <div className="mt-10 rounded-2xl border border-j2s-green/20 bg-j2s-green/5 p-6 text-center">
-          <h2 className="font-titan text-xl text-j2s-ink">
-            {TERM_LABELS[nextTerm]} registration is open
-          </h2>
-          <p className="mt-2 text-sm text-j2s-ink/70">
-            Secure your spot for the upcoming term.
-          </p>
-          <Link
-            to={`/${org.slug}`}
-            className="mt-4 inline-block rounded-lg bg-j2s-purple px-6 py-3 font-bold text-white transition hover:bg-j2s-purple-dark"
-          >
-            Browse {TERM_LABELS[nextTerm]} programs &rarr;
+        <div className="rounded-2xl border border-j2s-green/20 bg-j2s-green/5 p-5 text-center">
+          <p className="font-bold text-j2s-ink">{TERM_LABELS[nextTerm]} registration is open</p>
+          <p className="mt-1 text-sm text-j2s-ink/60">Secure your spot for the upcoming term.</p>
+          <Link to={`/${slug}`} className="mt-3 inline-block rounded-lg bg-j2s-purple px-5 py-2.5 text-sm font-bold text-white transition hover:bg-j2s-purple-dark">
+            Browse programs
           </Link>
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* ============================================================ */}
-      {/*  NOTIFICATION PREFERENCES                                     */}
-      {/* ============================================================ */}
-      {prefs && (
-        <div className="mt-10">
-          <h2 className="font-titan text-xl text-j2s-ink">
-            Email preferences
-          </h2>
-          <p className="mt-1 text-sm text-j2s-ink/50">
-            Choose which emails you'd like to receive.
-          </p>
-          <div className="mt-4 space-y-3">
-            {PREF_OPTIONS.map((opt) => (
-              <label
-                key={opt.key}
-                className="flex cursor-pointer items-start gap-3 rounded-xl border border-j2s-purple/10 bg-white p-4 transition hover:border-j2s-purple/20"
-              >
-                <div className="pt-0.5">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={!!prefs[opt.key]}
-                    disabled={savingPrefs}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      togglePref(opt.key);
-                    }}
-                    className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-j2s-purple/40 ${
-                      prefs[opt.key] ? 'bg-j2s-purple' : 'bg-gray-300'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform duration-200 ${
-                        prefs[opt.key] ? 'translate-x-[22px]' : 'translate-x-0.5'
-                      } mt-0.5`}
-                    />
-                  </button>
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-j2s-ink">
-                    {opt.label}
-                  </p>
-                  <p className="mt-0.5 text-xs text-j2s-ink/50">
-                    {opt.description}
-                  </p>
-                </div>
-              </label>
-            ))}
-          </div>
-          {prefsSaved && (
-            <p className="mt-2 text-sm font-medium text-green-600">
-              Saved!
-            </p>
-          )}
+function ClassCard({ enrollment: e, expanded, onToggle }) {
+  const isCamp = e.type === 'camp';
+  const hasSchedule = e.sessions.length > 0;
+  const scheduleLabel = isCamp
+    ? `day-by-day schedule (${e.sessions.length} days)`
+    : `week-by-week schedule (${e.sessions.length} sessions)`;
+
+  return (
+    <div className="rounded-2xl border border-j2s-purple/10 bg-white shadow-card overflow-hidden">
+      <div className="p-4">
+        <p className="font-semibold text-j2s-purple">{e.name}</p>
+        <div className="mt-1 space-y-0.5 text-sm text-j2s-ink/60">
+          {e.location && <p>at {e.location}</p>}
+          {e.day && <p>{e.day}s, {fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}</p>}
+          {!e.day && e.startTime && <p>{fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}</p>}
+          {e.firstDate && !isCamp && <p>Starts {fmtDate(e.firstDate)}</p>}
+          {isCamp && e.firstDate && e.lastDate && <p>{fmtDateShort(e.firstDate)}–{fmtDateShort(e.lastDate)}</p>}
+          {e.term && <p className="text-xs text-j2s-ink/40">{TERM_LABELS[e.term] || e.term}</p>}
         </div>
-      )}
 
-      {/* ---- Footer ---- */}
-      <div className="mt-10 text-center">
+        {(e.arrival || e.dismissal) && (
+          <div className="mt-3 border-t border-j2s-purple/5 pt-3 space-y-2">
+            {e.arrival && (
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-j2s-ink/40">Arrival</p>
+                <p className="mt-0.5 text-sm text-j2s-ink/60">{e.arrival}</p>
+              </div>
+            )}
+            {e.dismissal && (
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-j2s-ink/40">Dismissal</p>
+                <p className="mt-0.5 text-sm text-j2s-ink/60">{e.dismissal}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!hasSchedule && e.skillsOverall && (
+          <div className="mt-3 border-t border-j2s-purple/5 pt-3">
+            <p className="text-xs font-bold uppercase tracking-wider text-j2s-ink/40">Skills</p>
+            <p className="mt-1 text-sm text-j2s-ink/60">{e.skillsOverall}</p>
+          </div>
+        )}
+
+        {hasSchedule && (
+          <button type="button" onClick={onToggle}
+            className="mt-3 flex w-full items-center justify-between border-t border-j2s-purple/5 pt-3 text-left text-sm font-semibold text-j2s-purple hover:text-j2s-purple-dark transition">
+            <span>{expanded ? 'Hide' : 'View'} {scheduleLabel}</span>
+            <ChevronDown open={expanded} className="text-j2s-purple" />
+          </button>
+        )}
+      </div>
+      {expanded && hasSchedule && <SessionTimeline sessions={e.sessions} isCamp={isCamp} />}
+    </div>
+  );
+}
+
+/* ==================================================================== */
+/*  SETTINGS TAB                                                        */
+/* ==================================================================== */
+function SettingsTab({ prefs, savingPrefs, prefsSaved, onToggle, supportEmail }) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <SectionLabel>Email preferences</SectionLabel>
+        <p className="mt-1 text-sm text-j2s-ink/40">Choose which emails you'd like to receive.</p>
+        <div className="mt-4 space-y-3">
+          {PREF_OPTIONS.map((opt) => (
+            <label key={opt.key} className="flex cursor-pointer items-start gap-3 rounded-xl border border-j2s-purple/10 bg-white p-4 transition hover:border-j2s-purple/20">
+              <button type="button" role="switch" aria-checked={!!prefs?.[opt.key]} disabled={savingPrefs}
+                onClick={(ev) => { ev.preventDefault(); onToggle(opt.key); }}
+                className={`relative mt-0.5 inline-flex h-6 w-11 shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-j2s-purple/40 ${prefs?.[opt.key] ? 'bg-j2s-purple' : 'bg-gray-300'}`}>
+                <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform duration-200 mt-0.5 ${prefs?.[opt.key] ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+              </button>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-j2s-ink">{opt.label}</p>
+                <p className="mt-0.5 text-xs text-j2s-ink/40">{opt.desc}</p>
+              </div>
+            </label>
+          ))}
+        </div>
+        {prefsSaved && <p className="mt-2 text-sm font-medium text-green-600">Saved!</p>}
+      </div>
+      <div className="rounded-2xl border border-j2s-purple/10 bg-white p-5 text-center shadow-card">
         <p className="text-sm text-j2s-ink/50">
           Questions? Email{' '}
-          <a
-            href={`mailto:${supportEmail}`}
-            className="font-semibold text-j2s-purple hover:underline"
-          >
-            {supportEmail}
-          </a>
+          <a href={`mailto:${supportEmail}`} className="font-semibold text-j2s-purple hover:underline">{supportEmail}</a>
         </p>
       </div>
     </div>
@@ -476,245 +651,46 @@ export default function Dashboard() {
 }
 
 /* ==================================================================== */
-/*  Afterschool enrollment card                                          */
+/*  Shared                                                               */
 /* ==================================================================== */
-function AfterschoolCard({ reg, expanded, onToggle }) {
-  const student = reg.students;
-  const program = reg.programs;
-  const location = program?.program_locations;
-  const curriculum = program?.curricula;
-  const sessions = curriculum?.curriculum_sessions
-    ? [...curriculum.curriculum_sessions].sort((a, b) => a.session_number - b.session_number)
-    : [];
-  const hasSchedule = sessions.length > 0;
+function SectionLabel({ children, className = '' }) {
+  return <p className={`text-xs font-bold uppercase tracking-wider text-j2s-ink/40 ${className}`}>{children}</p>;
+}
 
+function EmptyState({ title, body, cta, to }) {
   return (
-    <div className="rounded-2xl border border-j2s-purple/10 bg-white shadow-card overflow-hidden">
-      {/* Card header — always visible */}
-      <div className="p-5">
-        <p className="text-lg font-bold text-j2s-ink">
-          {student?.first_name} {student?.last_name}
-        </p>
-        <p className="mt-1 font-semibold text-j2s-purple">
-          {program?.curriculum}
-        </p>
-
-        {location?.name && (
-          <p className="mt-1 text-sm text-j2s-ink/70">at {location.name}</p>
-        )}
-        {program?.day_of_week && (
-          <p className="mt-1 text-sm text-j2s-ink/70">
-            {program.day_of_week}s, {formatTime(program.start_time)}
-            {program.end_time ? `–${formatTime(program.end_time)}` : ''}
-          </p>
-        )}
-        {program?.first_session_date && (
-          <p className="mt-1 text-sm text-j2s-ink/70">
-            First session: {formatDate(program.first_session_date)}
-          </p>
-        )}
-
-        {/* Arrival / Dismissal */}
-        {(location?.arrival_instructions || location?.dismissal_instructions) && (
-          <div className="mt-3 border-t border-j2s-purple/5 pt-3 space-y-2">
-            {location.arrival_instructions && (
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-j2s-ink/50">
-                  Arrival
-                </p>
-                <p className="mt-0.5 text-sm leading-relaxed text-j2s-ink/70">
-                  {location.arrival_instructions}
-                </p>
-              </div>
-            )}
-            {location.dismissal_instructions && (
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-j2s-ink/50">
-                  Dismissal
-                </p>
-                <p className="mt-0.5 text-sm leading-relaxed text-j2s-ink/70">
-                  {location.dismissal_instructions}
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Skills overview fallback (when no session data) */}
-        {!hasSchedule && curriculum?.skills_overall && (
-          <div className="mt-3 border-t border-j2s-purple/5 pt-3">
-            <p className="text-xs font-bold uppercase tracking-wider text-j2s-ink/50">
-              Skills your child will practice
-            </p>
-            <p className="mt-1 text-sm text-j2s-ink/70">
-              {curriculum.skills_overall}
-            </p>
-          </div>
-        )}
-
-        {/* Expand toggle for session schedule */}
-        {hasSchedule && (
-          <button
-            type="button"
-            onClick={onToggle}
-            className="mt-3 flex w-full items-center justify-between border-t border-j2s-purple/5 pt-3 text-left text-sm font-semibold text-j2s-purple hover:text-j2s-purple-dark transition"
-          >
-            <span>
-              {expanded ? 'Hide' : 'View'} week-by-week schedule ({sessions.length} sessions)
-            </span>
-            <ChevronDown open={expanded} className="text-j2s-purple" />
-          </button>
-        )}
-      </div>
-
-      {/* Expanded session schedule */}
-      {expanded && hasSchedule && (
-        <SessionSchedule sessions={sessions} labelPrefix="Week" />
+    <div className="rounded-2xl border border-j2s-purple/10 bg-white p-8 text-center shadow-card">
+      <p className="text-lg font-bold text-j2s-ink/70">{title}</p>
+      <p className="mt-2 text-sm text-j2s-ink/50">{body}</p>
+      {cta && to && (
+        <Link to={to} className="mt-5 inline-block rounded-lg bg-j2s-purple px-6 py-3 text-sm font-bold text-white transition hover:bg-j2s-purple-dark">{cta}</Link>
       )}
     </div>
   );
 }
 
-/* ==================================================================== */
-/*  Camp enrollment card                                                 */
-/* ==================================================================== */
-function CampCard({ reg, expanded, onToggle }) {
-  const student = reg.students;
-  const camp = reg.camp_sessions;
-  const curriculum = camp?.curricula;
-  const sessions = curriculum?.curriculum_sessions
-    ? [...curriculum.curriculum_sessions].sort((a, b) => a.session_number - b.session_number)
-    : [];
-  const hasSchedule = sessions.length > 0;
-
-  // Format camp date range
-  const dateRange =
-    camp?.starts_on && camp?.ends_on
-      ? `${formatDateShort(camp.starts_on)}–${formatDateShort(camp.ends_on)}`
-      : null;
-
-  // Session type label
-  const typeLabel =
-    camp?.session_type === 'half_day_am'
-      ? 'Morning'
-      : camp?.session_type === 'half_day_pm'
-        ? 'Afternoon'
-        : camp?.session_type === 'full_day'
-          ? 'Full day'
-          : '';
-
-  return (
-    <div className="rounded-2xl border border-j2s-purple/10 bg-white shadow-card overflow-hidden">
-      <div className="p-5">
-        <p className="text-lg font-bold text-j2s-ink">
-          {student?.first_name} {student?.last_name}
-        </p>
-        <p className="mt-1 font-semibold text-j2s-purple">
-          {camp?.curriculum_name || curriculum?.name || 'Camp session'}
-        </p>
-
-        {camp?.location_name && (
-          <p className="mt-1 text-sm text-j2s-ink/70">
-            at {camp.location_name}
-          </p>
-        )}
-
-        <div className="mt-1 flex flex-wrap gap-x-3 text-sm text-j2s-ink/70">
-          {dateRange && <span>{dateRange}</span>}
-          {typeLabel && <span>{typeLabel}</span>}
-          {camp?.start_time && (
-            <span>
-              {formatTime(camp.start_time)}
-              {camp.end_time ? `–${formatTime(camp.end_time)}` : ''}
-            </span>
-          )}
-        </div>
-
-        {camp?.week_num && (
-          <p className="mt-1 text-xs text-j2s-ink/50">
-            Week {camp.week_num}
-          </p>
-        )}
-
-        {/* Skills overview fallback */}
-        {!hasSchedule && curriculum?.skills_overall && (
-          <div className="mt-3 border-t border-j2s-purple/5 pt-3">
-            <p className="text-xs font-bold uppercase tracking-wider text-j2s-ink/50">
-              Skills your child will practice
-            </p>
-            <p className="mt-1 text-sm text-j2s-ink/70">
-              {curriculum.skills_overall}
-            </p>
-          </div>
-        )}
-
-        {/* Expand toggle */}
-        {hasSchedule && (
-          <button
-            type="button"
-            onClick={onToggle}
-            className="mt-3 flex w-full items-center justify-between border-t border-j2s-purple/5 pt-3 text-left text-sm font-semibold text-j2s-purple hover:text-j2s-purple-dark transition"
-          >
-            <span>
-              {expanded ? 'Hide' : 'View'} day-by-day schedule ({sessions.length} days)
-            </span>
-            <ChevronDown open={expanded} className="text-j2s-purple" />
-          </button>
-        )}
-      </div>
-
-      {expanded && hasSchedule && (
-        <SessionSchedule sessions={sessions} labelPrefix="Day" />
-      )}
-    </div>
-  );
-}
-
-/* ==================================================================== */
-/*  Shared session schedule (week-by-week or day-by-day)                 */
-/* ==================================================================== */
-function SessionSchedule({ sessions, labelPrefix }) {
+function SessionTimeline({ sessions, isCamp }) {
+  const prefix = isCamp ? 'Day' : 'Week';
   return (
     <div className="border-t border-j2s-purple/10 bg-j2s-purple/[0.02] px-5 py-4">
       <div className="space-y-4">
-        {sessions.map((s) => (
+        {sessions.map((s, idx) => (
           <div key={s.session_number} className="relative pl-7">
-            {/* Timeline dot */}
             <div className="absolute left-0 top-1 h-4 w-4 rounded-full border-2 border-j2s-purple bg-white" />
-            {s.session_number < sessions.length && (
-              <div className="absolute left-[7px] top-5 bottom-0 w-0.5 bg-j2s-purple/15" />
-            )}
-
-            <p className="text-xs font-bold uppercase tracking-wider text-j2s-purple/70">
-              {labelPrefix} {s.session_number}
-            </p>
-            <p className="mt-0.5 text-sm font-semibold text-j2s-ink">
-              {s.title}
-            </p>
-
-            {s.skills_practiced && s.skills_practiced.length > 0 && (
+            {idx < sessions.length - 1 && <div className="absolute left-[7px] top-5 bottom-0 w-0.5 bg-j2s-purple/15" />}
+            <p className="text-xs font-bold uppercase tracking-wider text-j2s-purple/70">{prefix} {s.session_number}</p>
+            <p className="mt-0.5 text-sm font-semibold text-j2s-ink">{s.title}</p>
+            {s.skills_practiced?.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {s.skills_practiced
-                  .filter(Boolean)
-                  .map((skill, i) => (
-                    <span
-                      key={i}
-                      className="inline-block rounded-full bg-j2s-purple/10 px-2.5 py-0.5 text-xs font-medium text-j2s-purple"
-                    >
-                      {skill}
-                    </span>
-                  ))}
+                {s.skills_practiced.filter(Boolean).map((skill, i) => (
+                  <span key={i} className="rounded-full bg-j2s-purple/10 px-2.5 py-0.5 text-xs font-medium text-j2s-purple">{skill}</span>
+                ))}
               </div>
             )}
-
             {s.parent_engagement_question && (
               <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2">
-                <p className="text-xs font-bold text-amber-700">
-                  Ask your child
-                </p>
-                <p className="mt-0.5 text-sm text-amber-900">
-                  {s.parent_engagement_question}
-                </p>
+                <p className="text-xs font-bold text-amber-700">Ask your child</p>
+                <p className="mt-0.5 text-sm text-amber-900">{s.parent_engagement_question}</p>
               </div>
             )}
           </div>
