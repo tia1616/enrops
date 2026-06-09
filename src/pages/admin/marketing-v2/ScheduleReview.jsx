@@ -181,7 +181,7 @@ export default function ScheduleReview({
           BEFORE the window dates that the context explains. */}
       {operatorNotes && (
         <div style={{
-          background: "#FFF8E1", border: "1px solid #E6C77A", borderRadius: 8,
+          background: "#FFF8E1", border: "1px solid #E6C77A", borderRadius: 12,
           padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#5C4A1C",
         }}>
           <strong style={{ fontWeight: 700 }}>A note from Enni:</strong> {operatorNotes}
@@ -190,7 +190,7 @@ export default function ScheduleReview({
 
       {zeroRecipients && (
         <div style={{
-          background: "#FDECEA", border: "1px solid #E5A6A0", borderRadius: 8,
+          background: "#FDECEA", border: "1px solid #E5A6A0", borderRadius: 12,
           padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#7A1F19",
         }}>
           <strong style={{ fontWeight: 700 }}>No recipients matched.</strong> Enni drafted the schedule, but no parents fit this filter yet. Go back and widen the audience, or save as a draft for later.
@@ -198,7 +198,7 @@ export default function ScheduleReview({
       )}
 
       <div style={{
-        background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10,
+        background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12,
         padding: "18px 20px", marginBottom: 12,
       }}>
         <p style={{ fontSize: 11, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, margin: 0 }}>
@@ -237,7 +237,7 @@ export default function ScheduleReview({
 
       {/* Recipient summary */}
       <div style={{
-        background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10,
+        background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12,
         padding: 14, marginBottom: 12,
       }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>

@@ -120,7 +120,7 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
         <AutoScopeBanner state={autoDeriveState} filter={who.filter} what={what} />
       )}
 
-      <div style={{ background: "#faf7ed", border: `1px solid #ece1bf`, borderRadius: 8, padding: 14, marginTop: who.filter?.auto_derived ? 12 : 0 }}>
+      <div style={{ background: "#faf7ed", border: `1px solid #ece1bf`, borderRadius: 12, padding: 14, marginTop: who.filter?.auto_derived ? 12 : 0 }}>
         <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.6 }}>
           {who.filter?.auto_derived ? "Change scope" : "Who's it going to?"}
         </p>
@@ -281,7 +281,7 @@ function ExcludeAlreadyRegisteredToggle({ orgId, what, checked, onChange }) {
       marginTop: 12, padding: "12px 14px",
       background: enabled ? "#fff" : "#faf7ed",
       border: `1px solid ${enabled ? RULE : "#ece1bf"}`,
-      borderRadius: 8,
+      borderRadius: 12,
     }}>
       <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: enabled ? "pointer" : "not-allowed" }}>
         <input
@@ -333,7 +333,7 @@ function ExcludeAlreadyRegisteredToggle({ orgId, what, checked, onChange }) {
 function AutoScopeBanner({ state, filter, what }) {
   if (state.status === "loading") {
     return (
-      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 14, marginBottom: 12, fontSize: 13, color: MUTED }}>
+      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 14, marginBottom: 12, fontSize: 13, color: MUTED }}>
         Working out who this campaign should go to…
       </div>
     );
@@ -344,7 +344,7 @@ function AutoScopeBanner({ state, filter, what }) {
   const bgColor = tone === "warn" ? "#FAEEDA" : "#EAF3DE";
   const accent = tone === "warn" ? WARN : OK;
   return (
-    <div style={{ background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
+    <div style={{ background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: accent, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
         Audience picked for you
       </div>

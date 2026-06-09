@@ -652,7 +652,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               srcDoc={displayedPreviewHtml}
               sandbox="allow-popups allow-popups-to-escape-sandbox"
               style={{
-                width: "100%", height: 480, border: `1px solid ${RULE}`, borderRadius: 8,
+                width: "100%", height: 480, border: `1px solid ${RULE}`, borderRadius: 12,
                 background: "#fff",
               }}
             />
@@ -678,7 +678,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
         </div>
 
         {/* Action bar — sits below the editor content, no longer a fixed footer */}
-        <div style={{ marginTop: 16, padding: "16px", borderTop: `1px solid ${RULE}`, background: "#fbfaf6", borderRadius: 8, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ marginTop: 16, padding: "16px", borderTop: `1px solid ${RULE}`, background: "#fbfaf6", borderRadius: 12, display: "flex", flexDirection: "column", gap: 12 }}>
           {/* Real-data test source picker — only for program-based templates */}
           {sourceType && (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>

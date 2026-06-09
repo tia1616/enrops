@@ -99,7 +99,7 @@ export default function Q3_Duration({ inputs, setField, onNext, onBack, canNext 
                 cursor: "pointer", padding: 12,
                 background: selected ? "#faf7ed" : "#fff",
                 border: `2px solid ${selected ? PURPLE : RULE}`,
-                borderRadius: 8,
+                borderRadius: 12,
               }}
             >
               <input
@@ -128,7 +128,7 @@ export default function Q3_Duration({ inputs, setField, onNext, onBack, canNext 
             padding: 12,
             background: customSelected ? "#faf7ed" : "#fff",
             border: `2px solid ${customSelected ? PURPLE : RULE}`,
-            borderRadius: 8,
+            borderRadius: 12,
             gridColumn: customSelected ? "1 / -1" : "auto",
           }}
         >
@@ -230,7 +230,7 @@ function SendTimePicker({ inputs, setField, onNext, onBack, canNext }) {
             cursor: "pointer", padding: 12,
             background: isNow ? "#faf7ed" : "#fff",
             border: `2px solid ${isNow ? PURPLE : RULE}`,
-            borderRadius: 8,
+            borderRadius: 12,
           }}
         >
           <input type="radio" name="send_at" checked={isNow} onChange={() => setField("send_at", "now")} style={{ display: "none" }} />
@@ -243,7 +243,7 @@ function SendTimePicker({ inputs, setField, onNext, onBack, canNext }) {
             cursor: "pointer", padding: 12,
             background: isTomorrow ? "#faf7ed" : "#fff",
             border: `2px solid ${isTomorrow ? PURPLE : RULE}`,
-            borderRadius: 8,
+            borderRadius: 12,
           }}
         >
           <input type="radio" name="send_at" checked={isTomorrow} onChange={() => setField("send_at", "tomorrow_morning")} style={{ display: "none" }} />
@@ -261,7 +261,7 @@ function SendTimePicker({ inputs, setField, onNext, onBack, canNext }) {
             padding: 12,
             background: customSelected ? "#faf7ed" : "#fff",
             border: `2px solid ${customSelected ? PURPLE : RULE}`,
-            borderRadius: 8,
+            borderRadius: 12,
             gridColumn: customSelected ? "1 / -1" : "auto",
           }}
         >

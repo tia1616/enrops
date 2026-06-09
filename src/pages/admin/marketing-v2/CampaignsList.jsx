@@ -114,7 +114,7 @@ export default function CampaignsList({ onNew }) {
       {loading ? (
         <div style={{ padding: 24, color: MUTED }}>Loading your campaigns…</div>
       ) : campaigns.length === 0 ? (
-        <div style={{ border: `1px dashed ${RULE}`, borderRadius: 8, padding: 32, textAlign: "center", color: MUTED }}>
+        <div style={{ border: `1px dashed ${RULE}`, borderRadius: 12, padding: 32, textAlign: "center", color: MUTED }}>
           <p style={{ margin: "0 0 4px", color: INK, fontWeight: 600 }}>No campaigns scheduled yet</p>
           <p style={{ margin: 0, fontSize: 13 }}>Click “Build a campaign” to set one up with Enni.</p>
         </div>
@@ -149,7 +149,7 @@ function CampaignRow({ campaign, onCancel, canceling }) {
     : null;
 
   return (
-    <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: 16, background: "#fff" }}>
+    <div style={{ border: `1px solid ${RULE}`, borderRadius: 12, padding: 16, background: "#fff" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div style={{ minWidth: 0 }}>
           <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: INK }}>{shortName(campaign.name)}</p>

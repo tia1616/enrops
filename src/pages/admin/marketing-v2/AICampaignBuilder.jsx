@@ -656,7 +656,7 @@ function CelebrationScreen({ draft, onReset, onHome }) {
       </div>
 
       {first && (
-        <div style={{ textAlign: "left", marginTop: 24, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 16 }}>
+        <div style={{ textAlign: "left", marginTop: 24, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 16 }}>
           <p style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, margin: 0 }}>Next up</p>
           <p style={{ margin: "4px 0 0", fontSize: 14, color: INK, fontWeight: 600 }}>
             {/* Subject contains tokens like {{school}} that resolve per-recipient

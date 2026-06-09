@@ -61,7 +61,7 @@ function OtherCard({ onPickIntent }) {
     <div style={{
       background: "#fff",
       border: `1px solid ${RULE}`,
-      borderRadius: 8,
+      borderRadius: 12,
       padding: 14,
       display: "flex",
       flexDirection: "column",
@@ -102,7 +102,7 @@ function PeriodCard({ period, allPeriods, onPickIntent }) {
     <div style={{
       background: "#fff",
       border: `1px solid ${RULE}`,
-      borderRadius: 8,
+      borderRadius: 12,
       padding: 14,
       display: "flex",
       flexDirection: "column",
@@ -189,7 +189,7 @@ function Skeleton({ text }) {
   return (
     <div style={{
       padding: 14, marginBottom: 14, background: "#fff",
-      border: `1px solid ${RULE}`, borderRadius: 8,
+      border: `1px solid ${RULE}`, borderRadius: 12,
       fontSize: 13, color: MUTED, fontStyle: "italic",
     }}>
       {text}
@@ -200,7 +200,7 @@ function ErrorHint({ children }) {
   return (
     <div style={{
       padding: 14, marginBottom: 14, background: "#fdecea",
-      border: "1px solid #f5c2c0", borderRadius: 8,
+      border: "1px solid #f5c2c0", borderRadius: 12,
       fontSize: 13, color: "#7a2018", lineHeight: 1.5,
     }}>
       {children}
@@ -211,7 +211,7 @@ function EmptyHint({ children }) {
   return (
     <div style={{
       padding: 14, marginBottom: 14, background: "#fff",
-      border: `1px solid ${RULE}`, borderRadius: 8,
+      border: `1px solid ${RULE}`, borderRadius: 12,
       fontSize: 13, color: MUTED, lineHeight: 1.5,
     }}>
       {children}

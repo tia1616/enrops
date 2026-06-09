@@ -216,7 +216,7 @@ export default function AutomationsTab() {
             border: `1px solid ${WARN}`,
             color: "#7c2d12",
             padding: "10px 14px",
-            borderRadius: 8,
+            borderRadius: 12,
             marginBottom: 16,
             fontSize: 14,
           }}

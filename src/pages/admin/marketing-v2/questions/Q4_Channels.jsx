@@ -73,7 +73,7 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
                 padding: 12,
                 background: checked ? "#faf7ed" : "#fff",
                 border: `2px solid ${checked ? PURPLE : RULE}`,
-                borderRadius: 8,
+                borderRadius: 12,
               }}
             >
               <input
