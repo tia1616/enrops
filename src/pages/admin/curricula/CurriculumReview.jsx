@@ -1101,7 +1101,7 @@ function FlagBadge() {
 }
 
 function SavedTick({ on }) {
-  return <span style={{ marginLeft: 6, fontSize: 12, color: VIOLET, opacity: on ? 1 : 0, transition: "opacity 0.2s" }}>✓</span>;
+  return <span style={{ marginLeft: 6, fontSize: 12, color: BRIGHT, opacity: on ? 1 : 0, transition: "opacity 0.2s" }}>✓</span>;
 }
 
 function FieldText({ label, inlineHelp, help, value, onChange, flagged, saved, placeholder, ...rest }) {
@@ -2500,8 +2500,8 @@ const openLinkBtn = {
 const ennieBanner = {
   background: PANEL,
   border: `1px solid ${GOLD_BORDER}`,
-  borderLeft: `4px solid ${VIOLET}`,
-  borderRadius: 8,
+  borderLeft: `4px solid ${BRIGHT}`,
+  borderRadius: 12,
   padding: "16px 20px",
   display: "flex",
   alignItems: "center",
@@ -2518,7 +2518,7 @@ const ennieActionBtn = {
   padding: "8px 14px", fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer", flexShrink: 0,
 };
 
-const card = { background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8, padding: 22 };
+const card = { background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 22 };
 const sectionHead = { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 };
 const sectionBlurb = { color: MUTED, fontSize: 13, margin: "0 0 18px", lineHeight: 1.5 };
 const inlineCode = { background: "#f5f3eb", padding: "1px 6px", borderRadius: 3, fontSize: 12 };
