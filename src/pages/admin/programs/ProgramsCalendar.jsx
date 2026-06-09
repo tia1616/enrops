@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
+import SquiggleAccent from "../../../components/SquiggleAccent.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -330,6 +331,7 @@ export default function ProgramsCalendar() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Scheduled programs</h1>
+          <SquiggleAccent width={172} style={{ marginTop: 2 }} />
           <div style={{ color: MUTED, fontSize: 13, marginTop: 4 }}>
             What's running this term, by day or by school. Live enrollment numbers.
           </div>

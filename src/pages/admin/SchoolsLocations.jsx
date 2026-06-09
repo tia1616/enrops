@@ -12,6 +12,7 @@ import { useSearchParams, useOutletContext } from 'react-router-dom';
 import PartnersTab from './contacts/PartnersTab';
 import LocationsList from './LocationsList';
 import CalendarsList from './CalendarsList';
+import SquiggleAccent from '../../components/SquiggleAccent.jsx';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - active tabs/actions (Figma)
@@ -39,6 +40,7 @@ export default function SchoolsLocations() {
         <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.3 }}>
           Partners
         </h1>
+        <SquiggleAccent width={96} style={{ marginTop: 3 }} />
         <p style={{ color: MUTED, marginTop: 6, fontSize: 13.5, lineHeight: 1.5 }}>
           {active.help}
         </p>
