@@ -345,56 +345,51 @@ export default function LocationsList() {
 
       {loading ? (
         <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>Loading venues…</div>
+      ) : locations.length === 0 ? (
+        <div style={{
+          background: "#fff",
+          border: `1px dashed ${RULE}`,
+          borderRadius: 12,
+          padding: 36,
+          textAlign: "center",
+          color: MUTED,
+          fontSize: 14,
+        }}>
+          No venues yet. Click <strong>+ Add new venue</strong> to set up your first one.
+        </div>
       ) : (
-        <>
-          {editingId === "new" && (
+        locations.map((loc) => (
+          <div key={loc.id} id={`location-row-${loc.id}`}>
+            <DisplayCard loc={loc} campCount={campCounts.get(loc.id) ?? 0} onEdit={() => startEdit(loc)} />
+          </div>
+        ))
+      )}
+
+      {/* Add / edit a venue in a right-side drawer — keeps the venues list in view. */}
+      {editingId !== null && (
+        <div
+          onClick={cancelEdit}
+          style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(28,0,79,0.28)", display: "flex", justifyContent: "flex-end" }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 560, height: "100%", background: "#fff", boxShadow: "-12px 0 40px rgba(0,0,0,0.18)", overflowY: "auto", borderTopLeftRadius: 12, borderBottomLeftRadius: 12 }}
+          >
             <EditCard
-              title="New venue"
+              title={editingId === "new" ? "New venue" : (locations.find((l) => l.id === editingId)?.name ?? "")}
               draft={draft}
               bind={bind}
               applyPlace={applyPlace}
               partners={partners}
-              error={editingId === "new" ? error : null}
+              error={error}
               saving={saving}
               onSave={save}
               onCancel={cancelEdit}
-              isNew
+              isNew={editingId === "new"}
+              inDrawer
             />
-          )}
-          {locations.length === 0 && editingId !== "new" ? (
-            <div style={{
-              background: "#fff",
-              border: `1px dashed ${RULE}`,
-              borderRadius: 8,
-              padding: 36,
-              textAlign: "center",
-              color: MUTED,
-              fontSize: 14,
-            }}>
-              No venues yet. Click <strong>+ Add new venue</strong> to set up your first one.
-            </div>
-          ) : (
-            locations.map((loc) => (
-              <div key={loc.id} id={`location-row-${loc.id}`}>
-                {editingId === loc.id ? (
-                  <EditCard
-                    title={loc.name}
-                    draft={draft}
-                    bind={bind}
-                    applyPlace={applyPlace}
-                    partners={partners}
-                    error={error}
-                    saving={saving}
-                    onSave={save}
-                    onCancel={cancelEdit}
-                  />
-                ) : (
-                  <DisplayCard loc={loc} campCount={campCounts.get(loc.id) ?? 0} onEdit={() => startEdit(loc)} />
-                )}
-              </div>
-            ))
-          )}
-        </>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -466,14 +461,14 @@ function DisplayCard({ loc, campCount, onEdit }) {
   );
 }
 
-function EditCard({ title, draft, bind, applyPlace, partners, error, saving, onSave, onCancel, isNew }) {
+function EditCard({ title, draft, bind, applyPlace, partners, error, saving, onSave, onCancel, isNew, inDrawer }) {
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   return (
     <div style={{
       background: "#fff",
-      border: `2px solid ${BRIGHT}`,
-      borderRadius: 12,
-      padding: "20px 22px",
+      border: inDrawer ? "none" : `2px solid ${BRIGHT}`,
+      borderRadius: inDrawer ? 0 : 12,
+      padding: inDrawer ? "22px 24px 28px" : "20px 22px",
       display: "flex",
       flexDirection: "column",
       gap: 14,
