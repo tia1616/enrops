@@ -4,8 +4,9 @@
 
 import { useState } from "react";
 import EditableField from "./EditableField.jsx";
+import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
 import { supabase } from "../../../lib/supabase.js";
-import { INK, MUTED, PURPLE, RULE, OK, INFO } from "../marketing/tokens.jsx";
+import { INK, MUTED, PURPLE, BRIGHT, RULE, OK, INFO } from "../marketing/tokens.jsx";
 
 function fmtScheduled(iso, timezone) {
   if (!iso) return "—";
@@ -84,6 +85,9 @@ export default function TouchpointCard({
   const [previewData, setPreviewData] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState(null);
+  // The rendered email shows in a right-side drawer (not inline) so the tall
+  // email gets dedicated space while the card keeps the editor in view.
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const isPreviewing = !!previewLocationId;
 
   const loadPreview = async (locationId) => {
@@ -121,12 +125,23 @@ export default function TouchpointCard({
   const onPickPreviewLocation = (e) => {
     const id = e.target.value;
     setPreviewLocationId(id);
-    if (!id) { setPreviewData(null); setPreviewError(null); return; }
+    if (!id) { setPreviewData(null); setPreviewError(null); setDrawerOpen(false); return; }
+    setDrawerOpen(true);
     loadPreview(id);
   };
 
+  // Status badges (VIP shown/suppressed, no-content) shown both inline by the
+  // dropdown and inside the preview drawer.
+  const previewBadges = [];
+  if (isPreviewing && previewData) {
+    if (previewData.vip_block_shown === false) previewBadges.push({ label: "VIP block suppressed here", color: "#854F0B", bg: "#FAEEDA" });
+    if (previewData.vip_block_shown === true) previewBadges.push({ label: "VIP block shown", color: OK, bg: "#EAF3DE" });
+    if (previewData.program_matched === false && hasContentPicks) previewBadges.push({ label: "No picked content for this audience", color: "#b3261e", bg: "#fce4ec" });
+  }
+
   return (
-    <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, marginBottom: 10, background: "#fff", overflow: "hidden" }}>
+    <>
+    <div style={{ border: `1px solid ${RULE}`, borderRadius: 12, marginBottom: 10, background: "#fff", overflow: "hidden" }}>
       <button
         onClick={() => setOpen((v) => !v)}
         style={{
@@ -229,6 +244,18 @@ export default function TouchpointCard({
                 <option key={l.value} value={l.value}>{l.label}</option>
               ))}
             </select>
+              {isPreviewing && !drawerOpen && (
+                <button
+                  type="button"
+                  onClick={() => setDrawerOpen(true)}
+                  style={{
+                    padding: "6px 12px", background: BRIGHT, color: "#fff", border: "none",
+                    borderRadius: 999, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+                  }}
+                >
+                  Show preview
+                </button>
+              )}
               {previewLoading && <span style={{ fontSize: 11, color: MUTED }}>rendering…</span>}
               {previewData?.vip_block_shown === false && isPreviewing && (
                 <span style={{
@@ -256,20 +283,12 @@ export default function TouchpointCard({
               )}
             </div>
 
+          {/* Always the raw editor now — the rendered, token-resolved email
+              for a picked school renders in EmailPreviewDrawer (right side). */}
           <BodyEditor
             value={tp.body_html ?? ""}
             onChange={(v) => onUpdate(tp.id, { body_html: v, body_text: stripHtml(v) })}
             onCommit={(v) => onCommit?.(tp.id, { body_html: v, body_text: stripHtml(v) })}
-            // Preview overrides: when an operator picks a school in the
-            // dropdown, BodyEditor shows the SERVER-rendered body (tokens
-            // resolved, VIP shown/suppressed) instead of the raw
-            // body_html with merge-token highlighting. Edit button is
-            // still available — clicking Edit hides the preview and
-            // shows the raw body so the operator can keep iterating.
-            previewHtml={isPreviewing ? previewData?.body_html : null}
-            previewSubject={isPreviewing ? previewData?.subject : null}
-            previewSchoolName={isPreviewing ? previewData?.used_school_name : null}
-            previewError={previewError}
           />
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -299,6 +318,18 @@ export default function TouchpointCard({
         </div>
       )}
     </div>
+
+      <EmailPreviewDrawer
+        open={drawerOpen && isPreviewing}
+        onClose={() => setDrawerOpen(false)}
+        schoolName={previewData?.used_school_name}
+        subject={previewData?.subject}
+        bodyHtml={previewData?.body_html}
+        loading={previewLoading}
+        error={previewError}
+        badges={previewBadges}
+      />
+    </>
   );
 }
 
@@ -360,7 +391,7 @@ function editableToHtml(text) {
   return paragraphs.map((p) => `<p>${p}</p>`).join("");
 }
 
-function BodyEditor({ value, onChange, onCommit, previewHtml, previewSubject, previewSchoolName, previewError }) {
+function BodyEditor({ value, onChange, onCommit }) {
   const [editing, setEditing] = useState(false);
   // Plain-text working copy used only while the textarea is open. Seeded
   // from `value` (HTML) when Edit is clicked. Bubbled back up as HTML on
@@ -369,13 +400,6 @@ function BodyEditor({ value, onChange, onCommit, previewHtml, previewSubject, pr
   // onCommit(html) which PATCHes the touchpoint row to the DB so the
   // edits survive Send test, reloads, and Approve.
   const [editableText, setEditableText] = useState("");
-
-  // When a school is picked in the dropdown above, we hide the raw-tokens
-  // view and show the server-rendered body for that school. Editing the
-  // body is always allowed — clicking Edit drops out of preview mode for
-  // this card visually, but the parent's previewLocationId is unchanged
-  // so de-selecting Edit returns to the preview view.
-  const showingPreview = !!previewHtml && !editing;
 
   const toggleEditing = () => {
     if (editing) {
@@ -399,7 +423,7 @@ function BodyEditor({ value, onChange, onCommit, previewHtml, previewSubject, pr
         marginBottom: 4,
       }}>
         <span style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
-          {showingPreview ? `Preview for parents at ${previewSchoolName}` : "Email body"}
+          Email body
         </span>
         <button
           onClick={toggleEditing}
@@ -412,52 +436,7 @@ function BodyEditor({ value, onChange, onCommit, previewHtml, previewSubject, pr
         </button>
       </div>
 
-      {previewError && (
-        <div style={{
-          padding: "8px 12px", marginBottom: 6,
-          border: "1px solid #b3261e", borderRadius: 6,
-          background: "#fce4ec", color: "#b3261e", fontSize: 12,
-        }}>
-          Preview failed: {previewError}
-        </div>
-      )}
-
-      {showingPreview ? (
-        <>
-          {previewSubject && (
-            <div style={{
-              padding: "8px 12px", marginBottom: 6,
-              border: `1px solid ${RULE}`, borderRadius: 6,
-              background: "#faf8f1", fontSize: 13, color: INK,
-            }}>
-              <span style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginRight: 6 }}>
-                Subject
-              </span>
-              {previewSubject}
-            </div>
-          )}
-          {/* Server-rendered, real send-time output for the picked school.
-              Includes the email-shell wrapper + unsubscribe footer the
-              parent will actually see. Using an iframe srcDoc isolates
-              the rendered HTML from the admin app's stylesheet (the email
-              ships in a fresh document).
-              Sandbox grants popup-escape so clicking a link inside the
-              preview opens a new tab. The server-rendered preview HTML
-              injects <base target="_blank"> so every <a> targets _blank
-              by default — without this, clicking a link navigated the
-              iframe itself into a sandboxed-blank state. */}
-          <iframe
-            title="email preview"
-            srcDoc={previewHtml}
-            sandbox="allow-popups allow-popups-to-escape-sandbox"
-            style={{
-              width: "100%", minHeight: 480,
-              border: `1px solid ${RULE}`, borderRadius: 6,
-              background: "#fff",
-            }}
-          />
-        </>
-      ) : editing ? (
+      {editing ? (
         <>
           <textarea
             value={editableText}
@@ -486,10 +465,10 @@ function BodyEditor({ value, onChange, onCommit, previewHtml, previewSubject, pr
         />
       )}
 
-      {!editing && !showingPreview && (
+      {!editing && (
         <div style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
           <p style={{ margin: 0 }}>
-            Highlighted tags like <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span> get filled in for each parent when the email sends. Pick a school above to see exactly what parents there will receive.
+            Highlighted tags like <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span> get filled in for each parent when the email sends. Pick a school in the dropdown above to preview the real email in a side panel.
           </p>
           <p style={{ margin: "4px 0 0", color: OK, fontStyle: "italic" }}>
             ✨ Every edit teaches Enni a phrase you prefer or drop. Future drafts will reflect your voice automatically — less editing each campaign.
