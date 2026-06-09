@@ -17,7 +17,6 @@ import RefundDrawer from "../../components/RefundDrawer";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
-const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -292,7 +291,7 @@ export default function Rosters() {
           {camps === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
 
           {camps !== null && camps.length === 0 && !error && (
-            <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 28, color: MUTED, textAlign: "center" }}>
+            <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, color: MUTED, textAlign: "center" }}>
               No camps in this org yet.
             </div>
           )}
@@ -379,7 +378,7 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
         background: "#fff",
         border: `1px solid ${RULE}`,
         borderLeft: camp.roster_count > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`,
-        borderRadius: 8,
+        borderRadius: 12,
         padding: "12px 16px",
       }}
     >
@@ -777,7 +776,7 @@ function RemoveConfirm({ registration, name, onClose, onRemoved }) {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ background: "#fff", width: "100%", maxWidth: 420, border: `1px solid ${RULE}`, borderRadius: 10, padding: 22, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}
+        style={{ background: "#fff", width: "100%", maxWidth: 420, border: `1px solid ${RULE}`, borderRadius: 12, padding: 22, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}
       >
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: INK }}>Remove {name}?</h3>
         <p style={{ color: MUTED, fontSize: 13, marginTop: 8, lineHeight: 1.5 }}>
@@ -1161,7 +1160,7 @@ function RosterUploadModal({ target, onClose, onImported }) {
           width: "100%",
           maxWidth: 760,
           border: `1px solid ${RULE}`,
-          borderRadius: 10,
+          borderRadius: 12,
           padding: 22,
           boxShadow: "0 10px 40px rgba(0,0,0,0.2)",
         }}
@@ -1764,7 +1763,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
       {error && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 10 }}>{error}</div>}
       {programs === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
       {programs !== null && programs.length === 0 && !error && (
-        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 20, color: MUTED, textAlign: "center", fontSize: 13 }}>
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 20, color: MUTED, textAlign: "center", fontSize: 13 }}>
           No afterschool programs for {term} yet.
         </div>
       )}
@@ -1833,7 +1832,7 @@ function ProgramRosterRow({ program: p, orgId, canEdit, expanded, onToggle, onUp
     ? new Date(p.last_emailed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })
     : null;
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: p.enrolled > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`, borderRadius: 8, padding: "12px 16px" }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: p.enrolled > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`, borderRadius: 12, padding: "12px 16px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <button
           type="button"
