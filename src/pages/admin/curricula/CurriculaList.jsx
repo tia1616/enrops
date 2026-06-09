@@ -367,37 +367,30 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
           </div>
         </div>
       )}
-      <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
-        {cta.filter((i) => i.primary).map((item, i) => (
-          <Link key={`p${i}`} to={item.to} style={cardCtaPrimaryFull}>{item.label}</Link>
+      <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+        {cta.map((item, i) => (
+          <Link key={i} to={item.to} style={item.primary ? cardCtaPrimary : cardCtaSecondary}>{item.label}</Link>
         ))}
-        {(cta.some((i) => !i.primary) || onDelete) && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {cta.filter((i) => !i.primary).map((item, i) => (
-              <Link key={`s${i}`} to={item.to} style={cardCtaSecondary}>{item.label}</Link>
-            ))}
-            {onDelete && (
-              <button
-                type="button"
-                onClick={onDelete}
-                disabled={deleting}
-                title="Delete this curriculum"
-                style={{
-                  marginLeft: "auto",
-                  background: "transparent",
-                  border: "none",
-                  color: deleting ? MUTED : "#a13a3a",
-                  cursor: deleting ? "wait" : "pointer",
-                  fontSize: 16,
-                  padding: "6px 8px",
-                  opacity: deleting ? 0.5 : 0.7,
-                  lineHeight: 1,
-                }}
-              >
-                {deleting ? "…" : "🗑"}
-              </button>
-            )}
-          </div>
+        {onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={deleting}
+            title="Delete this curriculum"
+            style={{
+              marginLeft: "auto",
+              background: "transparent",
+              border: "none",
+              color: deleting ? MUTED : "#a13a3a",
+              cursor: deleting ? "wait" : "pointer",
+              fontSize: 16,
+              padding: "6px 8px",
+              opacity: deleting ? 0.5 : 0.7,
+              lineHeight: 1,
+            }}
+          >
+            {deleting ? "…" : "🗑"}
+          </button>
         )}
       </div>
     </div>
@@ -484,21 +477,6 @@ const searchInput = {
   fontFamily: "inherit",
   background: "#fff",
   color: INK,
-  boxSizing: "border-box",
-};
-
-const cardCtaPrimaryFull = {
-  display: "block",
-  width: "100%",
-  textAlign: "center",
-  padding: "9px 12px",
-  background: PURPLE,
-  color: "#fff",
-  border: "none",
-  borderRadius: 6,
-  fontSize: 13,
-  fontWeight: 600,
-  textDecoration: "none",
   boxSizing: "border-box",
 };
 
