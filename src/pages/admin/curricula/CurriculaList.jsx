@@ -8,7 +8,8 @@ import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { CAPABILITY_ICONS, deriveOrgStatesForCurriculum, isCapabilityUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 
-const PURPLE = "#1C004F";
+const PURPLE = "#1C004F";   // deep plum — headings
+const BRIGHT = "#6857E1";   // bright indigo — primary actions (sampled from Figma)
 const VIOLET = "#8C88FF";
 const GOLD_SOFT = "rgba(207, 177, 47, 0.13)";
 const GOLD_BORDER = "rgba(207, 177, 47, 0.55)";
@@ -402,7 +403,7 @@ function StatusBadge({ status }) {
 const primaryBtn = {
   display: "inline-block",
   padding: "9px 16px",
-  background: PURPLE,
+  background: BRIGHT,
   color: "#fff",
   border: "none",
   borderRadius: 6,
@@ -435,7 +436,7 @@ const searchInput = {
 
 const cardCtaPrimary = {
   padding: "7px 12px",
-  background: PURPLE,
+  background: BRIGHT,
   color: "#fff",
   border: "none",
   borderRadius: 5,
@@ -447,8 +448,8 @@ const cardCtaPrimary = {
 const cardCtaSecondary = {
   padding: "7px 12px",
   background: "transparent",
-  color: PURPLE,
-  border: `1px solid ${PURPLE}`,
+  color: BRIGHT,
+  border: `1px solid ${BRIGHT}`,
   borderRadius: 5,
   fontSize: 13,
   fontWeight: 600,

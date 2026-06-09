@@ -11,7 +11,9 @@ import EnropsWordmark from "../components/EnropsWordmark.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 
 // Enrops brand tokens
-const PURPLE = "#1C004F";
+const PURPLE = "#1C004F";   // deep plum — wordmark, headings, body accents
+const BRIGHT = "#6857E1";   // bright indigo — primary actions + active nav (sampled from Figma)
+const LAVENDER = "#F2F0FF"; // sidebar background (sampled from Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
@@ -255,7 +257,7 @@ export default function AdminLayout() {
       <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
         {/* Sidebar */}
         <aside data-admin-sidebar style={{
-          background: "#fff",
+          background: LAVENDER,
           borderRight: `1px solid ${RULE}`,
           padding: "20px 0",
           display: "flex",
@@ -285,12 +287,14 @@ export default function AdminLayout() {
                     alignItems: "center",
                     justifyContent: "space-between",
                     padding: "9px 12px",
-                    margin: "1px 0",
-                    borderRadius: 6,
+                    margin: "2px 0",
+                    borderRadius: 8,
+                    borderLeft: active ? `3px solid ${BRIGHT}` : "3px solid transparent",
                     fontSize: 14,
                     fontWeight: active ? 600 : 500,
-                    color: active ? PURPLE : (item.soon ? MUTED : INK),
-                    background: active ? `${VIOLET}22` : "transparent",
+                    color: active ? BRIGHT : (item.soon ? MUTED : INK),
+                    background: active ? "#fff" : "transparent",
+                    boxShadow: active ? "0 1px 3px rgba(28, 0, 79, 0.08)" : "none",
                     textDecoration: "none",
                     cursor: item.soon ? "default" : "pointer",
                     pointerEvents: item.soon ? "none" : "auto",
@@ -424,8 +428,8 @@ export default function AdminLayout() {
                     to={t.to}
                     style={{
                       padding: "8px 14px",
-                      borderBottom: tabActive ? `2px solid ${PURPLE}` : "2px solid transparent",
-                      color: tabActive ? PURPLE : MUTED,
+                      borderBottom: tabActive ? `2px solid ${BRIGHT}` : "2px solid transparent",
+                      color: tabActive ? BRIGHT : MUTED,
                       fontWeight: tabActive ? 700 : 500,
                       fontSize: 13,
                       textDecoration: "none",
