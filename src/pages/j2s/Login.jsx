@@ -1,14 +1,11 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { supabase } from '../../lib/supabase.js';
 
 export default function Login() {
-  const navigate = useNavigate();
-  const { signInWithGoogle, signInWithPassword } = useAuth();
+  const { signInWithGoogle } = useAuth();
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPw, setShowPw] = useState(false);
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -43,14 +40,6 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
-  }
-  async function handlePw() {
-    if (!email || !password) return;
-    setLoading(true);
-    const { error: err } = await signInWithPassword(email, password);
-    setLoading(false);
-    if (err) setError(err.message);
-    else navigate('/j2s/dashboard');
   }
 
   return (
@@ -94,34 +83,6 @@ export default function Login() {
             </svg>
             Continue with Google
           </button>
-
-          {/* Password login hidden for May 4 soft-open — parents only have magic link auth.
-              Re-enable when password-set/reset flow is built. */}
-          {false && (showPw ? (
-            <>
-              <input
-                type="password"
-                className="input-field"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-              <button
-                onClick={handlePw}
-                disabled={loading || !email || !password}
-                className="btn-j2s-secondary w-full"
-              >
-                Sign in with password
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={() => setShowPw(true)}
-              className="block w-full text-center text-sm text-j2s-purple hover:underline"
-            >
-              Use a password instead
-            </button>
-          ))}
 
           {msg && <p className="rounded-lg bg-j2s-purple-soft p-3 text-sm">{msg}</p>}
           {error && <p className="error-text">{error}</p>}

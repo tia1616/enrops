@@ -7,7 +7,6 @@
 // /j2s/login since they're tenant-scoped.
 
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 
 const PURPLE = "#1C004F";
@@ -20,28 +19,10 @@ const RULE = "#e2dfd5";
 const DANGER = "#b3261e";
 
 export default function AdminLogin() {
-  const navigate = useNavigate();
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
-
-  async function handlePassword(e) {
-    e.preventDefault();
-    if (!email || !password) return;
-    setLoading(true);
-    setError("");
-    const { error: err } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (err) {
-      setError(err.message);
-    } else {
-      // Hand off to '/' so EnropsLanding's smart-redirect picks the right
-      // portal based on role. Same for OAuth + magic-link below.
-      navigate("/");
-    }
-  }
 
   async function handleGoogle() {
     setLoading(true);
@@ -137,7 +118,7 @@ export default function AdminLogin() {
           <span style={{ flex: 1, height: 1, background: RULE }} />
         </div>
 
-        <form onSubmit={handlePassword}>
+        <div>
           <div style={{ marginBottom: 12 }}>
             <label style={labelStyle}>Email</label>
             <input
@@ -150,46 +131,18 @@ export default function AdminLogin() {
             />
           </div>
 
-          <div style={{ marginBottom: 16 }}>
-            <label style={labelStyle}>Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Your password"
-              style={inputStyle}
-              autoComplete="current-password"
-            />
-          </div>
-
           <button
-            type="submit"
-            disabled={loading || !email || !password}
+            type="button"
+            onClick={handleMagicLink}
+            disabled={loading || !email}
             style={{
               width: "100%", padding: "10px 14px", background: BRIGHT, color: "#fff",
               border: "none", borderRadius: 6, fontSize: 14, fontWeight: 600,
               fontFamily: "inherit", cursor: loading ? "wait" : "pointer",
-              opacity: loading ? 0.7 : 1,
+              opacity: (loading || !email) ? 0.7 : 1,
             }}
           >
-            {loading ? "Signing in…" : "Sign in"}
-          </button>
-        </form>
-
-        <div style={{
-          textAlign: "center", margin: "16px 0 0", paddingTop: 16,
-          borderTop: `1px solid ${RULE}`,
-        }}>
-          <button
-            onClick={handleMagicLink}
-            disabled={loading || !email}
-            style={{
-              background: "none", border: "none", color: PURPLE,
-              fontSize: 13, cursor: "pointer", fontFamily: "inherit",
-              textDecoration: "underline", opacity: !email ? 0.4 : 1,
-            }}
-          >
-            Email me a sign-in link instead
+            {loading ? "Sending…" : "Email me a sign-in link"}
           </button>
         </div>
 

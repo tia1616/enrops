@@ -8,12 +8,10 @@ export default function RegisterSuccess() {
   const ORG_SLUG = org.slug;
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get('session_id');
-  const { user, signInWithGoogle, signInWithMagicLink, signUpWithPassword } = useAuth();
+  const { user, signInWithGoogle, signInWithMagicLink } = useAuth();
   const { clearCart, cart } = useCart();
 
   const [email, setEmail] = useState(cart?.parent?.email || '');
-  const [password, setPassword] = useState('');
-  const [showPw, setShowPw] = useState(false);
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -35,16 +33,6 @@ export default function RegisterSuccess() {
     setLoading(false);
     if (err) setError(err.message);
     else setMsg(`Check ${email} for a sign-in link.`);
-  }
-
-  async function handlePasswordSignup() {
-    if (!email || !password) return;
-    setLoading(true);
-    setError('');
-    const { error: err } = await signUpWithPassword(email, password);
-    setLoading(false);
-    if (err) setError(err.message);
-    else setMsg('Account created. Check your email to confirm.');
   }
 
   async function handleGoogle() {

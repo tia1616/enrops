@@ -34,14 +34,6 @@ export function AuthProvider({ children }) {
     });
   }
 
-  async function signInWithPassword(email, password) {
-    return supabase.auth.signInWithPassword({ email, password });
-  }
-
-  async function signUpWithPassword(email, password) {
-    return supabase.auth.signUp({ email, password });
-  }
-
   async function signOut() {
     return supabase.auth.signOut();
   }
@@ -52,8 +44,6 @@ export function AuthProvider({ children }) {
     loading,
     signInWithGoogle,
     signInWithMagicLink,
-    signInWithPassword,
-    signUpWithPassword,
     signOut,
   };
 
