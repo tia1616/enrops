@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
-import { PURPLE, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
+import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import { editableToHtml, highlightTokens, htmlToEditable } from "./bodyEditorUtils.js";
 
 // Decode the common HTML entities operators might type or paste into a
@@ -731,7 +731,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               onClick={handleSendTest}
               disabled={sendingTest || !testEmail}
               style={{
-                background: "#fff", color: PURPLE, border: `1px solid ${PURPLE}`,
+                background: "#fff", color: BRIGHT, border: `1px solid ${BRIGHT}`,
                 padding: "8px 16px", borderRadius: 6, fontSize: 13, fontWeight: 600,
                 cursor: sendingTest || !testEmail ? "not-allowed" : "pointer",
                 opacity: sendingTest || !testEmail ? 0.5 : 1,

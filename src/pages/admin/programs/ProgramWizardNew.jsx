@@ -1143,8 +1143,8 @@ function Step3PriceAndOpen({
             onClick={() => onSubmit("draft")}
             disabled={submitting || !step3Valid}
             style={{
-              padding: "10px 18px", background: "#fff", color: PURPLE,
-              border: `1.5px solid ${PURPLE}`, borderRadius: 8,
+              padding: "10px 18px", background: "#fff", color: BRIGHT,
+              border: `1.5px solid ${BRIGHT}`, borderRadius: 8,
               fontSize: 14, fontWeight: 600,
               cursor: submitting || !step3Valid ? "not-allowed" : "pointer",
               opacity: submitting || !step3Valid ? 0.5 : 1,

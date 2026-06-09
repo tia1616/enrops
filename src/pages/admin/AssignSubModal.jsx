@@ -295,7 +295,7 @@ const inputStyle = {
 const btnPrimary = {
   background: BRIGHT,
   color: '#fff',
-  border: `1px solid ${PURPLE}`,
+  border: `1px solid ${BRIGHT}`,
   padding: '8px 14px',
   fontSize: 13,
   fontWeight: 600,

@@ -10,6 +10,7 @@
 import { Link } from "react-router-dom";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -59,9 +60,9 @@ function StepRow({ number, done, focused, title, blurb, ctaLabel, ctaTo }) {
             style={{
               display: "inline-block", marginTop: 10,
               padding: "8px 14px",
-              background: focused ? PURPLE : "#fff",
-              color: focused ? "#fff" : PURPLE,
-              border: `1.5px solid ${PURPLE}`,
+              background: focused ? BRIGHT : "#fff",
+              color: focused ? "#fff" : BRIGHT,
+              border: `1.5px solid ${BRIGHT}`,
               borderRadius: 8, fontSize: 14, fontWeight: 600,
               textDecoration: "none",
             }}

@@ -476,7 +476,7 @@ function ComposeStep({ partner, location, operational, otherContacts, selected, 
         <button
           type="button"
           onClick={onChangePartner}
-          style={{ padding: "5px 10px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 5, fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}
+          style={{ padding: "5px 10px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 5, fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}
         >Change</button>
       </div>
 

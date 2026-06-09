@@ -77,7 +77,7 @@ export default function PartnersTab({ org }) {
             type="button"
             onClick={() => setAddingOne(true)}
             style={{
-              padding: '10px 14px', background: 'transparent', color: PURPLE, border: `1px solid ${PURPLE}`,
+              padding: '10px 14px', background: 'transparent', color: BRIGHT, border: `1px solid ${BRIGHT}`,
               borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
             }}
           >

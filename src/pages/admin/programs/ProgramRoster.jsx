@@ -435,8 +435,8 @@ function primaryBtn(disabled) {
 }
 function ghostBtn(disabled) {
   return {
-    padding: "8px 14px", background: "#fff", color: PURPLE,
-    border: `1.5px solid ${PURPLE}`, borderRadius: 8, fontSize: 13, fontWeight: 600,
+    padding: "8px 14px", background: "#fff", color: BRIGHT,
+    border: `1.5px solid ${BRIGHT}`, borderRadius: 8, fontSize: 13, fontWeight: 600,
     fontFamily: "inherit", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
   };
 }

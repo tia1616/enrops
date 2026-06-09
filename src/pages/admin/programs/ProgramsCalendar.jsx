@@ -584,8 +584,8 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWi
                   onClick={() => onToggleSchool?.(programIds)}
                   style={{
                     background: "transparent",
-                    border: `1px solid ${PURPLE}`,
-                    color: PURPLE,
+                    border: `1px solid ${BRIGHT}`,
+                    color: BRIGHT,
                     padding: "4px 12px",
                     borderRadius: 6,
                     fontSize: 12,

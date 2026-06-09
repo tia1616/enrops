@@ -10,6 +10,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const CORAL = "#D9694F";
@@ -281,8 +282,8 @@ function ghostBtn() {
     display: "inline-block",
     padding: "9px 14px",
     background: "transparent",
-    color: PURPLE,
-    border: `1px solid ${PURPLE}`,
+    color: BRIGHT,
+    border: `1px solid ${BRIGHT}`,
     borderRadius: 6,
     fontWeight: 500,
     fontSize: 14,

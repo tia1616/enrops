@@ -938,8 +938,8 @@ function DayBreakdown({ rows, originalInstructor, onApproveRow, onWithholdRow, o
 
 function ActionButton({ onClick, disabled, tone = 'primary', children }) {
   const colors = {
-    primary:   { bg: PURPLE,     fg: '#fff', border: PURPLE },
-    secondary: { bg: '#fff',     fg: PURPLE, border: PURPLE },
+    primary:   { bg: BRIGHT,     fg: '#fff', border: BRIGHT },
+    secondary: { bg: '#fff',     fg: BRIGHT, border: BRIGHT },
     danger:    { bg: '#fff',     fg: RED,    border: RED },
   };
   const c = colors[tone] ?? colors.primary;

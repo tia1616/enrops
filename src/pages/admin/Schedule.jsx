@@ -2293,7 +2293,7 @@ export default function Schedule() {
                 style={{
                   padding: "9px 14px",
                   border: "none",
-                  background: "#1C004F",
+                  background: BRIGHT,
                   color: "#fff",
                   borderRadius: 6,
                   cursor: "pointer",

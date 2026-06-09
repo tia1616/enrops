@@ -1859,7 +1859,7 @@ function ProgramRosterRow({ program: p, orgId, canEdit, expanded, onToggle, onUp
               </button>
             )}
             {p.enrolled > 0 && (
-              <button type="button" onClick={onEmail} style={{ padding: "6px 12px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }} title="Send a branded PDF roster to this location's partner contacts">
+              <button type="button" onClick={onEmail} style={{ padding: "6px 12px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }} title="Send a branded PDF roster to this location's partner contacts">
                 Email roster →
               </button>
             )}

@@ -282,7 +282,7 @@ export default function InstructorsTab({ org }) {
             padding: '7px 12px',
             background: BRIGHT,
             color: '#fff',
-            border: `1px solid ${PURPLE}`,
+            border: `1px solid ${BRIGHT}`,
             borderRadius: 6,
             fontSize: 12,
             fontWeight: 600,
@@ -299,8 +299,8 @@ export default function InstructorsTab({ org }) {
           style={{
             padding: '7px 12px',
             background: '#fff',
-            color: PURPLE,
-            border: `1px solid ${PURPLE}`,
+            color: BRIGHT,
+            border: `1px solid ${BRIGHT}`,
             borderRadius: 6,
             fontSize: 12,
             fontWeight: 600,
@@ -516,9 +516,9 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
             disabled={inviteBusy}
             style={{
               padding: '6px 12px',
-              background: inviteState === 'first' ? PURPLE : 'transparent',
-              color: inviteState === 'first' ? '#fff' : PURPLE,
-              border: `1px solid ${PURPLE}`,
+              background: inviteState === 'first' ? BRIGHT : 'transparent',
+              color: inviteState === 'first' ? '#fff' : BRIGHT,
+              border: `1px solid ${BRIGHT}`,
               borderRadius: 6,
               fontSize: 12,
               fontWeight: 600,

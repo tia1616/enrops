@@ -1083,7 +1083,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
           type="button"
           onClick={onOpenSurvey}
           disabled={!!busy}
-          style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}` }}
+          style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}` }}
         >
           {survey?.opened_at ? "Resend survey" : "Open availability survey"}
         </button>
@@ -1101,9 +1101,9 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
               disabled={!!busy || !hasPrograms || nothingToMatch}
               title={nothingToMatch ? "Every class already has an instructor — nothing to match. Unassign someone to re-open a slot." : ""}
               style={{ ...btnStyle,
-                background: nothingToMatch ? "#f3f1ea" : (secondary ? "#fff" : PURPLE),
-                color: nothingToMatch ? MUTED : (secondary ? PURPLE : "#fff"),
-                border: `1.5px solid ${nothingToMatch ? RULE : PURPLE}`,
+                background: nothingToMatch ? "#f3f1ea" : (secondary ? "#fff" : BRIGHT),
+                color: nothingToMatch ? MUTED : (secondary ? BRIGHT : "#fff"),
+                border: `1.5px solid ${nothingToMatch ? RULE : BRIGHT}`,
                 cursor: nothingToMatch ? "default" : "pointer",
                 opacity: busy === "matching" ? 0.7 : 1 }}
             >
@@ -1116,7 +1116,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             type="button"
             onClick={onApprove}
             disabled={!!busy}
-            style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}`, opacity: busy === "approving" ? 0.7 : 1 }}
+            style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, opacity: busy === "approving" ? 0.7 : 1 }}
           >
             {busy === "approving" ? "Approving…" : `Approve ${counts.proposed} match${counts.proposed === 1 ? "" : "es"}`}
           </button>
@@ -1126,7 +1126,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             type="button"
             onClick={onSendOffers}
             disabled={!!busy}
-            style={{ ...btnStyle, background: BRIGHT, color: "#fff", border: `1.5px solid ${PURPLE}`, opacity: busy === "offers" ? 0.7 : 1 }}
+            style={{ ...btnStyle, background: BRIGHT, color: "#fff", border: `1.5px solid ${BRIGHT}`, opacity: busy === "offers" ? 0.7 : 1 }}
           >
             {busy === "offers" ? "Sending…" : `Send offers (${counts.sendable})`}
           </button>
@@ -1546,7 +1546,7 @@ function SurveyDialog({ dialog, term, instructorCount, deadline, setDeadline, bu
         <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 }}>Response deadline (optional)</label>
         <input type="date" value={deadline ?? ""} onChange={(e) => setDeadline(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit", marginBottom: 20 }} />
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
-          <button onClick={() => onRun("test")} disabled={busy} style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}` }}>Send test to me</button>
+          <button onClick={() => onRun("test")} disabled={busy} style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}` }}>Send test to me</button>
           <button onClick={() => onRun("send")} disabled={busy} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>
             {busy ? "Sending…" : `Send to ${instructorCount} instructor${instructorCount === 1 ? "" : "s"}`}
           </button>
@@ -1660,7 +1660,7 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
           type="button"
           onClick={doPreview}
           disabled={pvBusy || selCount === 0}
-          style={{ ...btnStyle, width: "100%", background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}`, opacity: pvBusy || selCount === 0 ? 0.5 : 1, marginBottom: 10 }}
+          style={{ ...btnStyle, width: "100%", background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, opacity: pvBusy || selCount === 0 ? 0.5 : 1, marginBottom: 10 }}
         >
           {pvBusy ? "Building preview…" : hasPreview ? "Refresh preview" : "Preview the email"}
         </button>

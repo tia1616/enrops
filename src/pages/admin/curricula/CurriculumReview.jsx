@@ -2583,7 +2583,7 @@ const primaryBtn = {
 };
 const primaryBtnDisabled = { ...primaryBtn, background: "#c8c4b7", cursor: "not-allowed" };
 const secondaryBtn = {
-  padding: "10px 18px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6,
+  padding: "10px 18px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6,
   fontFamily: "inherit", fontSize: 14, fontWeight: 600, cursor: "pointer", textDecoration: "none",
 };
 const tertiaryBtn = {

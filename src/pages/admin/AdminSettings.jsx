@@ -228,8 +228,8 @@ const primaryBtn = {
 const secondaryBtn = {
   padding: "9px 16px",
   background: "transparent",
-  color: PURPLE,
-  border: `1px solid ${PURPLE}`,
+  color: BRIGHT,
+  border: `1px solid ${BRIGHT}`,
   borderRadius: 6,
   fontFamily: "inherit",
   fontSize: 13,

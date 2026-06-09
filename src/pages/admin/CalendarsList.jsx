@@ -291,11 +291,11 @@ function DistrictRow({ district, locationCount, cal, isViewing, onToggleView, on
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         {hasViewableDates && (
-          <button type="button" onClick={onToggleView} style={btn("transparent", PURPLE, true)}>
+          <button type="button" onClick={onToggleView} style={btn("transparent", BRIGHT, true)}>
             {isViewing ? "Hide dates" : "View dates"}
           </button>
         )}
-        <button type="button" onClick={onEdit} style={btn(cal ? "transparent" : PURPLE, cal ? PURPLE : "#fff", !!cal)}>
+        <button type="button" onClick={onEdit} style={btn(cal ? "transparent" : BRIGHT, cal ? BRIGHT : "#fff", !!cal)}>
           {cal ? "Edit" : "Add calendar"}
         </button>
       </div>
@@ -364,12 +364,12 @@ function DateGroup({ title, emptyLabel, rows, copied, onCopy }) {
             type="button"
             onClick={onCopy}
             style={{
-              ...btn("transparent", PURPLE, true),
+              ...btn("transparent", BRIGHT, true),
               padding: "4px 10px",
               fontSize: 12,
               background: copied ? `${OK_GREEN}1F` : "transparent",
-              color: copied ? OK_GREEN : PURPLE,
-              borderColor: copied ? OK_GREEN : PURPLE,
+              color: copied ? OK_GREEN : BRIGHT,
+              borderColor: copied ? OK_GREEN : BRIGHT,
             }}
             title="Copy this list to clipboard"
           >
@@ -675,13 +675,13 @@ function CalendarEditor({ org, district, schoolYear, existing, onClose, onSaved 
               style={{ ...inputStyle, flex: 1 }}
               disabled={extracting}
             />
-            <button type="button" onClick={onExtractUrl} disabled={extracting} style={btn(PURPLE, "#fff", false, extracting)}>
+            <button type="button" onClick={onExtractUrl} disabled={extracting} style={btn(BRIGHT, "#fff", false, extracting)}>
               {extracting ? "Reading…" : "Extract"}
             </button>
           </div>
         ) : (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <label style={{ ...btn(PURPLE, "#fff", false, extracting), cursor: extracting ? "default" : "pointer" }}>
+            <label style={{ ...btn(BRIGHT, "#fff", false, extracting), cursor: extracting ? "default" : "pointer" }}>
               {extracting ? "Reading…" : "Choose PDF…"}
               <input
                 type="file"
@@ -819,7 +819,7 @@ function CalendarEditor({ org, district, schoolYear, existing, onClose, onSaved 
         <button type="button" onClick={onClose} disabled={saving} style={btn("transparent", MUTED, true, saving)}>
           Cancel
         </button>
-        <button type="button" onClick={save} disabled={saving} style={btn(PURPLE, "#fff", false, saving)}>
+        <button type="button" onClick={save} disabled={saving} style={btn(BRIGHT, "#fff", false, saving)}>
           {saving ? "Saving…" : (existing ? "Save changes" : "Save calendar")}
         </button>
       </div>
@@ -843,7 +843,7 @@ function DateListEditor({ title, subtitle, rows, onChange, updateRow }) {
           </div>
           {subtitle && <div style={{ fontSize: 12, color: MUTED }}>{subtitle}</div>}
         </div>
-        <button type="button" onClick={addRow} style={btn("transparent", PURPLE, true)}>+ Add date</button>
+        <button type="button" onClick={addRow} style={btn("transparent", BRIGHT, true)}>+ Add date</button>
       </div>
       {(!rows || rows.length === 0) ? (
         <div style={{ fontSize: 13, color: MUTED, fontStyle: "italic", padding: "8px 0" }}>

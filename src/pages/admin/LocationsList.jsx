@@ -13,6 +13,7 @@ import PlacesAutocomplete from "../../components/PlacesAutocomplete";
 import FindMissingAddressesModal from "./FindMissingAddressesModal";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const CORAL = "#D9694F";
@@ -306,8 +307,8 @@ export default function LocationsList() {
               style={{
                 padding: "10px 14px",
                 background: "transparent",
-                color: PURPLE,
-                border: `1.5px solid ${PURPLE}`,
+                color: BRIGHT,
+                border: `1.5px solid ${BRIGHT}`,
                 borderRadius: 8,
                 fontSize: 13,
                 fontWeight: 700,

@@ -248,7 +248,7 @@ export default function AddPartnerModal({ orgId, onClose, onSaved }) {
           onClick={addContact}
           disabled={busy}
           style={{
-            background: 'transparent', color: PURPLE, border: `1px dashed ${PURPLE}`,
+            background: 'transparent', color: BRIGHT, border: `1px dashed ${BRIGHT}`,
             padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
             fontFamily: 'inherit', cursor: 'pointer', marginBottom: 14,
           }}

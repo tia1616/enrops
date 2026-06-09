@@ -26,6 +26,7 @@ import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -665,8 +666,8 @@ function SetupBanner({ accountId, chargesEnabled, payoutsEnabled, open, onToggle
           style={{
             padding: "5px 10px",
             background: "transparent",
-            color: PURPLE,
-            border: `1px solid ${PURPLE}`,
+            color: BRIGHT,
+            border: `1px solid ${BRIGHT}`,
             borderRadius: 5,
             fontSize: 12,
             fontWeight: 600,

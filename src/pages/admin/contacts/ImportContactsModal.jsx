@@ -653,7 +653,7 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
               <button
                 type="button"
                 onClick={downloadTemplate}
-                style={{ padding: '7px 14px', background: '#fff', color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                style={{ padding: '7px 14px', background: '#fff', color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap' }}
               >📄 Download template</button>
             </div>
           </div>
@@ -1140,7 +1140,7 @@ function DoneStep({ result, orgId, onClose }) {
                   type="button"
                   disabled={busyId === p.partner_id}
                   onClick={() => addAsLocation(p)}
-                  style={{ padding: '5px 12px', background: '#fff', color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap', opacity: busyId === p.partner_id ? 0.6 : 1 }}
+                  style={{ padding: '5px 12px', background: '#fff', color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap', opacity: busyId === p.partner_id ? 0.6 : 1 }}
                 >{busyId === p.partner_id ? 'Adding…' : 'Add as location'}</button>
               </div>
             ))}
