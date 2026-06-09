@@ -19,7 +19,6 @@ const TERM_LABELS = {
   SU26: 'Summer 2026', FA26: 'Fall 2026', WI27: 'Winter 2027',
   SP27: 'Spring 2027', SU27: 'Summer 2027',
 };
-
 const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
 const PREF_OPTIONS = [
@@ -45,6 +44,16 @@ function fmtTime(t) {
   if (t.includes('AM') || t.includes('PM')) return t;
   const [h, m] = t.split(':').map(Number);
   return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const now = new Date();
+  const days = Math.floor((now - d) / (1000 * 60 * 60 * 24));
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return `${days} days ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 /* ------------------------------------------------------------------ */
@@ -75,34 +84,22 @@ function getSessionInfo(program, sessions) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Icons (inline SVG, no deps)                                        */
+/*  Icons                                                              */
 /* ------------------------------------------------------------------ */
 function IconToday({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 11H9v-1h2v1zm0-3H9V6h2v4z" /></svg>
-  );
+  return <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 11H9v-1h2v1zm0-3H9V6h2v4z" /></svg>;
 }
 function IconSchedule({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" /></svg>
-  );
+  return <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" /></svg>;
 }
 function IconClasses({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838l-3.14 1.346L10 11.12l6.606-2.83a1 1 0 000-1.84l-7-3zM3.31 9.397L5 10.12v4.102a8.969 8.969 0 00-1.05-.174 1 1 0 01-.89-.89 11.115 11.115 0 01.25-3.762zM9.3 16.573A9.026 9.026 0 007 14.935v-3.957l1.818.78a3 3 0 002.364 0l5.508-2.361a11.026 11.026 0 01.25 3.762 1 1 0 01-.89.89 8.968 8.968 0 00-5.35 2.524 1 1 0 01-1.4 0z" /></svg>
-  );
+  return <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838l-3.14 1.346L10 11.12l6.606-2.83a1 1 0 000-1.84l-7-3zM3.31 9.397L5 10.12v4.102a8.969 8.969 0 00-1.05-.174 1 1 0 01-.89-.89 11.115 11.115 0 01.25-3.762zM9.3 16.573A9.026 9.026 0 007 14.935v-3.957l1.818.78a3 3 0 002.364 0l5.508-2.361a11.026 11.026 0 01.25 3.762 1 1 0 01-.89.89 8.968 8.968 0 00-5.35 2.524 1 1 0 01-1.4 0z" /></svg>;
 }
 function IconSettings({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" /></svg>
-  );
+  return <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" /></svg>;
 }
 function ChevronDown({ open, className = '' }) {
-  return (
-    <svg className={`h-5 w-5 transition-transform duration-200 ${open ? 'rotate-180' : ''} ${className}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-    </svg>
-  );
+  return <svg className={`h-5 w-5 transition-transform duration-200 ${open ? 'rotate-180' : ''} ${className}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>;
 }
 const TAB_ICONS = { today: IconToday, schedule: IconSchedule, classes: IconClasses, settings: IconSettings };
 
@@ -118,6 +115,7 @@ export default function Dashboard() {
 
   const [parent, setParent] = useState(null);
   const [enrollments, setEnrollments] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState('today');
@@ -148,6 +146,7 @@ export default function Dashboard() {
       setLoading(true);
       setError(null);
 
+      // 1. Parent
       const { data: p, error: pErr } = await supabase
         .from('parents')
         .select('id, first_name, last_name, communication_preferences')
@@ -158,6 +157,7 @@ export default function Dashboard() {
       setParent(p);
       setPrefs({ ...DEFAULT_PREFS, ...(p.communication_preferences || {}) });
 
+      // 2a. Afterschool registrations
       const { data: asRegs } = await supabase
         .from('registrations')
         .select(`id, status, registered_at, program_id,
@@ -175,6 +175,7 @@ export default function Dashboard() {
         .not('program_id', 'is', null)
         .order('registered_at', { ascending: true });
 
+      // 2b. Camp registrations
       const { data: cRegs } = await supabase
         .from('registrations')
         .select(`id, status, registered_at, camp_session_id,
@@ -191,14 +192,21 @@ export default function Dashboard() {
         .not('camp_session_id', 'is', null)
         .order('registered_at', { ascending: true });
 
+      // 3. Normalize + cap sessions at program.session_count
       const merged = [];
+      const programIdsForDates = [];
+
       (asRegs || []).forEach((r) => {
         const pr = r.programs;
         const cur = pr?.curricula;
+        const maxSessions = pr?.session_count || 999;
         const sessions = cur?.curriculum_sessions
-          ? [...cur.curriculum_sessions].sort((a, b) => a.session_number - b.session_number)
+          ? [...cur.curriculum_sessions]
+              .sort((a, b) => a.session_number - b.session_number)
+              .slice(0, maxSessions)
           : [];
-        merged.push({
+
+        const entry = {
           id: r.id, type: 'afterschool',
           student: r.students,
           name: pr?.curriculum || 'Class',
@@ -208,11 +216,17 @@ export default function Dashboard() {
           day: pr?.day_of_week,
           startTime: pr?.start_time, endTime: pr?.end_time,
           term: pr?.term, firstDate: pr?.first_session_date,
+          programId: pr?.id,
+          sessionCount: maxSessions,
           sessions,
+          sessionDates: [], // filled by RPC below
           sessionInfo: getSessionInfo(pr, sessions),
           skillsOverall: cur?.skills_overall,
-        });
+        };
+        merged.push(entry);
+        if (pr?.id) programIdsForDates.push({ enrollmentId: r.id, programId: pr.id });
       });
+
       (cRegs || []).forEach((r) => {
         const cs = r.camp_sessions;
         const cur = cs?.curricula;
@@ -228,10 +242,42 @@ export default function Dashboard() {
           startTime: cs?.start_time, endTime: cs?.end_time,
           term: 'SU26', firstDate: cs?.starts_on, lastDate: cs?.ends_on,
           sessionType: cs?.session_type, weekNum: cs?.week_num,
-          sessions, sessionInfo: null,
+          programId: null,
+          sessionCount: sessions.length,
+          sessions, sessionDates: [],
+          sessionInfo: null,
           skillsOverall: cur?.skills_overall,
         });
       });
+
+      // 4. Fetch actual session dates via derive_program_session_dates()
+      if (programIdsForDates.length > 0) {
+        const dateResults = await Promise.all(
+          programIdsForDates.map(({ programId }) =>
+            supabase.rpc('derive_program_session_dates', { p_program_id: programId })
+          )
+        );
+        programIdsForDates.forEach(({ enrollmentId }, i) => {
+          const dates = dateResults[i]?.data || [];
+          const entry = merged.find((e) => e.id === enrollmentId);
+          if (entry) entry.sessionDates = dates;
+        });
+      }
+
+      // 5. Notification feed
+      const { data: notifs } = await supabase
+        .from('automation_run_recipients')
+        .select('id, status, sent_at, automations(automation_templates(display_name))')
+        .eq('parent_id', p.id)
+        .order('sent_at', { ascending: false })
+        .limit(10);
+
+      setNotifications((notifs || []).map((n) => ({
+        id: n.id,
+        name: n.automations?.automation_templates?.display_name || 'Update',
+        sentAt: n.sent_at,
+        status: n.status,
+      })));
 
       setEnrollments(merged);
       setLoading(false);
@@ -258,12 +304,6 @@ export default function Dashboard() {
     enrollments.filter((e) => e.sessionInfo?.state === 'upcoming' || e.sessionInfo?.state === 'in-progress')
       .sort((a, b) => (a.firstDate || '').localeCompare(b.firstDate || '')),
     [enrollments]);
-  const weekSchedule = useMemo(() => {
-    const byDay = {};
-    DAY_ORDER.forEach((d) => { byDay[d] = []; });
-    enrollments.forEach((e) => { if (e.day && byDay[e.day]) byDay[e.day].push(e); });
-    return byDay;
-  }, [enrollments]);
 
   /* ---- Render gates ---- */
   if (authLoading) {
@@ -306,20 +346,16 @@ export default function Dashboard() {
         </h1>
       </div>
 
-      {/* Tab bar */}
       <div className="sticky top-0 z-10 -mx-4 bg-white/95 px-4 backdrop-blur sm:-mx-6 sm:px-6">
         <nav className="flex border-b border-j2s-purple/10">
           {TABS.map((t) => {
             const Icon = TAB_ICONS[t.key];
             const active = tab === t.key;
             return (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
+              <button key={t.key} onClick={() => setTab(t.key)}
                 className={`flex flex-1 flex-col items-center gap-0.5 py-3 text-xs font-semibold transition sm:flex-row sm:justify-center sm:gap-1.5 sm:text-sm ${
                   active ? 'border-b-2 border-j2s-purple text-j2s-purple' : 'text-j2s-ink/40 hover:text-j2s-ink/70'
-                }`}
-              >
+                }`}>
                 <Icon className="h-5 w-5" />
                 {t.label}
               </button>
@@ -329,8 +365,8 @@ export default function Dashboard() {
       </div>
 
       <div className="mt-6">
-        {tab === 'today' && <TodayTab todayClasses={todayClasses} upcomingClasses={upcomingClasses} enrollments={enrollments} slug={org.slug} />}
-        {tab === 'schedule' && <ScheduleTab weekSchedule={weekSchedule} enrollments={enrollments} />}
+        {tab === 'today' && <TodayTab todayClasses={todayClasses} upcomingClasses={upcomingClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} />}
+        {tab === 'schedule' && <ScheduleTab enrollments={enrollments} />}
         {tab === 'classes' && <ClassesTab enrollments={enrollments} expandedCards={expandedCards} toggleCard={toggleCard} nextTerm={nextTerm} slug={org.slug} />}
         {tab === 'settings' && <SettingsTab prefs={prefs} savingPrefs={savingPrefs} prefsSaved={prefsSaved} onToggle={(key) => savePrefs({ ...prefs, [key]: !prefs[key] })} supportEmail={supportEmail} />}
       </div>
@@ -341,7 +377,7 @@ export default function Dashboard() {
 /* ==================================================================== */
 /*  TODAY TAB                                                            */
 /* ==================================================================== */
-function TodayTab({ todayClasses, upcomingClasses, enrollments, slug }) {
+function TodayTab({ todayClasses, upcomingClasses, enrollments, notifications, slug }) {
   if (enrollments.length === 0) {
     return <EmptyState title="No enrollments yet" body="Once you register for a class, you'll see what your child is learning each day." cta="Browse programs" to={`/${slug}`} />;
   }
@@ -365,6 +401,29 @@ function TodayTab({ todayClasses, upcomingClasses, enrollments, slug }) {
           {upcomingClasses.slice(0, 3).map((e) => <UpcomingCard key={e.id} enrollment={e} />)}
         </>
       )}
+
+      {/* Notification feed */}
+      {notifications.length > 0 && (
+        <>
+          <SectionLabel>From Journey to STEAM</SectionLabel>
+          <div className="space-y-2">
+            {notifications.map((n) => (
+              <div key={n.id} className="flex items-center gap-3 rounded-xl border border-j2s-purple/10 bg-white px-4 py-3 shadow-card">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-j2s-purple/10">
+                  <svg className="h-4 w-4 text-j2s-purple" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
+                    <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
+                  </svg>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-j2s-ink">{n.name}</p>
+                  <p className="text-xs text-j2s-ink/40">{timeAgo(n.sentAt)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -383,19 +442,12 @@ function TodayCard({ enrollment: e }) {
             </p>
             <p className="mt-1 text-lg font-bold text-j2s-ink">{s.title}</p>
           </div>
-          <span className="shrink-0 rounded-full bg-j2s-green/10 px-2.5 py-1 text-xs font-bold text-j2s-green-dark">
-            Today
-          </span>
+          <span className="shrink-0 rounded-full bg-j2s-green/10 px-2.5 py-1 text-xs font-bold text-j2s-green-dark">Today</span>
         </div>
-
         <p className="mt-1 text-sm text-j2s-ink/60">
           {e.student?.first_name} &middot; {e.name}{e.location ? ` at ${e.location}` : ''}
         </p>
-
-        {s.description && (
-          <p className="mt-3 text-sm leading-relaxed text-j2s-ink/70">{s.description}</p>
-        )}
-
+        {s.description && <p className="mt-3 text-sm leading-relaxed text-j2s-ink/70">{s.description}</p>}
         {s.skills_practiced?.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {s.skills_practiced.filter(Boolean).map((skill, i) => (
@@ -403,7 +455,6 @@ function TodayCard({ enrollment: e }) {
             ))}
           </div>
         )}
-
         {s.parent_engagement_question && (
           <div className="mt-4 rounded-xl bg-amber-50 p-4">
             <p className="text-xs font-bold uppercase tracking-wider text-amber-700">Ask your child tonight</p>
@@ -419,7 +470,6 @@ function UpcomingCard({ enrollment: e }) {
   const info = e.sessionInfo;
   const session = info?.state === 'upcoming' ? info.session : info?.nextSession || info?.session;
   const sessionNum = info?.state === 'upcoming' ? 1 : (info?.nextSessionNumber || info?.sessionNumber);
-
   return (
     <div className="rounded-2xl border border-j2s-purple/10 bg-white p-4 shadow-card">
       <div className="flex items-center gap-3">
@@ -436,9 +486,7 @@ function UpcomingCard({ enrollment: e }) {
           <span className="shrink-0 text-xs text-j2s-ink/40">Starts {fmtDateShort(e.firstDate)}</span>
         )}
         {sessionNum && info?.totalSessions && (
-          <span className="shrink-0 rounded-full bg-j2s-purple/5 px-2 py-0.5 text-xs text-j2s-purple/60">
-            {sessionNum}/{info.totalSessions}
-          </span>
+          <span className="shrink-0 rounded-full bg-j2s-purple/5 px-2 py-0.5 text-xs text-j2s-purple/60">{sessionNum}/{info.totalSessions}</span>
         )}
       </div>
     </div>
@@ -446,13 +494,13 @@ function UpcomingCard({ enrollment: e }) {
 }
 
 /* ==================================================================== */
-/*  SCHEDULE TAB                                                        */
+/*  SCHEDULE TAB — actual session dates from derive_program_session_dates */
 /* ==================================================================== */
-function ScheduleTab({ weekSchedule, enrollments }) {
-  const hasAnyClasses = Object.values(weekSchedule).some((arr) => arr.length > 0);
-  const todayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date().getDay()];
+function ScheduleTab({ enrollments }) {
+  const afterschool = enrollments.filter((e) => e.type === 'afterschool');
+  const camps = enrollments.filter((e) => e.type === 'camp');
 
-  if (!hasAnyClasses && enrollments.filter((e) => e.type === 'camp').length === 0) {
+  if (afterschool.length === 0 && camps.length === 0) {
     return (
       <div className="rounded-2xl border border-j2s-purple/10 bg-white p-6 text-center shadow-card">
         <p className="text-j2s-ink/50">No classes scheduled yet.</p>
@@ -460,47 +508,80 @@ function ScheduleTab({ weekSchedule, enrollments }) {
     );
   }
 
-  return (
-    <div className="space-y-3">
-      {hasAnyClasses && (
-        <>
-          <SectionLabel>Weekly schedule</SectionLabel>
-          {DAY_ORDER.map((day) => {
-            const classes = weekSchedule[day];
-            const isToday = day === todayName;
-            return (
-              <div key={day} className={`rounded-2xl border bg-white p-4 shadow-card ${isToday ? 'border-j2s-purple/30 ring-1 ring-j2s-purple/10' : 'border-j2s-purple/10'}`}>
-                <div className="flex items-center gap-2">
-                  <p className={`text-sm font-bold ${isToday ? 'text-j2s-purple' : 'text-j2s-ink/70'}`}>{day}</p>
-                  {isToday && <span className="rounded-full bg-j2s-purple px-2 py-0.5 text-[10px] font-bold text-white">TODAY</span>}
-                </div>
-                {classes.length === 0 ? (
-                  <p className="mt-1 text-xs text-j2s-ink/30">No classes</p>
-                ) : (
-                  <div className="mt-2 space-y-2">
-                    {classes.map((e) => (
-                      <div key={e.id} className="flex items-center gap-3">
-                        <p className="w-24 shrink-0 text-xs font-medium text-j2s-ink/50">
-                          {fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}
-                        </p>
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-j2s-ink truncate">{e.name}</p>
-                          <p className="text-xs text-j2s-ink/50">{e.student?.first_name}{e.location ? ` · ${e.location}` : ''}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </>
-      )}
+  const todayStr = new Date().toISOString().split('T')[0];
 
-      {enrollments.filter((e) => e.type === 'camp').length > 0 && (
+  return (
+    <div className="space-y-8">
+      {afterschool.map((e) => (
+        <div key={e.id}>
+          <SectionLabel>
+            {e.student?.first_name} &middot; {e.name}
+          </SectionLabel>
+          <p className="mt-0.5 text-xs text-j2s-ink/40">
+            {e.day}s {fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}
+            {e.location ? ` at ${e.location}` : ''}
+          </p>
+
+          {e.sessionDates.length > 0 ? (
+            <div className="mt-3 space-y-1">
+              {e.sessionDates.map((date, idx) => {
+                const isPast = date < todayStr;
+                const isToday = date === todayStr;
+                const session = e.sessions[idx];
+                return (
+                  <div
+                    key={date}
+                    className={`flex items-center gap-3 rounded-lg px-3 py-2 ${
+                      isToday ? 'bg-j2s-purple/10 ring-1 ring-j2s-purple/20' : isPast ? 'opacity-40' : 'bg-white'
+                    }`}
+                  >
+                    {/* Check or dot */}
+                    <div className="w-5 shrink-0 text-center">
+                      {isPast ? (
+                        <svg className="mx-auto h-4 w-4 text-j2s-green" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      ) : isToday ? (
+                        <div className="mx-auto h-3 w-3 rounded-full bg-j2s-purple" />
+                      ) : (
+                        <div className="mx-auto h-2.5 w-2.5 rounded-full border-2 border-j2s-purple/30" />
+                      )}
+                    </div>
+
+                    {/* Date */}
+                    <p className={`w-28 shrink-0 text-sm ${isToday ? 'font-bold text-j2s-purple' : 'text-j2s-ink/60'}`}>
+                      {fmtDateShort(date)}
+                    </p>
+
+                    {/* Session title */}
+                    <div className="min-w-0 flex-1">
+                      {session ? (
+                        <p className={`text-sm truncate ${isToday ? 'font-semibold text-j2s-ink' : 'text-j2s-ink/70'}`}>
+                          {session.title}
+                        </p>
+                      ) : (
+                        <p className="text-sm text-j2s-ink/30">Session {idx + 1}</p>
+                      )}
+                    </div>
+
+                    {/* Session number badge */}
+                    <span className="shrink-0 text-xs text-j2s-ink/30">{idx + 1}/{e.sessionDates.length}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-j2s-ink/40">
+              {e.firstDate ? `Starts ${fmtDate(e.firstDate)} · ${e.sessionCount} sessions` : `${e.sessionCount} sessions`}
+            </p>
+          )}
+        </div>
+      ))}
+
+      {camps.length > 0 && (
         <>
-          <SectionLabel className="mt-4">Camp sessions</SectionLabel>
-          {enrollments.filter((e) => e.type === 'camp').map((e) => (
+          <SectionLabel>Camp sessions</SectionLabel>
+          {camps.map((e) => (
             <div key={e.id} className="rounded-2xl border border-j2s-purple/10 bg-white p-4 shadow-card">
               <p className="text-sm font-semibold text-j2s-ink">{e.name}</p>
               <p className="mt-0.5 text-xs text-j2s-ink/50">
@@ -543,14 +624,11 @@ function ClassesTab({ enrollments, expandedCards, toggleCard, nextTerm, slug }) 
           </div>
         </div>
       ))}
-
       {nextTerm && (
         <div className="rounded-2xl border border-j2s-green/20 bg-j2s-green/5 p-5 text-center">
           <p className="font-bold text-j2s-ink">{TERM_LABELS[nextTerm]} registration is open</p>
           <p className="mt-1 text-sm text-j2s-ink/60">Secure your spot for the upcoming term.</p>
-          <Link to={`/${slug}`} className="mt-3 inline-block rounded-lg bg-j2s-purple px-5 py-2.5 text-sm font-bold text-white transition hover:bg-j2s-purple-dark">
-            Browse programs
-          </Link>
+          <Link to={`/${slug}`} className="mt-3 inline-block rounded-lg bg-j2s-purple px-5 py-2.5 text-sm font-bold text-white transition hover:bg-j2s-purple-dark">Browse programs</Link>
         </div>
       )}
     </div>
@@ -560,9 +638,10 @@ function ClassesTab({ enrollments, expandedCards, toggleCard, nextTerm, slug }) 
 function ClassCard({ enrollment: e, expanded, onToggle }) {
   const isCamp = e.type === 'camp';
   const hasSchedule = e.sessions.length > 0;
+  const count = e.sessionCount;
   const scheduleLabel = isCamp
-    ? `day-by-day schedule (${e.sessions.length} days)`
-    : `week-by-week schedule (${e.sessions.length} sessions)`;
+    ? `day-by-day schedule (${count} days)`
+    : `week-by-week schedule (${count} sessions)`;
 
   return (
     <div className="rounded-2xl border border-j2s-purple/10 bg-white shadow-card overflow-hidden">
@@ -572,7 +651,11 @@ function ClassCard({ enrollment: e, expanded, onToggle }) {
           {e.location && <p>at {e.location}</p>}
           {e.day && <p>{e.day}s, {fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}</p>}
           {!e.day && e.startTime && <p>{fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}</p>}
-          {e.firstDate && !isCamp && <p>Starts {fmtDate(e.firstDate)}</p>}
+          {/* Date range from actual session dates */}
+          {e.sessionDates?.length > 0 && (
+            <p>{fmtDateShort(e.sessionDates[0])}–{fmtDateShort(e.sessionDates[e.sessionDates.length - 1])}</p>
+          )}
+          {e.sessionDates?.length === 0 && e.firstDate && !isCamp && <p>Starts {fmtDate(e.firstDate)}</p>}
           {isCamp && e.firstDate && e.lastDate && <p>{fmtDateShort(e.firstDate)}–{fmtDateShort(e.lastDate)}</p>}
           {e.term && <p className="text-xs text-j2s-ink/40">{TERM_LABELS[e.term] || e.term}</p>}
         </div>
@@ -662,9 +745,7 @@ function EmptyState({ title, body, cta, to }) {
     <div className="rounded-2xl border border-j2s-purple/10 bg-white p-8 text-center shadow-card">
       <p className="text-lg font-bold text-j2s-ink/70">{title}</p>
       <p className="mt-2 text-sm text-j2s-ink/50">{body}</p>
-      {cta && to && (
-        <Link to={to} className="mt-5 inline-block rounded-lg bg-j2s-purple px-6 py-3 text-sm font-bold text-white transition hover:bg-j2s-purple-dark">{cta}</Link>
-      )}
+      {cta && to && <Link to={to} className="mt-5 inline-block rounded-lg bg-j2s-purple px-6 py-3 text-sm font-bold text-white transition hover:bg-j2s-purple-dark">{cta}</Link>}
     </div>
   );
 }
