@@ -27,7 +27,6 @@ import { supabase } from "../../lib/supabase";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
-const VIOLET = "#8C88FF";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -878,7 +877,7 @@ function Heading({ children }) {
 function Banner({ tone, children }) {
   const colors = {
     ok:   { bg: "rgba(58, 124, 58, 0.10)", fg: OK,    bd: "rgba(58, 124, 58, 0.35)" },
-    info: { bg: `${VIOLET}1F`,             fg: PURPLE, bd: `${VIOLET}66` },
+    info: { bg: `${BRIGHT}1F`,             fg: BRIGHT, bd: `${BRIGHT}66` },
     warn: { bg: "rgba(182, 126, 0, 0.10)", fg: AMBER, bd: "rgba(182, 126, 0, 0.35)" },
     err:  { bg: "rgba(181, 55, 55, 0.08)", fg: RED,   bd: "rgba(181, 55, 55, 0.35)" },
   };
@@ -1170,7 +1169,7 @@ function Toggle({ checked, onChange, labelOn, labelOff }) {
         height: 32,
         borderRadius: 999,
         border: "none",
-        background: checked ? VIOLET : "#cccccc",
+        background: checked ? BRIGHT : "#cccccc",
         cursor: "pointer",
         fontFamily: "inherit",
         display: "flex",

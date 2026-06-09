@@ -756,7 +756,7 @@ function Banner({ tone = 'info', children }) {
 
 function EmptyState({ showPaid, sinceDate }) {
   return (
-    <div style={{ background: '#fff', border: `1px solid ${RULE}`, borderRadius: 10, padding: 32, textAlign: 'center', color: MUTED, fontSize: 14 }}>
+    <div style={{ background: '#fff', border: `1px solid ${RULE}`, borderRadius: 12, padding: 32, textAlign: 'center', color: MUTED, fontSize: 14 }}>
       No payroll lines since {sinceDate}.
       <div style={{ fontSize: 12, marginTop: 8 }}>
         {showPaid
@@ -794,7 +794,7 @@ function GroupRow({
   const hasPending = g.counts.pending > 0 || g.counts.adjusted > 0;
 
   return (
-    <div style={{ background: '#fff', border: `1px solid ${RULE}`, borderRadius: 10, marginBottom: 12 }}>
+    <div style={{ background: '#fff', border: `1px solid ${RULE}`, borderRadius: 12, marginBottom: 12 }}>
       <div style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <button
           type="button"

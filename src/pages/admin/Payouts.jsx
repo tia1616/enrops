@@ -81,7 +81,7 @@ function TabsNav({ tab, onTab }) {
 function BankTab() {
   return (
     <div style={{
-      background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10,
+      background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12,
       padding: 32, textAlign: "center", color: MUTED, fontSize: 14,
     }}>
       Stripe payout schedule and history will show here — when Stripe sends
@@ -96,7 +96,7 @@ function BankTab() {
 function ReportsTab() {
   return (
     <div style={{
-      background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10,
+      background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12,
       padding: 32, textAlign: "center", color: MUTED, fontSize: 14,
     }}>
       Annual statements, instructor 1099s, and platform fee summaries will
