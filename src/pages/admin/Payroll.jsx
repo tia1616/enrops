@@ -21,6 +21,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
+import Chevron from '../../components/Chevron.jsx';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
@@ -574,8 +575,8 @@ function PayRoutesCard({ org }) {
             Three ways — only some are live right now. {open ? 'Hide' : 'Show'} the details.
           </div>
         </div>
-        <div style={{ color: VIOLET, fontSize: 18, lineHeight: 1, userSelect: 'none' }}>
-          {open ? '▴' : '▾'}
+        <div style={{ fontSize: 18, lineHeight: 1, userSelect: 'none' }}>
+          <Chevron open={open} color={BRIGHT} size={16} />
         </div>
       </div>
 
@@ -805,7 +806,7 @@ function GroupRow({
             color: PURPLE, fontSize: 14, cursor: 'pointer', padding: 0,
           }}
         >
-          {expanded ? '▾' : '▸'}
+          <Chevron open={expanded} color={BRIGHT} size={14} />
         </button>
         <div style={{ flex: '1 1 240px', minWidth: 240 }}>
           <div style={{ fontWeight: 700, color: INK, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>

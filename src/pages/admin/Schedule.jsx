@@ -9,6 +9,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
 import HatGuide from "../../components/HatGuide";
+import Chevron from "../../components/Chevron.jsx";
 import NotifyRemovalModal from "./NotifyRemovalModal";
 import AssignSubModal from "./AssignSubModal";
 import AfterschoolSchedule from "./AfterschoolSchedule";
@@ -4044,7 +4045,7 @@ function InstructorPickerPanel({ eligibleInstructors, selectedInstructorIds, onC
         }}
       >
         <span><strong>Pick instructors:</strong> {summary}</span>
-        <span style={{ color: MUTED }}>{open ? "▾" : "▸"}</span>
+        <Chevron open={open} color={MUTED} />
       </button>
       {open && (
         <div style={{ borderTop: `1px solid ${RULE}`, padding: "10px 12px", background: "#fafaf6" }}>

@@ -16,6 +16,7 @@ import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../../lib/supabase.js";
 import QuestionStep from "../QuestionStep.jsx";
 import PeriodCards from "../PeriodCards.jsx";
+import Chevron from "../../../../components/Chevron.jsx";
 import { isLowEnrollment as sharedIsLowEnrollment, usePeriodCards } from "../lib/periodDetection.js";
 import { PURPLE, BRIGHT, RULE, INK, MUTED, OK, INFO, WARN } from "../../marketing/tokens.jsx";
 
@@ -117,7 +118,7 @@ export default function Q1_What({ inputs, setField, onNext, onBack, canNext, onA
             cursor: "pointer", fontFamily: "inherit",
           }}
         >
-          <span style={{ display: "inline-block", transform: pickerExpanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▶</span>
+          <Chevron open={pickerExpanded} color={MUTED} />
           {pickerExpanded ? "Hide picker" : "Pick programs manually"}
         </button>
 
