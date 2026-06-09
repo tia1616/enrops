@@ -65,6 +65,7 @@ export default function Finances() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [checkingStatus, setCheckingStatus] = useState(false);
   const [savedToast, setSavedToast] = useState(null);
 
   const canManage = orgMember?.role === "owner" || orgMember?.role === "admin";
@@ -172,28 +173,52 @@ export default function Finances() {
   // onboarding but never flip to 'active'. sync-operator-stripe-status hits the
   // v1 Accounts API directly (shape-agnostic) and applies the same mapping.
   async function syncStripeStatus() {
-    if (!org?.id) return;
+    if (!org?.id) return null;
+    let result = null;
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
-      if (!token) return;
-      await fetch(
+      if (!token) return null;
+      const resp = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sync-operator-stripe-status`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({ org_id: org.id }),
         }
       );
+      result = await resp.json().catch(() => null);
     } catch (err) {
       // Non-fatal: fall back to the passive DB re-read. A real webhook may
       // still land the status moments later.
       console.warn("[finances] operator stripe status sync failed:", err);
     }
     await reload();
+    return result;
+  }
+
+  // Manual "Check status" — for an operator who finished Stripe earlier but
+  // never got flipped (e.g. a v2 account whose activation never reached the
+  // webhook) and is revisiting Finances without the ?stripe=return param.
+  async function checkStripeStatus() {
+    if (!canManage) return;
+    setCheckingStatus(true);
+    setError(null);
+    const result = await syncStripeStatus();
+    setCheckingStatus(false);
+    if (result?.stripe_account_status === "active") {
+      setSavedToast("You're all set — payments now route to your bank.");
+      setTimeout(() => setSavedToast(null), 3000);
+    } else if (result && !result.error) {
+      setSavedToast("Still verifying with Stripe — nothing to do yet.");
+      setTimeout(() => setSavedToast(null), 3000);
+    } else if (result?.error) {
+      setError("Couldn't reach Stripe just now. Try again in a moment.");
+    }
   }
 
   useEffect(() => { reload(); /* eslint-disable-next-line */ }, [org?.id]);
@@ -436,6 +461,8 @@ export default function Finances() {
               <OnboardingBody
                 status={status}
                 onContinue={startOnboarding}
+                onCheckStatus={checkStripeStatus}
+                checking={checkingStatus}
                 busy={busy}
                 canManage={canManage}
                 chargesEnabled={!!config?.stripe_charges_enabled}
@@ -1030,7 +1057,7 @@ function ConnectButton({ onConnect, onReconnect, busy, canManage, savedBusinessT
   );
 }
 
-function OnboardingBody({ status, onContinue, busy, canManage, chargesEnabled, payoutsEnabled }) {
+function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, canManage, chargesEnabled, payoutsEnabled }) {
   return (
     <>
       {status === "restricted" && (
@@ -1055,9 +1082,14 @@ function OnboardingBody({ status, onContinue, busy, canManage, chargesEnabled, p
       </div>
       <WhatToExpect />
       {canManage ? (
-        <button onClick={onContinue} disabled={busy} style={btn(PURPLE, "#fff", false, busy)}>
-          {busy ? "Loading…" : "Continue setup"}
-        </button>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+          <button onClick={onContinue} disabled={busy || checking} style={btn(PURPLE, "#fff", false, busy || checking)}>
+            {busy ? "Loading…" : "Continue setup"}
+          </button>
+          <button onClick={onCheckStatus} disabled={busy || checking} style={btn("transparent", PURPLE, true, busy || checking)}>
+            {checking ? "Checking…" : "Already finished? Check status"}
+          </button>
+        </div>
       ) : (
         <em style={{ color: MUTED, fontSize: 13 }}>
           Only an owner or admin can finish Stripe setup.
