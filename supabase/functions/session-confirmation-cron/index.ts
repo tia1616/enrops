@@ -58,9 +58,11 @@ serve(async (req: Request) => {
     const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     const dayName = dayOfWeekLower(today); // 'monday', 'tuesday', ...
 
-    // Pull all accepted/published camp assignments whose camp_session runs
-    // today (between starts_on and ends_on, and class_days includes today's
-    // day-of-week).
+    // Pull all live camp assignments whose camp_session runs today (between
+    // starts_on and ends_on, and class_days includes today's day-of-week).
+    // 'confirmed' is the canonical accepted state in camp_assignments today;
+    // 'accepted'/'published' are kept for forward/back compat. 'withdrawn'
+    // and 'declined' are intentionally excluded.
     //
     // We do this as two queries instead of an INSERT...SELECT because the
     // class_days filter is awkward in PostgREST. Get the candidate rows in
@@ -79,7 +81,7 @@ serve(async (req: Request) => {
          ),
          status`,
       )
-      .in('status', ['accepted', 'published']);
+      .in('status', ['accepted', 'published', 'confirmed']);
 
     if (candidateErr) {
       console.error('Job A candidate query failed:', candidateErr);
@@ -119,22 +121,40 @@ serve(async (req: Request) => {
       }
 
       if (rowsToInsert.length > 0) {
-        // ON CONFLICT against the partial unique index (instructor_id,
-        // session_date, camp_session_id WHERE camp_session_id IS NOT NULL).
-        // Use upsert with ignoreDuplicates so a re-run of the cron doesn't
-        // 500 — it just no-ops the duplicates.
-        const { error: insErr, count } = await supabase
+        // De-dupe in JS rather than ON CONFLICT: the camp uniqueness index is
+        // PARTIAL (WHERE camp_session_id IS NOT NULL), which PostgREST can't
+        // target without the predicate — an upsert here raises 42P10. Volume
+        // is a handful of camp-days, so an existence check + per-row insert is
+        // cheap and avoids that. A concurrent self-check-in that beats us trips
+        // 23505, which we treat as already-created.
+        const { data: existingToday, error: existErr } = await supabase
           .from('session_delivery_confirmations')
-          .upsert(rowsToInsert, {
-            onConflict: 'instructor_id,session_date,camp_session_id',
-            ignoreDuplicates: true,
-            count: 'exact',
-          });
-        if (insErr) {
-          console.error('Job A insert failed:', insErr);
-          summary.errors.push(`job_a_insert: ${insErr.message}`);
-        } else {
-          summary.job_a_rows_created = count ?? rowsToInsert.length;
+          .select('instructor_id, camp_session_id')
+          .eq('session_date', today)
+          .not('camp_session_id', 'is', null);
+        if (existErr) {
+          console.error('Job A existing-lookup failed:', existErr);
+          summary.errors.push(`job_a_existing: ${existErr.message}`);
+        }
+        const have = new Set(
+          (existingToday ?? []).map((r) => `${r.instructor_id}|${r.camp_session_id}`),
+        );
+        const fresh = rowsToInsert.filter(
+          (r) => !have.has(`${r.instructor_id}|${r.camp_session_id}`),
+        );
+
+        for (const r of fresh) {
+          const { error: insErr } = await supabase
+            .from('session_delivery_confirmations')
+            .insert(r);
+          if (insErr) {
+            // 23505 = unique_violation: a concurrent insert beat us — fine.
+            if ((insErr as { code?: string }).code === '23505') continue;
+            console.error('Job A insert failed:', insErr);
+            summary.errors.push(`job_a_insert: ${insErr.message}`);
+            continue;
+          }
+          summary.job_a_rows_created++;
         }
       }
     }

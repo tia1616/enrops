@@ -3,8 +3,19 @@
 // Instructor Portal: closes the schedule loop by letting an instructor
 // mark a specific day of camp as "I taught this." Writes a row into
 // session_delivery_confirmations with confirmed_by='self', pay_status
-// 'pending', and pay_amount_cents computed from the org's pay-rate
-// config (or null when the tenant hasn't configured rates yet).
+// 'pending', and pay_amount_cents computed from the FLAT per-day pay
+// table below (keyed by the assignment's role + the session_type).
+//
+// Pay table is the single contractual rate card: camps are paid a flat
+// amount per day, NOT per hour. It is duplicated verbatim from
+// confirm-session-delivery and session-confirmation-cron so all three
+// pay-writing paths agree. If rates change, update all three. (Future:
+// pull from a tenant_pay_rates table — see those siblings' TODO.)
+//
+// If the assignment has no usable role, or the session_type isn't a
+// camp day type, we leave pay_amount_cents null and let the admin set it
+// on the Payroll screen — the check-in is still recorded so the day is
+// never silently lost.
 //
 // Body: { camp_assignment_id: string, session_date: 'YYYY-MM-DD' }
 //
@@ -13,13 +24,6 @@
 // no unique index on the table yet, so we check existence first inside
 // a single function call. If two clients race the check, we may briefly
 // produce two rows — acceptable for an MVP; the admin can clean up.
-//
-// Weekly completion bonus: when this insert covers the LAST weekday in
-// the camp's range AND every other weekday is also confirmed for the
-// same instructor, the org's pay_camp_weekly_bonus_cents is written into
-// pay_adjustment_cents on this row with reason "Week completion bonus."
-// Per-tenant config keeps the rule generic — no J2S-specific values
-// hardcoded.
 //
 // Anti-enumeration: missing row + wrong instructor both return identical
 // 403 with no detail.
@@ -36,6 +40,18 @@ interface RequestBody {
   camp_assignment_id?: string;
   session_date?: string;
 }
+
+// Flat per-day pay — cents. Per pay_schedule v3.0 (legal_documents.body_text):
+//   Camps: $80/$65 half-day (morning|afternoon), $160/$130 full-day.
+// Keyed by engagement role from camp_assignments, never instructor tier.
+// Duplicated from confirm-session-delivery + session-confirmation-cron.
+type Role = 'lead' | 'developing';
+type CampSessionType = 'morning' | 'afternoon' | 'full_day';
+
+const PAY: Record<Role, Record<CampSessionType, number>> = {
+  lead:       { morning: 8000, afternoon: 8000, full_day: 16000 },
+  developing: { morning: 6500, afternoon: 6500, full_day: 13000 },
+};
 
 const FORBIDDEN = json({ error: 'forbidden' }, 403);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -66,11 +82,11 @@ serve(async (req: Request) => {
     const supabase = adminClient();
 
     // Fetch the assignment + linked camp_session (service role bypasses RLS;
-    // we authorize via instructor.id comparison below).
+    // we authorize via instructor.id comparison below). role drives pay.
     const { data: assignment, error: fetchErr } = await supabase
       .from('camp_assignments')
       .select(
-        `id, instructor_id, organization_id, status, camp_session_id,
+        `id, instructor_id, organization_id, status, role, camp_session_id,
          camp_sessions ( id, starts_on, ends_on, session_type )`
       )
       .eq('id', assignmentId)
@@ -131,16 +147,11 @@ serve(async (req: Request) => {
       });
     }
 
-    // Pay computation. Reads the org's configured rates; if any are
-    // missing we leave pay_amount_cents null and let the admin set it
-    // manually. This keeps un-configured tenants safe.
-    const { data: orgRow } = await supabase
-      .from('organizations')
-      .select('pay_hourly_cents, pay_camp_morning_hours, pay_camp_full_day_hours, pay_camp_weekly_bonus_cents')
-      .eq('id', assignment.organization_id)
-      .maybeSingle();
-
-    const payAmountCents = computePayAmount(orgRow, session.session_type);
+    // Pay computation: flat per-day rate from the table, keyed by the
+    // assignment role + session_type. If the role is missing/unexpected or
+    // the session_type isn't a camp day type, leave pay null so the admin
+    // sets it manually on Payroll — the check-in is still recorded.
+    const payAmountCents = computePayAmount(assignment.role, session.session_type);
 
     // Insert the new confirmation. session_type mirrors the camp_session's
     // (full_day / morning / afternoon).
@@ -164,50 +175,9 @@ serve(async (req: Request) => {
       return json({ error: 'insert_failed', detail: insErr.message }, 500);
     }
 
-    // Weekly completion bonus. If this insert covers the FINAL weekday of
-    // the camp AND every other weekday in the range is also confirmed for
-    // this instructor, write the bonus as pay_adjustment_cents on this
-    // row. Reason becomes the audit trail.
-    let bonusApplied = false;
-    if (orgRow?.pay_camp_weekly_bonus_cents && orgRow.pay_camp_weekly_bonus_cents > 0) {
-      const weekdays = weekdayDatesInRange(session.starts_on, session.ends_on);
-      const lastWeekday = weekdays[weekdays.length - 1];
-      if (lastWeekday && sessionDate === lastWeekday) {
-        // Pull all confirmations for this (instructor, camp_session) so we
-        // can check completeness. The just-inserted row is included.
-        const { data: allConfirms } = await supabase
-          .from('session_delivery_confirmations')
-          .select('session_date')
-          .eq('instructor_id', me.id)
-          .eq('camp_session_id', session.id);
-        const confirmedDates = new Set((allConfirms ?? []).map((r) => r.session_date));
-        const allCovered = weekdays.every((d) => confirmedDates.has(d));
-        if (allCovered) {
-          const { error: bonusErr } = await supabase
-            .from('session_delivery_confirmations')
-            .update({
-              pay_adjustment_cents: orgRow.pay_camp_weekly_bonus_cents,
-              pay_adjustment_reason: 'Week completion bonus',
-            })
-            .eq('id', inserted.id);
-          if (bonusErr) {
-            console.warn('weekly bonus apply failed (non-fatal):', bonusErr);
-          } else {
-            bonusApplied = true;
-          }
-        }
-      }
-    }
-
     return json({
-      confirmation: bonusApplied
-        ? {
-            ...inserted,
-            pay_adjustment_cents: orgRow.pay_camp_weekly_bonus_cents,
-          }
-        : inserted,
+      confirmation: inserted,
       already_confirmed: false,
-      bonus_applied: bonusApplied,
     });
   } catch (err) {
     console.error('confirm-session-taught fatal:', err);
@@ -215,39 +185,12 @@ serve(async (req: Request) => {
   }
 });
 
-// Compute pay_amount_cents from the org's configured rates. Returns null
-// if the org hasn't set their rate (so admin fills it in manually).
-function computePayAmount(
-  org:
-    | {
-        pay_hourly_cents: number | null;
-        pay_camp_morning_hours: number | null;
-        pay_camp_full_day_hours: number | null;
-      }
-    | null,
-  sessionType: string,
-): number | null {
-  if (!org || !org.pay_hourly_cents) return null;
-  let hours: number | null = null;
-  if (sessionType === 'morning' || sessionType === 'afternoon') {
-    hours = org.pay_camp_morning_hours ?? null;
-  } else if (sessionType === 'full_day') {
-    hours = org.pay_camp_full_day_hours ?? null;
+// Flat per-day pay lookup. Returns null when the role is missing/unknown
+// or the session_type isn't a camp day type, so the admin fills it in.
+function computePayAmount(role: unknown, sessionType: string): number | null {
+  if (role !== 'lead' && role !== 'developing') return null;
+  if (sessionType !== 'morning' && sessionType !== 'afternoon' && sessionType !== 'full_day') {
+    return null;
   }
-  if (hours === null) return null;
-  return Math.round(org.pay_hourly_cents * Number(hours));
-}
-
-// Generate Mon-Fri date strings between start and end (inclusive), each
-// YYYY-MM-DD. Matches the frontend weekdayRange in InstructorPortal.jsx.
-function weekdayDatesInRange(start: string, end: string): string[] {
-  const out: string[] = [];
-  const s = new Date(`${start}T00:00:00Z`);
-  const e = new Date(`${end}T00:00:00Z`);
-  for (let d = new Date(s); d <= e; d.setUTCDate(d.getUTCDate() + 1)) {
-    const day = d.getUTCDay();
-    if (day === 0 || day === 6) continue;
-    out.push(d.toISOString().slice(0, 10));
-  }
-  return out;
+  return PAY[role as Role][sessionType as CampSessionType];
 }
