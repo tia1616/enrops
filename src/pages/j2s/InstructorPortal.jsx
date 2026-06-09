@@ -16,6 +16,7 @@ import { linkifyText } from "../../lib/linkifyText.jsx";
 import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Enrops default; tenant-skinnable later)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const CORAL = "#D9694F";
@@ -763,7 +764,7 @@ export default function InstructorPortal() {
         <div style={{ background: "#fff", border: `1px solid ${CORAL}`, borderRadius: 10, padding: 28, maxWidth: 540 }}>
           <h1 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: INK }}>We couldn't load your schedule</h1>
           <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px", lineHeight: 1.5 }}>{friendly}</p>
-          <button type="button" onClick={signOut} style={{ padding: "8px 14px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
+          <button type="button" onClick={signOut} style={{ padding: "8px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
             Sign out and try again
           </button>
         </div>
@@ -1211,7 +1212,7 @@ export default function InstructorPortal() {
                 <button
                   type="button"
                   onClick={() => setEditingCycleId(c.id)}
-                  style={{ background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}
+                  style={{ background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}
                 >
                   Update availability
                 </button>
@@ -1235,7 +1236,7 @@ export default function InstructorPortal() {
                 <button
                   type="button"
                   onClick={() => setEditingTerm(s.term)}
-                  style={{ background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}
+                  style={{ background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}
                 >
                   Update availability
                 </button>
@@ -1476,7 +1477,7 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, onMarkTaught
                 type="button"
                 onClick={onMarkTaught}
                 disabled={markBusy}
-                style={{ background: PURPLE, color: "#fff", border: `1px solid ${PURPLE}`, padding: "6px 12px", fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: markBusy ? "default" : "pointer", opacity: markBusy ? 0.6 : 1 }}
+                style={{ background: BRIGHT, color: "#fff", border: `1px solid ${BRIGHT}`, padding: "6px 12px", fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: markBusy ? "default" : "pointer", opacity: markBusy ? 0.6 : 1 }}
               >
                 {markBusy ? "Marking…" : "Mark this day as taught"}
               </button>
@@ -1499,7 +1500,7 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, onMarkTaught
             type="button"
             onClick={onAccept}
             disabled={busy}
-            style={{ background: PURPLE, color: "#fff", border: `1px solid ${PURPLE}`, padding: "8px 14px", fontSize: 13, fontWeight: 600, borderRadius: 6, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
+            style={{ background: BRIGHT, color: "#fff", border: `1px solid ${BRIGHT}`, padding: "8px 14px", fontSize: 13, fontWeight: 600, borderRadius: 6, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
           >
             {busy && busyAction === "accept" ? "Accepting…" : "Accept"}
           </button>
@@ -1825,7 +1826,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], messages = 
             type="button"
             onClick={onAccept}
             disabled={busy}
-            style={{ padding: "8px 14px", background: PURPLE, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1 }}
+            style={{ padding: "8px 14px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1 }}
           >
             {busy ? "Saving…" : "Accept"}
           </button>
@@ -1834,7 +1835,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], messages = 
             onClick={onRequestChange}
             disabled={requestChangeDisabled}
             title={awaitingAdminReply ? "You already requested a change — wait for your coordinator to reply, then you can send another." : ""}
-            style={{ padding: "8px 14px", background: "transparent", color: PURPLE, border: `1px solid ${PURPLE}`, borderRadius: 6, fontSize: 13, fontWeight: 500, fontFamily: "inherit", cursor: requestChangeDisabled ? "not-allowed" : "pointer", opacity: requestChangeDisabled ? 0.5 : 1 }}
+            style={{ padding: "8px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 500, fontFamily: "inherit", cursor: requestChangeDisabled ? "not-allowed" : "pointer", opacity: requestChangeDisabled ? 0.5 : 1 }}
           >
             {assignment.status === "change_requested" ? "Send another change request" : "Request change"}
           </button>
@@ -1924,7 +1925,7 @@ function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onCl
           <button type="button" onClick={onClose} disabled={busy} style={{ padding: "8px 14px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
             Cancel
           </button>
-          <button type="button" onClick={onSubmit} disabled={busy || !value.trim()} style={{ padding: "8px 14px", background: PURPLE, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: (busy || !value.trim()) ? 0.6 : 1 }}>
+          <button type="button" onClick={onSubmit} disabled={busy || !value.trim()} style={{ padding: "8px 14px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: (busy || !value.trim()) ? 0.6 : 1 }}>
             {busy ? "Sending…" : "Send request"}
           </button>
         </div>
