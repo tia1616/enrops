@@ -314,14 +314,14 @@ export default function AdminLayout() {
           {/* Lifetime time-saved tally — every Director action contributes. */}
           {timeSavedTotal != null && timeSavedTotal > 0 && (
             <div style={{ position: "relative", padding: "0 12px", marginBottom: 8 }}>
-              <button
-                type="button"
-                onClick={() => setTallyOpen((v) => !v)}
-                title="Click for the breakdown"
+              <Link
+                to="/admin/time-saved"
+                title="See the full time-saved breakdown"
                 style={{
                   display: "block",
                   width: "100%",
                   textAlign: "left",
+                  textDecoration: "none",
                   background: "rgba(78, 145, 78, 0.12)",
                   border: "1px solid rgba(78, 145, 78, 0.35)",
                   borderRadius: 10,
@@ -337,43 +337,9 @@ export default function AdminLayout() {
                   ⏱ {Math.round(timeSavedTotal)}+ hours
                 </div>
                 <div style={{ fontSize: 10, color: MUTED, marginTop: 4 }}>
-                  {tallyOpen ? "tap to close" : "tap for breakdown"}
+                  tap for breakdown
                 </div>
-              </button>
-              {tallyOpen && (
-                <div style={{
-                  position: "absolute",
-                  bottom: "calc(100% + 6px)",
-                  left: 12,
-                  right: 12,
-                  background: "#fff",
-                  border: `1px solid ${RULE}`,
-                  borderRadius: 8,
-                  padding: 14,
-                  boxShadow: "0 8px 24px rgba(0, 0, 0, 0.15)",
-                  zIndex: 50,
-                }}>
-                  <div style={{ color: PURPLE, fontWeight: 700, fontSize: 14, marginBottom: 2 }}>
-                    Saved you {Math.round(timeSavedTotal)}+ hours
-                  </div>
-                  <div style={{ color: MUTED, fontSize: 11, marginBottom: 10 }}>
-                    Lifetime · last 5 actions
-                  </div>
-                  <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: 12, lineHeight: 1.45 }}>
-                    {timeSavedRecent.length === 0 && (
-                      <li style={{ color: MUTED }}>No actions logged yet.</li>
-                    )}
-                    {timeSavedRecent.map((ev, i) => (
-                      <li key={i} style={{ display: "flex", justifyContent: "space-between", gap: 6, padding: "5px 0", borderBottom: i < timeSavedRecent.length - 1 ? `1px solid ${RULE}` : "none" }}>
-                        <span style={{ flex: 1, color: INK }}>
-                          <strong style={{ color: "#2d5a2d" }}>+{Math.round(Number(ev.hours_saved))} hr</strong> · {ev.action_label}
-                        </span>
-                        <span style={{ color: MUTED, fontSize: 10, whiteSpace: "nowrap" }}>{relativeTime(ev.created_at)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              </Link>
             </div>
           )}
 
