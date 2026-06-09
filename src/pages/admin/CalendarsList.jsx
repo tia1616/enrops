@@ -131,7 +131,7 @@ export default function CalendarsList() {
       <header style={{
         background: "#fff",
         border: `1px solid ${RULE}`,
-        borderRadius: 8,
+        borderRadius: 12,
         padding: "18px 22px",
         display: "flex",
         flexWrap: "wrap",
@@ -639,8 +639,8 @@ function CalendarEditor({ org, district, schoolYear, existing, onClose, onSaved 
   return (
     <div style={{
       background: "#fff",
-      border: `2px solid ${PURPLE}`,
-      borderRadius: 8,
+      border: `2px solid ${BRIGHT}`,
+      borderRadius: 12,
       padding: "20px 22px",
       display: "flex",
       flexDirection: "column",
@@ -975,8 +975,8 @@ const infoBanner = {
 };
 
 const waitBanner = {
-  background: `${VIOLET}14`,
-  border: `1px solid ${VIOLET}66`,
+  background: `${BRIGHT}14`,
+  border: `1px solid ${BRIGHT}66`,
   borderRadius: 6,
   padding: "10px 14px",
 };
@@ -992,7 +992,7 @@ const spinnerDot = {
 const emptyState = {
   background: "#fff",
   border: `1px dashed ${RULE}`,
-  borderRadius: 8,
+  borderRadius: 12,
   padding: 36,
   textAlign: "center",
   color: MUTED,

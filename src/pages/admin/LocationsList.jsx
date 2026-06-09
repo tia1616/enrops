@@ -280,7 +280,7 @@ export default function LocationsList() {
       <header style={{
         background: "#fff",
         border: `1px solid ${RULE}`,
-        borderRadius: 8,
+        borderRadius: 12,
         padding: "18px 22px",
         display: "flex",
         flexWrap: "wrap",
@@ -415,7 +415,7 @@ function DisplayCard({ loc, campCount, onEdit }) {
     <div style={{
       background: "#fff",
       border: `1px solid ${RULE}`,
-      borderRadius: 8,
+      borderRadius: 12,
       padding: "16px 22px",
       display: "flex",
       gap: 16,
@@ -471,8 +471,8 @@ function EditCard({ title, draft, bind, applyPlace, partners, error, saving, onS
   return (
     <div style={{
       background: "#fff",
-      border: `2px solid ${PURPLE}`,
-      borderRadius: 8,
+      border: `2px solid ${BRIGHT}`,
+      borderRadius: 12,
       padding: "20px 22px",
       display: "flex",
       flexDirection: "column",

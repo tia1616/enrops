@@ -53,7 +53,7 @@ export default function PartnersTab({ org }) {
     <div>
       <div style={{
         display: 'flex', gap: 16, alignItems: 'flex-start',
-        background: '#fff', border: `1px solid ${RULE}`, borderRadius: 10,
+        background: '#fff', border: `1px solid ${RULE}`, borderRadius: 12,
         padding: 18, marginBottom: 18, flexWrap: 'wrap',
       }}>
         <Stat label="Partners" value={counts.partners} />

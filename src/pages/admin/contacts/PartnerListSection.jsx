@@ -111,7 +111,7 @@ export default function PartnerListSection({ org, refreshKey, onChanged }) {
       {partners === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
 
       {partners !== null && filtered.length === 0 && (
-        <div style={{ color: MUTED, fontSize: 13, padding: 16, textAlign: 'center', background: '#fff', border: `1px solid ${RULE}`, borderRadius: 8 }}>
+        <div style={{ color: MUTED, fontSize: 13, padding: 16, textAlign: 'center', background: '#fff', border: `1px solid ${RULE}`, borderRadius: 12 }}>
           {query ? 'No partners match that search.' : 'No partners yet — use Add partner or Import to get started.'}
         </div>
       )}
@@ -143,7 +143,7 @@ function PartnerRow({ partner, contactCount, expanded, onToggle, onPartnerChange
         background: '#fff',
         border: `1px solid ${RULE}`,
         borderLeft: partner.inactive ? `3px solid ${AMBER}` : `3px solid ${OK}`,
-        borderRadius: 8,
+        borderRadius: 12,
         padding: '10px 14px',
         opacity: partner.inactive ? 0.7 : 1,
       }}
@@ -500,7 +500,7 @@ function ContactEditForm({ contact, onCancel, onSaved, onDelete }) {
   }
 
   return (
-    <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderLeft: `3px solid ${PURPLE}`, borderRadius: 6, padding: 10 }}>
+    <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderLeft: `3px solid ${BRIGHT}`, borderRadius: 6, padding: 10 }}>
       {err && <div style={{ background: `${RED}1A`, color: RED, padding: 8, borderRadius: 6, fontSize: 12, marginBottom: 8 }}>{err}</div>}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
         <label>

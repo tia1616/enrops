@@ -465,7 +465,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWi
   }, [programs]);
 
   return (
-    <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8 }}>
+    <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12 }}>
       {DAYS_OF_WEEK.filter((d) => byDay[d].length > 0).map((day, dayIdx, visibleDays) => (
         <div key={day}>
           <div style={{
@@ -525,7 +525,7 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWi
   }, [programs]);
 
   return (
-    <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8 }}>
+    <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12 }}>
       {bySchool.map(([school, list], idx) => {
         const summary = summarizeSchool(list, sessionDatesByProgram);
         const programIds = list.map((p) => p.id);
@@ -668,7 +668,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
   const capacity = p.max_capacity ?? 0;
   const pct = capacity > 0 ? Math.min(1, enrolled / capacity) : 0;
   const isFull = capacity > 0 && enrolled >= capacity;
-  const fillColor = isFull ? PURPLE : pct >= 0.7 ? VIOLET : "#a8c47f";
+  const fillColor = isFull ? BRIGHT : pct >= 0.7 ? VIOLET : "#a8c47f";
   const isDraft = p.status === "draft";
 
   const breakdownParts = [];
@@ -761,9 +761,9 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
               alignItems: "center",
               gap: 4,
               padding: "2px 10px",
-              background: isDatesExpanded ? PURPLE : `${PURPLE}14`,
-              color: isDatesExpanded ? "#fff" : PURPLE,
-              border: `1px solid ${PURPLE}`,
+              background: isDatesExpanded ? BRIGHT : `${BRIGHT}14`,
+              color: isDatesExpanded ? "#fff" : BRIGHT,
+              border: `1px solid ${BRIGHT}`,
               borderRadius: 999,
               fontSize: 11,
               fontWeight: 600,
@@ -1458,7 +1458,7 @@ const summaryBar = {
   padding: "10px 14px",
   background: PANEL,
   border: `1px solid ${RULE}`,
-  borderRadius: 6,
+  borderRadius: 12,
   marginBottom: 14,
   fontSize: 13,
   color: INK,
@@ -1467,7 +1467,7 @@ const summaryBar = {
 const dayColumn = {
   background: PANEL,
   border: `1px solid ${RULE}`,
-  borderRadius: 8,
+  borderRadius: 12,
   padding: 12,
 };
 
@@ -1492,7 +1492,7 @@ const schoolHeader = {
 const cardStyle = {
   background: "#fafaf5",
   border: `1px solid ${RULE}`,
-  borderRadius: 6,
+  borderRadius: 10,
   padding: 10,
 };
 
@@ -1508,7 +1508,7 @@ const errorBox = {
 const emptyState = {
   background: PANEL,
   border: `1px dashed ${RULE}`,
-  borderRadius: 8,
+  borderRadius: 12,
   padding: 28,
   textAlign: "center",
   color: MUTED,
