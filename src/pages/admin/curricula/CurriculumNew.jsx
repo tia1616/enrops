@@ -19,6 +19,8 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const PANEL = "#fff";
+const LAVENDER = "#F2F0FF";                      // matches sidebar (Figma)
+const INDIGO_SOFT = "rgba(88, 71, 201, 0.07)";   // soft indigo tint for highlight panels
 
 const ALLOWED_EXTS = ["pdf", "docx", "txt", "md", "xlsx"];
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -675,9 +677,9 @@ const crumbs = { fontSize: 13, color: MUTED, marginBottom: 8 };
 const crumbLink = { color: MUTED, textDecoration: "none" };
 
 const unlockPanel = {
-  background: "rgba(207, 177, 47, 0.10)",
-  borderLeft: `3px solid ${VIOLET}`,
-  borderRadius: 4,
+  background: INDIGO_SOFT,
+  borderLeft: `3px solid ${BRIGHT}`,
+  borderRadius: 10,
   padding: "16px 18px",
   margin: "0 0 18px",
 };
@@ -699,7 +701,7 @@ const unlockList = {
 const unlockReassure = {
   marginTop: 10,
   paddingTop: 10,
-  borderTop: "1px dashed rgba(207, 177, 47, 0.4)",
+  borderTop: `1px dashed ${RULE}`,
   fontSize: 13,
   color: INK,
   lineHeight: 1.5,
@@ -730,7 +732,7 @@ const destructiveWarning = {
 const panel = {
   background: PANEL,
   border: `1px solid ${RULE}`,
-  borderRadius: 8,
+  borderRadius: 12,
   padding: 22,
 };
 
@@ -745,9 +747,9 @@ const dropBase = {
 const dropEmpty = { ...dropBase, padding: "44px 24px" };
 const dropFilled = {
   ...dropBase,
-  background: "#faf8f0",
+  background: LAVENDER,
   borderStyle: "solid",
-  borderColor: VIOLET,
+  borderColor: BRIGHT,
   padding: 22,
   textAlign: "left",
   cursor: "default",
@@ -782,12 +784,12 @@ const replaceBtn = {
 const filetypes = { textAlign: "center", color: MUTED, fontSize: 12, marginTop: 10 };
 
 const revealNote = {
-  background: "rgba(207, 177, 47, 0.15)",
-  borderLeft: `3px solid ${VIOLET}`,
+  background: INDIGO_SOFT,
+  borderLeft: `3px solid ${BRIGHT}`,
   padding: "10px 14px",
-  borderRadius: 4,
+  borderRadius: 8,
   fontSize: 13,
-  color: "#5c4400",
+  color: INK,
   marginTop: 16,
 };
 
@@ -800,9 +802,9 @@ const secondaryZones = {
 const dropSmall = { ...dropBase, padding: 18 };
 const dropSmallFilled = {
   ...dropBase,
-  background: "#faf8f0",
+  background: LAVENDER,
   borderStyle: "solid",
-  borderColor: VIOLET,
+  borderColor: BRIGHT,
   padding: 14,
   textAlign: "left",
   cursor: "default",
@@ -837,9 +839,9 @@ const connectCallout = {
   alignItems: "center",
   gap: 14,
   padding: "14px 16px",
-  background: "rgba(140, 136, 255, 0.08)",
+  background: INDIGO_SOFT,
   border: `1px solid ${RULE}`,
-  borderLeft: `3px solid ${VIOLET}`,
+  borderLeft: `3px solid ${BRIGHT}`,
   borderRadius: 6,
 };
 const connectBtn = {
