@@ -14,7 +14,6 @@ import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
-import SquiggleAccent from "../../components/SquiggleAccent.jsx";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -3145,11 +3144,7 @@ function PayView({ instructorId, onBack }) {
       )}
 
       {data !== null && (
-        <div style={{ position: "relative", marginTop: 22, padding: "16px 18px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10 }}>
-          {/* Decorative nudge toward the CTA. Enrops green by default; once
-              tenant branding is wired into the portal, pass
-              color={branding?.primary_color} so it adopts the tenant's color. */}
-          <SquiggleAccent variant="arrow" width={88} height={48} style={{ position: "absolute", top: -22, right: 34, pointerEvents: "none" }} />
+        <div style={{ marginTop: 22, padding: "16px 18px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10 }}>
           <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginBottom: 4 }}>
             Manage payouts, bank info, and tax docs
           </div>
