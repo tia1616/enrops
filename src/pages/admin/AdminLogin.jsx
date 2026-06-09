@@ -11,6 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
@@ -165,7 +166,7 @@ export default function AdminLogin() {
             type="submit"
             disabled={loading || !email || !password}
             style={{
-              width: "100%", padding: "10px 14px", background: PURPLE, color: "#fff",
+              width: "100%", padding: "10px 14px", background: BRIGHT, color: "#fff",
               border: "none", borderRadius: 6, fontSize: 14, fontWeight: 600,
               fontFamily: "inherit", cursor: loading ? "wait" : "pointer",
               opacity: loading ? 0.7 : 1,

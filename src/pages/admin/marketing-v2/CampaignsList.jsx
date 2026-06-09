@@ -17,7 +17,7 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
-import { PURPLE, INK, MUTED, RULE, OK, INFO } from "../marketing/tokens.jsx";
+import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, INFO } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 
 export default function CampaignsList({ onNew }) {
@@ -97,7 +97,7 @@ export default function CampaignsList({ onNew }) {
         <button
           onClick={onNew}
           style={{
-            padding: "10px 16px", background: PURPLE, color: "#fff", border: "none",
+            padding: "10px 16px", background: BRIGHT, color: "#fff", border: "none",
             borderRadius: 6, cursor: "pointer", fontSize: 14, fontWeight: 600, fontFamily: "inherit",
           }}
         >

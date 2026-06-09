@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 
 const PURPLE = '#1C004F';
+const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
@@ -565,5 +566,5 @@ function btnGhostStyle(color) {
   return { padding: '5px 10px', background: 'transparent', color: c, border: `1px solid ${c}`, borderRadius: 5, fontSize: 11, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' };
 }
 function btnPrimaryStyle(busy) {
-  return { padding: '6px 14px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1 };
+  return { padding: '6px 14px', background: BRIGHT, color: '#fff', border: 'none', borderRadius: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1 };
 }

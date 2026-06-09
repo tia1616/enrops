@@ -23,6 +23,7 @@ import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 
 const PURPLE = '#1C004F';
+const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
 const VIOLET = '#8C88FF';
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
@@ -664,7 +665,7 @@ function PayRouteRow({ number, title, body, status, statusLabel, cta }) {
           width: 26,
           height: 26,
           borderRadius: '50%',
-          background: PURPLE,
+          background: BRIGHT,
           color: '#fff',
           display: 'flex',
           alignItems: 'center',

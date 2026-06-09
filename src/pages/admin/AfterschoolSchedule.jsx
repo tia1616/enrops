@@ -15,6 +15,7 @@ import NotifyRemovalModal from "./NotifyRemovalModal.jsx";
 import HatGuide from "../../components/HatGuide";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CORAL = "#D9694F";
 const INK = "#1a1a1a";
@@ -1125,7 +1126,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             type="button"
             onClick={onSendOffers}
             disabled={!!busy}
-            style={{ ...btnStyle, background: PURPLE, color: "#fff", border: `1.5px solid ${PURPLE}`, opacity: busy === "offers" ? 0.7 : 1 }}
+            style={{ ...btnStyle, background: BRIGHT, color: "#fff", border: `1.5px solid ${PURPLE}`, opacity: busy === "offers" ? 0.7 : 1 }}
           >
             {busy === "offers" ? "Sending…" : `Send offers (${counts.sendable})`}
           </button>
@@ -1224,7 +1225,7 @@ function MultiSelect({ label, options, selected, onToggle }) {
       >
         <span>{label}</span>
         {count > 0 && (
-          <span style={{ background: PURPLE, color: "#fff", borderRadius: 999, padding: "0 7px", fontSize: 11, fontWeight: 600 }}>{count}</span>
+          <span style={{ background: BRIGHT, color: "#fff", borderRadius: 999, padding: "0 7px", fontSize: 11, fontWeight: 600 }}>{count}</span>
         )}
         <span style={{ fontSize: 10, color: MUTED }}>▾</span>
       </button>
@@ -1529,7 +1530,7 @@ function SurveyDialog({ dialog, term, instructorCount, deadline, setDeadline, bu
             {Array.isArray(data?.failed) && data.failed.length > 0 && ` ${data.failed.length} failed.`}
           </p>
           <div style={{ textAlign: "right" }}>
-            <button onClick={onClose} style={{ ...btnStyle, background: PURPLE, color: "#fff" }}>Done</button>
+            <button onClick={onClose} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>Done</button>
           </div>
         </div>
       </Overlay>
@@ -1546,7 +1547,7 @@ function SurveyDialog({ dialog, term, instructorCount, deadline, setDeadline, bu
         <input type="date" value={deadline ?? ""} onChange={(e) => setDeadline(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit", marginBottom: 20 }} />
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
           <button onClick={() => onRun("test")} disabled={busy} style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1.5px solid ${PURPLE}` }}>Send test to me</button>
-          <button onClick={() => onRun("send")} disabled={busy} style={{ ...btnStyle, background: PURPLE, color: "#fff" }}>
+          <button onClick={() => onRun("send")} disabled={busy} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>
             {busy ? "Sending…" : `Send to ${instructorCount} instructor${instructorCount === 1 ? "" : "s"}`}
           </button>
         </div>
@@ -1593,7 +1594,7 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
             </div>
           )}
           <div style={{ textAlign: "right" }}>
-            <button onClick={onClose} style={{ ...btnStyle, background: PURPLE, color: "#fff" }}>Done</button>
+            <button onClick={onClose} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>Done</button>
           </div>
         </div>
       </Overlay>
@@ -1682,7 +1683,7 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
         )}
         <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
           <button onClick={onClose} style={linkBtn}>Cancel</button>
-          <button onClick={() => onRun("send")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: PURPLE, color: "#fff", opacity: busy || selCount === 0 ? 0.6 : 1 }}>
+          <button onClick={() => onRun("send")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy || selCount === 0 ? 0.6 : 1 }}>
             {busy ? "Sending…" : allSelected ? "Send to all" : `Send to ${selCount}`}
           </button>
         </div>
@@ -1777,7 +1778,7 @@ function OfferReviewModal({ program, assignment, loc, onReply, onReassign, onRem
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={onClose} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}>Close</button>
-            <button onClick={send} disabled={busy || !reply.trim()} style={{ ...btnStyle, background: PURPLE, color: "#fff", opacity: busy || !reply.trim() ? 0.6 : 1 }}>{busy ? "Sending…" : "Send reply"}</button>
+            <button onClick={send} disabled={busy || !reply.trim()} style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy || !reply.trim() ? 0.6 : 1 }}>{busy ? "Sending…" : "Send reply"}</button>
           </div>
         </div>
       </div>

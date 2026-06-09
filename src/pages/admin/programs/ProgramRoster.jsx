@@ -17,6 +17,7 @@ import { supabase } from "../../../lib/supabase.js";
 import EmailRosterModal from "../EmailRosterModal.jsx";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -427,7 +428,7 @@ const backLink = {
 
 function primaryBtn(disabled) {
   return {
-    padding: "8px 14px", background: PURPLE, color: "#fff", border: "none",
+    padding: "8px 14px", background: BRIGHT, color: "#fff", border: "none",
     borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit",
     cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
   };

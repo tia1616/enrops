@@ -11,6 +11,7 @@ import { supabase } from "../../lib/supabase.js";
 // instructor-facing not parent-facing — same tone rule.
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
@@ -284,7 +285,7 @@ export default function NotifyRemovalModal({
             style={{
               padding: "9px 14px",
               border: "none",
-              background: PURPLE,
+              background: BRIGHT,
               color: "#fff",
               borderRadius: 6,
               cursor: busy ? "wait" : noEmail ? "not-allowed" : "pointer",

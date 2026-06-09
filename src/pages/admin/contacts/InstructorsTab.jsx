@@ -12,6 +12,7 @@ import { avatarUrl, isValidAvatarKey } from '../../../lib/avatars';
 import { phoneIsValid, looksLikeName, emailIsValid } from '../../../lib/validation';
 
 const PURPLE = '#1C004F';
+const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
 const VIOLET = '#8C88FF';
 const CREAM = '#FBFBFB';
 const INK = '#1a1a1a';
@@ -279,7 +280,7 @@ export default function InstructorsTab({ org }) {
           onClick={() => setAddOpen(true)}
           style={{
             padding: '7px 12px',
-            background: PURPLE,
+            background: BRIGHT,
             color: '#fff',
             border: `1px solid ${PURPLE}`,
             borderRadius: 6,
@@ -1221,7 +1222,7 @@ function BackgroundCheckUploadModal({ instructors, initialInstructorId, onClose,
               disabled={busy || !selected || !file || !completedOn}
               style={{
                 padding: '8px 16px',
-                background: PURPLE,
+                background: BRIGHT,
                 color: '#fff',
                 border: 'none',
                 borderRadius: 6,
@@ -1489,7 +1490,7 @@ function AddInstructorModal({ org, onClose, onAdded }) {
                 disabled={busy}
                 style={{
                   padding: '8px 16px',
-                  background: PURPLE,
+                  background: BRIGHT,
                   color: '#fff',
                   border: 'none',
                   borderRadius: 6,
@@ -1552,7 +1553,7 @@ function AddInstructorModal({ org, onClose, onAdded }) {
                 disabled={busy || inviteResult?.type === 'ok'}
                 style={{
                   padding: '8px 16px',
-                  background: PURPLE,
+                  background: BRIGHT,
                   color: '#fff',
                   border: 'none',
                   borderRadius: 6,

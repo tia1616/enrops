@@ -9,6 +9,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
@@ -213,7 +214,7 @@ const iconBox = {
 
 const primaryBtn = {
   padding: "9px 16px",
-  background: PURPLE,
+  background: BRIGHT,
   color: "#fff",
   border: "none",
   borderRadius: 6,

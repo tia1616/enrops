@@ -17,6 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -1026,7 +1027,7 @@ function primaryBtnStyle({ busy, disabled }) {
   return {
     padding: "9px 14px",
     border: "none",
-    background: PURPLE,
+    background: BRIGHT,
     color: "#fff",
     borderRadius: 6,
     cursor: busy ? "wait" : disabled ? "not-allowed" : "pointer",

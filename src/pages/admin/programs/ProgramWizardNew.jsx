@@ -17,6 +17,7 @@ import { supabase } from "../../../lib/supabase.js";
 import ProgramPrereqEmptyState from "./ProgramPrereqEmptyState.jsx";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
@@ -593,7 +594,7 @@ export default function ProgramWizardNew() {
                 || (currentStep === 2 && !step2Valid)
               }
               style={{
-                padding: "10px 18px", background: PURPLE, color: "#fff",
+                padding: "10px 18px", background: BRIGHT, color: "#fff",
                 border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600,
                 cursor:
                   (currentStep === 1 && !step1Valid)
@@ -1077,7 +1078,7 @@ function Step3PriceAndOpen({
           <button
             onClick={onBackToPrograms}
             style={{
-              padding: "10px 18px", background: PURPLE, color: "#fff",
+              padding: "10px 18px", background: BRIGHT, color: "#fff",
               border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600,
               cursor: "pointer",
             }}
@@ -1130,7 +1131,7 @@ function Step3PriceAndOpen({
             onClick={() => onSubmit("open")}
             disabled={submitting || !step3Valid}
             style={{
-              padding: "10px 18px", background: PURPLE, color: "#fff",
+              padding: "10px 18px", background: BRIGHT, color: "#fff",
               border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600,
               cursor: submitting || !step3Valid ? "not-allowed" : "pointer",
               opacity: submitting || !step3Valid ? 0.5 : 1,

@@ -4,7 +4,8 @@
 // file -- not bringing back any of the v1 UI.
 
 // Enrops brand
-export const PURPLE = "#1C004F";
+export const PURPLE = "#1C004F";   // deep plum — headings
+export const BRIGHT = "#5847C9";   // indigo — primary actions (sampled from Figma)
 export const VIOLET = "#8C88FF";
 export const INK = "#1a1a1a";
 export const MUTED = "#6b6b6b";

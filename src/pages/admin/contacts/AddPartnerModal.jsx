@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 
 const PURPLE = '#1C004F';
+const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
@@ -264,7 +265,7 @@ export default function AddPartnerModal({ orgId, onClose, onSaved }) {
             type="button"
             onClick={save}
             disabled={busy}
-            style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1 }}
+            style={{ padding: '8px 16px', background: BRIGHT, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1 }}
           >{busy ? 'Saving…' : 'Save partner'}</button>
         </div>
       </div>

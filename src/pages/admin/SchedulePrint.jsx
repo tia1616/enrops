@@ -11,6 +11,7 @@ import { Link, useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -258,7 +259,7 @@ export default function SchedulePrint() {
             type="button"
             onClick={() => window.print()}
             style={{
-              background: PURPLE,
+              background: BRIGHT,
               color: "#fff",
               border: "none",
               padding: "8px 14px",

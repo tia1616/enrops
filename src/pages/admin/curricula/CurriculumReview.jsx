@@ -18,6 +18,7 @@ import { supabase, API_BASE } from "../../../lib/supabase.js";
 import { CAPABILITY_ICONS as SHARED_CAPABILITY_ICONS, deriveOrgStatesForCurriculum as sharedDeriveStates, isCapabilityUnlocked as sharedIsUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const PLUM_SOFT = "rgba(105, 29, 57, 0.08)";
 const VIOLET = "#8C88FF";
 const GOLD_SOFT = "rgba(207, 177, 47, 0.13)";
@@ -2513,7 +2514,7 @@ const ennieBanner = {
 const ennieBannerCalm = { ...ennieBanner, borderColor: RULE, borderLeftColor: RULE, background: "#fafaf3" };
 
 const ennieActionBtn = {
-  background: PURPLE, color: "#fff", border: "none", borderRadius: 5,
+  background: BRIGHT, color: "#fff", border: "none", borderRadius: 5,
   padding: "8px 14px", fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer", flexShrink: 0,
 };
 
@@ -2577,7 +2578,7 @@ const ctaBar = {
 };
 
 const primaryBtn = {
-  padding: "10px 18px", background: PURPLE, color: "#fff", border: "none", borderRadius: 6,
+  padding: "10px 18px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6,
   fontFamily: "inherit", fontSize: 14, fontWeight: 600, cursor: "pointer", textDecoration: "none",
 };
 const primaryBtnDisabled = { ...primaryBtn, background: "#c8c4b7", cursor: "not-allowed" };

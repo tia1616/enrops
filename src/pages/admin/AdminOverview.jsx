@@ -7,6 +7,7 @@ import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -411,7 +412,7 @@ function TeachingScheduleCard({ teaching }) {
       <Link to={portalPath} style={{
         display: "inline-block",
         padding: "7px 14px",
-        background: PURPLE,
+        background: BRIGHT,
         color: "#fff",
         borderRadius: 6,
         fontSize: 13,
@@ -506,7 +507,7 @@ function ContractorPipelineCard({ pipeline, error }) {
       <Link to="/admin/instructors" style={{
         display: "inline-block",
         padding: "7px 14px",
-        background: PURPLE,
+        background: BRIGHT,
         color: "#fff",
         borderRadius: 6,
         fontSize: 13,
@@ -549,7 +550,7 @@ function Card({ title, body, to, cta, ready, soon }) {
         <Link to={to} style={{
           display: "inline-block",
           padding: "7px 14px",
-          background: PURPLE,
+          background: BRIGHT,
           color: "#fff",
           borderRadius: 6,
           fontSize: 13,

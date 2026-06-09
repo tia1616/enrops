@@ -18,6 +18,7 @@ import { supabase } from '../../../lib/supabase';
 import ElapsedTimer from '../../../components/ElapsedTimer';
 
 const PURPLE = '#1C004F';
+const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
@@ -704,7 +705,7 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
         <button
           type="button"
           onClick={onNext}
-          style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}
+          style={{ padding: '8px 16px', background: BRIGHT, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}
         >{mode === 'file' ? 'Read file →' : 'Read with AI →'}</button>
       </div>
     </div>
@@ -767,7 +768,7 @@ function MappingStep({ headers, rows, mapping, setMapping, onBack, onContinue })
           type="button"
           onClick={onContinue}
           disabled={!partnerCol}
-          style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: partnerCol ? 'pointer' : 'not-allowed', opacity: partnerCol ? 1 : 0.5 }}
+          style={{ padding: '8px 16px', background: BRIGHT, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: partnerCol ? 'pointer' : 'not-allowed', opacity: partnerCol ? 1 : 0.5 }}
         >Continue →</button>
       </div>
     </div>
@@ -832,7 +833,7 @@ function ReviewStep({ partners, existingByName, existingLocByPartner, selectedCo
           type="button"
           onClick={onCommit}
           disabled={selectedCount.p === 0 && selectedCount.c === 0}
-          style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', opacity: (selectedCount.p === 0 && selectedCount.c === 0) ? 0.5 : 1 }}
+          style={{ padding: '8px 16px', background: BRIGHT, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', opacity: (selectedCount.p === 0 && selectedCount.c === 0) ? 0.5 : 1 }}
         >Save {selectedCount.p} partner{selectedCount.p === 1 ? '' : 's'} / {selectedCount.c} contact{selectedCount.c === 1 ? '' : 's'}</button>
       </div>
     </div>
@@ -1185,7 +1186,7 @@ function DoneStep({ result, orgId, onClose }) {
           <button
             type="button"
             onClick={() => { onClose(); navigate('/admin/programs/new'); }}
-            style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer' }}
+            style={{ padding: '8px 16px', background: BRIGHT, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer' }}
           >Create a program →</button>
         )}
       </div>

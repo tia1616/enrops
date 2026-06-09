@@ -16,6 +16,7 @@ import EmailRosterModal from "./EmailRosterModal";
 import RefundDrawer from "../../components/RefundDrawer";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
@@ -433,7 +434,7 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
               onClick={onUpload}
               style={{
                 padding: "6px 12px",
-                background: PURPLE,
+                background: BRIGHT,
                 color: "#fff",
                 border: "none",
                 borderRadius: 6,
@@ -976,7 +977,7 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
           disabled={busy}
           style={{
             padding: "6px 14px",
-            background: PURPLE,
+            background: BRIGHT,
             color: "#fff",
             border: "none",
             borderRadius: 5,
@@ -1423,7 +1424,7 @@ function CsvPanel({ target, csvHeaders, csvRows, mapping, reDetect, reviewRows, 
             disabled={busy || validCount === 0}
             style={{
               padding: "8px 16px",
-              background: PURPLE,
+              background: BRIGHT,
               color: "#fff",
               border: "none",
               borderRadius: 6,
@@ -1609,7 +1610,7 @@ function ManualPanel({ target, busy, setBusy, onSaved, onClose }) {
           disabled={busy}
           style={{
             padding: "8px 16px",
-            background: PURPLE,
+            background: BRIGHT,
             color: "#fff",
             border: "none",
             borderRadius: 6,
@@ -1853,7 +1854,7 @@ function ProgramRosterRow({ program: p, orgId, canEdit, expanded, onToggle, onUp
           </div>
           <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6, flexWrap: "wrap" }}>
             {canEdit && (
-              <button type="button" onClick={onUpload} style={{ padding: "6px 12px", background: PURPLE, color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
+              <button type="button" onClick={onUpload} style={{ padding: "6px 12px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
                 Add / upload →
               </button>
             )}

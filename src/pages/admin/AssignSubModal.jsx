@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 
 const PURPLE = '#1C004F';
+const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
@@ -292,7 +293,7 @@ const inputStyle = {
 };
 
 const btnPrimary = {
-  background: PURPLE,
+  background: BRIGHT,
   color: '#fff',
   border: `1px solid ${PURPLE}`,
   padding: '8px 14px',

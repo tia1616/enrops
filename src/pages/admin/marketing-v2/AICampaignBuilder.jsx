@@ -27,7 +27,7 @@
 import { useReducer, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
-import { PURPLE, RULE, INK, MUTED, OK } from "../marketing/tokens.jsx";
+import { PURPLE, BRIGHT, RULE, INK, MUTED, OK } from "../marketing/tokens.jsx";
 import Q1_What from "./questions/Q1_What.jsx";
 import Q2_Who from "./questions/Q2_Who.jsx";
 import Q3_Duration from "./questions/Q3_Duration.jsx";
@@ -634,7 +634,7 @@ function ProgressHeader({ step }) {
         <span>of 4</span>
       </div>
       <div style={{ marginTop: 6, height: 4, background: RULE, borderRadius: 999, overflow: "hidden" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: PURPLE, transition: "width 0.18s ease" }} />
+        <div style={{ width: `${pct}%`, height: "100%", background: BRIGHT, transition: "width 0.18s ease" }} />
       </div>
     </div>
   );
@@ -688,7 +688,7 @@ function CelebrationScreen({ draft, onReset, onHome }) {
         <button
           onClick={onReset}
           style={{
-            padding: "10px 16px", background: PURPLE, color: "#fff",
+            padding: "10px 16px", background: BRIGHT, color: "#fff",
             border: "none", borderRadius: 6, cursor: "pointer",
             fontSize: 14, fontFamily: "inherit", fontWeight: 600,
           }}

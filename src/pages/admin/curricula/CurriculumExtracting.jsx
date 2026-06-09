@@ -18,6 +18,7 @@ import { supabase, API_BASE } from "../../../lib/supabase.js";
 import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
@@ -365,7 +366,7 @@ const failBox = {
 
 const primaryBtn = {
   padding: "11px 20px",
-  background: PURPLE,
+  background: BRIGHT,
   color: "#fff",
   border: "none",
   borderRadius: 6,

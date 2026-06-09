@@ -14,6 +14,7 @@ import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
@@ -338,7 +339,7 @@ export default function ProgramsCalendar() {
             to="/admin/programs/new"
             style={{
               padding: "8px 14px",
-              background: PURPLE,
+              background: BRIGHT,
               color: "#fff",
               border: "none",
               borderRadius: 8,
@@ -974,7 +975,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
           onClick={handleSave}
           disabled={saving}
           style={{
-            background: PURPLE, color: "#fff", border: "none", padding: "8px 16px",
+            background: BRIGHT, color: "#fff", border: "none", padding: "8px 16px",
             borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit",
             cursor: saving ? "wait" : "pointer", opacity: saving ? 0.6 : 1,
           }}
@@ -1446,7 +1447,7 @@ const toggleBtn = {
 
 const toggleBtnActive = {
   ...toggleBtn,
-  background: PURPLE,
+  background: BRIGHT,
   color: "#fff",
 };
 

@@ -14,6 +14,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CORAL = "#D9694F";
 const OK_GREEN = "#3a7c3a";
@@ -984,7 +985,7 @@ const spinnerDot = {
   width: 10,
   height: 10,
   borderRadius: 999,
-  background: PURPLE,
+  background: BRIGHT,
   animation: "calendarWaitPulse 1s ease-in-out infinite",
 };
 

@@ -14,6 +14,7 @@ import AssignSubModal from "./AssignSubModal";
 import AfterschoolSchedule from "./AfterschoolSchedule";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const CORAL = "#D9694F";
@@ -944,7 +945,7 @@ export default function Schedule() {
             type="button"
             onClick={() => { setScheduleMode("afterschool"); setSelectedTerm(afterschoolTerms[0]); }}
             style={{
-              background: PURPLE, color: "#fff", border: "none", borderRadius: 8,
+              background: BRIGHT, color: "#fff", border: "none", borderRadius: 8,
               padding: "10px 18px", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
             }}
           >
@@ -2722,7 +2723,7 @@ function MultiSelect({ label, options, selected, onToggle }) {
         <span>{label}</span>
         {count > 0 && (
           <span style={{
-            background: PURPLE,
+            background: BRIGHT,
             color: "#fff",
             borderRadius: 999,
             padding: "0 7px",

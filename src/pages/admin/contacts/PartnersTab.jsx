@@ -13,6 +13,7 @@ import AddPartnerModal from './AddPartnerModal';
 import PartnerListSection from './PartnerListSection';
 
 const PURPLE = '#1C004F';
+const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
@@ -86,7 +87,7 @@ export default function PartnersTab({ org }) {
             type="button"
             onClick={() => setImporting(true)}
             style={{
-              padding: '10px 16px', background: PURPLE, color: '#fff', border: 'none',
+              padding: '10px 16px', background: BRIGHT, color: '#fff', border: 'none',
               borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
             }}
           >

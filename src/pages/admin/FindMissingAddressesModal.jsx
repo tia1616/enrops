@@ -16,6 +16,7 @@ import { loadGoogleMaps } from '../../components/PlacesAutocomplete';
 import ElapsedTimer from '../../components/ElapsedTimer';
 
 const PURPLE = '#1C004F';
+const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
@@ -218,7 +219,7 @@ export default function FindMissingAddressesModal({ orgId, locations, onClose, o
                 type="button"
                 onClick={startLookup}
                 disabled={missing.length === 0}
-                style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer' }}
+                style={{ padding: '8px 16px', background: BRIGHT, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer' }}
               >✨ Find {missing.length} address{missing.length === 1 ? '' : 'es'} →</button>
             </div>
           </div>
@@ -299,7 +300,7 @@ export default function FindMissingAddressesModal({ orgId, locations, onClose, o
                 type="button"
                 onClick={commitAccepted}
                 disabled={saving || results.filter((r) => r.selected).length === 0}
-                style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer', opacity: results.filter((r) => r.selected).length === 0 ? 0.5 : 1 }}
+                style={{ padding: '8px 16px', background: BRIGHT, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer', opacity: results.filter((r) => r.selected).length === 0 ? 0.5 : 1 }}
               >Save {results.filter((r) => r.selected).length} address{results.filter((r) => r.selected).length === 1 ? '' : 'es'}</button>
             </div>
           </div>
@@ -322,7 +323,7 @@ export default function FindMissingAddressesModal({ orgId, locations, onClose, o
               <button
                 type="button"
                 onClick={done}
-                style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer' }}
+                style={{ padding: '8px 16px', background: BRIGHT, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer' }}
               >Done</button>
             </div>
           </div>
@@ -337,7 +338,7 @@ export default function FindMissingAddressesModal({ orgId, locations, onClose, o
               <button
                 type="button"
                 onClick={onClose}
-                style={{ padding: '8px 16px', background: PURPLE, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer' }}
+                style={{ padding: '8px 16px', background: BRIGHT, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer' }}
               >Close</button>
             </div>
           </div>

@@ -12,6 +12,7 @@ import { useNavigate, useOutletContext, useSearchParams, Link } from "react-rout
 import { supabase, API_BASE } from "../../../lib/supabase.js";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
@@ -843,7 +844,7 @@ const connectCallout = {
 };
 const connectBtn = {
   padding: "9px 14px",
-  background: PURPLE,
+  background: BRIGHT,
   color: "#fff",
   border: "none",
   borderRadius: 6,
@@ -885,7 +886,7 @@ const ctaRow = {
 
 const primaryBtn = {
   padding: "11px 20px",
-  background: PURPLE,
+  background: BRIGHT,
   color: "#fff",
   border: "none",
   borderRadius: 6,
