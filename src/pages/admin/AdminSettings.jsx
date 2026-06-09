@@ -197,7 +197,7 @@ const sectionTitle = { fontSize: 13, fontWeight: 700, color: PURPLE, textTransfo
 const connectionCard = {
   background: PANEL,
   border: `1px solid ${RULE}`,
-  borderRadius: 8,
+  borderRadius: 12,
   padding: 18,
 };
 

@@ -86,7 +86,7 @@ export default function AdminLogin() {
     }}>
       <div style={{
         width: "100%", maxWidth: 400, background: "#fff",
-        border: `1px solid ${RULE}`, borderRadius: 8, padding: 32,
+        border: `1px solid ${RULE}`, borderRadius: 12, padding: 32,
       }}>
         <div style={{ fontWeight: 700, fontSize: 22, color: PURPLE, marginBottom: 4 }}>
           Sign in to Enrops

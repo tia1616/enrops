@@ -172,7 +172,7 @@ export default function AssignSubModal({
       display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
     }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{
-        background: '#fff', borderRadius: 10, width: '100%', maxWidth: 520, maxHeight: '90vh',
+        background: '#fff', borderRadius: 12, width: '100%', maxWidth: 520, maxHeight: '90vh',
         overflow: 'auto', boxShadow: '0 18px 40px rgba(0,0,0,0.25)',
       }}>
         <div style={{ padding: '18px 20px 12px', borderBottom: `1px solid ${RULE}` }}>

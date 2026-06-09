@@ -146,7 +146,7 @@ export default function NotifyRemovalModal({
           width: "100%",
           maxWidth: 640,
           border: `1px solid ${RULE}`,
-          borderRadius: 10,
+          borderRadius: 12,
           padding: 22,
           boxShadow: "0 10px 40px rgba(0,0,0,0.2)",
         }}

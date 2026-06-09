@@ -118,7 +118,7 @@ export default function TeamPage() {
           style={{
             background: "#fff",
             border: `1px solid ${RULE}`,
-            borderRadius: 10,
+            borderRadius: 12,
             padding: 16,
             marginBottom: 18,
           }}
@@ -197,7 +197,7 @@ export default function TeamPage() {
         style={{
           background: "#fff",
           border: `1px solid ${RULE}`,
-          borderRadius: 10,
+          borderRadius: 12,
           overflow: "hidden",
         }}
       >
