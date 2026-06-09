@@ -18,6 +18,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Enrops default)
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const CORAL = "#D9694F";
@@ -369,7 +370,7 @@ const textareaStyle = {
 
 function primaryBtn(disabled) {
   return {
-    padding: "12px 22px", background: PURPLE, color: "#fff", border: "none", borderRadius: 6,
+    padding: "12px 22px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6,
     fontSize: 15, fontWeight: 700, fontFamily: "inherit", cursor: disabled ? "default" : "pointer",
     opacity: disabled ? 0.6 : 1,
   };

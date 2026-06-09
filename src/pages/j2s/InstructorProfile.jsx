@@ -14,6 +14,7 @@ import { AVATARS, DEFAULT_AVATAR, avatarUrl } from '../../lib/avatars';
 import { ensureBrowserSafeImage, extensionFor } from '../../lib/heicConvert';
 
 const PURPLE = '#1C004F';
+const BRIGHT = '#5847C9';   // indigo - primary actions (Enrops default)
 const VIOLET = '#8C88FF';
 const CREAM = '#FBFBFB';
 const CORAL = '#D9694F';
@@ -467,7 +468,7 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
             disabled={busy}
             style={{
               padding: '10px 18px',
-              background: PURPLE,
+              background: BRIGHT,
               color: '#fff',
               border: 'none',
               borderRadius: 6,
