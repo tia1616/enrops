@@ -2521,7 +2521,7 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
             type="button"
             onClick={onUndo}
             title={lastOp.label}
-            style={{ ...btn("transparent", PURPLE, true), padding: "7px 12px", fontSize: 13 }}
+            style={{ ...btn("transparent", BRIGHT, true), padding: "7px 12px", fontSize: 13 }}
           >
             ↶ Undo
           </button>
@@ -2532,7 +2532,7 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
             onClick={onRerunAgent}
             disabled={busy === "rematching"}
             title="Re-run the matching agent on this cycle's surveys to regenerate a fresh draft of proposed assignments"
-            style={btn("transparent", PURPLE, true, busy === "rematching")}
+            style={btn("transparent", BRIGHT, true, busy === "rematching")}
           >
             {busy === "rematching" ? "Re-running…" : "Re-run matching"}
           </button>
@@ -2543,7 +2543,7 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
             onClick={onApprove}
             disabled={busy === "approving"}
             title="Lock in the AI's draft assignments — flips every proposed row to confirmed so you can send offers. This is the draft-approval gate, not instructor acceptances."
-            style={btn("transparent", PURPLE, true, busy === "approving")}
+            style={btn("transparent", BRIGHT, true, busy === "approving")}
           >
             {busy === "approving" ? "Approving…" : "Approve draft"}
           </button>
@@ -2555,7 +2555,7 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
               onClick={onPreviewClick}
               disabled={busy === "previewing"}
               title="Render every offer email so you can review before sending — no real sends, no DB changes"
-              style={btn("transparent", PURPLE, true, busy === "previewing")}
+              style={btn("transparent", BRIGHT, true, busy === "previewing")}
             >
               {busy === "previewing" ? "Loading…" : "Preview offers"}
             </button>
@@ -2564,7 +2564,7 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
               onClick={onSendClick}
               disabled={busy === "sending"}
               title="Send the confirmed offers to every assigned instructor"
-              style={btn(PURPLE, "#fff", false, busy === "sending")}
+              style={btn(BRIGHT, "#fff", false, busy === "sending")}
             >
               Send offers
             </button>
@@ -2576,7 +2576,7 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
             onClick={onRemindersClick}
             disabled={busy === "reminders"}
             title="Fire reminder emails right now to anyone whose response is still pending (the cron auto-fires 2–3 days before each deadline — this is for manual nudges)"
-            style={btn("transparent", PURPLE, true, busy === "reminders")}
+            style={btn("transparent", BRIGHT, true, busy === "reminders")}
           >
             {busy === "reminders" ? "Working…" : "Send reminders now"}
           </button>
@@ -3692,7 +3692,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
                     <button type="button" onClick={() => { setReplyOpen(false); setReplyText(""); setReplyError(""); }} disabled={replyBusy} style={{ ...btn("transparent", MUTED, true), padding: "6px 10px", fontSize: 12 }}>
                       Cancel
                     </button>
-                    <button type="button" onClick={sendReply} disabled={replyBusy || !replyText.trim()} style={{ ...btn(PURPLE, "#fff", false, replyBusy || !replyText.trim()), padding: "6px 12px", fontSize: 12 }}>
+                    <button type="button" onClick={sendReply} disabled={replyBusy || !replyText.trim()} style={{ ...btn(BRIGHT, "#fff", false, replyBusy || !replyText.trim()), padding: "6px 12px", fontSize: 12 }}>
                       {replyBusy ? "Sending…" : "Send"}
                     </button>
                   </div>
@@ -3757,7 +3757,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           You can now send offers.
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>OK</button>
+          <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>OK</button>
         </div>
       </ModalShell>
     );
@@ -3801,7 +3801,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           )}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>Close</button>
+          <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>Close</button>
         </div>
       </ModalShell>
     );
@@ -3880,7 +3880,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           )}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>Close</button>
+          <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>Close</button>
         </div>
       </ModalShell>
     );
@@ -3893,7 +3893,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           <strong>{dialog.payload.count}</strong> {dialog.payload.count === 1 ? "offer is" : "offers are"} ready to be sent again. Distance bonuses are still there. Click <strong>Send offers</strong> when you're ready.
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>OK</button>
+          <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>OK</button>
         </div>
       </ModalShell>
     );
@@ -4117,7 +4117,7 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
           )}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>OK</button>
+          <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>OK</button>
         </div>
       </ModalShell>
     );
@@ -4521,7 +4521,7 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
       </div>
       <div style={{ padding: "0 20px 20px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
         <button type="button" onClick={onClose} disabled={saving} style={btn("transparent", MUTED, true, saving)}>Cancel</button>
-        <button type="button" onClick={save} disabled={saving} style={btn(PURPLE, "#fff", false, saving)}>
+        <button type="button" onClick={save} disabled={saving} style={btn(BRIGHT, "#fff", false, saving)}>
           {saving ? "Setting up…" : "Create cycle"}
         </button>
       </div>
@@ -4977,7 +4977,7 @@ function PreviewViewer({ data, onClose, onSend, sendLabel, sending, excludedInst
           {data?.note ?? "No confirmed assignments to preview yet. Click Approve first."}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>Close</button>
+          <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>Close</button>
         </div>
       </ModalShell>
     );
@@ -5040,18 +5040,18 @@ function PreviewViewer({ data, onClose, onSend, sendLabel, sending, excludedInst
             )}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <button type="button" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} style={btn("transparent", PURPLE, true, idx === 0)}>‹ Prev</button>
-            <button type="button" onClick={() => setIdx((i) => Math.min(previews.length - 1, i + 1))} disabled={idx === previews.length - 1} style={btn("transparent", PURPLE, true, idx === previews.length - 1)}>Next ›</button>
-            <button type="button" onClick={onClose} disabled={sending} style={btn("transparent", PURPLE, true, sending)}>Cancel</button>
+            <button type="button" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} style={btn("transparent", BRIGHT, true, idx === 0)}>‹ Prev</button>
+            <button type="button" onClick={() => setIdx((i) => Math.min(previews.length - 1, i + 1))} disabled={idx === previews.length - 1} style={btn("transparent", BRIGHT, true, idx === previews.length - 1)}>Next ›</button>
+            <button type="button" onClick={onClose} disabled={sending} style={btn("transparent", BRIGHT, true, sending)}>Cancel</button>
             {onSend && (() => {
               const sendDisabled = sending || sendLabel === "Nothing to send";
               return (
-                <button type="button" onClick={onSend} disabled={sendDisabled} style={btn(PURPLE, "#fff", false, sendDisabled)}>
+                <button type="button" onClick={onSend} disabled={sendDisabled} style={btn(BRIGHT, "#fff", false, sendDisabled)}>
                   {sending ? "Sending…" : (sendLabel ?? "Send")}
                 </button>
               );
             })()}
-            {!onSend && <button type="button" onClick={onClose} style={btn(PURPLE, "#fff")}>Close</button>}
+            {!onSend && <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>Close</button>}
           </div>
         </div>
         <div style={{ flex: 1, overflow: "hidden", background: CREAM, padding: 0 }}>
@@ -5379,7 +5379,7 @@ function CandidatePicker({
                     type="button"
                     onClick={() => { setMsgOpen((v) => !v); setMsgSent(false); setMsgError(""); }}
                     title={`Send ${currentFirstName} a message — emails them and saves a copy to the conversation thread`}
-                    style={{ ...btn("transparent", PURPLE, true), padding: "5px 10px", fontSize: 12 }}
+                    style={{ ...btn("transparent", BRIGHT, true), padding: "5px 10px", fontSize: 12 }}
                   >
                     {msgOpen ? "Cancel message" : `Message ${currentFirstName}`}
                   </button>
@@ -5390,7 +5390,7 @@ function CandidatePicker({
                     onClick={() => setResendArmed(true)}
                     disabled={resendArmed || resendBusy}
                     title={`Resend the offer email for this ${role === "developing" ? "developing slot" : "camp"} — opens preview before sending`}
-                    style={{ ...btn("transparent", PURPLE, true), padding: "5px 10px", fontSize: 12, opacity: (resendArmed || resendBusy) ? 0.6 : 1 }}
+                    style={{ ...btn("transparent", BRIGHT, true), padding: "5px 10px", fontSize: 12, opacity: (resendArmed || resendBusy) ? 0.6 : 1 }}
                   >
                     Resend offer email
                   </button>
@@ -5410,7 +5410,7 @@ function CandidatePicker({
                     type="button"
                     onClick={onAssignSub}
                     title="Assign a substitute for a single day in this assignment — the sub gets an offer email"
-                    style={{ ...btn("transparent", PURPLE, true), padding: "5px 10px", fontSize: 12 }}
+                    style={{ ...btn("transparent", BRIGHT, true), padding: "5px 10px", fontSize: 12 }}
                   >
                     Assign sub for a day
                   </button>
@@ -5447,7 +5447,7 @@ function CandidatePicker({
                     type="button"
                     onClick={async () => { setResendBusy(true); try { await onResendOffer(); } finally { setResendBusy(false); } }}
                     disabled={resendBusy}
-                    style={{ ...btn(PURPLE, "#fff", false, resendBusy), padding: "6px 12px", fontSize: 12 }}
+                    style={{ ...btn(BRIGHT, "#fff", false, resendBusy), padding: "6px 12px", fontSize: 12 }}
                   >
                     {resendBusy ? "Preparing preview…" : `Yes, resend to ${currentFirstName}`}
                   </button>
@@ -5515,7 +5515,7 @@ function CandidatePicker({
                         type="button"
                         onClick={handleSendMessageClick}
                         disabled={msgBusy || !msgText.trim()}
-                        style={{ ...btn(PURPLE, "#fff", false, msgBusy || !msgText.trim()), padding: "6px 12px", fontSize: 12 }}
+                        style={{ ...btn(BRIGHT, "#fff", false, msgBusy || !msgText.trim()), padding: "6px 12px", fontSize: 12 }}
                       >
                         {msgBusy ? "Sending…" : "Send message"}
                       </button>
@@ -5611,7 +5611,7 @@ function CandidatePicker({
                 <button
                   type="button"
                   onClick={() => onPick(instructor.id, warningsForBanner)}
-                  style={{ ...btn(PURPLE, "#fff"), padding: "7px 12px", fontSize: 13 }}
+                  style={{ ...btn(BRIGHT, "#fff"), padding: "7px 12px", fontSize: 13 }}
                 >
                   {isReassign ? "Reassign" : "Assign"}
                 </button>
@@ -5663,7 +5663,7 @@ function CandidatePicker({
                         <button
                           type="button"
                           onClick={() => onUndecline(inst.id)}
-                          style={{ ...btn("transparent", PURPLE, true), padding: "4px 10px", fontSize: 11 }}
+                          style={{ ...btn("transparent", BRIGHT, true), padding: "4px 10px", fontSize: 11 }}
                         >
                           Re-suggest
                         </button>
@@ -5681,7 +5681,7 @@ function CandidatePicker({
             <button
               type="button"
               onClick={() => setAddOpen(true)}
-              style={{ ...btn("transparent", PURPLE, true), width: "100%", padding: "8px 12px", fontSize: 13 }}
+              style={{ ...btn("transparent", BRIGHT, true), width: "100%", padding: "8px 12px", fontSize: 13 }}
             >
               + Add new instructor
             </button>
@@ -5737,7 +5737,7 @@ function CandidatePicker({
                   type="button"
                   onClick={submitNewInstructor}
                   disabled={addBusy || !addForm.firstName.trim() || !addForm.email.trim()}
-                  style={{ ...btn(PURPLE, "#fff", false, addBusy), padding: "6px 12px", fontSize: 13 }}
+                  style={{ ...btn(BRIGHT, "#fff", false, addBusy), padding: "6px 12px", fontSize: 13 }}
                 >
                   {addBusy ? "Adding…" : "Add & Assign"}
                 </button>
@@ -5792,7 +5792,7 @@ function Empty({ title, body, tone, action }) {
         <button
           type="button"
           onClick={action.onClick}
-          style={{ ...btn(PURPLE, "#fff"), marginTop: 16 }}
+          style={{ ...btn(BRIGHT, "#fff"), marginTop: 16 }}
         >
           {action.label}
         </button>

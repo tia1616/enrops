@@ -1350,7 +1350,7 @@ function FacilityRequestModal({ program, onCancel, onSave }) {
             <button type="button" onClick={onCancel} disabled={saving} style={facBtn(MUTED, "transparent", true)}>
               Cancel
             </button>
-            <button type="button" onClick={handleSave} disabled={saving} style={facBtn("#fff", PURPLE, false)}>
+            <button type="button" onClick={handleSave} disabled={saving} style={facBtn("#fff", BRIGHT, false)}>
               {saving ? "Saving…" : "Save"}
             </button>
           </div>

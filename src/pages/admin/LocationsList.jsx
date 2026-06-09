@@ -323,7 +323,7 @@ export default function LocationsList() {
             type="button"
             onClick={startNew}
             disabled={editingId === "new"}
-            style={btn(PURPLE, "#fff", false, editingId === "new")}
+            style={btn(BRIGHT, "#fff", false, editingId === "new")}
           >
             + Add new venue
           </button>
@@ -454,7 +454,7 @@ function DisplayCard({ loc, campCount, onEdit }) {
           )}
         </div>
       </div>
-      <button type="button" onClick={onEdit} style={btn("transparent", PURPLE, true)}>
+      <button type="button" onClick={onEdit} style={btn("transparent", BRIGHT, true)}>
         Edit
       </button>
     </div>
@@ -512,7 +512,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, error, saving, onS
           <button
             type="button"
             onClick={() => setDraft((d) => ({ ...d, area: parseCity(d.address) }))}
-            style={{ marginTop: 6, background: "transparent", border: "none", color: "#1C004F", fontSize: 12, fontWeight: 600, cursor: "pointer", padding: 0 }}
+            style={{ marginTop: 6, background: "transparent", border: "none", color: BRIGHT, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: 0 }}
           >
             Use &quot;{parseCity(draft.address)}&quot;
           </button>
@@ -584,7 +584,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, error, saving, onS
         <button type="button" onClick={onCancel} disabled={saving} style={btn("transparent", MUTED, true, saving)}>
           Cancel
         </button>
-        <button type="button" onClick={onSave} disabled={saving} style={btn(PURPLE, "#fff", false, saving)}>
+        <button type="button" onClick={onSave} disabled={saving} style={btn(BRIGHT, "#fff", false, saving)}>
           {saving ? "Saving…" : (isNew ? "Add venue" : "Save changes")}
         </button>
       </div>

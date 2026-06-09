@@ -567,7 +567,7 @@ export default function Finances() {
                   }}
                 />
                 {canManage && (
-                  <button onClick={saveDescriptorSuffix} style={btn(PURPLE, "#fff")}>
+                  <button onClick={saveDescriptorSuffix} style={btn(BRIGHT, "#fff")}>
                     Save
                   </button>
                 )}
@@ -609,7 +609,7 @@ export default function Finances() {
                   />
                 </div>
                 {canManage && (
-                  <button onClick={saveAdminFee} style={btn(PURPLE, "#fff")}>
+                  <button onClick={saveAdminFee} style={btn(BRIGHT, "#fff")}>
                     Save
                   </button>
                 )}
@@ -1020,7 +1020,7 @@ function BusinessSetupForm({
         <button
           onClick={saveBusinessSetup}
           disabled={savingBiz || !isDirty}
-          style={btn(PURPLE, "#fff", false, savingBiz || !isDirty)}
+          style={btn(BRIGHT, "#fff", false, savingBiz || !isDirty)}
         >
           {savingBiz ? "Saving…" : "Save"}
         </button>
@@ -1044,7 +1044,7 @@ function ConnectButton({ onConnect, onReconnect, busy, canManage, savedBusinessT
       <button
         onClick={handler}
         disabled={busy || blocked}
-        style={btn(PURPLE, "#fff", false, busy || blocked)}
+        style={btn(BRIGHT, "#fff", false, busy || blocked)}
       >
         {busy ? "Starting…" : label}
       </button>
@@ -1083,10 +1083,10 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
       <WhatToExpect />
       {canManage ? (
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
-          <button onClick={onContinue} disabled={busy || checking} style={btn(PURPLE, "#fff", false, busy || checking)}>
+          <button onClick={onContinue} disabled={busy || checking} style={btn(BRIGHT, "#fff", false, busy || checking)}>
             {busy ? "Loading…" : "Continue setup"}
           </button>
-          <button onClick={onCheckStatus} disabled={busy || checking} style={btn("transparent", PURPLE, true, busy || checking)}>
+          <button onClick={onCheckStatus} disabled={busy || checking} style={btn("transparent", BRIGHT, true, busy || checking)}>
             {checking ? "Checking…" : "Already finished? Check status"}
           </button>
         </div>
@@ -1112,7 +1112,7 @@ function ActiveBody({ accountId, onOpenDashboard, busy }) {
       <div style={{ fontSize: 13, color: MUTED, marginBottom: 16 }}>
         Account ID: <code style={{ fontFamily: "monospace", fontSize: 12 }}>{accountId}</code>
       </div>
-      <button onClick={onOpenDashboard} disabled={busy} style={btn("transparent", PURPLE, true, busy)}>
+      <button onClick={onOpenDashboard} disabled={busy} style={btn("transparent", BRIGHT, true, busy)}>
         {busy ? "Loading…" : "Open Stripe Dashboard ↗"}
       </button>
       <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
