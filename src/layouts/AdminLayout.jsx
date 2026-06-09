@@ -227,8 +227,8 @@ export default function AdminLayout() {
             </p>
           )}
           <div style={{ marginTop: 20, display: "flex", gap: 8 }}>
-            <Link to="/admin/login" style={btn(PURPLE, "#fff")}>Sign in</Link>
-            {user && <button onClick={signOut} style={btn("transparent", PURPLE, true)}>Sign out</button>}
+            <Link to="/admin/login" style={btn(BRIGHT, "#fff")}>Sign in</Link>
+            {user && <button onClick={signOut} style={btn("transparent", BRIGHT, true)}>Sign out</button>}
           </div>
           {debugInfo && (
             <div style={{ marginTop: 16, padding: 10, background: "#f7f6ef", borderRadius: 4, fontSize: 11, color: MUTED, wordBreak: "break-all" }}>
@@ -386,7 +386,7 @@ export default function AdminLayout() {
             </div>
             <div style={{ marginBottom: 6, color: INK, fontWeight: 500 }}>{user?.email}</div>
             <div style={{ marginBottom: 10, textTransform: "capitalize" }}>{orgMember?.role ?? "member"}</div>
-            <button onClick={signOut} style={{ ...btn("transparent", PURPLE, true), padding: "5px 10px", fontSize: 12 }}>
+            <button onClick={signOut} style={{ ...btn("transparent", BRIGHT, true), padding: "5px 10px", fontSize: 12 }}>
               Sign out
             </button>
           </div>

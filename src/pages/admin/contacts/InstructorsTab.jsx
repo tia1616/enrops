@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { avatarUrl, isValidAvatarKey } from '../../../lib/avatars';
 import { phoneIsValid, looksLikeName, emailIsValid } from '../../../lib/validation';
+import Chevron from '../../../components/Chevron.jsx';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
@@ -494,7 +495,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
         >
           {status.replace(/_/g, ' ')}
         </span>
-        <span style={{ color: PURPLE, fontSize: 14, fontWeight: 700 }}>{expanded ? '▾' : '▸'}</span>
+        <Chevron open={expanded} color={BRIGHT} size={14} />
       </button>
 
       {inviteState && (

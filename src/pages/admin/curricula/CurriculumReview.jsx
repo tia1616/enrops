@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { supabase, API_BASE } from "../../../lib/supabase.js";
 import { CAPABILITY_ICONS as SHARED_CAPABILITY_ICONS, deriveOrgStatesForCurriculum as sharedDeriveStates, isCapabilityUnlocked as sharedIsUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
+import Chevron from "../../../components/Chevron.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -1356,7 +1357,7 @@ function SessionRow({ session, open, onToggle, onSave, savingField, onPolishSkil
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 0", cursor: "pointer", userSelect: "none" }}>
         <span style={{ width: 26, height: 26, borderRadius: "50%", background: PLUM_SOFT, color: PURPLE, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{session.session_number}</span>
         <span style={{ flex: 1, fontWeight: 600, color: INK, fontSize: 14 }}>{session.title || "(untitled)"}</span>
-        <span style={{ color: MUTED, transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▶</span>
+        <Chevron open={open} color={MUTED} />
       </div>
       {open && (
         <div style={{ padding: "0 0 18px 36px" }}>

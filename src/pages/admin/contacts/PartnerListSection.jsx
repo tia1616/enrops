@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
+import Chevron from '../../../components/Chevron.jsx';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
@@ -158,7 +159,7 @@ function PartnerRow({ partner, contactCount, expanded, onToggle, onPartnerChange
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-          <span style={{ color: PURPLE, fontSize: 12, fontWeight: 700 }}>{expanded ? '▾' : '▸'}</span>
+          <Chevron open={expanded} color={BRIGHT} />
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>
               {partner.partner_name}

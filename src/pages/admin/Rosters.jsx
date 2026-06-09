@@ -14,6 +14,7 @@ import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import EmailRosterModal from "./EmailRosterModal";
 import RefundDrawer from "../../components/RefundDrawer";
+import Chevron from "../../components/Chevron.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -399,7 +400,7 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
         >
           <div style={{ fontSize: 14, fontWeight: 600, color: INK, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 6 }}>
             {camp.roster_count > 0 && (
-              <span style={{ color: PURPLE, fontSize: 12, fontWeight: 700 }}>{expanded ? "▾" : "▸"}</span>
+              <Chevron open={expanded} color={BRIGHT} />
             )}
             <span>
               {camp.curriculum_name}
@@ -1840,7 +1841,7 @@ function ProgramRosterRow({ program: p, orgId, canEdit, expanded, onToggle, onUp
           style={{ minWidth: 0, flex: "1 1 220px", background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}
         >
           <div style={{ fontSize: 14, fontWeight: 600, color: INK, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ color: PURPLE, fontSize: 12, fontWeight: 700 }}>{expanded ? "▾" : "▸"}</span>
+            <Chevron open={expanded} color={BRIGHT} />
             <span>{p.curriculum ?? "Untitled"}</span>
           </div>
           <div style={{ fontSize: 12, color: MUTED, marginTop: 2, paddingLeft: 18 }}>{subtitle || "—"}</div>

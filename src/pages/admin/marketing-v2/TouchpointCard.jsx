@@ -5,6 +5,7 @@
 import { useState } from "react";
 import EditableField from "./EditableField.jsx";
 import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
+import Chevron from "../../../components/Chevron.jsx";
 import { supabase } from "../../../lib/supabase.js";
 import { INK, MUTED, PURPLE, BRIGHT, RULE, OK, INFO } from "../marketing/tokens.jsx";
 
@@ -175,7 +176,7 @@ export default function TouchpointCard({
             {fmtScheduled(tp.scheduled_at, timezone)}
           </div>
         </div>
-        <span style={{ color: MUTED, fontSize: 14, transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s ease" }}>▶</span>
+        <Chevron open={open} color={MUTED} size={14} />
       </button>
 
       {open && (
