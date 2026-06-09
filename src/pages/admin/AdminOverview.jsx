@@ -8,7 +8,6 @@ import { defaultTenantSlug } from "../../lib/tenants.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
-const VIOLET = "#8C88FF";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -326,7 +325,7 @@ function OpenHiresBanner({ openHires }) {
       background: `${CORAL}12`,
       border: `1px solid ${CORAL}55`,
       borderLeft: `4px solid ${CORAL}`,
-      borderRadius: 8,
+      borderRadius: 12,
       padding: "14px 18px",
       marginBottom: 20,
       display: "flex",
@@ -371,8 +370,8 @@ function TeachingScheduleCard({ teaching }) {
     <div style={{
       background: "#fff",
       border: `1px solid ${RULE}`,
-      borderLeft: `3px solid ${VIOLET}`,
-      borderRadius: 8,
+      borderLeft: `3px solid ${BRIGHT}`,
+      borderRadius: 12,
       padding: 20,
       display: "flex",
       flexDirection: "column",
@@ -380,7 +379,7 @@ function TeachingScheduleCard({ teaching }) {
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <h2 style={{ fontSize: 17, fontWeight: 600, color: INK, margin: 0 }}>Your teaching schedule</h2>
-        <span style={{ fontSize: 10, color: PURPLE, background: `${VIOLET}33`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+        <span style={{ fontSize: 10, color: BRIGHT, background: `${BRIGHT}1A`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
           You teach too
         </span>
       </div>
@@ -437,7 +436,7 @@ function ContractorPipelineCard({ pipeline, error }) {
     <div style={{
       background: "#fff",
       border: `1px solid ${RULE}`,
-      borderRadius: 8,
+      borderRadius: 12,
       padding: 20,
       display: "flex",
       flexDirection: "column",
@@ -445,7 +444,7 @@ function ContractorPipelineCard({ pipeline, error }) {
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <h2 style={{ fontSize: 17, fontWeight: 600, color: INK, margin: 0 }}>Contractor pipeline</h2>
-        <span style={{ fontSize: 10, color: PURPLE, background: `${VIOLET}33`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+        <span style={{ fontSize: 10, color: BRIGHT, background: `${BRIGHT}1A`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
           Live
         </span>
       </div>
@@ -526,7 +525,7 @@ function Card({ title, body, to, cta, ready, soon }) {
     <div style={{
       background: "#fff",
       border: `1px solid ${RULE}`,
-      borderRadius: 8,
+      borderRadius: 12,
       padding: 20,
       display: "flex",
       flexDirection: "column",
@@ -540,7 +539,7 @@ function Card({ title, body, to, cta, ready, soon }) {
           </span>
         )}
         {ready && (
-          <span style={{ fontSize: 10, color: PURPLE, background: `${VIOLET}33`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+          <span style={{ fontSize: 10, color: BRIGHT, background: `${BRIGHT}1A`, padding: "2px 8px", borderRadius: 999, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
             Live
           </span>
         )}
