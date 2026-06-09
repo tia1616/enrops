@@ -645,7 +645,7 @@ export default function InstructorPortal() {
   if (phase === "login") {
     return (
       <Shell>
-        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, maxWidth: 400 }}>
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, maxWidth: 400 }}>
           <h1 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, color: PURPLE }}>Instructor sign in</h1>
           <p style={{ margin: "0 0 18px", color: MUTED, fontSize: 14 }}>Sign in to view your schedule and respond to offers.</p>
 
@@ -761,7 +761,7 @@ export default function InstructorPortal() {
 
     return (
       <Shell>
-        <div style={{ background: "#fff", border: `1px solid ${CORAL}`, borderRadius: 10, padding: 28, maxWidth: 540 }}>
+        <div style={{ background: "#fff", border: `1px solid ${CORAL}`, borderRadius: 12, padding: 28, maxWidth: 540 }}>
           <h1 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: INK }}>We couldn't load your schedule</h1>
           <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px", lineHeight: 1.5 }}>{friendly}</p>
           <button type="button" onClick={signOut} style={{ padding: "8px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
@@ -1163,7 +1163,7 @@ export default function InstructorPortal() {
       )}
 
       {currentAssignments.length === 0 && programAssignments.length === 0 && needsSurvey.length === 0 && needsAfterschoolSurvey.length === 0 && pastAssignments.length === 0 && (
-        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, color: MUTED, textAlign: "center" }}>
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, color: MUTED, textAlign: "center" }}>
           No schedule yet. Your admin will email you when it's ready.
         </div>
       )}
@@ -1439,7 +1439,7 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, onMarkTaught
     : "";
 
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px", marginBottom: 10 }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 18px", marginBottom: 10 }}>
       <div style={{ fontSize: 11, color: VIOLET, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700, marginBottom: 4 }}>
         Sub · {sub.sub_tier === "lead" ? "Lead" : "Developing"}
       </div>
@@ -2032,7 +2032,7 @@ function LegalDocRow({ docKey, label, isOpen, onToggle }) {
   }, [isOpen, docKey, doc]);
 
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8 }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12 }}>
       <button
         type="button"
         onClick={onToggle}
@@ -2471,7 +2471,7 @@ function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn }) 
 
   return (
     <Section title="Daily check-in">
-      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "14px 16px" }}>
+      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "14px 16px" }}>
         <div style={{ fontSize: 13, color: MUTED, marginBottom: 12, lineHeight: 1.5 }}>
           Mark each day after you teach it. {marked > 0 ? (
             <span style={{ color: OK_GREEN, fontWeight: 600 }}>{marked} of {total} marked.</span>
@@ -2683,7 +2683,7 @@ function RosterSection({ campSessionId, enrollment, startsOn }) {
 
   return (
     <Section title="Roster">
-      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "14px 16px" }}>
+      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "14px 16px" }}>
         {err && (
           <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
             {err}
@@ -3129,7 +3129,7 @@ function PayView({ instructorId, onBack }) {
       )}
 
       {data !== null && data.camps.length === 0 && !err && (
-        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 28, color: MUTED, textAlign: "center", lineHeight: 1.5 }}>
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, color: MUTED, textAlign: "center", lineHeight: 1.5 }}>
           You haven't marked any sessions taught yet. Open a confirmed camp, then use <strong>Daily check-in</strong> after each day to start tracking pay.
         </div>
       )}
@@ -3146,7 +3146,7 @@ function PayView({ instructorId, onBack }) {
       )}
 
       {data !== null && (
-        <div style={{ marginTop: 22, padding: "16px 18px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10 }}>
+        <div style={{ marginTop: 22, padding: "16px 18px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12 }}>
           <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginBottom: 4 }}>
             Manage payouts, bank info, and tax docs
           </div>
@@ -3162,7 +3162,7 @@ function PayView({ instructorId, onBack }) {
 
 function PayTotalsCard({ totals }) {
   return (
-    <div style={{ background: PURPLE, color: "#fff", borderRadius: 10, padding: "16px 18px" }}>
+    <div style={{ background: PURPLE, color: "#fff", borderRadius: 12, padding: "16px 18px" }}>
       <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, opacity: 0.8 }}>
         Total earned
       </div>
@@ -3204,7 +3204,7 @@ function PayCampCard({ entry }) {
   const friendlyStatus = friendlyPayStatus(worst);
 
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "14px 18px" }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "14px 18px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 220px", minWidth: 200 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
