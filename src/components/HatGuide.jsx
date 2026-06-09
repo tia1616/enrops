@@ -114,7 +114,7 @@ export default function HatGuide({ character = "instructor", tip }) {
                 disabled={tip.primary.disabled}
                 style={{
                   padding: "9px 16px",
-                  background: PURPLE,
+                  background: "#5847C9",
                   color: "#fff",
                   border: "none",
                   borderRadius: 6,

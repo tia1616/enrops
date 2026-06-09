@@ -188,7 +188,7 @@ export default function PwaInstallButton({ variant = 'inline' }) {
                 style={{
                   flex: 1,
                   padding: '9px 12px',
-                  background: PURPLE,
+                  background: '#5847C9',
                   color: '#fff',
                   border: 'none',
                   borderRadius: 8,
@@ -261,7 +261,7 @@ function Step({ n, children }) {
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
       <div
         style={{
-          background: PURPLE,
+          background: '#5847C9',
           color: '#fff',
           width: 22,
           height: 22,

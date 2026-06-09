@@ -3,7 +3,7 @@
 // when open. Inherits color via `currentColor` by default so it adapts to its
 // context (indigo on admin, tenant color on tenant surfaces).
 
-export default function Chevron({ open = false, size = 12, color = "currentColor", style = {} }) {
+export default function Chevron({ open = false, size = 12, color = "currentColor", style = {}, className }) {
   return (
     <svg
       width={size}
@@ -11,6 +11,7 @@ export default function Chevron({ open = false, size = 12, color = "currentColor
       viewBox="0 0 12 12"
       fill="none"
       aria-hidden="true"
+      className={className}
       style={{
         flexShrink: 0,
         display: "inline-block",

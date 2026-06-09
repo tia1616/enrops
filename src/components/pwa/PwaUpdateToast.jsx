@@ -68,7 +68,7 @@ export default function PwaUpdateToast() {
         type="button"
         onClick={() => updateSW(true)}
         style={{
-          background: PURPLE,
+          background: '#5847C9',
           color: '#fff',
           border: 'none',
           borderRadius: 6,

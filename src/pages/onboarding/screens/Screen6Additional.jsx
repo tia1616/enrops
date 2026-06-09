@@ -4,6 +4,7 @@ import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFe
 import { fetchLegalDocument } from '../../../lib/legalDoc.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import { linkifyText } from '../../../lib/linkifyText.jsx';
+import Chevron from '../../../components/Chevron.jsx';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
 // Screen 6 — Additional Acknowledgments. Three documents, but the
@@ -237,7 +238,7 @@ function MultiAckAccordion({
         className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-neutral-900 hover:bg-neutral-50"
       >
         <span>{title}</span>
-        <span className="text-neutral-500">{isExpanded ? '▾' : '▸'}</span>
+        <Chevron open={isExpanded} className="text-neutral-500" />
       </button>
       {isExpanded && (
         <div className="border-t border-neutral-200 bg-neutral-50 px-4 py-3">
