@@ -195,7 +195,7 @@ export const INTENTS = [
 //
 // These live on a separate card from the period cards (rendered by
 // PeriodCards.jsx as a trailing card). All set mode='other' + a starter
-// topic + intent_key so Ennie writes appropriate tone (urgent for schedule
+// topic + intent_key so Enni writes appropriate tone (urgent for schedule
 // changes, warm for recaps, etc. — see Step 6 edge function rules).
 //
 // Spec note: scheduled recurring recaps (mid-term recap, last-day thank-you)

@@ -19,7 +19,7 @@
 //   channels: string[]
 //
 // Edge function loads the selected program/camp rows server-side and injects them
-// as KNOWN FACTS into Ennie's prompt — replacing the old fuzzy-string curriculum
+// as KNOWN FACTS into Enni's prompt — replacing the old fuzzy-string curriculum
 // match for the structured path. Falls back to fuzzy match when mode='other'.
 //
 // All tenant context (org, user) comes from useOutletContext(). No hardcoded ids.
@@ -80,7 +80,7 @@ const INITIAL = {
 // back to master_list if filter somehow stayed 'auto'. The structured
 // `what` shape (mode + program_ids / camp_session_ids / topics) and
 // promo are forwarded as-is — the edge function loads the rows
-// server-side and injects grounded facts into Ennie's prompt.
+// server-side and injects grounded facts into Enni's prompt.
 function prepareInputsForEdge(inputs) {
   const { auto_derived: _drop, ...filterCore } = inputs.who.filter ?? {};
   const cleanFilter = filterCore.type === "auto"
@@ -112,7 +112,7 @@ async function friendlyDraftError(error) {
     return `Your org is missing ${missing}. Add it in Settings, then try again.`;
   }
   if (code === "draft_timeout") {
-    return "Ennie took too long to draft this one. Try again — usually clears up on a retry.";
+    return "Enni took too long to draft this one. Try again — usually clears up on a retry.";
   }
   if (typeof code === "string" && code.toLowerCase().includes("forbidden")) {
     return "You don't have admin access to this org's marketing.";
@@ -323,7 +323,7 @@ export default function AICampaignBuilder() {
 
   // Save as draft — persists any inline edits the operator made on
   // ScheduleReview (subject/body/scheduled_at) to the touchpoint rows.
-  // Campaign row itself is already in 'draft' status from when Ennie's draft
+  // Campaign row itself is already in 'draft' status from when Enni's draft
   // call created it; this just snapshots the operator's working state so
   // approve-later picks up the edits, not the original.
   const onSaveDraft = async () => {
@@ -393,7 +393,7 @@ export default function AICampaignBuilder() {
       if (error) {
         // Pull friendly error from edge function response when available.
         // supabase-js wraps non-2xx as FunctionsHttpError with the original
-        // Response on error.context — clone+read for the JSON body Ennie's
+        // Response on error.context — clone+read for the JSON body Enni's
         // function actually returned.
         let msg = error.message ?? "Send failed.";
         let rawBody = null;
@@ -455,7 +455,7 @@ export default function AICampaignBuilder() {
     }
     const tpCount = state.draft?.schedule?.touchpoints?.length ?? 0;
     const recipientCount = state.draft?.recipients?.count ?? 0;
-    if (!confirm(`Approve ${tpCount} touchpoint${tpCount === 1 ? "" : "s"} and schedule to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}? Once approved, Ennie sends each touchpoint at its scheduled time. You can't edit after this.`)) return;
+    if (!confirm(`Approve ${tpCount} touchpoint${tpCount === 1 ? "" : "s"} and schedule to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}? Once approved, Enni sends each touchpoint at its scheduled time. You can't edit after this.`)) return;
     setBusyAction("approve");
     try {
       // Captures audience at approve time. If parents subscribe/unsubscribe
@@ -511,7 +511,7 @@ export default function AICampaignBuilder() {
     dispatch({ type: "START_DRAFTING" });
 
     // Edge function consumes the structured `what` shape directly — loads
-    // program/camp rows server-side and injects grounded facts into Ennie's
+    // program/camp rows server-side and injects grounded facts into Enni's
     // prompt. No more client-side bridge / topic derivation.
     const inputsForEdge = prepareInputsForEdge(state.inputs);
 
@@ -524,7 +524,7 @@ export default function AICampaignBuilder() {
       return;
     }
     if (!data?.schedule?.touchpoints?.length) {
-      dispatch({ type: "DRAFT_FAILED", error: "Ennie couldn't draft a schedule. Try again, or simplify the topics." });
+      dispatch({ type: "DRAFT_FAILED", error: "Enni couldn't draft a schedule. Try again, or simplify the topics." });
       return;
     }
     dispatch({
@@ -649,7 +649,7 @@ function CelebrationScreen({ draft, onReset, onHome }) {
       <div style={{ fontSize: 56 }}>🎉</div>
       <h2 style={{ margin: "8px 0 4px", fontSize: 28, color: PURPLE }}>Huzzah!</h2>
       <p style={{ margin: 0, color: INK, fontSize: 15 }}>
-        {count} touchpoint{count === 1 ? "" : "s"} scheduled for {recipientCount} recipient{recipientCount === 1 ? "" : "s"}. Ennie will take it from here.
+        {count} touchpoint{count === 1 ? "" : "s"} scheduled for {recipientCount} recipient{recipientCount === 1 ? "" : "s"}. Enni will take it from here.
       </p>
       <div style={{ marginTop: 16, display: "inline-flex", alignItems: "center", gap: 6, background: "#EAF3DE", color: OK, fontWeight: 600, fontSize: 13, padding: "6px 12px", borderRadius: 999, border: `1px solid ${OK}` }}>
         ⏱ Hours of work, done in 90 seconds

@@ -1,7 +1,7 @@
 // /admin/curricula/:id/review
 //
 // Chunk 3 of the curriculum onboarding flow. Replaces the read-only placeholder.
-// One-screen review: Ennie banner (flags fields she's unsure about) above a full
+// One-screen review: Enni banner (flags fields she's unsure about) above a full
 // editable surface of every extracted curricula + curriculum_sessions field.
 // Save-as-draft keeps status='extracted'; Publish flips to 'published' after a
 // two-step modal (confirm name → optionally link existing program runs).
@@ -10,7 +10,7 @@
 // organization_id. No J2S hardcoding.
 //
 // Memory pointers: feedback_one_place_to_edit, project_enrops_curricula_upstream,
-// feedback_enrops_principles, project_enrops_platform_vision (Ennie = Director).
+// feedback_enrops_principles, project_enrops_platform_vision (Enni = Director).
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
@@ -32,7 +32,7 @@ const PANEL = "#fff";
 // instructor prep docs + structured data for scheduling).
 const TIME_SAVED_HOURS = 10;
 
-// Fields Ennie flags when the value is null/empty AND the field is in this list.
+// Fields Enni flags when the value is null/empty AND the field is in this list.
 // Low-confidence extracted fields are flagged regardless of list membership.
 const FLAG_IF_NULL = new Set([
   "age_range", "grade_range", "class_size", "format",
@@ -193,12 +193,12 @@ export default function CurriculumReview() {
   const [preLinkedProgramCount, setPreLinkedProgramCount] = useState(0);
   const [preLinkedCampSessionCount, setPreLinkedCampSessionCount] = useState(0);
 
-  // Polish with Ennie: when set, the modal opens for this field
+  // Polish with Enni: when set, the modal opens for this field
   const [polishConfig, setPolishConfig] = useState(null);
-  // Chunk 3.5: capability_definitions (14 rows, global) + Ennie's Phase 2
+  // Chunk 3.5: capability_definitions (14 rows, global) + Enni's Phase 2
   // recommendation for the just-published curriculum (fetched after publish).
   const [capabilities, setCapabilities] = useState([]);
-  const [ennieRecommendation, setEnnieRecommendation] = useState(null);
+  const [ennieRecommendation, setEnniRecommendation] = useState(null);
   // Link-existing-programs modal: opens from the celebration screen's
   // link_existing recommendation CTA, or from the published-curriculum CTA bar.
   const [linkModalOpen, setLinkModalOpen] = useState(false);
@@ -432,7 +432,7 @@ export default function CurriculumReview() {
     timers.set(key, setTimeout(run, 800));
   }
 
-  // Polish with Ennie: open the modal pre-loaded with the right field's context.
+  // Polish with Enni: open the modal pre-loaded with the right field's context.
   // For curriculum-level skill rollups, the onAccept replaces the field via
   // the same debounced save path. For per-session skills_practiced, it routes
   // through saveSessionField.
@@ -659,7 +659,7 @@ export default function CurriculumReview() {
         const { data: recData, error: recErr } = await supabase.functions.invoke("ennie-recommend", {
           body: { curriculum_id: curriculum.id },
         });
-        if (!recErr && recData) setEnnieRecommendation(recData);
+        if (!recErr && recData) setEnniRecommendation(recData);
       } catch (e) {
         console.warn("ennie-recommend failed (using fallback):", e instanceof Error ? e.message : String(e));
       }
@@ -737,7 +737,7 @@ export default function CurriculumReview() {
 
         {/* RIGHT */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <EnnieBanner flagCount={flagCount} onJump={jumpToFirstFlag} />
+          <EnniBanner flagCount={flagCount} onJump={jumpToFirstFlag} />
 
           <section style={card}>
             <div style={sectionHead}>
@@ -745,7 +745,7 @@ export default function CurriculumReview() {
               <span style={{ color: MUTED, fontSize: 12 }}>Edits save as you go</span>
             </div>
             <p style={sectionBlurb}>
-              Everything below feeds your registration page, marketing emails, instructor portal, and parent recaps. Fields with a gold ring are ones Ennie wasn't fully sure about — worth a glance.
+              Everything below feeds your registration page, marketing emails, instructor portal, and parent recaps. Fields with a gold ring are ones Enni wasn't fully sure about — worth a glance.
             </p>
 
             <FieldText
@@ -1025,7 +1025,7 @@ function SaveStateLabel({ state }) {
 
 // --- Subcomponents ---
 
-function EnnieAvatar({ size = 38, calm = false }) {
+function EnniAvatar({ size = 38, calm = false }) {
   return (
     <div style={{
       width: size, height: size, borderRadius: "50%", overflow: "hidden",
@@ -1034,7 +1034,7 @@ function EnnieAvatar({ size = 38, calm = false }) {
     }}>
       <img
         src="/ennie-full.jpg"
-        alt="Ennie"
+        alt="Enni"
         style={{
           width: "100%", height: "100%",
           objectFit: "cover", objectPosition: "center 18%",
@@ -1047,14 +1047,14 @@ function EnnieAvatar({ size = 38, calm = false }) {
   );
 }
 
-function EnnieBanner({ flagCount, onJump }) {
+function EnniBanner({ flagCount, onJump }) {
   const calm = flagCount === 0;
   return (
     <section style={calm ? ennieBannerCalm : ennieBanner}>
-      <EnnieAvatar calm={calm} />
+      <EnniAvatar calm={calm} />
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700, color: calm ? INK : PURPLE, fontSize: 14 }}>
-          Ennie <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
+          Enni <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
         </div>
         <div style={{ fontSize: 14, color: INK, marginTop: 2, lineHeight: 1.45 }}>
           {calm
@@ -1095,7 +1095,7 @@ function FieldLabel({ children, inlineHelp, flagged }) {
 
 function FlagBadge() {
   return (
-    <span title="Double-check this one — Ennie wasn't fully sure." style={flagBadge}>◆ Ennie flagged</span>
+    <span title="Double-check this one — Enni wasn't fully sure." style={flagBadge}>◆ Enni flagged</span>
   );
 }
 
@@ -1140,7 +1140,7 @@ function FieldTextarea({ label, inlineHelp, help, value, onChange, flagged, save
             type="button"
             onClick={() => canPolish && onPolish(value)}
             disabled={!canPolish}
-            title={canPolish ? "Ask Ennie to rewrite this into parent-impressive copy" : "Add text first"}
+            title={canPolish ? "Ask Enni to rewrite this into parent-impressive copy" : "Add text first"}
             style={{
               background: canPolish ? GOLD_SOFT : "transparent",
               border: `1px solid ${canPolish ? GOLD_BORDER : RULE}`,
@@ -1153,7 +1153,7 @@ function FieldTextarea({ label, inlineHelp, help, value, onChange, flagged, save
               whiteSpace: "nowrap",
             }}
           >
-            ✨ Polish with Ennie
+            ✨ Polish with Enni
           </button>
         )}
       </div>
@@ -1312,7 +1312,7 @@ function FieldChips({ label, inlineHelp, help, value, onChange, flagged, saved, 
             type="button"
             onClick={() => canPolish && onPolish(value)}
             disabled={!canPolish}
-            title={canPolish ? "Ask Ennie to re-rank and rewrite these as parent-impressive concepts" : "Add at least one skill first"}
+            title={canPolish ? "Ask Enni to re-rank and rewrite these as parent-impressive concepts" : "Add at least one skill first"}
             style={{
               background: canPolish ? GOLD_SOFT : "transparent",
               border: `1px solid ${canPolish ? GOLD_BORDER : RULE}`,
@@ -1325,7 +1325,7 @@ function FieldChips({ label, inlineHelp, help, value, onChange, flagged, saved, 
               whiteSpace: "nowrap",
             }}
           >
-            ✨ Polish with Ennie
+            ✨ Polish with Enni
           </button>
         )}
       </div>
@@ -1497,17 +1497,17 @@ function PolishModal({ curriculumId, config, onClose }) {
     ? "Rewrite to lead with what kids do + make, drop jargon, and read parent-impressive. Edit anything before accepting."
     : `Rewrite + re-rank into the top ${targetCount} parent-impressive concepts. Edit each line before accepting.`;
   const loadingCopy = mode === "text"
-    ? "Asking Ennie to polish this description…"
-    : `Asking Ennie to polish these ${current.length} skill${current.length === 1 ? "" : "s"}…`;
+    ? "Asking Enni to polish this description…"
+    : `Asking Enni to polish these ${current.length} skill${current.length === 1 ? "" : "s"}…`;
 
   return (
     <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={modal}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-          <EnnieAvatar size={54} />
+          <EnniAvatar size={54} />
           <div>
             <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>
-              Ennie<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
+              Enni<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
             </div>
           </div>
         </div>
@@ -1539,7 +1539,7 @@ function PolishModal({ curriculumId, config, onClose }) {
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Ennie</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Enni</div>
                 <textarea
                   value={polishedText}
                   onChange={(e) => setPolishedText(e.target.value)}
@@ -1554,7 +1554,7 @@ function PolishModal({ curriculumId, config, onClose }) {
                 disabled={acceptDisabled}
                 style={{ ...primaryBtn, opacity: acceptDisabled ? 0.5 : 1, cursor: acceptDisabled ? "not-allowed" : "pointer" }}
               >
-                Use Ennie's polish →
+                Use Enni's polish →
               </button>
             </div>
           </>
@@ -1572,7 +1572,7 @@ function PolishModal({ curriculumId, config, onClose }) {
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Ennie</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>✨ Polished by Enni</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, background: GOLD_SOFT, border: `1px solid ${GOLD_BORDER}`, borderRadius: 6, padding: 8 }}>
                   {polishedList.map((c, i) => (
                     <div key={`pol-${i}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1609,7 +1609,7 @@ function PolishModal({ curriculumId, config, onClose }) {
                 disabled={acceptDisabled}
                 style={{ ...primaryBtn, opacity: acceptDisabled ? 0.5 : 1, cursor: acceptDisabled ? "not-allowed" : "pointer" }}
               >
-                Use Ennie's polish →
+                Use Enni's polish →
               </button>
             </div>
           </>
@@ -2187,10 +2187,10 @@ function PublishModal({
     >
       <div style={isCelebration ? celebrationModal : modal}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-          <EnnieAvatar size={isCelebration ? 72 : 54} />
+          <EnniAvatar size={isCelebration ? 72 : 54} />
           <div>
             <div style={{ fontWeight: 700, color: PURPLE, fontSize: isCelebration ? 16 : 15 }}>
-              Ennie<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
+              Enni<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
             </div>
             {isCelebration && (
               <div style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>Nice work — here's what you just unlocked.</div>
@@ -2317,10 +2317,10 @@ function PublishModal({
                   gap: 12,
                   alignItems: "flex-start",
                 }}>
-                  <EnnieAvatar size={48} />
+                  <EnniAvatar size={48} />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 11, color: MUTED, marginBottom: 2 }}>
-                      <strong style={{ color: PURPLE }}>Ennie's recommendation</strong>
+                      <strong style={{ color: PURPLE }}>Enni's recommendation</strong>
                     </div>
                     <div style={{ fontWeight: 700, color: INK, fontSize: 15, lineHeight: 1.35, marginBottom: 4 }}>
                       {recommendation.headline}

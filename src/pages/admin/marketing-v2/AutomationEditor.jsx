@@ -371,7 +371,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
         result = data;
       }
       // Append voice-signal rows for any field that actually changed. Foundation
-      // for Ennie learning operator voice over time — phrases added/dropped,
+      // for Enni learning operator voice over time — phrases added/dropped,
       // structural changes per save. Failure here is non-fatal (the save
       // already succeeded); just log so the editor doesn't roll back a real save.
       await appendEditHistory({
@@ -396,9 +396,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     }
   }
 
-  // Foundation for Ennie voice-learning. Appends a row to automation_edits
+  // Foundation for Enni voice-learning. Appends a row to automation_edits
   // per changed field. RLS allows org members to INSERT; nothing reads this
-  // table today — turned on when Ennie integration ships for lifecycle
+  // table today — turned on when Enni integration ships for lifecycle
   // drafts or when marketing-draft-campaign reads lifecycle edits as voice
   // signal. Non-fatal: a failed history write doesn't fail the user's save.
   async function appendEditHistory({ orgId: oid, templateId, userId, deltas }) {

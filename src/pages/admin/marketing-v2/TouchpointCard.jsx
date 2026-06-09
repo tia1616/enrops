@@ -78,7 +78,7 @@ export default function TouchpointCard({
 
   // Per-school preview state. previewLocationId is what the operator
   // selected from the dropdown. previewData holds the server's rendered
-  // subject + body for that school. Defaults to "" (i.e. show Ennie's
+  // subject + body for that school. Defaults to "" (i.e. show Enni's
   // raw {{token}} body so the operator can see which tokens get replaced).
   const [previewLocationId, setPreviewLocationId] = useState("");
   const [previewData, setPreviewData] = useState(null);
@@ -316,7 +316,7 @@ function stripHtml(html) {
 // unpredictably, swallowing the anchor tag entirely and leaking the href as
 // plain text. The negative lookahead `(?![^<]*>)` matches a token only when
 // there's an unclosed `<` before the next `>`, i.e. the token sits in text
-// content not inside an attribute. Bug surfaced 2026-06-02 when Ennie wrote
+// content not inside an attribute. Bug surfaced 2026-06-02 when Enni wrote
 // `<a href="{{register_url}}">Grab the rate →</a>` and operators saw the
 // rendered preview as `{{register_url}}">Grab the rate →` with no link.
 function highlightTokens(html) {
@@ -326,13 +326,13 @@ function highlightTokens(html) {
   );
 }
 
-// Convert stored HTML (what Ennie writes, what the server renders) into the
+// Convert stored HTML (what Enni writes, what the server renders) into the
 // plain-text form an operator edits.
 // - <p>...</p> blocks become blank-line-separated blocks.
 // - <a href="X">Y</a> becomes [Y](X) so the operator can edit the visible
 //   text without breaking the URL.
 // - <em>X</em>/<i>X</i> become _X_ and <strong>X</strong>/<b>X</b> become
-//   **X**, so Ennie's emphasis survives a no-touch round-trip.
+//   **X**, so Enni's emphasis survives a no-touch round-trip.
 // - Merge tokens like {{first_name}} pass through untouched.
 function htmlToEditable(html) {
   if (!html) return "";
@@ -492,7 +492,7 @@ function BodyEditor({ value, onChange, onCommit, previewHtml, previewSubject, pr
             Highlighted tags like <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span> get filled in for each parent when the email sends. Pick a school above to see exactly what parents there will receive.
           </p>
           <p style={{ margin: "4px 0 0", color: OK, fontStyle: "italic" }}>
-            ✨ Every edit teaches Ennie a phrase you prefer or drop. Future drafts will reflect your voice automatically — less editing each campaign.
+            ✨ Every edit teaches Enni a phrase you prefer or drop. Future drafts will reflect your voice automatically — less editing each campaign.
           </p>
         </div>
       )}

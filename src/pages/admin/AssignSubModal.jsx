@@ -1,6 +1,6 @@
 // AssignSubModal — admin assigns a single-day substitute for a camp or
 // afterschool session. Calls create-assignment-substitution which UPSERTs
-// the row and sends the sub an Ennie-voiced offer email.
+// the row and sends the sub an Enni-voiced offer email.
 //
 // Resent state: when the operator re-opens the modal for a day that already
 // has a sub assigned + emailed, the submit button shows "Resend offer to X".

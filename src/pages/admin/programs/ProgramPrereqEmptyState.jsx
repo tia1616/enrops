@@ -4,7 +4,7 @@
 //   - /admin/programs/new (the wizard) when a provider lands without prereqs
 //
 // Always renders all 3 items; check completed ones, link the next undone one.
-// Voice is Ennie's ("I"). No tutorial bloat — onboarding tours carry the
+// Voice is Enni's ("I"). No tutorial bloat — onboarding tours carry the
 // explainer load.
 
 import { Link } from "react-router-dom";

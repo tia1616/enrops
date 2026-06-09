@@ -116,7 +116,7 @@ export default function CampaignsList({ onNew }) {
       ) : campaigns.length === 0 ? (
         <div style={{ border: `1px dashed ${RULE}`, borderRadius: 8, padding: 32, textAlign: "center", color: MUTED }}>
           <p style={{ margin: "0 0 4px", color: INK, fontWeight: 600 }}>No campaigns scheduled yet</p>
-          <p style={{ margin: 0, fontSize: 13 }}>Click “Build a campaign” to set one up with Ennie.</p>
+          <p style={{ margin: 0, fontSize: 13 }}>Click “Build a campaign” to set one up with Enni.</p>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
