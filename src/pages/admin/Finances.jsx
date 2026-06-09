@@ -165,18 +165,54 @@ export default function Finances() {
     await reload();
   }
 
+  // Actively poll Stripe and write the operator's status, then reload. This is
+  // the deterministic fallback for the account-activation gap: the webhook
+  // (handleAccountUpdated) only fires on the classic v1 `account.updated`
+  // event, so an operator whose account is minted as v2 would finish
+  // onboarding but never flip to 'active'. sync-operator-stripe-status hits the
+  // v1 Accounts API directly (shape-agnostic) and applies the same mapping.
+  async function syncStripeStatus() {
+    if (!org?.id) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) return;
+      await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sync-operator-stripe-status`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ org_id: org.id }),
+        }
+      );
+    } catch (err) {
+      // Non-fatal: fall back to the passive DB re-read. A real webhook may
+      // still land the status moments later.
+      console.warn("[finances] operator stripe status sync failed:", err);
+    }
+    await reload();
+  }
+
   useEffect(() => { reload(); /* eslint-disable-next-line */ }, [org?.id]);
 
   // Re-fetch when Stripe bounces back so the new status is visible quickly.
   // (The webhook is the source of truth, but it may land a few seconds after
-  // the redirect.)
+  // the redirect — or never, for v2 accounts. See syncStripeStatus.)
   useEffect(() => {
-    if (stripeParam) {
+    if (!stripeParam) return;
+    if (stripeParam === "return") {
+      // Operator finished/paused onboarding: poll Stripe + write status, then
+      // reload. The delayed reload still catches a late v1 webhook.
+      syncStripeStatus();
+    } else {
+      // 'refresh' (link expired) or anything else: just re-read.
       reload();
-      // Refresh once more after a short delay to catch the webhook write.
-      const t = setTimeout(reload, 4000);
-      return () => clearTimeout(t);
     }
+    const t = setTimeout(reload, 4000);
+    return () => clearTimeout(t);
     // eslint-disable-next-line
   }, [stripeParam]);
 
