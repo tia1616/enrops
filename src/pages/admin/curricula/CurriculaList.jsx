@@ -41,6 +41,8 @@ export default function CurriculaList() {
   const [capabilities, setCapabilities] = useState([]);
   // Click-detail modal state: { capability, unlocked } | null
   const [capabilityModalConfig, setCapabilityModalConfig] = useState(null);
+  // Client-side name search (J2S has ~13 curricula; a client filter is plenty).
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     if (!org?.id) return;
@@ -112,9 +114,13 @@ export default function CurriculaList() {
     return () => { mounted = false; };
   }, [org?.id]);
 
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? curricula.filter((c) => (c.name ?? "").toLowerCase().includes(q))
+    : curricula;
   const grouped = STATUS_GROUPS.map((g) => ({
     ...g,
-    items: curricula.filter((c) => c.status === g.key),
+    items: filtered.filter((c) => c.status === g.key),
   }));
 
   // Delete a curriculum (any status):
@@ -202,6 +208,18 @@ export default function CurriculaList() {
         <Link to="/admin/curricula/new" style={primaryBtn}>+ New curriculum</Link>
       </div>
 
+      {!loading && !error && curricula.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search curricula…"
+            style={searchInput}
+          />
+        </div>
+      )}
+
       {loading && <div style={{ color: MUTED, padding: 12 }}>Loading…</div>}
       {error && (
         <div style={errorBox}>Could not load curricula: {error}</div>
@@ -214,6 +232,12 @@ export default function CurriculaList() {
             Drop a lesson plan or curriculum guide and we'll set up everything around it — registration page, marketing flyer, parent emails, instructor portal — automatically.
           </div>
           <Link to="/admin/curricula/new" style={primaryBtn}>+ Add your first curriculum</Link>
+        </div>
+      )}
+
+      {!loading && !error && curricula.length > 0 && filtered.length === 0 && (
+        <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>
+          No curricula match “{search}”.
         </div>
       )}
 
@@ -281,7 +305,7 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
           <StatusBadge status={c.status} />
           {showNeedsReview && (
             <span
-              title={`${flagCount} field${flagCount === 1 ? "" : "s"} Ennie isn't sure about`}
+              title={`${flagCount} field${flagCount === 1 ? "" : "s"} Enni isn't sure about`}
               style={{
                 background: GOLD_SOFT,
                 color: "#7a5a00",
@@ -301,9 +325,7 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
         </div>
       </div>
       <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
-        {ageLabel}<br />
-        {sessionsLabel}<br />
-        {formatLabel}
+        {ageLabel} · {sessionsLabel} · {formatLabel}
       </div>
       {showCapStrip && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}` }}>
@@ -345,30 +367,37 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
           </div>
         </div>
       )}
-      <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
-        {cta.map((item, i) => (
-          <Link key={i} to={item.to} style={item.primary ? cardCtaPrimary : cardCtaSecondary}>{item.label}</Link>
+      <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+        {cta.filter((i) => i.primary).map((item, i) => (
+          <Link key={`p${i}`} to={item.to} style={cardCtaPrimaryFull}>{item.label}</Link>
         ))}
-        {onDelete && (
-          <button
-            type="button"
-            onClick={onDelete}
-            disabled={deleting}
-            title="Delete this curriculum"
-            style={{
-              marginLeft: "auto",
-              background: "transparent",
-              border: "none",
-              color: deleting ? MUTED : "#a13a3a",
-              cursor: deleting ? "wait" : "pointer",
-              fontSize: 16,
-              padding: "6px 8px",
-              opacity: deleting ? 0.5 : 0.7,
-              lineHeight: 1,
-            }}
-          >
-            {deleting ? "…" : "🗑"}
-          </button>
+        {(cta.some((i) => !i.primary) || onDelete) && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {cta.filter((i) => !i.primary).map((item, i) => (
+              <Link key={`s${i}`} to={item.to} style={cardCtaSecondary}>{item.label}</Link>
+            ))}
+            {onDelete && (
+              <button
+                type="button"
+                onClick={onDelete}
+                disabled={deleting}
+                title="Delete this curriculum"
+                style={{
+                  marginLeft: "auto",
+                  background: "transparent",
+                  border: "none",
+                  color: deleting ? MUTED : "#a13a3a",
+                  cursor: deleting ? "wait" : "pointer",
+                  fontSize: 16,
+                  padding: "6px 8px",
+                  opacity: deleting ? 0.5 : 0.7,
+                  lineHeight: 1,
+                }}
+              >
+                {deleting ? "…" : "🗑"}
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -440,8 +469,37 @@ const primaryBtn = {
 const cardStyle = {
   background: PANEL,
   border: `1px solid ${RULE}`,
+  borderRadius: 12,
+  padding: 16,
+  boxShadow: "0 1px 2px rgba(28, 0, 79, 0.04)",
+};
+
+const searchInput = {
+  width: "100%",
+  maxWidth: 420,
+  padding: "10px 14px",
+  border: `1px solid ${RULE}`,
   borderRadius: 8,
-  padding: 14,
+  fontSize: 14,
+  fontFamily: "inherit",
+  background: "#fff",
+  color: INK,
+  boxSizing: "border-box",
+};
+
+const cardCtaPrimaryFull = {
+  display: "block",
+  width: "100%",
+  textAlign: "center",
+  padding: "9px 12px",
+  background: PURPLE,
+  color: "#fff",
+  border: "none",
+  borderRadius: 6,
+  fontSize: 13,
+  fontWeight: 600,
+  textDecoration: "none",
+  boxSizing: "border-box",
 };
 
 const cardCtaPrimary = {
