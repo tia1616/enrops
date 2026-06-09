@@ -318,26 +318,37 @@ export default function AdminLayout() {
                 to="/admin/time-saved"
                 title="See the full time-saved breakdown"
                 style={{
-                  display: "block",
+                  display: "flex",
+                  gap: 10,
+                  alignItems: "flex-start",
                   width: "100%",
-                  textAlign: "left",
+                  boxSizing: "border-box",
                   textDecoration: "none",
-                  background: "rgba(78, 145, 78, 0.12)",
-                  border: "1px solid rgba(78, 145, 78, 0.35)",
-                  borderRadius: 10,
-                  padding: "10px 12px",
+                  background: "#fff",
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 12,
+                  padding: "12px 14px",
                   cursor: "pointer",
                   fontFamily: "inherit",
                 }}
               >
-                <div style={{ fontSize: 10, color: "#2d5a2d", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
-                  Saved with Enrops
-                </div>
-                <div style={{ fontSize: 16, color: "#2d5a2d", fontWeight: 700, marginTop: 2 }}>
-                  ⏱ {Math.round(timeSavedTotal)}+ hours
-                </div>
-                <div style={{ fontSize: 10, color: MUTED, marginTop: 4 }}>
-                  tap for breakdown
+                <span style={{
+                  flexShrink: 0, marginTop: 1,
+                  width: 18, height: 18, borderRadius: 999,
+                  background: "#2e9e4f", color: "#fff",
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 11, fontWeight: 700, lineHeight: 1,
+                }}>✓</span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+                    Saved with Enrops
+                  </div>
+                  <div style={{ fontSize: 16, color: INK, fontWeight: 700, marginTop: 2 }}>
+                    {Math.round(timeSavedTotal)}+ hours
+                  </div>
+                  <div style={{ fontSize: 10, color: MUTED, marginTop: 4 }}>
+                    tap for breakdown
+                  </div>
                 </div>
               </Link>
             </div>

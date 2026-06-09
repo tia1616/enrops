@@ -101,12 +101,18 @@ export default function TimeSavedPage() {
       </header>
 
       <div style={{
-        display: "inline-flex", alignItems: "baseline", gap: 10,
-        background: "rgba(78, 145, 78, 0.12)", border: "1px solid rgba(78, 145, 78, 0.35)",
+        display: "inline-flex", alignItems: "center", gap: 12,
+        background: "#fff", border: `1px solid ${RULE}`,
         borderRadius: 12, padding: "14px 18px", marginBottom: 18,
       }}>
-        <span style={{ fontSize: 30, fontWeight: 700, color: GREEN }}>⏱ {Math.round(totalHours)}+</span>
-        <span style={{ fontSize: 14, color: GREEN, fontWeight: 600 }}>hours saved, lifetime</span>
+        <span style={{
+          flexShrink: 0, width: 26, height: 26, borderRadius: 999,
+          background: "#2e9e4f", color: "#fff",
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          fontSize: 14, fontWeight: 700,
+        }}>✓</span>
+        <span style={{ fontSize: 30, fontWeight: 700, color: INK }}>{Math.round(totalHours)}+</span>
+        <span style={{ fontSize: 14, color: MUTED, fontWeight: 600 }}>hours saved, lifetime</span>
       </div>
 
       {error && (
