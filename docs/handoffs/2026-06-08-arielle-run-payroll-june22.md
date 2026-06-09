@@ -4,7 +4,7 @@ _Last verified against production 2026-06-08._
 
 ## Before you start (once, the Friday before)
 
-1. **Log in** at [enrops.com](https://enrops.com) as `arielle@journeytosteam.com` → left nav → **Payroll**.
+1. **Log in** at [enrops.com](https://enrops.com) as `arielle@journeytosteam.com` → left nav **Money** → **Payouts** tab → **Payroll** tab.
 2. **Check the J2S Stripe balance.** Paying all 5 camps is about **$2,000**. The money comes out of J2S's Stripe balance (where parent payments land), so make sure there's at least that much **available** before you pay.
    - If Stripe is set to auto-pay your balance to the bank, it can leave nothing for instructor pay. In Stripe → Settings → Payouts, set the schedule to **Manual** so funds accumulate. Balance settles ~2 days after each parent payment.
 3. You don't need to chase instructors to check in. A nightly job auto-confirms any day they forget, at the correct rate. Their own "I taught today" taps also work.
