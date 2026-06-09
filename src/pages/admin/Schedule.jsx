@@ -2253,7 +2253,7 @@ export default function Schedule() {
               width: "100%",
               maxWidth: 440,
               border: "1px solid #e2dfd5",
-              borderRadius: 10,
+              borderRadius: 12,
               padding: 22,
               boxShadow: "0 10px 40px rgba(0,0,0,0.2)",
             }}
@@ -2848,7 +2848,7 @@ function ActivePills({
 
 function TermOverview({ weeks, weekBuckets, focusedWeek, onFocus }) {
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 14 }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 14 }}>
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${weeks.length || 1}, minmax(0, 1fr))`, gap: 10 }}>
         {weeks.map((w) => {
           const dots = weekBuckets.get(w.num) ?? [];
@@ -2940,7 +2940,7 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, getValidationFor,
   const colorByLocation = useMemo(() => locationColorMap(sorted), [sorted]);
 
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 14 }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: INK }}>
           Week {week?.num} <span style={{ fontWeight: 400, color: MUTED, fontSize: 13 }}>· {fmtShort(week?.starts_on)} – {fmtShort(week?.ends_on)}</span>
@@ -4024,7 +4024,7 @@ function InstructorPickerPanel({ eligibleInstructors, selectedInstructorIds, onC
   }
 
   return (
-    <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff" }}>
+    <div style={{ border: `1px solid ${RULE}`, borderRadius: 12, background: "#fff" }}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -4719,7 +4719,7 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
     >
       <div onClick={(e) => e.stopPropagation()} style={{
         width: "100%", maxWidth: 820, height: "85vh", background: "#fff",
-        border: `1px solid ${RULE}`, borderRadius: 10,
+        border: `1px solid ${RULE}`, borderRadius: 12,
         boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
         display: "flex", flexDirection: "column",
       }}>
@@ -5003,7 +5003,7 @@ function PreviewViewer({ data, onClose, onSend, sendLabel, sending, excludedInst
         height: "85vh",
         background: "#fff",
         border: `1px solid ${RULE}`,
-        borderRadius: 10,
+        borderRadius: 12,
         boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
         display: "flex",
         flexDirection: "column",
@@ -5111,7 +5111,7 @@ function ModalShell({ title, children, onClose, maxWidth = 480 }) {
         maxHeight: "90vh",
         background: "#fff",
         border: `1px solid ${RULE}`,
-        borderRadius: 10,
+        borderRadius: 12,
         boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
         display: "flex",
         flexDirection: "column",
@@ -5312,7 +5312,7 @@ function CandidatePicker({
           overflow: "hidden",
           background: "#fff",
           border: `1px solid ${RULE}`,
-          borderRadius: 10,
+          borderRadius: 12,
           boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
           display: "flex",
           flexDirection: "column",

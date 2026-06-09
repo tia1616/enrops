@@ -790,7 +790,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   if (state.status === "loading") return <div style={{ color: MUTED, fontSize: 14 }}>Loading schedule…</div>;
   if (state.status === "error") return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 28 }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28 }}>
       <h2 style={{ color: CORAL, margin: "0 0 8px" }}>Couldn't load schedule</h2>
       <p style={{ color: MUTED, margin: 0 }}>{state.message}</p>
     </div>
@@ -903,7 +903,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       )}
 
       {state.programs.length === 0 ? (
-        <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 8, padding: 28, textAlign: "center", color: MUTED }}>
+        <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 12, padding: 28, textAlign: "center", color: MUTED }}>
           No {termDisplayName(term)} after-school classes yet. Classes you schedule for this term will appear here.
         </div>
       ) : view === "list" ? (
@@ -1033,7 +1033,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
     else onSwitchToCamp && onSwitchToCamp(v);
   }
   return (
-    <header style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "18px 22px", display: "flex", flexWrap: "wrap", gap: 20, alignItems: "center", justifyContent: "space-between" }}>
+    <header style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "18px 22px", display: "flex", flexWrap: "wrap", gap: 20, alignItems: "center", justifyContent: "space-between" }}>
       <div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
           <select
@@ -1149,7 +1149,7 @@ function FilterBar({
   onClear, hasFilters,
 }) {
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <input
           type="search"
@@ -1314,7 +1314,7 @@ function InstructorLoadStrip({ instructors, loadCount, availByInstr, selectedIns
   }).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
   if (rows.length === 0) return null;
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 14px", display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "10px 14px", display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
       <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, fontWeight: 700, marginRight: 4 }}>Instructor load <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>· tap to filter</span></span>
       {rows.map((r) => {
         const full = r.cap != null && r.n >= r.cap;
@@ -1352,13 +1352,13 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
   for (const arr of byDay.values()) arr.sort((a, b) => (parse12h(a.start_time) ?? 0) - (parse12h(b.start_time) ?? 0));
   const anyRows = DAYS.some((d) => (byDay.get(d.code) ?? []).length > 0);
   if (!anyRows) {
-    return <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 8, padding: 24, textAlign: "center", color: MUTED }}>No classes match your filters.</div>;
+    return <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 12, padding: 24, textAlign: "center", color: MUTED }}>No classes match your filters.</div>;
   }
   const th = { fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, fontWeight: 700, textAlign: "left", padding: "10px 14px", borderBottom: `1px solid ${RULE}` };
   const td = { padding: "11px 14px", borderTop: "1px solid #f0eee6", fontSize: 13.5, verticalAlign: "middle" };
   const widths = ["24%", "19%", "19%", "9%", "16%", "13%"];
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, overflow: "hidden" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <colgroup>{widths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
         <thead>
