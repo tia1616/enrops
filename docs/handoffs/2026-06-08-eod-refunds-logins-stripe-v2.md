@@ -31,7 +31,10 @@ The matcher was reworked (per-day `{from,until}` windows + `instructor_term_area
 
 ---
 
-## ⚠️ TOP PRIORITY NEXT — Stripe v2 account activation (pre-July-3 must-verify)
+## ✅ RESOLVED 2026-06-08 — Stripe operator activation (was the top-priority risk)
+Shipped `sync-operator-stripe-status` (operator status-refresh via the v1 Accounts API — account-shape-agnostic, works for v1 AND v2 accounts) to **prod + staging**; `Finances.jsx` calls it on `?stripe=return` + a manual "Check status" button. Chose the refresh-fallback over a `v2.core.account.*` webhook handler (deterministic, no SDK bump). Staging-tested + prod-verified; also reconciled the prod-only/not-in-repo drift for that function. Details: [[project_enrops_operator_stripe_activation]]. Original write-up retained below.
+
+### (original) Stripe v2 account activation
 Found while testing the staging Stripe-connect dry-run. **Our operator-activation webhook (`stripe-webhook` → `handleAccountUpdated`) only handles the classic v1 `account.updated`.** But `stripe-connect-onboard` (same code prod uses) produced a **v2 account** in the Enrops Dev sandbox, emitting `v2.core.account.*` events that never trigger our v1 handler — even with the endpoint subscribed to v1 `account.updated`.
 
 - **Why prod *probably* fine:** J2S prod activated via v1 `account.updated` (`stripe_last_account_event_id` set). Likely the live platform still defaults to v1 (sandboxes run ahead) or J2S predates the v2 default.
@@ -46,5 +49,6 @@ Also logged in backlog: staging missing `sync-operator-stripe-status` (not in re
 Jessica pulled these in 2026-06-08: per-tenant terms & pricing, settings-gated registration + canonical gating, min-students/K=K display, PolicyPage per-tenant policy+brand, #18 parent portal (register-new-term + notifications), #19 weekly security-audit automation, #20 billing explainer + blank-slate test. Plus deferred structural parity sweep (migrations-by-name + realtime publication + the prod-only-functions question: `marketing-send`, `admin-convert-logo`, `sync-operator-stripe-status` exist on prod, not in repo).
 
 ## Next chat: start here
-1. Build the **Stripe v2 activation handler** (the ALPHA-RISK item) → test on staging → deploy prod on Jessica's go.
-2. Then resume the July-3 queue in priority order.
+1. ~~Build the Stripe v2 activation handler~~ ✅ DONE 2026-06-08 (shipped `sync-operator-stripe-status` refresh-fallback to prod+staging; verified).
+2. Resume the **July-3 queue** in priority order (per-tenant terms & pricing, settings-gated registration + canonical gating, min-students/K=K display, PolicyPage, #18 parent portal, #19 weekly security-audit automation, #20 billing explainer + blank-slate test).
+3. Deferred structural-parity sweep (migrations-by-name + realtime publication + prod-only-functions question) — now partly addressed by the new edge-fn-drift-check skill.
