@@ -10,6 +10,7 @@ import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import AfterschoolAvailabilityForm from "./AfterschoolAvailabilityForm.jsx";
 import InstructorProfile from "./InstructorProfile.jsx";
+import Chevron from "../../components/Chevron.jsx";
 import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
@@ -1186,7 +1187,7 @@ export default function InstructorPortal() {
               padding: 0,
             }}
           >
-            {showPast ? "▾" : "▸"} Past camps ({pastAssignments.length})
+            <Chevron open={showPast} color={BRIGHT} style={{ marginRight: 5, verticalAlign: "middle" }} /> Past camps ({pastAssignments.length})
           </button>
           {showPast && (
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -2053,7 +2054,7 @@ function LegalDocRow({ docKey, label, isOpen, onToggle }) {
         }}
       >
         <span>{label}</span>
-        <span style={{ color: MUTED, fontSize: 14 }}>{isOpen ? "▾" : "▸"}</span>
+        <Chevron open={isOpen} color={MUTED} size={14} />
       </button>
       {isOpen && (
         <div style={{ borderTop: `1px solid ${RULE}`, padding: "14px 16px", background: "#fafaf6" }}>
