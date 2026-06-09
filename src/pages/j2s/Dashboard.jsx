@@ -298,7 +298,11 @@ export default function Dashboard() {
   }
 
   const enrolledTerms = useMemo(() => new Set(enrollments.map((e) => e.term).filter(Boolean)), [enrollments]);
-  const nextTerm = useMemo(() => TERM_ORDER.find((t) => !enrolledTerms.has(t)), [enrolledTerms]);
+  const nextTerm = useMemo(() => {
+    if (enrolledTerms.size === 0) return null;
+    const latestIdx = Math.max(...[...enrolledTerms].map((t) => TERM_ORDER.indexOf(t)).filter((i) => i >= 0));
+    return TERM_ORDER[latestIdx + 1] || null;
+  }, [enrolledTerms]);
   const todayClasses = useMemo(() => enrollments.filter((e) => e.sessionInfo?.state === 'today'), [enrollments]);
   const upcomingClasses = useMemo(() =>
     enrollments.filter((e) => e.sessionInfo?.state === 'upcoming' || e.sessionInfo?.state === 'in-progress')
@@ -346,6 +350,16 @@ export default function Dashboard() {
         </h1>
       </div>
 
+      {nextTerm && enrollments.length > 0 && (
+        <Link to={`/${org.slug}`} className="mb-4 flex items-center justify-between rounded-2xl border border-j2s-green/20 bg-j2s-green/5 px-5 py-3.5 transition hover:bg-j2s-green/10">
+          <div>
+            <p className="text-sm font-bold text-j2s-ink">{TERM_LABELS[nextTerm]} registration is open</p>
+            <p className="text-xs text-j2s-ink/50">Secure your spot for the upcoming term</p>
+          </div>
+          <svg className="h-5 w-5 shrink-0 text-j2s-purple" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" /></svg>
+        </Link>
+      )}
+
       <div className="sticky top-0 z-10 -mx-4 bg-white/95 px-4 backdrop-blur sm:-mx-6 sm:px-6">
         <nav className="flex border-b border-j2s-purple/10">
           {TABS.map((t) => {
@@ -367,7 +381,7 @@ export default function Dashboard() {
       <div className="mt-6">
         {tab === 'today' && <TodayTab todayClasses={todayClasses} upcomingClasses={upcomingClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} />}
         {tab === 'schedule' && <ScheduleTab enrollments={enrollments} />}
-        {tab === 'classes' && <ClassesTab enrollments={enrollments} expandedCards={expandedCards} toggleCard={toggleCard} nextTerm={nextTerm} slug={org.slug} />}
+        {tab === 'classes' && <ClassesTab enrollments={enrollments} expandedCards={expandedCards} toggleCard={toggleCard} slug={org.slug} />}
         {tab === 'settings' && <SettingsTab prefs={prefs} savingPrefs={savingPrefs} prefsSaved={prefsSaved} onToggle={(key) => savePrefs({ ...prefs, [key]: !prefs[key] })} supportEmail={supportEmail} />}
       </div>
     </div>
@@ -384,25 +398,7 @@ function TodayTab({ todayClasses, upcomingClasses, enrollments, notifications, s
 
   return (
     <div className="space-y-6">
-      {todayClasses.length > 0 ? (
-        <>
-          <SectionLabel>Today in class</SectionLabel>
-          {todayClasses.map((e) => <TodayCard key={e.id} enrollment={e} />)}
-        </>
-      ) : (
-        <div className="rounded-2xl border border-j2s-purple/10 bg-white p-6 text-center shadow-card">
-          <p className="text-sm text-j2s-ink/50">No classes today</p>
-        </div>
-      )}
-
-      {upcomingClasses.length > 0 && (
-        <>
-          <SectionLabel>Coming up</SectionLabel>
-          {upcomingClasses.slice(0, 3).map((e) => <UpcomingCard key={e.id} enrollment={e} />)}
-        </>
-      )}
-
-      {/* Notification feed */}
+      {/* Notification feed — top of page */}
       {notifications.length > 0 && (
         <>
           <SectionLabel>From Journey to STEAM</SectionLabel>
@@ -422,6 +418,24 @@ function TodayTab({ todayClasses, upcomingClasses, enrollments, notifications, s
               </div>
             ))}
           </div>
+        </>
+      )}
+
+      {todayClasses.length > 0 ? (
+        <>
+          <SectionLabel>Today in class</SectionLabel>
+          {todayClasses.map((e) => <TodayCard key={e.id} enrollment={e} />)}
+        </>
+      ) : (
+        <div className="rounded-2xl border border-j2s-purple/10 bg-white p-6 text-center shadow-card">
+          <p className="text-sm text-j2s-ink/50">No classes today</p>
+        </div>
+      )}
+
+      {upcomingClasses.length > 0 && (
+        <>
+          <SectionLabel>Coming up</SectionLabel>
+          {upcomingClasses.slice(0, 3).map((e) => <UpcomingCard key={e.id} enrollment={e} />)}
         </>
       )}
     </div>
@@ -600,7 +614,7 @@ function ScheduleTab({ enrollments }) {
 /* ==================================================================== */
 /*  CLASSES TAB                                                         */
 /* ==================================================================== */
-function ClassesTab({ enrollments, expandedCards, toggleCard, nextTerm, slug }) {
+function ClassesTab({ enrollments, expandedCards, toggleCard, slug }) {
   if (enrollments.length === 0) {
     return <EmptyState title="No enrollments yet" body="Browse programs to get started." cta="Browse programs" to={`/${slug}`} />;
   }
@@ -624,13 +638,6 @@ function ClassesTab({ enrollments, expandedCards, toggleCard, nextTerm, slug }) 
           </div>
         </div>
       ))}
-      {nextTerm && (
-        <div className="rounded-2xl border border-j2s-green/20 bg-j2s-green/5 p-5 text-center">
-          <p className="font-bold text-j2s-ink">{TERM_LABELS[nextTerm]} registration is open</p>
-          <p className="mt-1 text-sm text-j2s-ink/60">Secure your spot for the upcoming term.</p>
-          <Link to={`/${slug}`} className="mt-3 inline-block rounded-lg bg-j2s-purple px-5 py-2.5 text-sm font-bold text-white transition hover:bg-j2s-purple-dark">Browse programs</Link>
-        </div>
-      )}
     </div>
   );
 }
