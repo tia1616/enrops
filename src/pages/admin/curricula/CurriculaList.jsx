@@ -290,13 +290,6 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
   // yet (expected); for Published the review has happened already.
   const showNeedsReview = c.status === "extracted" && flagCount > 0;
 
-  // Capability strip: 8 icons per row, color-coded unlocked/locked.
-  // Only show on extracted/published cards — draft cards don't have content yet.
-  const showCapStrip = (c.status === "extracted" || c.status === "published") && capabilities.length > 0;
-  const stripCapabilities = showCapStrip ? capabilities.slice(0, 8) : [];
-  const satisfiedStates = showCapStrip ? deriveOrgStatesForCurriculum(c, scheduledCount) : new Set();
-  const unlockedCount = stripCapabilities.filter((cap) => isCapabilityUnlocked(cap, satisfiedStates)).length;
-
   return (
     <div style={cardStyle}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
@@ -327,46 +320,6 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
       <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
         {ageLabel} · {sessionsLabel} · {formatLabel}
       </div>
-      {showCapStrip && (
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}` }}>
-          <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 6 }}>
-            {unlockedCount} of {stripCapabilities.length} unlocked
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-            {stripCapabilities.map((cap) => {
-              const unlocked = isCapabilityUnlocked(cap, satisfiedStates);
-              const glyph = CAPABILITY_ICONS[cap.icon_name] ?? "•";
-              return (
-                <button
-                  key={cap.slug}
-                  type="button"
-                  onClick={() => onCapabilityClick?.(cap, unlocked)}
-                  title={unlocked
-                    ? `${cap.display_name} — unlocked (click for details)`
-                    : `${cap.display_name} — ${cap.required_states_human || "locked"} (click for details)`}
-                  style={{
-                    width: 26,
-                    height: 26,
-                    borderRadius: "50%",
-                    border: `1px solid ${unlocked ? "rgba(78, 145, 78, 0.45)" : RULE}`,
-                    background: unlocked ? "rgba(78, 145, 78, 0.12)" : "#f7f6ef",
-                    color: unlocked ? "#2d5a2d" : MUTED,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 13,
-                    cursor: "pointer",
-                    padding: 0,
-                    fontFamily: "inherit",
-                  }}
-                >
-                  {glyph}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
       <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
         {cta.map((item, i) => (
           <Link key={i} to={item.to} style={item.primary ? cardCtaPrimary : cardCtaSecondary}>{item.label}</Link>
