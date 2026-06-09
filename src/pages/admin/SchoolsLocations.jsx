@@ -11,6 +11,7 @@
 import { useSearchParams, useOutletContext } from 'react-router-dom';
 import PartnersTab from './contacts/PartnersTab';
 import LocationsList from './LocationsList';
+import CalendarsList from './CalendarsList';
 
 const PURPLE = '#1C004F';
 const INK = '#1a1a1a';
@@ -18,8 +19,9 @@ const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
 
 const TABS = [
-  { key: 'partners',  label: 'Schools & partners', help: 'The schools, districts, and orgs you partner with.' },
+  { key: 'partners',  label: 'Schools & partners', help: 'The schools, districts, and orgs you partner with — and your contacts there.' },
   { key: 'locations', label: 'Locations',          help: 'Where programs actually run — venues with addresses, room numbers, and arrival info.' },
+  { key: 'calendars', label: 'Calendars',          help: "District academic calendars — no-school days that flow into every program's session dates." },
 ];
 
 export default function SchoolsLocations() {
@@ -34,7 +36,7 @@ export default function SchoolsLocations() {
     <div>
       <header style={{ marginBottom: 12 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.3 }}>
-          Schools &amp; locations
+          Partners
         </h1>
         <p style={{ color: MUTED, marginTop: 6, fontSize: 13.5, lineHeight: 1.5 }}>
           {active.help}
@@ -71,6 +73,7 @@ export default function SchoolsLocations() {
 
       {tab === 'partners'  && <PartnersTab org={org} />}
       {tab === 'locations' && <LocationsList />}
+      {tab === 'calendars' && <CalendarsList />}
     </div>
   );
 }

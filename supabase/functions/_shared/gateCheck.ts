@@ -156,7 +156,7 @@ async function sendOnboardingCompleteEmails(
     ``,
     `Paperwork signed, background check cleared, Stripe Connect set up. They're ready to be assigned to camps or programs.`,
     ``,
-    `View their record: https://enrops.com/admin/contacts`,
+    `View their record: https://enrops.com/admin/instructors`, // was /admin/contacts (retired 2026-06-08)
   ].join('\n');
 
   try {

@@ -3,8 +3,8 @@
 // All admin pages render inside <Outlet />. Enrops chrome (Plum/Gold/Chalk).
 // Multi-tenant: never hardcodes J2S. Reads org from logged-in user's org_members row.
 
-import { useEffect, useMemo, useState } from "react";
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
@@ -18,46 +18,63 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 
-// Top-level nav. Items with `children` render as expandable groups (the parent
-// label is not itself a route — clicking toggles the group; child routes do
-// the navigating). A group auto-expands when any of its children is active.
+// Flat sidebar nav — every item is a single page. Sections with multiple
+// facets (Programs, Instructors, Money, Family Comms) expose an in-page tab
+// strip (rendered in <main>) instead of an expandable sidebar group, so the
+// sidebar pattern is uniform. Partners (/admin/schools) owns its own internal
+// ?tab= tabs, so it has no shell tab strip — `match` keeps the sidebar item lit
+// on its sub-routes (incl. the retired /admin/calendars, which now redirects
+// into the Calendars tab).
+//
+// URL guardrail: /admin/finances stays put — the Stripe return_url in
+// stripe-connect-onboard is hardcoded to /admin/finances?stripe=return.
 const NAV = [
   { to: "/admin", label: "Overview", end: true },
-  { to: "/admin/family-comms/marketing", label: "Family Comms" },
   {
-    label: "Programs",
-    group: "programs",
-    children: [
+    to: "/admin/curricula", label: "Programs",
+    tabs: [
       { to: "/admin/curricula", label: "Curricula" },
       { to: "/admin/programs", label: "Scheduled programs" },
       { to: "/admin/rosters", label: "Class rosters" },
-      { to: "/admin/schools", label: "Schools & locations" },
-      { to: "/admin/calendars", label: "School calendars" },
     ],
   },
   {
-    label: "Instructors",
-    group: "instructors",
-    children: [
-      { to: "/admin/instructors", label: "Instructor roster" },
-      { to: "/admin/schedule", label: "Instructor schedule" },
+    to: "/admin/schools", label: "Partners",
+    match: ["/admin/schools", "/admin/calendars"],
+  },
+  {
+    to: "/admin/instructors", label: "Instructors",
+    tabs: [
+      { to: "/admin/instructors", label: "Roster" },
+      { to: "/admin/schedule", label: "Schedule" },
     ],
   },
   {
-    label: "Money",
-    group: "money",
-    children: [
-      // /admin/finances = Receivables. URL stays /admin/finances for now so
-      // the Stripe return_url hardcoded in stripe-connect-onboard
-      // (/admin/finances?stripe=return) keeps working. Will rename URL when
-      // we next touch that edge function.
+    to: "/admin/finances", label: "Money",
+    tabs: [
       { to: "/admin/finances", label: "Receivables" },
       { to: "/admin/payouts", label: "Payouts" },
+    ],
+  },
+  {
+    to: "/admin/family-comms/marketing", label: "Family Comms",
+    tabs: [
+      { to: "/admin/family-comms/marketing", label: "Marketing" },
+      { to: "/admin/family-comms/automations", label: "Automations" },
     ],
   },
   { to: "/admin/community", label: "Community", soon: true },
   { to: "/admin/settings", label: "Settings" },
 ];
+
+// A sidebar item is "active" when the current path is (or is under) any of its
+// routes. Overview matches exactly; tabbed sections match any tab route;
+// Partners matches its `match` list; otherwise the item's own `to`.
+function navItemActive(item, pathname) {
+  if (item.end) return pathname === item.to;
+  const roots = item.tabs ? item.tabs.map((t) => t.to) : item.match || [item.to];
+  return roots.some((r) => pathname === r || pathname.startsWith(r + "/"));
+}
 
 export default function AdminLayout() {
   const navigate = useNavigate();
@@ -72,32 +89,12 @@ export default function AdminLayout() {
   // from any admin page. Null = unchecked / not an instructor.
   const [adminInstructorSlug, setAdminInstructorSlug] = useState(null);
   const [debugInfo, setDebugInfo] = useState(null);
-  const [openGroups, setOpenGroups] = useState(() => new Set());
   // Lifetime time-saved tally (rolling sum of time_saved_events for this org).
   // See project_enrops_time_saved memory: every Director action that completes
   // work for the operator inserts a row; this is the always-on receipt.
   const [timeSavedTotal, setTimeSavedTotal] = useState(null);
   const [timeSavedRecent, setTimeSavedRecent] = useState([]);
   const [tallyOpen, setTallyOpen] = useState(false);
-
-  // Groups whose child route is currently active are forced open regardless of toggle state.
-  const activeGroupKeys = useMemo(() => {
-    const active = new Set();
-    for (const item of NAV) {
-      if (item.children && item.children.some((c) => location.pathname.startsWith(c.to))) {
-        active.add(item.group);
-      }
-    }
-    return active;
-  }, [location.pathname]);
-
-  function toggleGroup(key) {
-    setOpenGroups((prev) => {
-      const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
-      return next;
-    });
-  }
 
   useEffect(() => {
     let mounted = true;
@@ -244,6 +241,15 @@ export default function AdminLayout() {
     );
   }
 
+  // Which tabbed section (if any) the current route belongs to, and whether to
+  // show its in-page tab strip — only on the tab root pages, not deep sub-flows
+  // like /admin/curricula/:id/review.
+  const activeTabSection = NAV.find(
+    (it) => it.tabs && it.tabs.some((t) => location.pathname === t.to || location.pathname.startsWith(t.to + "/"))
+  );
+  const showSectionTabs =
+    activeTabSection && activeTabSection.tabs.some((t) => location.pathname === t.to);
+
   return (
     <div style={{ minHeight: "100vh", background: CREAM, fontFamily: "'Poppins', system-ui, sans-serif", color: INK }}>
       <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
@@ -269,77 +275,12 @@ export default function AdminLayout() {
 
           <nav style={{ padding: "12px 8px", flex: 1 }}>
             {NAV.map((item) => {
-              if (item.children) {
-                const isOpen = openGroups.has(item.group) || activeGroupKeys.has(item.group);
-                return (
-                  <div key={item.group}>
-                    <button
-                      onClick={() => toggleGroup(item.group)}
-                      style={{
-                        display: "flex", alignItems: "center", justifyContent: "space-between",
-                        width: "100%", padding: "9px 12px", margin: "1px 0", borderRadius: 6,
-                        fontSize: 14, fontWeight: 500, color: INK,
-                        background: "transparent", border: "none", cursor: "pointer",
-                        fontFamily: "inherit", textAlign: "left",
-                      }}
-                    >
-                      <span>{item.label}</span>
-                      <span style={{ fontSize: 10, color: MUTED, transition: "transform 0.15s", transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▸</span>
-                    </button>
-                    {isOpen && item.children.map((child) => (
-                      <NavLink
-                        key={child.to}
-                        to={child.to}
-                        end={child.end}
-                        style={({ isActive }) => ({
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          padding: "7px 12px 7px 26px",
-                          margin: "1px 0",
-                          borderRadius: 6,
-                          fontSize: 13,
-                          fontWeight: isActive ? 600 : 500,
-                          color: isActive ? PURPLE : (child.soon ? MUTED : INK),
-                          background: isActive ? `${VIOLET}22` : "transparent",
-                          textDecoration: "none",
-                          cursor: child.soon ? "default" : "pointer",
-                          pointerEvents: child.soon ? "none" : "auto",
-                        })}
-                      >
-                        <span>{child.label}</span>
-                        {child.soon && (
-                          <span style={{ fontSize: 10, color: MUTED, fontWeight: 500, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                            soon
-                          </span>
-                        )}
-                      </NavLink>
-                    ))}
-                  </div>
-                );
-              }
-              return item.external ? (
-                <a
+              const active = navItemActive(item, location.pathname);
+              return (
+                <Link
                   key={item.to}
-                  href={item.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  to={item.soon ? location.pathname : item.to}
                   style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                    padding: "9px 12px", margin: "1px 0", borderRadius: 6,
-                    fontSize: 14, fontWeight: 500, color: INK,
-                    background: "transparent", textDecoration: "none",
-                  }}
-                >
-                  <span>{item.label}</span>
-                  <span style={{ fontSize: 10, color: MUTED }}>↗</span>
-                </a>
-              ) : (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.end}
-                  style={({ isActive }) => ({
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
@@ -347,13 +288,13 @@ export default function AdminLayout() {
                     margin: "1px 0",
                     borderRadius: 6,
                     fontSize: 14,
-                    fontWeight: isActive ? 600 : 500,
-                    color: isActive ? PURPLE : (item.soon ? MUTED : INK),
-                    background: isActive ? `${VIOLET}22` : "transparent",
+                    fontWeight: active ? 600 : 500,
+                    color: active ? PURPLE : (item.soon ? MUTED : INK),
+                    background: active ? `${VIOLET}22` : "transparent",
                     textDecoration: "none",
                     cursor: item.soon ? "default" : "pointer",
                     pointerEvents: item.soon ? "none" : "auto",
-                  })}
+                  }}
                 >
                   <span>{item.label}</span>
                   {item.soon && (
@@ -361,7 +302,7 @@ export default function AdminLayout() {
                       soon
                     </span>
                   )}
-                </NavLink>
+                </Link>
               );
             })}
           </nav>
@@ -472,6 +413,32 @@ export default function AdminLayout() {
 
         {/* Main */}
         <main data-admin-main style={{ padding: "28px 36px", maxWidth: 1200 }}>
+          {showSectionTabs && (
+            <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 22 }}>
+              {activeTabSection.tabs.map((t) => {
+                const tabActive =
+                  location.pathname === t.to || location.pathname.startsWith(t.to + "/");
+                return (
+                  <Link
+                    key={t.to}
+                    to={t.to}
+                    style={{
+                      padding: "8px 14px",
+                      borderBottom: tabActive ? `2px solid ${PURPLE}` : "2px solid transparent",
+                      color: tabActive ? PURPLE : MUTED,
+                      fontWeight: tabActive ? 700 : 500,
+                      fontSize: 13,
+                      textDecoration: "none",
+                      position: "relative",
+                      top: 1,
+                    }}
+                  >
+                    {t.label}
+                  </Link>
+                );
+              })}
+            </div>
+          )}
           <Outlet context={{ user, org, orgMember }} />
         </main>
       </div>

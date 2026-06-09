@@ -24,8 +24,6 @@ import ProgramsCalendar from './pages/admin/programs/ProgramsCalendar.jsx';
 import ProgramWizardNew from './pages/admin/programs/ProgramWizardNew.jsx';
 import ProgramRoster from './pages/admin/programs/ProgramRoster.jsx';
 import LocationsList from './pages/admin/LocationsList.jsx';
-import CalendarsList from './pages/admin/CalendarsList.jsx';
-import AdminContacts from './pages/admin/contacts/AdminContacts.jsx';
 import SchoolsLocations from './pages/admin/SchoolsLocations.jsx';
 import InstructorsPage from './pages/admin/instructors/InstructorsPage.jsx';
 import Payroll from './pages/admin/Payroll.jsx';
@@ -145,8 +143,10 @@ export default function App() {
         <Route path="schools" element={<SchoolsLocations />} />
         {/* Legacy URLs kept alive so bookmarks/email links still resolve. */}
         <Route path="locations" element={<LocationsList />} />
-        <Route path="calendars" element={<CalendarsList />} />
-        <Route path="contacts" element={<AdminContacts />} />
+        {/* Calendars folded into the Partners page (/admin/schools) as a tab;
+            Contacts retired (Partners tab is its home). Redirect stale links. */}
+        <Route path="calendars" element={<Navigate to="/admin/schools?tab=calendars" replace />} />
+        <Route path="contacts" element={<Navigate to="/admin/schools?tab=partners" replace />} />
         <Route path="instructors" element={<InstructorsPage />} />
         <Route path="payroll" element={<Payroll />} />
         <Route path="rosters" element={<Rosters />} />

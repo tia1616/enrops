@@ -1,4 +1,4 @@
-// Instructors tab for /admin/contacts. Lists everyone in the admin's org
+// Instructors roster (rendered at /admin/instructors). Lists everyone in the admin's org
 // with the full picture: display name (preferred_name fallback to legal
 // first_name), legal name, email, phone, contractor tier, onboarding
 // status, date of birth (with age + minor flag), shirt size, site
