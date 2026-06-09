@@ -3145,20 +3145,18 @@ function PayView({ instructorId, onBack }) {
       )}
 
       {data !== null && (
-        <div style={{ marginTop: 22, padding: "16px 18px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10 }}>
+        <div style={{ position: "relative", marginTop: 22, padding: "16px 18px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10 }}>
+          {/* Decorative nudge toward the CTA. Enrops green by default; once
+              tenant branding is wired into the portal, pass
+              color={branding?.primary_color} so it adopts the tenant's color. */}
+          <SquiggleAccent variant="arrow" width={88} height={48} style={{ position: "absolute", top: -22, right: 34, pointerEvents: "none" }} />
           <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginBottom: 4 }}>
             Manage payouts, bank info, and tax docs
           </div>
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 1.5 }}>
             Opens your Stripe Express. If your account isn&rsquo;t finished yet, you&rsquo;ll land on the setup form to add your bank, address, and SSN &mdash; Stripe will pick up where you left off. If you&rsquo;re done, you go straight to your payouts dashboard where your W&#8209;9 and 1099 live.
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <StripeExpressDeepLink variant="button" title="Open your Stripe Express →" />
-            {/* Decorative nudge toward the CTA. Enrops green by default; once
-                tenant branding is wired into the portal, pass
-                color={branding?.primary_color} so it adopts the tenant's color. */}
-            <SquiggleAccent variant="arrow" style={{ transform: "scaleX(-1)" }} />
-          </div>
+          <StripeExpressDeepLink variant="button" title="Open your Stripe Express →" />
         </div>
       )}
     </div>

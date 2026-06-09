@@ -24,30 +24,31 @@ export default function SquiggleAccent({
   ariaHidden = true,
 }) {
   if (variant === "arrow") {
-    const w = width ?? 76;
-    const h = height ?? 40;
+    const w = width ?? 88;
+    const h = height ?? 48;
     return (
       <svg
         width={w}
         height={h}
-        viewBox="0 0 76 40"
+        viewBox="0 0 88 48"
         fill="none"
         aria-hidden={ariaHidden}
         style={{ display: "block", overflow: "visible", ...style }}
       >
-        {/* a loose squiggle that curves down toward the target */}
+        {/* hand-drawn wavy tail (two humps) that lifts up to the right */}
         <path
-          d="M4 7 Q 22 0, 33 13 T 58 26"
+          d="M5 32 C 9 22, 18 22, 22 31 C 25 37, 31 36, 35 27 C 43 11, 60 7, 77 12"
           stroke={color}
-          strokeWidth="2.6"
+          strokeWidth="3"
           strokeLinecap="round"
+          strokeLinejoin="round"
           fill="none"
         />
-        {/* arrowhead */}
+        {/* arrowhead at the tip, opening to the lower-left (points up-right) */}
         <path
-          d="M49 22 L60 28 L50 33"
+          d="M65 8 L79 11 L74 24"
           stroke={color}
-          strokeWidth="2.6"
+          strokeWidth="3"
           strokeLinecap="round"
           strokeLinejoin="round"
           fill="none"
