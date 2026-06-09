@@ -17,7 +17,7 @@ import { supabase } from "../../../../lib/supabase.js";
 import QuestionStep from "../QuestionStep.jsx";
 import PeriodCards from "../PeriodCards.jsx";
 import { isLowEnrollment as sharedIsLowEnrollment, usePeriodCards } from "../lib/periodDetection.js";
-import { PURPLE, RULE, INK, MUTED, OK, INFO, WARN } from "../../marketing/tokens.jsx";
+import { PURPLE, BRIGHT, RULE, INK, MUTED, OK, INFO, WARN } from "../../marketing/tokens.jsx";
 
 const TABS = [
   { mode: "programs", label: "After-school programs" },
@@ -158,8 +158,8 @@ function TabBar({ mode, onChange }) {
               padding: "10px 16px",
               fontSize: 14,
               fontWeight: active ? 600 : 500,
-              color: active ? PURPLE : MUTED,
-              borderBottom: active ? `2px solid ${PURPLE}` : "2px solid transparent",
+              color: active ? BRIGHT : MUTED,
+              borderBottom: active ? `2px solid ${BRIGHT}` : "2px solid transparent",
               marginBottom: -1,
               cursor: "pointer",
               fontFamily: "inherit",

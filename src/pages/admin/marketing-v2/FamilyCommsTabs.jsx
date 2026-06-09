@@ -7,7 +7,7 @@
 //   Automations bypass it — they're service comms to active families.
 
 import { Link } from "react-router-dom";
-import { PURPLE, INK, MUTED, RULE } from "../marketing/tokens.jsx";
+import { PURPLE, BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 
 export default function FamilyCommsTabs({ active }) {
   return (
@@ -40,10 +40,10 @@ function TabLink({ to, active, children }) {
       style={{
         padding: "12px 20px",
         textDecoration: "none",
-        color: active ? PURPLE : MUTED,
+        color: active ? BRIGHT : MUTED,
         fontWeight: active ? 700 : 500,
         fontSize: 15,
-        borderBottom: active ? `2px solid ${PURPLE}` : "2px solid transparent",
+        borderBottom: active ? `2px solid ${BRIGHT}` : "2px solid transparent",
         marginBottom: -1,
         transition: "color 120ms",
       }}

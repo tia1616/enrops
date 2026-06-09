@@ -14,6 +14,7 @@ import LocationsList from './LocationsList';
 import CalendarsList from './CalendarsList';
 
 const PURPLE = '#1C004F';
+const BRIGHT = '#5847C9';   // indigo - active tabs/actions (Figma)
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
@@ -55,8 +56,8 @@ export default function SchoolsLocations() {
                 padding: '8px 14px',
                 background: 'transparent',
                 border: 'none',
-                borderBottom: isActive ? `2px solid ${PURPLE}` : '2px solid transparent',
-                color: isActive ? PURPLE : MUTED,
+                borderBottom: isActive ? `2px solid ${BRIGHT}` : '2px solid transparent',
+                color: isActive ? BRIGHT : MUTED,
                 fontWeight: isActive ? 700 : 500,
                 fontSize: 13,
                 fontFamily: 'inherit',

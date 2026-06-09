@@ -782,8 +782,8 @@ function TabBtn({ active, onClick, label }) {
       onClick={onClick}
       style={{
         padding: '8px 14px', background: 'transparent', border: 'none',
-        borderBottom: active ? `2px solid ${PURPLE}` : '2px solid transparent',
-        color: active ? PURPLE : MUTED, fontSize: 13, fontWeight: 600,
+        borderBottom: active ? `2px solid ${BRIGHT}` : '2px solid transparent',
+        color: active ? BRIGHT : MUTED, fontSize: 13, fontWeight: 600,
         fontFamily: 'inherit', cursor: 'pointer', marginBottom: -1,
       }}
     >{label}</button>

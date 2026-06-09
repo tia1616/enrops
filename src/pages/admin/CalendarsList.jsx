@@ -892,7 +892,7 @@ function ModeTab({ active, onClick, label }) {
       type="button"
       onClick={onClick}
       style={{
-        ...btn(active ? PURPLE : "transparent", active ? "#fff" : PURPLE, !active),
+        ...btn(active ? BRIGHT : "transparent", active ? "#fff" : BRIGHT, !active),
         padding: "6px 12px",
         fontSize: 13,
       }}

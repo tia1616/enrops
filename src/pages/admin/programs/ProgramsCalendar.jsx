@@ -773,7 +773,9 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
             }}
             title="Expand to edit dates, time, capacity, status, and more"
           >
-            <span style={{ fontSize: 9, lineHeight: 1 }}>{isDatesExpanded ? "▴" : "▾"}</span>
+            <svg width="9" height="9" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0, transform: isDatesExpanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+              <path d="M3 4.5 L6 7.5 L9 4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
             {isDatesExpanded ? "Hide" : "Expand"}
           </button>
           <FacilityPill program={p} onClick={() => onEditFacility?.(p)} />
