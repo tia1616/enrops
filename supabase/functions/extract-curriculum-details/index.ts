@@ -282,6 +282,32 @@ async function processExtractionInBackground(
         .download(doc.storage_path);
       if (dlErr || !fileData) throw new Error(`Could not download document: ${dlErr?.message ?? "no file"}`);
       const bytes = new Uint8Array(await fileData.arrayBuffer());
+
+      // File-hash dedup: if the same org already extracted an identical file,
+      // copy those results instead of re-calling Claude.
+      const hashBuf = await crypto.subtle.digest("SHA-256", bytes);
+      const fileHash = [...new Uint8Array(hashBuf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      await admin.from("curriculum_documents").update({ file_hash: fileHash }).eq("id", documentId);
+
+      const { data: existingDoc } = await admin
+        .from("curriculum_documents")
+        .select("id, extraction_result, extracted_text, curriculum_id")
+        .eq("organization_id", organizationId)
+        .eq("file_hash", fileHash)
+        .eq("extraction_status", "complete")
+        .neq("id", documentId)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingDoc?.extraction_result && existingDoc.extracted_text) {
+        await markStatus("complete", "Done! (matched a previously extracted copy)", {
+          extraction_result: existingDoc.extraction_result,
+          extracted_text: existingDoc.extracted_text,
+          extraction_error: null,
+        });
+        return;
+      }
+
       documentText = await parseDocument(bytes, ext);
     } else if (doc.source_type === "drive_link" && doc.extracted_text) {
       documentText = doc.extracted_text;

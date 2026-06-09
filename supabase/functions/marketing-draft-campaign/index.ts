@@ -47,10 +47,10 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
-// Opus 4.6 picked over Sonnet 4.6 for marketing copy quality. Jessica's
-// feedback: Opus 4.7 "overthinks" the draft and produces colder copy. 4.6
-// stays warm and punchy. Override per-deploy via MARKETING_DRAFT_MODEL.
-const DRAFT_MODEL = Deno.env.get("MARKETING_DRAFT_MODEL") ?? "claude-opus-4-6";
+// Sonnet 4.6 — switched from Opus 4.6 for cost (June 2026 review). ~5x
+// cheaper, acceptable quality for parent-facing email copy. Revert via
+// MARKETING_DRAFT_MODEL env var if copy quality drops.
+const DRAFT_MODEL = Deno.env.get("MARKETING_DRAFT_MODEL") ?? "claude-sonnet-4-6";
 
 // Multi-touchpoint schedules return ~6-9 emails worth of JSON. 8000 max_tokens
 // fits comfortably; if Ennie wants more, future chunks can stream or paginate.
@@ -1793,6 +1793,28 @@ serve(async (req: Request) => {
   // explicit auth gate above; service role lets us avoid second-guessing each
   // policy from inside this trusted function).
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+  // ---- Rate limit: 15s cooldown + 50 drafts/day per org ----
+  const DRAFT_COOLDOWN_MS = 15_000;
+  const DAILY_DRAFT_CAP = 50;
+  const { data: recentDrafts, error: rlErr } = await supabase
+    .from("marketing_campaigns")
+    .select("created_at")
+    .eq("organization_id", organization_id)
+    .eq("draft_source", "ai_assisted")
+    .gte("created_at", new Date(Date.now() - 86_400_000).toISOString())
+    .order("created_at", { ascending: false })
+    .limit(DAILY_DRAFT_CAP + 1);
+  if (!rlErr && recentDrafts && recentDrafts.length > 0) {
+    const lastCreated = new Date(recentDrafts[0].created_at).getTime();
+    if (Date.now() - lastCreated < DRAFT_COOLDOWN_MS) {
+      const waitSec = Math.ceil((DRAFT_COOLDOWN_MS - (Date.now() - lastCreated)) / 1000);
+      return jsonError(`Please wait ${waitSec}s before generating another draft`, 429, { retry_after_seconds: waitSec });
+    }
+    if (recentDrafts.length > DAILY_DRAFT_CAP) {
+      return jsonError("Daily draft limit reached (50 per org). Try again tomorrow.", 429);
+    }
+  }
 
   // ---- Audience gate (v1: parents only) ----
   if (inputs.who.audience !== "parents") {
