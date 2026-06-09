@@ -55,11 +55,11 @@ export default function App() {
     <>
     <PwaUpdateToast />
     <Routes>
-      {/* Staging also runs EnropsLanding's smart-redirect, but sends signed-OUT
-          visitors to /admin/login instead of the marketing homepage. The old
-          hard redirect to /admin/login skipped the smart-redirect, so a freshly
-          signed-in user looped back to the login page. */}
-      <Route path="/" element={IS_STAGING ? <EnropsLanding signedOutTo="/admin/login" /> : <EnropsLanding />} />
+      {/* enrops.com home = the State 1 invite-only entry card (see Landing.jsx).
+          Signed-in users smart-redirect to their portal; signed-out browser
+          users see the card (with its own Log in button), so staging + prod
+          behave the same now. */}
+      <Route path="/" element={<EnropsLanding />} />
       <Route path="/privacy" element={<PolicyPage policyType="privacy" orgSlug="enrops" />} />
       <Route path="/terms" element={<PolicyPage policyType="terms" orgSlug="enrops" />} />
       <Route path="/acceptable-use" element={<PolicyPage policyType="acceptable-use" orgSlug="enrops" />} />
@@ -117,6 +117,10 @@ export default function App() {
       <Route path="/:slug/onboarding" element={<OnboardingRouter />} />
       <Route path="/:slug/onboarding/declined" element={<DeclinedPage />} />
       <Route path="/:slug/onboarding/abandoned" element={<AbandonedPage />} />
+      {/* /login is the public, brand-stable sign-in URL (Arielle wires the
+          getenrops.com Login button to it). Renders the same universal sign-in
+          as /admin/login (which stays for back-compat + Stripe return_urls). */}
+      <Route path="/login" element={<AdminLogin />} />
       <Route path="/admin/login" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<AdminOverview />} />

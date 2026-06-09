@@ -4,26 +4,26 @@ import { supabase } from '../../lib/supabase.js';
 import { parentLandingPath } from '../../lib/tenants.js';
 import EnropsWordmark from '../../components/EnropsWordmark.jsx';
 
-// PwaInstallButton intentionally NOT mounted on the Enrops homepage.
-// First-time visitors haven't signed up yet — installing a SaaS app shell
-// they can't actually use is friction without value. The install affordance
-// lives on the authenticated portals (admin, instructor, J2S parent) where
-// the user already has a reason to come back.
+// enrops.com home page.
+//
+// Per Arielle's homepage brief (2026-06-09): enrops.com is the PLATFORM entry
+// point, NOT a marketing page (that's getenrops.com). State 1 (pre-launch /
+// invite-only): cohort members log in; everyone else is sent to getenrops.com
+// to request access. State 2 (self-serve, future) swaps the copy — Arielle will
+// say when. Marketing-brand palette (deep purple / violet / mint), intentionally
+// distinct from the app's indigo interior (Jessica's call 2026-06-09).
 //
 // Smart-redirect: when a signed-in user lands on '/', we route them to the
-// portal that matches their role. PWA-installed users tap their home-screen
-// icon to start working — sending them to '/' (the manifest start_url) and
-// bouncing them to their portal is the cleanest way to make the icon "just
-// work" without per-role manifests.
+// portal that matches their role (better than the spec's generic /dashboard).
 //   - org_member (admin/owner)                  -> /admin
 //   - instructor (active in instructors table)  -> /:slug/instructor
 //   - signed-in but neither (parent / family)   -> /j2s (parent portal)
 //   - not signed in + PWA                       -> /admin/login (universal)
-//   - not signed in + browser                   -> stay on Enrops homepage
+//   - not signed in + browser                   -> render State 1
 export default function EnropsLanding({ signedOutTo = null } = {}) {
   const navigate = useNavigate();
-  // Track whether we've finished the role check so we don't flash marketing
-  // copy for a split second before the redirect lands.
+  // Track whether we've finished the role check so we don't flash the State-1
+  // card for a split second before a signed-in user's redirect lands.
   const [roleChecked, setRoleChecked] = useState(false);
 
   useEffect(() => {
@@ -34,21 +34,13 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
         if (cancelled) return;
         if (!session?.user) {
           // PWA-installed user tapped the home-screen icon while signed out.
-          // The marketing page is dead weight for them — bounce to the
-          // sign-in flow. After sign-in we land back on /admin (admin login
-          // default), and from there the layout's auth check routes them
-          // correctly based on org_members / instructor role.
-          //
-          // Detection: display-mode: standalone fires inside an installed
-          // PWA on Android + desktop Chrome; navigator.standalone is the
-          // iOS Safari equivalent.
+          // The card is dead weight for them — bounce to the sign-in flow.
+          // Detection: display-mode: standalone fires inside an installed PWA
+          // on Android + desktop Chrome; navigator.standalone is iOS Safari.
           const inPwa =
             window.matchMedia?.('(display-mode: standalone)').matches ||
             window.navigator.standalone === true;
-          // signedOutTo lets a caller (e.g. the staging root route) send
-          // signed-out visitors straight to a sign-in page instead of the
-          // marketing homepage. PWA users still default to /admin/login.
-          const signedOutTarget = signedOutTo || (inPwa ? '/admin/login' : null);
+          const signedOutTarget = signedOutTo || (inPwa ? '/login' : null);
           if (signedOutTarget) {
             navigate(signedOutTarget, { replace: true });
             return;
@@ -79,9 +71,6 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
           .maybeSingle();
         if (cancelled) return;
         if (instructor) {
-          // Look up the org slug so multi-tenant works. For J2S today the
-          // slug is just 'j2s' but we resolve it dynamically so a second
-          // tenant doesn't require code changes.
           const { data: org } = await supabase
             .from('organizations')
             .select('slug')
@@ -95,13 +84,10 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
         }
 
         // Signed in but neither admin nor instructor — they're a parent.
-        // parentLandingPath() centralizes the v1 single-tenant shortcut
-        // (returns '/j2s' today, will become a real lookup when a second
-        // tenant lands). See lib/tenants.js.
         navigate(parentLandingPath(session.user.id), { replace: true });
         return;
       } catch (err) {
-        // Auth check failed — show marketing rather than blocking on errors.
+        // Auth check failed — show the card rather than blocking on errors.
         console.error('[EnropsLanding] role check failed', err);
         if (!cancelled) setRoleChecked(true);
       }
@@ -109,216 +95,111 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
     return () => { cancelled = true; };
   }, [navigate, signedOutTo]);
 
-  // Hide the marketing flash while we're still resolving the role. ~100ms
-  // typical, much less if the session is empty.
+  // Deep-purple holding screen while we resolve the role — avoids a flash of
+  // the card before a signed-in user redirects to their portal.
   if (!roleChecked) {
     return (
-      <div className="brand-enrops flex min-h-screen items-center justify-center bg-enrops-cream text-enrops-ink/60">
-        Loading…
+      <div style={{
+        minHeight: '100vh', background: '#1C004F', color: 'rgba(255,255,255,0.5)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontFamily: "'Poppins', system-ui, sans-serif",
+      }}>
+        Loading&hellip;
       </div>
     );
   }
 
+  // State 1 — pre-launch / invite-only entry point.
   return (
-    <div className="brand-enrops min-h-screen bg-enrops-cream">
-      <header className="border-b border-enrops-purple/10 bg-enrops-cream">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-6 sm:px-6">
-          <Link to="/" className="flex items-center">
-            <EnropsWordmark height={36} />
-          </Link>
-          <nav className="flex items-center gap-6 text-sm font-medium text-enrops-ink">
-            <a href="#features" className="hidden hover:text-enrops-purple sm:inline">
-              Platform
-            </a>
-            <Link
-              to="/j2s"
-              className="rounded-md border border-enrops-purple px-4 py-2 font-medium text-enrops-purple transition hover:bg-enrops-purple hover:text-enrops-cream"
-            >
-              Visit J2S
-            </Link>
-          </nav>
+    <div className="enr-home">
+      <style>{`
+        .enr-home {
+          --deep-purple:#1C004F; --vivid-violet:#8C88FF; --mint-green:#26D687;
+          --soft-lilac:#F2F0FF; --text-muted:#9B9FBB;
+          min-height:100vh; background:var(--deep-purple); color:#fff;
+          font-family:'Poppins',system-ui,sans-serif; -webkit-font-smoothing:antialiased;
+          display:flex; flex-direction:column; align-items:center; justify-content:center;
+          padding:24px; box-sizing:border-box;
+        }
+        .enr-home .home-logo { margin-bottom:48px; }
+        .enr-home .home-card {
+          width:100%; max-width:440px; background:rgba(255,255,255,0.06);
+          border:1px solid rgba(255,255,255,0.1); border-radius:16px;
+          padding:40px 36px; text-align:center; box-sizing:border-box;
+        }
+        .enr-home .status-chip {
+          display:inline-flex; align-items:center; gap:8px;
+          background:rgba(38,214,135,0.12); border:1px solid rgba(38,214,135,0.3);
+          border-radius:100px; padding:6px 14px; margin-bottom:24px;
+        }
+        .enr-home .status-chip .dot {
+          width:7px; height:7px; border-radius:50%; background:var(--mint-green);
+          flex-shrink:0; animation:enrHomePulse 2s ease-in-out infinite;
+        }
+        .enr-home .status-chip span {
+          font-size:12px; font-weight:500; color:var(--mint-green); letter-spacing:0.01em;
+        }
+        @keyframes enrHomePulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+        .enr-home h1 { font-size:24px; font-weight:700; line-height:1.35; margin-bottom:12px; color:#fff; }
+        .enr-home p.lede { font-size:15px; font-weight:400; line-height:1.65; color:var(--text-muted); margin-bottom:32px; }
+        .enr-home .btn-primary {
+          display:block; width:100%; padding:14px 24px; background:var(--mint-green);
+          color:var(--deep-purple); font-family:inherit; font-size:15px; font-weight:600;
+          border:none; border-radius:10px; cursor:pointer; text-decoration:none; text-align:center;
+          transition:opacity 0.15s ease, transform 0.1s ease; margin-bottom:12px;
+        }
+        .enr-home .btn-primary:hover { opacity:0.9; transform:translateY(-1px); }
+        .enr-home .btn-primary:active { transform:translateY(0); }
+        .enr-home .btn-secondary {
+          display:block; width:100%; padding:14px 24px; background:transparent;
+          color:var(--soft-lilac); font-family:inherit; font-size:15px; font-weight:500;
+          border:1px solid rgba(255,255,255,0.2); border-radius:10px; cursor:pointer;
+          text-decoration:none; text-align:center; transition:border-color 0.15s ease, color 0.15s ease;
+        }
+        .enr-home .btn-secondary:hover { border-color:rgba(255,255,255,0.45); color:#fff; }
+        .enr-home .divider { display:flex; align-items:center; gap:12px; margin:16px 0; color:var(--text-muted); font-size:13px; }
+        .enr-home .divider::before, .enr-home .divider::after { content:''; flex:1; height:1px; background:rgba(255,255,255,0.1); }
+        .enr-home .footer-link { margin-top:32px; font-size:13px; color:var(--text-muted); }
+        .enr-home .footer-link a { color:var(--vivid-violet); text-decoration:none; font-weight:500; }
+        .enr-home .footer-link a:hover { text-decoration:underline; }
+        .enr-home .bottom-wordmark { margin-top:24px; font-size:12px; color:rgba(255,255,255,0.2); letter-spacing:0.02em; }
+        @media (max-width:480px){ .enr-home .home-card{ padding:28px 20px; } .enr-home h1{ font-size:20px; } }
+      `}</style>
+
+      <div className="home-logo">
+        <EnropsWordmark height={32} color="#FFFFFF" />
+      </div>
+
+      <div className="home-card">
+        <div className="status-chip">
+          <span className="dot" />
+          <span>Founding cohort &mdash; now open</span>
         </div>
-      </header>
 
-      <main>
-        {/* Hero */}
-        <section className="relative overflow-hidden">
-          <div className="absolute inset-0 -z-10 opacity-60">
-            <svg
-              className="h-full w-full"
-              preserveAspectRatio="none"
-              viewBox="0 0 1200 600"
-            >
-              <defs>
-                <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stopColor="#FBFBFB" />
-                  <stop offset="1" stopColor="#F4E9C8" />
-                </linearGradient>
-              </defs>
-              <rect width="1200" height="600" fill="url(#g1)" />
-              <circle cx="1100" cy="100" r="180" fill="#8C88FF" opacity="0.18" />
-              <circle cx="80" cy="500" r="140" fill="#1C004F" opacity="0.10" />
-            </svg>
-          </div>
+        <h1>The platform is ready for<br />founding members.</h1>
+        <p className="lede">
+          If you&rsquo;re on the list, you can log in below.<br />
+          Not on the list yet? Get early access at getenrops.com.
+        </p>
 
-          <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
-            <div className="max-w-3xl">
-              <span className="inline-block rounded-full bg-enrops-purple/10 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-enrops-purple">
-                The enrichment operations platform
-              </span>
-              <h1 className="mt-6 font-grotesk text-5xl font-bold leading-[1.05] tracking-tight text-enrops-ink sm:text-7xl">
-                Registration is just the <span className="text-enrops-purple">front door.</span>
-              </h1>
-              <p className="mt-6 max-w-2xl font-grotesk text-xl leading-relaxed text-enrops-ink/80">
-                Enrops runs the whole operation. Parent registration, instructor scheduling,
-                school-ready rosters, session recaps, and re-enrollment &mdash; all from
-                one place. Built by operators, for operators.
-              </p>
-              <div className="mt-10 flex flex-wrap gap-3">
-                <a
-                  href="mailto:hello@enrops.com"
-                  className="btn-enrops-primary"
-                >
-                  Request a demo
-                </a>
-                <Link
-                  to="/j2s"
-                  className="inline-flex items-center justify-center gap-2 rounded-md border-2 border-enrops-purple bg-transparent px-6 py-3 font-medium text-enrops-purple transition hover:bg-enrops-purple hover:text-enrops-cream"
-                >
-                  See it live at J2S →
-                </Link>
-              </div>
-            </div>
-          </div>
-        </section>
+        <Link to="/login" className="btn-primary">Log in to enrops</Link>
 
-        {/* Features */}
-        <section id="features" className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
-          <div className="mb-12 max-w-2xl">
-            <h2 className="font-grotesk text-3xl font-bold tracking-tight text-enrops-ink sm:text-4xl">
-              One platform. Every part of the operation.
-            </h2>
-            <p className="mt-4 font-grotesk text-lg text-enrops-ink/70">
-              Stop stitching together Activity Messenger, Sawyer, Jumbula, spreadsheets, Slack, and email.
-              Enrops replaces your program manager, your admin, and your ops spreadsheets &mdash; not just registration.
-            </p>
-          </div>
+        <div className="divider">or</div>
 
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              {
-                title: 'Parent registration',
-                body:
-                  'Multi-child carts, sibling discounts, VIP bundles, installments, waivers, and promo codes &mdash; all built in.',
-              },
-              {
-                title: 'Instructor management',
-                body:
-                  'Schedule, pay, and communicate with mobile contractors. Sub coordination without the Slack chaos.',
-              },
-              {
-                title: 'School-ready rosters',
-                body:
-                  'Automatic Excel delivery with class name, homeroom teacher, room, and instructor contact. The exact format schools want.',
-              },
-              {
-                title: 'Cross-term intelligence',
-                body:
-                  'Identify your highest-LTV families, your cancel-rate hotspots, and where to double down next term.',
-              },
-              {
-                title: 'Parent portal',
-                body:
-                  'Session recaps, automated reminders, re-enrollment prompts. LTV grows automatically.',
-              },
-              {
-                title: 'Built for operators with a team',
-                body:
-                  'Not another generic SaaS. Designed for independent operators running their own programs.',
-              },
-            ].map((f) => (
-              <div
-                key={f.title}
-                className="group rounded-lg border border-enrops-purple/15 bg-white p-8 transition hover:border-enrops-purple hover:shadow-card"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-enrops-violet/20 font-grotesk font-bold text-enrops-purple">
-                  &bull;
-                </div>
-                <h3 className="mt-5 font-grotesk text-xl font-bold text-enrops-ink">
-                  {f.title}
-                </h3>
-                <p
-                  className="mt-3 font-grotesk leading-relaxed text-enrops-ink/70"
-                  dangerouslySetInnerHTML={{ __html: f.body }}
-                />
-              </div>
-            ))}
-          </div>
-        </section>
+        <a
+          href="https://getenrops.com/join"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn-secondary"
+        >
+          Get early access &rarr;
+        </a>
+      </div>
 
-        {/* CTA band */}
-        <section className="bg-enrops-purple text-enrops-cream">
-          <div className="mx-auto flex max-w-6xl flex-col items-start gap-6 px-4 py-16 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-            <div>
-              <h2 className="font-grotesk text-3xl font-bold tracking-tight sm:text-4xl">
-                Running an enrichment program?
-              </h2>
-              <p className="mt-3 max-w-xl font-grotesk text-enrops-cream/80">
-                We're onboarding our Founding 50 operators now. Keep your current
-                Stripe account, keep your brand, get your evenings back.
-              </p>
-            </div>
-            <a
-              href="mailto:hello@enrops.com"
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-enrops-violet px-8 py-4 font-grotesk font-bold text-enrops-ink transition hover:bg-enrops-cream"
-            >
-              Get early access →
-            </a>
-          </div>
-        </section>
-      </main>
-
-      <footer className="bg-enrops-ink text-enrops-cream/70">
-        <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
-          <div className="flex flex-col gap-6 font-grotesk text-sm sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex flex-col gap-3">
-              <EnropsWordmark height={24} color="#FBFBFB" />
-              <span className="text-enrops-cream/50">
-                The enrichment operations platform
-              </span>
-              <Link to="/j2s" className="text-enrops-cream/80 hover:text-enrops-cream">
-                Journey to STEAM →
-              </Link>
-              <a href="mailto:hello@enrops.com" className="text-enrops-cream/80 hover:text-enrops-cream">
-                hello@enrops.com
-              </a>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <span className="font-grotesk text-xs font-bold uppercase tracking-widest text-enrops-cream/40">
-                Legal
-              </span>
-              <Link to="/terms" className="hover:text-enrops-cream">Terms of Service</Link>
-              <Link to="/privacy" className="hover:text-enrops-cream">Privacy Policy</Link>
-              <Link to="/acceptable-use" className="hover:text-enrops-cream">Acceptable Use</Link>
-              <Link to="/cookies" className="hover:text-enrops-cream">Cookies</Link>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <span className="font-grotesk text-xs font-bold uppercase tracking-widest text-enrops-cream/40">
-                For operators
-              </span>
-              <Link to="/dpa" className="hover:text-enrops-cream">Data Processing Agreement</Link>
-              <Link to="/data-retention" className="hover:text-enrops-cream">Data Retention & Deletion</Link>
-              <Link to="/subprocessors" className="hover:text-enrops-cream">Subprocessors</Link>
-            </div>
-          </div>
-
-          <div className="mt-10 border-t border-enrops-cream/10 pt-6 text-xs text-enrops-cream/50">
-            &copy; {new Date().getFullYear()} ENROPS LLC &middot; 4014 NE 13th Terrace, Gresham, OR 97030
-          </div>
-        </div>
-      </footer>
+      <p className="footer-link">
+        Questions? <a href="mailto:hello@enrops.com">hello@enrops.com</a>
+      </p>
+      <p className="bottom-wordmark">enrops &middot; Everything your enrichment business runs on</p>
     </div>
   );
 }
