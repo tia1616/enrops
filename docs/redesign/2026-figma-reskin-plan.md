@@ -107,5 +107,11 @@ Replace the current mixed model (some expandable groups, some single items) with
 ## Open questions (resolve at build time)
 - Does `PartnersTab` already surface partner contacts, or add a contacts view?
 
+## Design tokens (sampled from Figma PNGs via System.Drawing, 2026-06-08)
+- **`#1C004F`** deep plum — wordmark, headings, body text accents (keep)
+- **`#6857E1`** bright indigo — primary buttons, active nav, active tabs (NEW; replaces plum on actions)
+- **`#F2F0FF`** lavender — sidebar background (NEW; was white)
+- App-wide button-color sweep to `#6857E1` is pending — done so far in AdminLayout chrome + CurriculaList; other screens still use plum until swept (ideally via a shared token module).
+
 ## Decisions log
 - 2026-06-08: Build from PNGs (Figma seat blocks MCP). Enni spelling confirmed. Branding split confirmed (Enrops shell / tenant outward surfaces). Flat single-page-with-tabs nav adopted. Partners (rename of Schools) gains Calendars tab + absorbs partner contacts; Contacts page retired. Start: nav shell → curricula cluster.
