@@ -38,6 +38,14 @@ Set the **From** date at the top to **June 22, 2026**. You'll see one row per in
    - Paying them outside Enrops instead? Use **Mark paid manually** and note how you paid (so records stay clean and no one is double-paid).
 5. Repeat for each instructor. Use the **Show paid** toggle to see settled rows.
 
+## If a substitute covered a day
+
+If someone subbed for the assigned instructor on a given day, that day shows up under the **substitute's** name, tagged **"Subbing for [assigned instructor]"**, and pays the **sub's** own rate — a developing-tier sub is **$65** for a half-day, not the lead's $80. That's correct: pay the substitute, and the assigned instructor isn't paid for that day.
+
+- Expand the row to see which day was covered ("Subbing for …").
+- A sub only appears here once they've **accepted** the cover. A sub who declined (or was only offered) will **not** show up and will **not** be paid.
+- Edge case: if a sub was arranged very last-minute (after that night's auto-confirm ran), the day may still show the originally-assigned instructor at their rate. If you know a sub actually taught and the amount/name looks off, **stop and message Jessica** before paying — she can fix it in seconds.
+
 ## If a payment is blocked
 
 The panel tells you why in plain English. Most likely:
