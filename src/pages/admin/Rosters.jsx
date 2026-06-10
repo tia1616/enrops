@@ -656,7 +656,7 @@ function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSav
                 whiteSpace: "nowrap",
               }}
             >
-              Edit →
+              View / Edit →
             </button>
             {canManage && hasPayment && payStatus !== "refunded" && (
               <button
