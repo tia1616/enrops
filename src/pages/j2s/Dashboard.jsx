@@ -733,10 +733,13 @@ function SessionTimeline({ sessions, isCamp }) {
             <p className="text-xs font-bold uppercase tracking-wider text-j2s-purple/70">{prefix} {s.session_number}</p>
             <p className="mt-0.5 text-sm font-semibold text-j2s-ink">{s.title}</p>
             {s.skills_practiced?.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {s.skills_practiced.filter(Boolean).map((skill, i) => (
-                  <span key={i} className="rounded-full bg-j2s-purple/10 px-2.5 py-0.5 text-xs font-medium text-j2s-purple">{skill}</span>
-                ))}
+              <div className="mt-1.5">
+                <p className="mb-1 text-xs font-bold uppercase tracking-wider text-j2s-purple/50">Skills</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {s.skills_practiced.filter(Boolean).map((skill, i) => (
+                    <span key={i} className="rounded-full bg-j2s-purple/10 px-2.5 py-0.5 text-xs font-medium text-j2s-purple">{skill}</span>
+                  ))}
+                </div>
               </div>
             )}
             {s.parent_engagement_question && (
