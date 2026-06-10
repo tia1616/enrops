@@ -10,7 +10,8 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 
-const ALLOW_PASSWORD = import.meta.env.VITE_ALLOW_PASSWORD_AUTH === "true";
+const ALLOW_PASSWORD = import.meta.env.VITE_ALLOW_PASSWORD_AUTH === "true"
+  || window.location.hostname.endsWith("enrops-staging.netlify.app");
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
