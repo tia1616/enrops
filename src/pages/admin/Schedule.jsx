@@ -3068,14 +3068,13 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
     ? activeAssignments.find((a) => a.status === "change_requested") ?? assignment
     : isDeadlinePassed ? flaggedAssignment : null;
 
-  // Subs covering this day.
-  const daySubs = dayDate && subsByKey
-    ? activeAssignments.map((a) => subsByKey.get(`${a.id}:${dayDate}`)).filter(Boolean)
-    : [];
-
   // Lead + developing.
   const lead = activeAssignments.find((a) => a.role === "lead") ?? null;
   const developing = activeAssignments.find((a) => a.role === "developing") ?? null;
+
+  // Subs covering this day — look up per assignment.
+  const leadSub = lead && dayDate && subsByKey ? subsByKey.get(`${lead.id}:${dayDate}`) ?? null : null;
+  const devSub = developing && dayDate && subsByKey ? subsByKey.get(`${developing.id}:${dayDate}`) ?? null : null;
   const wantsDeveloping = (session.current_enrollment ?? 0) >= DEVELOPING_THRESHOLD;
   const showDevelopingRow = wantsDeveloping || !!developing;
   const color = statusColor(status);
@@ -3204,48 +3203,34 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
           <span style={{ fontWeight: 600, color: CHANGE_REQ }}> ”</span>
         </div>
       )}
-      <SlotRow
-        label="Lead"
-        assignment={lead}
-        session={session}
-        role="lead"
-        dragStateRef={dragStateRef}
-        onClick={onInstructorClick}
-      />
-      {showDevelopingRow && (
+      {leadSub && leadSub.status === "confirmed" ? (
+        <SubSlotRow sub={leadSub} role="lead" />
+      ) : (
         <SlotRow
-          label="Developing"
-          assignment={developing}
+          label="Lead"
+          assignment={lead}
           session={session}
-          role="developing"
+          role="lead"
           dragStateRef={dragStateRef}
           onClick={onInstructorClick}
+          rightContent={leadSub && leadSub.status === "pending" ? <SubPendingBadge sub={leadSub} /> : undefined}
         />
       )}
-      {daySubs.length > 0 && daySubs.map((sub) => {
-        const subName = sub.sub ? [sub.sub.first_name, sub.sub.last_name].filter(Boolean).join(" ") : "Sub";
-        const statusLabel = sub.status === "confirmed" ? "confirmed" : sub.status === "pending" ? "pending" : sub.status;
-        const pillColor = sub.status === "confirmed" ? OK_GREEN : sub.status === "pending" ? VIOLET : MUTED;
-        return (
-          <div key={sub.id} style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 10,
-            fontWeight: 600,
-            color: pillColor,
-            background: `${pillColor}14`,
-            border: `1px solid ${pillColor}44`,
-            borderRadius: 4,
-            padding: "2px 6px",
-            marginTop: 2,
-          }}>
-            <span style={{ textTransform: "uppercase", letterSpacing: 0.4 }}>Sub</span>
-            <span style={{ fontWeight: 400, color: INK }}>{subName}</span>
-            <span style={{ marginLeft: "auto", textTransform: "uppercase", letterSpacing: 0.3 }}>{statusLabel}</span>
-          </div>
-        );
-      })}
+      {showDevelopingRow && (
+        devSub && devSub.status === "confirmed" ? (
+          <SubSlotRow sub={devSub} role="developing" />
+        ) : (
+          <SlotRow
+            label="Developing"
+            assignment={developing}
+            session={session}
+            role="developing"
+            dragStateRef={dragStateRef}
+            onClick={onInstructorClick}
+            rightContent={devSub && devSub.status === "pending" ? <SubPendingBadge sub={devSub} /> : undefined}
+          />
+        )
+      )}
       <div style={{
         fontSize: 11,
         color: enrollColor,
@@ -3317,6 +3302,41 @@ function SlotRow({ label, assignment, session, role, dragStateRef, onClick, righ
       </div>
       {rightContent}
     </div>
+  );
+}
+
+function SubSlotRow({ sub, role }) {
+  const subName = sub.sub ? [sub.sub.first_name, sub.sub.last_name].filter(Boolean).join(" ") : "Sub";
+  const label = role === "lead" ? "Lead" : "Developing";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+      <span style={{
+        fontSize: 9, fontWeight: 700, color: MUTED,
+        textTransform: "uppercase", letterSpacing: 0.5, flexShrink: 0,
+      }}>{label}</span>
+      <span style={{
+        fontSize: 11, fontWeight: 600, color: OK_GREEN,
+        background: `${OK_GREEN}14`, border: `1px solid ${OK_GREEN}44`,
+        borderRadius: 999, padding: "2px 8px",
+        display: "inline-flex", alignItems: "center", gap: 4,
+      }}>
+        <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>Sub</span>
+        {subName} ✓
+      </span>
+    </div>
+  );
+}
+
+function SubPendingBadge({ sub }) {
+  const subName = sub.sub ? (sub.sub.first_name ?? "Sub") : "Sub";
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 600, color: VIOLET,
+      background: `${VIOLET}14`, border: `1px solid ${VIOLET}44`,
+      borderRadius: 999, padding: "1px 6px",
+    }}>
+      Sub {subName} pending
+    </span>
   );
 }
 

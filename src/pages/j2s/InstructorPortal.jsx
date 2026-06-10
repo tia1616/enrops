@@ -810,7 +810,8 @@ export default function InstructorPortal() {
   const isArchived = (a) => a.camp_sessions?.scheduling_cycles?.status === "archived";
   const currentAssignments = assignments.filter((a) => !isArchived(a));
   const pastAssignments = assignments.filter(isArchived);
-  const totalCount = currentAssignments.length;
+  const confirmedSubCount = subAssignments.filter((s) => s.status === "confirmed" || s.status === "taught").length;
+  const totalCount = currentAssignments.length + confirmedSubCount;
   const needsResponse = currentAssignments.filter(
     (a) => a.status === "published" || a.status === "change_requested"
   );
