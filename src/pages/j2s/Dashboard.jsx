@@ -304,10 +304,6 @@ export default function Dashboard() {
     return TERM_ORDER[latestIdx + 1] || null;
   }, [enrolledTerms]);
   const todayClasses = useMemo(() => enrollments.filter((e) => e.sessionInfo?.state === 'today'), [enrollments]);
-  const upcomingClasses = useMemo(() =>
-    enrollments.filter((e) => e.sessionInfo?.state === 'upcoming' || e.sessionInfo?.state === 'in-progress')
-      .sort((a, b) => (a.firstDate || '').localeCompare(b.firstDate || '')),
-    [enrollments]);
 
   /* ---- Render gates ---- */
   if (authLoading) {
@@ -379,7 +375,7 @@ export default function Dashboard() {
       </div>
 
       <div className="mt-6">
-        {tab === 'today' && <TodayTab todayClasses={todayClasses} upcomingClasses={upcomingClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} />}
+        {tab === 'today' && <TodayTab todayClasses={todayClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} />}
         {tab === 'schedule' && <ScheduleTab enrollments={enrollments} />}
         {tab === 'classes' && <ClassesTab enrollments={enrollments} expandedCards={expandedCards} toggleCard={toggleCard} slug={org.slug} />}
         {tab === 'settings' && <SettingsTab prefs={prefs} savingPrefs={savingPrefs} prefsSaved={prefsSaved} onToggle={(key) => savePrefs({ ...prefs, [key]: !prefs[key] })} supportEmail={supportEmail} />}
@@ -391,7 +387,7 @@ export default function Dashboard() {
 /* ==================================================================== */
 /*  TODAY TAB                                                            */
 /* ==================================================================== */
-function TodayTab({ todayClasses, upcomingClasses, enrollments, notifications, slug }) {
+function TodayTab({ todayClasses, enrollments, notifications, slug }) {
   if (enrollments.length === 0) {
     return <EmptyState title="No enrollments yet" body="Once you register for a class, you'll see what your child is learning each day." cta="Browse programs" to={`/${slug}`} />;
   }
@@ -404,11 +400,10 @@ function TodayTab({ todayClasses, upcomingClasses, enrollments, notifications, s
           <SectionLabel>From Journey to STEAM</SectionLabel>
           <div className="space-y-2">
             {notifications.map((n) => (
-              <div key={n.id} className="flex items-center gap-3 rounded-xl border border-j2s-purple/10 bg-white px-4 py-3 shadow-card">
+              <div key={n.id} className="flex items-center gap-3 rounded-xl border-l-4 border-l-j2s-purple border border-j2s-purple/10 bg-j2s-purple/[0.03] px-4 py-3">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-j2s-purple/10">
                   <svg className="h-4 w-4 text-j2s-purple" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
-                    <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
+                    <path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-3-3h6a3 3 0 01-3 3z" />
                   </svg>
                 </div>
                 <div className="min-w-0 flex-1">
@@ -430,13 +425,6 @@ function TodayTab({ todayClasses, upcomingClasses, enrollments, notifications, s
         <div className="rounded-2xl border border-j2s-purple/10 bg-white p-6 text-center shadow-card">
           <p className="text-sm text-j2s-ink/50">No classes today</p>
         </div>
-      )}
-
-      {upcomingClasses.length > 0 && (
-        <>
-          <SectionLabel>Coming up</SectionLabel>
-          {upcomingClasses.slice(0, 3).map((e) => <UpcomingCard key={e.id} enrollment={e} />)}
-        </>
       )}
     </div>
   );
@@ -474,33 +462,6 @@ function TodayCard({ enrollment: e }) {
             <p className="text-xs font-bold uppercase tracking-wider text-amber-700">Ask your child tonight</p>
             <p className="mt-1 text-sm leading-relaxed text-amber-900">{s.parent_engagement_question}</p>
           </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function UpcomingCard({ enrollment: e }) {
-  const info = e.sessionInfo;
-  const session = info?.state === 'upcoming' ? info.session : info?.nextSession || info?.session;
-  const sessionNum = info?.state === 'upcoming' ? 1 : (info?.nextSessionNumber || info?.sessionNumber);
-  return (
-    <div className="rounded-2xl border border-j2s-purple/10 bg-white p-4 shadow-card">
-      <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-j2s-purple/10 text-xs font-bold text-j2s-purple">
-          {e.day ? e.day.slice(0, 3).toUpperCase() : '---'}
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-j2s-ink truncate">{session?.title || e.name}</p>
-          <p className="text-xs text-j2s-ink/50">
-            {e.student?.first_name} &middot; {e.name}{e.startTime ? ` &middot; ${fmtTime(e.startTime)}` : ''}
-          </p>
-        </div>
-        {info?.state === 'upcoming' && e.firstDate && (
-          <span className="shrink-0 text-xs text-j2s-ink/40">Starts {fmtDateShort(e.firstDate)}</span>
-        )}
-        {sessionNum && info?.totalSessions && (
-          <span className="shrink-0 rounded-full bg-j2s-purple/5 px-2 py-0.5 text-xs text-j2s-purple/60">{sessionNum}/{info.totalSessions}</span>
         )}
       </div>
     </div>
