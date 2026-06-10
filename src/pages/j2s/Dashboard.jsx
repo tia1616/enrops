@@ -353,7 +353,7 @@ export default function Dashboard() {
               <p className="text-sm font-bold">{TERM_LABELS[nextTerm]} registration is open</p>
               <p className="mt-0.5 text-xs text-white/70">Secure your spot for the upcoming term</p>
             </div>
-            <span className="shrink-0 rounded-full bg-white/20 px-3 py-1.5 text-xs font-bold">Register →</span>
+            <span className="shrink-0 rounded-full bg-white px-3.5 py-1.5 text-xs font-bold text-j2s-purple">Register →</span>
           </div>
         </Link>
       )}
