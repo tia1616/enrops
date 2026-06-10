@@ -631,6 +631,14 @@ export default function InstructorPortal() {
         }
         throw new Error(data?.error || fnErr?.message || "Couldn't send your response.");
       }
+      // Optimistic local update so the card moves immediately — the re-fetch
+      // below confirms, but avoids a stale-read window where the pending card
+      // lingers after accept.
+      setSubAssignments((prev) =>
+        action === "decline"
+          ? prev.filter((s) => s.id !== substitutionId)
+          : prev.map((s) => s.id === substitutionId ? { ...s, status: "confirmed" } : s),
+      );
       await loadSubAssignments(instructor.instructor_id);
     } catch (err) {
       setError(err.message ?? "Couldn't send your response.");

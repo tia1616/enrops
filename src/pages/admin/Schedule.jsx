@@ -450,6 +450,18 @@ export default function Schedule() {
       if (curPrefRes.error) throw curPrefRes.error;
       if (declinesRes.error) throw declinesRes.error;
 
+      // Load substitutions for all camp assignments so the grid can show sub indicators.
+      const assignmentIds = (assignmentsRes.data ?? []).map((a) => a.id);
+      let substitutions = [];
+      if (assignmentIds.length > 0) {
+        const { data: subRows, error: subErr } = await supabase
+          .from("assignment_substitutions")
+          .select("id, parent_assignment_id, date, status, sub_tier, sub_instructor_id, sub:instructors!sub_instructor_id(first_name, last_name)")
+          .eq("parent_assignment_type", "camp")
+          .in("parent_assignment_id", assignmentIds);
+        if (!subErr) substitutions = subRows ?? [];
+      }
+
       const assignments = (assignmentsRes.data ?? []).map((a) => ({
         id: a.id,
         camp_session_id: a.camp_session_id,
@@ -471,6 +483,12 @@ export default function Schedule() {
       const surveyedIds = new Set(availability.map((r) => r.instructor_id));
       const missingSurveys = instructors.filter((i) => !surveyedIds.has(i.id)).length;
 
+      // Index subs by "assignmentId:date" for O(1) lookup in the grid.
+      const subsByKey = new Map();
+      for (const s of substitutions) {
+        subsByKey.set(`${s.parent_assignment_id}:${s.date}`, s);
+      }
+
       setState({
         status: "ready",
         cycle,
@@ -482,6 +500,7 @@ export default function Schedule() {
         curPrefs: curPrefRes.data ?? [],
         declines: declinesRes.data ?? [],
         missingSurveys,
+        subsByKey,
       });
     } catch (err) {
       console.error("Schedule load error:", err);
@@ -1985,6 +2004,7 @@ export default function Schedule() {
           items={filteredEnrichedForWeek}
           cycleType={cycle.cycle_type}
           recentlyUpdated={recentlyUpdated}
+          subsByKey={state.subsByKey}
           getValidationFor={getValidationFor}
           dragStateRef={dragStateRef}
           onDrop={handleDrop}
@@ -2206,9 +2226,7 @@ export default function Schedule() {
           instructors={state.instructors}
           onClose={() => setAssignSubFor(null)}
           onSubmitted={() => {
-            // No state-refresh action needed for v1 — Schedule view doesn't
-            // surface sub rows directly yet (PR 6 wires that). Modal handles
-            // its own list refresh + success display.
+            loadAll();
           }}
         />
       )}
@@ -2922,7 +2940,7 @@ function Legend() {
   );
 }
 
-function WeeklyGrid({ week, items, cycleType, recentlyUpdated, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
+function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
   // Sort camps globally by (location, session-time) so they share a row across all
   // five day columns. Each row renders cells per weekday: an actual card when the
   // camp meets that day, an em-dash placeholder otherwise. A gold line separates
@@ -2998,6 +3016,8 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, getValidationFor,
                     <ProgramCard
                       key={d}
                       item={e}
+                      dayDate={addDaysIso(week?.starts_on, WEEKDAYS.indexOf(d))}
+                      subsByKey={subsByKey}
                       cardBg={colorByLocation.get(e.session.location_name) ?? LOCATION_PALETTE[0]}
                       flash={e.activeAssignments.some((a) => recentlyUpdated?.has(a.id))}
                       getValidationFor={getValidationFor}
@@ -3031,7 +3051,7 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, getValidationFor,
   );
 }
 
-function ProgramCard({ item, cardBg, flash, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
+function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
   const { session, status, assignment, allAssignments, activeAssignments } = item;
   const [dropEffect, setDropEffect] = useState(null); // "ok" | "warn" | "block" | "self" | null
   const [hoverResult, setHoverResult] = useState(null); // full validation result during drag
@@ -3046,6 +3066,11 @@ function ProgramCard({ item, cardBg, flash, getValidationFor, dragStateRef, onDr
   const changeReqAssignment = isChangeRequested
     ? activeAssignments.find((a) => a.status === "change_requested") ?? assignment
     : isDeadlinePassed ? flaggedAssignment : null;
+
+  // Subs covering this day.
+  const daySubs = dayDate && subsByKey
+    ? activeAssignments.map((a) => subsByKey.get(`${a.id}:${dayDate}`)).filter(Boolean)
+    : [];
 
   // Lead + developing.
   const lead = activeAssignments.find((a) => a.role === "lead") ?? null;
@@ -3196,6 +3221,30 @@ function ProgramCard({ item, cardBg, flash, getValidationFor, dragStateRef, onDr
           onClick={onInstructorClick}
         />
       )}
+      {daySubs.length > 0 && daySubs.map((sub) => {
+        const subName = sub.sub ? [sub.sub.first_name, sub.sub.last_name].filter(Boolean).join(" ") : "Sub";
+        const statusLabel = sub.status === "confirmed" ? "confirmed" : sub.status === "pending" ? "pending" : sub.status;
+        const pillColor = sub.status === "confirmed" ? OK_GREEN : sub.status === "pending" ? VIOLET : MUTED;
+        return (
+          <div key={sub.id} style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            fontSize: 10,
+            fontWeight: 600,
+            color: pillColor,
+            background: `${pillColor}14`,
+            border: `1px solid ${pillColor}44`,
+            borderRadius: 4,
+            padding: "2px 6px",
+            marginTop: 2,
+          }}>
+            <span style={{ textTransform: "uppercase", letterSpacing: 0.4 }}>Sub</span>
+            <span style={{ fontWeight: 400, color: INK }}>{subName}</span>
+            <span style={{ marginLeft: "auto", textTransform: "uppercase", letterSpacing: 0.3 }}>{statusLabel}</span>
+          </div>
+        );
+      })}
       <div style={{
         fontSize: 11,
         color: enrollColor,
