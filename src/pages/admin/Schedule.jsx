@@ -459,7 +459,8 @@ export default function Schedule() {
           .select("id, parent_assignment_id, date, status, sub_tier, sub_instructor_id, sub:instructors!sub_instructor_id(first_name, last_name)")
           .eq("parent_assignment_type", "camp")
           .in("parent_assignment_id", assignmentIds);
-        if (!subErr) substitutions = subRows ?? [];
+        if (subErr) console.warn("[Schedule] sub load failed:", subErr.message);
+        else substitutions = subRows ?? [];
       }
 
       const assignments = (assignmentsRes.data ?? []).map((a) => ({
