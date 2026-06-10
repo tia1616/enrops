@@ -833,11 +833,10 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
     homeroom_teacher: s.homeroom_teacher ?? "",
     authorized_pickup_contacts: registration.authorized_pickup_contacts ?? "",
     notes: registration.notes ?? "",
-    // only used when creating a new parent (existingParent is null)
-    new_parent_first: "",
-    new_parent_last: "",
-    new_parent_email: "",
-    new_parent_phone: "",
+    parent_first: existingParent?.first_name ?? "",
+    parent_last: existingParent?.last_name ?? "",
+    parent_email: existingParent?.email ?? "",
+    parent_phone: existingParent?.phone ?? "",
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -872,25 +871,33 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         .eq("id", s.id);
       if (sErr) throw sErr;
 
-      // Create + link a new parent if none exists and at least an email was provided
-      if (!existingParent && emptyOrNull(form.new_parent_email)) {
-        const { data: newParent, error: pErr } = await supabase
-          .from("parents")
-          .insert({
-            first_name: emptyOrNull(form.new_parent_first) ?? "",
-            last_name: emptyOrNull(form.new_parent_last) ?? "",
-            email: form.new_parent_email.trim(),
-            phone: emptyOrNull(form.new_parent_phone),
-          })
-          .select("id")
-          .single();
-        if (pErr) throw pErr;
-        regFields.parent_id = newParent.id;
-        // Link parent to this org
-        const { error: relErr } = await supabase
-          .from("parent_org_relationships")
-          .insert({ parent_id: newParent.id, organization_id: orgId });
-        if (relErr) console.error("[CamperEditForm] parent_org_rel failed", relErr);
+      // Parent: update existing or create new
+      if (emptyOrNull(form.parent_email)) {
+        const parentFields = {
+          first_name: emptyOrNull(form.parent_first) ?? "",
+          last_name: emptyOrNull(form.parent_last) ?? "",
+          email: form.parent_email.trim(),
+          phone: emptyOrNull(form.parent_phone),
+        };
+        if (existingParent) {
+          const { error: pErr } = await supabase
+            .from("parents")
+            .update(parentFields)
+            .eq("id", existingParent.id);
+          if (pErr) throw pErr;
+        } else {
+          const { data: newParent, error: pErr } = await supabase
+            .from("parents")
+            .insert(parentFields)
+            .select("id")
+            .single();
+          if (pErr) throw pErr;
+          regFields.parent_id = newParent.id;
+          const { error: relErr } = await supabase
+            .from("parent_org_relationships")
+            .insert({ parent_id: newParent.id, organization_id: orgId });
+          if (relErr) console.error("[CamperEditForm] parent_org_rel failed", relErr);
+        }
       }
 
       const { error: rErr } = await supabase
@@ -948,39 +955,19 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
           />
         </Lbl>
 
-        {/* Parent / guardian section */}
-        {existingParent ? (
-          <div style={{ gridColumn: "1 / -1", background: `${BRIGHT}08`, border: `1px solid ${RULE}`, borderRadius: 6, padding: "8px 10px", marginBottom: 2 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, marginBottom: 4 }}>Parent / guardian</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 13, color: INK }}>
-              <div><span style={{ color: MUTED, fontSize: 11 }}>Name: </span>{existingParent.first_name} {existingParent.last_name}</div>
-              <div><span style={{ color: MUTED, fontSize: 11 }}>Email: </span>{existingParent.email || "—"}</div>
-              <div><span style={{ color: MUTED, fontSize: 11 }}>Phone: </span>{existingParent.phone || "—"}</div>
-            </div>
-            <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
-              To update parent details, re-import this student with updated parent info.
-            </div>
-          </div>
-        ) : (
-          <>
-            <FullField label="Parent / guardian (not linked yet — add below)">
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <Lbl label="Parent first name">
-                  <Inp value={form.new_parent_first} onChange={(v) => update("new_parent_first", v)} />
-                </Lbl>
-                <Lbl label="Parent last name">
-                  <Inp value={form.new_parent_last} onChange={(v) => update("new_parent_last", v)} />
-                </Lbl>
-                <Lbl label="Parent email">
-                  <Inp value={form.new_parent_email} onChange={(v) => update("new_parent_email", v)} type="email" placeholder="Required to receive emails" />
-                </Lbl>
-                <Lbl label="Parent phone">
-                  <Inp value={form.new_parent_phone} onChange={(v) => update("new_parent_phone", v)} />
-                </Lbl>
-              </div>
-            </FullField>
-          </>
-        )}
+        {/* Parent / guardian */}
+        <Lbl label="Parent first name">
+          <Inp value={form.parent_first} onChange={(v) => update("parent_first", v)} />
+        </Lbl>
+        <Lbl label="Parent last name">
+          <Inp value={form.parent_last} onChange={(v) => update("parent_last", v)} />
+        </Lbl>
+        <Lbl label="Parent email">
+          <Inp value={form.parent_email} onChange={(v) => update("parent_email", v)} type="email" placeholder="Required to receive emails" />
+        </Lbl>
+        <Lbl label="Parent phone">
+          <Inp value={form.parent_phone} onChange={(v) => update("parent_phone", v)} />
+        </Lbl>
 
         <FullField label="Allergies (flag for instructor)">
           <Inp value={form.allergies} onChange={(v) => update("allergies", v)} />
