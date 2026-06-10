@@ -958,7 +958,7 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
               <div><span style={{ color: MUTED, fontSize: 11 }}>Phone: </span>{existingParent.phone || "—"}</div>
             </div>
             <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
-              To update parent details, re-import this student with updated parent info, or ask Claude to update directly.
+              To update parent details, re-import this student with updated parent info.
             </div>
           </div>
         ) : (
