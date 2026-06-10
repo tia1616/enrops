@@ -347,12 +347,14 @@ export default function Dashboard() {
       </div>
 
       {nextTerm && enrollments.length > 0 && (
-        <Link to={`/${org.slug}`} className="mb-4 flex items-center justify-between rounded-2xl border border-j2s-green/20 bg-j2s-green/5 px-5 py-3.5 transition hover:bg-j2s-green/10">
-          <div>
-            <p className="text-sm font-bold text-j2s-ink">{TERM_LABELS[nextTerm]} registration is open</p>
-            <p className="text-xs text-j2s-ink/50">Secure your spot for the upcoming term</p>
+        <Link to={`/${org.slug}`} className="mb-4 block rounded-2xl bg-j2s-purple px-5 py-4 text-white shadow-lg transition hover:bg-j2s-purple-dark hover:shadow-xl">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-bold">{TERM_LABELS[nextTerm]} registration is open</p>
+              <p className="mt-0.5 text-xs text-white/70">Secure your spot for the upcoming term</p>
+            </div>
+            <span className="shrink-0 rounded-full bg-white/20 px-3 py-1.5 text-xs font-bold">Register →</span>
           </div>
-          <svg className="h-5 w-5 shrink-0 text-j2s-purple" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" /></svg>
         </Link>
       )}
 
