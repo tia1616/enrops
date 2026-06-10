@@ -451,16 +451,19 @@ function TodayCard({ enrollment: e }) {
         </p>
         {s.description && <p className="mt-3 text-sm leading-relaxed text-j2s-ink/70">{s.description}</p>}
         {s.skills_practiced?.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {s.skills_practiced.filter(Boolean).map((skill, i) => (
-              <span key={i} className="rounded-full bg-j2s-purple/10 px-2.5 py-0.5 text-xs font-medium text-j2s-purple">{skill}</span>
-            ))}
+          <div className="mt-3">
+            <p className="mb-1.5 text-xs font-bold uppercase tracking-wider text-j2s-ink/40">Skills</p>
+            <div className="flex flex-wrap gap-1.5">
+              {s.skills_practiced.filter(Boolean).map((skill, i) => (
+                <span key={i} className="rounded-full bg-j2s-purple/10 px-2.5 py-0.5 text-xs font-medium text-j2s-purple">{skill}</span>
+              ))}
+            </div>
           </div>
         )}
         {s.parent_engagement_question && (
           <div className="mt-4 rounded-xl bg-amber-50 p-4">
-            <p className="text-xs font-bold uppercase tracking-wider text-amber-700">Ask your child tonight</p>
-            <p className="mt-1 text-sm leading-relaxed text-amber-900">{s.parent_engagement_question}</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-amber-700">{'💬'} Ask your child tonight</p>
+            <p className="mt-1.5 text-sm italic leading-relaxed text-amber-900">&ldquo;{s.parent_engagement_question}&rdquo;</p>
           </div>
         )}
       </div>
@@ -492,7 +495,7 @@ function ScheduleTab({ enrollments }) {
           <SectionLabel>
             {e.student?.first_name} &middot; {e.name}
           </SectionLabel>
-          <p className="mt-0.5 text-xs text-j2s-ink/40">
+          <p className="mt-0.5 text-xs text-j2s-ink/60">
             {e.day}s {fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}
             {e.location ? ` at ${e.location}` : ''}
           </p>
@@ -524,29 +527,29 @@ function ScheduleTab({ enrollments }) {
                     </div>
 
                     {/* Date */}
-                    <p className={`w-28 shrink-0 text-sm ${isToday ? 'font-bold text-j2s-purple' : 'text-j2s-ink/60'}`}>
+                    <p className={`w-28 shrink-0 text-sm ${isToday ? 'font-bold text-j2s-purple' : 'text-j2s-ink/80'}`}>
                       {fmtDateShort(date)}
                     </p>
 
                     {/* Session title */}
                     <div className="min-w-0 flex-1">
                       {session ? (
-                        <p className={`text-sm truncate ${isToday ? 'font-semibold text-j2s-ink' : 'text-j2s-ink/70'}`}>
+                        <p className={`text-sm truncate ${isToday ? 'font-semibold text-j2s-ink' : 'text-j2s-ink/80'}`}>
                           {session.title}
                         </p>
                       ) : (
-                        <p className="text-sm text-j2s-ink/30">Session {idx + 1}</p>
+                        <p className="text-sm text-j2s-ink/50">Session {idx + 1}</p>
                       )}
                     </div>
 
                     {/* Session number badge */}
-                    <span className="shrink-0 text-xs text-j2s-ink/30">{idx + 1}/{e.sessionDates.length}</span>
+                    <span className="shrink-0 text-xs text-j2s-ink/50">{idx + 1}/{e.sessionDates.length}</span>
                   </div>
                 );
               })}
             </div>
           ) : (
-            <p className="mt-3 text-sm text-j2s-ink/40">
+            <p className="mt-3 text-sm text-j2s-ink/60">
               {e.firstDate ? `Starts ${fmtDate(e.firstDate)} · ${e.sessionCount} sessions` : `${e.sessionCount} sessions`}
             </p>
           )}
@@ -738,8 +741,8 @@ function SessionTimeline({ sessions, isCamp }) {
             )}
             {s.parent_engagement_question && (
               <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2">
-                <p className="text-xs font-bold text-amber-700">Ask your child</p>
-                <p className="mt-0.5 text-sm text-amber-900">{s.parent_engagement_question}</p>
+                <p className="text-xs font-bold text-amber-700">{'💬'} Ask your child</p>
+                <p className="mt-0.5 text-sm italic text-amber-900">&ldquo;{s.parent_engagement_question}&rdquo;</p>
               </div>
             )}
           </div>
