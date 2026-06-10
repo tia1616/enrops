@@ -1172,7 +1172,7 @@ export default function InstructorPortal() {
         </Section>
       )}
 
-      {currentAssignments.length === 0 && programAssignments.length === 0 && needsSurvey.length === 0 && needsAfterschoolSurvey.length === 0 && pastAssignments.length === 0 && (
+      {currentAssignments.length === 0 && programAssignments.length === 0 && confirmedSubCount === 0 && needsSurvey.length === 0 && needsAfterschoolSurvey.length === 0 && pastAssignments.length === 0 && (
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, color: MUTED, textAlign: "center" }}>
           No schedule yet. Your admin will email you when it's ready.
         </div>
