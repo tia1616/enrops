@@ -61,9 +61,14 @@ export default function NeedsLinkingSection({ org, onChanged }) {
         .select('id, name, area, district')
         .eq('organization_id', org.id).is('partner_id', null)
         .order('name', { ascending: true }),
+      // Load ALL partners, including inactive ones. An orphan venue's rightful
+      // partner is often INACTIVE (a school we stopped working with) — hiding
+      // those would push the operator to wrongly "create new" and duplicate the
+      // partner. Inactive partners are labeled in the picker; linking a dead
+      // venue to its dead partner files it away and clears it from this list.
       supabase.from('partners')
-        .select('id, partner_name, partner_type, location_area')
-        .eq('organization_id', org.id).eq('inactive', false)
+        .select('id, partner_name, partner_type, location_area, inactive')
+        .eq('organization_id', org.id)
         .order('partner_name', { ascending: true }),
     ]);
     if (lErr || pErr) { setError('Could not load venues.'); setOrphans([]); return; }
@@ -237,18 +242,19 @@ export default function NeedsLinkingSection({ org, onChanged }) {
                   <option value="">— pick a partner —</option>
                   {best && (
                     <option value={best.partner.id}>
-                      ✓ {best.partner.partner_name} (suggested{best.areaMatch ? ', area matches' : ''})
+                      ✓ {best.partner.partner_name}{best.partner.inactive ? ' (inactive)' : ''} (suggested{best.areaMatch ? ', area matches' : ''})
                     </option>
                   )}
                   {cands.filter((c) => !best || c.partner.id !== best.partner.id).map((c) => (
                     <option key={c.partner.id} value={c.partner.id}>
                       {c.tier === 'weak' ? '? ' : ''}{c.partner.partner_name}
+                      {c.partner.inactive ? ' (inactive)' : ''}
                       {c.areaMatch ? ' (area matches)' : ''}
                     </option>
                   ))}
                   <option disabled>──────────</option>
                   {partners.filter((p) => !cands.some((c) => c.partner.id === p.id)).map((p) => (
-                    <option key={p.id} value={p.id}>{p.partner_name}</option>
+                    <option key={p.id} value={p.id}>{p.partner_name}{p.inactive ? ' (inactive)' : ''}</option>
                   ))}
                   <option value={CREATE_NEW}>+ Create a new partner from this venue</option>
                 </select>
