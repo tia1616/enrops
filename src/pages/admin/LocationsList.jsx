@@ -279,13 +279,22 @@ export default function LocationsList() {
           setError("Enter a name for the new district, or pick an existing one.");
           return;
         }
-        const { data: newDistrict, error: distErr } = await supabase
-          .from("districts")
-          .insert({ organization_id: org.id, name: newName })
-          .select("id")
-          .single();
-        if (distErr) throw distErr;
-        resolvedDistrictId = newDistrict.id;
+        // Reuse an existing same-name district (case-insensitive) rather than
+        // create a duplicate — districts are unique per org on lower(name).
+        const existingMatch = districts.find(
+          (d) => (d.name ?? "").trim().toLowerCase() === newName.toLowerCase(),
+        );
+        if (existingMatch) {
+          resolvedDistrictId = existingMatch.id;
+        } else {
+          const { data: newDistrict, error: distErr } = await supabase
+            .from("districts")
+            .insert({ organization_id: org.id, name: newName })
+            .select("id")
+            .single();
+          if (distErr) throw distErr;
+          resolvedDistrictId = newDistrict.id;
+        }
       }
 
       // Normalize empty strings to null so they don't render as empty lines in emails.
