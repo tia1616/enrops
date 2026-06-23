@@ -49,9 +49,14 @@ function parseCity(address) {
   return m ? m[1].trim() : "";
 }
 
+// Sentinel value for the District picker's "create a new district" option.
+const NEW_DISTRICT = "__new__";
+
 const EMPTY_DRAFT = {
   name: "",
   district: "",
+  district_id: "",      // structured link to the districts entity (FK)
+  newDistrictName: "",  // transient — only used when creating a district inline
   area: "",
   address: "",
   room_number: "",
@@ -117,7 +122,7 @@ export default function LocationsList() {
     setLoading(true);
     const { data, error: err } = await supabase
       .from("program_locations")
-      .select("id, name, district, area, address, room_number, partner_id, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, parent_arrival_instructions, parent_dismissal_instructions, food_drink_policy, notes, created_at")
+      .select("id, name, district, district_id, area, address, room_number, partner_id, contact_name, contact_phone, contact_email, arrival_instructions, dismissal_instructions, parent_arrival_instructions, parent_dismissal_instructions, food_drink_policy, notes, created_at")
       .eq("organization_id", org.id)
       .order("name", { ascending: true });
     if (err) {
@@ -150,6 +155,30 @@ export default function LocationsList() {
     return () => { alive = false; };
   }, [org?.id]);
 
+  // Districts (the structured grouping entity) for the District picker — lets
+  // the operator attach a school to "Portland Public Schools district" once
+  // instead of retyping a code per school. Created inline from the picker.
+  const [districts, setDistricts] = useState([]);
+  async function fetchDistricts() {
+    if (!org?.id) return;
+    const { data } = await supabase
+      .from("districts")
+      .select("id, name")
+      .eq("organization_id", org.id)
+      .order("name", { ascending: true });
+    setDistricts(data ?? []);
+  }
+  useEffect(() => {
+    fetchDistricts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [org?.id]);
+
+  const districtNameById = useMemo(() => {
+    const m = new Map();
+    for (const d of districts) m.set(d.id, d.name);
+    return m;
+  }, [districts]);
+
   // Linked camp counts per location (per current cycles) — helps admin understand
   // what a venue's used for before they edit.
   const [campCounts, setCampCounts] = useState(new Map());
@@ -177,6 +206,8 @@ export default function LocationsList() {
     setDraft({
       name: loc.name ?? "",
       district: loc.district ?? "",
+      district_id: loc.district_id ?? "",
+      newDistrictName: "",
       area: loc.area ?? "",
       address: loc.address ?? "",
       room_number: loc.room_number ?? "",
@@ -237,11 +268,34 @@ export default function LocationsList() {
     setSaving(true);
     setError(null);
     try {
+      // Resolve the District picker. "+ Create new district" inserts the district
+      // entity first; otherwise use the selected id (or null to unlink). The
+      // legacy free-text `district` column is left untouched — it stays the
+      // fallback for calendar matching, and district_id is purely additive.
+      let resolvedDistrictId = draft.district_id || null;
+      if (draft.district_id === NEW_DISTRICT) {
+        const newName = (draft.newDistrictName || "").trim();
+        if (!newName) {
+          setError("Enter a name for the new district, or pick an existing one.");
+          return;
+        }
+        const { data: newDistrict, error: distErr } = await supabase
+          .from("districts")
+          .insert({ organization_id: org.id, name: newName })
+          .select("id")
+          .single();
+        if (distErr) throw distErr;
+        resolvedDistrictId = newDistrict.id;
+      }
+
       // Normalize empty strings to null so they don't render as empty lines in emails.
+      // district_id + newDistrictName are handled explicitly above, not via the loop.
       const payload = {};
       for (const [k, v] of Object.entries(draft)) {
+        if (k === "district_id" || k === "newDistrictName") continue;
         payload[k] = typeof v === "string" && v.trim() === "" ? null : (typeof v === "string" ? v.trim() : v);
       }
+      payload.district_id = resolvedDistrictId;
       // Area defaults to the address city when left blank (matches the availability survey + matcher).
       payload.area = (draft.area && draft.area.trim()) ? draft.area.trim() : (parseCity(draft.address) || null);
       if (editingId === "new") {
@@ -262,6 +316,7 @@ export default function LocationsList() {
         if (updErr) throw updErr;
       }
       await fetchLocations();
+      await fetchDistricts();
       cancelEdit();
     } catch (err) {
       console.error("Save failed:", err);
@@ -360,7 +415,7 @@ export default function LocationsList() {
       ) : (
         locations.map((loc) => (
           <div key={loc.id} id={`location-row-${loc.id}`}>
-            <DisplayCard loc={loc} campCount={campCounts.get(loc.id) ?? 0} onEdit={() => startEdit(loc)} />
+            <DisplayCard loc={loc} campCount={campCounts.get(loc.id) ?? 0} districtName={districtNameById.get(loc.district_id)} onEdit={() => startEdit(loc)} />
           </div>
         ))
       )}
@@ -381,6 +436,7 @@ export default function LocationsList() {
               bind={bind}
               applyPlace={applyPlace}
               partners={partners}
+              districts={districts}
               error={error}
               saving={saving}
               onSave={save}
@@ -395,7 +451,7 @@ export default function LocationsList() {
   );
 }
 
-function DisplayCard({ loc, campCount, onEdit }) {
+function DisplayCard({ loc, campCount, districtName, onEdit }) {
   const fieldsToShow = [
     { label: "Address", value: loc.address, key: "address" },
     { label: "Room", value: loc.room_number, key: "room_number" },
@@ -420,9 +476,9 @@ function DisplayCard({ loc, campCount, onEdit }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>{loc.name}</div>
-          {loc.district && (
+          {(districtName || loc.district) && (
             <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
-              {loc.district}
+              {districtName || loc.district}
             </div>
           )}
           {campCount > 0 && (
@@ -461,7 +517,7 @@ function DisplayCard({ loc, campCount, onEdit }) {
   );
 }
 
-function EditCard({ title, draft, bind, applyPlace, partners, error, saving, onSave, onCancel, isNew, inDrawer }) {
+function EditCard({ title, draft, bind, applyPlace, partners, districts, error, saving, onSave, onCancel, isNew, inDrawer }) {
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   return (
     <div style={{
@@ -519,11 +575,33 @@ function EditCard({ title, draft, bind, applyPlace, partners, error, saving, onS
         )}
       </Field>
 
+      <Field
+        label="District"
+        hint="Group this school under a district (e.g. Portland Public Schools) so its academic calendar applies automatically. Set one up once, then attach every school in it. Not shown to instructors."
+      >
+        <select {...bind("district_id")} style={inputStyle}>
+          <option value="">— no district —</option>
+          {(districts ?? []).map((d) => (
+            <option key={d.id} value={d.id}>{d.name}</option>
+          ))}
+          <option value={NEW_DISTRICT}>+ Create a new district…</option>
+        </select>
+        {draft.district_id === NEW_DISTRICT && (
+          <input
+            type="text"
+            {...bind("newDistrictName")}
+            placeholder="New district name, e.g. Portland Public Schools"
+            style={{ ...inputStyle, marginTop: 8 }}
+            autoFocus
+          />
+        )}
+      </Field>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <Field label="Room number" instructorFacing>
           <input type="text" {...bind("room_number")} placeholder="e.g. Room 12 or Gym B" style={inputStyle} />
         </Field>
-        <Field label="District (internal)" hint="Used for internal grouping — not shown to instructors.">
+        <Field label="Legacy district code (internal)" hint="Older free-text code, kept only to match calendars you uploaded before districts existed. Prefer the District picker above.">
           <input type="text" {...bind("district")} placeholder="e.g. Hillsboro" style={inputStyle} />
         </Field>
       </div>
