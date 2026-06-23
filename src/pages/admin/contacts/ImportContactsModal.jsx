@@ -512,7 +512,7 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
               Import partners &amp; contacts
             </h2>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: MUTED }}>
-              {step === 'source' && 'Upload a spreadsheet of your schools and contacts — or paste a list from an email.'}
+              {step === 'source' && 'Upload a spreadsheet of your partners and contacts — or paste a list from an email.'}
               {step === 'parsing' && 'Reading your file…'}
               {step === 'mapping' && 'Tell us which column is which, then continue.'}
               {step === 'extracting' && 'Working through the text…'}
@@ -636,7 +636,8 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
       {mode === 'file' && (
         <div>
           <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.55 }}>
-            Add all your schools and contacts in one go. Upload a spreadsheet from
+            Add all your partners (schools, Parks &amp; Rec, churches, community orgs)
+            and contacts in one go. Upload a spreadsheet from
             <strong> Google Sheets, Excel, or a CSV</strong> — your column names don’t
             have to match ours exactly, we’ll figure them out. You’ll get to review
             everything before anything saves.
@@ -647,7 +648,7 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
               <div style={{ fontSize: 13, color: INK, lineHeight: 1.5 }}>
                 <strong>Don’t have a spreadsheet yet?</strong>
                 <div style={{ color: MUTED, fontSize: 12.5, marginTop: 2 }}>
-                  Download our template, open it in Google Sheets or Excel, fill in your schools, save it, then upload here.
+                  Download our template, open it in Google Sheets or Excel, fill in your partners, save it, then upload here.
                 </div>
               </div>
               <button
@@ -681,7 +682,7 @@ function SourceStep({ mode, setMode, file, setFile, text, setText, onCancel, onN
         <div>
           <p style={{ margin: '0 0 12px', fontSize: 13, color: INK, lineHeight: 1.55 }}>
             Got your list in an email or a Word doc? Paste the whole thing below and
-            we’ll pull out the schools and contacts for you. You’ll review everything
+            we’ll pull out the partners and contacts for you. You’ll review everything
             before it saves.{' '}
             <span style={{ color: MUTED }}>(Uses AI to read messy text, so it’s sent to our AI provider.)</span>
           </p>
