@@ -44,9 +44,11 @@ $func$;
 COMMENT ON FUNCTION district_calendar_key(UUID) IS
   'Returns ONLY districts.calendar_key for a district id. SECURITY DEFINER so the date math is role-independent (parents are not org_members and cannot read districts directly). Exposes no districts PII — calendar_key is a non-sensitive matching code and district_calendars holidays are already public_read.';
 
--- Least privilege: drop the implicit public grant, allow only callers of the
--- date math. anon never runs derive (authenticated-only), so it is not granted.
-REVOKE EXECUTE ON FUNCTION district_calendar_key(UUID) FROM public;
+-- Least privilege. Supabase's default privileges auto-grant EXECUTE to anon on
+-- new public functions, and REVOKE FROM public does NOT remove that direct anon
+-- grant — so revoke anon explicitly. The date math is authenticated-only
+-- (parents + admins); anon never runs derive.
+REVOKE EXECUTE ON FUNCTION district_calendar_key(UUID) FROM public, anon;
 GRANT EXECUTE ON FUNCTION district_calendar_key(UUID) TO authenticated, service_role;
 
 -- ──────────────────────────────────────────────────────────────────────
