@@ -62,10 +62,10 @@ const FIELD_DEFS = [
     aliases: ["epipen", "epipenrequired", "carriesepipen"] },
   { key: "medications_at_program", label: "Medications at program", required: false,
     aliases: ["medications", "medicationsatprogram", "meds"] },
-  { key: "emergency_contact_name", label: "Emergency contact name", required: false,
-    aliases: ["emergencycontactname", "emergencyname", "emergencycontact"] },
-  { key: "emergency_contact_phone", label: "Emergency contact phone", required: false,
-    aliases: ["emergencycontactphone", "emergencyphone"] },
+  { key: "emergency_contact_name", label: "Emergency contact name", required: false, coalesce: true,
+    aliases: ["emergencycontactname", "emergencyname", "emergencycontact", "emergencycontact1", "emergencycontact2"] },
+  { key: "emergency_contact_phone", label: "Emergency contact phone", required: false, coalesce: true,
+    aliases: ["emergencycontactphone", "emergencyphone", "emergencycontact1phone", "emergencycontact2phone"] },
   { key: "special_needs_accommodations", label: "Accommodations", required: false,
     aliases: ["accommodations", "specialneeds", "specialneedsaccommodations"] },
   { key: "homeroom_teacher", label: "Homeroom teacher", required: false,
@@ -80,12 +80,18 @@ const FIELD_DEFS = [
     aliases: ["parentfirstname", "guardianfirstname", "parentfirst"] },
   { key: "parent_last_name", label: "Parent last name", required: false,
     aliases: ["parentlastname", "guardianlastname", "parentlast"] },
-  { key: "parent_full_name", label: "Parent full name", required: false,
-    aliases: ["parentname", "guardianname", "parentfullname", "guardianfullname", "parentguardian", "guardian"] },
-  { key: "parent_email", label: "Parent email", required: false,
-    aliases: ["parentemail", "guardianemail", "email", "emailaddress"] },
-  { key: "parent_phone", label: "Parent phone", required: false,
-    aliases: ["parentphone", "guardianphone", "phone", "phonenumber"] },
+  // "HOH 1 Name" = Head of Household 1, how rec-management exports (West Linn
+  // Parks & Rec, RecTrac, ActiveNet) label the guardian.
+  { key: "parent_full_name", label: "Parent full name", required: false, coalesce: true,
+    aliases: ["parentname", "guardianname", "parentfullname", "guardianfullname", "parentguardian", "guardian",
+      "hoh1name", "hoh2name", "headofhousehold", "headofhousehold1", "householdhead", "primaryguardian"] },
+  { key: "parent_email", label: "Parent email", required: false, coalesce: true,
+    aliases: ["parentemail", "guardianemail", "email", "emailaddress", "hoh1email", "hoh2email", "altemailaddress1"] },
+  // Rec exports scatter the number across Mobile/Home/HOH columns and fill a
+  // different one per family — coalesce picks the first non-empty per row.
+  { key: "parent_phone", label: "Parent phone", required: false, coalesce: true,
+    aliases: ["parentphone", "guardianphone", "mobilephone", "cellphone", "cellularphone", "homephone",
+      "hoh1cellphone", "hoh1homephone", "hoh2cellphone", "workphone", "phone", "phonenumber"] },
 ];
 
 // Fields that get their own dedicated inputs at the top of each review card
@@ -133,15 +139,39 @@ function splitName(v) {
 // Turn parsed CSV rows into editable registrant objects using the column
 // mapping. Full-name columns are split into first/last here so the review
 // list shows real names; explicit first/last columns always win.
+//
+// For fields flagged `coalesce`, the value can live in any of several columns
+// (e.g. a parent phone scattered across Mobile / Home / HOH columns). We take
+// the operator-chosen primary first, then fall back through every other column
+// whose name matches one of the field's aliases, using the first non-empty
+// cell for that row. Non-coalesce fields read only their single mapped column.
 function buildRegistrants(rows, headers, mapping) {
+  const normHeaders = headers.map(normalizeHeader);
+  // Ordered list of column indices to try for a field, primary first.
+  function candidateIndices(def) {
+    const idxs = [];
+    const primary = mapping[def.key];
+    if (primary) {
+      const pi = headers.indexOf(primary);
+      if (pi !== -1) idxs.push(pi);
+    }
+    if (def.coalesce) {
+      for (const alias of def.aliases) {
+        const na = normalizeHeader(alias);
+        normHeaders.forEach((h, i) => {
+          if (h === na && !idxs.includes(i)) idxs.push(i);
+        });
+      }
+    }
+    return idxs;
+  }
   return rows.map((row) => {
     const out = {};
     for (const def of FIELD_DEFS) {
-      const headerName = mapping[def.key];
-      if (!headerName) continue;
-      const idx = headers.indexOf(headerName);
-      if (idx === -1) continue;
-      out[def.key] = (row[idx] ?? "").toString().trim();
+      for (const idx of candidateIndices(def)) {
+        const cell = (row[idx] ?? "").toString().trim();
+        if (cell) { out[def.key] = cell; break; }
+      }
     }
     if (out.student_full_name) {
       const s = splitName(out.student_full_name);
