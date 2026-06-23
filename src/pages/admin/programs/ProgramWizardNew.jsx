@@ -181,7 +181,7 @@ export default function ProgramWizardNew() {
             .order("name"),
           supabase
             .from("program_locations")
-            .select("id, name, district, closure_dates")
+            .select("id, name, district, district_id, closure_dates")
             .eq("organization_id", org.id)
             .order("name"),
         ]);
@@ -250,9 +250,11 @@ export default function ProgramWizardNew() {
     formData.term,
   ]);
 
-  // District-calendar soft warning. If the chosen location has a district set
-  // AND no district_calendars row exists for that district + school_year, warn
-  // — date math will run without district closures subtracted.
+  // District-calendar soft warning. If the chosen location has a district
+  // (structured link or legacy free-text) but no matching calendar exists for
+  // the term's school year, warn — date math will run without district closures
+  // subtracted. matching_district_calendars() is the single source of truth and
+  // matches a school's calendar the same way derive/preview do.
   useEffect(() => {
     if (!org?.id || !formData.program_location_id) {
       setCalendarWarning(null);
@@ -261,7 +263,7 @@ export default function ProgramWizardNew() {
     let cancelled = false;
     (async () => {
       const loc = locations.find((l) => l.id === formData.program_location_id);
-      if (!loc?.district) {
+      if (!loc?.district && !loc?.district_id) {
         if (!cancelled) setCalendarWarning(null);
         return;
       }
@@ -270,20 +272,26 @@ export default function ProgramWizardNew() {
         if (!cancelled) setCalendarWarning(null);
         return;
       }
-      const { data, error: calErr } = await supabase
-        .from("district_calendars")
-        .select("id")
-        .eq("organization_id", org.id)
-        .eq("district", loc.district)
-        .eq("school_year", schoolYear)
-        .maybeSingle();
+      const { data, error: calErr } = await supabase.rpc(
+        "matching_district_calendars",
+        {
+          p_org_id: org.id,
+          p_location_id: formData.program_location_id,
+          p_term: formData.term,
+        },
+      );
       if (cancelled) return;
       if (calErr) {
         // Don't block the wizard on a calendar lookup error.
         setCalendarWarning(null);
         return;
       }
-      setCalendarWarning(data ? null : { district: loc.district, schoolYear });
+      const hasCalendar = Array.isArray(data) && data.length > 0;
+      setCalendarWarning(
+        hasCalendar
+          ? null
+          : { district: loc.district || "this school's district", schoolYear },
+      );
     })();
     return () => { cancelled = true; };
   }, [org?.id, formData.program_location_id, formData.term, locations]);
@@ -407,8 +415,8 @@ export default function ProgramWizardNew() {
     && selectedLocation.closure_dates.length > 0;
   let confirmationSource = null;
   if (selectedLocation) {
-    if (selectedLocation.district && !calendarWarning) {
-      confirmationSource = { kind: "district", name: selectedLocation.district };
+    if ((selectedLocation.district || selectedLocation.district_id) && !calendarWarning) {
+      confirmationSource = { kind: "district", name: selectedLocation.district || "school district" };
     } else if (locationHasClosures) {
       confirmationSource = { kind: "location" };
     }

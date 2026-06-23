@@ -167,10 +167,11 @@ export default function ProgramsCalendar() {
   }, [org?.id]);
   const [sessionDatesByProgram, setSessionDatesByProgram] = useState({});
   const [expandedDates, setExpandedDates] = useState(() => new Set());
-  // Set of district strings that DO have a saved calendar for this term's
-  // school_year. Used to flag programs in districts where the calendar is
-  // still missing — their derived dates won't skip holidays.
-  const [districtsWithCalendar, setDistrictsWithCalendar] = useState(() => new Set());
+  // Per-location calendar coverage for this term, keyed by program_location_id:
+  //   Map<location_id, { hasDistrict, hasCalendar }> while a school year applies,
+  //   or null when the term doesn't use district calendars / hasn't loaded.
+  // Used to flag schools whose derived dates won't skip holidays yet.
+  const [calendarCoverage, setCalendarCoverage] = useState(null);
 
   function toggleDatesExpanded(programId) {
     setExpandedDates((prev) => {
@@ -273,25 +274,29 @@ export default function ProgramsCalendar() {
           console.warn("Couldn't load derived session dates:", e?.message ?? e);
         }
 
-        // Which districts already have a calendar saved for this term's school
-        // year? Used to flag programs whose dates haven't been holiday-adjusted.
+        // Per-location calendar coverage for this term. Structure-aware via
+        // program_locations_calendar_coverage(), which matches a school's
+        // calendar by the structured district_id link OR the legacy free-text
+        // district — so a formalized school isn't falsely flagged as missing.
         // null = term doesn't use district calendars at all (e.g. summer camps),
         //        so never show the missing-calendar warning.
         const schoolYearForTerm = termToSchoolYearJs(term);
-        let calendarDistricts = null;
+        let coverageByLocation = null;
         if (schoolYearForTerm) {
-          calendarDistricts = new Set();
+          coverageByLocation = new Map();
           try {
-            const { data: calRows } = await supabase
-              .from("district_calendars")
-              .select("district")
-              .eq("organization_id", org.id)
-              .eq("school_year", schoolYearForTerm);
-            for (const r of calRows ?? []) {
-              if (r.district) calendarDistricts.add(r.district);
+            const { data: covRows } = await supabase.rpc(
+              "program_locations_calendar_coverage",
+              { p_org_id: org.id, p_term: term },
+            );
+            for (const r of covRows ?? []) {
+              coverageByLocation.set(r.location_id, {
+                hasDistrict: r.has_district,
+                hasCalendar: r.has_calendar,
+              });
             }
           } catch (e) {
-            console.warn("Couldn't load district calendars:", e?.message ?? e);
+            console.warn("Couldn't load calendar coverage:", e?.message ?? e);
           }
         }
 
@@ -299,7 +304,7 @@ export default function ProgramsCalendar() {
           setPrograms(progRows ?? []);
           setEnrollmentByProgram(enrollment);
           setSessionDatesByProgram(datesByProgram);
-          setDistrictsWithCalendar(calendarDistricts);
+          setCalendarCoverage(coverageByLocation);
           setExpandedDates(new Set()); // collapse all when term changes
         }
       } catch (e) {
@@ -388,7 +393,7 @@ export default function ProgramsCalendar() {
               programs={programs}
               enrollment={enrollmentByProgram}
               sessionDatesByProgram={sessionDatesByProgram}
-              districtsWithCalendar={districtsWithCalendar}
+              calendarCoverage={calendarCoverage}
               expandedDates={expandedDates}
               onToggleDates={toggleDatesExpanded}
               onEdit={setEditingProgram}
@@ -403,7 +408,7 @@ export default function ProgramsCalendar() {
               programs={programs}
               enrollment={enrollmentByProgram}
               sessionDatesByProgram={sessionDatesByProgram}
-              districtsWithCalendar={districtsWithCalendar}
+              calendarCoverage={calendarCoverage}
               expandedDates={expandedDates}
               onToggleDates={toggleDatesExpanded}
               onToggleSchool={toggleSchoolExpanded}
@@ -451,7 +456,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -489,7 +494,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWi
               program={p}
               e={enrollment[p.id]}
               sessionDates={sessionDatesByProgram?.[p.id]}
-              districtHasCalendar={districtHasCal(p, districtsWithCalendar)}
+              districtHasCalendar={districtHasCal(p, calendarCoverage)}
               isDatesExpanded={expandedDates?.has(p.id)}
               onToggleDates={onToggleDates}
               onEdit={onEdit}
@@ -507,7 +512,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, districtsWi
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWithCalendar, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -605,7 +610,7 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, districtsWi
                 program={p}
                 e={enrollment[p.id]}
                 sessionDates={sessionDatesByProgram?.[p.id]}
-                districtHasCalendar={districtHasCal(p, districtsWithCalendar)}
+                districtHasCalendar={districtHasCal(p, calendarCoverage)}
                 isDatesExpanded={expandedDates?.has(p.id)}
                 onToggleDates={onToggleDates}
                 onEdit={onEdit}
@@ -651,15 +656,17 @@ function summarizeSchool(programs, sessionDatesByProgram) {
 // ---- Card ----
 
 // districtHasCal returns:
-//   true  → program's district has a saved calendar for the relevant school_year
-//   false → district is set but no calendar saved yet (warn the admin)
+//   true  → the program's school has a calendar resolved for this term
+//   false → the school has a district (structured link or free-text) but no
+//            calendar saved yet (warn the admin — holidays won't be subtracted)
 //   null  → no warning to show. Either the term doesn't use district calendars
-//          (e.g. SU camps), or the program has no district at all.
-function districtHasCal(program, districtsWithCalendar) {
-  if (districtsWithCalendar == null) return null; // term doesn't use district calendars
-  const district = program?.program_locations?.district ?? null;
-  if (!district) return null;
-  return districtsWithCalendar.has(district);
+//          (e.g. SU camps) / coverage hasn't loaded, or the school has no
+//          district at all.
+function districtHasCal(program, calendarCoverage) {
+  if (calendarCoverage == null) return null; // term doesn't use district calendars / not loaded
+  const entry = calendarCoverage.get(program?.program_location_id);
+  if (!entry || !entry.hasDistrict) return null;
+  return entry.hasCalendar;
 }
 
 function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, showDay = false }) {
@@ -1061,6 +1068,9 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
   }
 
   const district = program.program_locations?.district ?? null;
+  // Free-text district may be absent once a school is linked structurally;
+  // fall back to a generic label so the warning never reads "... for  —".
+  const districtLabel = district || "this school's district";
   const showMissingCalendarWarning = districtHasCalendar === false;
 
   // No dates to show? Skip the panel entirely.
@@ -1131,12 +1141,12 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
           flexWrap: "wrap",
         }}>
           <strong>Heads up:</strong>
-          <span>No calendar saved for {district} — these dates are weekly only, holidays not subtracted.</span>
+          <span>No calendar saved for {districtLabel} — these dates are weekly only, holidays not subtracted.</span>
           <a
             href="/admin/calendars"
             style={{ color: AMBER, fontWeight: 600, textDecoration: "underline" }}
           >
-            Set up {district} calendar →
+            Set up {districtLabel} calendar →
           </a>
         </div>
       )}
