@@ -46,6 +46,12 @@ function typeLabel(t) { return PARTNER_TYPE_LABELS[t] ?? (t ? t.replace(/_/g, " 
 
 const NO_DISTRICT = "__none__";
 
+// Time-saved estimate per partner set up in Enrops vs. by hand (the old two-tab
+// add + address lookup + typing logistics + linking contacts/calendar across
+// tools). Kept conservative so the pill stays credible (copy-honesty rule).
+// Bump to 60 for the fuller "an hour each" framing.
+const MINUTES_SAVED_PER_PARTNER = 20;
+
 export default function SchoolsList() {
   const { org } = useOutletContext() ?? {};
   const [partners, setPartners] = useState(null);
@@ -92,12 +98,14 @@ export default function SchoolsList() {
     setPartners(partnerRows ?? []);
     setLocations(locRows ?? []);
 
-    // Contact counts per partner.
-    const pIds = (partnerRows ?? []).map((p) => p.id);
+    // Contact counts per partner. Scope by org (RLS-backed) and aggregate
+    // client-side — NOT `.in(partnerIds)`, which would blow the PostgREST URL
+    // length cap (~500 UUIDs) for a large tenant (scale guardrail #9).
     const cMap = new Map();
-    if (pIds.length) {
-      const { data: contactRows } = await supabase.from("partner_contacts").select("partner_id").in("partner_id", pIds);
-      for (const c of contactRows ?? []) cMap.set(c.partner_id, (cMap.get(c.partner_id) ?? 0) + 1);
+    const { data: contactRows } = await supabase
+      .from("partner_contacts").select("partner_id").eq("organization_id", org.id);
+    for (const c of contactRows ?? []) {
+      if (c.partner_id) cMap.set(c.partner_id, (cMap.get(c.partner_id) ?? 0) + 1);
     }
     setContactCounts(cMap);
 
@@ -106,12 +114,15 @@ export default function SchoolsList() {
     setCalendarDistrictIds(new Set((calRows ?? []).map((r) => r.district_id).filter(Boolean)));
 
     // Activity per venue (programs + camps), aggregated from two org-wide reads.
+    // Scoped by org only (no `.in(locIds)`) so the query never grows an
+    // unbounded URL for a large tenant (scale guardrail #9); extra rows for
+    // venues not shown just sit unused in the map.
     const locIds = (locRows ?? []).map((l) => l.id);
     const aMap = new Map();
     if (locIds.length) {
       const [{ data: progRows }, { data: campRows }] = await Promise.all([
-        supabase.from("programs").select("program_location_id").eq("organization_id", org.id).in("program_location_id", locIds),
-        supabase.from("camp_sessions").select("location_id").eq("organization_id", org.id).in("location_id", locIds),
+        supabase.from("programs").select("program_location_id").eq("organization_id", org.id),
+        supabase.from("camp_sessions").select("location_id").eq("organization_id", org.id),
       ]);
       for (const r of progRows ?? []) {
         if (!r.program_location_id) continue;
@@ -228,6 +239,8 @@ export default function SchoolsList() {
   if (!org) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
 
   const totalVenues = locations.filter((l) => l.partner_id).length;
+  const minsSaved = schools.length * MINUTES_SAVED_PER_PARTNER;
+  const savedLabel = minsSaved >= 60 ? `~${Math.round(minsSaved / 60)}h` : `~${minsSaved}m`;
 
   return (
     <div>
@@ -236,6 +249,14 @@ export default function SchoolsList() {
         <div style={{ fontSize: 13, color: MUTED }}>
           {partners === null ? "Loading…" : `${schools.length} partner${schools.length === 1 ? "" : "s"} · ${totalVenues} venue${totalVenues === 1 ? "" : "s"} · ${districts.length} district${districts.length === 1 ? "" : "s"}`}
         </div>
+        {partners !== null && schools.length > 0 && (
+          <span
+            title={`Setting up a partner by hand — entering details, looking up the address, and linking contacts + calendar across your tools — runs about ${MINUTES_SAVED_PER_PARTNER} min each. Enrops does it in a couple of clicks.`}
+            style={{ fontSize: 12, fontWeight: 600, color: OK, background: `${OK}14`, padding: "4px 10px", borderRadius: 99 }}
+          >
+            {savedLabel} saved vs. by hand
+          </span>
+        )}
         <div style={{ flex: 1 }} />
         <button type="button" onClick={() => setImporting(true)}
           title="Bulk-upload a list of partners (schools, Parks & Rec, etc.) + contacts from a spreadsheet"
