@@ -20,6 +20,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase";
 import Chevron from "../../../components/Chevron.jsx";
 import NeedsLinkingSection from "../contacts/NeedsLinkingSection.jsx";
+import ImportContactsModal from "../contacts/ImportContactsModal.jsx";
 import AddSchoolModal from "./AddSchoolModal.jsx";
 import SchoolDetailDrawer from "./SchoolDetailDrawer.jsx";
 
@@ -58,6 +59,7 @@ export default function SchoolsList() {
   const [showInactive, setShowInactive] = useState(false);
   const [expanded, setExpanded] = useState(new Set());               // umbrella partner ids expanded
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [selectedPartner, setSelectedPartner] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -143,6 +145,11 @@ export default function SchoolsList() {
       const distId = venues.find((v) => v.district_id)?.district_id ?? null;
       const hasAddress = venues.length > 0 && venues.every((v) => v.address && String(v.address).trim());
       const hasContact = (contactCounts.get(p.id) ?? 0) > 0;
+      // Calendar readiness keys off the STRUCTURED district_id only. For J2S's
+      // legacy free-text `district` calendars this under-reports (shows "Add
+      // calendar" even when a legacy calendar exists) — accepted for now since
+      // WS1 is validated on the clean Tenant 2 org; fix in WS2 when J2S's
+      // partners/venues/districts are reconciled to district_id.
       const hasCalendar = !!distId && calendarDistrictIds.has(distId);
       let programs = 0, camps = 0;
       for (const v of venues) {
@@ -221,6 +228,11 @@ export default function SchoolsList() {
           {partners === null ? "Loading…" : `${schools.length} school${schools.length === 1 ? "" : "s"} · ${totalVenues} venue${totalVenues === 1 ? "" : "s"} · ${districts.length} district${districts.length === 1 ? "" : "s"}`}
         </div>
         <div style={{ flex: 1 }} />
+        <button type="button" onClick={() => setImporting(true)}
+          title="Bulk-upload a list of schools/partners + contacts from a spreadsheet"
+          style={{ padding: "9px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
+          Import schools
+        </button>
         <button type="button" onClick={() => setAdding(true)}
           style={{ padding: "9px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
           + Add a school
@@ -302,6 +314,14 @@ export default function SchoolsList() {
             setSelectedPartner(fresh ?? p ?? null);
             refresh();
           }}
+        />
+      )}
+
+      {importing && (
+        <ImportContactsModal
+          orgId={org.id}
+          onClose={() => setImporting(false)}
+          onImported={() => { setImporting(false); loadDistricts(); refresh(); }}
         />
       )}
 
