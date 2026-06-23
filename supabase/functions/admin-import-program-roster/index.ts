@@ -389,9 +389,27 @@ function parseDate(v: unknown): string | null {
     const d = m[2].padStart(2, '0');
     return `${m[3]}-${mo}-${d}`;
   }
+  // Bare Excel date serial (e.g. "43777" = days since 1899-12-30). A child's
+  // birthdate lands in the ~20000–60000 range (years ~1954–2064). Convert via
+  // the UTC epoch so there's no timezone drift. Without this, new Date("43777")
+  // below would read it as the YEAR 43777 and emit "+043777-01".
+  if (/^\d{5}(\.\d+)?$/.test(s)) {
+    const serial = parseFloat(s);
+    if (serial >= 20000 && serial <= 60000) {
+      const d = new Date(Math.round((serial - 25569) * 86400000));
+      if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    }
+    return null;
+  }
+  // Fallback: let Date.parse have a go — but reject anything that resolves to
+  // an implausible year, so garbage never reaches a date column as the
+  // expanded-year "+0YYYYYY-…" string Postgres can't store.
   const parsed = new Date(s);
   if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString().slice(0, 10);
+    const yr = parsed.getUTCFullYear();
+    if (yr >= 1900 && yr <= new Date().getUTCFullYear()) {
+      return parsed.toISOString().slice(0, 10);
+    }
   }
   return null;
 }
