@@ -50,6 +50,7 @@ export default function SchoolsList() {
   const { org } = useOutletContext() ?? {};
   const [partners, setPartners] = useState(null);
   const [locations, setLocations] = useState([]);
+  const [loadError, setLoadError] = useState("");
   const [districts, setDistricts] = useState([]);
   const [contactCounts, setContactCounts] = useState(new Map());     // partner_id -> n
   const [calendarDistrictIds, setCalendarDistrictIds] = useState(new Set());
@@ -72,7 +73,8 @@ export default function SchoolsList() {
 
   async function load() {
     if (!org?.id) return;
-    const [{ data: partnerRows }, { data: locRows }] = await Promise.all([
+    setLoadError("");
+    const [{ data: partnerRows, error: pErr }, { data: locRows, error: lErr }] = await Promise.all([
       supabase.from("partners")
         .select("id, partner_name, partner_type, location_area, locations_managed, marketing_notes, invoicing_notes, planning_notes, implementation_notes, other_notes, inactive")
         .eq("organization_id", org.id).order("partner_name"),
@@ -80,6 +82,13 @@ export default function SchoolsList() {
         .select("id, name, address, area, district_id, partner_id")
         .eq("organization_id", org.id).order("name"),
     ]);
+    if (pErr || lErr) {
+      // Surface the failure instead of spinning "Loading…" forever (rule E).
+      console.error("[SchoolsList] load failed:", pErr ?? lErr);
+      setLoadError(`Couldn't load partners: ${(pErr ?? lErr).message}. Refresh to try again.`);
+      setPartners([]);
+      return;
+    }
     setPartners(partnerRows ?? []);
     setLocations(locRows ?? []);
 
@@ -259,6 +268,12 @@ export default function SchoolsList() {
           </label>
         )}
       </div>
+
+      {loadError && (
+        <div style={{ background: "#fbeaea", border: "1px solid #D9694F", borderRadius: 8, padding: "10px 14px", color: "#7a2a2a", fontSize: 13, marginBottom: 14 }}>
+          {loadError}
+        </div>
+      )}
 
       {/* Inline, self-emptying cleanup for orphan venues. */}
       <NeedsLinkingSection org={org} onChanged={refresh} />
@@ -457,11 +472,12 @@ function ReadyChip({ ok, okLabel, addLabel, onAdd }) {
 
 function ActivityLabel({ programs, camps, compact }) {
   const none = programs === 0 && camps === 0;
-  if (none) return <span style={{ fontSize: 12, color: "#9a9a9a" }}>{compact ? "—" : "No programs yet"}</span>;
+  if (none) return <span style={{ fontSize: 12, color: "#9a9a9a" }}>{compact ? "—" : "Nothing scheduled"}</span>;
   const bits = [];
   if (programs) bits.push(`${programs} program${programs === 1 ? "" : "s"}`);
   if (camps) bits.push(`${camps} camp${camps === 1 ? "" : "s"}`);
-  return <span style={{ fontSize: 12, color: MUTED }}>{bits.join(" · ")}{compact ? "" : " this term"}</span>;
+  // Counts are all-time (not term-filtered) — keep the label honest (rule D).
+  return <span style={{ fontSize: 12, color: MUTED }}>{bits.join(" · ")}{compact ? "" : " scheduled here"}</span>;
 }
 
 function chip(active) {
