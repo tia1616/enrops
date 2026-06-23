@@ -2940,6 +2940,25 @@ const DOC_TYPE_LABEL = {
   other: "Other",
 };
 
+function docViewerUrl(signedUrl, filename) {
+  if (!signedUrl || !filename) return signedUrl;
+  const ext = (filename.split(".").pop() || "").toLowerCase();
+  if (ext === "pdf" || !["docx","doc","xlsx","xls","pptx","ppt","txt","md"].includes(ext)) return signedUrl;
+  return `https://docs.google.com/gview?url=${encodeURIComponent(signedUrl)}&embedded=true`;
+}
+
+function fileExtBadge(filename) {
+  if (!filename) return null;
+  const ext = (filename.split(".").pop() || "").toUpperCase();
+  if (!ext) return null;
+  const colors = { PDF: "#c0392b", DOCX: "#2b5797", DOC: "#2b5797", XLSX: "#217346", XLS: "#217346", TXT: "#6b6b6b", MD: "#6b6b6b" };
+  return (
+    <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: colors[ext] || "#6b6b6b", borderRadius: 3, padding: "1px 5px", flexShrink: 0 }}>
+      {ext}
+    </span>
+  );
+}
+
 function DocLinkRow({ doc }) {
   const name = doc.original_filename || (doc.source_type === "drive_link" ? "Open in Drive" : "Open");
   const href = doc.download_url;
@@ -2950,31 +2969,50 @@ function DocLinkRow({ doc }) {
       </div>
     );
   }
+  const viewUrl = doc.source_type === "drive_link" ? href : docViewerUrl(href, doc.original_filename);
+  const isDirect = viewUrl === href;
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: "10px 12px",
-        background: "#fafaf6",
-        border: `1px solid ${RULE}`,
-        borderRadius: 6,
-        textDecoration: "none",
-        color: INK,
-        fontSize: 13,
-      }}
-    >
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 12 }}>
-        {name}
-      </span>
-      <span style={{ color: PURPLE, fontWeight: 600, flexShrink: 0 }}>
-        Open →
-      </span>
-    </a>
+    <div style={{
+      display: "flex",
+      flexDirection: "column",
+      gap: 4,
+      padding: "10px 12px",
+      background: "#fafaf6",
+      border: `1px solid ${RULE}`,
+      borderRadius: 6,
+    }}>
+      <a
+        href={viewUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          textDecoration: "none",
+          color: INK,
+          fontSize: 13,
+        }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", marginRight: 12 }}>
+          {fileExtBadge(doc.original_filename)}
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+        </span>
+        <span style={{ color: PURPLE, fontWeight: 600, flexShrink: 0 }}>
+          Open →
+        </span>
+      </a>
+      {!isDirect && (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ fontSize: 11, color: MUTED, textDecoration: "underline", marginLeft: 1 }}
+        >
+          Can't view? Download instead
+        </a>
+      )}
+    </div>
   );
 }
 

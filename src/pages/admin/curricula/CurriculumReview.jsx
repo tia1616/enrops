@@ -487,7 +487,7 @@ export default function CurriculumReview() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
-  async function openDocLink(storagePath) {
+  async function openDocLink(storagePath, filename) {
     if (!storagePath) return;
     const { data, error } = await supabase.storage
       .from("curriculum-documents")
@@ -496,7 +496,12 @@ export default function CurriculumReview() {
       alert("Could not open that document.");
       return;
     }
-    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+    const ext = (filename || storagePath).split(".").pop()?.toLowerCase();
+    const useViewer = ext && ["docx","doc","xlsx","xls","pptx","ppt","txt","md"].includes(ext);
+    const url = useViewer
+      ? `https://docs.google.com/gview?url=${encodeURIComponent(data.signedUrl)}&embedded=true`
+      : data.signedUrl;
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   async function saveAsDraft() {
@@ -711,7 +716,7 @@ export default function CurriculumReview() {
                 <span style={{ color: MUTED, fontSize: 11 }}>{prettyDocType(d.doc_type)}</span>
               </div>
               <button
-                onClick={() => openDocLink(d.storage_path)}
+                onClick={() => openDocLink(d.storage_path, d.original_filename)}
                 style={openLinkBtn}
               >Open</button>
             </div>
@@ -2441,9 +2446,9 @@ function UnlockItem({ title, body }) {
 
 function prettyDocType(t) {
   switch (t) {
-    case "instructor_guide": return "curriculum guide";
-    case "materials_list": return "materials list";
-    case "student_materials": return "student materials";
+    case "instructor_guide": return "Instructor guide";
+    case "materials_list": return "Materials list";
+    case "student_materials": return "Student materials";
     default: return t || "";
   }
 }
