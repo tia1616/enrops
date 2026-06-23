@@ -242,11 +242,11 @@ export default function SchoolDetailDrawer({ org, partner, districts = [], partn
           </Section>
 
           {/* Programs here — read-only activity */}
-          <Section title="Programs here" hint="What's running at this school. Schedule programs from the Programs area.">
+          <Section title="Programs here" hint="What's running at this partner's venue(s). Schedule programs from the Programs area.">
             <div style={{ fontSize: 13, color: MUTED }}>
               {activity.programs === 0 && activity.camps === 0
                 ? "Nothing scheduled here yet."
-                : `${activity.programs} after-school program${activity.programs === 1 ? "" : "s"} and ${activity.camps} camp${activity.camps === 1 ? "" : "s"} reference this school.`}
+                : `${activity.programs} after-school program${activity.programs === 1 ? "" : "s"} and ${activity.camps} camp${activity.camps === 1 ? "" : "s"} reference this partner's venue(s).`}
             </div>
           </Section>
         </div>

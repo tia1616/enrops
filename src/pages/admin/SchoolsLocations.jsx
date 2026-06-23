@@ -20,13 +20,14 @@ const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
 
-// Schools is the unified primary surface (a school = a partner + its venues).
-// The old Partners + Locations tabs stay as a labeled "classic" fallback during
-// the transition — they get retired once the J2S data reconciliation
-// (Workstream 2) lets the unified list cleanly replace them. Calendars stays
-// its own tab. The page defaults to ?tab=schools.
+// The unified Partners surface (a partner = a school / Parks & Rec / church /
+// community org, with its venue(s)). "Partner" is the schema-accurate,
+// multi-tenant-safe umbrella term — not every tenant runs at schools. The old
+// per-table Partners + Locations tabs stay as a labeled "classic" fallback
+// during the transition — retired once the J2S data reconciliation (Workstream
+// 2) lets the unified list cleanly replace them. Calendars stays its own tab.
 const TABS = [
-  { key: 'schools',   label: 'Schools',             help: 'Every school you work with — its venue(s), contacts, district calendar, and what runs there. One place per school.' },
+  { key: 'schools',   label: 'Partners',            help: 'Every partner you work with — schools, Parks & Rec, churches, community orgs — with its venue(s), contacts, calendar, and what runs there. One place per partner.' },
   { key: 'partners',  label: 'Partners (classic)',  help: 'The schools, districts, and orgs you partner with — and your contacts there.' },
   { key: 'locations', label: 'Locations (classic)', help: 'Where programs actually run — venues with addresses, room numbers, and arrival info.' },
   { key: 'calendars', label: 'Calendars',           help: "District academic calendars — no-school days that flow into every program's session dates." },
@@ -44,7 +45,7 @@ export default function SchoolsLocations() {
     <div>
       <header style={{ marginBottom: 12 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.3 }}>
-          Schools
+          Partners
         </h1>
         <p style={{ color: MUTED, marginTop: 6, fontSize: 13.5, lineHeight: 1.5 }}>
           {active.help}

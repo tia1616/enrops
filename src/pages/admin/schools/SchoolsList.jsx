@@ -225,22 +225,22 @@ export default function SchoolsList() {
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: MUTED }}>
-          {partners === null ? "Loading…" : `${schools.length} school${schools.length === 1 ? "" : "s"} · ${totalVenues} venue${totalVenues === 1 ? "" : "s"} · ${districts.length} district${districts.length === 1 ? "" : "s"}`}
+          {partners === null ? "Loading…" : `${schools.length} partner${schools.length === 1 ? "" : "s"} · ${totalVenues} venue${totalVenues === 1 ? "" : "s"} · ${districts.length} district${districts.length === 1 ? "" : "s"}`}
         </div>
         <div style={{ flex: 1 }} />
         <button type="button" onClick={() => setImporting(true)}
-          title="Bulk-upload a list of schools/partners + contacts from a spreadsheet"
+          title="Bulk-upload a list of partners (schools, Parks & Rec, etc.) + contacts from a spreadsheet"
           style={{ padding: "9px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-          Import schools
+          Import partners
         </button>
         <button type="button" onClick={() => setAdding(true)}
           style={{ padding: "9px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-          + Add a school
+          + Add a partner
         </button>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
-        <input type="text" placeholder="Search schools, districts, areas…" value={query} onChange={(e) => setQuery(e.target.value)}
+        <input type="text" placeholder="Search partners, districts, areas…" value={query} onChange={(e) => setQuery(e.target.value)}
           style={{ flex: "1 1 260px", maxWidth: 360, padding: "8px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", boxSizing: "border-box" }} />
         <button type="button" onClick={() => setGroupByDistrict((v) => !v)}
           style={chip(groupByDistrict)}>
@@ -267,8 +267,8 @@ export default function SchoolsList() {
 
       {partners !== null && filtered.length === 0 && (
         <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 12, padding: 36, textAlign: "center", color: MUTED, fontSize: 14 }}>
-          {query ? "No schools match that search." : (
-            <>No schools yet. Click <strong>+ Add a school</strong> to set up your first one.</>
+          {query ? "No partners match that search." : (
+            <>No partners yet. Click <strong>+ Add a partner</strong> to set up your first one.</>
           )}
         </div>
       )}

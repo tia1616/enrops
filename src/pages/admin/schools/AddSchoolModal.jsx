@@ -76,7 +76,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
   async function save() {
     setError("");
     const trimmed = name.trim();
-    if (!trimmed) { setError("School name is required."); return; }
+    if (!trimmed) { setError("Partner name is required."); return; }
     if (umbrellaMode && !umbrellaPartnerId) { setError("Pick the umbrella partner this venue belongs to."); return; }
     setBusy(true);
     try {
@@ -150,7 +150,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
-          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: INK }}>Add a school</h2>
+          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: INK }}>Add a partner</h2>
           <button type="button" onClick={onClose} disabled={busy} aria-label="Close"
             style={{ background: "transparent", border: "none", color: MUTED, fontSize: 18, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
@@ -167,7 +167,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <label>
-            <Lbl>School name *</Lbl>
+            <Lbl>Partner name *</Lbl>
             {placesEnabled ? (
               <PlacesAutocomplete
                 value={name}
@@ -237,7 +237,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
           </button>
           <button type="button" onClick={save} disabled={busy}
             style={{ padding: "9px 18px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1 }}>
-            {busy ? "Adding…" : "Add school"}
+            {busy ? "Adding…" : "Add partner"}
           </button>
         </div>
       </div>
