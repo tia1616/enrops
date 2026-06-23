@@ -11,6 +11,7 @@ import { supabase } from '../../../lib/supabase';
 import ImportContactsModal from './ImportContactsModal';
 import AddPartnerModal from './AddPartnerModal';
 import PartnerListSection from './PartnerListSection';
+import NeedsLinkingSection from './NeedsLinkingSection';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
@@ -101,6 +102,8 @@ export default function PartnersTab({ org }) {
         their logistics contacts. Upload a CSV/XLSX, add one by hand, or expand any partner
         below to edit its details and contacts.
       </div>
+
+      <NeedsLinkingSection org={org} onChanged={() => setRefreshKey((k) => k + 1)} />
 
       <PartnerListSection org={org} refreshKey={refreshKey} onChanged={() => setRefreshKey((k) => k + 1)} />
 
