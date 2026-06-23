@@ -59,18 +59,18 @@ function formatRelativeDate(iso) {
 export default function CalendarsList() {
   const { org } = useOutletContext() ?? {};
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
-  const [districts, setDistricts] = useState([]); // [{ district, location_count }]
+  const [districts, setDistricts] = useState([]); // merged rows: [{ key, label, districtId, calendarKey, location_count }]
   const [calendars, setCalendars] = useState([]); // district_calendars rows for current school year
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState(null); // { district } | null
-  const [viewing, setViewing] = useState(() => new Set()); // districts currently showing their dates inline
+  const [editing, setEditing] = useState(null); // { key } | null
+  const [viewing, setViewing] = useState(() => new Set()); // row keys currently showing their dates inline
   const [topError, setTopError] = useState(null);
 
-  function toggleViewing(district) {
+  function toggleViewing(key) {
     setViewing((prev) => {
       const next = new Set(prev);
-      if (next.has(district)) next.delete(district);
-      else next.add(district);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
@@ -85,31 +85,66 @@ export default function CalendarsList() {
     setLoading(true);
     setTopError(null);
     try {
-      const [locsRes, calsRes] = await Promise.all([
+      const [locsRes, calsRes, distRes] = await Promise.all([
         supabase
           .from("program_locations")
-          .select("district")
-          .eq("organization_id", org.id)
-          .not("district", "is", null),
+          .select("district, district_id")
+          .eq("organization_id", org.id),
         supabase
           .from("district_calendars")
           .select("*")
           .eq("organization_id", org.id)
           .eq("school_year", schoolYear),
+        supabase
+          .from("districts")
+          .select("id, name, calendar_key")
+          .eq("organization_id", org.id),
       ]);
       if (locsRes.error) throw locsRes.error;
       if (calsRes.error) throw calsRes.error;
+      if (distRes.error) throw distRes.error;
 
-      const counts = new Map();
-      for (const r of locsRes.data ?? []) {
-        const d = (r.district ?? "").trim();
-        if (!d) continue;
-        counts.set(d, (counts.get(d) ?? 0) + 1);
+      const locs = locsRes.data ?? [];
+      const structured = distRes.data ?? [];
+
+      // Structured districts (the entity) — count schools linked via district_id.
+      const linkedCounts = new Map();
+      for (const r of locs) {
+        if (r.district_id) linkedCounts.set(r.district_id, (linkedCounts.get(r.district_id) ?? 0) + 1);
       }
-      const list = [...counts.entries()]
-        .map(([district, location_count]) => ({ district, location_count }))
-        .sort((a, b) => a.district.localeCompare(b.district));
-      setDistricts(list);
+      const structuredRows = structured.map((d) => ({
+        key: `d:${d.id}`,
+        label: d.name,
+        districtId: d.id,
+        calendarKey: d.calendar_key ?? null,
+        location_count: linkedCounts.get(d.id) ?? 0,
+      }));
+
+      // Legacy free-text districts (from program_locations.district) that are
+      // NOT already represented by a structured district — matched by name or
+      // calendar_key. Kept so calendars uploaded before districts existed still
+      // appear until the operator formalizes them.
+      const coveredText = new Set();
+      for (const d of structured) {
+        if (d.name) coveredText.add(d.name.trim().toLowerCase());
+        if (d.calendar_key) coveredText.add(d.calendar_key.trim().toLowerCase());
+      }
+      const textCounts = new Map();
+      for (const r of locs) {
+        const d = (r.district ?? "").trim();
+        if (!d || coveredText.has(d.toLowerCase())) continue;
+        textCounts.set(d, (textCounts.get(d) ?? 0) + 1);
+      }
+      const legacyRows = [...textCounts.entries()].map(([label, location_count]) => ({
+        key: `t:${label}`,
+        label,
+        districtId: null,
+        calendarKey: null,
+        location_count,
+      }));
+
+      const merged = [...structuredRows, ...legacyRows].sort((a, b) => a.label.localeCompare(b.label));
+      setDistricts(merged);
       setCalendars(calsRes.data ?? []);
     } catch (e) {
       console.error("Load calendars failed:", e);
@@ -119,8 +154,17 @@ export default function CalendarsList() {
     }
   }
 
-  function calendarFor(district) {
-    return calendars.find((c) => c.district === district) ?? null;
+  // A calendar matches a structured district by district_id (or its legacy
+  // calendar_key while it hasn't been stamped yet); a legacy row matches by the
+  // free-text district string on an unstamped calendar.
+  function calendarForRow(row) {
+    if (row.districtId) {
+      return calendars.find(
+        (c) => c.district_id === row.districtId
+          || (row.calendarKey && !c.district_id && c.district === row.calendarKey),
+      ) ?? null;
+    }
+    return calendars.find((c) => !c.district_id && c.district === row.label) ?? null;
   }
 
   if (!org) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
@@ -169,19 +213,22 @@ export default function CalendarsList() {
         <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>Loading…</div>
       ) : districts.length === 0 ? (
         <div style={emptyState}>
-          No districts yet. Add a location with a district name first, then come back here.
+          No districts yet. Create one from a school's <strong>District</strong> field
+          on the Locations tab (or add a location with a district name), then come back here.
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {districts.map(({ district, location_count }) => {
-            const cal = calendarFor(district);
-            const isEditing = editing?.district === district;
+          {districts.map((row) => {
+            const cal = calendarForRow(row);
+            const isEditing = editing?.key === row.key;
             return (
-              <div key={district}>
+              <div key={row.key}>
                 {isEditing ? (
                   <CalendarEditor
                     org={org}
-                    district={district}
+                    districtId={row.districtId}
+                    districtLabel={row.label}
+                    districtCalendarKey={row.calendarKey}
                     schoolYear={schoolYear}
                     existing={cal}
                     onClose={() => setEditing(null)}
@@ -200,12 +247,12 @@ export default function CalendarsList() {
                   />
                 ) : (
                   <DistrictRow
-                    district={district}
-                    locationCount={location_count}
+                    district={row.label}
+                    locationCount={row.location_count}
                     cal={cal}
-                    isViewing={viewing.has(district)}
-                    onToggleView={() => toggleViewing(district)}
-                    onEdit={() => setEditing({ district })}
+                    isViewing={viewing.has(row.key)}
+                    onToggleView={() => toggleViewing(row.key)}
+                    onEdit={() => setEditing({ key: row.key })}
                   />
                 )}
               </div>
@@ -449,7 +496,7 @@ function formatShortDateLabel(iso) {
   return dt.toLocaleDateString(undefined, { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" });
 }
 
-function CalendarEditor({ org, district, schoolYear, existing, onClose, onSaved }) {
+function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, schoolYear, existing, onClose, onSaved }) {
   const [extracting, setExtracting] = useState(false);
   const [extractStartedAt, setExtractStartedAt] = useState(null);
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -599,9 +646,16 @@ function CalendarEditor({ org, district, schoolYear, existing, onClose, onSaved 
       out.sort((a, b) => a.date.localeCompare(b.date));
       return out;
     }
+    // district_calendars.district is NOT NULL. For a brand-new structured-district
+    // calendar use its calendar_key (so it bridges any legacy free-text) or its
+    // name; when editing an existing row keep its current string so legacy
+    // free-text matching and the unique (org, district, school_year) key don't
+    // shift. district_id is stamped so the date math is parent-safe (branch 1).
+    const districtString = existing?.district ?? (districtCalendarKey || districtLabel);
     const payload = {
       organization_id: org.id,
-      district,
+      district: districtString,
+      district_id: districtId ?? existing?.district_id ?? null,
       school_year: draft.school_year,
       first_day_of_school: draft.first_day_of_school || null,
       last_day_of_school: draft.last_day_of_school || null,
@@ -649,7 +703,7 @@ function CalendarEditor({ org, district, schoolYear, existing, onClose, onSaved 
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 19, fontWeight: 700, color: INK }}>
-            {existing ? `Editing ${district} calendar` : `New calendar for ${district}`}
+            {existing ? `Editing ${districtLabel} calendar` : `New calendar for ${districtLabel}`}
           </div>
           <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
             School year <strong style={{ color: INK }}>{draft.school_year}</strong>
