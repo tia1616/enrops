@@ -375,7 +375,7 @@ function ctaForStatus(c, hasDoc = false) {
       return [{ to: `/admin/curricula/${c.id}/review`, label: "Review and publish →", primary: true }];
     case "published":
       return [
-        { to: `/admin/curricula/${c.id}/edit`, label: "Edit", primary: false },
+        { to: `/admin/curricula/${c.id}/edit`, label: "View / Edit", primary: false },
         { to: `/admin/curricula/${c.id}/schedule`, label: "Schedule a term", primary: true },
       ];
     default:
