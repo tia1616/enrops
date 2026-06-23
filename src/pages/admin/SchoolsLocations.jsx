@@ -9,6 +9,7 @@
 // tabs go away then and the page becomes a single list. Same URL, same nav slot.
 
 import { useSearchParams, useOutletContext } from 'react-router-dom';
+import SchoolsList from './schools/SchoolsList';
 import PartnersTab from './contacts/PartnersTab';
 import LocationsList from './LocationsList';
 import CalendarsList from './CalendarsList';
@@ -19,16 +20,22 @@ const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
 
+// Schools is the unified primary surface (a school = a partner + its venues).
+// The old Partners + Locations tabs stay as a labeled "classic" fallback during
+// the transition — they get retired once the J2S data reconciliation
+// (Workstream 2) lets the unified list cleanly replace them. Calendars stays
+// its own tab. The page defaults to ?tab=schools.
 const TABS = [
-  { key: 'partners',  label: 'Schools & partners', help: 'The schools, districts, and orgs you partner with — and your contacts there.' },
-  { key: 'locations', label: 'Locations',          help: 'Where programs actually run — venues with addresses, room numbers, and arrival info.' },
-  { key: 'calendars', label: 'Calendars',          help: "District academic calendars — no-school days that flow into every program's session dates." },
+  { key: 'schools',   label: 'Schools',             help: 'Every school you work with — its venue(s), contacts, district calendar, and what runs there. One place per school.' },
+  { key: 'partners',  label: 'Partners (classic)',  help: 'The schools, districts, and orgs you partner with — and your contacts there.' },
+  { key: 'locations', label: 'Locations (classic)', help: 'Where programs actually run — venues with addresses, room numbers, and arrival info.' },
+  { key: 'calendars', label: 'Calendars',           help: "District academic calendars — no-school days that flow into every program's session dates." },
 ];
 
 export default function SchoolsLocations() {
   const { org } = useOutletContext() ?? {};
   const [params, setParams] = useSearchParams();
-  const tab = params.get('tab') || 'partners';
+  const tab = params.get('tab') || 'schools';
   const active = TABS.find((t) => t.key === tab) ?? TABS[0];
 
   function selectTab(key) { setParams({ tab: key }, { replace: true }); }
@@ -37,7 +44,7 @@ export default function SchoolsLocations() {
     <div>
       <header style={{ marginBottom: 12 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.3 }}>
-          Partners
+          Schools
         </h1>
         <p style={{ color: MUTED, marginTop: 6, fontSize: 13.5, lineHeight: 1.5 }}>
           {active.help}
@@ -72,6 +79,7 @@ export default function SchoolsLocations() {
         })}
       </div>
 
+      {tab === 'schools'   && <SchoolsList />}
       {tab === 'partners'  && <PartnersTab org={org} />}
       {tab === 'locations' && <LocationsList />}
       {tab === 'calendars' && <CalendarsList />}

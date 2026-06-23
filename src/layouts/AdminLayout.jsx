@@ -41,7 +41,7 @@ const NAV = [
     ],
   },
   {
-    to: "/admin/schools", label: "Partners",
+    to: "/admin/schools", label: "Schools",
     match: ["/admin/schools", "/admin/calendars"],
   },
   {

@@ -190,8 +190,10 @@ function PartnerRow({ partner, contactCount, expanded, onToggle, onPartnerChange
 }
 
 // ─── Inline editor for the partner's own fields ─────────────────────────────
+// Exported so the unified Schools detail drawer can reuse the exact same partner
+// editor — guarantees field parity (no capability is lost in the redesign).
 
-function PartnerEditor({ partner, onChanged }) {
+export function PartnerEditor({ partner, onChanged }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
     partner_name: partner.partner_name ?? '',
@@ -357,8 +359,10 @@ function PartnerEditor({ partner, onChanged }) {
 }
 
 // ─── Contacts list under a partner ──────────────────────────────────────────
+// Exported so the unified Schools detail drawer reuses the identical contacts
+// CRUD (multiple contacts, roles, shared-inbox flag) — no data/capability loss.
 
-function ContactsList({ partnerId, organizationId, onChanged }) {
+export function ContactsList({ partnerId, organizationId, onChanged }) {
   const [contacts, setContacts] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [adding, setAdding] = useState(false);
