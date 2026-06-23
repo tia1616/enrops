@@ -1411,6 +1411,7 @@ function CsvPanel({ target, csvHeaders, csvRows, mapping, reDetect, reviewRows, 
                     <ReviewInput label={`${nounCap} first`} value={r.student_first_name} onChange={(v) => onEditRow(i, "student_first_name", v)} placeholder="required" />
                     <ReviewInput label="Last" value={r.student_last_name} onChange={(v) => onEditRow(i, "student_last_name", v)} />
                     <ReviewInput label="Grade" value={r.grade} onChange={(v) => onEditRow(i, "grade", v)} width="58px" />
+                    <ReviewInput label="Birthdate" value={r.birthdate} onChange={(v) => onEditRow(i, "birthdate", v)} width="120px" placeholder="YYYY-MM-DD" />
                     <button
                       type="button"
                       onClick={() => onRemoveRow(i)}
