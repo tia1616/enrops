@@ -11,6 +11,7 @@
 import { useSearchParams, useOutletContext } from 'react-router-dom';
 import PartnersTab from './contacts/PartnersTab';
 import LocationsList from './LocationsList';
+import DistrictsList from './DistrictsList';
 import CalendarsList from './CalendarsList';
 
 const PURPLE = '#1C004F';
@@ -22,6 +23,7 @@ const RULE = '#e2dfd5';
 const TABS = [
   { key: 'partners',  label: 'Schools & partners', help: 'The schools, districts, and orgs you partner with — and your contacts there.' },
   { key: 'locations', label: 'Locations',          help: 'Where programs actually run — venues with addresses, room numbers, and arrival info.' },
+  { key: 'districts', label: 'Districts',          help: 'Group schools under a district so its academic calendar applies to all of them at once.' },
   { key: 'calendars', label: 'Calendars',          help: "District academic calendars — no-school days that flow into every program's session dates." },
 ];
 
@@ -74,6 +76,7 @@ export default function SchoolsLocations() {
 
       {tab === 'partners'  && <PartnersTab org={org} />}
       {tab === 'locations' && <LocationsList />}
+      {tab === 'districts' && <DistrictsList />}
       {tab === 'calendars' && <CalendarsList />}
     </div>
   );
