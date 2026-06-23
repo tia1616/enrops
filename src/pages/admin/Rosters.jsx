@@ -147,6 +147,22 @@ function buildRegistrants(rows, headers, mapping) {
   });
 }
 
+// Stringify one Excel cell for the review list. Date-typed cells (when the
+// workbook is read with { cellDates: true }) arrive as JS Date objects —
+// format those as YYYY-MM-DD using UTC parts so a birthdate stored as an
+// Excel serial (e.g. 43777) doesn't reach the importer as a raw number that
+// gets misread as the year 43777. Everything else stringifies normally.
+function excelCellToString(c) {
+  if (c == null) return "";
+  if (c instanceof Date && !Number.isNaN(c.getTime())) {
+    const y = String(c.getUTCFullYear()).padStart(4, "0");
+    const m = String(c.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(c.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  return String(c);
+}
+
 // Tiny CSV parser. Handles quoted fields with embedded commas + escaped
 // quotes (""), CRLF/LF row endings. Plenty for Squarespace / Google
 // Sheets exports.
@@ -1118,16 +1134,19 @@ function RosterUploadModal({ target, onClose, onImported }) {
       reader.onload = async () => {
         try {
           const XLSX = await import("xlsx");
-          const wb = XLSX.read(new Uint8Array(reader.result), { type: "array" });
+          // cellDates: true decodes date-formatted cells into JS Date objects
+          // instead of leaving them as raw serial numbers (which were being
+          // misread as far-future years downstream).
+          const wb = XLSX.read(new Uint8Array(reader.result), { type: "array", cellDates: true });
           const sheet = wb.Sheets[wb.SheetNames[0]];
           if (!sheet) {
             setParseError("That spreadsheet has no sheets we could read.");
             return;
           }
           const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" });
-          const headers = (aoa[0] || []).map((c) => (c == null ? "" : String(c)));
+          const headers = (aoa[0] || []).map(excelCellToString);
           const data = aoa.slice(1)
-            .map((row) => row.map((c) => (c == null ? "" : String(c))))
+            .map((row) => row.map(excelCellToString))
             .filter((row) => row.some((c) => c.trim() !== ""));
           ingest(headers, data);
         } catch (err) {
