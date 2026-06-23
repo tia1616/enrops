@@ -88,6 +88,18 @@ const FIELD_DEFS = [
     aliases: ["parentphone", "guardianphone", "phone", "phonenumber"] },
 ];
 
+// Fields that get their own dedicated inputs at the top of each review card
+// (plus the full-name helpers, which are split into first/last before import).
+// Everything else in FIELD_DEFS is an "extra" — shown below whenever it has a
+// value, so the card is a faithful preview of everything being imported.
+const DEDICATED_REVIEW_KEYS = new Set([
+  "student_first_name", "student_last_name", "student_full_name",
+  "grade", "birthdate",
+  "parent_first_name", "parent_last_name", "parent_full_name",
+  "parent_email", "parent_phone",
+]);
+const EXTRA_FIELD_DEFS = FIELD_DEFS.filter((d) => !DEDICATED_REVIEW_KEYS.has(d.key));
+
 function normalizeHeader(h) {
   return (h || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -1427,12 +1439,21 @@ function CsvPanel({ target, csvHeaders, csvRows, mapping, reDetect, reviewRows, 
                     <ReviewInput label="Email" value={r.parent_email} onChange={(v) => onEditRow(i, "parent_email", v)} />
                     <ReviewInput label="Phone" value={r.parent_phone} onChange={(v) => onEditRow(i, "parent_phone", v)} width="120px" />
                   </div>
-                  {(r.allergies || r.medical_notes) && (
-                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                      <ReviewInput label="Allergies" value={r.allergies} onChange={(v) => onEditRow(i, "allergies", v)} />
-                      <ReviewInput label="Medical / health notes" value={r.medical_notes} onChange={(v) => onEditRow(i, "medical_notes", v)} />
-                    </div>
-                  )}
+                  {(() => {
+                    // Show every other field that has a value — a faithful
+                    // preview of everything being imported for this camper.
+                    const extras = EXTRA_FIELD_DEFS.filter(
+                      (d) => (r[d.key] ?? "").toString().trim() !== "",
+                    );
+                    if (extras.length === 0) return null;
+                    return (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 6, marginTop: 6 }}>
+                        {extras.map((d) => (
+                          <ReviewInput key={d.key} label={d.label} value={r[d.key]} onChange={(v) => onEditRow(i, d.key, v)} />
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
