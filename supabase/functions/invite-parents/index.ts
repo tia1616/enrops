@@ -33,6 +33,17 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 }
 
+// Condense a Resend / auth error into one short human-readable line for the operator.
+function shortErr(raw: string): string {
+  if (!raw) return 'unknown error';
+  try {
+    const j = JSON.parse(raw);
+    return String(j.message || j.error || j.name || raw).slice(0, 160);
+  } catch {
+    return raw.slice(0, 160);
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -109,7 +120,7 @@ serve(async (req) => {
     // ----- Tenant branding for the email -----
     const brand = await loadOrgBrand(admin, organizationId);
     const fromAddr = formatFromAddress(brand);
-    const subject = `Your ${brand.org_name} family portal is ready`;
+    const subject = `Your parent portal is ready — ${brand.org_name}`;
 
     // Look up existing auth users. We RE-SEND to accounts that exist but never
     // signed in (e.g. a prior send failed) instead of silently skipping them, and
@@ -144,13 +155,13 @@ serve(async (req) => {
     }
 
     let invited = 0, failed = 0;
-    const failedEmails: string[] = [];
+    const failedReasons: Array<{ email: string; reason: string }> = [];
     for (const c of toInvite) {
       // Create the account only if missing — the auth.users trigger links
       // parents.auth_id by email. Existing-but-never-signed-in just gets a re-send.
       if (!c.hasAccount) {
         const { error: createErr } = await admin.auth.admin.createUser({ email: c.email, email_confirm: true });
-        if (createErr) { console.error('createUser failed', c.email, createErr.message); failed++; failedEmails.push(c.email); continue; }
+        if (createErr) { console.error('createUser failed', c.email, createErr.message); failed++; failedReasons.push({ email: c.email, reason: shortErr(createErr.message) }); continue; }
       }
 
       let signInUrl = redirectTo || SUPABASE_URL;
@@ -171,12 +182,17 @@ serve(async (req) => {
           tags: [{ name: 'type', value: 'parent_invite' }],
         }),
       });
-      if (!resp.ok) { console.error('Resend failed', c.email, await resp.text()); failed++; failedEmails.push(c.email); continue; }
+      if (!resp.ok) {
+        const errText = await resp.text();
+        console.error('Resend failed', c.email, errText);
+        failed++; failedReasons.push({ email: c.email, reason: shortErr(errText) });
+        continue;
+      }
       invited++;
     }
 
     console.log(`invite-parents: org=${organizationId} program=${programId} invited=${invited} skipped_active=${skippedActive} failed=${failed}`);
-    return json({ invited, skipped_active: skippedActive, skipped_no_email: skippedNoEmail, failed, failed_emails: failedEmails, total_candidates: toInvite.length });
+    return json({ invited, skipped_active: skippedActive, skipped_no_email: skippedNoEmail, failed, failed_reasons: failedReasons, total_candidates: toInvite.length });
   } catch (e) {
     console.error('invite-parents error:', (e as Error).message);
     return json({ error: (e as Error).message || 'Internal error' }, 500);
@@ -194,19 +210,19 @@ function buildInviteEmail(brand: OrgBrand, firstName: string, signInUrl: string,
 <div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
   <div style="background:${primary};padding:32px 28px;text-align:center;">
     ${logo}
-    <h1 style="color:#fff;margin:8px 0 0;font-size:22px;font-weight:700;">Your family portal is ready</h1>
+    <h1 style="color:#fff;margin:8px 0 0;font-size:22px;font-weight:700;">Your parent portal is ready</h1>
   </div>
   <div style="padding:28px;">
     <p style="margin:0 0 16px;font-size:15px;color:#1a1a1a;">Hi ${firstName},</p>
     <p style="margin:0 0 20px;font-size:15px;color:#1a1a1a;line-height:1.6;">
-      Your child is enrolled${programName ? ` in <strong>${programName}</strong>` : ''}. Set up your portal to see the schedule and class details, sign any required forms, and get updates.
+      Your child is enrolled${programName ? ` in <strong>${programName}</strong>` : ''}. Sign in to your parent portal to see your child's program details, sign any required forms, and get updates.
     </p>
     <div style="text-align:center;margin:28px 0;">
       <a href="${signInUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:14px 36px;border-radius:8px;font-size:15px;font-weight:700;">
-        Open my portal
+        Sign in
       </a>
     </div>
-    <p style="margin:0;font-size:13px;color:#6b6b6b;line-height:1.6;">This one-click link works for 24 hours.${loginUrl ? ` After that you can sign in any time at <a href="${loginUrl}" style="color:${primary};">your family portal</a> — we'll email you a fresh link.` : ''} Questions? Just reply to this email.</p>
+    <p style="margin:0;font-size:13px;color:#6b6b6b;line-height:1.6;">This one-click link works for 24 hours.${loginUrl ? ` After that you can sign in any time at <a href="${loginUrl}" style="color:${primary};">your parent portal</a> — we'll email you a fresh link.` : ''} Questions? Just reply to this email.</p>
   </div>
 </div>
 </body></html>`;

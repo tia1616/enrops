@@ -84,15 +84,22 @@ export default function InviteFamiliesModal({ orgId, orgSlug, programId, onClose
 
           {phase === "sent" && (
             <div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: GREEN, marginBottom: 8 }}>Invites sent.</div>
-              <div style={{ fontSize: 14, color: INK, lineHeight: 1.6 }}>
-                Sent {result?.invited ?? 0} invite{(result?.invited ?? 0) === 1 ? "" : "s"}.
-                {result?.skipped_active ? ` ${result.skipped_active} already active (signed in before).` : ""}
-                {result?.skipped_no_email ? ` ${result.skipped_no_email} had no email on file.` : ""}
-                {result?.failed
-                  ? ` ${result.failed} couldn't be sent${result?.failed_emails?.length ? ` (${result.failed_emails.join(", ")})` : ""}.`
-                  : ""}
+              <div style={{ fontSize: 16, fontWeight: 600, color: (result?.invited ?? 0) > 0 ? GREEN : INK, marginBottom: 8 }}>
+                {(result?.invited ?? 0) > 0 ? `Sent ${result.invited} invite${result.invited === 1 ? "" : "s"}.` : "No invites sent."}
               </div>
+              <div style={{ fontSize: 14, color: INK, lineHeight: 1.6 }}>
+                {result?.skipped_active ? `${result.skipped_active} already active (signed in before). ` : ""}
+                {result?.skipped_no_email ? `${result.skipped_no_email} had no email on file. ` : ""}
+                {result?.failed ? `${result.failed} couldn't be sent.` : ""}
+                {(result?.invited ?? 0) === 0 && !result?.skipped_active && !result?.skipped_no_email && !result?.failed ? "Nothing to send." : ""}
+              </div>
+              {result?.failed_reasons?.length ? (
+                <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
+                  {result.failed_reasons.map((f, i) => (
+                    <li key={f.email + i}><span style={{ color: INK }}>{f.email}</span> — {f.reason}</li>
+                  ))}
+                </ul>
+              ) : null}
               <div style={{ marginTop: 18, textAlign: "right" }}>
                 <button onClick={onClose} style={primaryBtn(false)}>Done</button>
               </div>
