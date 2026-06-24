@@ -7,6 +7,7 @@
 // per-program roster page.
 
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 
 const BRIGHT = "#5847C9";
@@ -127,6 +128,10 @@ export default function InviteFamiliesModal({ orgId, orgSlug, programId, onClose
                     </div>
                   ) : null}
                   <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>From: {preview?.from} · Subject: {preview?.subject}</div>
+                  <div style={{ fontSize: 12, color: MUTED, marginBottom: 12, lineHeight: 1.5 }}>
+                    In the portal, families sign your required waivers before they see program details.{" "}
+                    <Link to="/admin/waivers" style={{ color: BRIGHT, textDecoration: "none" }}>Manage waivers →</Link>
+                  </div>
 
                   <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, maxHeight: 140, overflowY: "auto", marginBottom: 16 }}>
                     {recipients.map((r, i) => (

@@ -1289,6 +1289,10 @@ function Step3PriceAndOpen({
               </span>
             </span>
           </label>
+          <div style={{ marginTop: 12, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
+            When you invite these families to the portal, they'll sign your required waivers first.{" "}
+            <a href="/admin/waivers" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Set up waivers ↗</a>
+          </div>
         </div>
       ) : (
         <div style={fieldGroup}>

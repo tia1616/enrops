@@ -20,42 +20,6 @@ const GREEN_BG = "#f0fdf4";
 const GREEN_INK = "#166534";
 const RED = "#b53737";
 
-// Generic starter waivers for a provider with none yet. {org} is filled with the
-// org name on seed; the provider edits everything after.
-function templateWaivers(orgName) {
-  const o = orgName || "our program";
-  return [
-    {
-      name: "Liability Waiver & Agreement",
-      required: true,
-      content:
-`${o} is committed to a safe, positive learning environment. By enrolling my child, I acknowledge and agree to the following:
-
-1. Participation & risk. Enrichment activities involve inherent risks. I voluntarily enroll my child and assume these risks.
-
-2. Release. To the extent permitted by law, I release ${o}, its instructors, and its partner sites from liability for injuries or losses, except those caused by gross negligence.
-
-3. Medical. In an emergency, I authorize ${o} to seek medical care for my child if I cannot be reached, and I am responsible for related costs.
-
-4. Behavior. My child is expected to follow program rules. ${o} may remove a child whose behavior is unsafe or disruptive.
-
-5. Pickup. I will arrange timely, authorized pickup at dismissal.
-
-By signing, I confirm I have read and agree to this waiver and agreement.`,
-    },
-    {
-      name: "Photo & Media Release",
-      required: true,
-      content:
-`From time to time, ${o} may photograph or record program activities for use in materials such as our website, social media, and promotional content.
-
-By signing, I grant ${o} permission to use my child's image and work in these materials, without compensation. No last names are published.
-
-If you prefer your child not be photographed, please decline this release and let your instructor know — your child can still fully participate.`,
-    },
-  ];
-}
-
 export default function WaiverManager() {
   const { org } = useOutletContext();
   const [waivers, setWaivers] = useState(null); // null = loading
@@ -125,12 +89,12 @@ export default function WaiverManager() {
     if (busy) return;
     setBusy(true); setError("");
     try {
-      const rows = templateWaivers(org?.name).map((t) => ({
-        organization_id: org.id, name: t.name, content: t.content, required: t.required, active: true,
-      }));
-      const { error: e } = await supabase.from("waivers").insert(rows);
+      // Copies the platform default waivers into this org with the operator's
+      // name filled in (server-side, admin-gated). See seed_default_waivers().
+      const { data, error: e } = await supabase.rpc("seed_default_waivers", { p_org_id: org.id });
       if (e) throw e;
-      flash("Starter waivers added — edit them to match your program.");
+      if (!data) { setError("No starter templates are available yet."); return; }
+      flash(`Added ${data} starter waiver${data === 1 ? "" : "s"} — edit them to match your program.`);
       await load();
     } catch (e) {
       setError(e.message ?? "Couldn't add the starter waivers.");
