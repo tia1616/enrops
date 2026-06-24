@@ -90,6 +90,7 @@ export default function InviteFamiliesModal({ orgId, orgSlug, programId, onClose
               <div style={{ fontSize: 14, color: INK, lineHeight: 1.6 }}>
                 {result?.skipped_active ? `${result.skipped_active} already active (signed in before). ` : ""}
                 {result?.skipped_no_email ? `${result.skipped_no_email} had no email on file. ` : ""}
+                {result?.held_back ? `${result.held_back} held back (staging test guard). ` : ""}
                 {result?.failed ? `${result.failed} couldn't be sent.` : ""}
                 {(result?.invited ?? 0) === 0 && !result?.skipped_active && !result?.skipped_no_email && !result?.failed ? "Nothing to send." : ""}
               </div>
@@ -110,7 +111,9 @@ export default function InviteFamiliesModal({ orgId, orgSlug, programId, onClose
             <div>
               {count === 0 ? (
                 <div style={{ color: MUTED, fontSize: 14, lineHeight: 1.6 }}>
-                  {preview?.message || "Everyone on this roster already has portal access or has no email on file — nothing to send."}
+                  {preview?.held_back
+                    ? `${preview.held_back} would-be recipient${preview.held_back === 1 ? " is" : "s are"} held back by the staging test guard — only your allowlisted inboxes receive on staging.`
+                    : (preview?.message || "Everyone on this roster already has portal access or has no email on file — nothing to send.")}
                 </div>
               ) : (
                 <>
@@ -118,6 +121,11 @@ export default function InviteFamiliesModal({ orgId, orgSlug, programId, onClose
                     This will email <strong>{count} famil{count === 1 ? "y" : "ies"}</strong> who don't have portal access yet
                     {preview?.skipped_no_email ? <span style={{ color: MUTED }}> ({preview.skipped_no_email} skipped — no email on file)</span> : null}.
                   </div>
+                  {preview?.held_back ? (
+                    <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 8 }}>
+                      {preview.held_back} more held back by the staging test guard — only your allowlisted inboxes receive on staging.
+                    </div>
+                  ) : null}
                   <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>From: {preview?.from} · Subject: {preview?.subject}</div>
 
                   <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, maxHeight: 140, overflowY: "auto", marginBottom: 16 }}>

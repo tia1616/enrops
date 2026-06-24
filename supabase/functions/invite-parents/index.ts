@@ -18,6 +18,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
+import { isEmailAllowed, emailGuardActive } from '../_shared/emailGuard.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -139,24 +140,31 @@ serve(async (req) => {
       toInvite.push({ first_name: c.first_name, last_name: c.last_name, email: c.email, hasAccount: !!existing });
     }
 
+    // Staging recipient guard: on staging, only allowlisted inboxes actually
+    // receive — so a test never blasts synthetic/real families. Prod = allow all.
+    const guardOn = emailGuardActive();
+    const deliverable = guardOn ? toInvite.filter((c) => isEmailAllowed(c.email)) : toInvite;
+    const heldBack = toInvite.length - deliverable.length;
+
     // Preview mode: return exactly who would be emailed + the rendered email.
     // Nothing is created and nothing is sent.
     if (preview) {
       return json({
         preview: true,
-        total_candidates: toInvite.length,
+        total_candidates: deliverable.length,
+        held_back: heldBack,
         skipped_active: skippedActive,
         skipped_no_email: skippedNoEmail,
         from: fromAddr,
         subject,
-        recipients: toInvite.map((c) => ({ name: `${c.first_name} ${c.last_name}`.trim() || c.email, email: c.email })),
-        preview_html: buildInviteEmail(brand, toInvite[0]?.first_name || 'there', '#', prog.curriculum, loginUrl),
+        recipients: deliverable.map((c) => ({ name: `${c.first_name} ${c.last_name}`.trim() || c.email, email: c.email })),
+        preview_html: buildInviteEmail(brand, deliverable[0]?.first_name || 'there', '#', prog.curriculum, loginUrl),
       });
     }
 
     let invited = 0, failed = 0;
     const failedReasons: Array<{ email: string; reason: string }> = [];
-    for (const c of toInvite) {
+    for (const c of deliverable) {
       // Create the account only if missing — the auth.users trigger links
       // parents.auth_id by email. Existing-but-never-signed-in just gets a re-send.
       if (!c.hasAccount) {
@@ -191,8 +199,8 @@ serve(async (req) => {
       invited++;
     }
 
-    console.log(`invite-parents: org=${organizationId} program=${programId} invited=${invited} skipped_active=${skippedActive} failed=${failed}`);
-    return json({ invited, skipped_active: skippedActive, skipped_no_email: skippedNoEmail, failed, failed_reasons: failedReasons, total_candidates: toInvite.length });
+    console.log(`invite-parents: org=${organizationId} program=${programId} invited=${invited} skipped_active=${skippedActive} held_back=${heldBack} failed=${failed}`);
+    return json({ invited, skipped_active: skippedActive, skipped_no_email: skippedNoEmail, held_back: heldBack, failed, failed_reasons: failedReasons, total_candidates: deliverable.length });
   } catch (e) {
     console.error('invite-parents error:', (e as Error).message);
     return json({ error: (e as Error).message || 'Internal error' }, 500);
