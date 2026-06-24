@@ -226,6 +226,7 @@ export default function ProgramsCalendar() {
           .select(`
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             max_capacity, status, instructor_name, price_cents,
+            runs_own_registration, external_registration_url,
             first_session_date, session_count,
             facility_requested_at, facility_approved_at, facility_notes,
             program_location_id,
@@ -864,14 +865,17 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   // (avoid round-tripping the DB on every keystroke).
   const [draft, setDraft] = useState({
     day_of_week: program.day_of_week ?? "",
-    start_time: program.start_time ?? "",
-    end_time: program.end_time ?? "",
+    // Stored as 12-hour text ("2:45 PM"); <input type="time"> needs 24-hour.
+    start_time: to24h(program.start_time),
+    end_time: to24h(program.end_time),
     first_session_date: program.first_session_date ?? "",
     session_count: program.session_count ?? "",
     max_capacity: program.max_capacity ?? "",
     price_cents: program.price_cents ?? "",
     program_location_id: program.program_location_id ?? "",
     room: program.room ?? "",
+    runs_own_registration: program.runs_own_registration ?? false,
+    external_registration_url: program.external_registration_url ?? "",
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -888,14 +892,19 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
     try {
       const patch = {
         day_of_week: draft.day_of_week || null,
-        start_time: draft.start_time || null,
-        end_time: draft.end_time || null,
+        // Convert the 24-hour input values back to the stored 12-hour text format.
+        start_time: draft.start_time ? to12hText(draft.start_time) : null,
+        end_time: draft.end_time ? to12hText(draft.end_time) : null,
         first_session_date: draft.first_session_date || null,
         session_count: draft.session_count === "" || draft.session_count === null ? null : Number(draft.session_count),
         max_capacity: draft.max_capacity === "" || draft.max_capacity === null ? null : Number(draft.max_capacity),
         price_cents: draft.price_cents === "" || draft.price_cents === null ? null : Number(draft.price_cents),
         program_location_id: draft.program_location_id || null,
         room: draft.room || null,
+        runs_own_registration: !!draft.runs_own_registration,
+        external_registration_url: draft.runs_own_registration
+          ? (draft.external_registration_url?.trim() || null)
+          : null,
       };
       await onUpdate(program.id, patch);
       setSavedFlash(true);
@@ -969,6 +978,32 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         <ExpandField label="Room">
           <input type="text" value={draft.room ?? ""} onChange={(e) => set("room", e.target.value)} placeholder="e.g. Room 12" style={expandInputStyle} />
         </ExpandField>
+      </div>
+
+      {/* Registration ownership — who collects sign-ups for this program. */}
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={!!draft.runs_own_registration}
+            onChange={(e) => set("runs_own_registration", e.target.checked)}
+          />
+          Partner runs their own registration (keeps this program off your public catalog)
+        </label>
+        {draft.runs_own_registration && (
+          <div style={{ marginTop: 8, maxWidth: 440 }}>
+            <ExpandField label="Partner's registration link">
+              <input
+                type="url"
+                inputMode="url"
+                value={draft.external_registration_url ?? ""}
+                onChange={(e) => set("external_registration_url", e.target.value)}
+                placeholder="https://…  where families sign up"
+                style={expandInputStyle}
+              />
+            </ExpandField>
+          </div>
+        )}
       </div>
 
       {saveError && (
@@ -1424,6 +1459,33 @@ function formatTime(t) {
   const hr12 = ((h + 11) % 12) + 1;
   const ampm = h >= 12 ? "pm" : "am";
   return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
+}
+
+// programs.start_time/end_time are stored as 12-hour text ("2:45 PM"), but
+// <input type="time"> only accepts 24-hour "HH:MM". to24h seeds the input;
+// to12hText converts the input's value back to the stored format on save.
+function to24h(t) {
+  if (!t || typeof t !== "string") return "";
+  const ampm = /^\s*(\d{1,2}):(\d{2})\s*([AaPp])[Mm]\s*$/.exec(t);
+  if (ampm) {
+    let h = parseInt(ampm[1], 10) % 12;
+    if (ampm[3].toLowerCase() === "p") h += 12;
+    return `${String(h).padStart(2, "0")}:${ampm[2]}`;
+  }
+  const hhmm = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(t);
+  if (hhmm) return `${String(parseInt(hhmm[1], 10)).padStart(2, "0")}:${hhmm[2]}`;
+  return "";
+}
+function to12hText(t) {
+  if (!t || typeof t !== "string") return t;
+  if (/[ap]m/i.test(t)) return t; // already 12-hour
+  const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(t);
+  if (!m) return t;
+  const h = parseInt(m[1], 10);
+  const ampm = h >= 12 ? "PM" : "AM";
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${h12}:${m[2]} ${ampm}`;
 }
 
 // ---- Styles ----
