@@ -202,6 +202,7 @@ export default function Register() {
         .select('*')
         .eq('program_location_id', program.program_location_id)
         .eq('day_of_week', program.day_of_week)
+        .eq('registration_mode', 'enrops') // don't bundle partner-run programs into a paid VIP offer
         .in('term', ['WI27', 'SP27']);
       const winter = matches?.find((p) => p.term === 'WI27');
       const spring = matches?.find((p) => p.term === 'SP27');
@@ -231,6 +232,7 @@ export default function Register() {
         .select('*')
         .eq('organization_id', ORG_ID)
         .eq('status', 'open')
+        .eq('registration_mode', 'enrops') // exclude partner-run programs — no public checkout
         .order('day_of_week'),
       supabase
         .from('waivers')

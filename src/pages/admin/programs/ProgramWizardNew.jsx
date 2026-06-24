@@ -75,6 +75,22 @@ function formatTime(hhmm) {
   return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
+// The HTML <input type="time"> gives 24-hour "HH:MM". programs.start_time/
+// end_time are stored as 12-hour text ("3:30 PM") — the format the matcher and
+// schedule view parse. Convert on save so a new program's time matches existing
+// rows and isn't dropped by the matcher's 12-hour parser.
+function toDbTime12h(hhmm) {
+  if (!hhmm || typeof hhmm !== "string") return hhmm;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) return hhmm; // not the 24h picker format — leave as-is
+  const h = parseInt(m[1], 10);
+  const min = m[2];
+  const ampm = h >= 12 ? "PM" : "AM";
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${h12}:${min} ${ampm}`;
+}
+
 function dayLabel(dow) {
   const found = DAYS.find((d) => d.value === dow);
   return found ? found.label : "";
@@ -138,6 +154,11 @@ export default function ProgramWizardNew() {
     age_max: null,
     price_cents: null,
     short_description: "",
+    // 'enrops' = we run checkout (public catalog). 'partner' = the partner/venue
+    // runs their own registration; program is live + scheduled but never shown
+    // in the public catalog with a checkout.
+    registration_mode: "enrops",
+    external_registration_url: "",
   });
   const [prefilledFromCurriculum, setPrefilledFromCurriculum] = useState(false);
 
@@ -396,10 +417,11 @@ export default function ProgramWizardNew() {
     && formData.start_time < formData.end_time,
   );
 
-  // Step 3 valid when price is set (≥ 0). Free programs allowed.
-  const step3Valid = Boolean(
-    formData.price_cents !== null && formData.price_cents >= 0,
-  );
+  // Step 3 valid when price is set (≥ 0) for programs WE run. For partner-run
+  // programs we never collect payment, so price isn't required.
+  const step3Valid = formData.registration_mode === "partner"
+    ? true
+    : Boolean(formData.price_cents !== null && formData.price_cents >= 0);
 
   // Which calendar source the preview was actually able to use. Drives the
   // "Confirmed through ..." line in the preview box.
@@ -441,8 +463,9 @@ export default function ProgramWizardNew() {
         curriculum: formData.curriculum, // NOT NULL denormalized name
         program_location_id: formData.program_location_id,
         day_of_week: formData.day_of_week,
-        start_time: formData.start_time,
-        end_time: formData.end_time,
+        // Store 12-hour text ("3:30 PM") to match existing data + the matcher.
+        start_time: toDbTime12h(formData.start_time),
+        end_time: toDbTime12h(formData.end_time),
         first_session_date: formData.first_session_date,
         session_count: formData.session_count,
         // Legacy column: nullable, defaults to 8. Some downstream code (pricing
@@ -457,9 +480,17 @@ export default function ProgramWizardNew() {
         grade_max: formData.age_format === "grade" ? formData.grade_max : null,
         age_min: formData.age_format === "age" ? formData.age_min : null,
         age_max: formData.age_format === "age" ? formData.age_max : null,
-        price_cents: formData.price_cents,
+        // Partner-run programs don't take payment through us; default price to 0
+        // so the NOT-null-friendly column stays clean and no $ ever shows.
+        price_cents: formData.registration_mode === "partner"
+          ? (formData.price_cents ?? 0)
+          : formData.price_cents,
         short_description: formData.short_description || null,
         program_type: "standard",
+        registration_mode: formData.registration_mode,
+        external_registration_url: formData.registration_mode === "partner"
+          ? (formData.external_registration_url.trim() || null)
+          : null,
         status, // 'draft' or 'open'
       };
       const { data, error: insErr } = await supabase
@@ -1043,6 +1074,34 @@ function Step2WhenAndHowMany({
 }
 
 // ---------------------------------------------------------------
+// Registration-mode radio option (Step 3).
+// ---------------------------------------------------------------
+function RegModeOption({ checked, onChange, disabled, title, desc }) {
+  return (
+    <label style={{
+      display: "flex", gap: 10, alignItems: "flex-start",
+      cursor: disabled ? "default" : "pointer",
+      padding: "10px 12px", borderRadius: 8,
+      border: `1.5px solid ${checked ? BRIGHT : RULE}`,
+      background: checked ? "#f6f4ff" : "#fff",
+    }}>
+      <input
+        type="radio"
+        name="registration_mode"
+        checked={checked}
+        onChange={onChange}
+        disabled={disabled}
+        style={{ marginTop: 2 }}
+      />
+      <span>
+        <span style={{ display: "block", fontSize: 14, fontWeight: 600, color: INK }}>{title}</span>
+        <span style={{ display: "block", fontSize: 12.5, color: MUTED, lineHeight: 1.45, marginTop: 2 }}>{desc}</span>
+      </span>
+    </label>
+  );
+}
+
+// ---------------------------------------------------------------
 // Step 3 — Price & open
 // ---------------------------------------------------------------
 function Step3PriceAndOpen({
@@ -1056,6 +1115,8 @@ function Step3PriceAndOpen({
   onBackToPrograms,
   step3Valid,
 }) {
+  const isPartner = formData.registration_mode === "partner";
+
   // Dollars display — formData.price_cents is the canonical store.
   const dollars = formData.price_cents == null ? "" : (formData.price_cents / 100).toFixed(2);
 
@@ -1072,15 +1133,25 @@ function Step3PriceAndOpen({
   // ---- Saved success state ----
   if (savedProgramId) {
     const isOpen = savedAsStatus === "open";
+    let heading;
+    let body;
+    if (!isOpen) {
+      heading = "Saved as a draft.";
+      body = "Only you can see it for now. When you're ready, publish it from your program list.";
+    } else if (isPartner) {
+      heading = "Your program is set up.";
+      body = "It's on your schedule and rosters and will be included when you match instructors. It won't show in your public catalog — the partner runs registration.";
+    } else {
+      heading = "Your program is live.";
+      body = "Families can register now. You'll see them show up on the calendar as they sign up.";
+    }
     return (
       <div>
         <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
-          {isOpen ? "Your program is live." : "Saved as a draft."}
+          {heading}
         </div>
         <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
-          {isOpen
-            ? "Families can register now. You'll see them show up on the calendar as they sign up."
-            : "Only you can see it for now. When you're ready, publish it from your program list."}
+          {body}
         </p>
         <div style={{ display: "flex", gap: 12 }}>
           <button
@@ -1101,26 +1172,68 @@ function Step3PriceAndOpen({
   // ---- Form state ----
   return (
     <div>
+      {/* Who runs registration? Drives whether this program is publicly
+          registerable (enrops) or partner-managed (scheduled but no checkout). */}
       <div style={fieldGroup}>
-        <label htmlFor="price" style={labelStyle}>Price per student</label>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ color: MUTED, fontSize: 16 }}>$</span>
-          <input
-            id="price"
-            type="number"
-            min={0}
-            step="0.01"
-            value={dollars}
-            onChange={(e) => handlePriceChange(e.target.value)}
-            style={{ ...inputStyle, maxWidth: 160 }}
-            placeholder="0.00"
+        <label style={labelStyle}>Who runs registration?</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <RegModeOption
+            checked={!isPartner}
+            onChange={() => onField("registration_mode", "enrops")}
+            disabled={submitting}
+            title="We run registration"
+            desc="Families sign up and pay through your public catalog."
+          />
+          <RegModeOption
+            checked={isPartner}
+            onChange={() => onField("registration_mode", "partner")}
+            disabled={submitting}
+            title="Partner runs their own registration"
+            desc="The program is on your schedule and rosters, but families register with the partner — it won't appear in your public catalog."
           />
         </div>
-        <div style={{ marginTop: 6, fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
-          Set to 0 for a free program. You can add early-bird discounts and
-          promo codes after this is created — they usually boost sign-ups.
-        </div>
       </div>
+
+      {isPartner ? (
+        <div style={fieldGroup}>
+          <label htmlFor="ext_url" style={labelStyle}>
+            Partner's registration link <span style={{ color: MUTED, fontWeight: 400 }}>(optional)</span>
+          </label>
+          <input
+            id="ext_url"
+            type="url"
+            inputMode="url"
+            value={formData.external_registration_url}
+            onChange={(e) => onField("external_registration_url", e.target.value)}
+            style={inputStyle}
+            placeholder="https://…  where families sign up"
+          />
+          <div style={{ marginTop: 6, fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+            We'll keep this on file so you can drop it into marketing emails. Add or change it any time.
+          </div>
+        </div>
+      ) : (
+        <div style={fieldGroup}>
+          <label htmlFor="price" style={labelStyle}>Price per student</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: MUTED, fontSize: 16 }}>$</span>
+            <input
+              id="price"
+              type="number"
+              min={0}
+              step="0.01"
+              value={dollars}
+              onChange={(e) => handlePriceChange(e.target.value)}
+              style={{ ...inputStyle, maxWidth: 160 }}
+              placeholder="0.00"
+            />
+          </div>
+          <div style={{ marginTop: 6, fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+            Set to 0 for a free program. You can add early-bird discounts and
+            promo codes after this is created — they usually boost sign-ups.
+          </div>
+        </div>
+      )}
 
       <div style={{
         marginTop: 24, padding: "16px 18px",
@@ -1130,9 +1243,9 @@ function Step3PriceAndOpen({
           Ready to publish?
         </div>
         <p style={{ margin: "0 0 14px", color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
-          Opening registration puts this program in your public catalog so families
-          can sign up. Saving as a draft keeps it private — you can publish from
-          the program list anytime.
+          {isPartner
+            ? "Adding this puts it on your schedule and rosters so you can match instructors. Saving as a draft keeps it private until you're ready."
+            : "Opening registration puts this program in your public catalog so families can sign up. Saving as a draft keeps it private — you can publish from the program list anytime."}
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button
@@ -1145,7 +1258,7 @@ function Step3PriceAndOpen({
               opacity: submitting || !step3Valid ? 0.5 : 1,
             }}
           >
-            {submitting ? "Working…" : "Open registration"}
+            {submitting ? "Working…" : isPartner ? "Add to schedule" : "Open registration"}
           </button>
           <button
             onClick={() => onSubmit("draft")}

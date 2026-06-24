@@ -69,6 +69,7 @@ export default function J2SHome() {
       .eq('organization_id', org.id)
       .eq('term', 'FA26')
       .eq('status', 'open')
+      .eq('registration_mode', 'enrops') // exclude partner-run programs — no public checkout
       .order('day_of_week');
 
     // Look up Winter/Spring matches for each fall program to determine VIP eligibility.
@@ -79,6 +80,7 @@ export default function J2SHome() {
         .from('programs')
         .select('*')
         .eq('organization_id', org.id)
+        .eq('registration_mode', 'enrops') // don't bundle partner-run programs into a paid VIP offer
         .in('term', ['WI27', 'SP27']);
 
       pg.forEach((fall) => {
