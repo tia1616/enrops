@@ -1253,7 +1253,7 @@ function Step3PriceAndOpen({
             onChange={() => onField("runs_own_registration", true)}
             disabled={submitting}
             title="Partner runs their own registration"
-            desc="The program is on your schedule and rosters, but families register with the partner — it won't appear in your public catalog."
+            desc="Families register with the partner, not through our checkout. It still schedules and shows on your rosters."
           />
         </div>
       </div>
@@ -1285,7 +1285,7 @@ function Step3PriceAndOpen({
             <span>
               Also list it on our public reg page
               <span style={{ display: "block", fontSize: 12, color: MUTED, marginTop: 2 }}>
-                Families see it in your catalog and click through to the partner's link. Needs a link above.
+                Off by default — the program stays off your catalog. Check this to show it with a "Register at the partner" link (needs a link above).
               </span>
             </span>
           </label>

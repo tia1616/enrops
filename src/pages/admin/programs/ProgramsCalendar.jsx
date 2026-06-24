@@ -992,7 +992,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
             checked={!!draft.runs_own_registration}
             onChange={(e) => set("runs_own_registration", e.target.checked)}
           />
-          Partner runs their own registration (keeps this program off your public catalog)
+          Partner runs their own registration — families register with the partner, not our checkout
         </label>
         {draft.runs_own_registration && (
           <div style={{ marginTop: 8, maxWidth: 440 }}>
@@ -1016,7 +1016,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
               <span>
                 Also list it on our public reg page
                 <span style={{ display: "block", fontSize: 12, color: MUTED, marginTop: 2 }}>
-                  Families click through to the partner's link. Needs a link above.
+                  Off by default — the program stays off your catalog. Check this to show it with a "Register at the partner" link (needs a link above).
                 </span>
               </span>
             </label>

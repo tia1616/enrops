@@ -1907,6 +1907,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
               key={p.id}
               program={p}
               orgId={org?.id}
+              orgSlug={org?.slug}
               canEdit={canEdit}
               expanded={expandedId === p.id}
               onToggle={() => setExpandedId((cur) => (cur === p.id ? null : p.id))}
@@ -1960,10 +1961,44 @@ function AfterschoolRostersSection({ org, canEdit }) {
 
 // One afterschool program in the roster list. Mirrors CampRow: expand to edit
 // enrolled kids inline, plus add/upload + email + view/print actions.
-function ProgramRosterRow({ program: p, orgId, canEdit, expanded, onToggle, onUpload, onEmail, subtitle, onChanged }) {
+function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onToggle, onUpload, onEmail, subtitle, onChanged }) {
   const lastEmailedLabel = p.last_emailed_at
     ? new Date(p.last_emailed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })
     : null;
+  const [inviting, setInviting] = useState(false);
+  const [inviteMsg, setInviteMsg] = useState(null); // { tone, text }
+
+  // Invite this program's families into the parent portal (sign-in + waivers).
+  // Used most for partner-run programs where families were roster-imported.
+  // Idempotent on the backend — re-running skips anyone who already has access.
+  async function handleInvite() {
+    if (inviting) return;
+    if (!window.confirm(
+      "Send a portal sign-in invite to this program's families?\n\n"
+      + "Each family without portal access yet (and with an email on file) gets a welcome email. "
+      + "Families who already have access are skipped.",
+    )) return;
+    setInviting(true);
+    setInviteMsg(null);
+    try {
+      const redirectTo = `${window.location.origin}/${orgSlug}/dashboard`;
+      const { data, error } = await supabase.functions.invoke("invite-parents", {
+        body: { organization_id: orgId, program_id: p.id, redirect_to: redirectTo },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      const parts = [];
+      if (data?.invited) parts.push(`Invited ${data.invited} famil${data.invited === 1 ? "y" : "ies"}`);
+      if (data?.skipped_existing) parts.push(`${data.skipped_existing} already had access`);
+      if (data?.skipped_no_email) parts.push(`${data.skipped_no_email} had no email`);
+      if (data?.failed) parts.push(`${data.failed} couldn't be sent`);
+      setInviteMsg({ tone: data?.failed ? "err" : "ok", text: parts.length ? parts.join(" · ") : (data?.message ?? "Nothing to send.") });
+    } catch (e) {
+      setInviteMsg({ tone: "err", text: e.message ?? "Couldn't send invites." });
+    } finally {
+      setInviting(false);
+    }
+  }
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: p.enrolled > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`, borderRadius: 12, padding: "12px 16px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -1995,10 +2030,18 @@ function ProgramRosterRow({ program: p, orgId, canEdit, expanded, onToggle, onUp
                 Email roster →
               </button>
             )}
+            {canEdit && p.enrolled > 0 && (
+              <button type="button" onClick={handleInvite} disabled={inviting} style={{ padding: "6px 12px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: inviting ? "wait" : "pointer", opacity: inviting ? 0.6 : 1 }} title="Email families a sign-in link so they can view details and sign waivers in the portal. Skips anyone who already has access.">
+                {inviting ? "Inviting…" : "Invite families →"}
+              </button>
+            )}
             <Link to={`/admin/programs/${p.id}/roster`} style={{ padding: "6px 12px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12, fontWeight: 600, textDecoration: "none" }} title="Open the printable roster">
               View / print →
             </Link>
           </div>
+          {inviteMsg && (
+            <div style={{ fontSize: 11, marginTop: 4, textAlign: "right", color: inviteMsg.tone === "ok" ? OK : "#b53737" }}>{inviteMsg.text}</div>
+          )}
           {lastEmailedLabel && <div style={{ fontSize: 11, color: MUTED, marginTop: 4, textAlign: "right" }}>Last emailed {lastEmailedLabel}</div>}
         </div>
       </div>
