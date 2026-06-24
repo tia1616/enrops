@@ -18,7 +18,19 @@ import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 
 interface AdminInviteBody {
   email?: string;
-  role?: 'admin' | 'owner';
+  role?: 'owner' | 'admin' | 'staff' | 'viewer';
+}
+
+const ALLOWED_ROLES = ['owner', 'admin', 'staff', 'viewer'] as const;
+type Role = (typeof ALLOWED_ROLES)[number];
+
+function roleLabel(role: Role): string {
+  switch (role) {
+    case 'owner': return 'an owner';
+    case 'admin': return 'an admin';
+    case 'staff': return 'a staff member';
+    case 'viewer': return 'a viewer';
+  }
 }
 
 const FORBIDDEN = json({ error: 'forbidden' }, 403);
@@ -49,7 +61,8 @@ serve(async (req: Request) => {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return json({ error: 'invalid_email' }, 400);
     }
-    const role: 'admin' | 'owner' = body.role === 'owner' ? 'owner' : 'admin';
+    const role = (body.role ?? '').toLowerCase() as Role;
+    if (!ALLOWED_ROLES.includes(role)) return json({ error: 'invalid_role' }, 400);
 
     const { data: callerMember, error: cmErr } = await supabase
       .from('org_members')
@@ -120,12 +133,19 @@ serve(async (req: Request) => {
       return json({ error: 'lookup_failed' }, 500);
     }
 
+    // Owner-protection: only an owner may modify an existing owner's row
+    // (an admin cannot demote/re-grant an owner).
+    if (existingMember && existingMember.role === 'owner' && callerMember.role !== 'owner') {
+      return FORBIDDEN;
+    }
+
     let outcome: 'added' | 'updated' | 'resent';
     if (existingMember) {
       const { error: updErr } = await supabase
         .from('org_members')
         .update({
           role,
+          email,
           accepted_at: existingMember.accepted_at ?? nowIso,
         })
         .eq('id', existingMember.id);
@@ -141,6 +161,7 @@ serve(async (req: Request) => {
           auth_user_id: authUserId,
           organization_id: organizationId,
           role,
+          email,
           accepted_at: nowIso,
         });
       if (insErr) {
@@ -169,9 +190,10 @@ serve(async (req: Request) => {
       return json({ error: 'email_not_configured' }, 500);
     }
 
+    const label = roleLabel(role);
     const subject = `You're invited to ${org.name} on Enrops`;
     const text = [
-      `You've been invited to join ${org.name} on Enrops as ${role === 'owner' ? 'an owner' : 'an admin'}.`,
+      `You've been invited to join ${org.name} on Enrops as ${label}.`,
       ``,
       `Click below to sign in:`,
       `${magicLink}`,
@@ -179,7 +201,7 @@ serve(async (req: Request) => {
       `If you weren't expecting this invite, you can ignore this email.`,
     ].join('\n');
 
-    const html = buildEmailHtml({ orgName: org.name ?? 'Enrops', role, magicLink });
+    const html = buildEmailHtml({ orgName: org.name ?? 'Enrops', roleLabel: label, magicLink });
 
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -225,9 +247,8 @@ serve(async (req: Request) => {
   }
 });
 
-function buildEmailHtml(args: { orgName: string; role: string; magicLink: string }): string {
-  const { orgName, role, magicLink } = args;
-  const roleLabel = role === 'owner' ? 'an owner' : 'an admin';
+function buildEmailHtml(args: { orgName: string; roleLabel: string; magicLink: string }): string {
+  const { orgName, roleLabel, magicLink } = args;
   return `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1a1a1a;max-width:560px;margin:0 auto;padding:24px;line-height:1.6;">
   <h2 style="font-size:20px;margin:0 0 16px 0;">You're invited to ${escapeHtml(orgName)} on Enrops</h2>

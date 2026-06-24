@@ -32,8 +32,29 @@ export default function TeamPage() {
   const [inviteError, setInviteError] = useState(null);
   const [inviteSuccess, setInviteSuccess] = useState(null);
 
-  const canInvite = orgMember?.role === "owner" || orgMember?.role === "admin";
+  // Per-row member-management state.
+  const [busyId, setBusyId] = useState(null);          // member id currently updating
+  const [confirmRemoveId, setConfirmRemoveId] = useState(null);
+  const [rowError, setRowError] = useState(null);      // { id, message }
+
+  const canManage = orgMember?.role === "owner" || orgMember?.role === "admin";
+  const canInvite = canManage;
   const canMintOwner = orgMember?.role === "owner";
+
+  // A member row is editable when the caller can manage the team, it isn't their
+  // own row, and — for owner rows / promoting to owner — the caller is an owner.
+  function canEditMember(m) {
+    if (!canManage || m.is_caller) return false;
+    if (m.role === "owner" && !canMintOwner) return false;
+    return true;
+  }
+
+  // Role options the caller may assign to a given member (owner only if owner).
+  function roleOptionsFor(m) {
+    const base = ["admin", "staff", "viewer"];
+    if (canMintOwner || m.role === "owner") base.unshift("owner");
+    return base;
+  }
 
   useEffect(() => {
     if (!org?.id) return;
@@ -104,12 +125,61 @@ export default function TeamPage() {
     fetchMembers();
   }
 
+  // Map backend error codes to plain language (no codes shown to operators).
+  function friendlyError(code) {
+    switch (code) {
+      case "last_owner":
+        return "This is the only owner — promote someone else to owner first.";
+      case "forbidden":
+        return "Only an owner can change or remove an owner.";
+      case "cannot_change_self":
+      case "cannot_remove_self":
+        return "You can't change your own access — ask another admin or the owner.";
+      case "member_not_found":
+        return "That person is no longer on the team — refreshing the list.";
+      default:
+        return "Something went wrong. Please try again.";
+    }
+  }
+
+  async function changeRole(member, nextRole) {
+    if (nextRole === member.role) return;
+    setRowError(null);
+    setBusyId(member.id);
+    const { data, error } = await supabase.functions.invoke("admin-set-member-role", {
+      body: { member_id: member.id, role: nextRole },
+    });
+    setBusyId(null);
+    if (error || data?.error) {
+      setRowError({ id: member.id, message: friendlyError(data?.error) });
+      fetchMembers();
+      return;
+    }
+    fetchMembers();
+  }
+
+  async function removeMember(member) {
+    setRowError(null);
+    setBusyId(member.id);
+    const { data, error } = await supabase.functions.invoke("admin-remove-member", {
+      body: { member_id: member.id },
+    });
+    setBusyId(null);
+    setConfirmRemoveId(null);
+    if (error || data?.error) {
+      setRowError({ id: member.id, message: friendlyError(data?.error) });
+      fetchMembers();
+      return;
+    }
+    fetchMembers();
+  }
+
   return (
     <div>
       <div style={{ marginBottom: 18 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, color: PURPLE, margin: 0 }}>Team</h1>
         <div style={{ color: MUTED, fontSize: 14, marginTop: 4 }}>
-          Owners and admins for {org?.name ?? "this organization"}.
+          Everyone who can access {org?.name ?? "this organization"}'s workspace, and what they can do.
         </div>
       </div>
 
@@ -156,6 +226,8 @@ export default function TeamPage() {
                   style={inputStyle()}
                 >
                   <option value="admin">Admin</option>
+                  <option value="staff">Staff</option>
+                  <option value="viewer">Viewer</option>
                   {canMintOwner && <option value="owner">Owner</option>}
                 </select>
                 <button type="submit" disabled={sending} style={primaryBtn(sending)}>
@@ -174,8 +246,12 @@ export default function TeamPage() {
                   Cancel
                 </button>
               </div>
-              <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>
-                They'll get a magic link sign-in from {org?.name ?? "your"} Enrops workspace.
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+                They'll get a magic-link sign-in from {org?.name ?? "your"} Enrops workspace.
+                <br />
+                <strong>Admin</strong> — everything, including money &amp; settings.{" "}
+                <strong>Staff</strong> — run programs, rosters &amp; emails (no money or settings).{" "}
+                <strong>Viewer</strong> — read-only, can't see money.
                 {!canMintOwner && " Only owners can promote someone to owner."}
               </div>
               {inviteError && (
@@ -204,7 +280,7 @@ export default function TeamPage() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 140px 160px",
+            gridTemplateColumns: "1fr 150px 130px 150px",
             padding: "10px 16px",
             background: CREAM,
             fontSize: 11,
@@ -217,36 +293,100 @@ export default function TeamPage() {
           <div>Email</div>
           <div>Role</div>
           <div>Joined</div>
+          <div />
         </div>
         {loading ? (
           <div style={{ padding: 18, color: MUTED, fontSize: 14 }}>Loading…</div>
         ) : members.length === 0 ? (
           <div style={{ padding: 18, color: MUTED, fontSize: 14 }}>No team members yet.</div>
         ) : (
-          members.map((m, i) => (
-            <div
-              key={m.id}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 140px 160px",
-                padding: "12px 16px",
-                borderTop: i === 0 ? "none" : `1px solid ${RULE}`,
-                alignItems: "center",
-                fontSize: 14,
-              }}
-            >
-              <div style={{ color: INK }}>
-                {m.email ?? <span style={{ color: MUTED }}>(no email on auth user)</span>}
-                {m.is_caller && (
-                  <span style={{ color: MUTED, fontSize: 12, marginLeft: 8 }}>you</span>
+          members.map((m, i) => {
+            const editable = canEditMember(m);
+            const isBusy = busyId === m.id;
+            return (
+              <div key={m.id} style={{ borderTop: i === 0 ? "none" : `1px solid ${RULE}` }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 150px 130px 150px",
+                    padding: "12px 16px",
+                    alignItems: "center",
+                    fontSize: 14,
+                  }}
+                >
+                  <div style={{ color: INK }}>
+                    {m.email ?? <span style={{ color: MUTED }}>(no email on file)</span>}
+                    {m.is_caller && (
+                      <span style={{ color: MUTED, fontSize: 12, marginLeft: 8 }}>you</span>
+                    )}
+                  </div>
+
+                  <div>
+                    {editable ? (
+                      <select
+                        value={m.role}
+                        disabled={isBusy}
+                        onChange={(e) => changeRole(m, e.target.value)}
+                        style={{ ...inputStyle(), padding: "6px 8px", width: "100%" }}
+                      >
+                        {roleOptionsFor(m).map((r) => (
+                          <option key={r} value={r}>
+                            {r.charAt(0).toUpperCase() + r.slice(1)}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span style={roleBadge(m.role)}>{m.role ?? "—"}</span>
+                    )}
+                  </div>
+
+                  <div style={{ color: MUTED, fontSize: 13 }}>
+                    {m.accepted_at ? formatDate(m.accepted_at) : "—"}
+                  </div>
+
+                  <div style={{ textAlign: "right" }}>
+                    {editable && (
+                      confirmRemoveId === m.id ? (
+                        <span style={{ fontSize: 13 }}>
+                          <span style={{ color: MUTED, marginRight: 8 }}>Remove?</span>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => removeMember(m)}
+                            style={linkBtn(CORAL)}
+                          >
+                            {isBusy ? "Removing…" : "Yes"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmRemoveId(null)}
+                            style={linkBtn(MUTED)}
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => { setRowError(null); setConfirmRemoveId(m.id); }}
+                          style={linkBtn(CORAL)}
+                        >
+                          Remove
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                {rowError?.id === m.id && (
+                  <div style={{ padding: "0 16px 12px", color: CORAL, fontSize: 13 }}>
+                    {rowError.message}
+                  </div>
                 )}
               </div>
-              <div style={{ textTransform: "capitalize", color: INK }}>{m.role ?? "—"}</div>
-              <div style={{ color: MUTED, fontSize: 13 }}>
-                {m.accepted_at ? formatDate(m.accepted_at) : <span style={{ color: VIOLET }}>Invite not accepted yet</span>}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
@@ -302,5 +442,40 @@ function inputStyle() {
     color: INK,
     background: "#fff",
     minWidth: 0,
+  };
+}
+
+// Colored pill for a non-editable role cell.
+function roleBadge(role) {
+  const colors = {
+    owner: { bg: "#EDE7FB", fg: PURPLE },
+    admin: { bg: "#ECEAFB", fg: BRIGHT },
+    staff: { bg: "#EFEEFF", fg: "#5b54b8" },
+    viewer: { bg: "#F1F0EC", fg: MUTED },
+  };
+  const c = colors[role] ?? colors.viewer;
+  return {
+    display: "inline-block",
+    padding: "3px 10px",
+    borderRadius: 999,
+    background: c.bg,
+    color: c.fg,
+    fontSize: 12,
+    fontWeight: 600,
+    textTransform: "capitalize",
+  };
+}
+
+// Minimal text button for inline row actions (Remove / Yes / Cancel).
+function linkBtn(color) {
+  return {
+    background: "transparent",
+    border: "none",
+    color,
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    padding: "2px 6px",
+    fontFamily: "inherit",
   };
 }
