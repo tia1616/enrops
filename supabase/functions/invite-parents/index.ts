@@ -133,11 +133,11 @@ serve(async (req) => {
     }
 
     let skippedActive = 0;
-    const toInvite: Array<{ first_name: string; last_name: string; email: string; hasAccount: boolean }> = [];
+    const toInvite: Array<{ first_name: string; last_name: string; email: string; hasAccount: boolean; parentId: string; existingId: string | null }> = [];
     for (const c of candidates) {
       const existing = userByEmail.get(c.email.toLowerCase());
       if (existing?.last_sign_in_at) { skippedActive++; continue; } // already signed in — truly has access
-      toInvite.push({ first_name: c.first_name, last_name: c.last_name, email: c.email, hasAccount: !!existing });
+      toInvite.push({ first_name: c.first_name, last_name: c.last_name, email: c.email, hasAccount: !!existing, parentId: c.id, existingId: existing?.id ?? null });
     }
 
     // Staging recipient guard: on staging, only allowlisted inboxes actually
@@ -167,9 +167,17 @@ serve(async (req) => {
     for (const c of deliverable) {
       // Create the account only if missing — the auth.users trigger links
       // parents.auth_id by email. Existing-but-never-signed-in just gets a re-send.
+      let authUserId = c.existingId;
       if (!c.hasAccount) {
-        const { error: createErr } = await admin.auth.admin.createUser({ email: c.email, email_confirm: true });
+        const { data: created, error: createErr } = await admin.auth.admin.createUser({ email: c.email, email_confirm: true });
         if (createErr) { console.error('createUser failed', c.email, createErr.message); failed++; failedReasons.push({ email: c.email, reason: shortErr(createErr.message) }); continue; }
+        authUserId = created?.user?.id ?? null;
+      }
+      // Self-heal: the on-create trigger links parents.auth_id, but a pre-existing
+      // account leaves it unlinked → the parent's portal can't resolve. Link it
+      // now (only when null, so we never steal a correct link or hit the unique idx).
+      if (authUserId) {
+        await admin.from('parents').update({ auth_id: authUserId }).eq('id', c.parentId).is('auth_id', null);
       }
 
       let signInUrl = redirectTo || SUPABASE_URL;
