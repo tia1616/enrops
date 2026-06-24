@@ -164,6 +164,7 @@ export default function ProgramWizardNew() {
     // public catalog with a checkout. Mirrors camp_sessions.runs_own_registration.
     runs_own_registration: false,
     external_registration_url: "",
+    list_in_public_catalog: false,
   });
   const [prefilledFromCurriculum, setPrefilledFromCurriculum] = useState(false);
 
@@ -536,6 +537,9 @@ export default function ProgramWizardNew() {
         external_registration_url: formData.runs_own_registration
           ? (formData.external_registration_url.trim() || null)
           : null,
+        list_in_public_catalog: formData.runs_own_registration
+          ? !!formData.list_in_public_catalog
+          : false,
         status, // 'draft' or 'open'
       };
       const { data, error: insErr } = await supabase
@@ -1271,6 +1275,20 @@ function Step3PriceAndOpen({
           <div style={{ marginTop: 6, fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
             We'll keep this on file so you can drop it into marketing emails. Add or change it any time.
           </div>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 12, fontSize: 13, color: INK, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={!!formData.list_in_public_catalog}
+              onChange={(e) => onField("list_in_public_catalog", e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              Also list it on our public reg page
+              <span style={{ display: "block", fontSize: 12, color: MUTED, marginTop: 2 }}>
+                Families see it in your catalog and click through to the partner's link. Needs a link above.
+              </span>
+            </span>
+          </label>
         </div>
       ) : (
         <div style={fieldGroup}>

@@ -74,7 +74,9 @@ export default function J2SHome() {
       .eq('organization_id', org.id)
       .eq('term', 'FA26')
       .eq('status', 'open')
-      .eq('runs_own_registration', false) // exclude partner-run programs — no public checkout
+      // Native programs (we run checkout) OR partner-run programs the operator
+      // explicitly listed with a registration link (shown as a link-out, no checkout).
+      .or('runs_own_registration.eq.false,and(runs_own_registration.eq.true,list_in_public_catalog.eq.true,external_registration_url.not.is.null)')
       .order('day_of_week');
 
     // Look up Winter/Spring matches for each fall program to determine VIP eligibility.
@@ -271,6 +273,43 @@ export default function J2SHome() {
                 </div>
                 <div className="space-y-4">
                   {programsAtSchool.map((p) => {
+                    // Partner-run, listed program: families register on the partner's
+                    // site, so render a link-out card (no price, no VIP, no checkout).
+                    if (p.runs_own_registration) {
+                      return (
+                        <div
+                          key={p.id}
+                          className="overflow-hidden rounded-2xl border border-j2s-purple/10 bg-white shadow-card"
+                        >
+                          <div className="border-b border-j2s-purple/10 bg-j2s-purple-soft/40 px-5 py-4">
+                            <p className="font-titan text-lg text-j2s-ink">{p.curriculum}</p>
+                            {p.short_description && (
+                              <p className="mt-1 text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
+                            )}
+                            <p className="mt-1 text-sm text-j2s-ink/70">
+                              {p.day_of_week}s · {p.start_time}{p.end_time && <>–{p.end_time}</>}
+                              {p.grade_min != null && p.grade_max != null && (
+                                <> · Grades {p.grade_min === 0 ? 'K' : p.grade_min}–{p.grade_max}</>
+                              )}
+                            </p>
+                          </div>
+                          <div className="px-5 py-4">
+                            <p className="text-sm text-j2s-ink/70">
+                              Registration for this program is handled by our partner.
+                            </p>
+                            <a
+                              href={p.external_registration_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-3 inline-flex items-center gap-2 rounded-xl border-2 border-j2s-purple px-5 py-2.5 font-bold text-j2s-purple transition hover:bg-j2s-purple hover:text-white"
+                            >
+                              Register on the partner's site
+                              <span aria-hidden="true">↗</span>
+                            </a>
+                          </div>
+                        </div>
+                      );
+                    }
                     const bundle = vipBundles[p.id];
                     const vipEligible = !!bundle;
                     const fallPricing = basePriceForItem({ program: p, isVip: false });

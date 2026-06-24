@@ -226,7 +226,7 @@ export default function ProgramsCalendar() {
           .select(`
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             max_capacity, status, instructor_name, price_cents,
-            runs_own_registration, external_registration_url,
+            runs_own_registration, external_registration_url, list_in_public_catalog,
             first_session_date, session_count,
             facility_requested_at, facility_approved_at, facility_notes,
             program_location_id,
@@ -876,6 +876,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
     room: program.room ?? "",
     runs_own_registration: program.runs_own_registration ?? false,
     external_registration_url: program.external_registration_url ?? "",
+    list_in_public_catalog: program.list_in_public_catalog ?? false,
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -905,6 +906,9 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         external_registration_url: draft.runs_own_registration
           ? (draft.external_registration_url?.trim() || null)
           : null,
+        list_in_public_catalog: draft.runs_own_registration
+          ? !!draft.list_in_public_catalog
+          : false,
       };
       await onUpdate(program.id, patch);
       setSavedFlash(true);
@@ -1002,6 +1006,20 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
                 style={expandInputStyle}
               />
             </ExpandField>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 10, fontSize: 13, color: INK, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={!!draft.list_in_public_catalog}
+                onChange={(e) => set("list_in_public_catalog", e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                Also list it on our public reg page
+                <span style={{ display: "block", fontSize: 12, color: MUTED, marginTop: 2 }}>
+                  Families click through to the partner's link. Needs a link above.
+                </span>
+              </span>
+            </label>
           </div>
         )}
       </div>
