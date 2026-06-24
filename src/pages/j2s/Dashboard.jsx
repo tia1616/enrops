@@ -3,6 +3,7 @@ import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { getTenant } from '../../lib/tenants.js';
+import WaiverGate from './WaiverGate.jsx';
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -115,6 +116,7 @@ export default function Dashboard() {
 
   const [parent, setParent] = useState(null);
   const [enrollments, setEnrollments] = useState([]);
+  const [unsignedWaivers, setUnsignedWaivers] = useState([]); // required waivers still needing signature
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -191,6 +193,26 @@ export default function Dashboard() {
         .in('status', ['confirmed'])
         .not('camp_session_id', 'is', null)
         .order('registered_at', { ascending: true });
+
+      // 2c. Required-waiver gate — block the portal until the parent has signed
+      // every required, active waiver for each of their registrations. A
+      // signature is per-registration (matches create-registration).
+      const regIds = [...(asRegs || []).map((r) => r.id), ...(cRegs || []).map((r) => r.id)];
+      let needsWaivers = [];
+      if (regIds.length > 0) {
+        const [{ data: wv }, { data: sigs }] = await Promise.all([
+          supabase.from('waivers')
+            .select('id, name, content, version')
+            .eq('organization_id', org.id).eq('active', true).eq('required', true),
+          supabase.from('waiver_signatures')
+            .select('waiver_id, registration_id').eq('parent_id', p.id),
+        ]);
+        const signed = new Set((sigs || []).map((s) => `${s.registration_id}:${s.waiver_id}`));
+        needsWaivers = (wv || [])
+          .map((w) => ({ ...w, missingRegIds: regIds.filter((rid) => !signed.has(`${rid}:${w.id}`)) }))
+          .filter((w) => w.missingRegIds.length > 0);
+      }
+      setUnsignedWaivers(needsWaivers);
 
       // 3. Normalize + cap sessions at program.session_count
       const merged = [];
@@ -336,6 +358,11 @@ export default function Dashboard() {
         <a href={`mailto:${supportEmail}`} className="mt-4 inline-block font-bold text-j2s-purple underline">{supportEmail}</a>
       </div>
     );
+  }
+
+  // Blocking waiver gate — must sign required waivers before seeing details.
+  if (unsignedWaivers.length > 0) {
+    return <WaiverGate waivers={unsignedWaivers} parent={parent} orgId={org.id} onComplete={fetchData} />;
   }
 
   return (
