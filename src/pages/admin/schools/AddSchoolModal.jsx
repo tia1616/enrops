@@ -24,6 +24,7 @@ const RULE = "#e2dfd5";
 const RED = "#b53737";
 
 const NEW_DISTRICT = "__new__";
+const NEW_UMBRELLA = "__new_umbrella__";
 
 const PARTNER_TYPES = [
   { v: "public_school", label: "Public school" },
@@ -50,6 +51,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
   const [newDistrictName, setNewDistrictName] = useState("");
   const [umbrellaMode, setUmbrellaMode] = useState(false);
   const [umbrellaPartnerId, setUmbrellaPartnerId] = useState("");
+  const [newUmbrellaName, setNewUmbrellaName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -77,16 +79,30 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
     setError("");
     const trimmed = name.trim();
     if (!trimmed) { setError("Partner name is required."); return; }
-    if (umbrellaMode && !umbrellaPartnerId) { setError("Pick the umbrella partner this venue belongs to."); return; }
+    if (umbrellaMode && !umbrellaPartnerId) { setError("Pick the umbrella org this venue belongs to, or create one."); return; }
+    if (umbrellaMode && umbrellaPartnerId === NEW_UMBRELLA && !newUmbrellaName.trim()) {
+      setError("Enter a name for the new umbrella org."); return;
+    }
     setBusy(true);
     try {
       const resolvedDistrictId = await resolveDistrictId();
       const resolvedArea = area.trim() || parseCity(address) || null;
 
-      // 1) Partner: reuse the umbrella, or create a fresh 1:1 partner for this school.
+      // 1) Partner: reuse the umbrella (existing or just-created), or create a
+      //    fresh 1:1 partner for this school.
       let partnerId;
       if (umbrellaMode) {
-        partnerId = umbrellaPartnerId;
+        if (umbrellaPartnerId === NEW_UMBRELLA) {
+          const { data: umb, error: uErr } = await supabase
+            .from("partners")
+            .insert({ organization_id: org.id, partner_name: newUmbrellaName.trim() })
+            .select("id")
+            .single();
+          if (uErr) throw uErr;
+          partnerId = umb.id;
+        } else {
+          partnerId = umbrellaPartnerId;
+        }
       } else {
         const { data: partnerRow, error: pErr } = await supabase
           .from("partners")
@@ -218,9 +234,21 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
             {umbrellaMode && (
               <div style={{ marginTop: 8 }}>
                 <select value={umbrellaPartnerId} onChange={(e) => setUmbrellaPartnerId(e.target.value)} style={inputStyle} disabled={busy}>
-                  <option value="">— pick the umbrella partner —</option>
+                  <option value="">— pick the umbrella org —</option>
                   {partners.map((p) => <option key={p.id} value={p.id}>{p.partner_name}</option>)}
+                  <option value={NEW_UMBRELLA}>+ Create a new umbrella org…</option>
                 </select>
+                {umbrellaPartnerId === NEW_UMBRELLA && (
+                  <input
+                    type="text"
+                    value={newUmbrellaName}
+                    onChange={(e) => setNewUmbrellaName(e.target.value)}
+                    placeholder="e.g. Multnomah County Library"
+                    style={{ ...inputStyle, marginTop: 8 }}
+                    disabled={busy}
+                    autoFocus
+                  />
+                )}
                 <div style={{ fontSize: 11.5, color: MUTED, marginTop: 4 }}>
                   The venue links to this partner instead of creating a new one. Roster
                   emails go to the umbrella's contacts.

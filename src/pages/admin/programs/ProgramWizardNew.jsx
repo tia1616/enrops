@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ProgramPrereqEmptyState from "./ProgramPrereqEmptyState.jsx";
+import AddSchoolModal from "../schools/AddSchoolModal.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -132,6 +133,10 @@ export default function ProgramWizardNew() {
   const [prereqs, setPrereqs] = useState({ hasCurricula: false, hasLocations: false });
   const [curricula, setCurricula] = useState([]);
   const [locations, setLocations] = useState([]);
+  // For the inline "Add a school" modal (reused from the Schools surface).
+  const [districts, setDistricts] = useState([]);
+  const [partners, setPartners] = useState([]);
+  const [addingSchool, setAddingSchool] = useState(false);
 
   // Wizard state. Written only on final submit. Pre-fills from curriculum
   // happen in the curriculum-change handler.
@@ -189,7 +194,7 @@ export default function ProgramWizardNew() {
       setLoading(true);
       setError("");
       try {
-        const [cRes, lRes] = await Promise.all([
+        const [cRes, lRes, dRes, pRes] = await Promise.all([
           supabase
             .from("curricula")
             .select(
@@ -205,12 +210,26 @@ export default function ProgramWizardNew() {
             .select("id, name, district, district_id, closure_dates")
             .eq("organization_id", org.id)
             .order("name"),
+          // Districts + partners feed the inline "Add a school" modal. Non-blocking
+          // if they fail — the wizard still works, the modal just has empty pickers.
+          supabase
+            .from("districts")
+            .select("id, name")
+            .eq("organization_id", org.id)
+            .order("name"),
+          supabase
+            .from("partners")
+            .select("id, partner_name")
+            .eq("organization_id", org.id)
+            .order("partner_name"),
         ]);
         if (cRes.error) throw cRes.error;
         if (lRes.error) throw lRes.error;
         if (mounted) {
           setCurricula(cRes.data ?? []);
           setLocations(lRes.data ?? []);
+          setDistricts(dRes.data ?? []);
+          setPartners(pRes.data ?? []);
           setPrereqs({
             hasCurricula: (cRes.data?.length ?? 0) > 0,
             hasLocations: (lRes.data?.length ?? 0) > 0,
@@ -388,6 +407,32 @@ export default function ProgramWizardNew() {
 
   function handleLocationChange(locationId) {
     setFormData((f) => ({ ...f, program_location_id: locationId || null }));
+  }
+
+  // Refetch the location dropdown after the inline "Add a school" modal creates a
+  // venue, and auto-select the brand-new one so the operator doesn't hunt for it.
+  async function reloadLocations() {
+    const { data } = await supabase
+      .from("program_locations")
+      .select("id, name, district, district_id, closure_dates")
+      .eq("organization_id", org.id)
+      .order("name");
+    setLocations(data ?? []);
+  }
+  async function reloadDistricts() {
+    const { data } = await supabase
+      .from("districts")
+      .select("id, name")
+      .eq("organization_id", org.id)
+      .order("name");
+    setDistricts(data ?? []);
+  }
+  async function handleSchoolCreated({ locationId }) {
+    setAddingSchool(false);
+    await reloadLocations();
+    if (locationId) {
+      setFormData((f) => ({ ...f, program_location_id: locationId }));
+    }
   }
 
   function handleTermChange(term) {
@@ -573,6 +618,7 @@ export default function ProgramWizardNew() {
             onCurriculumChange={handleCurriculumChange}
             onLocationChange={handleLocationChange}
             onTermChange={handleTermChange}
+            onAddSchool={() => setAddingSchool(true)}
           />
         )}
         {currentStep === 2 && (
@@ -650,6 +696,17 @@ export default function ProgramWizardNew() {
           )}
         </div>
       )}
+
+      {addingSchool && (
+        <AddSchoolModal
+          org={org}
+          districts={districts}
+          partners={partners}
+          onClose={() => setAddingSchool(false)}
+          onDistrictsChanged={reloadDistricts}
+          onCreated={handleSchoolCreated}
+        />
+      )}
     </div>
   );
 }
@@ -717,6 +774,7 @@ function Step1WhatAndWhere({
   onCurriculumChange,
   onLocationChange,
   onTermChange,
+  onAddSchool,
 }) {
   return (
     <div>
@@ -776,15 +834,17 @@ function Step1WhatAndWhere({
           ))}
         </select>
         <div style={{ marginTop: 8, fontSize: 13 }}>
-          <a
-            href="/admin/schools?tab=locations"
-            target="_blank"
-            rel="noreferrer"
-            style={{ color: PURPLE, textDecoration: "none" }}
+          <button
+            type="button"
+            onClick={onAddSchool}
+            style={{
+              background: "none", border: "none", padding: 0,
+              color: PURPLE, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+            }}
           >
-            + Add a new location
-          </a>
-          <span style={{ color: MUTED, marginLeft: 8 }}>opens in a new tab</span>
+            + Add a school / venue
+          </button>
+          <span style={{ color: MUTED, marginLeft: 8 }}>add the venue (and its umbrella org) without leaving</span>
         </div>
       </div>
 
