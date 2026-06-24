@@ -52,14 +52,17 @@ export default function NeedsLinkingSection({ org, onChanged }) {
   const [busyId, setBusyId] = useState(null);
   const [batchBusy, setBatchBusy] = useState(false);
   const [error, setError] = useState('');
+  const [archived, setArchived] = useState([]);      // orphans the operator hid
+  const [showArchived, setShowArchived] = useState(false);
 
   async function load() {
     if (!org?.id) return;
     setError('');
-    const [{ data: locs, error: lErr }, { data: parts, error: pErr }] = await Promise.all([
+    const [{ data: locs, error: lErr }, { data: parts, error: pErr }, { data: arch }] = await Promise.all([
+      // Active orphans only — archived ones are hidden so they don't nag forever.
       supabase.from('program_locations')
         .select('id, name, area, district')
-        .eq('organization_id', org.id).is('partner_id', null)
+        .eq('organization_id', org.id).is('partner_id', null).eq('archived', false)
         .order('name', { ascending: true }),
       // Load ALL partners, including inactive ones. An orphan venue's rightful
       // partner is often INACTIVE (a school we stopped working with) — hiding
@@ -70,10 +73,15 @@ export default function NeedsLinkingSection({ org, onChanged }) {
         .select('id, partner_name, partner_type, location_area, inactive')
         .eq('organization_id', org.id)
         .order('partner_name', { ascending: true }),
+      supabase.from('program_locations')
+        .select('id, name, area, district')
+        .eq('organization_id', org.id).is('partner_id', null).eq('archived', true)
+        .order('name', { ascending: true }),
     ]);
     if (lErr || pErr) { setError('Could not load venues.'); setOrphans([]); return; }
     setPartners(parts ?? []);
     setOrphans(locs ?? []);
+    setArchived(arch ?? []);
     // Pre-select confident matches.
     const preset = {};
     for (const loc of locs ?? []) {
@@ -176,8 +184,47 @@ export default function NeedsLinkingSection({ org, onChanged }) {
     }
   }
 
-  if (orphans === null) return null;          // loading: stay invisible
-  if (orphans.length === 0) return null;      // self-empty: nothing to fix
+  async function archiveOne(loc) {
+    setBusyId(loc.id);
+    setError('');
+    const { error: e } = await supabase.from('program_locations').update({ archived: true }).eq('id', loc.id);
+    if (e) { setError(`${loc.name}: ${e.message}`); setBusyId(null); return; }
+    await load();
+    if (onChanged) onChanged();
+    setBusyId(null);
+  }
+  async function restoreOne(loc) {
+    const { error: e } = await supabase.from('program_locations').update({ archived: false }).eq('id', loc.id);
+    if (e) { setError(`${loc.name}: ${e.message}`); return; }
+    await load();
+    if (onChanged) onChanged();
+  }
+
+  if (orphans === null) return null;                                  // loading: stay invisible
+  if (orphans.length === 0 && archived.length === 0) return null;     // fully empty: nothing to show
+
+  // Only archived venues remain — show a quiet restore strip, not the big nag.
+  if (orphans.length === 0 && archived.length > 0) {
+    return (
+      <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 20 }}>
+        {archived.length} archived {archived.length === 1 ? 'venue' : 'venues'} hidden from linking.{' '}
+        <button type="button" onClick={() => setShowArchived((v) => !v)} style={{ background: 'transparent', border: 'none', color: BRIGHT, fontWeight: 600, cursor: 'pointer', padding: 0, fontSize: 12.5, fontFamily: 'inherit' }}>
+          {showArchived ? 'Hide' : 'Show'}
+        </button>
+        {showArchived && (
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {archived.map((loc) => (
+              <div key={loc.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6 }}>
+                <span style={{ fontSize: 13, color: INK }}>{loc.name}</span>
+                <span style={{ flex: 1 }} />
+                <button type="button" onClick={() => restoreOne(loc)} style={{ background: 'transparent', border: `1px solid ${BRIGHT}`, color: BRIGHT, borderRadius: 5, fontSize: 11.5, fontWeight: 600, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>Restore</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{
@@ -283,10 +330,42 @@ export default function NeedsLinkingSection({ org, onChanged }) {
                 }}>
                 {busyId === loc.id ? 'Linking…' : isCreate ? 'Create & link' : 'Link'}
               </button>
+
+              <button
+                onClick={() => archiveOne(loc)}
+                disabled={busyId === loc.id}
+                title="Hide this venue from the linking list — you can restore it later"
+                style={{
+                  flexShrink: 0, padding: '7px 10px', background: 'transparent', color: MUTED,
+                  border: `1px solid ${RULE}`, borderRadius: 7, fontSize: 12, fontWeight: 600,
+                  cursor: busyId === loc.id ? 'default' : 'pointer', fontFamily: 'inherit',
+                }}>
+                Archive
+              </button>
             </div>
           );
         })}
       </div>
+
+      {archived.length > 0 && (
+        <div style={{ marginTop: 12, fontSize: 12, color: MUTED }}>
+          {archived.length} archived {archived.length === 1 ? 'venue' : 'venues'} hidden.{' '}
+          <button type="button" onClick={() => setShowArchived((v) => !v)} style={{ background: 'transparent', border: 'none', color: BRIGHT, fontWeight: 600, cursor: 'pointer', padding: 0, fontSize: 12, fontFamily: 'inherit' }}>
+            {showArchived ? 'Hide' : 'Show'}
+          </button>
+          {showArchived && (
+            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {archived.map((loc) => (
+                <div key={loc.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#fff', border: `1px solid ${RULE}`, borderRadius: 6 }}>
+                  <span style={{ fontSize: 13, color: INK }}>{loc.name}</span>
+                  <span style={{ flex: 1 }} />
+                  <button type="button" onClick={() => restoreOne(loc)} style={{ background: 'transparent', border: `1px solid ${BRIGHT}`, color: BRIGHT, borderRadius: 5, fontSize: 11.5, fontWeight: 600, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>Restore</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
