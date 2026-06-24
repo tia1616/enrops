@@ -222,16 +222,18 @@ serve(async (req: Request) => {
     if (!resp.ok) {
       const errText = await resp.text();
       console.error('Resend admin invite send failed:', resp.status, errText);
-      // Membership is already created — surface that so the admin knows the
-      // user can still sign in via /admin/login even though the email failed.
-      return json(
-        {
-          error: 'email_send_failed',
-          detail: 'Membership was created but the invite email did not send. The user can still sign in via /admin/login.',
-          outcome,
-        },
-        502,
-      );
+      // The access grant (org_members row) already succeeded — only the
+      // convenience email failed. Return 200 with email_sent:false so the client
+      // treats this as success-with-warning, not a hard failure. The person can
+      // still sign in via /admin/login.
+      return json({
+        success: true,
+        email,
+        role,
+        outcome,
+        email_sent: false,
+        organization_id: organizationId,
+      });
     }
 
     return json({
@@ -239,6 +241,7 @@ serve(async (req: Request) => {
       email,
       role,
       outcome,
+      email_sent: true,
       organization_id: organizationId,
     });
   } catch (err) {

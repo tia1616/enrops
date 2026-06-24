@@ -98,31 +98,42 @@ export default function TeamPage() {
     });
     setSending(false);
     if (error) {
-      console.error("admin-invite failed:", error);
-      setInviteError(error.message ?? "Invite failed.");
-      return;
-    }
-    if (data?.error) {
-      setInviteError(
-        data.detail
-          ? `${data.error}: ${data.detail}`
-          : data.error.replace(/_/g, " ")
-      );
-      // Still refresh the list — membership might have been created even if
-      // the email send failed (502 email_send_failed branch).
+      const code = await readFnError(error);
+      setInviteError(friendlyError(code));
+      // Refresh — for some failures the membership may already exist.
       fetchMembers();
       return;
     }
-    setInviteSuccess(
-      data?.outcome === "added"
-        ? `Invite sent to ${email}. They'll get a magic link.`
-        : data?.outcome === "updated"
-        ? `${email} updated to ${inviteRole}. Magic link sent.`
-        : `Resent invite to ${email}.`
-    );
+    const roleName = inviteRole.charAt(0).toUpperCase() + inviteRole.slice(1);
+    if (data?.email_sent === false) {
+      // Access granted, but the sign-in email didn't send (e.g. unverified
+      // sender on staging). Soft success — they can sign in via /admin/login.
+      setInviteSuccess(
+        `${email} was added as ${roleName}, but the sign-in email didn't send. They can still sign in at /admin/login.`
+      );
+    } else {
+      setInviteSuccess(
+        data?.outcome === "added"
+          ? `Invite sent to ${email} — they'll get a magic-link sign-in as ${roleName}.`
+          : data?.outcome === "updated"
+          ? `${email} updated to ${roleName}. Magic link sent.`
+          : `Resent invite to ${email}.`
+      );
+    }
     setInviteEmail("");
     setInviteRole("admin");
     fetchMembers();
+  }
+
+  // supabase-js puts a non-2xx response body in error.context (a Response),
+  // not in `data`. Read the error code out of it so we can show plain language.
+  async function readFnError(error) {
+    try {
+      const body = await error?.context?.json?.();
+      return body?.error ?? null;
+    } catch {
+      return null;
+    }
   }
 
   // Map backend error codes to plain language (no codes shown to operators).
@@ -131,12 +142,20 @@ export default function TeamPage() {
       case "last_owner":
         return "This is the only owner — promote someone else to owner first.";
       case "forbidden":
-        return "Only an owner can change or remove an owner.";
+        return "You don't have permission for that. Only an owner can change or remove an owner.";
       case "cannot_change_self":
       case "cannot_remove_self":
         return "You can't change your own access — ask another admin or the owner.";
       case "member_not_found":
         return "That person is no longer on the team — refreshing the list.";
+      case "invalid_email":
+        return "That doesn't look like a valid email address.";
+      case "invalid_role":
+        return "Pick a role for this teammate.";
+      case "org_missing_sender_config":
+        return "Your workspace needs a sender email set in Settings before you can invite people.";
+      case "auth_create_failed":
+        return "Couldn't set up that person's sign-in. Double-check the email and try again.";
       default:
         return "Something went wrong. Please try again.";
     }
@@ -150,8 +169,9 @@ export default function TeamPage() {
       body: { member_id: member.id, role: nextRole },
     });
     setBusyId(null);
-    if (error || data?.error) {
-      setRowError({ id: member.id, message: friendlyError(data?.error) });
+    if (error) {
+      const code = await readFnError(error);
+      setRowError({ id: member.id, message: friendlyError(code) });
       fetchMembers();
       return;
     }
@@ -166,8 +186,9 @@ export default function TeamPage() {
     });
     setBusyId(null);
     setConfirmRemoveId(null);
-    if (error || data?.error) {
-      setRowError({ id: member.id, message: friendlyError(data?.error) });
+    if (error) {
+      const code = await readFnError(error);
+      setRowError({ id: member.id, message: friendlyError(code) });
       fetchMembers();
       return;
     }
@@ -203,7 +224,7 @@ export default function TeamPage() {
               }}
               style={primaryBtn()}
             >
-              Invite admin
+              Invite teammate
             </button>
           ) : (
             <form onSubmit={submitInvite}>
