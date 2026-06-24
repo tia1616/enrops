@@ -46,6 +46,7 @@ serve(async (req) => {
     const organizationId: string | undefined = body.organization_id;
     const programId: string | undefined = body.program_id;
     const redirectTo: string | undefined = body.redirect_to;
+    const preview: boolean = body.preview === true; // preview: return who + the email, send nothing
     if (!organizationId) return json({ error: 'organization_id required' }, 400);
     if (!programId) return json({ error: 'program_id required' }, 400);
 
@@ -93,16 +94,16 @@ serve(async (req) => {
 
     const { data: parents } = await admin
       .from('parents')
-      .select('id, first_name, email, auth_id')
+      .select('id, first_name, last_name, email, auth_id')
       .in('id', parentIds);
 
     let skippedNoEmail = 0;
-    const candidates: Array<{ id: string; first_name: string; email: string }> = [];
+    const candidates: Array<{ id: string; first_name: string; last_name: string; email: string }> = [];
     for (const p of parents ?? []) {
       if (p.auth_id) continue; // already has a login
       const email = (p.email ?? '').trim();
       if (!email || email.toLowerCase().endsWith('@import.local')) { skippedNoEmail++; continue; }
-      candidates.push({ id: p.id, first_name: (p.first_name ?? '').trim() || 'there', email });
+      candidates.push({ id: p.id, first_name: (p.first_name ?? '').trim() || 'there', last_name: (p.last_name ?? '').trim(), email });
     }
 
     if (candidates.length === 0) {
@@ -113,6 +114,20 @@ serve(async (req) => {
     // ----- Tenant branding for the email -----
     const brand = await loadOrgBrand(admin, organizationId);
     const fromAddr = formatFromAddress(brand);
+
+    // Preview mode: return exactly who would be invited + the rendered email.
+    // Nothing is created and nothing is sent.
+    if (preview) {
+      return json({
+        preview: true,
+        total_candidates: candidates.length,
+        skipped_no_email: skippedNoEmail,
+        from: fromAddr,
+        subject: `Your ${brand.org_name} family portal is ready`,
+        recipients: candidates.map((c) => ({ name: `${c.first_name} ${c.last_name}`.trim() || c.email, email: c.email })),
+        preview_html: buildInviteEmail(brand, candidates[0]?.first_name || 'there', '#', prog.curriculum),
+      });
+    }
 
     // Existing auth users (skip emails that already have an account).
     const { data: userList } = await admin.auth.admin.listUsers();
