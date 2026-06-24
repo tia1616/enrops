@@ -1314,6 +1314,10 @@ function Step3PriceAndOpen({
             Set to 0 for a free program. You can add early-bird discounts and
             promo codes after this is created — they usually boost sign-ups.
           </div>
+          <div style={{ marginTop: 12, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
+            Families will read and sign your required waivers during checkout.{" "}
+            <a href="/admin/waivers" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Set up waivers ↗</a>
+          </div>
         </div>
       )}
 
