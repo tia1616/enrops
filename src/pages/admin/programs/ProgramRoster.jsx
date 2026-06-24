@@ -206,6 +206,46 @@ export default function ProgramRoster() {
   // Rosters go to the PARTNER (school/venue logistics) — never to families.
   const [emailing, setEmailing] = useState(false);
 
+  // Invite this program's families into the parent portal (sign-in + waivers).
+  // Used most for partner-run programs where families were roster-imported and
+  // have no login yet. Idempotent on the backend — re-running skips anyone who
+  // already has access.
+  const [inviting, setInviting] = useState(false);
+  const [inviteMsg, setInviteMsg] = useState(null); // { tone: 'ok'|'err', text }
+
+  async function handleInvite() {
+    if (inviting) return;
+    const ok = window.confirm(
+      "Send a portal sign-in invite to this program's families?\n\n"
+      + "Each family without portal access yet (and with an email on file) gets a welcome email. "
+      + "Families who already have access are skipped.",
+    );
+    if (!ok) return;
+    setInviting(true);
+    setInviteMsg(null);
+    try {
+      const redirectTo = `${window.location.origin}/${org.slug}/dashboard`;
+      const { data, error: invErr } = await supabase.functions.invoke("invite-parents", {
+        body: { organization_id: org.id, program_id: programId, redirect_to: redirectTo },
+      });
+      if (invErr) throw invErr;
+      if (data?.error) throw new Error(data.error);
+      const parts = [];
+      if (data?.invited) parts.push(`Invited ${data.invited} famil${data.invited === 1 ? "y" : "ies"}`);
+      if (data?.skipped_existing) parts.push(`${data.skipped_existing} already had access`);
+      if (data?.skipped_no_email) parts.push(`${data.skipped_no_email} had no email on file`);
+      if (data?.failed) parts.push(`${data.failed} couldn't be sent`);
+      setInviteMsg({
+        tone: data?.failed ? "err" : "ok",
+        text: parts.length ? parts.join(" · ") : (data?.message ?? "Nothing to send."),
+      });
+    } catch (e) {
+      setInviteMsg({ tone: "err", text: e.message ?? "Couldn't send invites." });
+    } finally {
+      setInviting(false);
+    }
+  }
+
   // ---- Render ----
 
   if (loading) {
@@ -270,8 +310,22 @@ export default function ProgramRoster() {
           <button type="button" onClick={() => setEmailing(true)} disabled={enrolled.length === 0} style={ghostBtn(enrolled.length === 0)} title="Email a branded PDF roster to this location's partner / logistics contacts">
             Email roster to partner
           </button>
+          <button type="button" onClick={handleInvite} disabled={enrolled.length === 0 || inviting} style={ghostBtn(enrolled.length === 0 || inviting)} title="Email families a sign-in link so they can view details and sign waivers in the portal. Skips anyone who already has access.">
+            {inviting ? "Inviting…" : "Invite families to portal"}
+          </button>
         </div>
       </div>
+
+      {inviteMsg && (
+        <div className="roster-noprint" style={{
+          marginTop: 12, padding: "10px 14px", borderRadius: 8, fontSize: 13, lineHeight: 1.5,
+          background: inviteMsg.tone === "ok" ? "#f0fdf4" : "#fef2f2",
+          border: `1px solid ${inviteMsg.tone === "ok" ? "#bbf7d0" : "#fecaca"}`,
+          color: inviteMsg.tone === "ok" ? "#166534" : "#991b1b",
+        }}>
+          {inviteMsg.text}
+        </div>
+      )}
 
       {/* Roster */}
       <div style={{ marginTop: 18 }}>
