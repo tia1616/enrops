@@ -31,6 +31,7 @@ import Finances from './pages/admin/Finances.jsx';
 import Payouts from './pages/admin/Payouts.jsx';
 import TeamPage from './pages/admin/team/TeamPage.jsx';
 import AdminSettings from './pages/admin/AdminSettings.jsx';
+import WaiverManager from './pages/admin/WaiverManager.jsx';
 import TimeSavedPage from './pages/admin/TimeSavedPage.jsx';
 import InstructorPortal from './pages/j2s/InstructorPortal.jsx';
 import GoogleAuthCallback from './pages/auth/GoogleAuthCallback.jsx';
@@ -159,6 +160,7 @@ export default function App() {
         <Route path="team" element={<TeamPage />} />
         <Route path="time-saved" element={<TimeSavedPage />} />
         <Route path="settings" element={<AdminSettings />} />
+        <Route path="waivers" element={<WaiverManager />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
