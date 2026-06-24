@@ -9,6 +9,7 @@ import { supabase } from "../lib/supabase";
 import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
+import { getPermissions } from "../lib/permissions";
 
 // Enrops brand tokens
 const PURPLE = "#1C004F";   // deep plum — wordmark, headings, body accents
@@ -53,6 +54,7 @@ const NAV = [
   },
   {
     to: "/admin/finances", label: "Money",
+    gate: "viewMoney",   // owner/admin only — staff + viewer are money-blind
     tabs: [
       { to: "/admin/finances", label: "Receivables" },
       { to: "/admin/payouts", label: "Payouts" },
@@ -60,13 +62,15 @@ const NAV = [
   },
   {
     to: "/admin/family-comms/marketing", label: "Family Comms",
+    gate: "send",        // owner/admin/staff — a sending surface, hidden from viewer
     tabs: [
       { to: "/admin/family-comms/marketing", label: "Marketing" },
       { to: "/admin/family-comms/automations", label: "Automations" },
     ],
   },
   { to: "/admin/community", label: "Community", soon: true },
-  { to: "/admin/settings", label: "Settings" },
+  { to: "/admin/settings", label: "Settings", gate: "settings" }, // owner/admin only
+  { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
 ];
 
 // A sidebar item is "active" when the current path is (or is under) any of its
@@ -246,6 +250,14 @@ export default function AdminLayout() {
   // Which tabbed section (if any) the current route belongs to, and whether to
   // show its in-page tab strip — only on the tab root pages, not deep sub-flows
   // like /admin/curricula/:id/review.
+  const perm = getPermissions(orgMember?.role);
+  const visibleNav = NAV.filter((it) => !it.gate || perm.can(it.gate));
+  // Route guard: if the current path is under a gated section the user can't
+  // access, block it (covers direct-URL navigation, not just nav hiding).
+  const blockedItem = NAV.find(
+    (it) => it.gate && !perm.can(it.gate) && navItemActive(it, location.pathname)
+  );
+
   const activeTabSection = NAV.find(
     (it) => it.tabs && it.tabs.some((t) => location.pathname === t.to || location.pathname.startsWith(t.to + "/"))
   );
@@ -276,7 +288,7 @@ export default function AdminLayout() {
           </div>
 
           <nav style={{ padding: "12px 8px", flex: 1 }}>
-            {NAV.map((item) => {
+            {visibleNav.map((item) => {
               const active = navItemActive(item, location.pathname);
               return (
                 <Link
@@ -394,6 +406,19 @@ export default function AdminLayout() {
 
         {/* Main */}
         <main data-admin-main style={{ padding: "28px 36px", maxWidth: 1200 }}>
+          {blockedItem ? (
+            <div style={{ maxWidth: 460, margin: "40px auto 0", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, textAlign: "center" }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: PURPLE, marginBottom: 8 }}>
+                {blockedItem.label} isn’t available for your role
+              </div>
+              <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.5, margin: 0 }}>
+                Your access is <strong style={{ textTransform: "capitalize" }}>{orgMember?.role ?? "member"}</strong>.
+                Ask an owner or admin if you need access to {blockedItem.label.toLowerCase()}.
+              </p>
+              <Link to="/admin" style={{ ...btn(BRIGHT, "#fff"), marginTop: 18 }}>Back to Overview</Link>
+            </div>
+          ) : (
+          <>
           {showSectionTabs && (
             <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 22 }}>
               {activeTabSection.tabs.map((t) => {
@@ -421,6 +446,8 @@ export default function AdminLayout() {
             </div>
           )}
           <Outlet context={{ user, org, orgMember }} />
+          </>
+          )}
         </main>
       </div>
     </div>
