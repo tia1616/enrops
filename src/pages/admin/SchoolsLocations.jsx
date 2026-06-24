@@ -1,17 +1,13 @@
-// /admin/schools — combined surface for the schools/partners/locations concept.
-//
-// Today these are two tables in the schema (partners + program_locations) joined
-// by partner_id, but to an operator a school is ONE thing. This page surfaces
-// them under tabs so there's a single "where my schools live" home in the nav.
-//
-// Post-Italy: the partners↔locations unification (see
-// project_enrops_partners_locations_link) collapses these into one table; the
-// tabs go away then and the page becomes a single list. Same URL, same nav slot.
+// /admin/schools — the unified Partners surface. A "partner" is one thing to the
+// operator (a school / Parks & Rec / church / community org) even though the
+// schema keeps partners + program_locations as two tables joined by partner_id.
+// SchoolsList renders them as one list (partner + its venues); Calendars stays
+// its own tab. The old per-table "Partners (classic)" + "Locations (classic)"
+// tabs were retired 2026-06-23 once the J2S data reconciliation made the unified
+// list clean — bulk "Find missing addresses" was ported into SchoolsList.
 
-import { useSearchParams, useOutletContext } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import SchoolsList from './schools/SchoolsList';
-import PartnersTab from './contacts/PartnersTab';
-import LocationsList from './LocationsList';
 import CalendarsList from './CalendarsList';
 
 const PURPLE = '#1C004F';
@@ -27,14 +23,11 @@ const RULE = '#e2dfd5';
 // during the transition — retired once the J2S data reconciliation (Workstream
 // 2) lets the unified list cleanly replace them. Calendars stays its own tab.
 const TABS = [
-  { key: 'schools',   label: 'Partners',            help: 'Every partner you work with — schools, Parks & Rec, churches, community orgs — with its venue(s), contacts, calendar, and what runs there. One place per partner.' },
-  { key: 'partners',  label: 'Partners (classic)',  help: 'The schools, districts, and orgs you partner with — and your contacts there.' },
-  { key: 'locations', label: 'Locations (classic)', help: 'Where programs actually run — venues with addresses, room numbers, and arrival info.' },
-  { key: 'calendars', label: 'Calendars',           help: "District academic calendars — no-school days that flow into every program's session dates." },
+  { key: 'schools',   label: 'Partners',  help: 'Every partner you work with — schools, Parks & Rec, churches, community orgs — with its venue(s), contacts, calendar, and what runs there. One place per partner.' },
+  { key: 'calendars', label: 'Calendars', help: "District academic calendars — no-school days that flow into every program's session dates." },
 ];
 
 export default function SchoolsLocations() {
-  const { org } = useOutletContext() ?? {};
   const [params, setParams] = useSearchParams();
   const tab = params.get('tab') || 'schools';
   const active = TABS.find((t) => t.key === tab) ?? TABS[0];
@@ -80,10 +73,7 @@ export default function SchoolsLocations() {
         })}
       </div>
 
-      {tab === 'schools'   && <SchoolsList />}
-      {tab === 'partners'  && <PartnersTab org={org} />}
-      {tab === 'locations' && <LocationsList />}
-      {tab === 'calendars' && <CalendarsList />}
+      {tab === 'calendars' ? <CalendarsList /> : <SchoolsList />}
     </div>
   );
 }

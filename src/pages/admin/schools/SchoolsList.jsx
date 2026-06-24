@@ -21,6 +21,7 @@ import { supabase } from "../../../lib/supabase";
 import Chevron from "../../../components/Chevron.jsx";
 import NeedsLinkingSection from "../contacts/NeedsLinkingSection.jsx";
 import ImportContactsModal from "../contacts/ImportContactsModal.jsx";
+import FindMissingAddressesModal from "../FindMissingAddressesModal.jsx";
 import AddSchoolModal from "./AddSchoolModal.jsx";
 import SchoolDetailDrawer from "./SchoolDetailDrawer.jsx";
 
@@ -67,6 +68,7 @@ export default function SchoolsList() {
   const [expanded, setExpanded] = useState(new Set());               // umbrella partner ids expanded
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [findingAddresses, setFindingAddresses] = useState(false);
   const [selectedPartner, setSelectedPartner] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -239,6 +241,8 @@ export default function SchoolsList() {
   if (!org) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
 
   const totalVenues = locations.filter((l) => l.partner_id).length;
+  const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+  const missingAddressCount = locations.filter((l) => !l.address || !String(l.address).trim()).length;
   const minsSaved = schools.length * MINUTES_SAVED_PER_PARTNER;
   const savedLabel = minsSaved >= 60 ? `~${Math.round(minsSaved / 60)}h` : `~${minsSaved}m`;
 
@@ -258,6 +262,13 @@ export default function SchoolsList() {
           </span>
         )}
         <div style={{ flex: 1 }} />
+        {placesEnabled && missingAddressCount > 0 && (
+          <button type="button" onClick={() => setFindingAddresses(true)}
+            title="Look up addresses for every venue that doesn't have one yet"
+            style={{ padding: "9px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
+            ✨ Find missing addresses ({missingAddressCount})
+          </button>
+        )}
         <button type="button" onClick={() => setImporting(true)}
           title="Bulk-upload a list of partners (schools, Parks & Rec, etc.) + contacts from a spreadsheet"
           style={{ padding: "9px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
@@ -358,6 +369,15 @@ export default function SchoolsList() {
           orgId={org.id}
           onClose={() => setImporting(false)}
           onImported={() => { setImporting(false); loadDistricts(); refresh(); }}
+        />
+      )}
+
+      {findingAddresses && (
+        <FindMissingAddressesModal
+          orgId={org.id}
+          locations={locations}
+          onClose={() => setFindingAddresses(false)}
+          onSaved={() => { setFindingAddresses(false); refresh(); }}
         />
       )}
 
