@@ -207,7 +207,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
             <label>
               <Lbl>District (optional)</Lbl>
               <select value={districtId} onChange={(e) => setDistrictId(e.target.value)} style={inputStyle} disabled={busy}>
-                <option value="">— no district —</option>
+                <option value="">Other schools &amp; sites (no public district)</option>
                 {districts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 <option value={NEW_DISTRICT}>+ Create a new district…</option>
               </select>

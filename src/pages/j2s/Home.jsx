@@ -18,6 +18,11 @@ import {
 // via Outlet context. Page reads org.id / org.slug from there instead of
 // hardcoding 'j2s'. The FA26 term filter is still hardcoded here — separate
 // backlog item to derive "current active term" from scheduling_cycles.
+// Catch-all bucket for venues with no public district (private/charter schools,
+// libraries, community sites). Keeps them on the reg page instead of hidden, and
+// stops each one rendering as its own one-school "district".
+const OTHER_DISTRICT = 'Other schools & sites';
+
 export default function J2SHome() {
   const { org } = useOutletContext();
   const ORG_SLUG = org.slug;
@@ -102,23 +107,31 @@ export default function J2SHome() {
     setLoading(false);
   }
 
-  // Only districts that have at least one school with an open program
+  // Only districts that have at least one school with an open program. Schools
+  // with no district collect under a single "Other schools & sites" bucket
+  // (sorted last) instead of vanishing or each becoming its own district.
   const activeDistricts = useMemo(() => {
     const schoolsWithPrograms = new Set(programs.map((p) => p.program_location_id));
     const districts = new Set();
+    let hasOther = false;
     schools.forEach((s) => {
-      if (schoolsWithPrograms.has(s.id) && s.district) districts.add(s.district);
+      if (!schoolsWithPrograms.has(s.id)) return;
+      if (s.district) districts.add(s.district);
+      else hasOther = true;
     });
-    return [...districts].sort((a, b) =>
+    const sorted = [...districts].sort((a, b) =>
       districtFullName(a).localeCompare(districtFullName(b)),
     );
+    if (hasOther) sorted.push(OTHER_DISTRICT);
+    return sorted;
   }, [schools, programs]);
 
   const schoolsInDistrict = useMemo(() => {
     if (!selectedDistrict) return [];
     const withPrograms = new Set(programs.map((p) => p.program_location_id));
     return schools
-      .filter((s) => s.district === selectedDistrict && withPrograms.has(s.id))
+      .filter((s) => withPrograms.has(s.id)
+        && (selectedDistrict === OTHER_DISTRICT ? !s.district : s.district === selectedDistrict))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [selectedDistrict, schools, programs]);
 
