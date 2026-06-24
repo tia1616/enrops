@@ -154,10 +154,10 @@ export default function ProgramWizardNew() {
     age_max: null,
     price_cents: null,
     short_description: "",
-    // 'enrops' = we run checkout (public catalog). 'partner' = the partner/venue
-    // runs their own registration; program is live + scheduled but never shown
-    // in the public catalog with a checkout.
-    registration_mode: "enrops",
+    // false = we run checkout (public catalog). true = the partner/venue runs
+    // their own registration; program is live + scheduled but never shown in the
+    // public catalog with a checkout. Mirrors camp_sessions.runs_own_registration.
+    runs_own_registration: false,
     external_registration_url: "",
   });
   const [prefilledFromCurriculum, setPrefilledFromCurriculum] = useState(false);
@@ -419,7 +419,7 @@ export default function ProgramWizardNew() {
 
   // Step 3 valid when price is set (≥ 0) for programs WE run. For partner-run
   // programs we never collect payment, so price isn't required.
-  const step3Valid = formData.registration_mode === "partner"
+  const step3Valid = formData.runs_own_registration
     ? true
     : Boolean(formData.price_cents !== null && formData.price_cents >= 0);
 
@@ -482,13 +482,13 @@ export default function ProgramWizardNew() {
         age_max: formData.age_format === "age" ? formData.age_max : null,
         // Partner-run programs don't take payment through us; default price to 0
         // so the NOT-null-friendly column stays clean and no $ ever shows.
-        price_cents: formData.registration_mode === "partner"
+        price_cents: formData.runs_own_registration
           ? (formData.price_cents ?? 0)
           : formData.price_cents,
         short_description: formData.short_description || null,
         program_type: "standard",
-        registration_mode: formData.registration_mode,
-        external_registration_url: formData.registration_mode === "partner"
+        runs_own_registration: formData.runs_own_registration,
+        external_registration_url: formData.runs_own_registration
           ? (formData.external_registration_url.trim() || null)
           : null,
         status, // 'draft' or 'open'
@@ -1115,7 +1115,7 @@ function Step3PriceAndOpen({
   onBackToPrograms,
   step3Valid,
 }) {
-  const isPartner = formData.registration_mode === "partner";
+  const isPartner = formData.runs_own_registration;
 
   // Dollars display — formData.price_cents is the canonical store.
   const dollars = formData.price_cents == null ? "" : (formData.price_cents / 100).toFixed(2);
@@ -1179,14 +1179,14 @@ function Step3PriceAndOpen({
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <RegModeOption
             checked={!isPartner}
-            onChange={() => onField("registration_mode", "enrops")}
+            onChange={() => onField("runs_own_registration", false)}
             disabled={submitting}
             title="We run registration"
             desc="Families sign up and pay through your public catalog."
           />
           <RegModeOption
             checked={isPartner}
-            onChange={() => onField("registration_mode", "partner")}
+            onChange={() => onField("runs_own_registration", true)}
             disabled={submitting}
             title="Partner runs their own registration"
             desc="The program is on your schedule and rosters, but families register with the partner — it won't appear in your public catalog."
