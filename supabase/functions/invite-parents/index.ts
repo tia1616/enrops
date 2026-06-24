@@ -46,6 +46,7 @@ serve(async (req) => {
     const organizationId: string | undefined = body.organization_id;
     const programId: string | undefined = body.program_id;
     const redirectTo: string | undefined = body.redirect_to;
+    const loginUrl: string | undefined = body.login_url; // fallback sign-in page if the one-click link expires
     const preview: boolean = body.preview === true; // preview: return who + the email, send nothing
     if (!organizationId) return json({ error: 'organization_id required' }, 400);
     if (!programId) return json({ error: 'program_id required' }, 400);
@@ -138,7 +139,7 @@ serve(async (req) => {
         from: fromAddr,
         subject,
         recipients: toInvite.map((c) => ({ name: `${c.first_name} ${c.last_name}`.trim() || c.email, email: c.email })),
-        preview_html: buildInviteEmail(brand, toInvite[0]?.first_name || 'there', '#', prog.curriculum),
+        preview_html: buildInviteEmail(brand, toInvite[0]?.first_name || 'there', '#', prog.curriculum, loginUrl),
       });
     }
 
@@ -166,7 +167,7 @@ serve(async (req) => {
           to: c.email,
           reply_to: brand.reply_to,
           subject,
-          html: buildInviteEmail(brand, c.first_name, signInUrl, prog.curriculum),
+          html: buildInviteEmail(brand, c.first_name, signInUrl, prog.curriculum, loginUrl),
           tags: [{ name: 'type', value: 'parent_invite' }],
         }),
       });
@@ -182,7 +183,7 @@ serve(async (req) => {
   }
 });
 
-function buildInviteEmail(brand: OrgBrand, firstName: string, signInUrl: string, programName: string | null): string {
+function buildInviteEmail(brand: OrgBrand, firstName: string, signInUrl: string, programName: string | null, loginUrl?: string | null): string {
   const primary = brand.primary_color;
   const accent = brand.accent_color;
   const logo = brand.logo_url
@@ -205,7 +206,7 @@ function buildInviteEmail(brand: OrgBrand, firstName: string, signInUrl: string,
         Open my portal
       </a>
     </div>
-    <p style="margin:0;font-size:13px;color:#6b6b6b;">This link expires in 24 hours. Questions? Just reply to this email.</p>
+    <p style="margin:0;font-size:13px;color:#6b6b6b;line-height:1.6;">This one-click link works for 24 hours.${loginUrl ? ` After that you can sign in any time at <a href="${loginUrl}" style="color:${primary};">your family portal</a> — we'll email you a fresh link.` : ''} Questions? Just reply to this email.</p>
   </div>
 </div>
 </body></html>`;

@@ -27,7 +27,7 @@ export default function InviteFamiliesModal({ orgId, orgSlug, programId, onClose
     (async () => {
       try {
         const { data, error } = await supabase.functions.invoke("invite-parents", {
-          body: { organization_id: orgId, program_id: programId, preview: true },
+          body: { organization_id: orgId, program_id: programId, preview: true, login_url: `${window.location.origin}/${orgSlug}/login` },
         });
         if (!alive) return;
         if (error) throw error;
@@ -47,9 +47,9 @@ export default function InviteFamiliesModal({ orgId, orgSlug, programId, onClose
     setPhase("sending");
     setErr("");
     try {
-      const redirectTo = `${window.location.origin}/${orgSlug}/dashboard`;
+      const origin = window.location.origin;
       const { data, error } = await supabase.functions.invoke("invite-parents", {
-        body: { organization_id: orgId, program_id: programId, redirect_to: redirectTo },
+        body: { organization_id: orgId, program_id: programId, redirect_to: `${origin}/${orgSlug}/dashboard`, login_url: `${origin}/${orgSlug}/login` },
       });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
