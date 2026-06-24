@@ -69,8 +69,8 @@ const NAV = [
     ],
   },
   { to: "/admin/community", label: "Community", soon: true },
-  { to: "/admin/waivers", label: "Waivers", gate: "settings" },   // owner/admin only
-  { to: "/admin/settings", label: "Settings", gate: "settings" }, // owner/admin only
+  // Settings owns Waivers as a sub-page (/admin/waivers) — keep this item lit there.
+  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers"] }, // owner/admin only
   { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
 ];
 

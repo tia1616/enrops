@@ -6,7 +6,7 @@
 // editable starter set. Brand-neutral copy — no tenant strings.
 
 import { useEffect, useMemo, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 
 const PURPLE = "#1C004F";
@@ -145,7 +145,8 @@ export default function WaiverManager() {
 
   return (
     <div style={{ maxWidth: 820, margin: "0 auto", padding: "8px 0 40px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+      <Link to="/admin/settings" style={{ fontSize: 13, color: MUTED, textDecoration: "none" }}>← Settings</Link>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginTop: 8 }}>
         <div>
           <h1 style={{ margin: 0, color: PURPLE, fontSize: 24, fontWeight: 700 }}>Waivers &amp; forms</h1>
           <p style={{ color: MUTED, fontSize: 14, marginTop: 4, lineHeight: 1.5, maxWidth: 560 }}>
