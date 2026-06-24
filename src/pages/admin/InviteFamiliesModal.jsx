@@ -86,9 +86,12 @@ export default function InviteFamiliesModal({ orgId, orgSlug, programId, onClose
             <div>
               <div style={{ fontSize: 16, fontWeight: 600, color: GREEN, marginBottom: 8 }}>Invites sent.</div>
               <div style={{ fontSize: 14, color: INK, lineHeight: 1.6 }}>
-                {result?.invited ? `Sent ${result.invited} invite${result.invited === 1 ? "" : "s"}.` : "Nothing to send."}
-                {result?.skipped_existing ? ` ${result.skipped_existing} already had access.` : ""}
-                {result?.failed ? ` ${result.failed} couldn't be sent.` : ""}
+                Sent {result?.invited ?? 0} invite{(result?.invited ?? 0) === 1 ? "" : "s"}.
+                {result?.skipped_active ? ` ${result.skipped_active} already active (signed in before).` : ""}
+                {result?.skipped_no_email ? ` ${result.skipped_no_email} had no email on file.` : ""}
+                {result?.failed
+                  ? ` ${result.failed} couldn't be sent${result?.failed_emails?.length ? ` (${result.failed_emails.join(", ")})` : ""}.`
+                  : ""}
               </div>
               <div style={{ marginTop: 18, textAlign: "right" }}>
                 <button onClick={onClose} style={primaryBtn(false)}>Done</button>

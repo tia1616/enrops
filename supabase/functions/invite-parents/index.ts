@@ -100,48 +100,58 @@ serve(async (req) => {
     let skippedNoEmail = 0;
     const candidates: Array<{ id: string; first_name: string; last_name: string; email: string }> = [];
     for (const p of parents ?? []) {
-      if (p.auth_id) continue; // already has a login
       const email = (p.email ?? '').trim();
       if (!email || email.toLowerCase().endsWith('@import.local')) { skippedNoEmail++; continue; }
       candidates.push({ id: p.id, first_name: (p.first_name ?? '').trim() || 'there', last_name: (p.last_name ?? '').trim(), email });
     }
 
-    if (candidates.length === 0) {
-      return json({ invited: 0, skipped_existing: 0, skipped_no_email: skippedNoEmail, failed: 0, total_candidates: 0,
-        message: 'Everyone on this roster either already has portal access or has no email on file.' });
-    }
-
     // ----- Tenant branding for the email -----
     const brand = await loadOrgBrand(admin, organizationId);
     const fromAddr = formatFromAddress(brand);
+    const subject = `Your ${brand.org_name} family portal is ready`;
 
-    // Preview mode: return exactly who would be invited + the rendered email.
+    // Look up existing auth users. We RE-SEND to accounts that exist but never
+    // signed in (e.g. a prior send failed) instead of silently skipping them, and
+    // skip only families who have actually signed in already (truly onboarded).
+    const { data: userList } = await admin.auth.admin.listUsers();
+    const userByEmail = new Map<string, any>();
+    for (const u of userList?.users ?? []) {
+      if (u.email) userByEmail.set(u.email.toLowerCase(), u);
+    }
+
+    let skippedActive = 0;
+    const toInvite: Array<{ first_name: string; last_name: string; email: string; hasAccount: boolean }> = [];
+    for (const c of candidates) {
+      const existing = userByEmail.get(c.email.toLowerCase());
+      if (existing?.last_sign_in_at) { skippedActive++; continue; } // already signed in — truly has access
+      toInvite.push({ first_name: c.first_name, last_name: c.last_name, email: c.email, hasAccount: !!existing });
+    }
+
+    // Preview mode: return exactly who would be emailed + the rendered email.
     // Nothing is created and nothing is sent.
     if (preview) {
       return json({
         preview: true,
-        total_candidates: candidates.length,
+        total_candidates: toInvite.length,
+        skipped_active: skippedActive,
         skipped_no_email: skippedNoEmail,
         from: fromAddr,
-        subject: `Your ${brand.org_name} family portal is ready`,
-        recipients: candidates.map((c) => ({ name: `${c.first_name} ${c.last_name}`.trim() || c.email, email: c.email })),
-        preview_html: buildInviteEmail(brand, candidates[0]?.first_name || 'there', '#', prog.curriculum),
+        subject,
+        recipients: toInvite.map((c) => ({ name: `${c.first_name} ${c.last_name}`.trim() || c.email, email: c.email })),
+        preview_html: buildInviteEmail(brand, toInvite[0]?.first_name || 'there', '#', prog.curriculum),
       });
     }
 
-    // Existing auth users (skip emails that already have an account).
-    const { data: userList } = await admin.auth.admin.listUsers();
-    const existingEmails = new Set((userList?.users ?? []).map((u) => (u.email ?? '').toLowerCase()));
+    let invited = 0, failed = 0;
+    const failedEmails: string[] = [];
+    for (const c of toInvite) {
+      // Create the account only if missing — the auth.users trigger links
+      // parents.auth_id by email. Existing-but-never-signed-in just gets a re-send.
+      if (!c.hasAccount) {
+        const { error: createErr } = await admin.auth.admin.createUser({ email: c.email, email_confirm: true });
+        if (createErr) { console.error('createUser failed', c.email, createErr.message); failed++; failedEmails.push(c.email); continue; }
+      }
 
-    let invited = 0, skippedExisting = 0, failed = 0;
-    for (const c of candidates) {
-      if (existingEmails.has(c.email.toLowerCase())) { skippedExisting++; continue; }
-
-      // Create the account — the auth.users trigger links parents.auth_id by email.
-      const { error: createErr } = await admin.auth.admin.createUser({ email: c.email, email_confirm: true });
-      if (createErr) { console.error('createUser failed', c.email, createErr.message); failed++; continue; }
-
-      // Magic-link welcome.
       let signInUrl = redirectTo || SUPABASE_URL;
       const { data: linkData } = await admin.auth.admin.generateLink({
         type: 'magiclink', email: c.email, options: { redirectTo: redirectTo || SUPABASE_URL },
@@ -155,17 +165,17 @@ serve(async (req) => {
           from: fromAddr,
           to: c.email,
           reply_to: brand.reply_to,
-          subject: `Your ${brand.org_name} family portal is ready`,
+          subject,
           html: buildInviteEmail(brand, c.first_name, signInUrl, prog.curriculum),
           tags: [{ name: 'type', value: 'parent_invite' }],
         }),
       });
-      if (!resp.ok) { console.error('Resend failed', c.email, await resp.text()); failed++; continue; }
+      if (!resp.ok) { console.error('Resend failed', c.email, await resp.text()); failed++; failedEmails.push(c.email); continue; }
       invited++;
     }
 
-    console.log(`invite-parents: org=${organizationId} program=${programId} invited=${invited} skipped_existing=${skippedExisting} failed=${failed}`);
-    return json({ invited, skipped_existing: skippedExisting, skipped_no_email: skippedNoEmail, failed, total_candidates: candidates.length });
+    console.log(`invite-parents: org=${organizationId} program=${programId} invited=${invited} skipped_active=${skippedActive} failed=${failed}`);
+    return json({ invited, skipped_active: skippedActive, skipped_no_email: skippedNoEmail, failed, failed_emails: failedEmails, total_candidates: toInvite.length });
   } catch (e) {
     console.error('invite-parents error:', (e as Error).message);
     return json({ error: (e as Error).message || 'Internal error' }, 500);
