@@ -33,9 +33,9 @@ export interface OrgBrand {
   secondary_color: string;
   accent_color: string;
   page_bg_color: string;
-  // Whether the FROM line is a real tenant sender or a fallback to the
-  // platform. Useful for logging when the tenant isn't fully set up yet.
-  sender_source: 'tenant' | 'platform' | 'hardcoded';
+  // Whether the FROM line is the tenant's own verified domain, a per-tenant
+  // address on the shared platform domain, or a fallback. Useful for logging.
+  sender_source: 'tenant' | 'platform_shared' | 'platform' | 'hardcoded';
 }
 
 // Hardcoded Enrops defaults. Used as the ultimate fallback when even
@@ -57,6 +57,7 @@ const ENROPS_DEFAULTS = {
 
 interface OrgRow {
   id: string;
+  slug: string | null;
   name: string | null;
   email: string | null;
   default_sender_name: string | null;
@@ -76,10 +77,17 @@ interface BrandingRow {
   logo_url: string | null;
 }
 
+/** The domain part of an email address (after the @), trimmed, or null. */
+function domainOf(email: string | null | undefined): string | null {
+  const at = (email ?? '').indexOf('@');
+  if (at < 0) return null;
+  return email!.slice(at + 1).trim() || null;
+}
+
 async function fetchOrg(supabase: SupabaseClient, where: { id?: string; slug?: string }): Promise<OrgRow | null> {
   let q = supabase
     .from('organizations')
-    .select('id, name, email, default_sender_name, default_sender_email, sending_domain, alert_email, logo_email_url');
+    .select('id, slug, name, email, default_sender_name, default_sender_email, sending_domain, alert_email, logo_email_url');
   if (where.id)    q = q.eq('id', where.id);
   if (where.slug)  q = q.eq('slug', where.slug);
   const { data } = await q.maybeSingle();
@@ -119,22 +127,40 @@ export async function loadOrgBrand(
     return null;
   };
 
+  // Platform sending domain: one Resend-verified domain (e.g. mail.enrops.com)
+  // that every tenant WITHOUT its own verified domain sends under, each with a
+  // per-tenant local part ({slug}@platformDomain). This removes per-tenant DNS
+  // setup and the silent-failure risk of an unverified tenant domain. Derived
+  // from the Enrops org's sending_domain (or the domain of its default sender).
+  const platformDomain =
+    pick(enropsOrg?.sending_domain, domainOf(enropsOrg?.default_sender_email)) ??
+    domainOf(ENROPS_DEFAULTS.sender_email)!;
+  const tenantSlug = (tenantOrg?.slug ?? '').trim() || null;
+
   const senderEmail =
-    pick(tenantOrg?.default_sender_email, enropsOrg?.default_sender_email) ??
+    // 1. Tenant's own verified domain (e.g. J2S on updates.journeytosteam.com) — advanced/grandfathered.
+    pick(tenantOrg?.default_sender_email) ??
+    // 2. Default for every other tenant: a per-tenant address on the shared verified platform domain.
+    (tenantSlug ? `${tenantSlug}@${platformDomain}` : null) ??
+    // 3. Platform itself (no tenant) → Enrops sender, then hardcoded last resort.
+    pick(enropsOrg?.default_sender_email) ??
     ENROPS_DEFAULTS.sender_email;
   const senderName =
     pick(
       tenantOrg?.default_sender_name,
       tenantBranding?.email_from_name,
+      tenantOrg?.name, // a tenant on the shared domain still sends as ITSELF, not "Enrops"
       enropsOrg?.default_sender_name,
       enropsBranding?.email_from_name,
     ) ?? ENROPS_DEFAULTS.sender_name;
 
   const senderSource: OrgBrand['sender_source'] = tenantOrg?.default_sender_email
     ? 'tenant'
-    : enropsOrg?.default_sender_email
-      ? 'platform'
-      : 'hardcoded';
+    : tenantSlug
+      ? 'platform_shared'
+      : enropsOrg?.default_sender_email
+        ? 'platform'
+        : 'hardcoded';
 
   return {
     org_id: tenantOrg?.id ?? enropsOrg?.id ?? '',
