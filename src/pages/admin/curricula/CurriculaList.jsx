@@ -300,7 +300,7 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
           <StatusBadge status={c.status} />
           {showNeedsReview && (
             <span
-              title={`${flagCount} field${flagCount === 1 ? "" : "s"} Enni isn't sure about`}
+              title={`${flagCount} field${flagCount === 1 ? "" : "s"} Ennie isn't sure about`}
               style={{
                 background: GOLD_SOFT,
                 color: "#7a5a00",

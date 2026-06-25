@@ -8,7 +8,7 @@
 //   { mode: 'programs'|'camps'|'other',
 //     program_ids: uuid[], camp_session_ids: uuid[], topics: string[] }
 //
-// Selecting rows here drives the audience auto-default in Q2 and gives Enni
+// Selecting rows here drives the audience auto-default in Q2 and gives Ennie
 // the structured KNOWN-FACTS list to write a personalized campaign from.
 
 import { useEffect, useMemo, useState } from "react";
@@ -97,7 +97,7 @@ export default function Q1_What({ inputs, setField, onNext, onBack, canNext, onA
   return (
     <QuestionStep
       title="What are you marketing?"
-      helper="Pick an intent below — Enni pre-fills the rest. Or open the picker to choose programs manually."
+      helper="Pick an intent below — Ennie pre-fills the rest. Or open the picker to choose programs manually."
       onNext={onNext}
       onBack={onBack}
       canNext={canNext}
@@ -784,7 +784,7 @@ function TopicChips({ topics, onChange }) {
           These are automations — set up once
         </div>
         <p style={{ margin: "0 0 8px", fontSize: 12, color: MUTED }}>
-          For repeatable parent comms, set up an Automation once and Enni fires it on the right trigger — no manual campaign each time. Coming soon:
+          For repeatable parent comms, set up an Automation once and Ennie fires it on the right trigger — no manual campaign each time. Coming soon:
         </p>
         <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: INK, lineHeight: 1.7 }}>
           {AUTOMATION_PATTERNS.map((p) => (

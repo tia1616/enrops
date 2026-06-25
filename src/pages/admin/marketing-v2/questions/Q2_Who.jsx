@@ -110,7 +110,7 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
   return (
     <QuestionStep
       title="Who's this going to?"
-      helper="Enni picked an audience based on your catalog choices. Change it below if you want something different."
+      helper="Ennie picked an audience based on your catalog choices. Change it below if you want something different."
       onNext={onNext}
       onBack={onBack}
       canNext={canNext}

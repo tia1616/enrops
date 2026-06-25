@@ -175,7 +175,7 @@ export default function ScheduleReview({
         ← Back to questions
       </button>
 
-      {/* Enni's note + zero-recipients warning hoisted ABOVE the summary card
+      {/* Ennie's note + zero-recipients warning hoisted ABOVE the summary card
           so the operator reads the context (e.g. "early-bird deadline is only
           3 days away — kickoff sends tomorrow, reminders bunch in week 1")
           BEFORE the window dates that the context explains. */}
@@ -184,7 +184,7 @@ export default function ScheduleReview({
           background: "#FFF8E1", border: "1px solid #E6C77A", borderRadius: 12,
           padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#5C4A1C",
         }}>
-          <strong style={{ fontWeight: 700 }}>A note from Enni:</strong> {operatorNotes}
+          <strong style={{ fontWeight: 700 }}>A note from Ennie:</strong> {operatorNotes}
         </div>
       )}
 
@@ -193,7 +193,7 @@ export default function ScheduleReview({
           background: "#FDECEA", border: "1px solid #E5A6A0", borderRadius: 12,
           padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#7A1F19",
         }}>
-          <strong style={{ fontWeight: 700 }}>No recipients matched.</strong> Enni drafted the schedule, but no parents fit this filter yet. Go back and widen the audience, or save as a draft for later.
+          <strong style={{ fontWeight: 700 }}>No recipients matched.</strong> Ennie drafted the schedule, but no parents fit this filter yet. Go back and widen the audience, or save as a draft for later.
         </div>
       )}
 
@@ -205,7 +205,7 @@ export default function ScheduleReview({
           Draft plan · review &amp; approve
         </p>
         <h2 style={{ margin: "4px 0 6px", fontSize: 22, color: INK }}>
-          Here's the campaign Enni put together.
+          Here's the campaign Ennie put together.
         </h2>
         <p style={{ margin: 0, color: MUTED, fontSize: 13 }}>
           {draft?.schedule?.summary || "Expand any touchpoint to edit and preview. Approve when it's right."}

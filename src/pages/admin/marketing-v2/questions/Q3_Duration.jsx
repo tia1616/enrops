@@ -1,9 +1,9 @@
 // Q3 — when/how-long question. Behavior depends on what was picked in Q1:
 //   - mode='programs' or 'camps': multi-touchpoint campaign → asks DURATION
-//     (2 weeks / 1 month / 2 months / custom range). Enni spaces touchpoints
+//     (2 weeks / 1 month / 2 months / custom range). Ennie spaces touchpoints
 //     across the window.
 //   - mode='other': one-off send (cancellation notice, recap, holiday note) →
-//     asks SEND TIME (now / tomorrow morning / custom date+time). Enni
+//     asks SEND TIME (now / tomorrow morning / custom date+time). Ennie
 //     produces a single touchpoint scheduled at that moment.
 // The deadline-proximity rule in the edge function can still tighten cadence
 // for multi-touchpoint campaigns when a deadline is days away.
@@ -84,7 +84,7 @@ export default function Q3_Duration({ inputs, setField, onNext, onBack, canNext 
   return (
     <QuestionStep
       title="How long should this run?"
-      helper="Enni spaces the touchpoints out so they land at the right moments. If a deadline is close, she'll tighten automatically."
+      helper="Ennie spaces the touchpoints out so they land at the right moments. If a deadline is close, she'll tighten automatically."
       onNext={onNext}
       onBack={onBack}
       canNext={canNext}
@@ -173,7 +173,7 @@ export default function Q3_Duration({ inputs, setField, onNext, onBack, canNext 
 
       <div style={{ marginTop: 14, padding: 10, background: "#eaf3de", color: OK, fontSize: 13, borderRadius: 6, display: "flex", gap: 8, alignItems: "flex-start" }}>
         <span>📊</span>
-        <span>1-month windows convert best for early-bird campaigns. When a deadline is within the first week, Enni shrinks to 2 emails (announce + final reminder) regardless of duration.</span>
+        <span>1-month windows convert best for early-bird campaigns. When a deadline is within the first week, Ennie shrinks to 2 emails (announce + final reminder) regardless of duration.</span>
       </div>
     </QuestionStep>
   );
@@ -181,7 +181,7 @@ export default function Q3_Duration({ inputs, setField, onNext, onBack, canNext 
 
 // ---------- One-off send-time picker (mode='other') ----------
 // Renders when the campaign is a one-off note (cancellation, recap, holiday).
-// Operator picks WHEN to send: now / tomorrow morning / custom. Enni produces
+// Operator picks WHEN to send: now / tomorrow morning / custom. Ennie produces
 // a single touchpoint scheduled at that moment.
 function SendTimePicker({ inputs, setField, onNext, onBack, canNext }) {
   const sendAt = inputs.send_at ?? "";

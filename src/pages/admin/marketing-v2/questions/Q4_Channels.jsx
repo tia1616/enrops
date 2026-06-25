@@ -31,7 +31,7 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
   return (
     <QuestionStep
       title="How are you reaching them?"
-      helper="Pick any combo — Enni will draft each one."
+      helper="Pick any combo — Ennie will draft each one."
       onBack={onBack}
       canNext={canNext}
       isLast
@@ -41,7 +41,7 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
         <button
           onClick={() => {
             // Friendly bail-out — kick back to the admin home. The Family
-            // Comms surface auto-creates a draft row when Enni's draft pass
+            // Comms surface auto-creates a draft row when Ennie's draft pass
             // runs, so this button doesn't need to persist anything. Future
             // (when a drafts list ships): land on /admin/family-comms/marketing/drafts
             // so the operator can pick this back up.
@@ -98,20 +98,20 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
         })}
       </div>
 
-      {/* Operator notes — free-form context that overrides Enni's defaults
-          for this specific campaign. Use cases: tenant-level offers Enni
+      {/* Operator notes — free-form context that overrides Ennie's defaults
+          for this specific campaign. Use cases: tenant-level offers Ennie
           can't infer (VIP pricing, partner showcase events), tone overrides,
           things to NOT mention. Promo picker (task #6) will add structured
           choices alongside. */}
       <div style={{ marginTop: 20 }}>
         <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 4 }}>
-          Anything else Enni should know? <span style={{ color: MUTED, fontWeight: 400 }}>(Optional)</span>
+          Anything else Ennie should know? <span style={{ color: MUTED, fontWeight: 400 }}>(Optional)</span>
         </label>
         <p style={{ fontSize: 12, color: MUTED, margin: "0 0 6px" }}>
-          Tell Enni anything you'd like her to mention in the emails. Examples: "Lead with the savings, not the program list" · "Don't talk about prices in the kickoff" · "Mention our parent showcase event on June 15"
+          Tell Ennie anything you'd like her to mention in the emails. Examples: "Lead with the savings, not the program list" · "Don't talk about prices in the kickoff" · "Mention our parent showcase event on June 15"
           {/* Removed "Mention our STEAM VIP full-year option, $720 total"
               from the examples — the VIP/annual-pass offering is now
-              centralized in organizations.vip_offering and Enni places it
+              centralized in organizations.vip_offering and Ennie places it
               via {{vip_block}} automatically. Asking the operator to retype
               it in operator_notes contradicts that architecture. */}
         </p>
@@ -141,7 +141,7 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
           Link to include <span style={{ color: MUTED, fontWeight: 400 }}>(Optional)</span>
         </label>
         <p style={{ fontSize: 12, color: MUTED, margin: "0 0 6px" }}>
-          If your email needs a link — registration page, photo gallery, makeup-class form, updated schedule, rebook tool — paste it here. Enni weaves it in naturally. Leave blank if no link.
+          If your email needs a link — registration page, photo gallery, makeup-class form, updated schedule, rebook tool — paste it here. Ennie weaves it in naturally. Leave blank if no link.
         </p>
         <input
           type="url"
