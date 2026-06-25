@@ -66,16 +66,15 @@ export default function EmailSenderSettings() {
     setSaving(true); setError("");
     try {
       const fields = {
+        organization_id: org.id,
         email_from_name: fromName.trim() || null,
         email_reply_to: replyTo.trim() || null,
         updated_at: new Date().toISOString(),
       };
-      // Select-then-write (a branding row may not exist yet).
-      const { data: existing } = await supabase
-        .from("org_branding").select("id").eq("organization_id", org.id).maybeSingle();
-      const { error: e } = existing
-        ? await supabase.from("org_branding").update(fields).eq("organization_id", org.id)
-        : await supabase.from("org_branding").insert({ organization_id: org.id, ...fields });
+      // org_branding is keyed on organization_id (its PK) — upsert so it inserts
+      // the row the first time and updates it thereafter.
+      const { error: e } = await supabase
+        .from("org_branding").upsert(fields, { onConflict: "organization_id" });
       if (e) throw e;
       flash("Sender saved.");
       await loadPreview();
