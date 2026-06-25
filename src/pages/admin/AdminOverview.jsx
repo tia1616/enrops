@@ -411,6 +411,7 @@ function fmtDue(due) {
 
 function TermChecklist({ org }) {
   const [state, setState] = useState(null); // null=loading; {empty:true} ; {term, items}
+  const [editMode, setEditMode] = useState(false);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -480,6 +481,38 @@ function TermChecklist({ org }) {
     }
   }
 
+  function dueFor(term, offset) {
+    if (!term?.anchor || offset == null) return null;
+    const d = new Date(`${term.anchor}T00:00:00`);
+    d.setDate(d.getDate() + offset);
+    return d;
+  }
+  function patchLocal(id, fields) {
+    setState((s) => ({
+      ...s,
+      items: s.items.map((i) =>
+        i.id === id ? { ...i, ...fields, ...("offset_days" in fields ? { due: dueFor(s.term, fields.offset_days) } : {}) } : i
+      ),
+    }));
+  }
+  async function persist(id, fields) {
+    await supabase.from("term_checklist_items").update(fields).eq("id", id).eq("organization_id", org.id);
+  }
+  async function addItem() {
+    const maxSort = state.items.reduce((m, i) => Math.max(m, i.sort_order || 0), 0);
+    const { data, error } = await supabase
+      .from("term_checklist_items")
+      .insert({ organization_id: org.id, label: "New step", offset_days: -14, is_default: false, sort_order: maxSort + 1 })
+      .select("id, label, detail, route, offset_days, sort_order")
+      .single();
+    if (error) { console.error("[checklist] add failed", error); return; }
+    setState((s) => ({ ...s, items: [...s.items, { ...data, done: false, due: dueFor(s.term, data.offset_days) }] }));
+  }
+  async function removeItem(id) {
+    setState((s) => ({ ...s, items: s.items.filter((i) => i.id !== id) }));
+    await supabase.from("term_checklist_items").update({ archived: true }).eq("id", id).eq("organization_id", org.id);
+  }
+
   if (state === null) return null;
 
   if (state.empty) {
@@ -494,16 +527,46 @@ function TermChecklist({ org }) {
   }
 
   const today = new Date().toISOString().slice(0, 10);
+  const ordered = [...state.items].sort((a, b) => (a.done === b.done ? a.sort_order - b.sort_order : a.done ? 1 : -1));
   return (
     <div style={{ marginBottom: 22 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
         <h2 style={{ fontSize: 17, fontWeight: 600, color: INK, margin: 0 }}>Your term</h2>
-        <span style={{ fontSize: 12, color: MUTED }}>{state.term.label}</span>
+        <div style={{ display: "flex", gap: 12, alignItems: "baseline" }}>
+          <span style={{ fontSize: 12, color: MUTED }}>{state.term.label}</span>
+          <button onClick={() => setEditMode((e) => !e)} style={{ fontSize: 12, fontWeight: 600, color: BRIGHT, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+            {editMode ? "Done" : "Edit"}
+          </button>
+        </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {/* Completed items sink to the bottom; otherwise keep the planned order. */}
-        {[...state.items].sort((a, b) => (a.done === b.done ? a.sort_order - b.sort_order : a.done ? 1 : -1)).map((it) => {
+        {ordered.map((it) => {
           const overdue = it.due && !it.done && it.due.toISOString().slice(0, 10) < today;
+          if (editMode) {
+            const weeks = it.offset_days != null ? Math.round(-it.offset_days / 7) : "";
+            return (
+              <div key={it.id} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "9px 12px", display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  value={it.label}
+                  onChange={(e) => patchLocal(it.id, { label: e.target.value })}
+                  onBlur={(e) => persist(it.id, { label: e.target.value.trim() || "Untitled step" })}
+                  style={{ flex: 1, minWidth: 0, fontSize: 14, padding: "6px 8px", border: `1px solid ${RULE}`, borderRadius: 6 }}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  value={weeks}
+                  onChange={(e) => patchLocal(it.id, { offset_days: e.target.value === "" ? null : -Math.abs(Math.round(Number(e.target.value))) * 7 })}
+                  onBlur={(e) => persist(it.id, { offset_days: e.target.value === "" ? null : -Math.abs(Math.round(Number(e.target.value))) * 7 })}
+                  style={{ width: 52, fontSize: 13, padding: "6px 6px", border: `1px solid ${RULE}`, borderRadius: 6, textAlign: "center" }}
+                  aria-label="Weeks before term start"
+                />
+                <span style={{ fontSize: 11, color: MUTED, whiteSpace: "nowrap" }}>wks before</span>
+                <button onClick={() => removeItem(it.id)} aria-label="Remove step" style={{ fontSize: 18, lineHeight: 1, color: MUTED, background: "none", border: "none", cursor: "pointer", padding: "0 4px" }}>×</button>
+              </div>
+            );
+          }
           return (
             <div key={it.id} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "11px 14px", display: "flex", gap: 12, alignItems: "flex-start" }}>
               <button
@@ -532,6 +595,11 @@ function TermChecklist({ org }) {
             </div>
           );
         })}
+        {editMode && (
+          <button onClick={addItem} style={{ alignSelf: "flex-start", marginTop: 2, fontSize: 13, fontWeight: 600, color: BRIGHT, background: "none", border: `1px dashed ${RULE}`, borderRadius: 8, padding: "8px 14px", cursor: "pointer" }}>
+            + Add a step
+          </button>
+        )}
       </div>
     </div>
   );
