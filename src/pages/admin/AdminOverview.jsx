@@ -294,9 +294,11 @@ export default function AdminOverview() {
 
           <TodayAgenda org={org} />
 
+          <TermChecklist org={org} />
+
           {/* Existing live cards — absorbed into wins / agenda / to-dos in later build steps. */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
-            {teaching && <TeachingScheduleCard teaching={teaching} />}
+            {teaching && <TeachingScheduleCard teaching={teaching} orgSlug={org?.slug} />}
             <ContractorPipelineCard pipeline={pipeline} error={pipelineErr} />
             <Card title="Family Comms" body="Preview, schedule, and send campaigns." to="/admin/family-comms/marketing" cta="Open Family Comms" ready />
             <Card title="Instructors" body="Your contractors. Send onboarding invites, upload prior background checks, view their schedules and statuses." to="/admin/instructors" cta="Open Instructors" ready />
@@ -370,6 +372,142 @@ function WeekPlaceholder() {
       padding: 28, textAlign: "center", color: MUTED, fontSize: 14,
     }}>
       This week's calendar is coming in the next build step.
+    </div>
+  );
+}
+
+// "Your term" to-do checklist — per-tenant editable term-planning steps, anchored
+// to the active term's first day. Reads term_checklist_items + per-term completions.
+// Items with a route deep-link in; external steps (route NULL) are check-off only.
+// (Add/edit/remove UI = step 6b.)
+function fmtDue(due) {
+  if (!due) return null;
+  return due.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function TermChecklist({ org }) {
+  const [state, setState] = useState(null); // null=loading; {empty:true} ; {term, items}
+
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        // Active planning term = soonest upcoming first-day (afterschool term OR camp cycle).
+        const [progRes, cycRes] = await Promise.all([
+          supabase.from("programs").select("term, first_session_date")
+            .eq("organization_id", org.id).not("first_session_date", "is", null),
+          supabase.from("scheduling_cycles").select("id, name, starts_on")
+            .eq("organization_id", org.id).eq("cycle_type", "summer_camp").not("starts_on", "is", null),
+        ]);
+        const termMin = new Map();
+        for (const p of progRes.data ?? []) {
+          if (!p.term || !p.first_session_date) continue;
+          const cur = termMin.get(p.term);
+          if (!cur || p.first_session_date < cur) termMin.set(p.term, p.first_session_date);
+        }
+        const candidates = [];
+        for (const [term, d] of termMin) candidates.push({ kind: "afterschool_term", key: term, label: term, anchor: d });
+        for (const c of cycRes.data ?? []) candidates.push({ kind: "camp_cycle", key: c.id, label: c.name, anchor: c.starts_on });
+        if (candidates.length === 0) { if (!cancelled) setState({ empty: true }); return; }
+        const future = candidates.filter((c) => c.anchor >= today).sort((a, b) => (a.anchor < b.anchor ? -1 : 1));
+        const latest = [...candidates].sort((a, b) => (a.anchor > b.anchor ? -1 : 1));
+        const term = future[0] || latest[0];
+
+        const [itemRes, compRes] = await Promise.all([
+          supabase.from("term_checklist_items").select("id, label, detail, route, offset_days, sort_order")
+            .eq("organization_id", org.id).eq("archived", false).order("sort_order", { ascending: true }),
+          supabase.from("term_checklist_completions").select("item_id")
+            .eq("organization_id", org.id).eq("term_kind", term.kind).eq("term_key", term.key),
+        ]);
+        const doneSet = new Set((compRes.data ?? []).map((c) => c.item_id));
+        const anchorDate = term.anchor ? new Date(`${term.anchor}T00:00:00`) : null;
+        const items = (itemRes.data ?? []).map((it) => {
+          let due = null;
+          if (anchorDate && it.offset_days != null) {
+            due = new Date(anchorDate);
+            due.setDate(due.getDate() + it.offset_days);
+          }
+          return { ...it, done: doneSet.has(it.id), due };
+        });
+        if (!cancelled) setState({ term, items });
+      } catch (e) {
+        console.error("[admin/overview] checklist load failed", e);
+        if (!cancelled) setState({ empty: true });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
+  async function toggle(item) {
+    const term = state?.term;
+    if (!term) return;
+    // Optimistic flip; RLS (can_edit_org) gates the write for non-editors.
+    setState((s) => ({ ...s, items: s.items.map((i) => (i.id === item.id ? { ...i, done: !i.done } : i)) }));
+    if (item.done) {
+      await supabase.from("term_checklist_completions").delete()
+        .eq("organization_id", org.id).eq("item_id", item.id)
+        .eq("term_kind", term.kind).eq("term_key", term.key);
+    } else {
+      await supabase.from("term_checklist_completions").insert({
+        organization_id: org.id, item_id: item.id, term_kind: term.kind, term_key: term.key,
+      });
+    }
+  }
+
+  if (state === null) return null;
+
+  if (state.empty) {
+    return (
+      <div style={{ marginBottom: 22 }}>
+        <h2 style={{ fontSize: 17, fontWeight: 600, color: INK, margin: "0 0 8px" }}>Your term</h2>
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 18, fontSize: 14, color: MUTED }}>
+          Add programs with a start date and your term to-do list shows up here.
+        </div>
+      </div>
+    );
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
+        <h2 style={{ fontSize: 17, fontWeight: 600, color: INK, margin: 0 }}>Your term</h2>
+        <span style={{ fontSize: 12, color: MUTED }}>{state.term.label}</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {state.items.map((it) => {
+          const overdue = it.due && !it.done && it.due.toISOString().slice(0, 10) < today;
+          return (
+            <div key={it.id} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "11px 14px", display: "flex", gap: 12, alignItems: "flex-start" }}>
+              <button
+                onClick={() => toggle(it)}
+                aria-label={it.done ? "Mark not done" : "Mark done"}
+                style={{
+                  width: 20, height: 20, borderRadius: 6, flexShrink: 0, marginTop: 1, cursor: "pointer",
+                  border: `1.5px solid ${it.done ? OK_GREEN : RULE}`, background: it.done ? OK_GREEN : "#fff",
+                  color: "#fff", fontSize: 12, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                }}
+              >
+                {it.done ? "✓" : ""}
+              </button>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 500, color: it.done ? MUTED : INK, textDecoration: it.done ? "line-through" : "none" }}>{it.label}</div>
+                {it.detail && <div style={{ fontSize: 12, color: MUTED, marginTop: 2, lineHeight: 1.4 }}>{it.detail}</div>}
+                <div style={{ marginTop: 6, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  {it.due && <span style={{ fontSize: 11, color: overdue ? AMBER : MUTED }}>{overdue ? "was due " : "by "}{fmtDue(it.due)}</span>}
+                  {it.route ? (
+                    <Link to={it.route} style={{ fontSize: 12, fontWeight: 600, color: BRIGHT, textDecoration: "none" }}>Open →</Link>
+                  ) : (
+                    <span style={{ fontSize: 11, color: MUTED, fontStyle: "italic" }}>done outside Enrops</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -577,12 +715,13 @@ function OpenHiresBanner({ openHires }) {
   );
 }
 
-function TeachingScheduleCard({ teaching }) {
+function TeachingScheduleCard({ teaching, orgSlug }) {
   // teaching = { instructorId, assignments: [...] }. Both upcoming-empty
   // and upcoming-some states render — the CTA is the same either way.
   const next = teaching.assignments ?? [];
-  const slug = defaultTenantSlug() ?? "j2s";
-  const portalPath = `/${slug}/instructor`;
+  // Multi-tenant: use THIS org's slug; fall back to the resolver, never a literal.
+  const slug = orgSlug || defaultTenantSlug();
+  const portalPath = slug ? `/${slug}/instructor` : "/instructor";
 
   return (
     <div style={{
