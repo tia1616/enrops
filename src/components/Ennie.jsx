@@ -38,9 +38,9 @@ const LOOPS = { idle: true, thinking: true, celebrate: false };
 const VIEWBOX = {
   idle: '859 439 175 175',
   thinking: '859 439 175 175',
-  // Celebrate rests at the same Y≈606 as idle for most of the clip — so share the
-  // crop. She pops in from below at the start and leaps up out of frame at the end.
-  celebrate: '859 439 175 175',
+  // Celebrate rests at the same Y≈606 as idle, but she jumps up — so zoom out a bit
+  // (same X center as idle, raised top for headroom) so her head isn't clipped mid-leap.
+  celebrate: '839 385 215 215',
 };
 
 const GOLD_BORDER = '#e7d9a8';
