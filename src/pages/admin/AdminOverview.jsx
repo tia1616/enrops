@@ -275,6 +275,8 @@ export default function AdminOverview() {
         <>
           {openHires?.total > 0 && <OpenHiresBanner openHires={openHires} />}
 
+          <TodayAgenda org={org} />
+
           {/* Existing live cards — absorbed into wins / agenda / to-dos in later build steps. */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
             {teaching && <TeachingScheduleCard teaching={teaching} />}
@@ -345,6 +347,113 @@ function WeekPlaceholder() {
       padding: 28, textAlign: "center", color: MUTED, fontSize: 14,
     }}>
       This week's calendar is coming in the next build step.
+    </div>
+  );
+}
+
+// "Today's schedule" — at-a-glance agenda of what's running today: time, topic,
+// location, instructor. Camps now; afterschool (via derive_program_session_dates)
+// is step 4b. Single accent only where a session needs cover.
+function fmtTime(t) {
+  if (!t) return "";
+  const [h, m] = String(t).split(":");
+  let hh = parseInt(h, 10);
+  if (Number.isNaN(hh)) return "";
+  const ap = hh >= 12 ? "PM" : "AM";
+  hh = hh % 12 || 12;
+  return `${hh}:${m} ${ap}`;
+}
+
+function TodayAgenda({ org }) {
+  const [rows, setRows] = useState(null); // null = loading; [] = nothing today
+
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        // Camps are week-long sessions; "running today" = today within [starts_on, ends_on].
+        const { data: sessions, error: sErr } = await supabase
+          .from("camp_sessions")
+          .select("id, location_name, curriculum_name, start_time, end_time")
+          .eq("organization_id", org.id)
+          .lte("starts_on", today)
+          .gte("ends_on", today)
+          .order("start_time", { ascending: true });
+        if (sErr) throw sErr;
+
+        const ids = (sessions ?? []).map((s) => s.id);
+        const leadByCamp = new Map();
+        if (ids.length) {
+          const { data: assigns } = await supabase
+            .from("camp_assignments")
+            .select("camp_session_id, status, instructors(first_name, preferred_name, last_name)")
+            .in("camp_session_id", ids)
+            .eq("role", "lead");
+          for (const a of assigns ?? []) {
+            if (a.status === "withdrawn" || a.status === "declined") continue;
+            const i = a.instructors;
+            if (!i) continue;
+            const name = `${i.preferred_name || i.first_name || ""}${i.last_name ? ` ${i.last_name}` : ""}`.trim();
+            if (name) leadByCamp.set(a.camp_session_id, name);
+          }
+        }
+
+        const built = (sessions ?? []).map((s) => ({
+          id: s.id,
+          title: s.curriculum_name,
+          location: s.location_name,
+          start: s.start_time,
+          end: s.end_time,
+          instructor: leadByCamp.get(s.id) || null,
+        }));
+        if (!cancelled) setRows(built);
+      } catch (e) {
+        console.error("[admin/overview] today agenda load failed", e);
+        if (!cancelled) setRows([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
+        <h2 style={{ fontSize: 17, fontWeight: 600, color: INK, margin: 0 }}>Today's schedule</h2>
+        {Array.isArray(rows) && rows.length > 0 && (
+          <span style={{ fontSize: 12, color: MUTED }}>{rows.length} running</span>
+        )}
+      </div>
+
+      {rows === null ? (
+        <div style={{ fontSize: 13, color: MUTED }}>Loading…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 20, fontSize: 14, color: MUTED }}>
+          Nothing running today — enjoy the breather.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {rows.map((r) => (
+            <div key={r.id} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "11px 14px", display: "flex", gap: 14, alignItems: "flex-start" }}>
+              <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, color: MUTED, minWidth: 66, lineHeight: 1.5 }}>
+                {fmtTime(r.start)}<br />{fmtTime(r.end)}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{r.title}</div>
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+                  {r.location}{r.instructor ? ` · ${r.instructor}` : ""}
+                </div>
+                {!r.instructor && (
+                  <span style={{ display: "inline-block", marginTop: 6, fontSize: 11, fontWeight: 600, color: CORAL, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, borderRadius: 6, padding: "2px 8px" }}>
+                    needs cover
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
