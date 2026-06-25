@@ -102,7 +102,7 @@ export default function OnboardingRouter() {
 
       // 5. Org slug — hard-fail on missing.
       const { data: org } = await supabase
-        .from('organizations')
+        .from('public_org_directory')
         .select('slug')
         .eq('id', instructor.organization_id)
         .single();

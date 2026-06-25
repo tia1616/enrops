@@ -36,7 +36,7 @@ export default function PolicyPage({ policyType, orgSlug: orgSlugProp }) {
 
       // Resolve org by slug
       const { data: org } = await supabase
-        .from('organizations')
+        .from('public_org_directory')
         .select('id, name')
         .eq('slug', orgSlug)
         .maybeSingle();

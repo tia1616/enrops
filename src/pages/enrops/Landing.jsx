@@ -72,7 +72,7 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
         if (cancelled) return;
         if (instructor) {
           const { data: org } = await supabase
-            .from('organizations')
+            .from('public_org_directory')
             .select('slug')
             .eq('id', instructor.organization_id)
             .maybeSingle();

@@ -35,7 +35,7 @@ export default function PublicLayout() {
     (async () => {
       setLoadState('loading');
       const { data, error } = await supabase
-        .from('organizations')
+        .from('public_org_directory')
         .select('id, slug, name, logo_url, status')
         .eq('slug', slug)
         .maybeSingle();

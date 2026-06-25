@@ -16,7 +16,7 @@ export default function J2SLayout() {
     let cancelled = false;
     async function loadOrg() {
       const { data } = await supabase
-        .from('organizations')
+        .from('public_org_directory')
         .select('id, name, logo_url')
         .eq('slug', 'j2s')
         .single();
