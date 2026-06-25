@@ -363,7 +363,8 @@ serve(async (req: Request) => {
       .from("camp_sessions")
       .select("id, curriculum_name, location_id, location_name, starts_on, ends_on, start_time, end_time, price_cents, early_bird_price_cents, early_bird_deadline, program_locations(district)")
       .eq("organization_id", campaign.organization_id)
-      .in("id", campIds);
+      .in("id", campIds)
+      .neq("status", "cancelled");
     pickedCamps = ((camps ?? []) as Array<Record<string, unknown>>).map((c) => {
       const pl = c.program_locations as { district?: string } | { district?: string }[] | null;
       const district = Array.isArray(pl) ? (pl[0]?.district ?? null) : (pl?.district ?? null);
@@ -1447,7 +1448,8 @@ async function renderPreview(
       .from("camp_sessions")
       .select("id, curriculum_name, location_id, location_name, starts_on, ends_on, start_time, end_time, price_cents, early_bird_price_cents, early_bird_deadline, program_locations(district)")
       .eq("organization_id", campaign.organization_id)
-      .in("id", campIds);
+      .in("id", campIds)
+      .neq("status", "cancelled");
     pickedCamps = ((camps ?? []) as Array<Record<string, unknown>>).map((c) => {
       const pl = c.program_locations as { district?: string } | { district?: string }[] | null;
       const district = Array.isArray(pl) ? (pl[0]?.district ?? null) : (pl?.district ?? null);
