@@ -60,7 +60,7 @@ export default function CurriculaList() {
       ] = await Promise.all([
         supabase
           .from("curricula")
-          .select("id, name, age_range_min, age_range_max, grade_min, grade_max, format, session_count, status, updated_at")
+          .select("id, name, age_range_min, age_range_max, grade_min, grade_max, format, session_count, status, updated_at, category")
           .eq("organization_id", org.id)
           .order("updated_at", { ascending: false }),
         supabase
@@ -285,6 +285,7 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
     : "Age/grade not set";
   const sessionsLabel = c.session_count ? `${c.session_count} session${c.session_count === 1 ? "" : "s"}` : "Sessions not set";
   const formatLabel = c.format === "summer_camp" ? "Summer camp" : c.format === "afterschool" ? "Afterschool" : c.format ? "Other" : "Format not set";
+  const familyLabel = c.category === "lego" ? "LEGO" : c.category === "coding" ? "Coding" : c.category === "robotics" ? "Robotics" : "Family not set";
 
   const cta = ctaForStatus(c, hasDoc);
   // Tag only fires on Extracted cards — for Draft the operator hasn't reviewed
@@ -319,7 +320,7 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
         </div>
       </div>
       <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
-        {ageLabel} · {sessionsLabel} · {formatLabel}
+        {ageLabel} · {sessionsLabel} · {formatLabel} · {familyLabel}
       </div>
       <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
         {cta.map((item, i) => (

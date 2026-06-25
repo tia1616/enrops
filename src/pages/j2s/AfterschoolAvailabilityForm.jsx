@@ -43,10 +43,15 @@ const DAYS_RANGES = [
 ];
 
 const PREF_OPTIONS = [
-  { value: "highly_preferred", label: "Highly preferred", color: OK_GREEN },
   { value: "preferred", label: "Preferred", color: OK_GREEN },
-  { value: "not_preferred", label: "Not preferred", color: VIOLET },
+  { value: "available", label: "Available", color: "#6B7280" },
   { value: "unavailable", label: "Unavailable", color: CORAL },
+];
+
+const CATEGORY_OPTIONS = [
+  { value: "lego", label: "LEGO" },
+  { value: "coding", label: "Coding" },
+  { value: "robotics", label: "Robotics" },
 ];
 
 function termTitle(term) {
@@ -77,6 +82,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   const [daysRange, setDaysRange] = useState("");
   const [notes, setNotes] = useState("");
   const [areaPrefs, setAreaPrefs] = useState({});   // area -> preference
+  const [categories, setCategories] = useState([]); // preferred families: lego/coding/robotics
 
   const [areas, setAreas] = useState([]);
   const [hasExisting, setHasExisting] = useState(false);
@@ -88,7 +94,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       const [availRes, locRes, areaPrefRes] = await Promise.all([
         supabase
           .from("instructor_term_availability")
-          .select("weekday_availability, min_days, max_days, notes, submitted_at")
+          .select("weekday_availability, min_days, max_days, notes, submitted_at, preferred_categories")
           .eq("instructor_id", instructorId)
           .eq("term", term)
           .maybeSingle(),
@@ -118,6 +124,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         );
         setDaysRange(r ? r.value : "");
         setNotes(availRes.data.notes ?? "");
+        setCategories(Array.isArray(availRes.data.preferred_categories) ? availRes.data.preferred_categories : []);
       }
 
       const distinctAreas = Array.from(
@@ -140,6 +147,10 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
   function setAreaPref(area, preference) {
     setAreaPrefs((prev) => ({ ...prev, [area]: preference }));
+  }
+
+  function toggleCategory(value) {
+    setCategories((prev) => (prev.includes(value) ? prev.filter((c) => c !== value) : [...prev, value]));
   }
 
   async function save() {
@@ -176,6 +187,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
             notes: notes.trim() || null,
             submitted_at: new Date().toISOString(),
             needs_confirmation: false,
+            preferred_categories: categories,
           },
           { onConflict: "organization_id,instructor_id,term" },
         );
@@ -266,7 +278,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         </select>
       </Card>
 
-      <Card title="Which areas do you want to teach in?" subtitle="Set your preference for each area. We'll prioritize highly preferred and only assign an unavailable area as a last resort (with an extra bonus).">
+      <Card title="Which areas do you want to teach in?" subtitle="For each area: 'Preferred' is where you'd most like to be, 'Available' means you're happy to teach there, and 'Unavailable' means we won't schedule you there. Leaving one blank counts as available.">
         {areas.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
             Your admin hasn't set up teaching areas yet.
@@ -278,6 +290,29 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
             ))}
           </div>
         )}
+      </Card>
+
+      <Card title="Which do you most enjoy teaching?" subtitle="Pick any that apply — we'll try to send you classes in the families you like. You can teach all of them; this just helps us match well.">
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {CATEGORY_OPTIONS.map((opt) => {
+            const on = categories.includes(opt.value);
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => toggleCategory(opt.value)}
+                style={{
+                  padding: "8px 16px", borderRadius: 8, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+                  border: `1px solid ${on ? OK_GREEN : RULE}`,
+                  background: on ? `${OK_GREEN}1F` : "#fff",
+                  color: on ? OK_GREEN : INK,
+                }}
+              >
+                {on ? "✓ " : ""}{opt.label}
+              </button>
+            );
+          })}
+        </div>
       </Card>
 
       <Card title="Anything else we should know?" subtitle="Optional — constraints or preferences that don't fit above.">

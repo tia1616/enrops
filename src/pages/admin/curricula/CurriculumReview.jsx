@@ -48,6 +48,21 @@ const FORMAT_OPTIONS = [
   { value: "other", label: "Other" },
 ];
 
+const CATEGORY_OPTIONS = [
+  { value: "lego", label: "LEGO" },
+  { value: "coding", label: "Coding" },
+  { value: "robotics", label: "Robotics" },
+];
+
+// Best-guess curriculum family from its title, so the admin usually just confirms.
+function guessCategory(name) {
+  const n = (name || "").toLowerCase();
+  if (/robot|mbot|spike|ev3|wedo/.test(n)) return "robotics";
+  if (/\blego\b|brick|duplo/.test(n)) return "lego";
+  if (/cod|minecraft|scratch|python|roblox|game design|game maker|program/.test(n)) return "coding";
+  return "";
+}
+
 const SESSION_TYPE_OPTIONS = [
   { value: "full_day", label: "Full-day camp" },
   { value: "half_day_am", label: "Half-day AM camp" },
@@ -408,6 +423,17 @@ export default function CurriculumReview() {
       timers.delete(fieldName);
     }, 800);
     timers.set(fieldName, t);
+  }
+
+  // Curriculum family (lego/coding/robotics) — a plain column, not a doc-extracted field.
+  async function saveCategory(value) {
+    if (!curriculum) return;
+    setCurriculum((c) => ({ ...c, category: value || null }));
+    markSaveState("saving");
+    const { error } = await supabase.from("curricula").update({ category: value || null }).eq("id", curriculum.id);
+    if (error) { console.error("save category failed", error); markSaveState("error"); return; }
+    flashSaved("category");
+    markSaveState("saved");
   }
 
   async function saveSessionField(sessionId, columnPatch, immediate = false) {
@@ -791,6 +817,24 @@ export default function CurriculumReview() {
                 flagged={isFieldFlagged({ curriculum, fieldName: "format", extractedRow: extractedByName.format })}
                 saved={savingField === "format"}
               />
+
+              <div style={fieldWrap}>
+                <FieldLabel>Family<SavedTick on={savingField === "category"} /></FieldLabel>
+                <select value={curriculum.category ?? ""} onChange={(e) => saveCategory(e.target.value)} style={textInput}>
+                  <option value="">Pick a family</option>
+                  {CATEGORY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                {!curriculum.category && guessCategory(curriculum.name) && (
+                  <button
+                    type="button"
+                    onClick={() => saveCategory(guessCategory(curriculum.name))}
+                    style={{ marginTop: 6, background: "none", border: "none", color: "#3a7c3a", fontSize: 12, cursor: "pointer", padding: 0, fontFamily: "inherit", textAlign: "left" }}
+                  >
+                    Suggested: {CATEGORY_OPTIONS.find((o) => o.value === guessCategory(curriculum.name))?.label} — tap to use
+                  </button>
+                )}
+                <div style={fieldHelp}>Matches instructors who enjoy this family (LEGO / Coding / Robotics).</div>
+              </div>
             </div>
 
             <div style={row2}>

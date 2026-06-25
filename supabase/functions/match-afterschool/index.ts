@@ -7,16 +7,27 @@
 //   HARD  one program per weekday (can't be at two schools after dismissal)
 //   HARD  respect the days/week cap (max_days)
 //   HARD  only `open` programs are auto-matched (drafts excluded)
-//   SOFT  AREA preference (program_locations.area): highly_preferred > preferred >
-//         neutral > not_preferred > unavailable. not_preferred / unavailable are
-//         still assignable as a LAST RESORT and earn a hardship bonus ($30 / $50).
+//   HARD  never auto-assign an instructor to an area they marked `unavailable`
+//   SOFT  CURRICULUM continuity (programs.curriculum_id, fallback curriculum text):
+//         keep each instructor on as few distinct curricula as possible so they
+//         carry 1-2 material sets for the term, not 4-5. This is the DOMINANT soft
+//         factor — an instructor who already teaches a curriculum wins any class of
+//         that same curriculum they're eligible for, ahead of area preference. The
+//         one exception is an area they marked `unavailable`: continuity will not
+//         drag them there.
+//   SOFT  CURRICULUM FAMILY (curricula.category: lego / coding / robotics): instructors
+//         pick the families they enjoy on the survey. A class is nudged toward someone
+//         who enjoys its family. Everyone CAN teach everything, so this never excludes.
+//   SOFT  AREA preference (program_locations.area): 'preferred' is a small nudge used
+//         only to break ties once curriculum + schedule are decided. 'available' (or
+//         no preference) is assigned freely — no penalty, no bonus.
 //
-// Curriculum is intentionally NOT a factor in v1 (programs.curriculum has no
-// category to match on without hardcoding).
-//
-// Assignment is TWO-PHASE so a stated preference is never silently lost:
-//   Phase 1 seats instructors at areas they highly-prefer / prefer first.
-//   Phase 2 fills everything still open from remaining capacity.
+// Assignment is greedy and curriculum-driven: each round we EXTEND a curriculum
+// someone already teaches before SEEDING a new one (so classes of one curriculum
+// consolidate onto as few instructors as possible), taking the most-constrained
+// class within that set. The winner for a class is chosen by: already-teaches-this
+// curriculum -> can-cover-the-most-other-classes-of-it -> enjoys-this-family ->
+// area preference -> fewest curricula so far -> confirmed-before-tentative -> fairness.
 //
 // AUTH: caller must be owner/admin of organization_id. Heavy lifting runs with
 // the service role; organization_id + term scope every query.
@@ -44,17 +55,12 @@ const DAY_MAP: Record<string, string> = {
 // Instructors arrive this many minutes before class start (and stay to the end).
 const ARRIVAL_BUFFER_MIN = 15;
 
-// AREA preference -> base score.
-const AREA_SCORE: Record<string, number> = {
-  highly_preferred: 30,
-  preferred: 20,
-  not_preferred: 5,
-  unavailable: -50,
-};
-const NEUTRAL_AREA_SCORE = 10; // no preference expressed for this area
-
-const HARDSHIP_NOT_PREFERRED_CENTS = 3000; // $30
-const HARDSHIP_UNAVAILABLE_CENTS = 5000;   // $50
+// AREA preference is now just a gentle TIEBREAKER once curriculum + schedule are set.
+// Survey scale: 'preferred' (a nudge) / 'available' (assign freely, no penalty) /
+// 'unavailable' (never auto-assigned). Legacy values are mapped for back-compat:
+// 'highly_preferred' -> preferred; 'neutral' / 'not_preferred' -> available.
+const PREFERRED_AREA_SCORE = 10; // 'preferred' (or legacy 'highly_preferred')
+const NEUTRAL_AREA_SCORE = 0;    // 'available', no preference, or legacy 'not_preferred'
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
@@ -85,6 +91,15 @@ function parseHHMM(t: string | null): number | null {
   const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(t);
   if (!m) return null;
   return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+// Stable key identifying a curriculum: prefer the structured id, fall back to the
+// (normalized) free-text name so older programs without a linked curriculum still
+// group together. Returns null when neither is set.
+function currKey(prog: any): string | null {
+  if (prog.curriculum_id) return `id:${prog.curriculum_id}`;
+  if (prog.curriculum && String(prog.curriculum).trim()) return `name:${String(prog.curriculum).trim().toLowerCase()}`;
+  return null;
 }
 
 serve(async (req) => {
@@ -123,7 +138,7 @@ serve(async (req) => {
     // ----- Programs (open only — drafts are excluded from auto-match) -----
     const { data: progRaw, error: progErr } = await admin
       .from('programs')
-      .select('id, day_of_week, start_time, end_time, program_location_id, status')
+      .select('id, day_of_week, start_time, end_time, program_location_id, status, curriculum_id, curriculum')
       .eq('organization_id', organizationId)
       .eq('term', term)
       .eq('status', 'open');
@@ -151,12 +166,20 @@ serve(async (req) => {
     // ----- Availability (term-scoped) -----
     const { data: availRaw, error: availErr } = await admin
       .from('instructor_term_availability')
-      .select('instructor_id, weekday_availability, max_days, needs_confirmation')
+      .select('instructor_id, weekday_availability, max_days, needs_confirmation, preferred_categories')
       .eq('organization_id', organizationId)
       .eq('term', term);
     if (availErr) return json({ error: `Load availability: ${availErr.message}` }, 500);
     const availByInstr = new Map<string, any>();
     for (const a of availRaw ?? []) availByInstr.set(a.instructor_id, a);
+
+    // ----- Curriculum categories (LEGO / coding / robotics) for the family guide -----
+    const { data: currRaw } = await admin
+      .from('curricula')
+      .select('id, category')
+      .eq('organization_id', organizationId);
+    const currCategory = new Map<string, string>();
+    for (const c of currRaw ?? []) { if (c.category) currCategory.set(c.id, String(c.category).toLowerCase()); }
 
     // ----- Area preferences -----
     const { data: areaPrefRaw, error: areaErr } = await admin
@@ -191,6 +214,7 @@ serve(async (req) => {
       maxDays: number | null;
       needsConfirmation: boolean;
       areaPrefs: Record<string, string>;
+      preferredCategories: Set<string>;  // LEGO / coding / robotics families they enjoy
     }
     const missingSurveys: string[] = [];
     const pool: PoolInstr[] = [];
@@ -200,18 +224,23 @@ serve(async (req) => {
       const wd = (av?.weekday_availability ?? {}) as Record<string, { from?: string; until?: string }>;
       const hasAny = av && Object.values(wd).some((w) => w && w.from);
       if (!hasAny) { missingSurveys.push(name); continue; }
+      const cats = Array.isArray(av.preferred_categories) ? av.preferred_categories : [];
       pool.push({
         id: inst.id, name,
         days: wd,
         maxDays: av.max_days ?? null,
         needsConfirmation: !!av.needs_confirmation,
         areaPrefs: areaPrefByInstr.get(inst.id) ?? {},
+        preferredCategories: new Set(cats.map((c: any) => String(c).toLowerCase())),
       });
     }
 
     // Running state seeded from confirmed rows so a re-run never double-books.
+    // assignedCurricula tracks which curricula each instructor already holds (incl.
+    // confirmed ones) so continuity carries across re-runs.
     const committedDays = new Map<string, Set<string>>();
     const loadCount = new Map<string, number>();
+    const assignedCurricula = new Map<string, Set<string>>();
     const lockedProgram = new Map<string, { instructor_id: string }>();
     for (const e of existing) {
       if (e.status !== 'confirmed') continue;
@@ -221,6 +250,11 @@ serve(async (req) => {
       if (dc) {
         if (!committedDays.has(e.instructor_id)) committedDays.set(e.instructor_id, new Set());
         committedDays.get(e.instructor_id)!.add(dc);
+      }
+      const ck = p ? currKey(p) : null;
+      if (ck) {
+        if (!assignedCurricula.has(e.instructor_id)) assignedCurricula.set(e.instructor_id, new Set());
+        assignedCurricula.get(e.instructor_id)!.add(ck);
       }
       loadCount.set(e.instructor_id, (loadCount.get(e.instructor_id) ?? 0) + 1);
     }
@@ -238,7 +272,8 @@ serve(async (req) => {
       return parse12h(prog.start_time) != null && parse12h(prog.end_time) != null;
     }
 
-    function eligible(inst: PoolInstr, prog: any): boolean {
+    // Everything except the area check: time/day fit, not double-booked, under cap.
+    function eligibleCore(inst: PoolInstr, prog: any): boolean {
       const dc = dayCode(prog.day_of_week);
       if (!dc) return false;
       const avail = inst.days[dc];
@@ -254,74 +289,140 @@ serve(async (req) => {
       if (inst.maxDays != null && (loadCount.get(inst.id) ?? 0) >= inst.maxDays) return false;
       return true;
     }
+    // Auto-match eligibility also excludes areas the instructor marked 'unavailable'.
+    function eligible(inst: PoolInstr, prog: any): boolean {
+      return eligibleCore(inst, prog) && areaPrefFor(inst, prog) !== 'unavailable';
+    }
 
-    function score(inst: PoolInstr, prog: any): number {
+    function areaScore(inst: PoolInstr, prog: any): number {
       const pref = areaPrefFor(inst, prog);
-      if (pref == null) return NEUTRAL_AREA_SCORE;
-      return AREA_SCORE[pref] ?? NEUTRAL_AREA_SCORE;
+      return (pref === 'preferred' || pref === 'highly_preferred') ? PREFERRED_AREA_SCORE : NEUTRAL_AREA_SCORE;
+    }
+
+    // Does this instructor already hold the program's curriculum (from a confirmed
+    // row or earlier in this run)?
+    function holdsCurriculum(inst: PoolInstr, prog: any): boolean {
+      const ck = currKey(prog);
+      return !!ck && (assignedCurricula.get(inst.id)?.has(ck) ?? false);
+    }
+
+    // How many OTHER still-open classes of the SAME curriculum could this instructor
+    // also take, given current commitments? Used only to choose a versatile seed when
+    // starting a brand-new curriculum chain (rough heuristic; same-weekday classes
+    // they could never stack are excluded).
+    function curriculumReach(inst: PoolInstr, prog: any): number {
+      const ck = currKey(prog);
+      if (!ck) return 0;
+      const pdc = dayCode(prog.day_of_week);
+      let n = 0;
+      for (const q of openPrograms) {
+        if (q.id === prog.id) continue;
+        if (assignedProgramIds.has(q.id) || lockedProgram.has(q.id) || !hasUsableTime(q)) continue;
+        if (currKey(q) !== ck) continue;
+        if (dayCode(q.day_of_week) === pdc) continue;
+        if (eligible(inst, q)) n++;
+      }
+      return n;
+    }
+
+    // Curriculum family (lego / coding / robotics) for this program, or null if unset.
+    function categoryFor(prog: any): string | null {
+      return prog.curriculum_id ? (currCategory.get(prog.curriculum_id) ?? null) : null;
+    }
+    // Soft guide: does the instructor enjoy this program's family? (Everyone CAN teach
+    // everything — this only nudges toward what they picked on their survey.)
+    function prefersCategory(inst: PoolInstr, prog: any): boolean {
+      const cat = categoryFor(prog);
+      return !!cat && inst.preferredCategories.has(cat);
     }
 
     const decisions: Array<any> = [];
     const assignedProgramIds = new Set<string>();
 
-    // Greedy pass over a program set, restricting candidates with `candidateFilter`.
-    // Most-constrained-first (fewest candidates) so scarce instructors aren't wasted.
-    function runPass(progs: any[], candidateFilter: (inst: PoolInstr, prog: any) => boolean) {
-      const remaining = progs.filter((p) => !assignedProgramIds.has(p.id) && !lockedProgram.has(p.id) && hasUsableTime(p));
-      while (remaining.length > 0) {
-        let bestIdx = 0, bestElig = Infinity;
-        for (let i = 0; i < remaining.length; i++) {
-          const n = pool.filter((inst) => eligible(inst, remaining[i]) && candidateFilter(inst, remaining[i])).length;
-          if (n < bestElig) { bestElig = n; bestIdx = i; }
-        }
-        const prog = remaining.splice(bestIdx, 1)[0];
-        const candidates = pool.filter((inst) => eligible(inst, prog) && candidateFilter(inst, prog));
-        if (candidates.length === 0) continue;
+    // Is there an eligible instructor who ALREADY teaches this program's curriculum
+    // (and didn't mark its area unavailable)? If so this class can EXTEND a chain.
+    function someHolderEligible(prog: any): boolean {
+      // eligible() already excludes 'unavailable' areas.
+      return pool.some((inst) => eligible(inst, prog) && holdsCurriculum(inst, prog));
+    }
 
-        candidates.sort((a, b) => {
-          const sa = score(a, prog), sb = score(b, prog);
-          if (sb !== sa) return sb - sa;
-          if (a.needsConfirmation !== b.needsConfirmation) return a.needsConfirmation ? 1 : -1;
-          const la = loadCount.get(a.id) ?? 0, lb = loadCount.get(b.id) ?? 0;
-          if (la !== lb) return la - lb;
-          return a.name.localeCompare(b.name);
-        });
-        const winner = candidates[0];
-        const dc = dayCode(prog.day_of_week)!;
-        if (!committedDays.has(winner.id)) committedDays.set(winner.id, new Set());
-        committedDays.get(winner.id)!.add(dc);
-        loadCount.set(winner.id, (loadCount.get(winner.id) ?? 0) + 1);
-        assignedProgramIds.add(prog.id);
-
-        const pref = areaPrefFor(winner, prog);
-        const flags: string[] = [];
-        let bonus = 0;
-        if (pref === 'not_preferred') { flags.push('location_low_pref'); bonus = HARDSHIP_NOT_PREFERRED_CENTS; }
-        else if (pref === 'unavailable') { flags.push('location_override'); bonus = HARDSHIP_UNAVAILABLE_CENTS; }
-        decisions.push({
-          program_id: prog.id,
-          location_name: locName.get(prog.program_location_id) ?? null,
-          area: areaFor(prog),
-          day_of_week: prog.day_of_week,
-          status: 'assigned',
-          instructor_id: winner.id,
-          instructor_name: winner.name,
-          area_preference: pref,
-          hardship_bonus_cents: bonus,
-          flags,
-        });
+    // Assign one program to its best candidate. Winner order:
+    //   1. already teaches this curriculum (continuity) — unless area = unavailable
+    //   2. can cover the most OTHER classes of this curriculum (start a long chain)
+    //   3. enjoys this curriculum family (LEGO / coding / robotics) — soft guide
+    //   4. area preference
+    //   5. fewest distinct curricula so far (don't pile a new set onto someone)
+    //   6. confirmed-before-tentative, then fewer classes, then name
+    function assignWinner(prog: any) {
+      const candidates = pool.filter((inst) => eligible(inst, prog));
+      if (candidates.length === 0) return;
+      const reachOf = new Map<string, number>();
+      for (const c of candidates) reachOf.set(c.id, curriculumReach(c, prog));
+      candidates.sort((a, b) => {
+        // candidates are all eligible(), so 'unavailable' areas are already excluded.
+        const aSticky = holdsCurriculum(a, prog);
+        const bSticky = holdsCurriculum(b, prog);
+        if (aSticky !== bSticky) return aSticky ? -1 : 1;
+        const ra = reachOf.get(a.id)!, rb = reachOf.get(b.id)!;
+        if (rb !== ra) return rb - ra;
+        const aCat = prefersCategory(a, prog), bCat = prefersCategory(b, prog);
+        if (aCat !== bCat) return aCat ? -1 : 1;
+        const sa = areaScore(a, prog), sb = areaScore(b, prog);
+        if (sb !== sa) return sb - sa;
+        const ca = assignedCurricula.get(a.id)?.size ?? 0, cb = assignedCurricula.get(b.id)?.size ?? 0;
+        if (ca !== cb) return ca - cb;
+        if (a.needsConfirmation !== b.needsConfirmation) return a.needsConfirmation ? 1 : -1;
+        const la = loadCount.get(a.id) ?? 0, lb = loadCount.get(b.id) ?? 0;
+        if (la !== lb) return la - lb;
+        return a.name.localeCompare(b.name);
+      });
+      const winner = candidates[0];
+      const dc = dayCode(prog.day_of_week)!;
+      if (!committedDays.has(winner.id)) committedDays.set(winner.id, new Set());
+      committedDays.get(winner.id)!.add(dc);
+      loadCount.set(winner.id, (loadCount.get(winner.id) ?? 0) + 1);
+      const ck = currKey(prog);
+      if (ck) {
+        if (!assignedCurricula.has(winner.id)) assignedCurricula.set(winner.id, new Set());
+        assignedCurricula.get(winner.id)!.add(ck);
       }
+      assignedProgramIds.add(prog.id);
+
+      decisions.push({
+        program_id: prog.id,
+        location_name: locName.get(prog.program_location_id) ?? null,
+        area: areaFor(prog),
+        curriculum_name: prog.curriculum ?? null,
+        day_of_week: prog.day_of_week,
+        status: 'assigned',
+        instructor_id: winner.id,
+        instructor_name: winner.name,
+        area_preference: areaPrefFor(winner, prog),
+        hardship_bonus_cents: 0,
+        flags: [],
+      });
     }
 
     const openPrograms = programs.filter((p: any) => !lockedProgram.has(p.id));
 
-    // Phase 1: seat instructors at areas they highly-prefer / prefer.
-    runPass(openPrograms, (inst, prog) => {
-      const pref = areaPrefFor(inst, prog);
-      return pref === 'highly_preferred' || pref === 'preferred';
-    });
-    // Phase 2: fill everything still open from remaining capacity.
-    runPass(openPrograms, () => true);
+    // Greedy, curriculum-continuity first. Each round we prefer to EXTEND a curriculum
+    // someone already teaches (so chains consolidate onto one instructor) before
+    // SEEDING a brand-new one; within that set we take the most-constrained class
+    // (fewest eligible instructors) so scarce instructors aren't wasted.
+    while (true) {
+      const remaining = openPrograms.filter((p: any) =>
+        !assignedProgramIds.has(p.id) && !lockedProgram.has(p.id) && hasUsableTime(p) &&
+        pool.some((inst) => eligible(inst, p)));
+      if (remaining.length === 0) break;
+      const chain = remaining.filter(someHolderEligible);
+      const pickFrom = chain.length > 0 ? chain : remaining;
+      let best = pickFrom[0], bestElig = Infinity;
+      for (const p of pickFrom) {
+        const n = pool.filter((inst) => eligible(inst, p)).length;
+        if (n < bestElig) { bestElig = n; best = p; }
+      }
+      assignWinner(best);
+    }
 
     // Unassigned -> needs_hire, or flagged as a data problem if the time is missing.
     for (const prog of openPrograms) {
@@ -336,21 +437,27 @@ serve(async (req) => {
         decisions.push({ ...base, status: 'needs_hire', reason: 'This class has no start/end time set — add its time before matching.' });
         continue;
       }
-      const dc = dayCode(prog.day_of_week);
-      const s = parse12h(prog.start_time)!, e = parse12h(prog.end_time)!;
-      const anyDayTime = pool.some((inst) => {
-        const a = inst.days[dc ?? ''];
-        if (!a || !a.from) return false;
-        const from = parseHHMM(a.from), until = a.until ? parseHHMM(a.until) : null;
-        return from != null && (s - ARRIVAL_BUFFER_MIN) >= from && (until == null || e <= until);
-      });
-      decisions.push({
-        ...base,
-        status: 'needs_hire',
-        reason: anyDayTime
+      // Anyone who could take this class but kept it off-limits by marking the area
+      // 'unavailable'? Surface them so the admin can place by hand if they want.
+      const blockedByArea = pool.filter((inst) => eligibleCore(inst, prog) && areaPrefFor(inst, prog) === 'unavailable');
+      let reason: string;
+      if (blockedByArea.length > 0) {
+        const names = blockedByArea.map((i) => i.name).join(', ');
+        reason = `${names} could take this class but marked this area as unavailable. Assign by hand if you'd like.`;
+      } else {
+        const dc = dayCode(prog.day_of_week);
+        const s = parse12h(prog.start_time)!, e = parse12h(prog.end_time)!;
+        const anyDayTime = pool.some((inst) => {
+          const a = inst.days[dc ?? ''];
+          if (!a || !a.from) return false;
+          const from = parseHHMM(a.from), until = a.until ? parseHHMM(a.until) : null;
+          return from != null && (s - ARRIVAL_BUFFER_MIN) >= from && (until == null || e <= until);
+        });
+        reason = anyDayTime
           ? 'Everyone who fits this day and time is already booked elsewhere.'
-          : 'No instructor is available for this weekday and time window.',
-      });
+          : 'No instructor is available for this weekday and time window.';
+      }
+      decisions.push({ ...base, status: 'needs_hire', reason });
     }
 
     // ----- Writes -----
@@ -386,6 +493,18 @@ serve(async (req) => {
       writeStats.inserted = toInsert.length;
     }
 
+    // Materials metric: distinct curricula (= class sets) per instructor across all
+    // assignments, including locked/confirmed ones.
+    const setsByInstr = new Map<string, Set<string>>();
+    for (const d of assignedDecisions) {
+      const ck = d.curriculum_name ? `name:${String(d.curriculum_name).trim().toLowerCase()}` : null;
+      if (!ck) continue;
+      if (!setsByInstr.has(d.instructor_id)) setsByInstr.set(d.instructor_id, new Set());
+      setsByInstr.get(d.instructor_id)!.add(ck);
+    }
+    let totalSets = 0, maxSets = 0;
+    for (const s of setsByInstr.values()) { totalSets += s.size; if (s.size > maxSets) maxSets = s.size; }
+
     return json({
       organization_id: organizationId,
       term,
@@ -396,6 +515,7 @@ serve(async (req) => {
         needs_hire: decisions.filter((d) => d.status === 'needs_hire').length,
         instructors_in_pool: pool.length,
         missing_surveys: missingSurveys,
+        curriculum_sets: { total: totalSets, max_per_instructor: maxSets, instructors_assigned: setsByInstr.size },
       },
       decisions,
       write_stats: writeStats,

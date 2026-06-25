@@ -465,7 +465,6 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
     const area = program.program_location_id ? (locArea.get(program.program_location_id) ?? null) : null;
     const pref = area ? (areaPrefByInstr.get(instructorId) || {})[area] : undefined;
-    if (pref === "not_preferred") warnings.push(`${first} marked ${area} as not preferred.`);
     if (pref === "unavailable") warnings.push(`${first} marked ${area} as a place they can't go.`);
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
     return { ok: true, reason: null, pref, warnings };
@@ -1441,15 +1440,6 @@ function ProgramCard({ program, loc, tint, status, lead, onClick }) {
         </span>
       </div>
       <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
-      {status === "flagged" && lead && Array.isArray(lead.flags) && lead.flags.length > 0 && (
-        <div style={{ fontSize: 10, color: VIOLET, fontWeight: 600, lineHeight: 1.3 }}>
-          {lead.flags.includes("location_override")
-            ? `In an area they marked unavailable · +$${Math.round((lead.distance_bonus_cents || 0) / 100)} bonus`
-            : lead.flags.includes("location_low_pref")
-            ? `In a not-preferred area · +$${Math.round((lead.distance_bonus_cents || 0) / 100)} bonus`
-            : null}
-        </div>
-      )}
     </button>
   );
 }
@@ -1459,8 +1449,8 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
     const ev = evaluate(i.id);
     return { inst: i, ev };
   });
-  const prefRank = { highly_preferred: 0, preferred: 1, undefined: 2, not_preferred: 3, unavailable: 4 };
-  const eligible = rows.filter((r) => r.ev.ok).sort((a, b) => (prefRank[a.ev.pref] ?? 2) - (prefRank[b.ev.pref] ?? 2));
+  const prefRank = { preferred: 0, highly_preferred: 0, available: 1, undefined: 1, not_preferred: 1, unavailable: 3 };
+  const eligible = rows.filter((r) => r.ev.ok).sort((a, b) => (prefRank[a.ev.pref] ?? 1) - (prefRank[b.ev.pref] ?? 1));
   const ineligible = rows.filter((r) => !r.ev.ok);
   return (
     <Overlay onClose={onClose}>
@@ -1485,8 +1475,7 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
           >
             <span style={{ fontSize: 14, color: INK, fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
             <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {ev.pref === "highly_preferred" && <Tag color={OK_GREEN}>Loves this area</Tag>}
-              {ev.pref === "preferred" && <Tag color={PURPLE}>Prefers this area</Tag>}
+              {(ev.pref === "preferred" || ev.pref === "highly_preferred") && <Tag color={OK_GREEN}>Prefers this area</Tag>}
               {ev.warnings.length > 0 && <Tag color={CORAL}>⚠ {ev.warnings.length}</Tag>}
             </span>
           </button>
