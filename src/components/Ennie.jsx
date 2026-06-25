@@ -32,6 +32,15 @@ const SOURCES = {
 // celebrate is a one-shot; the loops run continuously.
 const LOOPS = { idle: true, thinking: true, celebrate: false };
 
+// Source clips are 1920x1080 with the character in a small region, so we crop the
+// SVG viewBox to her. idle/thinking share a transform; celebrate she leaps upward
+// so it's framed higher + wider to hold the jump. (idle tuned by Jessica 2026-06-25.)
+const VIEWBOX = {
+  idle: '859 439 175 175',
+  thinking: '859 439 175 175',
+  celebrate: '799 200 320 320',
+};
+
 const GOLD_BORDER = '#e7d9a8';
 const RULE = '#ece9e0';
 const FRAME_BG = '#fafaf3';
@@ -83,11 +92,13 @@ export default function Ennie({
 
   const visual = animationData ? (
     <Lottie
+      key={state}
       lottieRef={lottieRef}
       animationData={animationData}
       loop={shouldLoop}
       autoplay
       onComplete={onComplete}
+      rendererSettings={{ viewBoxSize: VIEWBOX[state] || VIEWBOX.idle }}
       style={{ width: '100%', height: '100%' }}
       aria-hidden="true"
     />

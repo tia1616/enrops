@@ -295,18 +295,8 @@ export default function AdminOverview() {
           <TodayAgenda org={org} />
 
           <TermChecklist org={org} />
-
-          {/* Existing live cards — absorbed into wins / agenda / to-dos in later build steps. */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
-            {teaching && <TeachingScheduleCard teaching={teaching} orgSlug={org?.slug} />}
-            <ContractorPipelineCard pipeline={pipeline} error={pipelineErr} />
-            <Card title="Family Comms" body="Preview, schedule, and send campaigns." to="/admin/family-comms/marketing" cta="Open Family Comms" ready />
-            <Card title="Instructors" body="Your contractors. Send onboarding invites, upload prior background checks, view their schedules and statuses." to="/admin/instructors" cta="Open Instructors" ready />
-            <Card title="Schools & partners" body="Schools, districts, community orgs, and the contacts at each." to="/admin/schools?tab=partners" cta="Open Schools & partners" ready />
-            <Card title="Schedule" body="Assign instructors to camps and afterschool classes. Manage offers, archive past cycles." to="/admin/schedule" cta="Open Schedule" ready />
-            <Card title="Programs" body="Curricula, scheduled programs, locations." to="/admin/curricula" cta="Open Programs" ready />
-            <Card title="Settings" body="Org branding, sending domain, payout setup, members & roles." soon />
-          </div>
+          {/* Nav shortcuts removed — the side nav covers navigation. The pipeline /
+              teaching / open-hires data re-surfaces as heads-up cards in step 7. */}
         </>
       )}
     </div>
@@ -328,7 +318,7 @@ function EnnieHero({ greeting, displayName, dateLabel, view, onView, orgName, ce
       padding: "16px 20px", marginBottom: 24, display: "flex",
       alignItems: "center", gap: 16, flexWrap: "wrap",
     }}>
-      <Ennie state={ennieState} size={60} onComplete={() => setEnnieState("idle")} />
+      <Ennie state={ennieState} framed={false} size={104} onComplete={() => setEnnieState("idle")} />
       <div style={{ flex: 1, minWidth: 180 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>
           {greeting}{displayName ? `, ${displayName}` : ""}
@@ -538,19 +528,26 @@ const WIN_STYLE = {
   },
 };
 
+// Section label + card flourish both rotate so the strip feels alive, not canned.
+const WINS_LABELS = ["Reasons to celebrate", "Pat yourself on the back", "High-fives", "Worth a smile"];
+const PARTY = ["🎉", "🥳", "🎊", "🙌", "✨", "🌟", "🎈"];
+
 function WinsStrip({ wins }) {
+  const [label] = useState(() => WINS_LABELS[Math.floor(Math.random() * WINS_LABELS.length)]);
+  const [seed] = useState(() => Math.floor(Math.random() * PARTY.length));
   if (!Array.isArray(wins) || wins.length === 0) return null;
   return (
     <div style={{ marginBottom: 22 }}>
-      <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>wins</div>
+      <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>{label}</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
         {wins.slice(0, 3).map((w, idx) => {
           const cfg = WIN_STYLE[w.win_type];
           if (!cfg) return null;
           const { headline, detail } = cfg.build(w);
+          const emoji = PARTY[(seed + idx) % PARTY.length];
           return (
             <div key={idx} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 14 }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: cfg.accent, marginBottom: 8 }} />
+              <div style={{ fontSize: 22, lineHeight: 1, marginBottom: 6 }} aria-hidden="true">{emoji}</div>
               <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginBottom: 3 }}>{headline}</div>
               <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.4 }}>{detail}</div>
             </div>
