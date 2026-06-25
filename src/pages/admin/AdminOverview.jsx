@@ -295,6 +295,8 @@ export default function AdminOverview() {
           <TodayAgenda org={org} />
 
           <TermChecklist org={org} />
+
+          <TimeSavedPill org={org} />
           {/* Nav shortcuts removed — the side nav covers navigation. The pipeline /
               teaching / open-hires data re-surfaces as heads-up cards in step 7. */}
         </>
@@ -362,6 +364,38 @@ function WeekPlaceholder() {
       padding: 28, textAlign: "center", color: MUTED, fontSize: 14,
     }}>
       This week's calendar is coming in the next build step.
+    </div>
+  );
+}
+
+// Time-saved pill — Ennie's running tally of minutes saved by automations this
+// week (operator-surface standing rule). Hidden when there's nothing to show yet.
+function TimeSavedPill({ org }) {
+  const [mins, setMins] = useState(null);
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const { data, error } = await supabase
+        .from("automation_runs")
+        .select("time_saved_minutes")
+        .eq("organization_id", org.id)
+        .gte("fired_at", since);
+      if (cancelled) return;
+      if (error) { console.error("[admin/overview] time-saved load failed", error); setMins(0); return; }
+      setMins((data ?? []).reduce((s, r) => s + (r.time_saved_minutes || 0), 0));
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
+  if (!mins || mins <= 0) return null;
+  const rounded = Math.max(5, Math.round(mins / 5) * 5);
+  return (
+    <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${RULE}` }}>
+      <span style={{ fontSize: 12, color: OK_GREEN, background: `${OK_GREEN}14`, border: `1px solid ${OK_GREEN}40`, borderRadius: 8, padding: "4px 10px", display: "inline-block" }}>
+        Ennie saved you about {rounded} minutes this week
+      </span>
     </div>
   );
 }
@@ -467,7 +501,8 @@ function TermChecklist({ org }) {
         <span style={{ fontSize: 12, color: MUTED }}>{state.term.label}</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {state.items.map((it) => {
+        {/* Completed items sink to the bottom; otherwise keep the planned order. */}
+        {[...state.items].sort((a, b) => (a.done === b.done ? a.sort_order - b.sort_order : a.done ? 1 : -1)).map((it) => {
           const overdue = it.due && !it.done && it.due.toISOString().slice(0, 10) < today;
           return (
             <div key={it.id} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "11px 14px", display: "flex", gap: 12, alignItems: "flex-start" }}>
