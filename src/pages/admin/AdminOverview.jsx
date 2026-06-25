@@ -173,6 +173,7 @@ export default function AdminOverview() {
           const { data: sessions } = await supabase
             .from("camp_sessions")
             .select("id, current_enrollment")
+            .eq("status", "active") // mirror Schedule.jsx: cancelled camps aren't open hires
             .in("cycle_id", cycleIds);
           const sessIds = (sessions ?? []).map((s) => s.id);
           let camp = [];
