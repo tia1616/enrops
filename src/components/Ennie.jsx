@@ -38,9 +38,9 @@ const LOOPS = { idle: true, thinking: true, celebrate: false };
 const VIEWBOX = {
   idle: '859 439 175 175',
   thinking: '859 439 175 175',
-  // Celebrate rests at the same Y≈606 as idle, but she jumps up — so zoom out a bit
-  // (same X center as idle, raised top for headroom) so her head isn't clipped mid-leap.
-  celebrate: '839 385 215 215',
+  // Celebrate: she bounces both up and down past idle's frame, so it's enlarged to
+  // hold the whole bounce (top headroom for the jump, bottom room for the dip).
+  celebrate: '826 385 240 240',
 };
 
 const GOLD_BORDER = '#e7d9a8';
