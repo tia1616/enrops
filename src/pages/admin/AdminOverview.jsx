@@ -430,59 +430,59 @@ function WeekView({ org }) {
   );
 }
 
+function fmtDateRange(from, to) {
+  const f = new Date(`${from}T00:00:00`);
+  const t = new Date(`${to}T00:00:00`);
+  const mo = (d) => d.toLocaleDateString(undefined, { month: "short" });
+  if (from === to) return `${mo(f)} ${f.getDate()}`;
+  if (f.getMonth() === t.getMonth()) return `${mo(f)} ${f.getDate()}–${t.getDate()}`;
+  return `${mo(f)} ${f.getDate()} – ${mo(t)} ${t.getDate()}`;
+}
+
+// Month = a content-first agenda of the month's programs (a dot-grid wasted the
+// screen for sparse activity). Each camp shown once with its date range.
 function MonthView({ org }) {
-  const month = useMemo(() => {
+  const range = useMemo(() => {
     const t = new Date(); t.setHours(0, 0, 0, 0);
     const first = new Date(t.getFullYear(), t.getMonth(), 1);
-    const gridStart = new Date(first); gridStart.setDate(1 - ((first.getDay() + 6) % 7));
-    const days = Array.from({ length: 42 }, (_, i) => { const d = new Date(gridStart); d.setDate(gridStart.getDate() + i); return d; });
-    return { days, monthIdx: t.getMonth(), start: ymd(days[0]), end: ymd(days[41]), todayStr: ymd(t), label: t.toLocaleDateString(undefined, { month: "long", year: "numeric" }) };
+    const last = new Date(t.getFullYear(), t.getMonth() + 1, 0);
+    return { start: ymd(first), end: ymd(last), todayStr: ymd(t), label: t.toLocaleDateString(undefined, { month: "long", year: "numeric" }) };
   }, []);
   const [sessions, setSessions] = useState(null);
-  const [selected, setSelected] = useState(null);
   useEffect(() => {
     if (!org?.id) return;
     let cancelled = false;
-    (async () => { const s = await fetchCampsInRange(org.id, month.start, month.end); if (!cancelled) setSessions(s); })();
+    (async () => { const s = await fetchCampsInRange(org.id, range.start, range.end); if (!cancelled) setSessions(s); })();
     return () => { cancelled = true; };
-  }, [org?.id, month.start, month.end]);
+  }, [org?.id, range.start, range.end]);
 
-  const labels = ["M", "T", "W", "T", "F", "S", "S"];
-  const selDay = selected ? (sessions ? sessionsOnDay(sessions, selected) : []) : null;
+  const items = sessions
+    ? [...sessions].sort((a, b) => (a.starts_on === b.starts_on ? (a.start_time || "").localeCompare(b.start_time || "") : a.starts_on.localeCompare(b.starts_on)))
+    : null;
+
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 14 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: INK, marginBottom: 10 }}>{month.label}</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
-        {labels.map((l, i) => <div key={`l${i}`} style={{ textAlign: "center", fontSize: 10, color: MUTED }}>{l}</div>)}
-        {month.days.map((d, i) => {
-          const ds = ymd(d);
-          const inMonth = d.getMonth() === month.monthIdx;
-          const isToday = ds === month.todayStr;
-          const has = sessions ? sessionsOnDay(sessions, ds).length > 0 : false;
-          const isSel = ds === selected;
-          return (
-            <button key={i} onClick={() => setSelected(ds)} style={{
-              aspectRatio: "1 / 1", border: isSel ? `1.5px solid ${BRIGHT}` : "1px solid transparent", borderRadius: 8, cursor: "pointer",
-              background: isToday ? `${BRIGHT}14` : "transparent",
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
-              color: inMonth ? (isToday ? BRIGHT : INK) : "#c9c6bd", fontSize: 12, fontWeight: isToday ? 700 : 400,
-            }}>
-              {d.getDate()}
-              <span style={{ width: 5, height: 5, borderRadius: "50%", background: has ? OK_GREEN : "transparent" }} />
-            </button>
-          );
-        })}
-      </div>
-      {selected && (
-        <div style={{ marginTop: 12, borderTop: `1px solid ${RULE}`, paddingTop: 10 }}>
-          <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>
-            {new Date(`${selected}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
-          </div>
-          {selDay && selDay.length > 0 ? selDay.map((s) => (
-            <div key={s.id} style={{ fontSize: 13, color: INK, marginBottom: 3 }}>
-              <span style={{ color: MUTED, fontSize: 12 }}>{fmtTime(s.start_time)}</span> · {s.curriculum_name} <span style={{ color: MUTED }}>· {s.location_name}</span>
-            </div>
-          )) : <div style={{ fontSize: 13, color: MUTED }}>Nothing scheduled.</div>}
+      <div style={{ fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 }}>{range.label}</div>
+      {items === null ? (
+        <div style={{ fontSize: 13, color: MUTED, padding: "4px 0" }}>Loading…</div>
+      ) : items.length === 0 ? (
+        <div style={{ fontSize: 14, color: MUTED, padding: "6px 0" }}>Nothing scheduled this month — enjoy the breather.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {items.map((s) => {
+            const active = s.starts_on <= range.todayStr && s.ends_on >= range.todayStr;
+            return (
+              <div key={s.id} style={{ display: "flex", gap: 14, alignItems: "flex-start", padding: "10px 2px", borderTop: `1px solid ${RULE}` }}>
+                <div style={{ fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", color: active ? BRIGHT : MUTED, minWidth: 100, fontWeight: active ? 700 : 400, paddingTop: 1 }}>
+                  {fmtDateRange(s.starts_on, s.ends_on)}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, color: INK }}>{s.curriculum_name}</div>
+                  <div style={{ fontSize: 12, color: MUTED, marginTop: 1 }}>{fmtTime(s.start_time)}–{fmtTime(s.end_time)} · {s.location_name}</div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
