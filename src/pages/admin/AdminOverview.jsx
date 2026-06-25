@@ -1,7 +1,7 @@
 // src/pages/admin/AdminOverview.jsx
 // Default landing for /admin. Placeholder cards for the surfaces being built.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
@@ -285,7 +285,9 @@ export default function AdminOverview() {
       />
 
       {view === "week" ? (
-        <WeekPlaceholder />
+        <WeekView org={org} />
+      ) : view === "month" ? (
+        <MonthView org={org} />
       ) : (
         <>
           <WinsStrip wins={wins} />
@@ -351,19 +353,138 @@ function ViewToggle({ view, onView }) {
     <div style={{ display: "flex", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
       {tab("today", "Today")}
       {tab("week", "Week")}
+      {tab("month", "Month")}
     </div>
   );
 }
 
-// Week/Month calendar grids land in a later build step; placeholder keeps the
-// toggle honest until then.
-function WeekPlaceholder() {
+// ---- Week / Month calendar views (camps populate the days; afterschool = fast-follow) ----
+function ymd(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+async function fetchCampsInRange(orgId, from, to) {
+  const { data } = await supabase
+    .from("camp_sessions")
+    .select("id, location_name, curriculum_name, start_time, end_time, starts_on, ends_on")
+    .eq("organization_id", orgId)
+    .lte("starts_on", to)
+    .gte("ends_on", from)
+    .order("start_time", { ascending: true });
+  return data ?? [];
+}
+function sessionsOnDay(sessions, dayStr) {
+  return sessions.filter((s) => s.starts_on <= dayStr && s.ends_on >= dayStr);
+}
+
+function WeekView({ org }) {
+  const week = useMemo(() => {
+    const t = new Date(); t.setHours(0, 0, 0, 0);
+    const monday = new Date(t); monday.setDate(t.getDate() - ((t.getDay() + 6) % 7));
+    const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(monday); d.setDate(monday.getDate() + i); return d; });
+    return { days, start: ymd(days[0]), end: ymd(days[6]), todayStr: ymd(t) };
+  }, []);
+  const [sessions, setSessions] = useState(null);
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => { const s = await fetchCampsInRange(org.id, week.start, week.end); if (!cancelled) setSessions(s); })();
+    return () => { cancelled = true; };
+  }, [org?.id, week.start, week.end]);
+
+  const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   return (
-    <div style={{
-      background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12,
-      padding: 28, textAlign: "center", color: MUTED, fontSize: 14,
-    }}>
-      This week's calendar is coming in the next build step.
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 6 }}>
+        {week.days.map((d, i) => {
+          const isToday = ymd(d) === week.todayStr;
+          return (
+            <div key={i} style={{ textAlign: "center", padding: "4px 0", borderRadius: 8, background: isToday ? `${BRIGHT}14` : "transparent" }}>
+              <div style={{ fontSize: 11, color: isToday ? BRIGHT : MUTED }}>{labels[i]}</div>
+              <div style={{ fontSize: 13, fontWeight: isToday ? 700 : 400, color: isToday ? BRIGHT : INK }}>{d.getDate()}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 6, marginTop: 6, minHeight: 80 }}>
+        {week.days.map((d, i) => {
+          const day = sessions ? sessionsOnDay(sessions, ymd(d)) : [];
+          return (
+            <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {day.map((s) => (
+                <div key={s.id} style={{ background: "#fafaf3", border: `1px solid ${RULE}`, borderRadius: 6, padding: "4px 5px" }}>
+                  <div style={{ fontSize: 10, color: MUTED }}>{fmtTime(s.start_time)}</div>
+                  <div style={{ fontSize: 11, fontWeight: 500, lineHeight: 1.2, color: INK }}>{s.curriculum_name}</div>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+      {sessions !== null && sessions.length === 0 && (
+        <div style={{ fontSize: 13, color: MUTED, textAlign: "center", marginTop: 10 }}>Nothing scheduled this week — enjoy the breather.</div>
+      )}
+    </div>
+  );
+}
+
+function MonthView({ org }) {
+  const month = useMemo(() => {
+    const t = new Date(); t.setHours(0, 0, 0, 0);
+    const first = new Date(t.getFullYear(), t.getMonth(), 1);
+    const gridStart = new Date(first); gridStart.setDate(1 - ((first.getDay() + 6) % 7));
+    const days = Array.from({ length: 42 }, (_, i) => { const d = new Date(gridStart); d.setDate(gridStart.getDate() + i); return d; });
+    return { days, monthIdx: t.getMonth(), start: ymd(days[0]), end: ymd(days[41]), todayStr: ymd(t), label: t.toLocaleDateString(undefined, { month: "long", year: "numeric" }) };
+  }, []);
+  const [sessions, setSessions] = useState(null);
+  const [selected, setSelected] = useState(null);
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => { const s = await fetchCampsInRange(org.id, month.start, month.end); if (!cancelled) setSessions(s); })();
+    return () => { cancelled = true; };
+  }, [org?.id, month.start, month.end]);
+
+  const labels = ["M", "T", "W", "T", "F", "S", "S"];
+  const selDay = selected ? (sessions ? sessionsOnDay(sessions, selected) : []) : null;
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: INK, marginBottom: 10 }}>{month.label}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+        {labels.map((l, i) => <div key={`l${i}`} style={{ textAlign: "center", fontSize: 10, color: MUTED }}>{l}</div>)}
+        {month.days.map((d, i) => {
+          const ds = ymd(d);
+          const inMonth = d.getMonth() === month.monthIdx;
+          const isToday = ds === month.todayStr;
+          const has = sessions ? sessionsOnDay(sessions, ds).length > 0 : false;
+          const isSel = ds === selected;
+          return (
+            <button key={i} onClick={() => setSelected(ds)} style={{
+              aspectRatio: "1 / 1", border: isSel ? `1.5px solid ${BRIGHT}` : "1px solid transparent", borderRadius: 8, cursor: "pointer",
+              background: isToday ? `${BRIGHT}14` : "transparent",
+              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
+              color: inMonth ? (isToday ? BRIGHT : INK) : "#c9c6bd", fontSize: 12, fontWeight: isToday ? 700 : 400,
+            }}>
+              {d.getDate()}
+              <span style={{ width: 5, height: 5, borderRadius: "50%", background: has ? OK_GREEN : "transparent" }} />
+            </button>
+          );
+        })}
+      </div>
+      {selected && (
+        <div style={{ marginTop: 12, borderTop: `1px solid ${RULE}`, paddingTop: 10 }}>
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>
+            {new Date(`${selected}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
+          </div>
+          {selDay && selDay.length > 0 ? selDay.map((s) => (
+            <div key={s.id} style={{ fontSize: 13, color: INK, marginBottom: 3 }}>
+              <span style={{ color: MUTED, fontSize: 12 }}>{fmtTime(s.start_time)}</span> · {s.curriculum_name} <span style={{ color: MUTED }}>· {s.location_name}</span>
+            </div>
+          )) : <div style={{ fontSize: 13, color: MUTED }}>Nothing scheduled.</div>}
+        </div>
+      )}
     </div>
   );
 }
