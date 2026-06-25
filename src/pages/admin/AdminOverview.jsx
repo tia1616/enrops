@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
+import Ennie from "../../components/Ennie";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -14,6 +15,9 @@ const RULE = "#e2dfd5";
 const OK_GREEN = "#3a7c3a";
 const AMBER = "#b67e00";
 const CORAL = "#D9694F"; // matches the "Needs hire" badge on the schedule board
+
+// Greeting rotates once per session (Spec_01 HomeScreen). Ennie's casual voice.
+const GREETINGS = ["On deck", "Morning", "Let's go", "You've got this", "Showtime"];
 
 // Bucketed view of contractor_onboarding_status used by the pipeline card.
 // Order matters: rendered top-to-bottom in the card.
@@ -249,66 +253,98 @@ export default function AdminOverview() {
       .join(" ");
   })();
 
+  // Greeting + view state. Greeting picked once per session; Today is default.
+  const [greeting] = useState(() => GREETINGS[Math.floor(Math.random() * GREETINGS.length)]);
+  const [view, setView] = useState("today"); // "today" | "week"
+  const dateLabel = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+
   return (
     <div>
-      <header style={{ marginBottom: 28 }}>
-        <h1 style={{ fontSize: 30, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.5 }}>
-          Welcome back{displayName ? `, ${displayName}` : ""}.
+      <EnnieHero
+        greeting={greeting}
+        displayName={displayName}
+        dateLabel={dateLabel}
+        view={view}
+        onView={setView}
+        orgName={org?.name}
+      />
+
+      {view === "week" ? (
+        <WeekPlaceholder />
+      ) : (
+        <>
+          {openHires?.total > 0 && <OpenHiresBanner openHires={openHires} />}
+
+          {/* Existing live cards — absorbed into wins / agenda / to-dos in later build steps. */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+            {teaching && <TeachingScheduleCard teaching={teaching} />}
+            <ContractorPipelineCard pipeline={pipeline} error={pipelineErr} />
+            <Card title="Family Comms" body="Preview, schedule, and send campaigns." to="/admin/family-comms/marketing" cta="Open Family Comms" ready />
+            <Card title="Instructors" body="Your contractors. Send onboarding invites, upload prior background checks, view their schedules and statuses." to="/admin/instructors" cta="Open Instructors" ready />
+            <Card title="Schools & partners" body="Schools, districts, community orgs, and the contacts at each." to="/admin/schools?tab=partners" cta="Open Schools & partners" ready />
+            <Card title="Schedule" body="Assign instructors to camps and afterschool classes. Manage offers, archive past cycles." to="/admin/schedule" cta="Open Schedule" ready />
+            <Card title="Programs" body="Curricula, scheduled programs, locations." to="/admin/curricula" cta="Open Programs" ready />
+            <Card title="Settings" body="Org branding, sending domain, payout setup, members & roles." soon />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Ennie greeting hero — the ONE place the character lives (idle here; thinks while
+// the home loads; celebrates a joy-worthy win). Enrops-branded shell, not tenant.
+function EnnieHero({ greeting, displayName, dateLabel, view, onView, orgName }) {
+  return (
+    <div style={{
+      background: "#fff", border: `1px solid ${RULE}`, borderRadius: 14,
+      padding: "16px 20px", marginBottom: 24, display: "flex",
+      alignItems: "center", gap: 16, flexWrap: "wrap",
+    }}>
+      <Ennie state="idle" size={60} />
+      <div style={{ flex: 1, minWidth: 180 }}>
+        <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>
+          {greeting}{displayName ? `, ${displayName}` : ""}
         </h1>
-        <p style={{ color: MUTED, marginTop: 6, fontSize: 15 }}>
-          {org?.name ? `Operating as ${org.name}.` : "Admin overview."}
+        <p style={{ color: MUTED, marginTop: 4, fontSize: 14 }}>
+          {dateLabel}{orgName ? ` · ${orgName}` : ""}
         </p>
-      </header>
-
-      {openHires?.total > 0 && <OpenHiresBanner openHires={openHires} />}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
-        {/* Renders only when this admin is also in the instructors table.
-            Many enrichment operators teach classes themselves — they need
-            their own teaching schedule visible from the admin home. */}
-        {teaching && <TeachingScheduleCard teaching={teaching} />}
-        <ContractorPipelineCard pipeline={pipeline} error={pipelineErr} />
-        <Card
-          title="Family Comms"
-          body="Preview, schedule, and send campaigns."
-          to="/admin/family-comms/marketing"
-          cta="Open Family Comms"
-          ready
-        />
-        <Card
-          title="Instructors"
-          body="Your contractors. Send onboarding invites, upload prior background checks, view their schedules and statuses."
-          to="/admin/instructors"
-          cta="Open Instructors"
-          ready
-        />
-        <Card
-          title="Schools & partners"
-          body="Schools, districts, community orgs, and the contacts at each."
-          to="/admin/schools?tab=partners"
-          cta="Open Schools & partners"
-          ready
-        />
-        <Card
-          title="Schedule"
-          body="Assign instructors to camps and afterschool classes. Manage offers, archive past cycles."
-          to="/admin/schedule"
-          cta="Open Schedule"
-          ready
-        />
-        <Card
-          title="Programs"
-          body="Curricula, scheduled programs, locations."
-          to="/admin/curricula"
-          cta="Open Programs"
-          ready
-        />
-        <Card
-          title="Settings"
-          body="Org branding, sending domain, payout setup, members & roles."
-          soon
-        />
       </div>
+      <ViewToggle view={view} onView={onView} />
+    </div>
+  );
+}
+
+function ViewToggle({ view, onView }) {
+  const tab = (key, label) => (
+    <button
+      onClick={() => onView(key)}
+      style={{
+        fontSize: 13, fontWeight: 600, padding: "6px 14px", border: "none",
+        cursor: "pointer", background: view === key ? BRIGHT : "transparent",
+        color: view === key ? "#fff" : MUTED,
+      }}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div style={{ display: "flex", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
+      {tab("today", "Today")}
+      {tab("week", "Week")}
+    </div>
+  );
+}
+
+// Week/Month calendar grids land in a later build step; placeholder keeps the
+// toggle honest until then.
+function WeekPlaceholder() {
+  return (
+    <div style={{
+      background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12,
+      padding: 28, textAlign: "center", color: MUTED, fontSize: 14,
+    }}>
+      This week's calendar is coming in the next build step.
     </div>
   );
 }
