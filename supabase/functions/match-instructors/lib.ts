@@ -334,7 +334,7 @@ export interface SoftScoreContext {
 
 export interface ScoreResult {
   score: number;
-  flags: string[];
+  flags: OutputFlag[];
 }
 
 const LOC_SCORE: Record<PreferenceLevel, number> = {
@@ -362,7 +362,7 @@ export function scoreCamp(
 ): ScoreResult {
   const locPref = ctx.locPrefByKey.get(`${instructorId}:${regionFor(camp.location_name)}`) ?? 'preferred';
   let score = LOC_SCORE[locPref];
-  const flags: string[] = [];
+  const flags: OutputFlag[] = [];
   if (locPref === 'unavailable') flags.push('location_override');
   else if (locPref === 'not_preferred') flags.push('location_low_pref');
   if (!opts.skipCurriculum) {
@@ -409,7 +409,7 @@ export function scoreComboLocation(
 export interface ScoredCandidate {
   instructor: MatchInstructor;
   score: number;
-  flags: string[];
+  flags: OutputFlag[];
   assignmentCount: number;
 }
 
