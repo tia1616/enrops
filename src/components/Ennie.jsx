@@ -104,20 +104,7 @@ export default function Ennie({
       style={{ width: '100%', height: '100%' }}
       aria-hidden="true"
     />
-  ) : (
-    // Fallback while loading or on failure — the existing static portrait.
-    <img
-      src="/ennie-full.jpg"
-      alt="Ennie"
-      style={{
-        width: '100%',
-        height: '100%',
-        objectFit: 'cover',
-        objectPosition: 'center 18%',
-        display: 'block',
-      }}
-    />
-  );
+  ) : null; // nothing while the (fast, same-origin) Lottie loads — avoids a flash of the old static portrait
 
   if (!framed) {
     return (
