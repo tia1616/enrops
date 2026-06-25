@@ -2368,7 +2368,7 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
               }}
               title="Switch to another scheduling cycle or after-school term"
               style={{
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: 700,
                 color: INK,
                 letterSpacing: -0.2,
@@ -2400,7 +2400,7 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
               )}
             </select>
           ) : (
-            <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>{cycleDisplayName(cycle.name)}</h1>
+            <h1 style={{ fontSize: 14, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.2 }}>{cycleDisplayName(cycle.name)}</h1>
           )}
           <span style={{
             fontSize: 11,
