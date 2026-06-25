@@ -239,6 +239,20 @@ export default function AdminOverview() {
     return () => { cancelled = true; };
   }, [org?.id]);
 
+  // Homescreen wins (joy-worthy only). One RLS-respecting RPC; celebrate fires on Ennie.
+  const [wins, setWins] = useState(null);
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.rpc("get_home_wins", { p_org: org.id });
+      if (cancelled) return;
+      if (error) { console.error("[admin/overview] wins load failed", error); setWins([]); return; }
+      setWins(data ?? []);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
   // Display name: take the bit before the @ in the email and Title-Case it.
   // Splits on dots/underscores too so "jessica.vorster" -> "Jessica Vorster".
   // No DB lookup needed for v1; we can move to a stored display_name later if
@@ -267,12 +281,15 @@ export default function AdminOverview() {
         view={view}
         onView={setView}
         orgName={org?.name}
+        celebrate={Array.isArray(wins) && wins.length > 0}
       />
 
       {view === "week" ? (
         <WeekPlaceholder />
       ) : (
         <>
+          <WinsStrip wins={wins} />
+
           {openHires?.total > 0 && <OpenHiresBanner openHires={openHires} />}
 
           <TodayAgenda org={org} />
@@ -296,14 +313,20 @@ export default function AdminOverview() {
 
 // Ennie greeting hero — the ONE place the character lives (idle here; thinks while
 // the home loads; celebrates a joy-worthy win). Enrops-branded shell, not tenant.
-function EnnieHero({ greeting, displayName, dateLabel, view, onView, orgName }) {
+function EnnieHero({ greeting, displayName, dateLabel, view, onView, orgName, celebrate }) {
+  // Ennie idles by default; when a joy-worthy win lands she plays celebrate once,
+  // then settles back to idle.
+  const [ennieState, setEnnieState] = useState("idle");
+  useEffect(() => {
+    if (celebrate) setEnnieState("celebrate");
+  }, [celebrate]);
   return (
     <div style={{
       background: "#fff", border: `1px solid ${RULE}`, borderRadius: 14,
       padding: "16px 20px", marginBottom: 24, display: "flex",
       alignItems: "center", gap: 16, flexWrap: "wrap",
     }}>
-      <Ennie state="idle" size={60} />
+      <Ennie state={ennieState} size={60} onComplete={() => setEnnieState("idle")} />
       <div style={{ flex: 1, minWidth: 180 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>
           {greeting}{displayName ? `, ${displayName}` : ""}
@@ -347,6 +370,55 @@ function WeekPlaceholder() {
       padding: 28, textAlign: "center", color: MUTED, fontSize: 14,
     }}>
       This week's calendar is coming in the next build step.
+    </div>
+  );
+}
+
+// Wins strip — joy-worthy only (Jessica's locked list). Ennie's celebrate plays
+// up top; these cards carry the words. Clean, capped at 3.
+const WIN_STYLE = {
+  returning_family: {
+    accent: "#7c3aed",
+    build: (w) => ({
+      headline: `The ${w.label} family is back!`,
+      detail: "Re-enrolled for another term — the lifetime value (LTV) you're building.",
+    }),
+  },
+  hire_cleared: {
+    accent: OK_GREEN,
+    build: (w) => ({
+      headline: `${w.label} is cleared and ready!`,
+      detail: "Background check and pay setup are done — ready to assign.",
+    }),
+  },
+  full_class: {
+    accent: CORAL,
+    build: (w) => ({
+      headline: `${w.label} is full!`,
+      detail: `${w.detail || "Maxed out"} — full class.`,
+    }),
+  },
+};
+
+function WinsStrip({ wins }) {
+  if (!Array.isArray(wins) || wins.length === 0) return null;
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>wins</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+        {wins.slice(0, 3).map((w, idx) => {
+          const cfg = WIN_STYLE[w.win_type];
+          if (!cfg) return null;
+          const { headline, detail } = cfg.build(w);
+          return (
+            <div key={idx} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 14 }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: cfg.accent, marginBottom: 8 }} />
+              <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginBottom: 3 }}>{headline}</div>
+              <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.4 }}>{detail}</div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
