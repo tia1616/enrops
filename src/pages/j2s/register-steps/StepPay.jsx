@@ -89,6 +89,13 @@ export default function StepPay({
           <span className="text-j2s-purple">🔒</span>
           Payment processed securely by Stripe. We never see your card details.
         </p>
+        {!useInstallments && (
+          <p className="flex items-start gap-2 text-sm text-j2s-ink/80">
+            <span className="text-j2s-purple">🏦</span>
+            Pay by card or bank transfer. Bank transfers take 1–3 business days to
+            clear — your spot is held the whole time.
+          </p>
+        )}
         <p className="flex items-start gap-2 text-sm text-j2s-ink/80">
           <span className="text-j2s-purple">📧</span>
           Confirmation and receipt will arrive by email within a few minutes.
