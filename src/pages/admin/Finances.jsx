@@ -494,7 +494,7 @@ export default function Finances() {
       {isActive && (
         <>
           <TabsNav tab={tab} onTab={setTab} />
-          {tab === "activity" && <ActivityTab />}
+          {tab === "activity" && <ActivityTab org={org} />}
           {tab === "invoices" && <InvoicesTab />}
           {tab === "refunds" && <RefundsTab />}
         </>
@@ -742,16 +742,272 @@ function TabsNav({ tab, onTab }) {
   );
 }
 
-function ActivityTab() {
+// Revenue / Activity — money collected through Enrops, from our own DB (not the
+// Stripe API). Reads two money-gated RPCs (owner/admin only): get_revenue_summary
+// + get_revenue_activity. NET-to-bank is intentionally NOT shown (Stripe's
+// processing fee isn't stored) — we link to Stripe for the real deposit figure.
+const RA_PAGE = 25;
+
+function ActivityTab({ org }) {
+  const [terms, setTerms] = useState([]);            // [{ term, anchor }]
+  const [period, setPeriod] = useState(null);        // { kind:'term'|'30d'|'year'|'all', term?, label }
+  const [summary, setSummary] = useState(null);      // null=loading, undefined=error
+  const [sumErr, setSumErr] = useState("");
+  const [rows, setRows] = useState(null);            // null=loading
+  const [actErr, setActErr] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [stripeBusy, setStripeBusy] = useState(false);
+  const [stripeErr, setStripeErr] = useState("");
+
+  // Term list + sensible default (nearest upcoming/current term, else latest).
+  useEffect(() => {
+    if (!org?.id) return;
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("programs")
+        .select("term, first_session_date")
+        .eq("organization_id", org.id)
+        .not("term", "is", null);
+      if (!alive) return;
+      const byTerm = new Map();
+      for (const p of data ?? []) {
+        const ex = byTerm.get(p.term);
+        if (!byTerm.has(p.term)) byTerm.set(p.term, p.first_session_date ?? null);
+        else if (p.first_session_date && (ex == null || p.first_session_date < ex)) byTerm.set(p.term, p.first_session_date);
+      }
+      const list = [...byTerm.entries()].map(([term, anchor]) => ({ term, anchor }));
+      setTerms(list);
+      const today = new Date().toISOString().slice(0, 10);
+      const dated = list.filter((t) => t.anchor).sort((a, b) => (a.anchor < b.anchor ? -1 : 1));
+      const def = dated.find((t) => t.anchor >= today) || dated[dated.length - 1] || list[0];
+      setPeriod(def ? { kind: "term", term: def.term, label: def.term } : { kind: "all", label: "All time" });
+    })();
+    return () => { alive = false; };
+  }, [org?.id]);
+
+  function bounds(p) {
+    if (!p || p.kind === "all") return { from: null, to: null, term: null };
+    if (p.kind === "term") return { from: null, to: null, term: p.term };
+    const now = new Date();
+    if (p.kind === "30d") { const f = new Date(now); f.setDate(f.getDate() - 30); return { from: f.toISOString(), to: null, term: null }; }
+    if (p.kind === "year") { const f = new Date(now.getFullYear(), 0, 1); return { from: f.toISOString(), to: null, term: null }; }
+    return { from: null, to: null, term: null };
+  }
+
+  // Load summary + first page whenever the period changes.
+  useEffect(() => {
+    if (!org?.id || !period) return;
+    let alive = true;
+    setSummary(null); setSumErr(""); setRows(null); setActErr(""); setOffset(0); setHasMore(false);
+    const { from, to, term } = bounds(period);
+    (async () => {
+      const [sRes, aRes] = await Promise.all([
+        supabase.rpc("get_revenue_summary", { p_org: org.id, p_from: from, p_to: to, p_term: term }),
+        supabase.rpc("get_revenue_activity", { p_org: org.id, p_from: from, p_to: to, p_term: term, p_limit: RA_PAGE, p_offset: 0 }),
+      ]);
+      if (!alive) return;
+      if (sRes.error) { console.error("[Activity] summary", sRes.error); setSumErr("Couldn't load revenue. Refresh."); setSummary(undefined); }
+      else setSummary(sRes.data?.[0] ?? null);
+      if (aRes.error) { console.error("[Activity] feed", aRes.error); setActErr("Couldn't load the activity feed. Refresh."); setRows([]); }
+      else { const r = aRes.data ?? []; setRows(r); setHasMore(r.length === RA_PAGE); setOffset(r.length); }
+    })();
+    return () => { alive = false; };
+  }, [org?.id, period]);
+
+  async function loadMore() {
+    if (loadingMore || !org?.id || !period) return;
+    setLoadingMore(true);
+    const { from, to, term } = bounds(period);
+    const { data, error } = await supabase.rpc("get_revenue_activity",
+      { p_org: org.id, p_from: from, p_to: to, p_term: term, p_limit: RA_PAGE, p_offset: offset });
+    setLoadingMore(false);
+    if (error) { setActErr("Couldn't load more. Refresh."); return; }
+    const more = data ?? [];
+    setRows((prev) => [...(prev ?? []), ...more]);
+    setHasMore(more.length === RA_PAGE);
+    setOffset((o) => o + more.length);
+  }
+
+  async function openStripe() {
+    setStripeBusy(true); setStripeErr("");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error("Not signed in.");
+      const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-stripe-operator-login-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
+        body: JSON.stringify({ org_id: org.id }),
+      });
+      const json = await resp.json();
+      if (!resp.ok || !json.url) throw new Error(json?.stripe_message || json?.error || "Couldn't open Stripe.");
+      window.open(json.url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setStripeErr(err.message || "Couldn't open your Stripe dashboard.");
+    } finally {
+      setStripeBusy(false);
+    }
+  }
+
+  const periodOptions = [
+    ...terms.map((t) => ({ kind: "term", term: t.term, label: t.term })),
+    { kind: "30d", label: "Last 30 days" },
+    { kind: "year", label: "This year" },
+    { kind: "all", label: "All time" },
+  ];
+
+  const header = (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+      <div>
+        <h2 style={{ margin: "0 0 2px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Money in</h2>
+        <div style={{ fontSize: 12, color: OK, fontWeight: 600 }}>Always up to date — no spreadsheet reconciliation.</div>
+      </div>
+      {period && (
+        <select
+          value={period.kind === "term" ? `term:${period.term}` : period.kind}
+          onChange={(e) => {
+            const v = e.target.value;
+            const opt = v.startsWith("term:")
+              ? { kind: "term", term: v.slice(5), label: v.slice(5) }
+              : periodOptions.find((o) => o.kind === v);
+            if (opt) setPeriod(opt);
+          }}
+          style={{ padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, color: INK, background: "#fff", fontFamily: "inherit" }}
+        >
+          {periodOptions.map((o) => (
+            <option key={o.kind === "term" ? `term:${o.term}` : o.kind} value={o.kind === "term" ? `term:${o.term}` : o.kind}>
+              {o.kind === "term" ? `Term: ${o.label}` : o.label}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+
+  // ---- loading / error ----
+  if (summary === null) {
+    return <Card>{header}<div style={{ color: MUTED, fontSize: 13, padding: "24px 0" }}>Loading…</div></Card>;
+  }
+  if (summary === undefined) {
+    return <Card>{header}<div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5 }}>{sumErr}</div></Card>;
+  }
+
+  // ---- empty states ----
+  if (!summary.has_enrops_payments) {
+    const ext = Number(summary.external_count || 0);
+    return (
+      <Card>
+        {header}
+        <div style={{ textAlign: "center", padding: "28px 16px", color: MUTED, fontSize: 14, lineHeight: 1.6 }}>
+          {ext > 0 ? (
+            <>
+              <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>You collect payments outside Enrops</div>
+              Payment totals live in your own system. We track <strong>{ext}</strong> {ext === 1 ? "registration" : "registrations"} for you here — once families pay <em>through</em> Enrops, the money shows up on this screen.
+            </>
+          ) : (
+            <>
+              <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>No payments yet</div>
+              Once families pay through Enrops, every payment and refund will show up here automatically.
+            </>
+          )}
+        </div>
+      </Card>
+    );
+  }
+
+  // ---- full summary + feed ----
+  const collected = Number(summary.collected_cents || 0);
+  const refunded = Number(summary.refunded_cents || 0);
+  const expected = Number(summary.expected_soon_cents || 0);
+  const paidFam = Number(summary.paid_count || 0);
+  const external = Number(summary.external_count || 0);
+
   return (
     <Card>
-      <div style={{ color: MUTED, fontSize: 14, textAlign: "center", padding: "32px 16px" }}>
-        Recent parent payments and refunds will show here.
-        <div style={{ fontSize: 12, marginTop: 8 }}>
-          Coming next — pulls from Stripe Connect activity.
-        </div>
+      {header}
+
+      {/* Summary band */}
+      <div style={{ marginBottom: 6 }}>
+        <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>Collected through Enrops</div>
+        <div style={{ fontSize: 34, fontWeight: 800, color: PURPLE, lineHeight: 1.1, marginTop: 2 }}>{fmtCents(collected)}</div>
       </div>
+      <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "12px 0 16px" }}>
+        <RAStat label="Refunded" value={fmtCents(refunded)} />
+        {expected > 0 && <RAStat label="Expected soon" value={fmtCents(expected)} note="installments due" />}
+        <RAStat label="Paid families" value={String(paidFam)} />
+      </div>
+
+      {external > 0 && (
+        <div style={{ fontSize: 12, color: MUTED, marginBottom: 14 }}>
+          {external} {external === 1 ? "registration was" : "registrations were"} paid outside Enrops (imported) and aren&rsquo;t counted above.
+        </div>
+      )}
+
+      <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 18 }}>
+        Your actual bank deposits (after Stripe&rsquo;s processing fee) live in your Stripe dashboard.{" "}
+        <button type="button" onClick={openStripe} disabled={stripeBusy}
+          style={{ background: "none", border: "none", color: BRIGHT, fontWeight: 600, cursor: "pointer", padding: 0, fontFamily: "inherit", fontSize: 12.5 }}>
+          {stripeBusy ? "Opening…" : "Open Stripe →"}
+        </button>
+        {stripeErr && <span style={{ color: RED, marginLeft: 8 }}>{stripeErr}</span>}
+      </div>
+
+      {/* Activity feed */}
+      <h3 style={{ margin: "0 0 8px", fontSize: 14, color: INK, fontWeight: 700 }}>Activity</h3>
+      {actErr && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>{actErr}</div>}
+      {rows === null && <div style={{ color: MUTED, fontSize: 13, padding: "12px 0" }}>Loading…</div>}
+      {rows !== null && rows.length === 0 && !actErr && (
+        <div style={{ color: MUTED, fontSize: 13, padding: "16px 0" }}>No payments in this period.</div>
+      )}
+      {rows !== null && rows.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {rows.map((r, i) => <RAFeedRow key={`${r.registration_id}-${r.kind}-${i}`} r={r} />)}
+        </div>
+      )}
+      {hasMore && (
+        <div style={{ marginTop: 12, textAlign: "center" }}>
+          <button type="button" onClick={loadMore} disabled={loadingMore}
+            style={{ padding: "7px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
+        </div>
+      )}
     </Card>
+  );
+}
+
+function RAStat({ label, value, note }) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 700 }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: INK, marginTop: 1 }}>{value}</div>
+      {note && <div style={{ fontSize: 10.5, color: MUTED }}>{note}</div>}
+    </div>
+  );
+}
+
+function RAFeedRow({ r }) {
+  const isRefund = r.kind === "refund";
+  const cents = Number(r.amount_cents || 0);
+  const when = r.occurred_at
+    ? new Date(r.occurred_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+    : "";
+  const kindLabel = isRefund ? "Refund" : r.kind === "installment" ? "Installment" : "Payment";
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 12, alignItems: "baseline", border: `1px solid ${RULE}`, borderRadius: 6, padding: "8px 10px", fontSize: 13 }}>
+      <span style={{ minWidth: 0 }}>
+        <span style={{ fontWeight: 600, color: INK }}>{r.family_name || "—"}</span>
+        <span style={{ marginLeft: 8, fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${RULE}`, borderRadius: 4, padding: "1px 5px" }}>{kindLabel}</span>
+        {r.label && <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>{r.label}</span>}
+      </span>
+      <span style={{ fontWeight: 600, whiteSpace: "nowrap", color: isRefund ? RED : OK }}>
+        {isRefund ? `−${fmtCents(Math.abs(cents))}` : fmtCents(cents)}
+      </span>
+      <span style={{ color: MUTED, whiteSpace: "nowrap" }}>{when}</span>
+    </div>
   );
 }
 
