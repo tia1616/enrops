@@ -3,14 +3,10 @@
 -- Safety: default flips to FALSE so operators ABSORB the fee unless they
 -- deliberately opt in via the Finances toggle. (Previously defaulted true,
 -- which would have charged every new operator's families a fee by default.)
+--
+-- No snapshot column: checkout AND process-installments read live org config
+-- for the fee (matching how platform_fee_*_pct already work — see
+-- computePlatformFee.ts), so pass-through mode is read live too. Toggling
+-- mid-installment-plan affects in-flight installments 2/3, same as a rate
+-- change would; operators are told not to toggle mid-term.
 ALTER TABLE organizations ALTER COLUMN fee_pass_through SET DEFAULT false;
-
--- Snapshot the pass-through mode at first charge, alongside the rate/cap
--- snapshot. Installments 2 & 3 read this so the whole plan stays on the mode
--- in effect when the family first paid, even if the operator toggles later.
--- Nullable: legacy registrations have no snapshot and fall back to absorb.
-ALTER TABLE registrations
-  ADD COLUMN IF NOT EXISTS platform_fee_pass_through_at_charge boolean;
-
-COMMENT ON COLUMN registrations.platform_fee_pass_through_at_charge IS
-  'Whether the platform fee was passed through to the family at first charge. Snapshotted with platform_fee_rate_at_charge / _cap_cents_at_charge. NULL = legacy/absorb.';

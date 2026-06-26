@@ -53,6 +53,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildConnectChargeParams, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
+import { passThroughFeeCents } from '../_shared/passThroughFee.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -182,7 +183,8 @@ serve(async (req) => {
         id, alert_email, name,
         stripe_account_id, stripe_charges_enabled,
         statement_descriptor_suffix,
-        platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents
+        platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents,
+        fee_pass_through
       `)
       .in('id', orgIds);
 
@@ -198,6 +200,7 @@ serve(async (req) => {
         platform_fee_card_pct: org.platform_fee_card_pct,
         platform_fee_ach_pct: org.platform_fee_ach_pct,
         platform_fee_cap_cents: org.platform_fee_cap_cents,
+        fee_pass_through: org.fee_pass_through,
       });
     }
 
@@ -375,11 +378,16 @@ async function processGroup(
     activeRows[0].organization_id,
   );
 
+  // Pass-through: if the operator passes the fee to families, this installment
+  // charges its base amount PLUS the proportional 1% (application_fee above is
+  // unchanged at 1% of base, so the operator nets the full installment).
+  const passFee = orgConfig ? passThroughFeeCents(totalAmount, 'card', orgConfig) : 0;
+
   let paymentIntent: Stripe.PaymentIntent;
   try {
     paymentIntent = await stripe.paymentIntents.create(
       {
-        amount: totalAmount,
+        amount: totalAmount + passFee,
         currency: 'usd',
         customer: customerId,
         payment_method: paymentMethodId,

@@ -19,6 +19,7 @@ export interface ConnectOrgConfig extends PlatformFeeConfig {
   stripe_charges_enabled: boolean | null;
   statement_descriptor_suffix: string | null;
   name: string | null;
+  fee_pass_through?: boolean | null;
 }
 
 export interface ConnectChargeParams {

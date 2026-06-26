@@ -27,6 +27,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildConnectChargeParams, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
+import { passThroughLineItem } from '../_shared/passThroughFee.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -212,7 +213,8 @@ serve(async (req) => {
             name,
             platform_fee_card_pct,
             platform_fee_ach_pct,
-            platform_fee_cap_cents
+            platform_fee_cap_cents,
+            fee_pass_through
           )
         `)
         .eq('id', registration_ids[0])
@@ -221,10 +223,17 @@ serve(async (req) => {
       const orgConfig = (regForOrg?.organizations ?? null) as ConnectOrgConfig | null;
       const connectParams = buildConnectChargeParams(firstAmount, 'card', orgConfig, orgId);
 
+      // Pass-through: add the 1% on installment 1's amount as a visible line.
+      // Installments 2 & 3 add their own proportional fee in process-installments.
+      const feeLineInst = orgConfig ? passThroughLineItem(firstAmount, 'card', orgConfig) : null;
+      const installmentLineItems = feeLineInst
+        ? [installmentLineItem, feeLineInst]
+        : [installmentLineItem];
+
       // Create the Stripe Checkout session FIRST so we have the session_id to key on
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
-        line_items: [installmentLineItem],
+        line_items: installmentLineItems,
         mode: 'payment',
         customer: customerId,
         payment_intent_data: {
@@ -318,7 +327,8 @@ serve(async (req) => {
           name,
           platform_fee_card_pct,
           platform_fee_ach_pct,
-          platform_fee_cap_cents
+          platform_fee_cap_cents,
+          fee_pass_through
         )
       `)
       .eq('id', registration_ids[0])
@@ -326,6 +336,14 @@ serve(async (req) => {
     const orgIdStd = regForOrgStd?.organization_id || null;
     const orgConfigStd = (regForOrgStd?.organizations ?? null) as ConnectOrgConfig | null;
     const connectParamsStd = buildConnectChargeParams(total_cents, 'card', orgConfigStd, orgIdStd);
+
+    // Pass-through: when the operator opts in (fee_pass_through), add the 1% as a
+    // visible "Platform fee" line so the family covers it. application_fee_amount
+    // above is unchanged (still 1% of base). Method-agnostic (card/ACH both 1%).
+    if (orgConfigStd) {
+      const feeLineStd = passThroughLineItem(total_cents, 'card', orgConfigStd);
+      if (feeLineStd) stripeLineItems.push(feeLineStd);
+    }
 
     // Only attach payment_intent_data if we actually have Connect fields to
     // set. Stripe rejects an empty payment_intent_data object on Checkout
