@@ -45,6 +45,11 @@ import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
 import { handleTransferReversed as sharedHandleTransferReversed } from '../_shared/handleTransferReversed.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
+import {
+  settlementForCheckoutCompleted,
+  SETTLEMENT_ON_ASYNC_SUCCESS,
+  SETTLEMENT_ON_ASYNC_FAILURE,
+} from '../_shared/achSettlement.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -130,11 +135,12 @@ serve(async (req) => {
       // succeeded/failed. Per product decision: hold the seat optimistically
       // (confirmed) and reconcile if the ACH later fails. The ach_payment_state
       // marker distinguishes an ACH-in-flight 'unpaid' from a plain unpaid.
-      const isPaid = session.payment_status === 'paid';
+      const settlement = settlementForCheckoutCompleted(session.payment_status);
+      const isPaid = settlement.fundsSettled;
       await admin.from('registrations').update({
         status: 'confirmed',
-        payment_status: isPaid ? 'paid' : 'unpaid',
-        ach_payment_state: isPaid ? null : 'processing',
+        payment_status: settlement.payment_status,
+        ach_payment_state: settlement.ach_payment_state,
         stripe_payment_intent_id: session.payment_intent as string,
       }).in('id', regIds);
 
@@ -378,8 +384,7 @@ serve(async (req) => {
       const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
       const orgId = regForOrg?.organization_id;
       await admin.from('registrations').update({
-        payment_status: 'paid',
-        ach_payment_state: null,
+        ...SETTLEMENT_ON_ASYNC_SUCCESS,
         stripe_payment_intent_id: session.payment_intent as string,
       }).in('id', regIds);
       for (const regId of regIds) {
@@ -402,7 +407,7 @@ serve(async (req) => {
       if (!regIds.length) return new Response('ok', { status: 200 });
       const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
       const brand = await loadOrgBrand(admin, regForOrg?.organization_id);
-      await admin.from('registrations').update({ ach_payment_state: 'failed' }).in('id', regIds);
+      await admin.from('registrations').update({ ...SETTLEMENT_ON_ASYNC_FAILURE }).in('id', regIds);
       await sendOperatorAlert({
         brand,
         to: brand.alert_email,
