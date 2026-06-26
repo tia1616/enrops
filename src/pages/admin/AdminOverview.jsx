@@ -292,7 +292,7 @@ export default function AdminOverview() {
         <>
           <WinsStrip wins={wins} />
 
-          {openHires?.total > 0 && <OpenHiresBanner openHires={openHires} />}
+          <ImportantToday org={org} user={user} openHires={openHires} />
 
           <TodayAgenda org={org} />
 
@@ -750,6 +750,13 @@ const WIN_STYLE = {
       detail: `${w.detail || "Maxed out"} — full class.`,
     }),
   },
+  emails_sent: {
+    accent: "#2563eb",
+    build: (w) => ({
+      headline: `You reached ${w.label} ${Number(w.label) === 1 ? "family" : "families"}!`,
+      detail: `${w.detail || "Your campaign"} just went out — outreach that grows enrollment.`,
+    }),
+  },
 };
 
 // Section label + card flourish both rotate so the strip feels alive, not canned.
@@ -889,49 +896,169 @@ function TodayAgenda({ org }) {
   );
 }
 
-function OpenHiresBanner({ openHires }) {
-  const { camp, afterschool, total } = openHires;
-  // Plain-English breakdown, only naming the sources that actually have openings.
-  const parts = [];
-  if (camp > 0) parts.push(`${camp} camp ${camp === 1 ? "slot" : "slots"}`);
-  if (afterschool > 0) parts.push(`${afterschool} after-school ${afterschool === 1 ? "class" : "classes"}`);
-  const breakdown = parts.join(" and ");
+// "Important today" — the merged on-deck + heads-up list (Spec_01). Ennie's
+// first-person voice, no avatar (the hero carries her). ACTS (things to do) sort
+// above FYIs; capped at 5 with a "More waiting" overflow toggle. This REPLACES the
+// old open-hires banner — open hires is now one signal among several. Each card
+// can be snoozed 24h ("Not now"); FYIs can also be dismissed for good. Dismissals
+// are per-admin (homescreen_dismissals), so one admin's snooze doesn't hide a real
+// action from another. Counts are aggregate (get_home_signals RPC, RLS-scoped);
+// open-hires comes in as a prop from the existing JS calc so it stays byte-identical
+// to the schedule board's counter. Empty -> the section hides itself entirely.
+const IMPORTANT_CAP = 5;
+const dismissBtn = { fontSize: 12, color: MUTED, background: "none", border: "none", cursor: "pointer", padding: 0 };
+
+function daysUntil(dateStr) {
+  if (!dateStr) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const d = new Date(`${dateStr}T00:00:00`);
+  return Math.round((d - today) / 86400000);
+}
+
+// Pure: turn the signal counts + open-hires into ordered cards. prio ascending
+// within a kind; acts always above fyis. Copy is plain and real — no invented stats
+// (automation_off uses the template's own description). Counts are aggregated so one
+// card stands for N items, keeping the list inside the cap.
+function buildImportant(sig, openHires) {
+  const out = [];
+  // ---- Acts ----
+  if (sig?.finish_stripe) out.push({
+    key: "finish_stripe", kind: "act", prio: 1,
+    title: "Finish your payment setup",
+    detail: "Connect Stripe so families can register and your money lands in your account.",
+    cta: { to: "/admin/settings", label: "Finish setup →" },
+  });
+  if (openHires?.total > 0) {
+    const parts = [];
+    if (openHires.camp > 0) parts.push(`${openHires.camp} camp ${openHires.camp === 1 ? "slot" : "slots"}`);
+    if (openHires.afterschool > 0) parts.push(`${openHires.afterschool} after-school ${openHires.afterschool === 1 ? "class" : "classes"}`);
+    out.push({
+      key: "open_hires", kind: "act", prio: 2,
+      title: openHires.total === 1 ? "1 class still needs an instructor" : `${openHires.total} classes still need an instructor`,
+      detail: `${parts.join(" and ")} ${openHires.total === 1 ? "is" : "are"} unstaffed. Assign someone or send offers from the schedule.`,
+      cta: { to: "/admin/schedule", label: "Open the schedule →" },
+    });
+  }
+  if (sig?.sub_coverage > 0) out.push({
+    key: "sub_coverage", kind: "act", prio: 3,
+    title: sig.sub_coverage === 1 ? "A class needs sub coverage" : `${sig.sub_coverage} classes need sub coverage`,
+    detail: "An instructor can't make a date and no sub is locked in yet.",
+    cta: { to: "/admin/schedule", label: "Find a sub →" },
+  });
+  if (sig?.low_enrollment > 0) out.push({
+    key: "low_enrollment", kind: "act", prio: 4,
+    title: sig.low_enrollment === 1 ? "1 camp is under half full" : `${sig.low_enrollment} camps are under half full`,
+    detail: "Each starts within three weeks and is less than halfway to capacity — a quick campaign can still fill seats.",
+    cta: { to: "/admin/family-comms/marketing", label: "Send a campaign →" },
+  });
+  if (sig?.change_requested > 0) out.push({
+    key: "change_requested", kind: "act", prio: 5,
+    title: sig.change_requested === 1 ? "An instructor asked for a change" : `${sig.change_requested} instructors asked for changes`,
+    detail: "Someone you offered a class wants to talk it through before they accept.",
+    cta: { to: "/admin/schedule", label: "Review requests →" },
+  });
+  if (sig?.offers_awaiting > 0) out.push({
+    key: "offers_awaiting", kind: "act", prio: 6,
+    title: sig.offers_awaiting === 1 ? "1 offer is waiting on a reply" : `${sig.offers_awaiting} offers are waiting on a reply`,
+    detail: "These are out with instructors but unanswered. A nudge can speed things along.",
+    cta: { to: "/admin/schedule", label: "See offers →" },
+  });
+  // ---- FYIs ----
+  const dStart = daysUntil(sig?.next_start);
+  if (dStart != null && dStart >= 0 && dStart <= 21) {
+    const when = dStart === 0 ? "today" : dStart === 1 ? "tomorrow" : `in ${dStart} days`;
+    out.push({
+      key: "term_starting", kind: "fyi", prio: 7,
+      title: `Your next session starts ${when}`,
+      detail: "A good moment to confirm rosters, instructors, and welcome emails are set.",
+      cta: null,
+    });
+  }
+  if (sig?.automation_off > 0) out.push({
+    key: "automation_off", kind: "fyi", prio: 8,
+    title: sig.automation_off === 1 ? `“${sig.automation_off_name}” is turned off` : `${sig.automation_off} automations are turned off`,
+    detail: sig.automation_off === 1 && sig.automation_off_detail
+      ? sig.automation_off_detail
+      : "Turning them on lets Ennie send these for you automatically.",
+    cta: { to: "/admin/family-comms/automations", label: "Review automations →" },
+  });
+  return out;
+}
+
+function ImportantToday({ org, user, openHires }) {
+  const [sig, setSig] = useState(null);               // get_home_signals row
+  const [dismissals, setDismissals] = useState(null); // Map signal_key -> row
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const [sigRes, disRes] = await Promise.all([
+        supabase.rpc("get_home_signals", { p_org: org.id }),
+        supabase.from("homescreen_dismissals").select("signal_key, dismissed_until, permanent").eq("organization_id", org.id),
+      ]);
+      if (cancelled) return;
+      if (sigRes.error) { console.error("[admin/overview] signals load failed", sigRes.error); setSig({}); }
+      else setSig(Array.isArray(sigRes.data) ? sigRes.data[0] || {} : sigRes.data || {});
+      setDismissals(new Map((disRes.data ?? []).map((r) => [r.signal_key, r])));
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
+  async function dismiss(item, permanent) {
+    const until = permanent ? null : new Date(Date.now() + 86400000).toISOString();
+    // Optimistic hide; RLS (own row only) gates the write.
+    setDismissals((m) => new Map(m).set(item.key, { signal_key: item.key, permanent, dismissed_until: until }));
+    await supabase.from("homescreen_dismissals").upsert(
+      { organization_id: org.id, user_id: user?.id, signal_key: item.key, permanent, dismissed_until: until, updated_at: new Date().toISOString() },
+      { onConflict: "organization_id,user_id,signal_key" }
+    );
+  }
+
+  if (sig === null || dismissals === null) return null; // quiet while loading
+
+  const now = Date.now();
+  const all = buildImportant(sig, openHires).filter((s) => {
+    const d = dismissals.get(s.key);
+    if (!d) return true;
+    if (d.permanent) return false;
+    if (d.dismissed_until && new Date(d.dismissed_until).getTime() > now) return false;
+    return true;
+  });
+  all.sort((a, b) => (a.kind === b.kind ? a.prio - b.prio : a.kind === "act" ? -1 : 1));
+  if (all.length === 0) return null;
+
+  const shown = showAll ? all : all.slice(0, IMPORTANT_CAP);
+  const overflow = all.length - shown.length;
 
   return (
-    <div style={{
-      background: `${CORAL}12`,
-      border: `1px solid ${CORAL}55`,
-      borderLeft: `4px solid ${CORAL}`,
-      borderRadius: 12,
-      padding: "14px 18px",
-      marginBottom: 20,
-      display: "flex",
-      flexWrap: "wrap",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: 12,
-    }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>
-          {total === 1 ? "1 open hire needs your attention" : `${total} open hires need your attention`}
-        </div>
-        <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
-          {breakdown} still {total === 1 ? "needs" : "need"} an instructor. Assign someone or send offers from the schedule.
-        </div>
+    <div style={{ marginBottom: 22 }}>
+      <h2 style={{ fontSize: 17, fontWeight: 600, color: INK, margin: "0 0 10px" }}>Important today</h2>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {shown.map((it) => (
+          <div key={it.key} style={{
+            background: "#fff", border: `1px solid ${RULE}`,
+            borderLeft: `3px solid ${it.kind === "act" ? BRIGHT : RULE}`,
+            borderRadius: 10, padding: "12px 14px",
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{it.title}</div>
+            <div style={{ fontSize: 12.5, color: MUTED, marginTop: 3, lineHeight: 1.45 }}>{it.detail}</div>
+            <div style={{ marginTop: 9, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+              {it.cta && (
+                <Link to={it.cta.to} style={{ fontSize: 12.5, fontWeight: 600, color: BRIGHT, textDecoration: "none" }}>{it.cta.label}</Link>
+              )}
+              <button onClick={() => dismiss(it, false)} style={dismissBtn}>Not now</button>
+              {it.kind === "fyi" && <button onClick={() => dismiss(it, true)} style={dismissBtn}>Dismiss</button>}
+            </div>
+          </div>
+        ))}
       </div>
-      <Link to="/admin/schedule" style={{
-        flexShrink: 0,
-        display: "inline-block",
-        padding: "8px 16px",
-        background: CORAL,
-        color: "#fff",
-        borderRadius: 6,
-        fontSize: 13,
-        fontWeight: 600,
-        textDecoration: "none",
-      }}>
-        Review open hires →
-      </Link>
+      {overflow > 0 && !showAll && (
+        <button onClick={() => setShowAll(true)} style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: MUTED, background: "none", border: "none", cursor: "pointer", padding: "4px 0" }}>
+          More waiting ({overflow}) →
+        </button>
+      )}
     </div>
   );
 }
