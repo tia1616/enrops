@@ -333,10 +333,16 @@ serve(async (req) => {
     const piData = Object.keys(connectParamsStd).length > 0 ? connectParamsStd : undefined;
 
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
+      // Pay-in-full accepts card AND bank transfer (ACH). Both carry the same
+      // 1% platform fee, so application_fee_amount is identical regardless of
+      // which the family picks at Stripe. Installments stay card-only (off-
+      // session ACH debits are out of scope). us_bank_account requires a
+      // Customer to store the debit mandate, so have Checkout create one.
+      payment_method_types: ['card', 'us_bank_account'],
       line_items: stripeLineItems,
       mode: 'payment',
       customer_email: parent_email,
+      customer_creation: 'always',
       success_url: `${base}${successPath}?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${base}${cancelPath}`,
       metadata: {

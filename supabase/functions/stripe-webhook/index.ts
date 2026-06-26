@@ -124,24 +124,36 @@ serve(async (req) => {
       const brand = await loadOrgBrand(admin, orgId);
       const alertEmail = brand.alert_email;
 
+      // Card settles instantly (session.payment_status === 'paid'). ACH/bank
+      // transfer finishes Checkout but settles asynchronously — payment_status
+      // is 'unpaid' here, resolved later by checkout.session.async_payment_
+      // succeeded/failed. Per product decision: hold the seat optimistically
+      // (confirmed) and reconcile if the ACH later fails. The ach_payment_state
+      // marker distinguishes an ACH-in-flight 'unpaid' from a plain unpaid.
+      const isPaid = session.payment_status === 'paid';
       await admin.from('registrations').update({
-        status: 'confirmed', payment_status: 'paid',
+        status: 'confirmed',
+        payment_status: isPaid ? 'paid' : 'unpaid',
+        ach_payment_state: isPaid ? null : 'processing',
         stripe_payment_intent_id: session.payment_intent as string,
       }).in('id', regIds);
 
       // intelligence: log payment_completed (one per registration; fail-safe, never blocks).
       // dedupe on the Stripe event id so a webhook retry can't double-count.
-      for (const regId of regIds) {
-        await logEnrollmentEvent(admin, {
-          actionType: ENROLLMENT_ACTIONS.PAYMENT_COMPLETED,
-          organizationId: orgId,
-          registrationId: regId,
-          metadata: { amount_total_cents: session.amount_total ?? null, use_installments: useInstallments },
-          dedupeKey: `payment_completed:${event.id}:${regId}`,
-        });
+      // Only when funds are actually in — ACH-pending logs this on async clear.
+      if (isPaid) {
+        for (const regId of regIds) {
+          await logEnrollmentEvent(admin, {
+            actionType: ENROLLMENT_ACTIONS.PAYMENT_COMPLETED,
+            organizationId: orgId,
+            registrationId: regId,
+            metadata: { amount_total_cents: session.amount_total ?? null, use_installments: useInstallments },
+            dedupeKey: `payment_completed:${event.id}:${regId}`,
+          });
+        }
       }
 
-      if (useInstallments) {
+      if (isPaid && useInstallments) {
         try {
           const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent as string);
 
@@ -356,6 +368,47 @@ serve(async (req) => {
           console.error('Auto-create parent account failed:', accountErr);
         }
       }
+    } else if (event.type === 'checkout.session.async_payment_succeeded') {
+      // ACH/bank transfer cleared (3-5 days after checkout). Flip the
+      // optimistically-confirmed registrations to paid and log the money-in.
+      const session = event.data.object as Stripe.Checkout.Session;
+      const meta = session.metadata || {};
+      const regIds = (meta.registration_ids || '').split(',').filter(Boolean);
+      if (!regIds.length) return new Response('ok', { status: 200 });
+      const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
+      const orgId = regForOrg?.organization_id;
+      await admin.from('registrations').update({
+        payment_status: 'paid',
+        ach_payment_state: null,
+        stripe_payment_intent_id: session.payment_intent as string,
+      }).in('id', regIds);
+      for (const regId of regIds) {
+        await logEnrollmentEvent(admin, {
+          actionType: ENROLLMENT_ACTIONS.PAYMENT_COMPLETED,
+          organizationId: orgId,
+          registrationId: regId,
+          metadata: { amount_total_cents: session.amount_total ?? null, payment_method: 'us_bank_account' },
+          dedupeKey: `payment_completed:${event.id}:${regId}`,
+        });
+      }
+    } else if (event.type === 'checkout.session.async_payment_failed') {
+      // ACH/bank transfer bounced (e.g. NSF). The seat was held optimistically;
+      // mark the payment failed and alert the operator to follow up. We leave
+      // status='confirmed' / payment_status='unpaid' so the operator decides
+      // whether to chase payment or release the seat.
+      const session = event.data.object as Stripe.Checkout.Session;
+      const meta = session.metadata || {};
+      const regIds = (meta.registration_ids || '').split(',').filter(Boolean);
+      if (!regIds.length) return new Response('ok', { status: 200 });
+      const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
+      const brand = await loadOrgBrand(admin, regForOrg?.organization_id);
+      await admin.from('registrations').update({ ach_payment_state: 'failed' }).in('id', regIds);
+      await sendOperatorAlert({
+        brand,
+        to: brand.alert_email,
+        subject: 'Bank transfer (ACH) failed — follow up needed',
+        body: `A family's bank transfer did not clear (e.g. insufficient funds). The seat is still held (confirmed) but unpaid. Registration IDs: ${regIds.join(', ')}. Parent: ${meta.parent_name || ''} ${session.customer_email || meta.parent_email || ''}. Contact the family to arrange payment, or release the seat.`,
+      });
     } else if (event.type === 'account.updated') {
       await handleAccountUpdated(admin, event);
     } else if (event.type === 'account.application.deauthorized') {
