@@ -1,15 +1,17 @@
 import React from 'react';
 
+// Tenant-neutral referral options shared by every operator's registration flow.
+// (Replaced J2S-specific entries — "STEAM Night", "PDX Parent", "NW Kids",
+// "Kids Out and About" — which leaked Journey to STEAM's Portland-area channels
+// to other tenants. Per-tenant configurable options are a queued follow-up.)
 const REFERRAL_OPTIONS = [
   'School flyer (from my child\'s school)',
   'School newsletter, PTO, or PTA email',
   'Friend or family referral',
   'Social media (Facebook, Instagram)',
   'Google search',
-  'STEAM Night or school event',
-  'PDX Parent',
-  'NW Kids',
-  'Kids Out and About',
+  'Community event or fair',
+  'Local parenting magazine or website',
   'Other',
 ];
 
