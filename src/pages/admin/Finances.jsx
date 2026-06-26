@@ -322,8 +322,8 @@ export default function Finances() {
     // Confirm when flipping to pass-through (parents will see a fee)
     if (nextValue === true) {
       const ok = window.confirm(
-        "Pass-through mode: parents will see an extra service fee added at checkout. " +
-        "Switch to pass-through?"
+        "Pass-through mode: families will see the 1% platform fee as a separate line " +
+        "at checkout, so you keep your full price. Switch to pass-through?"
       );
       if (!ok) return;
     }
@@ -513,11 +513,29 @@ export default function Finances() {
               <FeeReadout config={config} />
 
               <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${RULE}` }}>
-                <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
-                  Who pays the platform fee?
-                </div>
-                <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
-                  Your organization absorbs the fee — families pay your base price.
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+                  <div>
+                    <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
+                      Who pays the platform fee?
+                    </div>
+                    <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
+                      {feePassThrough
+                        ? "Families see the 1% platform fee as a separate line at checkout — you keep your full price."
+                        : "Your organization absorbs the fee — families pay your base price."}
+                    </div>
+                  </div>
+                  {canManage ? (
+                    <Toggle
+                      checked={feePassThrough}
+                      onChange={(v) => togglePassThrough(v)}
+                      labelOn="Pass-through"
+                      labelOff="Absorbed"
+                    />
+                  ) : (
+                    <span style={{ color: MUTED, fontSize: 12 }}>
+                      Owner/admin only
+                    </span>
+                  )}
                 </div>
               </div>
             </Section>
