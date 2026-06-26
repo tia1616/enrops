@@ -513,29 +513,11 @@ export default function Finances() {
               <FeeReadout config={config} />
 
               <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${RULE}` }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-                  <div>
-                    <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
-                      Who pays the platform fee?
-                    </div>
-                    <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
-                      {feePassThrough
-                        ? "Parents see an extra service fee on top of your prices."
-                        : "Your organization absorbs the fee — parents pay your base price."}
-                    </div>
-                  </div>
-                  {canManage ? (
-                    <Toggle
-                      checked={feePassThrough}
-                      onChange={(v) => togglePassThrough(v)}
-                      labelOn="Pass-through"
-                      labelOff="Absorbed"
-                    />
-                  ) : (
-                    <span style={{ color: MUTED, fontSize: 12 }}>
-                      Owner/admin only
-                    </span>
-                  )}
+                <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
+                  Who pays the platform fee?
+                </div>
+                <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
+                  Your organization absorbs the fee — families pay your base price.
                 </div>
               </div>
             </Section>
