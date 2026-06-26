@@ -489,19 +489,10 @@ export default function Finances() {
         </Card>
       )}
 
-      {/* Tabs (only when active). Setup-related editable fields are nested
-          under the "Manage setup" banner above. */}
-      {isActive && (
-        <>
-          <TabsNav tab={tab} onTab={setTab} />
-          {tab === "activity" && <ActivityTab org={org} />}
-          {tab === "invoices" && <InvoicesTab />}
-          {tab === "refunds" && <RefundsTab />}
-        </>
-      )}
-
       {/* Expanded "Manage setup" detail — fee config, descriptor, admin fee.
-          Only renders when banner is expanded. */}
+          Renders directly under its banner (above the tabs) when expanded, so
+          clicking "Manage setup" reveals the fee config without scrolling past
+          the Activity feed. */}
       {isActive && setupOpen && (
         <>
           <Card>
@@ -616,6 +607,17 @@ export default function Finances() {
               </div>
             </Section>
           </Card>
+        </>
+      )}
+
+      {/* Tabs (Activity / Invoices / Refunds) — render below the setup detail
+          so the expanded "Manage setup" fee config sits under its own banner. */}
+      {isActive && (
+        <>
+          <TabsNav tab={tab} onTab={setTab} />
+          {tab === "activity" && <ActivityTab org={org} />}
+          {tab === "invoices" && <InvoicesTab />}
+          {tab === "refunds" && <RefundsTab />}
         </>
       )}
     </PageShell>
