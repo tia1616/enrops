@@ -967,7 +967,7 @@ function WhatToExpect() {
         <strong style={{ color: INK }}>What happens after:</strong> Stripe verifies your
         info (usually instant; up to a day if they need to review documents). You'll be set
         to "Active" automatically, and parents start paying through your account on new
-        registrations. Enrops keeps a 2% platform fee (capped at $5 per transaction); the
+        registrations. Enrops keeps a 1% platform fee (no cap); the
         rest lands in your bank.
         <br /><br />
         <strong style={{ color: INK }}>Already have a Stripe account?</strong> This creates
@@ -1127,7 +1127,11 @@ function FeeReadout({ config }) {
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
       <FeeStat label="Card" value={fmtPct(config.platform_fee_card_pct)} />
       <FeeStat label="ACH" value={fmtPct(config.platform_fee_ach_pct)} note="(when supported)" />
-      <FeeStat label="Capped at" value={fmtCents(config.platform_fee_cap_cents)} note="per transaction" />
+      <FeeStat
+        label="Fee cap"
+        value={config.platform_fee_cap_cents >= 100000000 ? "No cap" : fmtCents(config.platform_fee_cap_cents)}
+        note="per transaction"
+      />
     </div>
   );
 }
