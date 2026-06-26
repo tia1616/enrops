@@ -8,6 +8,9 @@ project_id = "enrops"
 [functions.stripe-webhook]
 verify_jwt = false
 
+[functions.org-fee-config]
+verify_jwt = false
+
 [functions.create-registration]
 verify_jwt = false
 

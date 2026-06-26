@@ -39,6 +39,7 @@ export default function Register() {
   const [schools, setSchools] = useState([]);
   const [programs, setPrograms] = useState([]);
   const [waivers, setWaivers] = useState([]);
+  const [feeConfig, setFeeConfig] = useState(null); // {fee_pass_through, platform_fee_card_pct, platform_fee_cap_cents}
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -221,7 +222,7 @@ export default function Register() {
   }, [programs, schools]);
 
   async function load() {
-    const [schoolsRes, programsRes, waiversRes] = await Promise.all([
+    const [schoolsRes, programsRes, waiversRes, feeRes] = await Promise.all([
       supabase
         .from('program_locations')
         .select('id, name, district, address')
@@ -239,11 +240,16 @@ export default function Register() {
         .select('*')
         .eq('organization_id', ORG_ID)
         .eq('active', true),
+      // Fee-display config via edge fn (RBAC-safe path — the anon org view
+      // intentionally excludes fee columns). Used to show the pass-through
+      // "Platform fee" line on StepPay before redirecting to Stripe.
+      supabase.functions.invoke('org-fee-config', { body: { slug: ORG_SLUG } }),
     ]);
 
     setSchools(schoolsRes.data || []);
     setPrograms(programsRes.data || []);
     setWaivers(waiversRes.data || []);
+    setFeeConfig(feeRes?.data || { fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_cap_cents: 0 });
     setLoading(false);
   }
 
@@ -481,6 +487,7 @@ export default function Register() {
               onCheckout={handleCheckout}
               paymentPlan={cart.payment_plan}
               installmentSchedule={installmentSchedule?.display || null}
+              org={{ ...org, ...(feeConfig || {}) }}
             />
           )}
         </div>

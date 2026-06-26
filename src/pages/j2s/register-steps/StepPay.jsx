@@ -7,6 +7,7 @@ export default function StepPay({
   onCheckout,
   paymentPlan,
   installmentSchedule,
+  org,
 }) {
   // Display amount reflects the choice made on the Review step:
   // - If paymentPlan checkbox was clicked AND we have a valid schedule, show first-charge amount
@@ -15,6 +16,24 @@ export default function StepPay({
   const displayAmount = useInstallments
     ? installmentSchedule[0].amount_cents
     : pricing.total_cents;
+
+  // Pass-through: when the operator passes the platform fee to families, the
+  // family pays the price PLUS the fee. Mirror the backend (computePlatformFee:
+  // round(amount * rate), capped) so this pre-redirect total matches exactly
+  // what Stripe charges. org fee config comes from the org-fee-config edge fn
+  // (the anon org view intentionally excludes fee columns). Absorb orgs add 0.
+  const passThrough = !!org?.fee_pass_through;
+  const feeRate = Number(org?.platform_fee_card_pct) || 0;
+  const feeCap = Number(org?.platform_fee_cap_cents) || Infinity;
+  const feeOn = (cents) => (passThrough ? Math.min(Math.round(cents * feeRate), feeCap) : 0);
+  const charged = (cents) => cents + feeOn(cents);
+
+  const feeToday = feeOn(displayAmount);
+  const chargedToday = charged(displayAmount);
+  const grandTotal = useInstallments
+    ? installmentSchedule.reduce((s, i) => s + charged(i.amount_cents), 0)
+    : chargedToday;
+  const feePctLabel = `${+(feeRate * 100).toFixed(2)}%`;
 
   const fmtDate = (iso) =>
     new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
@@ -37,13 +56,18 @@ export default function StepPay({
           {useInstallments ? 'Charged today' : 'Total due today'}
         </p>
         <p className="mt-2 font-titan text-6xl">
-          {formatMoney(displayAmount)}
+          {formatMoney(chargedToday)}
         </p>
+        {feeToday > 0 && (
+          <p className="mt-2 text-sm text-white/90">
+            {formatMoney(displayAmount)} + {formatMoney(feeToday)} platform fee ({feePctLabel})
+          </p>
+        )}
         <p className="mt-3 text-white/80">
           {pricing.lines.length}{' '}
           {pricing.lines.length === 1 ? 'registration' : 'registrations'}
           {useInstallments && (
-            <> &middot; Total {formatMoney(pricing.total_cents)} over 3 payments</>
+            <> &middot; Total {formatMoney(grandTotal)} over 3 payments</>
           )}
         </p>
       </div>
@@ -58,7 +82,7 @@ export default function StepPay({
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
               <p className="text-xs uppercase tracking-wider text-j2s-purple-dark">Today</p>
               <p className="font-titan text-lg text-j2s-ink">
-                {formatMoney(installmentSchedule[0].amount_cents)}
+                {formatMoney(charged(installmentSchedule[0].amount_cents))}
               </p>
             </div>
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
@@ -66,7 +90,7 @@ export default function StepPay({
                 {fmtDate(installmentSchedule[1].due_date)}
               </p>
               <p className="font-titan text-lg text-j2s-ink">
-                {formatMoney(installmentSchedule[1].amount_cents)}
+                {formatMoney(charged(installmentSchedule[1].amount_cents))}
               </p>
             </div>
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
@@ -74,12 +98,13 @@ export default function StepPay({
                 {fmtDate(installmentSchedule[2].due_date)}
               </p>
               <p className="font-titan text-lg text-j2s-ink">
-                {formatMoney(installmentSchedule[2].amount_cents)}
+                {formatMoney(charged(installmentSchedule[2].amount_cents))}
               </p>
             </div>
           </div>
           <p className="mt-3 text-xs text-j2s-ink/60">
             Your card on file will be charged automatically on each date.
+            {feeToday > 0 && ` Each charge includes the ${feePctLabel} platform fee.`}
           </p>
         </div>
       )}
