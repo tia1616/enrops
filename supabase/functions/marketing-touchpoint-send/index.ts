@@ -179,6 +179,7 @@ type Org = {
 type ProgramRow = {
   id: string;
   curriculum: string;
+  term: string | null;
   program_location_id: string | null;
   day_of_week: string;
   first_session_date: string | null;
@@ -345,7 +346,7 @@ serve(async (req: Request) => {
   if (programIds.length > 0) {
     const { data: progs } = await supabase
       .from("programs")
-      .select("id, curriculum, program_location_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
+      .select("id, curriculum, term, program_location_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
       .eq("organization_id", campaign.organization_id)
       .in("id", programIds);
     pickedPrograms = (progs ?? []) as ProgramRow[];
@@ -938,9 +939,22 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   tokens.set("phone", org.brand_voice?.phone || "");
   tokens.set("website", org.brand_voice?.website || "");
 
-  // Registration URL — per-campaign override beats org default
+  // Registration URL — precedence:
+  //   1. per-campaign override (operator typed an explicit URL)
+  //   2. per-recipient program deep link — lands the family on THIS class at
+  //      THEIR school (the public catalog auto-selects the school and highlights
+  //      the class). Mirrors buildProgramShareUrl on the frontend. `program` is
+  //      already resolved to the picked program at this recipient's school.
+  //   3. the org's full catalog (all open classes), when there's no per-recipient
+  //      program match (e.g. camps campaigns or a recipient at a non-picked school)
+  // Only deep-link programs the public catalog can actually show (its current
+  // term). "FA26" MUST match PUBLIC_CATALOG_TERM in src/lib/regLinks.js — the
+  // catalog is single-term, so a deep link for any other term would land on a
+  // catalog that can't show that class. Falls back to the full catalog.
+  const inCatalogTerm = program?.term === "FA26";
+  const programDeepLink = program?.id && inCatalogTerm ? `https://enrops.com/${org.slug}?program=${program.id}` : "";
   const defaultRegisterUrl = `https://enrops.com/${org.slug}`;
-  tokens.set("register_url", safeRegistrationUrl || defaultRegisterUrl);
+  tokens.set("register_url", safeRegistrationUrl || programDeepLink || defaultRegisterUrl);
 
   // Per-program (from THIS recipient's school's matching program)
   if (program) {
@@ -1433,7 +1447,7 @@ async function renderPreview(
   if (programIds.length > 0) {
     const { data: progs } = await supabase
       .from("programs")
-      .select("id, curriculum, program_location_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
+      .select("id, curriculum, term, program_location_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
       .eq("organization_id", campaign.organization_id)
       .in("id", programIds);
     pickedPrograms = (progs ?? []) as ProgramRow[];
