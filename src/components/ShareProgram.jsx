@@ -10,7 +10,7 @@
 //     given us a link, there's nothing to share yet.
 
 import ShareLink from "./ShareLink.jsx";
-import { buildProgramShareUrl } from "../lib/regLinks.js";
+import { buildProgramShareUrl, PUBLIC_CATALOG_TERM } from "../lib/regLinks.js";
 
 const INK = "#1a1a1a";
 const AMBER = "#a16207";
@@ -49,24 +49,39 @@ export default function ShareProgram({ slug, program, align = "right" }) {
     );
   }
 
-  // Native (we run checkout): catalog deep link, once published.
+  // Native (we run checkout): the catalog deep link only works when the program
+  // is BOTH published AND in the term the public catalog serves. Sharing a link
+  // for any other term would dead-end on a catalog that can't show that class —
+  // so gate it and explain, never hand out a broken link.
   const isPublished = program?.status === "open";
-  const url = slug ? buildProgramShareUrl(slug, program?.id) : "";
+  const inCatalogTerm = program?.term === PUBLIC_CATALOG_TERM;
+  const shareable = isPublished && inCatalogTerm;
+  const url = slug && shareable ? buildProgramShareUrl(slug, program?.id) : "";
+
+  const disabledNode = !isPublished ? (
+    <div style={{ fontSize: 13, color: INK, lineHeight: 1.55 }}>
+      <strong style={{ color: AMBER }}>Not live yet.</strong> Publish this
+      program first and you'll get a shareable registration link and QR code
+      here. Families can only sign up once it's open.
+    </div>
+  ) : (
+    <div style={{ fontSize: 13, color: INK, lineHeight: 1.55 }}>
+      <strong style={{ color: AMBER }}>Not open to families yet.</strong> Families
+      browse and register one term at a time, and this program is in a later
+      term than the one that's open now — so there's no public link to share yet.
+      It turns on when that term's registration opens.
+    </div>
+  );
+
   return (
     <ShareLink
       url={url}
       align={align}
-      disabled={!isPublished}
+      disabled={!shareable}
       panelTitle="Registration link"
       description="Put it on a flyer, in an email, or in an ad — families scan to register."
       qrFileBase={`register-${fileSlug(program?.curriculum)}`}
-      disabledNode={
-        <div style={{ fontSize: 13, color: INK, lineHeight: 1.55 }}>
-          <strong style={{ color: AMBER }}>Not live yet.</strong> Publish this
-          program first and you'll get a shareable registration link and QR code
-          here. Families can only sign up once it's open.
-        </div>
-      }
+      disabledNode={disabledNode}
     />
   );
 }

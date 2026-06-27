@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { districtFullName } from '../../lib/tenants.js';
+import { PUBLIC_CATALOG_TERM } from '../../lib/regLinks.js';
 import { useCart } from '../../context/CartContext.jsx';
 import {
   formatMoney,
@@ -75,7 +76,7 @@ export default function J2SHome() {
       .from('programs')
       .select('*')
       .eq('organization_id', org.id)
-      .eq('term', 'FA26')
+      .eq('term', PUBLIC_CATALOG_TERM)
       .eq('status', 'open')
       // Native programs (we run checkout) OR partner-run programs the operator
       // explicitly listed with a registration link (shown as a link-out, no checkout).

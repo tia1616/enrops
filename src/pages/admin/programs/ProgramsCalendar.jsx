@@ -228,7 +228,7 @@ export default function ProgramsCalendar() {
           .from("programs")
           .select(`
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
-            max_capacity, status, instructor_name, price_cents,
+            max_capacity, status, term, instructor_name, price_cents,
             runs_own_registration, external_registration_url, list_in_public_catalog,
             first_session_date, session_count,
             facility_requested_at, facility_approved_at, facility_notes,
@@ -1069,6 +1069,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
             id: program.id,
             curriculum: program.curriculum,
             status: program.status,
+            term: program.term,
             runs_own_registration: program.runs_own_registration,
             external_registration_url: program.external_registration_url,
           }}

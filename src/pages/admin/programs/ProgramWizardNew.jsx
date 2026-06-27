@@ -17,6 +17,7 @@ import { supabase } from "../../../lib/supabase.js";
 import ProgramPrereqEmptyState from "./ProgramPrereqEmptyState.jsx";
 import AddSchoolModal from "../schools/AddSchoolModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import { PUBLIC_CATALOG_TERM } from "../../../lib/regLinks.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -1200,6 +1201,11 @@ function Step3PriceAndOpen({
   // ---- Saved success state ----
   if (savedProgramId) {
     const isOpen = savedAsStatus === "open";
+    // The public catalog only serves one term — a program opened for a later
+    // term is scheduled but not yet registerable by families (and has no public
+    // link to share). Keep the success copy honest about that.
+    const inCatalogTerm = formData.term === PUBLIC_CATALOG_TERM;
+    const familiesCanRegister = isOpen && !isPartner && inCatalogTerm;
     let heading;
     let body;
     if (!isOpen) {
@@ -1208,6 +1214,9 @@ function Step3PriceAndOpen({
     } else if (isPartner) {
       heading = "Your program is set up.";
       body = "It's on your schedule and rosters and will be included when you match instructors. It won't show in your public catalog — the partner runs registration.";
+    } else if (!inCatalogTerm) {
+      heading = "Your program is scheduled.";
+      body = "It's on your calendar and rosters. Families can't register yet — your public registration page covers the current term, and this is a later one. It opens to families when that term's registration begins.";
     } else {
       heading = "Your program is live.";
       body = "Families can register now. You'll see them show up on the calendar as they sign up.";
@@ -1220,12 +1229,12 @@ function Step3PriceAndOpen({
         <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
           {body}
         </p>
-        {isOpen && !isPartner && (
+        {familiesCanRegister && (
           <div style={{ marginBottom: 20 }}>
             <ShareProgram
               slug={orgSlug}
               align="left"
-              program={{ id: savedProgramId, curriculum: formData.curriculum, status: "open" }}
+              program={{ id: savedProgramId, curriculum: formData.curriculum, status: "open", term: formData.term }}
             />
           </div>
         )}
