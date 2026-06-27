@@ -39,6 +39,9 @@ export default function J2SHome() {
   const [vipBundles, setVipBundles] = useState({}); // fallProgramId -> { winter, spring }
   const [selectedDistrict, setSelectedDistrict] = useState('');
   const [selectedSchool, setSelectedSchool] = useState('');
+  // Program id to scroll-to + highlight, set when arriving via a shared
+  // per-program link (/<slug>?program=<id>).
+  const [highlightProgram, setHighlightProgram] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -145,6 +148,31 @@ export default function J2SHome() {
         (a.day_of_week || '').localeCompare(b.day_of_week || ''),
       );
   }, [selectedSchool, programs]);
+
+  // Deep link from a shared per-program link (/<slug>?program=<id>): auto-select
+  // the class's district + school so its card renders, then flag it to highlight.
+  // Guarded so it never fights a family who's already picked a school.
+  useEffect(() => {
+    const programId = searchParams.get('program');
+    if (!programId || !programs.length || !schools.length || selectedSchool) return;
+    const prog = programs.find((p) => p.id === programId);
+    if (!prog) return; // not in the current catalog (e.g. a non-FA26 program) — show normal catalog
+    const school = schools.find((s) => s.id === prog.program_location_id);
+    if (!school) return;
+    setSelectedDistrict(school.district || OTHER_DISTRICT);
+    setSelectedSchool(school.id);
+    setHighlightProgram(programId);
+  }, [programs, schools, searchParams, selectedSchool]);
+
+  // Once the highlighted card is in the DOM, scroll to it and fade the ring.
+  useEffect(() => {
+    if (!highlightProgram) return;
+    const el = document.getElementById(`program-card-${highlightProgram}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const t = setTimeout(() => setHighlightProgram(''), 3000);
+    return () => clearTimeout(t);
+  }, [highlightProgram, programsAtSchool]);
 
   function startRegistration(programId, isVip = false) {
     if (!keepCart) clearCart();
@@ -279,7 +307,8 @@ export default function J2SHome() {
                       return (
                         <div
                           key={p.id}
-                          className="overflow-hidden rounded-2xl border border-j2s-purple/10 bg-white shadow-card"
+                          id={`program-card-${p.id}`}
+                          className={`overflow-hidden rounded-2xl border bg-white shadow-card transition ${highlightProgram === p.id ? 'border-j2s-purple ring-2 ring-j2s-purple ring-offset-2' : 'border-j2s-purple/10'}`}
                         >
                           <div className="border-b border-j2s-purple/10 bg-j2s-purple-soft/40 px-5 py-4">
                             <p className="font-titan text-lg text-j2s-ink">{p.curriculum}</p>
@@ -326,7 +355,8 @@ export default function J2SHome() {
                     return (
                       <div
                         key={p.id}
-                        className="overflow-hidden rounded-2xl border border-j2s-purple/10 bg-white shadow-card"
+                        id={`program-card-${p.id}`}
+                        className={`overflow-hidden rounded-2xl border bg-white shadow-card transition ${highlightProgram === p.id ? 'border-j2s-purple ring-2 ring-j2s-purple ring-offset-2' : 'border-j2s-purple/10'}`}
                       >
                         {/* Program header — #7: short description */}
                         <div className="border-b border-j2s-purple/10 bg-j2s-purple-soft/40 px-5 py-4">

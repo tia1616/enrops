@@ -30,8 +30,18 @@ export function buildCatalogUrl(slug, origin) {
 }
 
 // One specific program's registration. Without a programId, falls back to the
-// registration page (which lists open programs).
+// registration page (which lists open programs). Used by marketing emails for
+// the general "register" link.
 export function buildRegUrl(slug, programId, origin) {
   const base = `${regOrigin(origin)}/${slug}/register`;
+  return programId ? `${base}?program=${encodeURIComponent(programId)}` : base;
+}
+
+// SHARE target for one class: the public catalog page with the program
+// pre-selected. The catalog auto-picks the class's school, scrolls to its card,
+// and highlights it — so a family who scans/clicks lands on the class (name,
+// schedule, price, Register button) with full context, not a bare form.
+export function buildProgramShareUrl(slug, programId, origin) {
+  const base = buildCatalogUrl(slug, origin);
   return programId ? `${base}?program=${encodeURIComponent(programId)}` : base;
 }

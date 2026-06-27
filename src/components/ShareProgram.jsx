@@ -10,7 +10,7 @@
 // dead URL — eat-the-cooking, the link we hand over actually resolves.
 
 import ShareLink from "./ShareLink.jsx";
-import { buildRegUrl } from "../lib/regLinks.js";
+import { buildProgramShareUrl } from "../lib/regLinks.js";
 
 const INK = "#1a1a1a";
 const AMBER = "#a16207";
@@ -26,7 +26,7 @@ function fileSlug(name) {
 
 export default function ShareProgram({ slug, program, align = "right" }) {
   const isPublished = program?.status === "open";
-  const url = slug ? buildRegUrl(slug, program?.id) : "";
+  const url = slug ? buildProgramShareUrl(slug, program?.id) : "";
 
   return (
     <ShareLink
