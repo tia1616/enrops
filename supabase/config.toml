@@ -11,6 +11,9 @@ verify_jwt = false
 [functions.org-fee-config]
 verify_jwt = false
 
+[functions.checkout-session-status]
+verify_jwt = false
+
 [functions.create-registration]
 verify_jwt = false
 

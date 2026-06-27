@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams, Link, useOutletContext } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useCart } from '../../context/CartContext.jsx';
+import { supabase } from '../../lib/supabase.js';
 
 export default function RegisterSuccess() {
   const { org } = useOutletContext();
@@ -15,12 +16,28 @@ export default function RegisterSuccess() {
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // ACH/bank transfer settles over 1-3 business days. Ask Stripe whether this
+  // session is still processing so we can tell the family accurately instead of
+  // implying the payment is done (card settles instantly → processing=false).
+  const [processing, setProcessing] = useState(false);
 
   useEffect(() => {
     // Clear cart once we're on success
     setTimeout(() => clearCart(), 500);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.functions.invoke('checkout-session-status', {
+        body: { session_id: sessionId },
+      });
+      if (!cancelled && data?.processing) setProcessing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [sessionId]);
 
   async function handleMagicLink() {
     if (!email) return;
@@ -66,6 +83,19 @@ export default function RegisterSuccess() {
           </p>
         )}
       </div>
+
+      {processing && (
+        <div
+          className="mt-6 rounded-2xl border p-5"
+          style={{ borderColor: '#F8A638', background: '#FFF7ED', color: '#7c4a03' }}
+        >
+          <p className="font-bold">🏦 Your bank transfer is processing.</p>
+          <p className="mt-1 text-sm leading-relaxed">
+            Bank transfers take 1–3 business days to clear. Your spot is held the whole time —
+            we'll email you once your payment confirms. Nothing else to do right now.
+          </p>
+        </div>
+      )}
 
       {/* Account access — auto-account is created by stripe-webhook v15 + magic link sent */}
       {!user ? (

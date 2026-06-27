@@ -614,6 +614,7 @@ export default function Finances() {
           so the expanded "Manage setup" fee config sits under its own banner. */}
       {isActive && (
         <>
+          <AchAttention org={org} />
           <TabsNav tab={tab} onTab={setTab} />
           {tab === "activity" && <ActivityTab org={org} />}
           {tab === "invoices" && <InvoicesTab />}
@@ -625,6 +626,72 @@ export default function Finances() {
 }
 
 // ───────────────────────────── sub-components ──────────────────────────────
+
+// Bank-transfer (ACH) reconcile surface. Surfaces registrations whose bank
+// transfer is still clearing ('processing') or bounced ('failed') so the
+// operator can act. Failed = chase payment or drop the seat (operator also gets
+// an email alert on the bounce). Renders nothing when there's nothing to act on.
+// RLS scopes registrations to the org; the explicit org filter is defense-in-depth.
+function AchAttention({ org }) {
+  const [rows, setRows] = useState(null);
+
+  useEffect(() => {
+    if (!org?.id) return;
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("registrations")
+        .select("id, amount_cents, ach_payment_state, students(first_name, last_name)")
+        .eq("organization_id", org.id)
+        .in("ach_payment_state", ["processing", "failed"]);
+      if (alive) setRows(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [org?.id]);
+
+  if (!rows || rows.length === 0) return null;
+
+  const failed = rows.filter((r) => r.ach_payment_state === "failed");
+  const processing = rows.filter((r) => r.ach_payment_state === "processing");
+  const nameOf = (r) => {
+    const s = r.students;
+    return s ? `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "—" : "—";
+  };
+  const Row = ({ r, tone, suffix }) => (
+    <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", border: `1px solid ${RULE}`, borderRadius: 6, padding: "8px 10px", fontSize: 13, marginBottom: 6 }}>
+      <span style={{ fontWeight: 600, color: INK }}>{nameOf(r)}</span>
+      <span style={{ color: tone, fontWeight: 600, whiteSpace: "nowrap" }}>{fmtCents(r.amount_cents)} {suffix}</span>
+    </div>
+  );
+
+  return (
+    <Card>
+      <Heading>Bank transfers</Heading>
+      {failed.length > 0 && (
+        <div style={{ marginBottom: processing.length ? 18 : 0 }}>
+          <div style={{ fontWeight: 700, color: RED, fontSize: 14 }}>
+            {failed.length} bank transfer{failed.length > 1 ? "s" : ""} failed — needs follow-up
+          </div>
+          <p style={{ color: MUTED, fontSize: 13, margin: "4px 0 8px" }}>
+            The seat is still held but unpaid. Contact the family to arrange payment, or drop the seat from Rosters.
+          </p>
+          {failed.map((r) => <Row key={r.id} r={r} tone={RED} suffix="unpaid" />)}
+        </div>
+      )}
+      {processing.length > 0 && (
+        <div>
+          <div style={{ fontWeight: 700, color: AMBER, fontSize: 14 }}>
+            {processing.length} bank transfer{processing.length > 1 ? "s" : ""} clearing
+          </div>
+          <p style={{ color: MUTED, fontSize: 13, margin: "4px 0 8px" }}>
+            ACH takes 1–3 business days. The seat is held; these mark paid automatically when they clear.
+          </p>
+          {processing.map((r) => <Row key={r.id} r={r} tone={AMBER} suffix="processing" />)}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 // Slim status banner shown at the top of Receivables when Stripe is active.
 // Shows connection state + a Manage setup ▾ toggle that expands the editable
