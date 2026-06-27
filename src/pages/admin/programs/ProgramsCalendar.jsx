@@ -13,6 +13,8 @@ import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import ShareLink from "../../../components/ShareLink.jsx";
+import { buildCatalogUrl } from "../../../lib/regLinks.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -342,6 +344,16 @@ export default function ProgramsCalendar() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {org?.slug && (
+            <ShareLink
+              url={buildCatalogUrl(org.slug)}
+              align="right"
+              buttonLabel="Share registration page"
+              panelTitle="Your registration page"
+              description="One link to all your open programs — families pick a class and sign up. Put it in your bio, an email, or a flyer."
+              qrFileBase="registration-page"
+            />
+          )}
           <Link
             to="/admin/programs/new"
             style={{
