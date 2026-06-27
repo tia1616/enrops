@@ -16,6 +16,7 @@ import { Link, useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ProgramPrereqEmptyState from "./ProgramPrereqEmptyState.jsx";
 import AddSchoolModal from "../schools/AddSchoolModal.jsx";
+import ShareProgram from "../../../components/ShareProgram.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -645,6 +646,7 @@ export default function ProgramWizardNew() {
             submitError={submitError}
             savedProgramId={savedProgramId}
             savedAsStatus={savedAsStatus}
+            orgSlug={org?.slug}
             onSubmit={handleSubmit}
             onBackToPrograms={() => navigate("/admin/programs")}
             step3Valid={step3Valid}
@@ -1175,6 +1177,7 @@ function Step3PriceAndOpen({
   submitError,
   savedProgramId,
   savedAsStatus,
+  orgSlug,
   onSubmit,
   onBackToPrograms,
   step3Valid,
@@ -1217,6 +1220,15 @@ function Step3PriceAndOpen({
         <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
           {body}
         </p>
+        {isOpen && !isPartner && (
+          <div style={{ marginBottom: 20 }}>
+            <ShareProgram
+              slug={orgSlug}
+              align="left"
+              program={{ id: savedProgramId, curriculum: formData.curriculum, status: "open" }}
+            />
+          </div>
+        )}
         <div style={{ display: "flex", gap: 12 }}>
           <button
             onClick={onBackToPrograms}

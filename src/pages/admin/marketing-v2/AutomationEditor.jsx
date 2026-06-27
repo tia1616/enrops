@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import { editableToHtml, highlightTokens, htmlToEditable } from "./bodyEditorUtils.js";
+import { buildRegUrl, PUBLIC_SITE } from "../../../lib/regLinks.js";
 
 // Decode the common HTML entities operators might type or paste into a
 // plain-text input. The big one is &mdash; in subjects — subjects don't
@@ -90,7 +91,9 @@ function sampleTokens(orgName, senderName, primaryColor, orgSlug) {
   const color = primaryColor || "#1C004F";
   // Real tenant registration URL so the preview matches the live send. Cron
   // builds the same `${site}/${slug}/register` from the org's slug.
-  const registerUrl = orgSlug ? `https://enrops.com/${orgSlug}/register` : "https://enrops.com/your-org";
+  // Absolute prod URL (PUBLIC_SITE) — this lands in an email sent later by the
+  // cron, so it must never inherit a staging origin. Same string the cron builds.
+  const registerUrl = orgSlug ? buildRegUrl(orgSlug, null, PUBLIC_SITE) : `${PUBLIC_SITE}/your-org`;
   return {
     first_name: "Sarah",
     child_first_name: "Mia",

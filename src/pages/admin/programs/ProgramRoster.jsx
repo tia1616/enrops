@@ -16,6 +16,7 @@ import { Link, useParams, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import EmailRosterModal from "../EmailRosterModal.jsx";
 import InviteFamiliesModal from "../InviteFamiliesModal.jsx";
+import ShareProgram from "../../../components/ShareProgram.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -265,6 +266,10 @@ export default function ProgramRoster() {
           </div>
         </div>
         <div className="roster-noprint" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <ShareProgram
+            slug={org?.slug}
+            program={{ id: programId, curriculum: program?.curriculum, status: program?.status }}
+          />
           <button type="button" onClick={downloadCsv} disabled={enrolled.length === 0} style={primaryBtn(enrolled.length === 0)}>
             Download CSV
           </button>

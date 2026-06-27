@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
+import ShareProgram from "../../../components/ShareProgram.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -404,6 +405,7 @@ export default function ProgramsCalendar() {
               onDelete={deleteProgram}
               onUpdate={updateProgramFields}
               locations={locationsForPicker}
+              orgSlug={org?.slug}
             />
           : <BySchoolView
               programs={programs}
@@ -420,6 +422,7 @@ export default function ProgramsCalendar() {
               onDelete={deleteProgram}
               onUpdate={updateProgramFields}
               locations={locationsForPicker}
+              orgSlug={org?.slug}
             />
       )}
 
@@ -457,7 +460,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -505,6 +508,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
               onDelete={onDelete}
               onUpdate={onUpdate}
               locations={locations}
+              orgSlug={orgSlug}
             />
           ))}
         </div>
@@ -513,7 +517,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -621,6 +625,7 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCov
                 onDelete={onDelete}
                 onUpdate={onUpdate}
                 locations={locations}
+                orgSlug={orgSlug}
                 showDay
               />
             ))}
@@ -670,7 +675,7 @@ function districtHasCal(program, calendarCoverage) {
   return entry.hasCalendar;
 }
 
-function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -850,6 +855,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
         onUnpublish={onUnpublish}
         onDelete={onDelete}
         locations={locations}
+        orgSlug={orgSlug}
       />
     )}
     </>
@@ -860,7 +866,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
 // bottom, an editable form for day/time/dates/capacity/price/location at
 // the top, and the unpublish + delete actions on a footer row. The panel
 // only renders when the operator clicks "Expand" on a program row.
-function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, locations }) {
+function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, locations, orgSlug }) {
   // Local draft so the operator can edit several fields and save in one go
   // (avoid round-tripping the DB on every keystroke).
   const [draft, setDraft] = useState({
@@ -1043,6 +1049,12 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
           }}
         >{saving ? "Saving…" : "Save changes"}</button>
         {savedFlash && <span style={{ color: OK_GREEN, fontWeight: 600, fontSize: 12 }}>✓ Saved</span>}
+
+        <ShareProgram
+          slug={orgSlug}
+          align="left"
+          program={{ id: program.id, curriculum: program.curriculum, status: program.status }}
+        />
 
         <div style={{ flex: 1 }} />
 
