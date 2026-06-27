@@ -1065,7 +1065,13 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         <ShareProgram
           slug={orgSlug}
           align="left"
-          program={{ id: program.id, curriculum: program.curriculum, status: program.status }}
+          program={{
+            id: program.id,
+            curriculum: program.curriculum,
+            status: program.status,
+            runs_own_registration: program.runs_own_registration,
+            external_registration_url: program.external_registration_url,
+          }}
         />
 
         <div style={{ flex: 1 }} />

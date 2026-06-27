@@ -1,13 +1,13 @@
-// Share affordance for a single program: the registration deep link + QR for
-// that one class. Thin wrapper over the generic <ShareLink> — all the copy/QR/
-// download logic lives there.
+// Share affordance for a single program. Thin wrapper over the generic
+// <ShareLink> — all the copy/QR/download logic lives there.
 //
-// Used in three spots: the program list's expanded panel, the roster page
-// header, and the wizard success screen.
-//
-// Guardrail: a program only has a working public link once it's published
-// (status === "open"). Drafts show a "publish first" message instead of a
-// dead URL — eat-the-cooking, the link we hand over actually resolves.
+// Two cases:
+//   - Native (we run checkout): share the catalog deep link
+//     (/<slug>?program=<id>), which lands families on that class's card. Only
+//     once published (status === "open") — drafts show a "publish first" note.
+//   - Partner-run: families register on the PARTNER's own site, so the share
+//     link is their external_registration_url, not our catalog. If they haven't
+//     given us a link, there's nothing to share yet.
 
 import ShareLink from "./ShareLink.jsx";
 import { buildProgramShareUrl } from "../lib/regLinks.js";
@@ -25,9 +25,33 @@ function fileSlug(name) {
 }
 
 export default function ShareProgram({ slug, program, align = "right" }) {
+  const isPartnerRun = !!program?.runs_own_registration;
+  const externalUrl = program?.external_registration_url || "";
+
+  // Partner-run: share the partner's own registration link.
+  if (isPartnerRun) {
+    return (
+      <ShareLink
+        url={externalUrl}
+        align={align}
+        disabled={!externalUrl}
+        panelTitle="Partner's registration link"
+        description="Families register on your partner's site — share this link or QR."
+        qrFileBase={`register-${fileSlug(program?.curriculum)}`}
+        disabledNode={
+          <div style={{ fontSize: 13, color: INK, lineHeight: 1.55 }}>
+            <strong style={{ color: AMBER }}>No link yet.</strong> This program
+            registers on your partner's site. Add their registration link in the
+            program's settings and it'll show here to share.
+          </div>
+        }
+      />
+    );
+  }
+
+  // Native (we run checkout): catalog deep link, once published.
   const isPublished = program?.status === "open";
   const url = slug ? buildProgramShareUrl(slug, program?.id) : "";
-
   return (
     <ShareLink
       url={url}
