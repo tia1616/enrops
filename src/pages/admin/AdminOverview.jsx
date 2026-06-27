@@ -963,19 +963,25 @@ function buildImportant(sig, openHires) {
     detail: "These are out with instructors but unanswered. A nudge can speed things along.",
     cta: { to: "/admin/schedule", label: "See offers →" },
   });
+  if (sig?.end_of_term > 0) out.push({
+    key: "end_of_term", kind: "act", prio: 7,
+    title: sig.end_of_term === 1 ? "A term is wrapping up soon" : `${sig.end_of_term} terms are wrapping up soon`,
+    detail: "Check in with the school about next term while families are still engaged — it's the easiest re-enrollment you'll get.",
+    cta: { to: "/admin/schools", label: "Open schools →" },
+  });
   // ---- FYIs ----
   const dStart = daysUntil(sig?.next_start);
   if (dStart != null && dStart >= 0 && dStart <= 21) {
     const when = dStart === 0 ? "today" : dStart === 1 ? "tomorrow" : `in ${dStart} days`;
     out.push({
-      key: "term_starting", kind: "fyi", prio: 7,
+      key: "term_starting", kind: "fyi", prio: 8,
       title: `Your next session starts ${when}`,
       detail: "A good moment to confirm rosters, instructors, and welcome emails are set.",
       cta: null,
     });
   }
   if (sig?.automation_off > 0) out.push({
-    key: "automation_off", kind: "fyi", prio: 8,
+    key: "automation_off", kind: "fyi", prio: 9,
     title: sig.automation_off === 1 ? `“${sig.automation_off_name}” is turned off` : `${sig.automation_off} automations are turned off`,
     detail: sig.automation_off === 1 && sig.automation_off_detail
       ? sig.automation_off_detail
