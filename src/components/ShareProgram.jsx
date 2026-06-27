@@ -10,7 +10,7 @@
 //     given us a link, there's nothing to share yet.
 
 import ShareLink from "./ShareLink.jsx";
-import { buildProgramShareUrl, PUBLIC_CATALOG_TERM } from "../lib/regLinks.js";
+import { buildProgramShareUrl } from "../lib/regLinks.js";
 
 const INK = "#1a1a1a";
 const AMBER = "#a16207";
@@ -24,7 +24,7 @@ function fileSlug(name) {
   return s || "program";
 }
 
-export default function ShareProgram({ slug, program, align = "right" }) {
+export default function ShareProgram({ slug, program, activeTerm, align = "right" }) {
   const isPartnerRun = !!program?.runs_own_registration;
   const externalUrl = program?.external_registration_url || "";
 
@@ -54,7 +54,7 @@ export default function ShareProgram({ slug, program, align = "right" }) {
   // for any other term would dead-end on a catalog that can't show that class —
   // so gate it and explain, never hand out a broken link.
   const isPublished = program?.status === "open";
-  const inCatalogTerm = program?.term === PUBLIC_CATALOG_TERM;
+  const inCatalogTerm = !!activeTerm && program?.term === activeTerm;
   const shareable = isPublished && inCatalogTerm;
   const url = slug && shareable ? buildProgramShareUrl(slug, program?.id) : "";
 

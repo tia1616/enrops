@@ -17,7 +17,6 @@ import { supabase } from "../../../lib/supabase.js";
 import ProgramPrereqEmptyState from "./ProgramPrereqEmptyState.jsx";
 import AddSchoolModal from "../schools/AddSchoolModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
-import { PUBLIC_CATALOG_TERM } from "../../../lib/regLinks.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -648,6 +647,7 @@ export default function ProgramWizardNew() {
             savedProgramId={savedProgramId}
             savedAsStatus={savedAsStatus}
             orgSlug={org?.slug}
+            orgActiveTerm={org?.active_registration_term}
             onSubmit={handleSubmit}
             onBackToPrograms={() => navigate("/admin/programs")}
             step3Valid={step3Valid}
@@ -1179,6 +1179,7 @@ function Step3PriceAndOpen({
   savedProgramId,
   savedAsStatus,
   orgSlug,
+  orgActiveTerm,
   onSubmit,
   onBackToPrograms,
   step3Valid,
@@ -1204,7 +1205,7 @@ function Step3PriceAndOpen({
     // The public catalog only serves one term — a program opened for a later
     // term is scheduled but not yet registerable by families (and has no public
     // link to share). Keep the success copy honest about that.
-    const inCatalogTerm = formData.term === PUBLIC_CATALOG_TERM;
+    const inCatalogTerm = !!orgActiveTerm && formData.term === orgActiveTerm;
     const familiesCanRegister = isOpen && !isPartner && inCatalogTerm;
     let heading;
     let body;
@@ -1233,6 +1234,7 @@ function Step3PriceAndOpen({
           <div style={{ marginBottom: 20 }}>
             <ShareProgram
               slug={orgSlug}
+              activeTerm={orgActiveTerm}
               align="left"
               program={{ id: savedProgramId, curriculum: formData.curriculum, status: "open", term: formData.term }}
             />

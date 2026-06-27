@@ -174,6 +174,7 @@ type Org = {
   brand_voice: { closer?: string; phone?: string; website?: string } | null;
   logo_url: string | null;
   vip_offering: VipOffering | null;
+  active_registration_term: string | null;
 };
 
 type ProgramRow = {
@@ -292,7 +293,7 @@ serve(async (req: Request) => {
   // ---- Load org ----
   const { data: org, error: oErr } = await supabase
     .from("organizations")
-    .select("id, name, slug, default_sender_name, default_sender_email, brand_voice, logo_url, vip_offering")
+    .select("id, name, slug, default_sender_name, default_sender_email, brand_voice, logo_url, vip_offering, active_registration_term")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
@@ -947,11 +948,12 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   //      already resolved to the picked program at this recipient's school.
   //   3. the org's full catalog (all open classes), when there's no per-recipient
   //      program match (e.g. camps campaigns or a recipient at a non-picked school)
-  // Only deep-link programs the public catalog can actually show (its current
-  // term). "FA26" MUST match PUBLIC_CATALOG_TERM in src/lib/regLinks.js — the
-  // catalog is single-term, so a deep link for any other term would land on a
-  // catalog that can't show that class. Falls back to the full catalog.
-  const inCatalogTerm = program?.term === "FA26";
+  // Only deep-link programs the public catalog can actually show — the org's
+  // active_registration_term (the SAME per-org DB value the public catalog reads
+  // via public_org_directory). Single source of truth; no hardcoded term. A deep
+  // link for any other term would land on a catalog that can't show that class,
+  // so fall back to the full catalog.
+  const inCatalogTerm = !!org.active_registration_term && program?.term === org.active_registration_term;
   const programDeepLink = program?.id && inCatalogTerm ? `https://enrops.com/${org.slug}?program=${program.id}` : "";
   const defaultRegisterUrl = `https://enrops.com/${org.slug}`;
   tokens.set("register_url", safeRegistrationUrl || programDeepLink || defaultRegisterUrl);

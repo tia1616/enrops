@@ -418,6 +418,7 @@ export default function ProgramsCalendar() {
               onUpdate={updateProgramFields}
               locations={locationsForPicker}
               orgSlug={org?.slug}
+              orgActiveTerm={org?.active_registration_term}
             />
           : <BySchoolView
               programs={programs}
@@ -435,6 +436,7 @@ export default function ProgramsCalendar() {
               onUpdate={updateProgramFields}
               locations={locationsForPicker}
               orgSlug={org?.slug}
+              orgActiveTerm={org?.active_registration_term}
             />
       )}
 
@@ -472,7 +474,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, orgActiveTerm }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -521,6 +523,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
               onUpdate={onUpdate}
               locations={locations}
               orgSlug={orgSlug}
+              orgActiveTerm={orgActiveTerm}
             />
           ))}
         </div>
@@ -529,7 +532,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, orgActiveTerm }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -638,6 +641,7 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCov
                 onUpdate={onUpdate}
                 locations={locations}
                 orgSlug={orgSlug}
+                orgActiveTerm={orgActiveTerm}
                 showDay
               />
             ))}
@@ -687,7 +691,7 @@ function districtHasCal(program, calendarCoverage) {
   return entry.hasCalendar;
 }
 
-function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, orgActiveTerm, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -868,6 +872,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
         onDelete={onDelete}
         locations={locations}
         orgSlug={orgSlug}
+        orgActiveTerm={orgActiveTerm}
       />
     )}
     </>
@@ -878,7 +883,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
 // bottom, an editable form for day/time/dates/capacity/price/location at
 // the top, and the unpublish + delete actions on a footer row. The panel
 // only renders when the operator clicks "Expand" on a program row.
-function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, locations, orgSlug }) {
+function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, locations, orgSlug, orgActiveTerm }) {
   // Local draft so the operator can edit several fields and save in one go
   // (avoid round-tripping the DB on every keystroke).
   const [draft, setDraft] = useState({
@@ -1064,6 +1069,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
 
         <ShareProgram
           slug={orgSlug}
+          activeTerm={orgActiveTerm}
           align="left"
           program={{
             id: program.id,

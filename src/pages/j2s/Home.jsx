@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { districtFullName } from '../../lib/tenants.js';
-import { PUBLIC_CATALOG_TERM } from '../../lib/regLinks.js';
 import { useCart } from '../../context/CartContext.jsx';
 import {
   formatMoney,
@@ -15,10 +14,10 @@ import {
   standardPriceFor,
 } from '../../lib/pricing.js';
 
-// Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
-// via Outlet context. Page reads org.id / org.slug from there instead of
-// hardcoding 'j2s'. The FA26 term filter is still hardcoded here — separate
-// backlog item to derive "current active term" from scheduling_cycles.
+// Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
+// provided by PublicLayout via Outlet context (from the public_org_directory
+// view). Page reads org.id / org.slug from there instead of hardcoding 'j2s'.
+// The catalog term is per-org from org.active_registration_term — NOT hardcoded.
 // Catch-all bucket for venues with no public district (private/charter schools,
 // libraries, community sites). Keeps them on the reg page instead of hidden, and
 // stops each one rendering as its own one-school "district".
@@ -76,7 +75,7 @@ export default function J2SHome() {
       .from('programs')
       .select('*')
       .eq('organization_id', org.id)
-      .eq('term', PUBLIC_CATALOG_TERM)
+      .eq('term', org.active_registration_term)
       .eq('status', 'open')
       // Native programs (we run checkout) OR partner-run programs the operator
       // explicitly listed with a registration link (shown as a link-out, no checkout).

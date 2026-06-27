@@ -12,12 +12,11 @@
 // marketing emails sent from a cron) and must NOT inherit a staging origin.
 export const PUBLIC_SITE = "https://enrops.com";
 
-// The single term the public catalog currently serves (Home.jsx loads only this
-// term). Until the catalog is multi-term, a program is only publicly
-// registerable — and therefore shareable — when it's in this term. Both the
-// catalog load and the Share gate read this so they can never disagree (which
-// is what produced dead per-program links for other terms).
-export const PUBLIC_CATALOG_TERM = "FA26";
+// NOTE: the term the public catalog serves is NOT a constant — it's per-org and
+// lives in the DB (`organizations.active_registration_term`, exposed via the
+// `public_org_directory` view). Read it from `org.active_registration_term`;
+// never hardcode a term. The catalog load, the Share gate, and the marketing
+// send all read that one value so they can't drift.
 
 // Resolve the origin to build against. In-app surfaces default to the current
 // origin so links are correct on whatever environment the operator is in
