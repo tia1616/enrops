@@ -164,3 +164,19 @@ Deno.test('uplift not applied when org is not connected (returns {})', () => {
   const notConnected: ConnectOrgConfig = { ...TENANT_ORG, stripe_account_id: null };
   assertEquals(buildConnectChargeParams(20000, 'card', notConnected, 'org-id'), {});
 });
+
+// ── on_behalf_of (Spec D §2) ───────────────────────────────────────────────
+Deno.test("enrops_platform org → on_behalf_of set to the connected acct, suffix omitted", () => {
+  const org: ConnectOrgConfig = { ...TENANT_ORG, instructor_pay_model: 'enrops_platform' };
+  const result = buildConnectChargeParams(20000, 'card', org, 'org-id');
+  assertEquals(result.on_behalf_of, org.stripe_account_id);
+  // We send EITHER on_behalf_of OR the suffix, never both.
+  assertEquals(result.statement_descriptor_suffix, undefined);
+});
+
+Deno.test("legacy/unset instructor_pay_model → no on_behalf_of, statement suffix preserved", () => {
+  // HAPPY_ORG has no instructor_pay_model and a 'J2S' suffix → unchanged behavior.
+  const result = buildConnectChargeParams(20000, 'card', HAPPY_ORG, 'org-id');
+  assertEquals(result.on_behalf_of, undefined);
+  assertEquals(result.statement_descriptor_suffix, 'J2S');
+});

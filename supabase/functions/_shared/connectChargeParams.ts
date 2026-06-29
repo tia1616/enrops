@@ -26,12 +26,18 @@ export interface ConnectOrgConfig extends PlatformFeeConfig {
   // from the provider's payout — like Square/Squarespace already do for them.
   // 'platform' (legacy own-platform orgs like J2S) and unset → no uplift.
   stripe_fee_payer?: string | null;
+  // Platform relationship. 'enrops_platform' = Enrops is the Stripe platform and
+  // this org is a connected account → set on_behalf_of so the family sees the
+  // PROVIDER as merchant of record. 'legacy_own_platform' (J2S) = own merchant
+  // already; leave untouched.
+  instructor_pay_model?: string | null;
 }
 
 export interface ConnectChargeParams {
   application_fee_amount?: number;
   transfer_data?: { destination: string };
   statement_descriptor_suffix?: string;
+  on_behalf_of?: string;
 }
 
 export function buildConnectChargeParams(
@@ -72,9 +78,25 @@ export function buildConnectChargeParams(
     transfer_data: { destination: org.stripe_account_id },
   };
 
-  const suffix = buildStatementDescriptorSuffix(org.statement_descriptor_suffix, org.name);
-  if (suffix) {
-    params.statement_descriptor_suffix = suffix;
+  // on_behalf_of (Spec D §2): make the CONNECTED account the merchant of record
+  // so the family sees the PROVIDER's name on their card statement — only when
+  // Enrops is the platform (enrops_platform). Legacy own-platform orgs (J2S) are
+  // already their own merchant; leave their charges untouched.
+  //
+  // NOTE: when on_behalf_of is set, the connected account's OWN statement
+  // descriptor governs, so the platform statement_descriptor_suffix is redundant
+  // (and Stripe may reject sending both). We deliberately send EITHER on_behalf_of
+  // OR the suffix, never both — sidestepping the conflict the Spec D §2 caution
+  // warns about.
+  const useOnBehalfOf = org.instructor_pay_model === 'enrops_platform';
+
+  if (useOnBehalfOf) {
+    params.on_behalf_of = org.stripe_account_id;
+  } else {
+    const suffix = buildStatementDescriptorSuffix(org.statement_descriptor_suffix, org.name);
+    if (suffix) {
+      params.statement_descriptor_suffix = suffix;
+    }
   }
 
   return params;

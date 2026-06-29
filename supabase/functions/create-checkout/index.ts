@@ -216,7 +216,8 @@ serve(async (req) => {
             platform_fee_cap_cents,
             fee_pass_through,
             stripe_fee_payer,
-            active_registration_term
+            active_registration_term,
+            instructor_pay_model
           )
         `)
         .eq('id', registration_ids[0])
@@ -337,7 +338,8 @@ serve(async (req) => {
           platform_fee_cap_cents,
           fee_pass_through,
           stripe_fee_payer,
-          active_registration_term
+          active_registration_term,
+          instructor_pay_model
         )
       `)
       .eq('id', registration_ids[0])

@@ -184,7 +184,7 @@ serve(async (req) => {
         stripe_account_id, stripe_charges_enabled,
         statement_descriptor_suffix,
         platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents,
-        fee_pass_through, stripe_fee_payer
+        fee_pass_through, stripe_fee_payer, instructor_pay_model
       `)
       .in('id', orgIds);
 
@@ -202,6 +202,7 @@ serve(async (req) => {
         platform_fee_cap_cents: org.platform_fee_cap_cents,
         fee_pass_through: org.fee_pass_through,
         stripe_fee_payer: org.stripe_fee_payer,
+        instructor_pay_model: org.instructor_pay_model,
       });
     }
 
