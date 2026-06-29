@@ -181,10 +181,18 @@ serve(async (req: Request) => {
     // ---- Load org ----
     const { data: org, error: oErr } = await supabase
       .from('organizations')
-      .select('id, name, logo_url, logo_email_url')
+      .select('id, name, slug, logo_url, logo_email_url')
       .eq('id', orgId)
       .single<Org>();
     if (oErr || !org) return json({ error: `org not found: ${oErr?.message}` }, 404);
+
+    // SAFETY GUARD (2026-06-29): this is the J2S FA26 early-bird one-shot — the
+    // sender identity (FROM_EMAIL, REPLY_TO) and REGISTER_URL are hardcoded to
+    // J2S. Refuse any other org so it can never email another tenant's families
+    // under J2S's name. The multi-tenant sender is marketing-touchpoint-send.
+    if ((org as { slug?: string }).slug !== 'j2s') {
+      return json({ error: 'marketing-send is the J2S legacy sender and cannot run for other tenants; use marketing-touchpoint-send' }, 403);
+    }
 
     const branding = await loadBranding(supabase, orgId);
 

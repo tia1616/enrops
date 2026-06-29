@@ -25,6 +25,7 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { loadOrgBrand, formatFromAddress, type OrgBrand } from "../_shared/orgBrand.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -317,9 +318,14 @@ serve(async (req: Request) => {
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
-  if (!org.default_sender_email || !org.default_sender_name) {
-    return json({ error: "org_not_configured", missing: [!org.default_sender_email ? "default_sender_email" : null, !org.default_sender_name ? "default_sender_name" : null].filter(Boolean) }, 400);
-  }
+
+  // Email identity comes from the ONE shared source of truth (loadOrgBrand) —
+  // the same cascade transactional email uses. Always resolves: a tenant's own
+  // verified domain if set, else a per-tenant address on the verified platform
+  // domain ({slug}@mail.enrops.com). No per-tenant setup required, and no tenant
+  // can inherit another's identity. (Replaced the old org_not_configured gate,
+  // which blocked any tenant that hadn't set default_sender_*.)
+  const brand = await loadOrgBrand(supabase, campaign.organization_id);
 
   // ---- Preview mode: render-only, no send ----
   // Builds a synthetic recipient at the requested location, runs the SAME
@@ -327,7 +333,7 @@ serve(async (req: Request) => {
   // Reuses the real send code path so previews can never drift from what
   // parents actually receive.
   if (body.mode === "preview") {
-    return await renderPreview(supabase, campaign, touchpoint, org, body.preview_location_id!);
+    return await renderPreview(supabase, campaign, touchpoint, org, brand, body.preview_location_id!);
   }
 
   // ---- Load recipients ----
@@ -592,6 +598,7 @@ serve(async (req: Request) => {
       const tokens = await buildTokensForRecipient({
         recipient: r,
         org,
+        brand,
         program,
         recipientPrograms,
         pickedPrograms,
@@ -620,8 +627,8 @@ serve(async (req: Request) => {
     }));
 
     const batchPayload = rendered.map(({ r, subject, bodyHtml, bodyText }) => ({
-      from: `${org.default_sender_name} <${org.default_sender_email}>`,
-      reply_to: org.default_sender_email,
+      from: formatFromAddress(brand),
+      reply_to: brand.reply_to,
       to: [r.email],
       subject,
       html: bodyHtml,
@@ -916,10 +923,13 @@ type TokensInput = {
   draftInputs: Record<string, unknown>;
   safeRegistrationUrl: string | null;
   campaignTopics: string[];
+  // Resolved tenant email identity (shared loadOrgBrand cascade) — drives the
+  // {{sender_name}}, {{sender_email}}, {{reply_to}} body tokens.
+  brand: OrgBrand;
 };
 
 async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: Map<string, string[]> }): Promise<Map<string, string>> {
-  const { recipient: r, org, program, recipientPrograms, recipientCamps, draftInputs, safeRegistrationUrl, campaignTopics, locationNameMap } = input;
+  const { recipient: r, org, brand, program, recipientPrograms, recipientCamps, draftInputs, safeRegistrationUrl, campaignTopics, locationNameMap } = input;
   const tokens = new Map<string, string>();
   const isInternalAdmin = (r.segments ?? []).includes("_internal_admin");
 
@@ -949,12 +959,12 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   // gives the natural body version ("— Jessica") without forcing operators
   // to choose between a friendly From header and a clean sign-off.
   // No split for senders without " @ " (e.g. "Sarah Lopez") — used as-is.
-  const senderRaw = (org.default_sender_name || org.name || "").trim();
+  const senderRaw = (brand.sender_name || org.name || "").trim();
   const atIdx = senderRaw.indexOf(" @ ");
   const senderForBody = atIdx > 0 ? senderRaw.slice(0, atIdx).trim() : senderRaw;
   tokens.set("sender_name", senderForBody);
-  tokens.set("sender_email", org.default_sender_email || "");
-  tokens.set("reply_to", org.default_sender_email || "");
+  tokens.set("sender_email", brand.sender_email || "");
+  tokens.set("reply_to", brand.reply_to || "");
   tokens.set("logo_url", org.logo_url || "");
   tokens.set("closer", org.brand_voice?.closer || "");
   tokens.set("phone", org.brand_voice?.phone || "");
@@ -1469,6 +1479,7 @@ async function renderPreview(
   campaign: Campaign,
   touchpoint: Touchpoint,
   org: Org,
+  brand: OrgBrand,
   locationId: string,
 ): Promise<Response> {
   // Load the picked programs (campaign-wide) so per-school token resolution
@@ -1574,6 +1585,7 @@ async function renderPreview(
   const tokens = await buildTokensForRecipient({
     recipient: syntheticRecipient,
     org,
+    brand,
     program: programAtLocation ?? null,
     recipientPrograms: programsAtLocation,
     pickedPrograms,

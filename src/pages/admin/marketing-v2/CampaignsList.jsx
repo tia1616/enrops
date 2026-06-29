@@ -19,6 +19,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, INFO } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
+import SenderSetupNotice from "./SenderSetupNotice.jsx";
 
 export default function CampaignsList({ onNew }) {
   const { org } = useOutletContext() ?? {};
@@ -91,6 +92,8 @@ export default function CampaignsList({ onNew }) {
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", paddingBottom: 96 }}>
       <FamilyCommsTabs active="marketing" />
+
+      <SenderSetupNotice orgId={org?.id} />
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, color: PURPLE, margin: 0 }}>Campaigns</h1>

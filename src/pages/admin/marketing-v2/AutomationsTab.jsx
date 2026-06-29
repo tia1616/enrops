@@ -21,6 +21,7 @@ import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import AutomationEditor from "./AutomationEditor.jsx";
+import SenderSetupNotice from "./SenderSetupNotice.jsx";
 
 // Templates that require Stripe Connect to fire — UI locks the toggle until
 // the org connects. Kept here (not in DB) for v1 — a `requires_stripe_connect`
@@ -191,6 +192,8 @@ export default function AutomationsTab() {
         }
       `}</style>
       <FamilyCommsTabs active="automations" />
+
+      <SenderSetupNotice orgId={org?.id} />
 
       <header style={{ marginBottom: 28 }}>
         <h1 style={{ color: INK, fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>
