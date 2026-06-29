@@ -67,8 +67,17 @@ export default function Finances() {
   const [busy, setBusy] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [savedToast, setSavedToast] = useState(null);
+  const [downloading, setDownloading] = useState(false);
 
   const canManage = orgMember?.role === "owner" || orgMember?.role === "admin";
+
+  // Finances CSV export range (defaults to the last 90 days).
+  const [exportFrom, setExportFrom] = useState(
+    () => new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10),
+  );
+  const [exportTo, setExportTo] = useState(
+    () => new Date().toISOString().slice(0, 10),
+  );
 
   // Editable form state (mirrors columns; only used when canManage)
   const [feePassThrough, setFeePassThrough] = useState(false);
@@ -199,6 +208,62 @@ export default function Finances() {
     }
     await reload();
     return result;
+  }
+
+  // Download a CSV of the org's money records (registrations + instructor
+  // payouts) for the operator's bookkeeper. Server re-checks owner/admin.
+  async function downloadFinances() {
+    if (!org?.id || !canManage) return;
+    setDownloading(true);
+    setError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        setError("Please sign in again to export.");
+        return;
+      }
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/export-finances`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            organization_id: org.id,
+            date_from: exportFrom,
+            date_to: exportTo,
+          }),
+        }
+      );
+      if (!resp.ok) {
+        const msg = await resp.json().catch(() => null);
+        setError(
+          msg?.error === "forbidden"
+            ? "Only owners and admins can export finances."
+            : "Could not export finances. Please try again."
+        );
+        return;
+      }
+      const csv = await resp.text();
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `enrops-finances-${exportFrom}_to_${exportTo}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.warn("[finances] export failed:", err);
+      setError("Could not export finances. Please try again.");
+    } finally {
+      setDownloading(false);
+    }
   }
 
   // Manual "Check status" — for an operator who finished Stripe earlier but
@@ -565,6 +630,46 @@ export default function Finances() {
               </div>
               <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
                 Preview: <strong>ENROPS {descriptorSuffix.trim() || "(your org)"}</strong>
+              </div>
+            </Section>
+          </Card>
+
+          <Card>
+            <Section>
+              <Heading>Export your finances</Heading>
+              <p style={{ color: MUTED, fontSize: 14, marginTop: 0 }}>
+                Download a CSV of your registrations and instructor payouts for your
+                bookkeeper or accountant — import it into QuickBooks, Xero, or a spreadsheet.
+                Your books stay yours; this just hands them clean data.
+              </p>
+              <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <label style={{ fontSize: 13, color: MUTED }}>
+                  From
+                  <input
+                    type="date"
+                    value={exportFrom}
+                    max={exportTo}
+                    onChange={(e) => setExportFrom(e.target.value)}
+                    style={{ display: "block", marginTop: 4, padding: "8px 12px", fontSize: 14, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit" }}
+                  />
+                </label>
+                <label style={{ fontSize: 13, color: MUTED }}>
+                  To
+                  <input
+                    type="date"
+                    value={exportTo}
+                    min={exportFrom}
+                    onChange={(e) => setExportTo(e.target.value)}
+                    style={{ display: "block", marginTop: 4, padding: "8px 12px", fontSize: 14, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit" }}
+                  />
+                </label>
+                {canManage ? (
+                  <button onClick={downloadFinances} disabled={downloading} style={btn(BRIGHT, "#fff")}>
+                    {downloading ? "Preparing…" : "Download CSV"}
+                  </button>
+                ) : (
+                  <span style={{ color: MUTED, fontSize: 12 }}>Owner/admin only</span>
+                )}
               </div>
             </Section>
           </Card>
