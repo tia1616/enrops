@@ -32,8 +32,27 @@ export default function ShareLink({
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const previewRef = useRef(null);
+  const containerRef = useRef(null);
 
   const active = !disabled && !!url;
+
+  // Close the panel on an outside click or Escape — otherwise it stays pinned
+  // open when the operator clicks elsewhere (e.g. switches the term dropdown).
+  useEffect(() => {
+    if (!open) return;
+    function onDocPointer(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
+    }
+    function onKey(e) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   // Render the preview QR each time the panel opens with a live URL.
   useEffect(() => {
@@ -80,7 +99,7 @@ export default function ShareLink({
   }
 
   return (
-    <div style={{ position: "relative", display: "inline-block" }}>
+    <div ref={containerRef} style={{ position: "relative", display: "inline-block" }}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
