@@ -32,6 +32,11 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const UNSUBSCRIBE_SECRET = Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET")!;
 const UNSUBSCRIBE_ENDPOINT = `${SUPABASE_URL}/functions/v1/marketing-unsubscribe`;
+// Public site origin for registration links in emails. Per-environment (set
+// PUBLIC_SITE_URL on staging to the staging site); defaults to prod. Mirrors
+// lifecycle-automations-cron — never hardcode the domain, or staging emails
+// link to prod (where a staging-only tenant 404s).
+const PUBLIC_SITE_URL = (Deno.env.get("PUBLIC_SITE_URL") ?? "https://enrops.com").replace(/\/+$/, "");
 
 // Already-delivered statuses for dedup. Mirrors marketing-send.
 const DELIVERED_STATUSES = ["sent", "delivered", "opened", "clicked"];
@@ -954,8 +959,8 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   // link for any other term would land on a catalog that can't show that class,
   // so fall back to the full catalog.
   const inCatalogTerm = !!org.active_registration_term && program?.term === org.active_registration_term;
-  const programDeepLink = program?.id && inCatalogTerm ? `https://enrops.com/${org.slug}?program=${program.id}` : "";
-  const defaultRegisterUrl = `https://enrops.com/${org.slug}`;
+  const programDeepLink = program?.id && inCatalogTerm ? `${PUBLIC_SITE_URL}/${org.slug}?program=${program.id}` : "";
+  const defaultRegisterUrl = `${PUBLIC_SITE_URL}/${org.slug}`;
   const registerUrlValue = safeRegistrationUrl || programDeepLink || defaultRegisterUrl;
   tokens.set("register_url", registerUrlValue);
   // Branded button version of the registration CTA. Ennie places {{register_button}}
