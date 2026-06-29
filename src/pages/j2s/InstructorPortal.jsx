@@ -970,6 +970,9 @@ export default function InstructorPortal() {
         <SubDetailView
           sub={selectedSub}
           onBack={() => { setView("schedule"); setSelectedSubId(null); }}
+          onMarkTaught={() => handleSubMarkTaught(selectedSub.id)}
+          markBusy={subActingOn?.id === selectedSub.id && subActingOn?.action === "mark"}
+          error={error}
         />
       </Shell>
     );
@@ -1184,8 +1187,6 @@ export default function InstructorPortal() {
               key={s.id}
               sub={s}
               readOnly
-              onMarkTaught={() => handleSubMarkTaught(s.id)}
-              markBusy={subActingOn?.id === s.id && subActingOn?.action === "mark"}
               onOpen={() => { setSelectedSubId(s.id); setView("sub-detail"); }}
             />
           ))}
@@ -1449,7 +1450,7 @@ function Section({ title, children }) {
 // Mark Taught button (date-of or after). The component reads from either
 // sub.camp_parent (camp sub) or sub.program_parent (afterschool sub) — set
 // by loadSubAssignments.
-function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, onMarkTaught, markBusy, readOnly, onOpen }) {
+function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, onOpen }) {
   const [declineOpen, setDeclineOpen] = useState(false);
   const [reason, setReason] = useState("");
 
@@ -1506,16 +1507,6 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, onMarkTaught
             <div style={{ fontSize: 12, color: sub.status === "taught" ? OK_GREEN : MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
               {sub.status === "taught" ? "✓ Taught" : "✓ Accepted"}
             </div>
-            {sub.status === "confirmed" && sub.date && sub.date <= todayLocalISO() && onMarkTaught && (
-              <button
-                type="button"
-                onClick={onMarkTaught}
-                disabled={markBusy}
-                style={{ background: BRIGHT, color: "#fff", border: `1px solid ${BRIGHT}`, padding: "6px 12px", fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: markBusy ? "default" : "pointer", opacity: markBusy ? 0.6 : 1 }}
-              >
-                {markBusy ? "Marking…" : "Mark this day as taught"}
-              </button>
-            )}
           </div>
           {onOpen && (
             <div style={{ marginTop: 10 }}>
@@ -2327,7 +2318,7 @@ function AssignmentDetailView({ assignment, coInstructors = [], onBack }) {
 // DailyCheckInSection — the card itself carries the one-tap "Mark this day as
 // taught". Roster + lessons only apply to camp subs (mirrors the card's prior
 // inline behavior); program subs show location only.
-function SubDetailView({ sub, onBack }) {
+function SubDetailView({ sub, onBack, onMarkTaught, markBusy, error }) {
   const isCamp = sub.parent_assignment_type === "camp";
   const sess = isCamp ? sub.camp_parent?.camp_sessions ?? null : null;
   const prog = !isCamp ? sub.program_parent?.programs ?? null : null;
@@ -2364,6 +2355,12 @@ function SubDetailView({ sub, onBack }) {
         ← Back to schedule
       </button>
 
+      {error && (
+        <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+
       <div style={{
         background: "#fff",
         border: `1px solid ${RULE}`,
@@ -2392,6 +2389,7 @@ function SubDetailView({ sub, onBack }) {
       </div>
 
       <LocationSection location={loc} fallbackName={venueName} />
+      <SubCheckInSection sub={sub} onMarkTaught={onMarkTaught} markBusy={markBusy} />
       {isCamp && sess?.id && (
         <RosterSection campSessionId={sess.id} enrollment={sess.current_enrollment} startsOn={sess.starts_on} />
       )}
@@ -2399,6 +2397,42 @@ function SubDetailView({ sub, onBack }) {
         <LessonsSection curriculumId={curriculumId} curriculumName={curriculumName} />
       )}
     </div>
+  );
+}
+
+// Single-day check-in for a sub — the one-day counterpart to DailyCheckInSection.
+// A sub covers exactly one date, so there's one row: "Upcoming" before the day,
+// a "Mark taught" button on/after it, and a green ✓ once taught. Marking routes
+// through the parent's confirm-sub-delivery handler so the schedule card and this
+// row stay in sync.
+function SubCheckInSection({ sub, onMarkTaught, markBusy }) {
+  if (!sub?.date) return null;
+  const today = todayLocalISO();
+  const isTaught = sub.status === "taught";
+  const isFuture = sub.date > today;
+
+  return (
+    <Section title="Daily check-in">
+      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "14px 16px" }}>
+        <div style={{ fontSize: 13, color: MUTED, marginBottom: 12, lineHeight: 1.5 }}>
+          Mark this day after you teach it.{" "}
+          {isTaught ? (
+            <span style={{ color: OK_GREEN, fontWeight: 600 }}>All set — thanks!</span>
+          ) : (
+            <span>This is how your admin knows the day was covered.</span>
+          )}
+        </div>
+        <DayRow
+          date={sub.date}
+          isToday={sub.date === today}
+          isFuture={isFuture}
+          existing={isTaught ? {} : null}
+          loading={false}
+          busy={markBusy}
+          onMark={onMarkTaught}
+        />
+      </div>
+    </Section>
   );
 }
 
