@@ -135,6 +135,24 @@ serve(async (req: Request) => {
       .maybeSingle();
     if (!cmData) return FORBIDDEN;
 
+    // ── refund policy: who is made whole on a refund ──────────────────────
+    // When the provider bears Stripe's processing fee (stripe_fee_payer='tenant',
+    // Enrops-platform), the application fee was sized up to recover Stripe's fee
+    // (see _shared/connectChargeParams). On a refund we therefore ALSO refund the
+    // application fee so the PROVIDER is made whole — Enrops absorbs its 1% margin
+    // + the Stripe-fee recovery rather than charging a provider on a refunded
+    // registration. Verified in Stripe test mode 2026-06-29: refund_application_fee
+    // false → provider out the full app fee; true → provider net $0.
+    // Legacy own-platform orgs (J2S, stripe_fee_payer='platform' or unset) keep the
+    // prior behavior (false) — their app fee is internal, so this is unchanged.
+    const { data: orgFeeRow } = await supabase
+      .from('organizations')
+      .select('stripe_fee_payer')
+      .eq('id', reg.organization_id)
+      .maybeSingle();
+    const refundApplicationFee =
+      (orgFeeRow as { stripe_fee_payer?: string } | null)?.stripe_fee_payer === 'tenant';
+
     // ── collect paid PIs for this registration ────────────────────────────
     // Pattern: installments table is the primary source. If no installments
     // rows exist (single-pay registration), fall back to registrations.
@@ -243,10 +261,12 @@ serve(async (req: Request) => {
           {
             payment_intent: slot.pi,
             amount: refundThisPi,
-            // Enrops keeps its application fee on refunds — this is the spec'd
-            // behavior and matches Stripe's default for destination charges
-            // (this flag would only matter if it were true).
-            refund_application_fee: false,
+            // Make the provider whole on refunds when they bear Stripe's fee
+            // (see refundApplicationFee above). For provider-bears-fee orgs this
+            // refunds the (uplifted) application fee proportionally so the
+            // provider nets $0 on the refunded portion; Enrops absorbs the
+            // unrecoverable Stripe fee. Legacy own-platform orgs keep false.
+            refund_application_fee: refundApplicationFee,
             // Pull the refunded share back from the operator's connected
             // account. Without this, refund comes out of platform balance only.
             reverse_transfer: true,
