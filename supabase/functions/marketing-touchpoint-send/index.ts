@@ -180,7 +180,22 @@ type Org = {
   logo_url: string | null;
   vip_offering: VipOffering | null;
   active_registration_term: string | null;
+  // Nested one-to-one from org_branding (PostgREST returns object or 1-elem array).
+  org_branding: { primary_color: string | null } | { primary_color: string | null }[] | null;
 };
+
+// Hex color guard — only allow a real #rgb/#rrggbb so a malformed brand value
+// can't inject arbitrary CSS into the button style attribute.
+function safeHexColor(raw: unknown, fallback: string): string {
+  return typeof raw === "string" && /^#[0-9a-fA-F]{3,8}$/.test(raw.trim()) ? raw.trim() : fallback;
+}
+
+// Pull the tenant's brand color off the nested org_branding (object or array).
+function orgPrimaryColor(org: Org): string {
+  const b = org.org_branding;
+  const row = Array.isArray(b) ? b[0] : b;
+  return safeHexColor(row?.primary_color, "#1C004F");
+}
 
 type ProgramRow = {
   id: string;
@@ -298,7 +313,7 @@ serve(async (req: Request) => {
   // ---- Load org ----
   const { data: org, error: oErr } = await supabase
     .from("organizations")
-    .select("id, name, slug, default_sender_name, default_sender_email, brand_voice, logo_url, vip_offering, active_registration_term")
+    .select("id, name, slug, default_sender_name, default_sender_email, brand_voice, logo_url, vip_offering, active_registration_term, org_branding(primary_color)")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
@@ -965,12 +980,13 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   tokens.set("register_url", registerUrlValue);
   // Branded button version of the registration CTA. Ennie places {{register_button}}
   // on its own line for the primary "register" call-to-action so it renders as a
-  // button instead of a raw URL. (Color is the platform default for now;
-  // per-tenant button color is a follow-up — see the email-theming backlog.)
+  // button instead of a raw URL. Uses the tenant's own brand color
+  // (org_branding.primary_color), validated, with a platform fallback.
+  const btnColor = orgPrimaryColor(org);
   tokens.set(
     "register_button",
     registerUrlValue
-      ? `<div style="text-align:center;margin:28px 0;"><a href="${escapeHtml(registerUrlValue)}" style="display:inline-block;background:#1C004F;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;">Register now &rarr;</a></div>`
+      ? `<div style="text-align:center;margin:28px 0;"><a href="${escapeHtml(registerUrlValue)}" style="display:inline-block;background:${btnColor};color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;">Register now &rarr;</a></div>`
       : "",
   );
 
