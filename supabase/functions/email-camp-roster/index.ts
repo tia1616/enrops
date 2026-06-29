@@ -183,7 +183,7 @@ serve(async (req: Request) => {
       .from('camp_assignments')
       .select('id, role, status, instructor:instructors ( id, first_name, last_name, email, phone )')
       .eq('camp_session_id', camp.id)
-      .in('status', ['accepted', 'pending'])
+      .in('status', ['confirmed', 'published'])
       .order('role', { ascending: true });
     const instructors = (asgs ?? [])
       .filter((a: any) => a.instructor)
@@ -199,6 +199,7 @@ serve(async (req: Request) => {
         recipients,
         camper_count: campers.length,
         instructor_count: instructors.length,
+        instructors,
         partner: partner ? { id: partner.id, name: partner.partner_name } : null,
         location: location ? { id: location.id, name: location.name, has_contact_email: !!location.contact_email } : null,
       });

@@ -208,6 +208,7 @@ serve(async (req: Request) => {
         recipients,
         camper_count: students.length, // keep field name for modal compat
         instructor_count: instructors.length,
+        instructors,
         partner: partner ? { id: partner.id, name: partner.partner_name } : null,
         location: location ? { id: location.id, name: location.name, has_contact_email: !!location.contact_email } : null,
       });
