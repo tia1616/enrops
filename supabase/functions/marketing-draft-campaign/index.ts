@@ -1024,7 +1024,7 @@ const APPROVED_TOKENS = new Set([
   "first_name", "parent_name", "child_first_name", "child_last_name",
   "school", "city", "zip", "geo_segment", "unsubscribe_url",
   // per-org
-  "org_name", "sender_name", "sender_email", "register_url", "reply_to",
+  "org_name", "sender_name", "sender_email", "register_url", "register_button", "reply_to",
   "logo_url", "closer", "phone", "website",
   // per-program (computed from this recipient's school's programs)
   "savings", "early_bird_price", "regular_price", "early_bird_deadline",
@@ -1148,7 +1148,7 @@ function buildSystemPrompt(
 
   const tokenList = `Approved merge tokens (use these for ALL specifics):
 - Per-recipient: {{first_name}}, {{parent_name}}, {{child_first_name}}, {{child_last_name}}, {{school}}, {{city}}, {{zip}}, {{geo_segment}}, {{unsubscribe_url}}
-- Per-org: {{org_name}}, {{sender_name}}, {{sender_email}}, {{register_url}}, {{reply_to}}, {{logo_url}}, {{closer}}, {{phone}}, {{website}}
+- Per-org: {{org_name}}, {{sender_name}}, {{sender_email}}, {{register_url}}, {{register_button}} (branded registration button — see CTA rule), {{reply_to}}, {{logo_url}}, {{closer}}, {{phone}}, {{website}}
 - Per-program (pulled per recipient's school): {{savings}}, {{early_bird_price}}, {{regular_price}}, {{early_bird_deadline}}, {{first_session_date}}, {{session_count}}, {{day_of_week}}, {{curriculum}}, {{vip_price}}
 - Per-area camp list (pulled per recipient's area, camps mode only): {{camp_details}} — an HTML <ul> with each camp's name, venue, and date range in this recipient's area. Use this when the operator wants parents to see specific venues + dates per camp (almost always — it's what helps them pick a camp to register for).
 - VIP / annual-pass block (whole paragraph, per-recipient suppression): {{vip_block}} — see "VIP / ANNUAL-PASS BLOCK" rules below
@@ -1364,6 +1364,11 @@ This URL is NOT always a registration page. Use context to decide what to call i
 Look at the campaign topic, operator_notes, and what's happening (cancellation? recap? new program?) to pick the right framing. When in doubt, "More info" works for any link type.`
     : "";
 
+  // The registration CTA renders as a branded button via {{register_button}}.
+  const ctaButtonBlock = `REGISTRATION CTA BUTTON:
+For the main "register" / "sign up" call-to-action, put {{register_button}} on its OWN line where the button should go (usually near the end, right after the pitch). It renders as a branded "Register now" button — do NOT write your own button label and do NOT paste the raw URL as visible text.
+{{register_url}} points at the same destination as a plain text link — use it ONLY when the link is NOT a registration page (e.g. a photo gallery, survey, or updated schedule in a recap), and then write real link text, never the bare URL. For a normal "go register" campaign, use {{register_button}}.`;
+
   // One-off mode (mode='other' with send_at) -> 1 touchpoint at exact time.
   // Multi-touchpoint mode (programs/camps with duration) -> Ennie spaces the cadence.
   const isOneOff = !!inputs.send_at;
@@ -1395,6 +1400,7 @@ This is more useful to the operator than guessing or apologizing for the lack of
     curriculumBlock,
     operatorNotesBlock ? `\n${operatorNotesBlock}` : ``,
     registrationUrlBlock ? `\n${registrationUrlBlock}` : ``,
+    `\n${ctaButtonBlock}`,
     oneOffBlock ? `\n${oneOffBlock}` : ``,
     ``,
     isOneOff ? `` : cadenceGuidance,

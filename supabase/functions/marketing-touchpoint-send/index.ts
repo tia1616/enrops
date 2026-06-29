@@ -82,7 +82,7 @@ const SEND_TIME_BUDGET_MS = 130_000;
 const APPROVED_TOKENS = new Set([
   "first_name", "parent_name", "child_first_name", "child_last_name",
   "school", "city", "zip", "geo_segment", "unsubscribe_url",
-  "org_name", "sender_name", "sender_email", "register_url", "reply_to",
+  "org_name", "sender_name", "sender_email", "register_url", "register_button", "reply_to",
   "logo_url", "closer", "phone", "website",
   "savings", "early_bird_price", "regular_price", "early_bird_deadline",
   "first_session_date", "session_count", "day_of_week", "curriculum", "vip_price",
@@ -956,7 +956,18 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   const inCatalogTerm = !!org.active_registration_term && program?.term === org.active_registration_term;
   const programDeepLink = program?.id && inCatalogTerm ? `https://enrops.com/${org.slug}?program=${program.id}` : "";
   const defaultRegisterUrl = `https://enrops.com/${org.slug}`;
-  tokens.set("register_url", safeRegistrationUrl || programDeepLink || defaultRegisterUrl);
+  const registerUrlValue = safeRegistrationUrl || programDeepLink || defaultRegisterUrl;
+  tokens.set("register_url", registerUrlValue);
+  // Branded button version of the registration CTA. Ennie places {{register_button}}
+  // on its own line for the primary "register" call-to-action so it renders as a
+  // button instead of a raw URL. (Color is the platform default for now;
+  // per-tenant button color is a follow-up — see the email-theming backlog.)
+  tokens.set(
+    "register_button",
+    registerUrlValue
+      ? `<div style="text-align:center;margin:28px 0;"><a href="${escapeHtml(registerUrlValue)}" style="display:inline-block;background:#1C004F;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;">Register now &rarr;</a></div>`
+      : "",
+  );
 
   // Per-program (from THIS recipient's school's matching program)
   if (program) {
@@ -1135,7 +1146,7 @@ function buildVipBlock(
 // 2026-06-02 when Cascadia-excluded vs Cascadia-included previews showed
 // raw HTML tags. All OTHER tokens still get escaped: they come from
 // recipient data (parent_name, school) which could contain <script> etc.
-const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block", "curriculum", "camp_details"]);
+const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block", "curriculum", "camp_details", "register_button"]);
 
 function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: boolean }): string {
   return text.replace(/\{\{(\w+)\}\}/g, (full, key) => {
