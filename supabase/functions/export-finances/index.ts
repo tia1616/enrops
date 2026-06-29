@@ -8,6 +8,10 @@
 // — never trust the client's claim. Reads run with service_role internally so
 // the export can span tables, but only AFTER the permission check passes.
 //
+// DAY BOUNDARIES: rows are bucketed by the ORG'S LOCAL day (organizations.
+// timezone), not UTC, so a bookkeeper reconciling by calendar day gets the
+// right rows in the right day. The CSV `date` column is the org-local date.
+//
 // FEES: we deliberately do NOT fabricate Stripe's processing fee or the
 // application fee — neither is stored in our DB (the fee lives on Stripe's
 // balance transaction). Those columns are left blank; the Stripe→QBO connector
@@ -15,9 +19,8 @@
 // reconcile against Stripe, not a half-computed number.
 //
 // INPUT (POST JSON): { organization_id, date_from?, date_to?, record_types? }
-//   date_from / date_to: ISO dates (YYYY-MM-DD). Default = last 90 days (we do
-//   NOT dump all-time by accident). record_types: optional subset of
-//   ['registration','contractor_payout'].
+//   date_from / date_to: YYYY-MM-DD (org-local). Default = last 90 days.
+//   record_types: optional subset of ['registration','contractor_payout'].
 // OUTPUT: text/csv attachment.
 
 import { corsHeaders, adminClient } from '../_shared/instructor.ts';
@@ -28,11 +31,16 @@ const CSV_HEADER = [
   'enrops_record_id',
 ];
 
-// RFC-4180 CSV cell: wrap in quotes and double any internal quotes. Numbers and
-// nulls become plain strings ('' for null/undefined).
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TZ_FALLBACK = 'UTC';
+
+// RFC-4180 CSV cell, plus spreadsheet formula-injection neutralization: a value
+// starting with = + - @ (or tab/CR) is prefixed with a single quote so Excel /
+// Sheets treat it as text, not a formula, when the bookkeeper opens the file.
 function cell(v: unknown): string {
   if (v === null || v === undefined) return '';
-  const s = String(v);
+  let s = String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return `"${s.replace(/"/g, '""')}"`;
 }
 
@@ -44,6 +52,36 @@ function json(body: unknown, status = 200): Response {
 }
 
 const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+
+// The YYYY-MM-DD calendar day after the given one (date-only arithmetic).
+function nextDayStr(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return isoDate(new Date(Date.UTC(y, m - 1, d + 1)));
+}
+
+// The UTC instant corresponding to 00:00:00 LOCAL time on `dateStr` in
+// `timeZone`. Uses the zone's actual offset at that date, so it's DST-correct.
+function localDayStartUtc(dateStr: string, timeZone: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const utcMidnight = Date.UTC(y, m - 1, d, 0, 0, 0);
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const map: Record<string, string> = {};
+  for (const p of dtf.formatToParts(new Date(utcMidnight))) map[p.type] = p.value;
+  const hour = map.hour === '24' ? '00' : map.hour; // some zones emit '24' for midnight
+  const asUtc = Date.UTC(+map.year, +map.month - 1, +map.day, +hour, +map.minute, +map.second);
+  const offset = asUtc - utcMidnight; // ms local-time is ahead of UTC at that instant
+  return new Date(utcMidnight - offset).toISOString();
+}
+
+// The org-local calendar day (YYYY-MM-DD) for a stored UTC timestamp.
+function localDateOf(ts: string | null | undefined, timeZone: string): string {
+  if (!ts) return '';
+  return new Intl.DateTimeFormat('en-CA', { timeZone }).format(new Date(ts));
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -72,9 +110,11 @@ Deno.serve(async (req: Request) => {
     const orgId = (body.organization_id || '').trim();
     if (!orgId) return json({ error: 'missing_organization_id' }, 400);
 
+    // Validate any supplied dates up front (also closes a filename edge case).
+    if (body.date_from && !DATE_RE.test(body.date_from)) return json({ error: 'invalid_date_from' }, 400);
+    if (body.date_to && !DATE_RE.test(body.date_to)) return json({ error: 'invalid_date_to' }, 400);
+
     // ── money permission: caller must be owner/admin of THIS org ─────────
-    // (Same gate as can_handle_money; checked directly so this fn is
-    // self-contained. Do not trust the client.)
     const { data: cmData } = await supabase
       .from('org_members')
       .select('role')
@@ -85,25 +125,26 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
     if (!cmData) return json({ error: 'forbidden' }, 403);
 
-    // ── date window: default to the last 90 days ────────────────────────
+    // Org timezone (for local-day bucketing) + fallback term for camp regs.
+    const { data: orgRow } = await supabase
+      .from('organizations')
+      .select('timezone, active_registration_term')
+      .eq('id', orgId)
+      .maybeSingle();
+    const tz = (orgRow as { timezone?: string | null } | null)?.timezone || TZ_FALLBACK;
+    const orgTerm = (orgRow as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
+
+    // ── date window (org-local), default last 90 days ───────────────────
     const today = new Date();
-    const ninetyAgo = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
-    const dateFrom = (body.date_from || isoDate(ninetyAgo)).slice(0, 10);
-    const dateTo = (body.date_to || isoDate(today)).slice(0, 10);
-    // inclusive of the whole end day
-    const dateToExclusive = isoDate(new Date(new Date(dateTo + 'T00:00:00Z').getTime() + 24 * 60 * 60 * 1000));
+    const dateFrom = body.date_from || isoDate(new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000));
+    const dateTo = body.date_to || isoDate(today);
+    // UTC instants for [local 00:00 of dateFrom, local 00:00 of dateTo+1)
+    const fromInstant = localDayStartUtc(dateFrom, tz);
+    const toInstant = localDayStartUtc(nextDayStr(dateTo), tz);
 
     const types = Array.isArray(body.record_types) && body.record_types.length
       ? new Set(body.record_types)
       : new Set(['registration', 'contractor_payout']);
-
-    // Org-level fallback term for camp registrations that have no program term.
-    const { data: orgRow } = await supabase
-      .from('organizations')
-      .select('active_registration_term')
-      .eq('id', orgId)
-      .maybeSingle();
-    const orgTerm = (orgRow as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
 
     const rows: string[][] = [];
 
@@ -118,8 +159,8 @@ Deno.serve(async (req: Request) => {
           camp_sessions ( curriculum_name )
         `)
         .eq('organization_id', orgId)
-        .gte('registered_at', dateFrom)
-        .lt('registered_at', dateToExclusive)
+        .gte('registered_at', fromInstant)
+        .lt('registered_at', toInstant)
         .order('registered_at', { ascending: true });
       if (regErr) {
         console.error('[export-finances] registrations query failed:', regErr.message);
@@ -131,7 +172,7 @@ Deno.serve(async (req: Request) => {
         const program = r.programs?.curriculum ?? r.camp_sessions?.curriculum_name ?? '';
         const term = r.programs?.term ?? orgTerm;
         rows.push([
-          (r.registered_at ?? '').slice(0, 10),
+          localDateOf(r.registered_at, tz),
           'registration',
           String(r.amount_cents ?? ''),
           '', // stripe_fee_cents — connector captures from Stripe
@@ -158,8 +199,8 @@ Deno.serve(async (req: Request) => {
           camp_sessions ( curriculum_name )
         `)
         .eq('organization_id', orgId)
-        .gte('created_at', dateFrom)
-        .lt('created_at', dateToExclusive)
+        .gte('created_at', fromInstant)
+        .lt('created_at', toInstant)
         .order('created_at', { ascending: true });
       if (poErr) {
         console.error('[export-finances] payouts query failed:', poErr.message);
@@ -170,7 +211,7 @@ Deno.serve(async (req: Request) => {
         const counterparty = `${inst.first_name ?? ''} ${inst.last_name ?? ''}`.trim();
         const program = p.programs?.curriculum ?? p.camp_sessions?.curriculum_name ?? '';
         rows.push([
-          (p.succeeded_at ?? p.created_at ?? '').slice(0, 10),
+          localDateOf(p.succeeded_at ?? p.created_at, tz),
           'contractor_payout',
           String(p.amount_cents ?? ''),
           '', // stripe_fee_cents — transfers carry no Stripe processing fee
