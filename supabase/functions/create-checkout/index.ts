@@ -215,13 +215,15 @@ serve(async (req) => {
             platform_fee_ach_pct,
             platform_fee_cap_cents,
             fee_pass_through,
-            stripe_fee_payer
+            stripe_fee_payer,
+            active_registration_term
           )
         `)
         .eq('id', registration_ids[0])
         .single();
       const orgId = regForOrg?.organization_id || null;
       const orgConfig = (regForOrg?.organizations ?? null) as ConnectOrgConfig | null;
+      const orgTerm = (regForOrg?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
       const connectParams = buildConnectChargeParams(firstAmount, 'card', orgConfig, orgId);
 
       // Pass-through: add the 1% on installment 1's amount as a visible line.
@@ -243,6 +245,10 @@ serve(async (req) => {
             registration_ids: registration_ids.join(','),
             installment_number: '1',
             total_amount_cents: String(total_cents),
+            // C1 accounting-sync standard keys (read by external Stripe→QBO connectors)
+            enrops_org_id: orgId ?? '',
+            enrops_record_type: 'registration',
+            enrops_term: orgTerm,
           },
           ...connectParams,
         },
@@ -330,13 +336,15 @@ serve(async (req) => {
           platform_fee_ach_pct,
           platform_fee_cap_cents,
           fee_pass_through,
-          stripe_fee_payer
+          stripe_fee_payer,
+          active_registration_term
         )
       `)
       .eq('id', registration_ids[0])
       .single();
     const orgIdStd = regForOrgStd?.organization_id || null;
     const orgConfigStd = (regForOrgStd?.organizations ?? null) as ConnectOrgConfig | null;
+    const orgTermStd = (regForOrgStd?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
     const connectParamsStd = buildConnectChargeParams(total_cents, 'card', orgConfigStd, orgIdStd);
 
     // Pass-through: when the operator opts in (fee_pass_through), add the 1% as a
@@ -347,10 +355,20 @@ serve(async (req) => {
       if (feeLineStd) stripeLineItems.push(feeLineStd);
     }
 
-    // Only attach payment_intent_data if we actually have Connect fields to
-    // set. Stripe rejects an empty payment_intent_data object on Checkout
-    // Sessions; passing it conditionally keeps the no-Connect fallback clean.
-    const piData = Object.keys(connectParamsStd).length > 0 ? connectParamsStd : undefined;
+    // C1: every charge carries accounting-sync metadata so external Stripe→QBO
+    // connectors can categorize it. Metadata lands on payment_intent_data so it
+    // reaches the CHARGE (what connectors read), not just the session. Session
+    // metadata below is unchanged (the webhook reads that). Metadata is always
+    // present, so payment_intent_data is always non-empty (no empty-object risk).
+    const piData = {
+      ...connectParamsStd,
+      metadata: {
+        registration_ids: registration_ids.join(','),
+        enrops_org_id: orgIdStd ?? '',
+        enrops_record_type: 'registration',
+        enrops_term: orgTermStd,
+      },
+    };
 
     const session = await stripe.checkout.sessions.create({
       // Pay-in-full accepts card AND bank transfer (ACH). Both carry the same
@@ -370,7 +388,7 @@ serve(async (req) => {
         parent_email,
         parent_name: parent_name || '',
       },
-      ...(piData ? { payment_intent_data: piData } : {}),
+      payment_intent_data: piData,
     });
 
     // intelligence: log enrollment initiated (one per registration; fail-safe, never blocks)

@@ -397,6 +397,8 @@ serve(async (req: Request) => {
             enrops_camp_session_id: kind === 'camp'    ? campSessionId : '',
             enrops_program_id:      kind === 'program' ? programId     : '',
             enrops_org_id: instructor.organization_id,
+            enrops_record_type: 'contractor_payout',
+            enrops_record_id: payoutId,
             enrops_session_confirmation_count: String(confirmationIds.length),
             enrops_includes_distance_bonus: includesDistanceBonus ? 'true' : 'false',
             enrops_instructor_pay_model: payModel,
