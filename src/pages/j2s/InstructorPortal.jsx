@@ -89,6 +89,7 @@ export default function InstructorPortal() {
   const [view, setView] = useState("schedule");
   const [showPast, setShowPast] = useState(false);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState(null);
+  const [selectedSubId, setSelectedSubId] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -360,12 +361,12 @@ export default function InstructorPortal() {
       campParentIds.length === 0
         ? Promise.resolve({ data: [] })
         : supabase.from("camp_assignments")
-          .select("id, camp_session_id, camp_sessions(id, curriculum_id, curriculum_name, location_name, location_id, starts_on, ends_on, start_time, end_time, week_num, current_enrollment, program_locations:location_id(name, address, room_number, arrival_instructions, dismissal_instructions))")
+          .select("id, camp_session_id, camp_sessions(id, curriculum_id, curriculum_name, location_name, location_id, starts_on, ends_on, start_time, end_time, week_num, current_enrollment, program_locations:location_id(name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions))")
           .in("id", campParentIds),
       progParentIds.length === 0
         ? Promise.resolve({ data: [] })
         : supabase.from("program_assignments")
-          .select("id, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, program_location_id, program_locations:program_location_id(name, address, room_number, arrival_instructions, dismissal_instructions))")
+          .select("id, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, program_location_id, program_locations:program_location_id(name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions))")
           .in("id", progParentIds),
     ]);
 
@@ -956,6 +957,24 @@ export default function InstructorPortal() {
     );
   }
 
+  if (view === "sub-detail") {
+    const selectedSub = subAssignments.find((s) => s.id === selectedSubId);
+    if (!selectedSub) {
+      // Sub vanished (admin reassigned/withdrew). Bounce back.
+      setView("schedule");
+      setSelectedSubId(null);
+      return null;
+    }
+    return (
+      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+        <SubDetailView
+          sub={selectedSub}
+          onBack={() => { setView("schedule"); setSelectedSubId(null); }}
+        />
+      </Shell>
+    );
+  }
+
   return (
     <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
       {impersonating && (
@@ -1167,6 +1186,7 @@ export default function InstructorPortal() {
               readOnly
               onMarkTaught={() => handleSubMarkTaught(s.id)}
               markBusy={subActingOn?.id === s.id && subActingOn?.action === "mark"}
+              onOpen={() => { setSelectedSubId(s.id); setView("sub-detail"); }}
             />
           ))}
         </Section>
@@ -1429,7 +1449,7 @@ function Section({ title, children }) {
 // Mark Taught button (date-of or after). The component reads from either
 // sub.camp_parent (camp sub) or sub.program_parent (afterschool sub) — set
 // by loadSubAssignments.
-function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, onMarkTaught, markBusy, readOnly }) {
+function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, onMarkTaught, markBusy, readOnly, onOpen }) {
   const [declineOpen, setDeclineOpen] = useState(false);
   const [reason, setReason] = useState("");
 
@@ -1457,20 +1477,24 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, onMarkTaught
       <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
         {friendlyDate}{timeRange ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
       </div>
-      {loc?.address && (
+      {/* Location + arrival/dismissal + notes render inline on the pending
+          offer so the instructor can decide whether to accept. On the confirmed
+          (read-only) card they move behind "View details" to keep the schedule
+          list compact and consistent with the camp cards. */}
+      {!readOnly && loc?.address && (
         <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc.address}</div>
       )}
-      {loc?.arrival_instructions && (
+      {!readOnly && loc?.arrival_instructions && (
         <div style={{ fontSize: 13, color: INK, marginTop: 8 }}>
           <span style={{ color: MUTED, fontWeight: 600 }}>Arrival: </span>{loc.arrival_instructions}
         </div>
       )}
-      {loc?.dismissal_instructions && (
+      {!readOnly && loc?.dismissal_instructions && (
         <div style={{ fontSize: 13, color: INK, marginTop: 4 }}>
           <span style={{ color: MUTED, fontWeight: 600 }}>Dismissal: </span>{loc.dismissal_instructions}
         </div>
       )}
-      {sub.notes && (
+      {!readOnly && sub.notes && (
         <div style={{ fontSize: 13, color: INK, marginTop: 8, padding: 10, background: CREAM, borderLeft: `3px solid ${VIOLET}`, borderRadius: 4 }}>
           <span style={{ color: MUTED, fontWeight: 600 }}>Note: </span>{sub.notes}
         </div>
@@ -1493,14 +1517,24 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, onMarkTaught
               </button>
             )}
           </div>
-          {isCamp && sub.camp_parent?.camp_session_id && (
-            <div style={{ marginTop: 14 }}>
-              <RosterSection campSessionId={sub.camp_parent.camp_session_id} startsOn={sess?.starts_on} />
-            </div>
-          )}
-          {isCamp && sess?.curriculum_id && (
-            <div style={{ marginTop: 14 }}>
-              <LessonsSection curriculumId={sess.curriculum_id} curriculumName={curriculumName} />
+          {onOpen && (
+            <div style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                onClick={onOpen}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: PURPLE,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                {isCamp ? "View details, roster, and materials →" : "View details →"}
+              </button>
             </div>
           )}
         </>
@@ -2283,6 +2317,87 @@ function AssignmentDetailView({ assignment, coInstructors = [], onBack }) {
       />
       <RosterSection campSessionId={s.id} enrollment={s.current_enrollment} startsOn={s.starts_on} />
       <LessonsSection curriculumId={s.curriculum_id} curriculumName={s.curriculum_name} />
+    </div>
+  );
+}
+
+// Detail page for a confirmed sub day — the counterpart to AssignmentDetailView,
+// reached from the read-only SubOfferCard's "View details" link so the schedule
+// list stays compact. A sub is a single day (sub.date), so there's no multi-day
+// DailyCheckInSection — the card itself carries the one-tap "Mark this day as
+// taught". Roster + lessons only apply to camp subs (mirrors the card's prior
+// inline behavior); program subs show location only.
+function SubDetailView({ sub, onBack }) {
+  const isCamp = sub.parent_assignment_type === "camp";
+  const sess = isCamp ? sub.camp_parent?.camp_sessions ?? null : null;
+  const prog = !isCamp ? sub.program_parent?.programs ?? null : null;
+  const loc = isCamp ? sess?.program_locations ?? null : prog?.program_locations ?? null;
+
+  const curriculumName = isCamp ? (sess?.curriculum_name ?? "this camp") : (prog?.curriculum ?? "this program");
+  const venueName = loc?.name ?? (isCamp ? sess?.location_name : null) ?? "";
+  const startTime = isCamp ? sess?.start_time : prog?.start_time;
+  const endTime = isCamp ? sess?.end_time : prog?.end_time;
+  const timeRange = startTime && endTime ? `${fmtTimePretty(startTime)}–${fmtTimePretty(endTime)}` : (startTime ? fmtTimePretty(startTime) : "");
+  const curriculumId = isCamp ? sess?.curriculum_id : prog?.curriculum_id;
+
+  const friendlyDate = sub.date
+    ? new Date(`${sub.date}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+    : "";
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onBack}
+        style={{
+          background: "transparent",
+          border: "none",
+          color: PURPLE,
+          fontSize: 13,
+          fontWeight: 600,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          padding: 0,
+          marginBottom: 12,
+        }}
+      >
+        ← Back to schedule
+      </button>
+
+      <div style={{
+        background: "#fff",
+        border: `1px solid ${RULE}`,
+        borderLeft: `3px solid ${OK_GREEN}`,
+        borderRadius: 8,
+        padding: "16px 18px",
+        marginBottom: 18,
+      }}>
+        <div style={{ fontSize: 11, color: VIOLET, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6 }}>
+          Sub · {sub.sub_tier === "lead" ? "Lead" : "Developing"}
+        </div>
+        <h1 style={{ margin: "4px 0 0", fontSize: 22, fontWeight: 700, color: INK, letterSpacing: -0.3, lineHeight: 1.25 }}>
+          {curriculumName}
+        </h1>
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
+          {friendlyDate}{timeRange ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
+        </div>
+        <div style={{ marginTop: 8, fontSize: 12, color: sub.status === "taught" ? OK_GREEN : MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
+          {sub.status === "taught" ? "✓ Taught" : "✓ Accepted"}
+        </div>
+        {sub.notes && (
+          <div style={{ fontSize: 13, color: INK, marginTop: 12, padding: 10, background: CREAM, borderLeft: `3px solid ${VIOLET}`, borderRadius: 4 }}>
+            <span style={{ color: MUTED, fontWeight: 600 }}>Note: </span>{sub.notes}
+          </div>
+        )}
+      </div>
+
+      <LocationSection location={loc} fallbackName={venueName} />
+      {isCamp && sess?.id && (
+        <RosterSection campSessionId={sess.id} enrollment={sess.current_enrollment} startsOn={sess.starts_on} />
+      )}
+      {isCamp && curriculumId && (
+        <LessonsSection curriculumId={curriculumId} curriculumName={curriculumName} />
+      )}
     </div>
   );
 }
