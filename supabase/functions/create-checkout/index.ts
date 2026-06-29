@@ -328,7 +328,8 @@ serve(async (req) => {
           platform_fee_card_pct,
           platform_fee_ach_pct,
           platform_fee_cap_cents,
-          fee_pass_through
+          fee_pass_through,
+          stripe_fee_payer
         )
       `)
       .eq('id', registration_ids[0])

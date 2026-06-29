@@ -118,3 +118,49 @@ Deno.test('transfer destination is the org stripe_account_id, not the platform',
   const result = buildConnectChargeParams(10000, 'card', org, 'org-id');
   assertEquals(result.transfer_data?.destination, 'acct_TENANT_X');
 });
+
+// ── Stripe-fee recovery uplift (stripe_fee_payer) ──────────────────────────
+// Realistic Enrops-platform tenant: 1% margin, uncapped, provider bears Stripe fee.
+const TENANT_ORG: ConnectOrgConfig = {
+  ...HAPPY_ORG,
+  platform_fee_card_pct: 0.01,
+  platform_fee_ach_pct: 0.01,
+  platform_fee_cap_cents: 2147483647, // uncapped
+  stripe_fee_payer: 'tenant',
+};
+
+Deno.test('BACKWARD COMPAT: unset stripe_fee_payer → no uplift (margin only)', () => {
+  // HAPPY_ORG has no stripe_fee_payer, so behavior must be unchanged.
+  const result = buildConnectChargeParams(20000, 'card', HAPPY_ORG, 'org-id');
+  assertEquals(result.application_fee_amount, 400); // $200 × 2% only, no Stripe fee added
+});
+
+Deno.test("stripe_fee_payer='platform' (J2S) → no uplift", () => {
+  const j2s: ConnectOrgConfig = { ...TENANT_ORG, stripe_fee_payer: 'platform' };
+  const result = buildConnectChargeParams(20000, 'card', j2s, 'org-id');
+  assertEquals(result.application_fee_amount, 200); // $200 × 1% only
+});
+
+Deno.test("stripe_fee_payer='tenant' card → 1% margin + Stripe fee ($2.00 + $6.10 = $8.10)", () => {
+  const result = buildConnectChargeParams(20000, 'card', TENANT_ORG, 'org-id');
+  // margin 1% = $2.00; Stripe est = round(20000*0.029)+30 = 610; total = 810
+  assertEquals(result.application_fee_amount, 810);
+});
+
+Deno.test("stripe_fee_payer='tenant' ACH → 1% margin + ACH Stripe fee ($2.00 + $1.60 = $3.60)", () => {
+  const result = buildConnectChargeParams(20000, 'us_bank_account', TENANT_ORG, 'org-id');
+  // margin 1% = $2.00; ACH est = round(20000*0.008)=160 (under $5 cap); total = 360
+  assertEquals(result.application_fee_amount, 360);
+});
+
+Deno.test('uplift never exceeds the charge amount (tiny charge cap)', () => {
+  // $0.20 charge: margin ~0 + Stripe est (round(20*0.029)=1 + 30 = 31) = 31,
+  // but application fee can never exceed the 20-cent charge.
+  const result = buildConnectChargeParams(20, 'card', TENANT_ORG, 'org-id');
+  assertEquals(result.application_fee_amount, 20);
+});
+
+Deno.test('uplift not applied when org is not connected (returns {})', () => {
+  const notConnected: ConnectOrgConfig = { ...TENANT_ORG, stripe_account_id: null };
+  assertEquals(buildConnectChargeParams(20000, 'card', notConnected, 'org-id'), {});
+});

@@ -12,6 +12,7 @@
 // logged for the half-configured case so a human notices.
 
 import { computePlatformFee, PaymentMethodType, PlatformFeeConfig } from './computePlatformFee.ts';
+import { estimateStripeFee } from './estimateStripeFee.ts';
 import { buildStatementDescriptorSuffix } from './statementDescriptor.ts';
 
 export interface ConnectOrgConfig extends PlatformFeeConfig {
@@ -20,6 +21,11 @@ export interface ConnectOrgConfig extends PlatformFeeConfig {
   statement_descriptor_suffix: string | null;
   name: string | null;
   fee_pass_through?: boolean | null;
+  // Who bears Stripe's processing fee. 'tenant' (the default for Enrops-platform
+  // orgs) adds an estimate of Stripe's fee to the application fee so it's deducted
+  // from the provider's payout — like Square/Squarespace already do for them.
+  // 'platform' (legacy own-platform orgs like J2S) and unset → no uplift.
+  stripe_fee_payer?: string | null;
 }
 
 export interface ConnectChargeParams {
@@ -47,8 +53,22 @@ export function buildConnectChargeParams(
     return {};
   }
 
+  // Application fee = Enrops margin (computePlatformFee, e.g. 1%) PLUS, when the
+  // provider bears Stripe's processing fee (stripe_fee_payer='tenant'), an estimate
+  // of that fee — so it's deducted from the provider's payout instead of silently
+  // eaten by Enrops's platform balance on a destination charge.
+  //
+  // The Stripe-fee recovery is added ONLY here, never inside computePlatformFee:
+  // that helper is shared with the family-facing pass-through line, which must stay
+  // at the margin only. Capped at the charge amount (Stripe rejects an application
+  // fee larger than the charge), and floored at 0 defensively.
+  const margin = computePlatformFee(amountCents, paymentMethod, org);
+  const stripeRecovery =
+    org.stripe_fee_payer === 'tenant' ? estimateStripeFee(amountCents, paymentMethod) : 0;
+  const applicationFee = Math.max(0, Math.min(margin + stripeRecovery, amountCents));
+
   const params: ConnectChargeParams = {
-    application_fee_amount: computePlatformFee(amountCents, paymentMethod, org),
+    application_fee_amount: applicationFee,
     transfer_data: { destination: org.stripe_account_id },
   };
 
