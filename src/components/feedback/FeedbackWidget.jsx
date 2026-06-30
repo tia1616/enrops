@@ -67,7 +67,12 @@ export default function FeedbackWidget({ org }) {
     setStatus("sending");
     setErrorMsg("");
     try {
+      // Explicitly attach the user's access token — functions.invoke otherwise
+      // sends the anon key, and the edge fn would see no signed-in user.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Your session expired — please refresh and sign in again.");
       const { data, error } = await supabase.functions.invoke("submit-feedback", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
         body: {
           organization_id: orgId,
           message: text,
