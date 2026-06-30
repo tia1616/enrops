@@ -468,14 +468,23 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const starts = new Set();
     const pd = state.programDates ?? {};
     for (const pid in pd) for (const dt of pd[pid]) starts.add(weekStartOf(dt));
-    return [...starts].sort().map((start) => ({ start, end: addDaysIso(start, 6), label: fmtWeekLabel(start) }));
+    if (starts.size === 0) return [];
+    const sorted = [...starts].sort();
+    const last = sorted[sorted.length - 1];
+    // Fill EVERY week from the term's first to last class-week. Weeks with no class
+    // (a district-wide break inside the term) appear as labeled "Break" weeks, not holes.
+    const out = [];
+    for (let cur = sorted[0]; cur <= last; cur = addDaysIso(cur, 7)) {
+      out.push({ start: cur, end: addDaysIso(cur, 6), label: fmtWeekLabel(cur), isBreak: !starts.has(cur) });
+    }
+    return out;
   }, [state]);
 
   // Default focus = current/upcoming week (first whose end >= today), else the last week.
   const defaultWeekStart = useMemo(() => {
     if (weeks.length === 0) return null;
     const t = todayIso();
-    return (weeks.find((w) => w.end >= t) ?? weeks[weeks.length - 1]).start;
+    return (weeks.find((w) => !w.isBreak && w.end >= t) ?? weeks.find((w) => !w.isBreak) ?? weeks[weeks.length - 1]).start;
   }, [weeks]);
   const effectiveWeek = focusedWeekStart === undefined ? defaultWeekStart : focusedWeekStart;
 
@@ -513,7 +522,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         if (!sig) continue;
         if (metWeeks.has(w.start)) {
           if (needsHire) sig.gap = true;
-        } else if (isWeekly && w.start > firstW && w.start < lastW && !sig.closures.includes(schoolName)) {
+        } else if (!w.isBreak && isWeekly && w.start > firstW && w.start < lastW && !sig.closures.includes(schoolName)) {
           sig.closures.push(schoolName);
         }
       }
@@ -1100,7 +1109,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           {weeks.length > 0 && (
             <WeekRail weeks={weeks} signals={weekSignals} effective={effectiveWeek} onSelect={setFocusedWeekStart} />
           )}
-          {effectiveWeek && (weekSignals.get(effectiveWeek)?.closures.length ?? 0) > 0 && (
+          {effectiveWeek && weeks.find((w) => w.start === effectiveWeek)?.isBreak && (
+            <div style={{ fontSize: 12, color: MUTED, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 12px", marginBottom: 4 }}>
+              No classes this week — <strong style={{ color: INK }}>term break</strong>.
+            </div>
+          )}
+          {effectiveWeek && !weeks.find((w) => w.start === effectiveWeek)?.isBreak && (weekSignals.get(effectiveWeek)?.closures.length ?? 0) > 0 && (
             <div style={{ fontSize: 12, color: MUTED, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 12px", marginBottom: 4 }}>
               Off this week (break/closure): <strong style={{ color: INK }}>{weekSignals.get(effectiveWeek).closures.join(", ")}</strong>
             </div>
@@ -1651,16 +1665,21 @@ function WeekRail({ weeks, signals, effective, onSelect }) {
       <button type="button" onClick={() => onSelect(null)} style={weekPillStyle(effective === null)}>Every week</button>
       {weeks.map((w) => {
         const sig = signals?.get(w.start);
-        const dot = sig?.gap ? CORAL : sig?.sub ? VIOLET : null;
+        const active = effective === w.start;
+        const dot = !w.isBreak && (sig?.gap ? CORAL : sig?.sub ? VIOLET : null);
         return (
           <button
             key={w.start}
             type="button"
             onClick={() => onSelect(w.start)}
-            title={sig?.gap ? "A class needs an instructor this week" : sig?.sub ? "A sub is scheduled this week" : undefined}
-            style={{ ...weekPillStyle(effective === w.start), display: "inline-flex", alignItems: "center", gap: 5 }}
+            title={w.isBreak ? "No classes this week (term break)" : sig?.gap ? "A class needs an instructor this week" : sig?.sub ? "A sub is scheduled this week" : undefined}
+            style={{
+              ...weekPillStyle(active),
+              display: "inline-flex", alignItems: "center", gap: 5,
+              ...(w.isBreak && !active ? { background: "#fafafa", color: "#9a9a9a", borderStyle: "dashed" } : {}),
+            }}
           >
-            {w.label}
+            {w.isBreak ? `${w.label} · Break` : w.label}
             {dot && <span style={{ width: 6, height: 6, borderRadius: "50%", background: dot, flexShrink: 0 }} />}
           </button>
         );
