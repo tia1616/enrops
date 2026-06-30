@@ -42,6 +42,7 @@ import DeclinedPage from './pages/onboarding/DeclinedPage.jsx';
 import AbandonedPage from './pages/onboarding/AbandonedPage.jsx';
 import { CartProvider } from './context/CartContext.jsx';
 import PwaUpdateToast from './components/pwa/PwaUpdateToast.jsx';
+import AnalyticsBridge from './components/analytics/AnalyticsBridge.jsx';
 
 // On the staging site, the public marketing landing at "/" just gets in the way
 // (staging exists to exercise the app). Host-gated so prod (enrops.com) and any
@@ -55,6 +56,7 @@ export default function App() {
   return (
     <>
     <PwaUpdateToast />
+    <AnalyticsBridge />
     <Routes>
       {/* enrops.com home = the State 1 invite-only entry card (see Landing.jsx).
           Signed-in users smart-redirect to their portal; signed-out browser

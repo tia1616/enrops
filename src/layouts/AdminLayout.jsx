@@ -12,6 +12,7 @@ import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
+import { setOrgGroup } from "../lib/analytics";
 
 // Enrops brand tokens
 const PURPLE = "#1C004F";   // deep plum — wordmark, headings, body accents
@@ -198,6 +199,11 @@ export default function AdminLayout() {
     })();
     return () => { mounted = false; };
   }, [org?.id, location.pathname]);
+
+  // Tag the analytics session with the tenant so replays/events filter by org.
+  useEffect(() => {
+    if (org?.id) setOrgGroup(org, orgMember?.role);
+  }, [org?.id, orgMember?.role]);
 
   function relativeTime(iso) {
     const now = Date.now();
