@@ -176,7 +176,14 @@ On returning cycles: skip Q3 entirely. Provider can edit priorities anytime from
 - [ ] **Include-drafts toggle for the instructor schedule wizard.** When provider runs the schedule wizard, default behavior matches only scheduled programs with `status='open'`. Add an "Include drafts" toggle so a provider planning ahead can include not-yet-published programs they expect to run. Confirmed 2026-06-02 — edge case but worth the option.
 - [ ] **Wizard "+ Add new curriculum/location" links** now open in a new tab so wizard state isn't lost on return (replaces the confusing "(you'll come back here after)" copy). v2 should still upgrade these to inline drawer so the provider never leaves the wizard.
 
-## Nav reorganization (proposed, not yet applied)
+## Nav reorganization — SUPERSEDED (done via flat+tabs redesign, 2026-06-30)
+
+> **Do not re-apply the expandable-group proposal below.** The intent shipped
+> differently: the sidebar is now a flat list where multi-facet sections expose
+> an in-page tab strip. "Class rosters" already sits under the Programs section
+> and "Schedule" under Instructors. The last piece — clicking "Instructors" lands
+> on Schedule (not Roster), with the roster tab renamed "Instructor Roster" — was
+> done 2026-06-30 (commit on staging; Arielle 6/25 feedback). Kept below for history.
 
 Current `AdminLayout` NAV mixes "stuff about programs," "stuff about instructors," and "stuff about classes" at the top level. Cleaner shape:
 
