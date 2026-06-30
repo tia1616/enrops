@@ -52,7 +52,7 @@ export default function ProgramsCalendar() {
   const { org } = useOutletContext();
   // Term starts empty — we don't guess a hardcoded term. fetchOrgTerms picks
   // the org's default (in-progress today, else next starting, else most recent
-  // past) once orgId is known. An explicit ?term= in the URL still wins.
+  // past) once orgId is known.
   const [term, setTerm] = useState(null);
   const [termOptions, setTermOptions] = useState([]); // [{ value, label }]
   const [termsLoaded, setTermsLoaded] = useState(false); // org_terms fetch resolved
@@ -153,23 +153,18 @@ export default function ProgramsCalendar() {
   }
 
   // Load this org's terms once orgId is known: populate the dropdown and pick
-  // the default selection. An explicit ?term= in the URL wins over the default.
+  // the default (current/next) term. Re-resolves if the org ever changes.
   useEffect(() => {
     if (!org?.id) return;
     let alive = true;
+    setTermsLoaded(false); // re-gate the programs load while the org's terms resolve
     (async () => {
       const { terms, defaultTerm } = await fetchOrgTerms(org.id);
       if (!alive) return;
       setTermOptions(
         (terms ?? []).map((t) => ({ value: t.term, label: formatTermLabel(t.term) })),
       );
-      // URL override wins; otherwise the org's default term.
-      const params = typeof window !== "undefined"
-        ? new URLSearchParams(window.location.search)
-        : null;
-      const urlTerm = params?.get("term") || null;
-      // Only set the selected term if the operator hasn't already picked one.
-      setTerm((prev) => prev ?? urlTerm ?? defaultTerm);
+      setTerm(defaultTerm); // null when the org has no terms yet → empty state
       setTermsLoaded(true);
     })();
     return () => { alive = false; };

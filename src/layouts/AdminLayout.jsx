@@ -37,11 +37,14 @@ const RULE = "#e2dfd5";
 const NAV = [
   { to: "/admin", label: "Overview", end: true },
   {
-    to: "/admin/curricula", label: "Programs",
+    // Current-term-first: clicking "Programs" lands on Scheduled programs (which
+    // defaults to the term in progress), then Class rosters, then Offerings (the
+    // reference library) last. Per Arielle's feedback 2026-06-25.
+    to: "/admin/programs", label: "Programs",
     tabs: [
-      { to: "/admin/curricula", label: "Offerings" },
       { to: "/admin/programs", label: "Scheduled programs" },
       { to: "/admin/rosters", label: "Class rosters" },
+      { to: "/admin/curricula", label: "Offerings" },
     ],
   },
   {
