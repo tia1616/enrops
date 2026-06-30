@@ -42,6 +42,36 @@ const STATUS_RANK = { published: 4, confirmed: 3, change_requested: 2, proposed:
 // Sub statuses that are "live" — shown on the board, counted by the filter. Excludes declined/missed.
 const SUB_SHOWN_STATUSES = new Set(["pending", "confirmed", "taught"]);
 
+// --- Calendar-week helpers (UTC-based so they never shift across the user's tz). ---
+// These bucket CANONICAL session dates (from derive_program_session_dates) into weeks;
+// they never DERIVE which dates a class meets — that always comes from the RPC.
+function weekStartOf(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = dt.getUTCDay();              // 0=Sun..6=Sat
+  dt.setUTCDate(dt.getUTCDate() + (dow === 0 ? -6 : 1 - dow)); // back to Monday
+  return dt.toISOString().slice(0, 10);
+}
+function addDaysIso(iso, n) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+}
+function fmtWeekLabel(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+}
+function fmtDateShort(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+}
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 const FILTER_STATUSES = [
   { key: "needs_hire", label: "Needs instructor" },
   { key: "change_requested", label: "Change requested" },
@@ -191,6 +221,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [surveyDeadline, setSurveyDeadline] = useState(() => businessDaysFromToday(10));
   const [matchResult, setMatchResult] = useState(null);
   const [view, setView] = useState("list"); // 'list' | 'grid'
+  // Week focus for the week-grid view. undefined = use the default (current/upcoming) week;
+  // null = "Every week" (recurring overview); 'YYYY-MM-DD' (a Monday) = that specific week.
+  const [focusedWeekStart, setFocusedWeekStart] = useState(undefined);
   // Stage B — offer loop.
   const [offerDialog, setOfferDialog] = useState(null); // { mode:'choose'|'result', payload }
   const [offerDeadline, setOfferDeadline] = useState(() => businessDaysFromToday(5));
@@ -298,11 +331,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         else substitutions = subRows ?? [];
       }
 
+      // Each class's real session dates (per its school/district calendar, closures included)
+      // — used to build the week rail and resolve per-week coverage. Canonical source only.
+      // Fail-soft per class: one rejected RPC must not blank the whole board (or the
+      // list/recurring views, which don't need dates). A failed class just gets no weeks.
+      const dateResults = await Promise.all(
+        programs.map((p) =>
+          supabase.rpc("derive_program_session_dates", { p_program_id: p.id }).then((r) => r, () => ({ data: [] })),
+        ),
+      );
+      const programDates = {};
+      programs.forEach((p, i) => {
+        const d = dateResults[i]?.data;
+        programDates[p.id] = Array.isArray(d) ? d : [];
+      });
+
       setState({
         status: "ready",
         programs,
         assignments,
         substitutions,
+        programDates,
         instructors: instRes.data ?? [],
         availability: availRes.data ?? [],
         locations: locRes.data ?? [],
@@ -320,6 +369,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id, term]);
+
+  // Reset week focus to the default when the term or org changes.
+  useEffect(() => { setFocusedWeekStart(undefined); }, [term, org?.id]);
 
   // Realtime: when an instructor accepts / requests a change in their portal,
   // the board updates without a manual refresh. Reload on any program_assignments
@@ -408,6 +460,24 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
     return m;
   }, [state]);
+
+  // Calendar weeks present in this term — the union of every class's real session dates,
+  // bucketed by Monday. Empty weeks (all schools off) simply don't appear.
+  const weeks = useMemo(() => {
+    if (state.status !== "ready") return [];
+    const starts = new Set();
+    const pd = state.programDates ?? {};
+    for (const pid in pd) for (const dt of pd[pid]) starts.add(weekStartOf(dt));
+    return [...starts].sort().map((start) => ({ start, end: addDaysIso(start, 6), label: fmtWeekLabel(start) }));
+  }, [state]);
+
+  // Default focus = current/upcoming week (first whose end >= today), else the last week.
+  const defaultWeekStart = useMemo(() => {
+    if (weeks.length === 0) return null;
+    const t = todayIso();
+    return (weeks.find((w) => w.end >= t) ?? weeks[weeks.length - 1]).start;
+  }, [weeks]);
+  const effectiveWeek = focusedWeekStart === undefined ? defaultWeekStart : focusedWeekStart;
 
   // instructor_id -> Set<dayCode> currently committed (active assignments), for double-book checks.
   const committedDays = useMemo(() => {
@@ -543,11 +613,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     });
     for (const p of filtered) {
       const code = DAY_TO_CODE[dayKey(p.day_of_week)];
-      if (byDay.has(code)) byDay.get(code).push(p);
+      if (!byDay.has(code)) continue;
+      if (effectiveWeek) {
+        // Week mode: only show classes that actually meet this week (per their calendar).
+        const wd = (state.programDates?.[p.id] ?? []).find((dt) => weekStartOf(dt) === effectiveWeek);
+        if (!wd) continue;
+        byDay.get(code).push({ program: p, weekDate: wd });
+      } else {
+        byDay.get(code).push({ program: p, weekDate: null });
+      }
     }
     return byDay;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, enriched, searchText, selectedLocations, selectedStatuses, selectedInstructors, locName]);
+  }, [state, enriched, searchText, selectedLocations, selectedStatuses, selectedInstructors, locName, effectiveWeek]);
 
   const locationOptions = useMemo(() => {
     if (state.status !== "ready") return [];
@@ -823,14 +901,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   // Open the day-of sub assignment modal for a program. Fetches the program's real
   // class dates via the canonical RPC (never roll our own date math) for the picker.
-  async function openAssignSub(program) {
+  async function openAssignSub(program, defaultDate = null) {
     const lead = enriched.get(program.id)?.lead ?? null;
     if (!lead) return; // nothing to sub for until a lead is assigned
-    let dates = [];
-    const { data, error } = await supabase.rpc("derive_program_session_dates", { p_program_id: program.id });
-    if (error) console.warn("[AfterschoolSchedule] derive_program_session_dates failed:", error.message);
-    else if (Array.isArray(data)) dates = data;
-    setAssignSubFor({ program, lead, dates });
+    // Reuse the session dates already loaded; fall back to the RPC if they weren't.
+    let dates = state.status === "ready" ? (state.programDates?.[program.id] ?? []) : [];
+    if (dates.length === 0) {
+      const { data, error } = await supabase.rpc("derive_program_session_dates", { p_program_id: program.id });
+      if (error) console.warn("[AfterschoolSchedule] derive_program_session_dates failed:", error.message);
+      else if (Array.isArray(data)) dates = data;
+    }
+    setAssignSubFor({ program, lead, dates, defaultDate });
   }
 
   function openRow(program) {
@@ -973,7 +1054,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           onRowClick={openRow}
         />
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(5, minmax(0, 1fr))`, gap: 12, alignItems: "start" }}>
+        <>
+          {weeks.length > 0 && (
+            <WeekRail weeks={weeks} effective={effectiveWeek} onSelect={setFocusedWeekStart} />
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(5, minmax(0, 1fr))`, gap: 12, alignItems: "start" }}>
           {DAYS.map((d) => {
             const items = grid.get(d.code) ?? [];
             return (
@@ -985,9 +1070,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                 {items.length === 0 ? (
                   <div style={{ color: MUTED, fontSize: 12, textAlign: "center", padding: "12px 0" }}>—</div>
                 ) : (
-                  items.map((p) => {
+                  items.map(({ program: p, weekDate }) => {
                     const e = enriched.get(p.id);
                     const loc = locName.get(p.program_location_id) ?? "—";
+                    const weekSub = weekDate
+                      ? (subInfoByProgram.get(p.id)?.subs.find((s) => s.date === weekDate) ?? null)
+                      : null;
                     return (
                       <ProgramCard
                         key={p.id}
@@ -997,8 +1085,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         status={e?.status}
                         lead={e?.lead}
                         sub={subInfoByProgram.get(p.id)}
+                        weekDate={weekDate}
+                        weekSub={weekSub}
                         onClick={() => openRow(p)}
-                        onSubClick={() => openAssignSub(p)}
+                        onSubClick={(dd) => openAssignSub(p, dd)}
                       />
                     );
                   })
@@ -1006,7 +1096,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
               </div>
             );
           })}
-        </div>
+          </div>
+        </>
       )}
 
       {picker && (
@@ -1032,7 +1123,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             first_session_date: assignSubFor.dates[0] ?? null,
           }}
           availableDates={assignSubFor.dates}
-          defaultDate={null}
+          defaultDate={assignSubFor.defaultDate ?? null}
           organizationId={org?.id}
           instructors={state.instructors}
           onClose={() => setAssignSubFor(null)}
@@ -1494,9 +1585,36 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
   );
 }
 
-function ProgramCard({ program, loc, tint, status, lead, sub, onClick, onSubClick }) {
+function weekPillStyle(active) {
+  return {
+    flexShrink: 0, padding: "6px 12px", borderRadius: 999, cursor: "pointer", fontFamily: "inherit",
+    fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
+    background: active ? PURPLE : "#fff",
+    color: active ? "#fff" : MUTED,
+    border: `1px solid ${active ? PURPLE : RULE}`,
+  };
+}
+
+// Horizontal week selector for the week-grid view. "Every week" = recurring overview;
+// each pill = a real calendar week of the term (derived from class session dates).
+function WeekRail({ weeks, effective, onSelect }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, overflowX: "auto", padding: "2px 2px 8px" }}>
+      <button type="button" onClick={() => onSelect(null)} style={weekPillStyle(effective === null)}>Every week</button>
+      {weeks.map((w) => (
+        <button key={w.start} type="button" onClick={() => onSelect(w.start)} style={weekPillStyle(effective === w.start)}>
+          {w.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ProgramCard({ program, loc, tint, status, lead, sub, weekDate, weekSub, onClick, onSubClick }) {
   const sc = statusColor(status);
   const who = lead ? (lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "") : null;
+  // Week mode shows only THIS week's coverage; recurring mode summarizes all sub days.
+  const subsForLine = weekDate ? (weekSub ? [weekSub] : []) : (sub?.subs ?? []);
   return (
     <div style={{
       background: tint || "#fff", border: `1px solid ${RULE}`, borderLeft: `4px solid ${sc}`,
@@ -1511,6 +1629,9 @@ function ProgramCard({ program, loc, tint, status, lead, sub, onClick, onSubClic
           display: "flex", flexDirection: "column", gap: 4,
         }}
       >
+        {weekDate && (
+          <div style={{ fontSize: 10, fontWeight: 700, color: BRIGHT, textTransform: "uppercase", letterSpacing: 0.4 }}>{fmtDateShort(weekDate)}</div>
+        )}
         <div style={{ fontSize: 13, fontWeight: 700, color: INK, lineHeight: 1.25 }}>{program.curriculum || "Class"}</div>
         <div style={{ fontSize: 12, color: PURPLE, fontWeight: 600 }}>{loc}</div>
         {(program.start_time || program.end_time) && (
@@ -1523,7 +1644,7 @@ function ProgramCard({ program, loc, tint, status, lead, sub, onClick, onSubClic
         </div>
         <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
       </button>
-      {lead && <SubLineAS sub={sub} onClick={onSubClick} />}
+      {lead && <SubLineAS subs={subsForLine} onClick={() => onSubClick && onSubClick(weekDate ?? null)} />}
     </div>
   );
 }
@@ -1531,18 +1652,18 @@ function ProgramCard({ program, loc, tint, status, lead, sub, onClick, onSubClic
 // Sub coverage control on an after-school program card. Shows existing sub coverage
 // (or "+ Sub day" when none) and opens the assign-sub modal. Sibling of the main
 // card button (not nested) so it stays independently clickable and valid HTML.
-function SubLineAS({ sub, onClick }) {
-  const subs = sub?.subs ?? [];
+function SubLineAS({ subs, onClick }) {
+  const list = subs ?? [];
   let label, color;
-  if (subs.length === 0) {
+  if (list.length === 0) {
     color = MUTED; label = "+ Sub day";
-  } else if (subs.length === 1) {
-    const s = subs[0];
+  } else if (list.length === 1) {
+    const s = list[0];
     const confirmed = s.status === "confirmed" || s.status === "taught";
     color = confirmed ? OK_GREEN : VIOLET;
     label = `Sub ${s.name}${confirmed ? " ✓" : " · pending"}`;
   } else {
-    color = OK_GREEN; label = `${subs.length} sub days`;
+    color = OK_GREEN; label = `${list.length} sub days`;
   }
   return (
     <button
