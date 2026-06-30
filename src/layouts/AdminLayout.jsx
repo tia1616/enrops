@@ -8,6 +8,8 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
+import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
+import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
 
@@ -407,6 +409,7 @@ export default function AdminLayout() {
 
         {/* Main */}
         <main data-admin-main style={{ padding: "28px 36px", maxWidth: 1200 }}>
+          <AnnouncementBanner />
           {blockedItem ? (
             <div style={{ maxWidth: 460, margin: "40px auto 0", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, textAlign: "center" }}>
               <div style={{ fontSize: 18, fontWeight: 700, color: PURPLE, marginBottom: 8 }}>
@@ -451,6 +454,9 @@ export default function AdminLayout() {
           )}
         </main>
       </div>
+
+      {/* Always-available feedback path for early partners (fixed, bottom-right). */}
+      <FeedbackWidget org={org} />
     </div>
   );
 }
