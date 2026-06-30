@@ -45,6 +45,7 @@ export default function AssignSubModal({
   parentType,                 // 'camp' | 'program'
   sessionInfo,                // { curriculum_name, location_name, starts_on, ends_on, week_num } for camp; or { curriculum, school_name, first_session_date } for program
   defaultDate,                // YYYY-MM-DD; pre-fills the date input when admin clicked a specific day-tile
+  availableDates,             // optional string[] of valid class dates — renders a date picker (afterschool, which has no day-tiles)
   organizationId,
   instructors,                // full instructor list for the org
   onClose,
@@ -202,9 +203,24 @@ export default function AssignSubModal({
           )}
 
           <Field label="Date">
-            <div style={{ ...inputStyle, background: CREAM, color: INK, display: "flex", alignItems: "center" }}>
-              {date ? fmtDate(date) : <span style={{ color: MUTED }}>Open the modal from a day tile to set the date.</span>}
-            </div>
+            {availableDates ? (
+              availableDates.length > 0 ? (
+                <select value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle}>
+                  <option value="">— Pick a class date —</option>
+                  {availableDates.map((d) => (
+                    <option key={d} value={d}>{fmtDate(d)}</option>
+                  ))}
+                </select>
+              ) : (
+                <div style={{ ...inputStyle, background: CREAM, color: MUTED, display: "flex", alignItems: "center" }}>
+                  No class dates found for this term.
+                </div>
+              )
+            ) : (
+              <div style={{ ...inputStyle, background: CREAM, color: INK, display: "flex", alignItems: "center" }}>
+                {date ? fmtDate(date) : <span style={{ color: MUTED }}>Open the modal from a day tile to set the date.</span>}
+              </div>
+            )}
           </Field>
 
           <Field label="Sub instructor">

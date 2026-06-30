@@ -12,6 +12,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import NotifyRemovalModal from "./NotifyRemovalModal.jsx";
+import AssignSubModal from "./AssignSubModal";
 import HatGuide from "../../components/HatGuide";
 
 const PURPLE = "#1C004F";
@@ -37,6 +38,9 @@ const DAY_TO_CODE = { monday: "mon", tuesday: "tue", wednesday: "wed", thursday:
 const LOCATION_PALETTE = ["#F2E4D2", "#E5EDDC", "#DDE7F0", "#ECDFEC", "#F0E0E0", "#E1ECEA"];
 
 const STATUS_RANK = { published: 4, confirmed: 3, change_requested: 2, proposed: 1, withdrawn: 0, declined: 0 };
+
+// Sub statuses that are "live" — shown on the board, counted by the filter. Excludes declined/missed.
+const SUB_SHOWN_STATUSES = new Set(["pending", "confirmed", "taught"]);
 
 const FILTER_STATUSES = [
   { key: "needs_hire", label: "Needs instructor" },
@@ -193,6 +197,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [selectedInstructorIds, setSelectedInstructorIds] = useState(null); // Set<id> | null (=all)
   const [reviewFor, setReviewFor] = useState(null); // { program, assignment } — offer review / change-request modal
   const [notifyRemoval, setNotifyRemoval] = useState(null); // { mode, program, assignment, instructor, remaining, onProceed }
+  const [assignSubFor, setAssignSubFor] = useState(null); // { program, lead, dates } — day-of sub assignment modal
   const [approveResult, setApproveResult] = useState(null);
 
   const stateRef = useRef(state);
@@ -280,10 +285,24 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         instructor_email: a.instructor?.email ?? null,
       }));
 
+      // Day-of substitute coverage for these program assignments (parent_assignment_type='program').
+      const assignmentIds = assignments.map((a) => a.id);
+      let substitutions = [];
+      if (assignmentIds.length) {
+        const { data: subRows, error: subErr } = await supabase
+          .from("assignment_substitutions")
+          .select("id, parent_assignment_id, date, status, sub_tier, sub_instructor_id, sub:instructors!sub_instructor_id(first_name, last_name)")
+          .eq("parent_assignment_type", "program")
+          .in("parent_assignment_id", assignmentIds);
+        if (subErr) console.warn("[AfterschoolSchedule] sub load failed:", subErr.message);
+        else substitutions = subRows ?? [];
+      }
+
       setState({
         status: "ready",
         programs,
         assignments,
+        substitutions,
         instructors: instRes.data ?? [],
         availability: availRes.data ?? [],
         locations: locRes.data ?? [],
@@ -366,6 +385,26 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const own = state.assignments.filter((a) => a.program_id === p.id && a.status !== "withdrawn" && a.status !== "declined");
       const lead = own.find((a) => a.role === "lead") ?? own[0] ?? null;
       m.set(p.id, { status, lead });
+    }
+    return m;
+  }, [state]);
+
+  // program_id -> { ids:Set<instructor_id>, names:string[], subs:[{name,date,status}] } for live subs.
+  // Powers the card sub indicator and lets the instructor filter surface a program a person only SUBs.
+  const subInfoByProgram = useMemo(() => {
+    const m = new Map();
+    if (state.status !== "ready") return m;
+    const asgToProgram = new Map(state.assignments.map((a) => [a.id, a.program_id]));
+    for (const s of state.substitutions ?? []) {
+      if (!SUB_SHOWN_STATUSES.has(s.status)) continue;
+      const pid = asgToProgram.get(s.parent_assignment_id);
+      if (!pid) continue;
+      if (!m.has(pid)) m.set(pid, { ids: new Set(), names: [], subs: [] });
+      const entry = m.get(pid);
+      if (s.sub_instructor_id) entry.ids.add(s.sub_instructor_id);
+      const nm = [s.sub?.first_name, s.sub?.last_name].filter(Boolean).join(" ");
+      if (nm) entry.names.push(nm);
+      entry.subs.push({ name: nm || "Sub", date: s.date, status: s.status });
     }
     return m;
   }, [state]);
@@ -475,10 +514,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const loc = locName.get(p.program_location_id) ?? "—";
     if (selectedLocations.size && !selectedLocations.has(loc)) return false;
     if (selectedStatuses.size && !selectedStatuses.has(e?.status)) return false;
-    if (selectedInstructors.size && !(e?.lead?.instructor_id && selectedInstructors.has(e.lead.instructor_id))) return false;
+    const subInfo = subInfoByProgram.get(p.id);
+    if (selectedInstructors.size) {
+      let hit = !!(e?.lead?.instructor_id && selectedInstructors.has(e.lead.instructor_id));
+      if (!hit && subInfo) {
+        for (const id of subInfo.ids) { if (selectedInstructors.has(id)) { hit = true; break; } }
+      }
+      if (!hit) return false;
+    }
     const q = searchText.trim().toLowerCase();
     if (q) {
-      const hay = [p.curriculum, loc, e?.lead?.instructor_first, e?.lead?.instructor_last].filter(Boolean).join(" ").toLowerCase();
+      const hay = [p.curriculum, loc, e?.lead?.instructor_first, e?.lead?.instructor_last, ...(subInfo?.names ?? [])].filter(Boolean).join(" ").toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -775,6 +821,18 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     setOfferDialog({ mode: "choose", payload: null });
   }
 
+  // Open the day-of sub assignment modal for a program. Fetches the program's real
+  // class dates via the canonical RPC (never roll our own date math) for the picker.
+  async function openAssignSub(program) {
+    const lead = enriched.get(program.id)?.lead ?? null;
+    if (!lead) return; // nothing to sub for until a lead is assigned
+    let dates = [];
+    const { data, error } = await supabase.rpc("derive_program_session_dates", { p_program_id: program.id });
+    if (error) console.warn("[AfterschoolSchedule] derive_program_session_dates failed:", error.message);
+    else if (Array.isArray(data)) dates = data;
+    setAssignSubFor({ program, lead, dates });
+  }
+
   function openRow(program) {
     const e = enriched.get(program.id);
     const lead = e?.lead ?? null;
@@ -938,7 +996,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         tint={colorMap.get(loc)}
                         status={e?.status}
                         lead={e?.lead}
+                        sub={subInfoByProgram.get(p.id)}
                         onClick={() => openRow(p)}
+                        onSubClick={() => openAssignSub(p)}
                       />
                     );
                   })
@@ -959,6 +1019,24 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           onAssign={(id) => handleAssign(picker.program, id)}
           onRemove={() => handleRemove(picker.program)}
           onClose={() => setPicker(null)}
+        />
+      )}
+
+      {assignSubFor && (
+        <AssignSubModal
+          parentAssignment={assignSubFor.lead}
+          parentType="program"
+          sessionInfo={{
+            curriculum: assignSubFor.program.curriculum,
+            school_name: locName.get(assignSubFor.program.program_location_id) ?? "",
+            first_session_date: assignSubFor.dates[0] ?? null,
+          }}
+          availableDates={assignSubFor.dates}
+          defaultDate={null}
+          organizationId={org?.id}
+          instructors={state.instructors}
+          onClose={() => setAssignSubFor(null)}
+          onSubmitted={() => { setAssignSubFor(null); loadAll(); }}
         />
       )}
 
@@ -1416,30 +1494,70 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
   );
 }
 
-function ProgramCard({ program, loc, tint, status, lead, onClick }) {
+function ProgramCard({ program, loc, tint, status, lead, sub, onClick, onSubClick }) {
   const sc = statusColor(status);
   const who = lead ? (lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "") : null;
   return (
+    <div style={{
+      background: tint || "#fff", border: `1px solid ${RULE}`, borderLeft: `4px solid ${sc}`,
+      borderRadius: 8, display: "flex", flexDirection: "column", overflow: "hidden",
+    }}>
+      <button
+        type="button"
+        onClick={onClick}
+        style={{
+          textAlign: "left", width: "100%", cursor: "pointer", fontFamily: "inherit",
+          background: "transparent", border: "none", padding: "10px 12px",
+          display: "flex", flexDirection: "column", gap: 4,
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 700, color: INK, lineHeight: 1.25 }}>{program.curriculum || "Class"}</div>
+        <div style={{ fontSize: 12, color: PURPLE, fontWeight: 600 }}>{loc}</div>
+        {(program.start_time || program.end_time) && (
+          <div style={{ fontSize: 11, color: MUTED }}>{fmtTimeRange(program.start_time, program.end_time)}</div>
+        )}
+        <div style={{ marginTop: 2 }}>
+          <span style={{ display: "inline-block", fontSize: 12, fontWeight: 600, padding: "3px 9px", borderRadius: 999, background: who ? `${PURPLE}10` : `${CORAL}14`, color: who ? PURPLE : CORAL, border: `1px solid ${who ? `${PURPLE}33` : `${CORAL}55`}` }}>
+            {who || "+ Assign"}
+          </span>
+        </div>
+        <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
+      </button>
+      {lead && <SubLineAS sub={sub} onClick={onSubClick} />}
+    </div>
+  );
+}
+
+// Sub coverage control on an after-school program card. Shows existing sub coverage
+// (or "+ Sub day" when none) and opens the assign-sub modal. Sibling of the main
+// card button (not nested) so it stays independently clickable and valid HTML.
+function SubLineAS({ sub, onClick }) {
+  const subs = sub?.subs ?? [];
+  let label, color;
+  if (subs.length === 0) {
+    color = MUTED; label = "+ Sub day";
+  } else if (subs.length === 1) {
+    const s = subs[0];
+    const confirmed = s.status === "confirmed" || s.status === "taught";
+    color = confirmed ? OK_GREEN : VIOLET;
+    label = `Sub ${s.name}${confirmed ? " ✓" : " · pending"}`;
+  } else {
+    color = OK_GREEN; label = `${subs.length} sub days`;
+  }
+  return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={(e) => { e.stopPropagation(); if (onClick) onClick(); }}
+      title="Assign or change a sub for a class date"
       style={{
-        textAlign: "left", width: "100%", cursor: "pointer", fontFamily: "inherit",
-        background: tint || "#fff", border: `1px solid ${RULE}`, borderLeft: `4px solid ${sc}`,
-        borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 4,
+        display: "flex", alignItems: "center", width: "100%",
+        padding: "5px 12px", background: "transparent",
+        border: "none", borderTop: `1px solid ${RULE}`,
+        cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+        fontSize: 10, fontWeight: 600, color, whiteSpace: "nowrap", overflow: "hidden",
       }}
     >
-      <div style={{ fontSize: 13, fontWeight: 700, color: INK, lineHeight: 1.25 }}>{program.curriculum || "Class"}</div>
-      <div style={{ fontSize: 12, color: PURPLE, fontWeight: 600 }}>{loc}</div>
-      {(program.start_time || program.end_time) && (
-        <div style={{ fontSize: 11, color: MUTED }}>{fmtTimeRange(program.start_time, program.end_time)}</div>
-      )}
-      <div style={{ marginTop: 2 }}>
-        <span style={{ display: "inline-block", fontSize: 12, fontWeight: 600, padding: "3px 9px", borderRadius: 999, background: who ? `${PURPLE}10` : `${CORAL}14`, color: who ? PURPLE : CORAL, border: `1px solid ${who ? `${PURPLE}33` : `${CORAL}55`}` }}>
-          {who || "+ Assign"}
-        </span>
-      </div>
-      <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
     </button>
   );
 }
