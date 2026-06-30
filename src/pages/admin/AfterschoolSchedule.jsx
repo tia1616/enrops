@@ -220,7 +220,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [surveyDialog, setSurveyDialog] = useState(null); // { mode:'choose'|'result', payload }
   const [surveyDeadline, setSurveyDeadline] = useState(() => businessDaysFromToday(10));
   const [matchResult, setMatchResult] = useState(null);
-  const [view, setView] = useState("list"); // 'list' | 'grid'
+  const [view, setView] = useState("grid"); // 'list' | 'grid' — default to the week-at-a-glance grid
   // Week focus for the week-grid view. undefined = use the default (current/upcoming) week;
   // null = "Every week" (recurring overview); 'YYYY-MM-DD' (a Monday) = that specific week.
   const [focusedWeekStart, setFocusedWeekStart] = useState(undefined);
