@@ -728,18 +728,20 @@ export default function Schedule() {
     const q = searchText.trim().toLowerCase();
     if (selectedLocations.size && !selectedLocations.has(e.session.location_name)) return false;
     if (selectedStatuses.size && !selectedStatuses.has(e.status)) return false;
+    const subInfo = subInfoBySession.get(e.session.id);
     if (selectedInstructors.size) {
       const ids = e.activeAssignments.map((a) => a.instructor_id).filter(Boolean);
-      const subIds = subInfoBySession.get(e.session.id)?.ids;
-      const hit = ids.some((id) => selectedInstructors.has(id))
-        || (subIds && [...subIds].some((id) => selectedInstructors.has(id)));
+      let hit = ids.some((id) => selectedInstructors.has(id));
+      if (!hit && subInfo?.ids) {
+        for (const id of subInfo.ids) { if (selectedInstructors.has(id)) { hit = true; break; } }
+      }
       if (!hit) return false;
     }
     if (q) {
       const haystack = [
         e.session.curriculum_name, e.session.curriculum_category, e.session.session_type, e.session.location_name,
         ...e.activeAssignments.flatMap((a) => [a.instructor_first, a.instructor_last]),
-        ...(subInfoBySession.get(e.session.id)?.names ?? []),
+        ...(subInfo?.names ?? []),
       ].filter(Boolean).join(" ").toLowerCase();
       if (!haystack.includes(q)) return false;
     }
