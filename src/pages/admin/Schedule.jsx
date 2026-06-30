@@ -3273,10 +3273,10 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
         role="lead"
         dragStateRef={dragStateRef}
         onClick={onInstructorClick}
-        rightContent={leadSubActive ? (
-          <SubBadge sub={leadSubActive} onClick={() => onSubClick && lead && onSubClick(session, lead)} />
-        ) : undefined}
       />
+      {leadSubActive && (
+        <SubLine sub={leadSubActive} onClick={() => onSubClick && lead && onSubClick(session, lead)} />
+      )}
       {showDevelopingRow && (
         <SlotRow
           label="Developing"
@@ -3285,10 +3285,10 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
           role="developing"
           dragStateRef={dragStateRef}
           onClick={onInstructorClick}
-          rightContent={devSubActive ? (
-            <SubBadge sub={devSubActive} onClick={() => onSubClick && developing && onSubClick(session, developing)} />
-          ) : undefined}
         />
+      )}
+      {showDevelopingRow && devSubActive && (
+        <SubLine sub={devSubActive} onClick={() => onSubClick && developing && onSubClick(session, developing)} />
       )}
       <div style={{
         fontSize: 11,
@@ -3364,27 +3364,31 @@ function SlotRow({ label, assignment, session, role, dragStateRef, onClick, righ
   );
 }
 
-// Clickable sub indicator shown beside the lead/developing chip. Click opens the
-// assign-sub modal for that day so the operator can swap/resend the sub.
-function SubBadge({ sub, onClick }) {
+// Clickable sub indicator, rendered on its OWN line under the lead/developing
+// chip so it never competes for width in the narrow day cards. Truncates with
+// an ellipsis instead of wrapping. Click opens the assign-sub modal for that day.
+function SubLine({ sub, onClick }) {
   const confirmed = sub.status === "confirmed" || sub.status === "taught";
-  const subName = sub.sub ? (sub.sub.first_name ?? "Sub") : "Sub";
+  const subName = sub.sub ? [sub.sub.first_name, sub.sub.last_name].filter(Boolean).join(" ") : "Sub";
   const color = confirmed ? OK_GREEN : VIOLET;
-  const label = confirmed ? `Sub ${subName} ✓` : `Sub ${subName} pending`;
   return (
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); if (onClick) onClick(); }}
       title="Change or resend this sub"
       style={{
+        display: "inline-flex", alignItems: "center", gap: 4,
+        alignSelf: "flex-start", maxWidth: "100%",
+        marginTop: 2, padding: "1px 8px",
         fontSize: 10, fontWeight: 600, color,
         background: `${color}14`, border: `1px solid ${color}44`,
-        borderRadius: 999, padding: "1px 8px",
-        cursor: "pointer", fontFamily: "inherit",
-        display: "inline-flex", alignItems: "center", gap: 4,
+        borderRadius: 999, cursor: "pointer", fontFamily: "inherit",
+        whiteSpace: "nowrap", overflow: "hidden",
       }}
     >
-      {label}
+      <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, flexShrink: 0 }}>Sub</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{subName}</span>
+      <span style={{ flexShrink: 0 }}>{confirmed ? "✓" : "· pending"}</span>
     </button>
   );
 }
