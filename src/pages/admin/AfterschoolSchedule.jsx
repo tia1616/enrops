@@ -505,21 +505,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   }, [weeks]);
   const effectiveWeek = focusedWeekStart === undefined ? defaultWeekStart : focusedWeekStart;
 
-  // Per-week "needs attention" signals for the rail dots + closure notes:
-  //   sub      = a sub is scheduled on some date this week
-  //   gap      = a class meets this week but has no lead instructor
+  // Per-week "needs attention" signals for the rail dot + closure notes:
+  //   gap      = a class meets this week but has no lead instructor (drives the orange dot)
   //   closures = classes active AROUND this week but off it (a genuine mid-term break,
   //              not a term-boundary) — listed by school name.
   const weekSignals = useMemo(() => {
     const m = new Map();
     if (state.status !== "ready") return m;
-    for (const w of weeks) m.set(w.start, { sub: false, gap: false, closures: [] });
-    for (const info of subInfoByProgram.values()) {
-      for (const s of info.subs) {
-        const ws = weekStartOf(s.date);
-        if (m.has(ws)) m.get(ws).sub = true;
-      }
-    }
+    for (const w of weeks) m.set(w.start, { gap: false, closures: [] });
     const pd = state.programDates ?? {};
     for (const p of state.programs) {
       const dates = [...(pd[p.id] ?? [])].sort();
@@ -545,7 +538,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       }
     }
     return m;
-  }, [state, weeks, subInfoByProgram, enriched, locName]);
+  }, [state, weeks, enriched, locName]);
 
   // instructor_id -> Set<dayCode> currently committed (active assignments), for double-book checks.
   const committedDays = useMemo(() => {
@@ -1675,7 +1668,7 @@ function weekPillStyle(active) {
 
 // Horizontal week selector for the week-grid view. "Every week" = recurring overview;
 // each pill = a real calendar week of the term (derived from class session dates).
-// A dot flags weeks that need attention: coral = a class needs an instructor; violet = a sub is scheduled.
+// An orange dot flags weeks that need attention: a class that week has no instructor.
 function WeekRail({ weeks, signals, effective, onSelect }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, overflowX: "auto", padding: "2px 2px 8px" }}>
@@ -1683,13 +1676,13 @@ function WeekRail({ weeks, signals, effective, onSelect }) {
       {weeks.map((w) => {
         const sig = signals?.get(w.start);
         const active = effective === w.start;
-        const dot = !w.isBreak && (sig?.gap ? CORAL : sig?.sub ? VIOLET : null);
+        const dot = !w.isBreak && sig?.gap ? CORAL : null;
         return (
           <button
             key={w.start}
             type="button"
             onClick={() => onSelect(w.start)}
-            title={w.isBreak ? "No classes this week (term break)" : sig?.gap ? "A class needs an instructor this week" : sig?.sub ? "A sub is scheduled this week" : undefined}
+            title={w.isBreak ? "No classes this week (term break)" : sig?.gap ? "A class needs an instructor this week" : undefined}
             style={{
               ...weekPillStyle(active),
               display: "inline-flex", alignItems: "center", gap: 5,
