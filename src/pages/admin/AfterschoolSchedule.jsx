@@ -479,6 +479,48 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   }, [weeks]);
   const effectiveWeek = focusedWeekStart === undefined ? defaultWeekStart : focusedWeekStart;
 
+  // Per-week "needs attention" signals for the rail dots + closure notes:
+  //   sub      = a sub is scheduled on some date this week
+  //   gap      = a class meets this week but has no lead instructor
+  //   closures = classes active AROUND this week but off it (a genuine mid-term break,
+  //              not a term-boundary) — listed by school name.
+  const weekSignals = useMemo(() => {
+    const m = new Map();
+    if (state.status !== "ready") return m;
+    for (const w of weeks) m.set(w.start, { sub: false, gap: false, closures: [] });
+    for (const info of subInfoByProgram.values()) {
+      for (const s of info.subs) {
+        const ws = weekStartOf(s.date);
+        if (m.has(ws)) m.get(ws).sub = true;
+      }
+    }
+    const pd = state.programDates ?? {};
+    for (const p of state.programs) {
+      const dates = [...(pd[p.id] ?? [])].sort();
+      if (dates.length === 0) continue;
+      const metWeeks = new Set(dates.map(weekStartOf));
+      const firstW = weekStartOf(dates[0]);
+      const lastW = weekStartOf(dates[dates.length - 1]);
+      // Only call a missing week a "closure" for classes that actually meet weekly —
+      // otherwise a biweekly/irregular class's normal off-weeks would look like breaks.
+      const spanWeeks = weeks.filter((w) => w.start >= firstW && w.start <= lastW).length;
+      const isWeekly = spanWeeks > 0 && metWeeks.size / spanWeeks >= 0.75;
+      const e = enriched.get(p.id);
+      const needsHire = !e?.lead;
+      const schoolName = locName.get(p.program_location_id) ?? p.curriculum ?? "A class";
+      for (const w of weeks) {
+        const sig = m.get(w.start);
+        if (!sig) continue;
+        if (metWeeks.has(w.start)) {
+          if (needsHire) sig.gap = true;
+        } else if (isWeekly && w.start > firstW && w.start < lastW && !sig.closures.includes(schoolName)) {
+          sig.closures.push(schoolName);
+        }
+      }
+    }
+    return m;
+  }, [state, weeks, subInfoByProgram, enriched, locName]);
+
   // instructor_id -> Set<dayCode> currently committed (active assignments), for double-book checks.
   const committedDays = useMemo(() => {
     const m = new Map();
@@ -1056,7 +1098,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       ) : (
         <>
           {weeks.length > 0 && (
-            <WeekRail weeks={weeks} effective={effectiveWeek} onSelect={setFocusedWeekStart} />
+            <WeekRail weeks={weeks} signals={weekSignals} effective={effectiveWeek} onSelect={setFocusedWeekStart} />
+          )}
+          {effectiveWeek && (weekSignals.get(effectiveWeek)?.closures.length ?? 0) > 0 && (
+            <div style={{ fontSize: 12, color: MUTED, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 12px", marginBottom: 4 }}>
+              Off this week (break/closure): <strong style={{ color: INK }}>{weekSignals.get(effectiveWeek).closures.join(", ")}</strong>
+            </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: `repeat(5, minmax(0, 1fr))`, gap: 12, alignItems: "start" }}>
           {DAYS.map((d) => {
@@ -1597,15 +1644,27 @@ function weekPillStyle(active) {
 
 // Horizontal week selector for the week-grid view. "Every week" = recurring overview;
 // each pill = a real calendar week of the term (derived from class session dates).
-function WeekRail({ weeks, effective, onSelect }) {
+// A dot flags weeks that need attention: coral = a class needs an instructor; violet = a sub is scheduled.
+function WeekRail({ weeks, signals, effective, onSelect }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, overflowX: "auto", padding: "2px 2px 8px" }}>
       <button type="button" onClick={() => onSelect(null)} style={weekPillStyle(effective === null)}>Every week</button>
-      {weeks.map((w) => (
-        <button key={w.start} type="button" onClick={() => onSelect(w.start)} style={weekPillStyle(effective === w.start)}>
-          {w.label}
-        </button>
-      ))}
+      {weeks.map((w) => {
+        const sig = signals?.get(w.start);
+        const dot = sig?.gap ? CORAL : sig?.sub ? VIOLET : null;
+        return (
+          <button
+            key={w.start}
+            type="button"
+            onClick={() => onSelect(w.start)}
+            title={sig?.gap ? "A class needs an instructor this week" : sig?.sub ? "A sub is scheduled this week" : undefined}
+            style={{ ...weekPillStyle(effective === w.start), display: "inline-flex", alignItems: "center", gap: 5 }}
+          >
+            {w.label}
+            {dot && <span style={{ width: 6, height: 6, borderRadius: "50%", background: dot, flexShrink: 0 }} />}
+          </button>
+        );
+      })}
     </div>
   );
 }
