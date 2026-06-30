@@ -680,18 +680,24 @@ export default function CurriculumReview() {
       // Log the time-saved event so the sidebar tally + future analytics see
       // this work. Dynamic estimate: 1.5 hours per session, floor 10 hours.
       // Per project_enrops_time_saved memory: "saved you N+ hours" framing.
-      const sessionCount = sessions.length || 5;
-      const hoursSaved = Math.max(10, Math.ceil(sessionCount * 1.5));
-      const { error: tsErr } = await supabase.from("time_saved_events").insert({
-        organization_id: org.id,
-        action_type: "curriculum_published",
-        action_label: `Published "${finalName}"`,
-        hours_saved: hoursSaved,
-        related_entity_type: "curriculum",
-        related_entity_id: curriculum.id,
-        created_by: user?.id ?? null,
-      });
-      if (tsErr) console.warn("time_saved_events insert failed (non-fatal):", tsErr.message);
+      // Only credit time saved when AI extraction actually did the authoring.
+      // A manual entry (no doc, no extracted fields) was typed by the operator,
+      // so claiming "saved you N hours" at publish would be false. Downstream
+      // surfaces (flyer/recap/registration) log their own savings when used.
+      if (!isManualEntry) {
+        const sessionCount = sessions.length || 5;
+        const hoursSaved = Math.max(10, Math.ceil(sessionCount * 1.5));
+        const { error: tsErr } = await supabase.from("time_saved_events").insert({
+          organization_id: org.id,
+          action_type: "curriculum_published",
+          action_label: `Published "${finalName}"`,
+          hours_saved: hoursSaved,
+          related_entity_type: "curriculum",
+          related_entity_id: curriculum.id,
+          created_by: user?.id ?? null,
+        });
+        if (tsErr) console.warn("time_saved_events insert failed (non-fatal):", tsErr.message);
+      }
 
       // Phase 2 recommendation: ask ennie-recommend what the next clear action
       // is. Non-fatal -- the celebration screen has a static fallback CTA.
@@ -1003,6 +1009,7 @@ export default function CurriculumReview() {
           onPublish={doPublish}
           curriculum={curriculum}
           sessionCount={sessions.length}
+          manual={isManualEntry}
           linkedProgramCount={linkedProgramCount}
           linkedCampSessionCount={linkedCampSessionCount}
           preLinkedProgramCount={preLinkedProgramCount}
@@ -2225,7 +2232,7 @@ function PublishModal({
   curriculum, sessionCount, linkedProgramCount, linkedCampSessionCount,
   preLinkedProgramCount = 0, preLinkedCampSessionCount = 0,
   capabilities = [], recommendation = null, onDone, onRecommendationCta, onLinkExisting,
-  onCapabilityClick,
+  onCapabilityClick, manual = false,
 }) {
   function toggleMatch(key) {
     setSelectedMatchKeys((prev) => {
@@ -2376,7 +2383,9 @@ function PublishModal({
               </div>
 
               <div style={timeSavedPill}>
-                ⏱ <strong style={{ marginLeft: 6, marginRight: 4 }}>Saved you {hoursSaved}+ hours</strong> of setup work for this curriculum.
+                {manual
+                  ? <>✓ <strong style={{ marginLeft: 6, marginRight: 4 }}>Live and reusable</strong> — this now powers your registration page, emails, and instructor portal.</>
+                  : <>⏱ <strong style={{ marginLeft: 6, marginRight: 4 }}>Saved you {hoursSaved}+ hours</strong> of setup work for this curriculum.</>}
               </div>
 
               {recommendation && (
