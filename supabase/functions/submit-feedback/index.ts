@@ -43,14 +43,17 @@ serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization') ?? '';
-    if (!authHeader) return json({ error: 'Not signed in' }, 401);
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    if (!token) return json({ error: 'Not signed in' }, 401);
 
     // User-context client: inserts run under the caller's RLS context.
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    // In an edge function there is no stored session, so getUser() must be given
+    // the JWT explicitly — calling it bare always returns no user (401).
+    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
     if (userErr || !userData?.user) return json({ error: 'Not signed in' }, 401);
     const user = userData.user;
 
@@ -66,7 +69,10 @@ serve(async (req) => {
     if (message.length > 5000) return json({ error: 'Feedback is too long (5000 char max)' }, 400);
 
     // Insert under the caller's JWT — RLS enforces org membership + uid match.
-    const { data: inserted, error: insErr } = await supabase
+    // No RETURNING/.select() here: the feedback SELECT policy is platform-admin
+    // only, so an org member can't read their own new row — a RETURNING insert
+    // would fail the SELECT-policy visibility check. We don't need the row back.
+    const { error: insErr } = await supabase
       .from('feedback')
       .insert({
         organization_id,
@@ -76,9 +82,7 @@ serve(async (req) => {
         page_url,
         page_path,
         user_agent,
-      })
-      .select('id, created_at')
-      .single();
+      });
 
     if (insErr) {
       // RLS denial or a DB error surfaces here. Log the detail server-side;
@@ -127,7 +131,7 @@ serve(async (req) => {
       emailed = false;
     }
 
-    return json({ ok: true, id: inserted?.id, emailed }, 200);
+    return json({ ok: true, emailed }, 200);
   } catch (e) {
     console.error('submit-feedback unexpected error:', String(e));
     return json({ error: 'Something went wrong. Please try again.' }, 500);
