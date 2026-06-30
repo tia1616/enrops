@@ -66,6 +66,10 @@ const MIN_ENROLLMENT = 8;
 const CANCEL_THRESHOLD = 4;
 const DEVELOPING_THRESHOLD = 12;
 
+// Sub statuses that are "live" — shown on the schedule, counted by the
+// instructor filter, and eligible for swap. Excludes declined/missed.
+const SUB_SHOWN_STATUSES = new Set(["pending", "confirmed", "taught"]);
+
 const FILTER_STATUSES = [
   { key: "needs_hire", label: "Needs hire" },
   { key: "change_requested", label: "Change requested" },
@@ -661,6 +665,29 @@ export default function Schedule() {
     return byId;
   }, [state]);
 
+  // sessionId -> { ids:Set<instructor_id>, names:string[] } for live subs.
+  // Lets the instructor filter/search surface a person on weeks they only SUB
+  // (the lead/developing assignments are the only thing matchesFilters saw before).
+  const subInfoBySession = useMemo(() => {
+    const m = new Map();
+    if (state.status !== "ready" || !enriched) return m;
+    const asgToSession = new Map();
+    for (const e of enriched.values()) {
+      for (const a of e.allAssignments) asgToSession.set(a.id, e.session.id);
+    }
+    for (const s of (state.subsByKey ? state.subsByKey.values() : [])) {
+      if (!SUB_SHOWN_STATUSES.has(s.status)) continue;
+      const sid = asgToSession.get(s.parent_assignment_id);
+      if (!sid) continue;
+      if (!m.has(sid)) m.set(sid, { ids: new Set(), names: [] });
+      const entry = m.get(sid);
+      if (s.sub_instructor_id) entry.ids.add(s.sub_instructor_id);
+      const nm = [s.sub?.first_name, s.sub?.last_name].filter(Boolean).join(" ");
+      if (nm) entry.names.push(nm);
+    }
+    return m;
+  }, [state, enriched]);
+
   // Lookups for validation.
   const availabilityByInstructor = useMemo(() => {
     if (state.status !== "ready") return new Map();
@@ -703,12 +730,16 @@ export default function Schedule() {
     if (selectedStatuses.size && !selectedStatuses.has(e.status)) return false;
     if (selectedInstructors.size) {
       const ids = e.activeAssignments.map((a) => a.instructor_id).filter(Boolean);
-      if (!ids.some((id) => selectedInstructors.has(id))) return false;
+      const subIds = subInfoBySession.get(e.session.id)?.ids;
+      const hit = ids.some((id) => selectedInstructors.has(id))
+        || (subIds && [...subIds].some((id) => selectedInstructors.has(id)));
+      if (!hit) return false;
     }
     if (q) {
       const haystack = [
         e.session.curriculum_name, e.session.curriculum_category, e.session.session_type, e.session.location_name,
         ...e.activeAssignments.flatMap((a) => [a.instructor_first, a.instructor_last]),
+        ...(subInfoBySession.get(e.session.id)?.names ?? []),
       ].filter(Boolean).join(" ").toLowerCase();
       if (!haystack.includes(q)) return false;
     }
@@ -2035,6 +2066,11 @@ export default function Schedule() {
             role: currentAssignment?.role ?? roleHint ?? "lead",
             dayDate: dayDate ?? null,
           })}
+          onSubClick={(session, parentAssignment, dayDate) => setAssignSubFor({
+            session,
+            currentAssignment: parentAssignment,
+            defaultDate: dayDate ?? null,
+          })}
           onChangeRequestClick={(session, assignment) => {
             skippedThisWalkRef.current = new Set();
             setChangeRequestFor({ session, assignment });
@@ -2960,7 +2996,7 @@ function Legend() {
   );
 }
 
-function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
+function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onSubClick, onChangeRequestClick }) {
   // Sort camps globally by (location, session-time) so they share a row across all
   // five day columns. Each row renders cells per weekday: an actual card when the
   // camp meets that day, an em-dash placeholder otherwise. A gold line separates
@@ -3047,6 +3083,9 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getVal
                       onInstructorClick={(session, currentAssignment, roleHint) =>
                         onInstructorClick(session, currentAssignment, roleHint, addDaysIso(week?.starts_on, WEEKDAYS.indexOf(d)))
                       }
+                      onSubClick={(session, parentAssignment) =>
+                        onSubClick(session, parentAssignment, addDaysIso(week?.starts_on, WEEKDAYS.indexOf(d)))
+                      }
                       onChangeRequestClick={onChangeRequestClick}
                     />
                   ) : (
@@ -3071,7 +3110,7 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getVal
   );
 }
 
-function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onChangeRequestClick }) {
+function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onSubClick, onChangeRequestClick }) {
   const { session, status, assignment, allAssignments, activeAssignments } = item;
   const [dropEffect, setDropEffect] = useState(null); // "ok" | "warn" | "block" | "self" | null
   const [hoverResult, setHoverResult] = useState(null); // full validation result during drag
@@ -3094,6 +3133,9 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
   // Subs covering this day — look up per assignment.
   const leadSub = lead && dayDate && subsByKey ? subsByKey.get(`${lead.id}:${dayDate}`) ?? null : null;
   const devSub = developing && dayDate && subsByKey ? subsByKey.get(`${developing.id}:${dayDate}`) ?? null : null;
+  // Only surface live subs (pending/confirmed/taught) — a declined sub leaves the lead covering.
+  const leadSubActive = leadSub && SUB_SHOWN_STATUSES.has(leadSub.status) ? leadSub : null;
+  const devSubActive = devSub && SUB_SHOWN_STATUSES.has(devSub.status) ? devSub : null;
   const wantsDeveloping = (session.current_enrollment ?? 0) >= DEVELOPING_THRESHOLD;
   const showDevelopingRow = wantsDeveloping || !!developing;
   const color = statusColor(status);
@@ -3222,33 +3264,29 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
           <span style={{ fontWeight: 600, color: CHANGE_REQ }}> ”</span>
         </div>
       )}
-      {leadSub && leadSub.status === "confirmed" ? (
-        <SubSlotRow sub={leadSub} role="lead" />
-      ) : (
+      <SlotRow
+        label="Lead"
+        assignment={lead}
+        session={session}
+        role="lead"
+        dragStateRef={dragStateRef}
+        onClick={onInstructorClick}
+        rightContent={leadSubActive ? (
+          <SubBadge sub={leadSubActive} onClick={() => onSubClick && lead && onSubClick(session, lead)} />
+        ) : undefined}
+      />
+      {showDevelopingRow && (
         <SlotRow
-          label="Lead"
-          assignment={lead}
+          label="Developing"
+          assignment={developing}
           session={session}
-          role="lead"
+          role="developing"
           dragStateRef={dragStateRef}
           onClick={onInstructorClick}
-          rightContent={leadSub && leadSub.status === "pending" ? <SubPendingBadge sub={leadSub} /> : undefined}
+          rightContent={devSubActive ? (
+            <SubBadge sub={devSubActive} onClick={() => onSubClick && developing && onSubClick(session, developing)} />
+          ) : undefined}
         />
-      )}
-      {showDevelopingRow && (
-        devSub && devSub.status === "confirmed" ? (
-          <SubSlotRow sub={devSub} role="developing" />
-        ) : (
-          <SlotRow
-            label="Developing"
-            assignment={developing}
-            session={session}
-            role="developing"
-            dragStateRef={dragStateRef}
-            onClick={onInstructorClick}
-            rightContent={devSub && devSub.status === "pending" ? <SubPendingBadge sub={devSub} /> : undefined}
-          />
-        )
       )}
       <div style={{
         fontSize: 11,
@@ -3324,38 +3362,28 @@ function SlotRow({ label, assignment, session, role, dragStateRef, onClick, righ
   );
 }
 
-function SubSlotRow({ sub, role }) {
-  const subName = sub.sub ? [sub.sub.first_name, sub.sub.last_name].filter(Boolean).join(" ") : "Sub";
-  const label = role === "lead" ? "Lead" : "Developing";
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
-      <span style={{
-        fontSize: 9, fontWeight: 700, color: MUTED,
-        textTransform: "uppercase", letterSpacing: 0.5, flexShrink: 0,
-      }}>{label}</span>
-      <span style={{
-        fontSize: 11, fontWeight: 600, color: OK_GREEN,
-        background: `${OK_GREEN}14`, border: `1px solid ${OK_GREEN}44`,
-        borderRadius: 999, padding: "2px 8px",
-        display: "inline-flex", alignItems: "center", gap: 4,
-      }}>
-        <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>Sub</span>
-        {subName} ✓
-      </span>
-    </div>
-  );
-}
-
-function SubPendingBadge({ sub }) {
+// Clickable sub indicator shown beside the lead/developing chip. Click opens the
+// assign-sub modal for that day so the operator can swap/resend the sub.
+function SubBadge({ sub, onClick }) {
+  const confirmed = sub.status === "confirmed" || sub.status === "taught";
   const subName = sub.sub ? (sub.sub.first_name ?? "Sub") : "Sub";
+  const color = confirmed ? OK_GREEN : VIOLET;
+  const label = confirmed ? `Sub ${subName} ✓` : `Sub ${subName} pending`;
   return (
-    <span style={{
-      fontSize: 10, fontWeight: 600, color: VIOLET,
-      background: `${VIOLET}14`, border: `1px solid ${VIOLET}44`,
-      borderRadius: 999, padding: "1px 6px",
-    }}>
-      Sub {subName} pending
-    </span>
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); if (onClick) onClick(); }}
+      title="Change or resend this sub"
+      style={{
+        fontSize: 10, fontWeight: 600, color,
+        background: `${color}14`, border: `1px solid ${color}44`,
+        borderRadius: 999, padding: "1px 8px",
+        cursor: "pointer", fontFamily: "inherit",
+        display: "inline-flex", alignItems: "center", gap: 4,
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
