@@ -340,6 +340,13 @@ export default function CurriculumReview() {
     () => (curriculum ? computeFlagCount(curriculum, extractedByName) : 0),
     [curriculum, extractedByName],
   );
+  // Manual-entry offerings have no document and no AI-extracted fields, so the
+  // "here's what I found / flagged" framing doesn't apply — show a fill-it-in
+  // prompt instead.
+  const isManualEntry = useMemo(
+    () => docs.length === 0 && Object.keys(extractedByName).length === 0,
+    [docs, extractedByName],
+  );
 
   function flashSaved(fieldName) {
     setSavingField(fieldName);
@@ -770,7 +777,7 @@ export default function CurriculumReview() {
 
         {/* RIGHT */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <EnnieBanner flagCount={flagCount} onJump={jumpToFirstFlag} />
+          <EnnieBanner flagCount={flagCount} onJump={jumpToFirstFlag} manual={isManualEntry} />
 
           <section style={card}>
             <div style={sectionHead}>
@@ -1098,8 +1105,23 @@ function EnnieAvatar({ size = 38, calm = false }) {
   );
 }
 
-function EnnieBanner({ flagCount, onJump }) {
+function EnnieBanner({ flagCount, onJump, manual }) {
   const calm = flagCount === 0;
+  if (manual) {
+    return (
+      <section style={ennieBannerCalm}>
+        <EnnieAvatar calm />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, color: INK, fontSize: 14 }}>
+            Ennie <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
+          </div>
+          <div style={{ fontSize: 14, color: INK, marginTop: 2, lineHeight: 1.45 }}>
+            Fill in as much or as little as you like, then publish. Want it done for you? Add a document anytime and I'll auto-fill the rest.
+          </div>
+        </div>
+      </section>
+    );
+  }
   return (
     <section style={calm ? ennieBannerCalm : ennieBanner}>
       <EnnieAvatar calm={calm} />

@@ -57,6 +57,8 @@ export default function CurriculumNew() {
   const [journal, setJournal] = useState(null);
   const [driveUrl, setDriveUrl] = useState("");
   const [busy, setBusy] = useState(false);
+  const [manualName, setManualName] = useState("");
+  const [manualBusy, setManualBusy] = useState(false);
   const [errors, setErrors] = useState([]); // [{ zone, message }]
   // Connection check for the Drive section. null = unchecked, false = not
   // connected (show "Connect in Settings" CTA), true = connected.
@@ -380,6 +382,40 @@ export default function CurriculumNew() {
     }
   }
 
+  // Manual entry — no document required. Creates a name-only draft and routes
+  // straight to the same review/edit screen extraction lands on. The operator
+  // fills in what they want (or nothing but a name) and publishes. They can
+  // attach a document later from the detail page to auto-fill the rest.
+  async function createManual() {
+    const name = manualName.trim();
+    if (!name || manualBusy) return;
+    if (!org?.id) {
+      setErrors([{ zone: "manual", message: "Couldn't find your organization. Try signing out and back in." }]);
+      return;
+    }
+    setManualBusy(true);
+    setErrors([]);
+    try {
+      const { data: curRow, error: curErr } = await supabase
+        .from("curricula")
+        .insert({
+          organization_id: org.id,
+          name,
+          status: "draft",
+          created_by: user?.id ?? null,
+        })
+        .select("id")
+        .single();
+      if (curErr || !curRow) throw new Error(`Couldn't create it: ${curErr?.message ?? "no row"}`);
+      navigate(`/admin/curricula/${curRow.id}/review`);
+    } catch (e) {
+      setErrors([{ zone: "manual", message: e instanceof Error ? e.message : String(e) }]);
+      setManualBusy(false);
+    }
+  }
+
+  const manualErr = errors.find((e) => e.zone === "manual")?.message;
+
   const submitDisabled =
     (!primary && !driveUrl.trim()) || busy || (attachExistingWork && !confirmedReplace);
   const primaryErr = errors.find((e) => e.zone === "primary")?.message;
@@ -618,6 +654,34 @@ export default function CurriculumNew() {
           </button>
         </div>
       </div>
+
+      {/* Manual entry — no document required (upload is optional) */}
+      <div style={manualPanel}>
+        <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>Don't have a document yet?</div>
+        <div style={{ color: MUTED, fontSize: 13, margin: "6px 0 12px", lineHeight: 1.5 }}>
+          No problem — name your offering and fill in the details yourself on the next screen. You can always add a document later and we'll auto-fill the rest.
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <input
+            type="text"
+            value={manualName}
+            onChange={(e) => setManualName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") createManual(); }}
+            placeholder="e.g. Beginner Chess Club"
+            disabled={manualBusy}
+            style={{ ...driveInput, background: "#fff", flex: 1, minWidth: 240 }}
+          />
+          <button
+            type="button"
+            onClick={createManual}
+            disabled={!manualName.trim() || manualBusy}
+            style={(!manualName.trim() || manualBusy) ? primaryBtnDisabled : primaryBtn}
+          >
+            {manualBusy ? "Creating…" : "Create & fill in myself →"}
+          </button>
+        </div>
+        {manualErr && <div style={inlineError}>{manualErr}</div>}
+      </div>
     </div>
   );
 }
@@ -735,6 +799,7 @@ const panel = {
   borderRadius: 12,
   padding: 22,
 };
+const manualPanel = { ...panel, marginTop: 16 };
 
 const dropBase = {
   border: `2px dashed ${RULE}`,
