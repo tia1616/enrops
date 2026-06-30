@@ -15,6 +15,7 @@ import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
+import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -24,12 +25,6 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const PANEL = "#fff";
-
-const TERM_OPTIONS = [
-  { value: "FA26", label: "Fall 2026 (FA26)" },
-  { value: "WI27", label: "Winter 2027 (WI27)" },
-  { value: "SP27", label: "Spring 2027 (SP27)" },
-];
 
 const AMBER = "#a16207";
 const OK_GREEN = "#3a7c3a";
@@ -55,7 +50,12 @@ const DAY_LABELS = {
 
 export default function ProgramsCalendar() {
   const { org } = useOutletContext();
-  const [term, setTerm] = useState("FA26");
+  // Term starts empty — we don't guess a hardcoded term. fetchOrgTerms picks
+  // the org's default (in-progress today, else next starting, else most recent
+  // past) once orgId is known. An explicit ?term= in the URL still wins.
+  const [term, setTerm] = useState(null);
+  const [termOptions, setTermOptions] = useState([]); // [{ value, label }]
+  const [termsLoaded, setTermsLoaded] = useState(false); // org_terms fetch resolved
   const [viewMode, setViewMode] = useState("calendar");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -152,6 +152,29 @@ export default function ProgramsCalendar() {
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, ...patch } : p)));
   }
 
+  // Load this org's terms once orgId is known: populate the dropdown and pick
+  // the default selection. An explicit ?term= in the URL wins over the default.
+  useEffect(() => {
+    if (!org?.id) return;
+    let alive = true;
+    (async () => {
+      const { terms, defaultTerm } = await fetchOrgTerms(org.id);
+      if (!alive) return;
+      setTermOptions(
+        (terms ?? []).map((t) => ({ value: t.term, label: formatTermLabel(t.term) })),
+      );
+      // URL override wins; otherwise the org's default term.
+      const params = typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search)
+        : null;
+      const urlTerm = params?.get("term") || null;
+      // Only set the selected term if the operator hasn't already picked one.
+      setTerm((prev) => prev ?? urlTerm ?? defaultTerm);
+      setTermsLoaded(true);
+    })();
+    return () => { alive = false; };
+  }, [org?.id]);
+
   // Locations + curricula for the inline edit form's dropdowns. Loaded once
   // per org so every expand-row has the picker ready.
   const [locationsForPicker, setLocationsForPicker] = useState([]);
@@ -217,7 +240,11 @@ export default function ProgramsCalendar() {
   }, [org?.id]);
 
   useEffect(() => {
-    if (!org?.id) return;
+    // Wait for org_terms to resolve before deciding. Once loaded: if no term is
+    // selectable (org has no programs yet), show the empty state instead of
+    // querying with a null term or hanging on "Loading…".
+    if (!org?.id || !termsLoaded) return;
+    if (!term) { setPrograms([]); setLoading(false); return; }
     let mounted = true;
     (async () => {
       setLoading(true);
@@ -318,7 +345,7 @@ export default function ProgramsCalendar() {
       }
     })();
     return () => { mounted = false; };
-  }, [org?.id, term]);
+  }, [org?.id, term, termsLoaded]);
 
   const totals = useMemo(() => {
     let paid = 0, unpaid = 0, pending = 0, capacity = 0;
@@ -370,8 +397,9 @@ export default function ProgramsCalendar() {
           >
             + New program
           </Link>
-          <select value={term} onChange={(e) => setTerm(e.target.value)} style={selectStyle}>
-            {TERM_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+          <select value={term ?? ""} onChange={(e) => setTerm(e.target.value)} style={selectStyle}>
+            {!term && <option value="">{termsLoaded ? "No terms yet" : "Loading terms…"}</option>}
+            {termOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
           <div style={toggleGroup}>
             <button onClick={() => setViewMode("calendar")} style={viewMode === "calendar" ? toggleBtnActive : toggleBtn}>Calendar</button>
@@ -395,10 +423,10 @@ export default function ProgramsCalendar() {
         </div>
       )}
 
-      {loading && <div style={{ color: MUTED, padding: 12 }}>Loading {term} programs…</div>}
+      {loading && <div style={{ color: MUTED, padding: 12 }}>Loading {term ? `${term} ` : ""}programs…</div>}
       {error && <div style={errorBox}>Could not load programs: {error}</div>}
       {!loading && !error && programs.length === 0 && (
-        <div style={emptyState}>No programs scheduled for {term} yet.</div>
+        <div style={emptyState}>No programs scheduled{term ? ` for ${term}` : ""} yet.</div>
       )}
 
       {!loading && !error && programs.length > 0 && (

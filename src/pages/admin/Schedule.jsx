@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
+import { fetchOrgTerms } from "../../lib/terms.js";
 import HatGuide from "../../components/HatGuide";
 import Chevron from "../../components/Chevron.jsx";
 import NotifyRemovalModal from "./NotifyRemovalModal";
@@ -370,6 +371,11 @@ export default function Schedule() {
   // renders <AfterschoolSchedule> instead. afterschoolTerms is the distinct list
   // of term codes this org has programs or an open survey for.
   const [afterschoolTerms, setAfterschoolTerms] = useState([]);
+  // Org's default term (in-progress today, else next starting, else most recent
+  // past) from org_terms. Used to pick which after-school term to land on when
+  // the operator switches into after-school mode, instead of just the first/
+  // most-recent discovered term.
+  const [defaultAfterschoolTerm, setDefaultAfterschoolTerm] = useState(null);
   const [scheduleMode, setScheduleMode] = useState("camp"); // "camp" | "afterschool"
   const [selectedTerm, setSelectedTerm] = useState(null); // afterschool term code, e.g. "FA26"
   const [recentlyUpdated, setRecentlyUpdated] = useState(() => new Set()); // assignment ids that flashed via realtime
@@ -543,7 +549,20 @@ export default function Schedule() {
         if (!m) return 0;
         return (2000 + parseInt(m[2], 10)) * 100 + (SEASON_MONTH[m[1]] || 0);
       };
-      setAfterschoolTerms([...terms].sort((a, b) => termSortKey(a) - termSortKey(b)));
+      const sortedTerms = [...terms].sort((a, b) => termSortKey(a) - termSortKey(b));
+      setAfterschoolTerms(sortedTerms);
+
+      // Resolve the org's default term so after-school mode lands on the current
+      // term. Keep the data-discovered list above as the source of options; only
+      // use org_terms to choose the default. Fall back to the existing behavior
+      // (first discovered term) if the org default isn't among the after-school
+      // terms (e.g. the default term has no programs yet).
+      const { defaultTerm } = await fetchOrgTerms(org.id);
+      if (!alive) return;
+      const firstDiscovered = sortedTerms.length ? sortedTerms[0] : null;
+      setDefaultAfterschoolTerm(
+        defaultTerm && sortedTerms.includes(defaultTerm) ? defaultTerm : firstDiscovered,
+      );
     })();
     return () => { alive = false; };
   }, [org?.id]);
@@ -964,13 +983,13 @@ export default function Schedule() {
         <div style={{ marginTop: 14 }}>
           <button
             type="button"
-            onClick={() => { setScheduleMode("afterschool"); setSelectedTerm(afterschoolTerms[0]); }}
+            onClick={() => { setScheduleMode("afterschool"); setSelectedTerm(defaultAfterschoolTerm ?? afterschoolTerms[0]); }}
             style={{
               background: BRIGHT, color: "#fff", border: "none", borderRadius: 8,
               padding: "10px 18px", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
             }}
           >
-            View after-school schedule ({cycleDisplayName(afterschoolTerms[0])})
+            View after-school schedule ({cycleDisplayName(defaultAfterschoolTerm ?? afterschoolTerms[0])})
           </button>
         </div>
       )}
