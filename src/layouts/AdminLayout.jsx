@@ -49,10 +49,14 @@ const NAV = [
     match: ["/admin/schools", "/admin/calendars"],
   },
   {
-    to: "/admin/instructors", label: "Instructors",
+    // Schedule-first: clicking "Instructors" lands on the Schedule (the live
+    // operating picture — who's teaching where/when), not the static roster.
+    // Per Arielle's feedback 2026-06-25. "Instructor Roster" disambiguates from
+    // "Class rosters" under Programs.
+    to: "/admin/schedule", label: "Instructors",
     tabs: [
-      { to: "/admin/instructors", label: "Roster" },
       { to: "/admin/schedule", label: "Schedule" },
+      { to: "/admin/instructors", label: "Instructor Roster" },
     ],
   },
   {
