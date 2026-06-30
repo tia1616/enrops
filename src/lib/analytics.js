@@ -30,11 +30,24 @@ export function initAnalytics() {
     disable_session_recording: true,    // off by default; started only on /admin
     session_recording: {
       maskAllInputs: true,
-      // Mask all text inside the admin content container (student/parent/$ data).
-      maskTextSelector: '[data-admin-main]',
+      // Mask the text of EVERY descendant of the admin content container so
+      // nested student/parent/$ data (in tables, cards, spans) is masked — a
+      // bare '[data-admin-main]' selector would only cover the container's own
+      // (empty) text. Sidebar nav lives outside <main>, so it stays readable.
+      // VERIFY against a live replay before trusting (privacy-critical).
+      maskTextSelector: '[data-admin-main] *',
     },
   });
   enabled = true;
+}
+
+// Normalize record IDs out of paths (UUIDs -> :id) so $pageview properties
+// carry route templates, not identifiers.
+function normalizePath(pathname) {
+  return pathname.replace(
+    /\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+    '/:id',
+  );
 }
 
 export function identifyUser(user) {
@@ -58,15 +71,21 @@ export function resetAnalytics() {
 }
 
 // Record replay ONLY on the operator app; stop everywhere else.
+// Tracks the current state so we only toggle on real transitions, not on
+// every admin sub-route navigation.
+let recording = false;
 export function syncRecording(pathname) {
   if (!enabled) return;
-  if (pathname.startsWith('/admin')) posthog.startSessionRecording();
+  const shouldRecord = pathname.startsWith('/admin');
+  if (shouldRecord === recording) return;
+  recording = shouldRecord;
+  if (shouldRecord) posthog.startSessionRecording();
   else posthog.stopSessionRecording();
 }
 
 export function capturePageview(pathname) {
   if (!enabled) return;
-  posthog.capture('$pageview', { path: pathname });
+  posthog.capture('$pageview', { path: normalizePath(pathname) });
 }
 
 export function capture(event, props) {
