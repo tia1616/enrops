@@ -800,14 +800,14 @@ function Step1WhatAndWhere({
       </div>
 
       <div style={fieldGroup}>
-        <label htmlFor="curriculum" style={labelStyle}>Curriculum</label>
+        <label htmlFor="curriculum" style={labelStyle}>Offering</label>
         <select
           id="curriculum"
           value={formData.curriculum_id ?? ""}
           onChange={(e) => onCurriculumChange(e.target.value || null)}
           style={inputStyle}
         >
-          <option value="">— Choose a curriculum —</option>
+          <option value="">— Choose an offering —</option>
           {curricula.map((c) => (
             <option key={c.id} value={c.id}>{c.name}</option>
           ))}
@@ -819,7 +819,7 @@ function Step1WhatAndWhere({
             rel="noreferrer"
             style={{ color: PURPLE, textDecoration: "none" }}
           >
-            + Add a new curriculum
+            + Add a new offering
           </a>
           <span style={{ color: MUTED, marginLeft: 8 }}>opens in a new tab</span>
         </div>
@@ -861,7 +861,7 @@ function Step1WhatAndWhere({
           background: SOFT_GREEN_BG, borderRadius: 8,
           color: SOFT_GREEN_INK, fontSize: 13, lineHeight: 1.5,
         }}>
-          I pre-filled some defaults from this curriculum — number of sessions,
+          I pre-filled some defaults from this offering — number of sessions,
           age or grade range, and class size. You can edit them in the next step.
         </div>
       )}
@@ -1042,7 +1042,7 @@ function Step2WhenAndHowMany({
           onChange={(e) => onField("short_description", e.target.value)}
           rows={2}
           style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
-          placeholder="A sentence or two for families. Auto-filled from the curriculum if you left it blank."
+          placeholder="A sentence or two for families. Auto-filled from the offering if you left it blank."
         />
       </div>
 

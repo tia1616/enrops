@@ -149,9 +149,9 @@ export default function CurriculaList() {
       linkedCampCount = cc ?? 0;
     }
     const linkedTotal = linkedProgCount + linkedCampCount;
-    const baseMsg = `Delete "${c.name}"?\n\nThis removes the curriculum, all its sessions, extracted fields, and any uploaded documents. This can't be undone.`;
+    const baseMsg = `Delete "${c.name}"?\n\nThis removes the offering, all its sessions, extracted fields, and any uploaded documents. This can't be undone.`;
     const linkMsg = linkedTotal > 0
-      ? `\n\nThis curriculum is currently linked to ${linkedProgCount} program${linkedProgCount === 1 ? "" : "s"} and ${linkedCampCount} camp session${linkedCampCount === 1 ? "" : "s"}. They'll be unlinked (their free-text curriculum name stays) but not deleted.`
+      ? `\n\nThis offering is currently linked to ${linkedProgCount} program${linkedProgCount === 1 ? "" : "s"} and ${linkedCampCount} camp session${linkedCampCount === 1 ? "" : "s"}. They'll be unlinked (their free-text curriculum name stays) but not deleted.`
       : "";
     if (!window.confirm(baseMsg + linkMsg)) return;
     setDeleting(c.id);
@@ -201,12 +201,12 @@ export default function CurriculaList() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
         <div>
-          <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Curricula</h1>
+          <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Offerings</h1>
           <div style={{ color: MUTED, fontSize: 13, marginTop: 4 }}>
-            Your library of curricula. Add a new one, then schedule it into a term when you're ready.
+            Your library of offerings. Add a new one, then schedule it into a term when you're ready.
           </div>
         </div>
-        <Link to="/admin/curricula/new" style={primaryBtn}>+ New curriculum</Link>
+        <Link to="/admin/curricula/new" style={primaryBtn}>+ New offering</Link>
       </div>
 
       {!loading && !error && curricula.length > 0 && (
@@ -215,7 +215,7 @@ export default function CurriculaList() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search curricula…"
+            placeholder="Search offerings…"
             style={searchInput}
           />
         </div>
@@ -223,22 +223,22 @@ export default function CurriculaList() {
 
       {loading && <div style={{ color: MUTED, padding: 12 }}>Loading…</div>}
       {error && (
-        <div style={errorBox}>Could not load curricula: {error}</div>
+        <div style={errorBox}>Could not load offerings: {error}</div>
       )}
 
       {!loading && !error && curricula.length === 0 && (
         <div style={{ ...emptyState }}>
-          <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>No curricula yet.</div>
+          <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>No offerings yet.</div>
           <div style={{ color: MUTED, fontSize: 14, marginBottom: 16 }}>
             Drop a lesson plan or curriculum guide and we'll set up everything around it — registration page, marketing flyer, parent emails, instructor portal — automatically.
           </div>
-          <Link to="/admin/curricula/new" style={primaryBtn}>+ Add your first curriculum</Link>
+          <Link to="/admin/curricula/new" style={primaryBtn}>+ Add your first offering</Link>
         </div>
       )}
 
       {!loading && !error && curricula.length > 0 && filtered.length === 0 && (
         <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>
-          No curricula match “{search}”.
+          No offerings match “{search}”.
         </div>
       )}
 
@@ -331,7 +331,7 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
             type="button"
             onClick={onDelete}
             disabled={deleting}
-            title="Delete this curriculum"
+            title="Delete this offering"
             style={{
               marginLeft: "auto",
               background: "transparent",

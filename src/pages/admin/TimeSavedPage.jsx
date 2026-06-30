@@ -22,8 +22,8 @@ const GREEN = "#2d5a2d";
 // Friendly category per action_type. Unknown types fall back to "Other" so a
 // new event type still shows up rather than vanishing.
 const CATEGORY_FOR = {
-  curriculum_published: "Curricula",
-  curriculum_linked: "Curricula",
+  curriculum_published: "Offerings",
+  curriculum_linked: "Offerings",
   automation_fired: "Automations",
 };
 function categoryFor(actionType) {
@@ -96,7 +96,7 @@ export default function TimeSavedPage() {
       <header style={{ marginBottom: 16 }}>
         <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Saved with Enrops</h1>
         <p style={{ color: MUTED, marginTop: 6, fontSize: 13.5, lineHeight: 1.5 }}>
-          Every Enrops action that does work for you — publishing curricula, firing automations, and more — adds to your running total.
+          Every Enrops action that does work for you — publishing offerings, firing automations, and more — adds to your running total.
         </p>
       </header>
 

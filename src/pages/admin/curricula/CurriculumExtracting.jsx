@@ -26,7 +26,7 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const PANEL = "#fff";
 
-const INITIAL_MESSAGE = "Extracting your curriculum...";
+const INITIAL_MESSAGE = "Extracting your offering...";
 
 export default function CurriculumExtracting() {
   const { id: curriculumId } = useParams();
@@ -64,7 +64,7 @@ export default function CurriculumExtracting() {
         .maybeSingle();
       if (!mounted) return;
       if (curErr || !curRow) {
-        setLoadError(curErr?.message || "Curriculum not found.");
+        setLoadError(curErr?.message || "Offering not found.");
         setLoading(false);
         return;
       }
@@ -84,7 +84,7 @@ export default function CurriculumExtracting() {
         .maybeSingle();
       if (!mounted) return;
       if (docErr || !docRow) {
-        setLoadError(docErr?.message || "Couldn't find the uploaded doc for this curriculum.");
+        setLoadError(docErr?.message || "Couldn't find the uploaded doc for this offering.");
         setLoading(false);
         return;
       }
@@ -204,13 +204,13 @@ export default function CurriculumExtracting() {
     return (
       <div style={{ ...errorBox, maxWidth: 520 }}>
         {noDocCase
-          ? "This curriculum doesn't have an uploaded document yet — there's nothing to extract. Edit the details manually, or upload a curriculum doc from the library."
-          : `Couldn't load this curriculum: ${loadError}`}
+          ? "This offering doesn't have an uploaded document yet — there's nothing to extract. Edit the details manually, or upload a curriculum doc from the library."
+          : `Couldn't load this offering: ${loadError}`}
         <div style={{ marginTop: 12, display: "flex", gap: 14 }}>
           {curriculum && noDocCase && (
             <Link to={`/admin/curricula/${curriculum.id}/review`} style={linkStyle}>Edit details →</Link>
           )}
-          <Link to="/admin/curricula" style={linkStyle}>← Back to Curricula</Link>
+          <Link to="/admin/curricula" style={linkStyle}>← Back to Offerings</Link>
         </div>
       </div>
     );
@@ -219,16 +219,16 @@ export default function CurriculumExtracting() {
   return (
     <div>
       <div style={crumbs}>
-        <Link to="/admin/curricula" style={crumbLink}>Curricula</Link>
+        <Link to="/admin/curricula" style={crumbLink}>Offerings</Link>
         <span style={{ margin: "0 8px", color: MUTED }}>›</span>
-        <span>{curriculum?.name ?? "New curriculum"}</span>
+        <span>{curriculum?.name ?? "New offering"}</span>
         <span style={{ margin: "0 8px", color: MUTED }}>›</span>
         <span>Reading</span>
       </div>
 
       <div style={centerPanel}>
         <h1 style={{ margin: 0, color: PURPLE, fontSize: 28, fontWeight: 700, textAlign: "center" }}>
-          {isDone ? "All set." : isFailed ? "Something went wrong." : "Extracting your curriculum…"}
+          {isDone ? "All set." : isFailed ? "Something went wrong." : "Extracting your offering…"}
         </h1>
         <p style={subline}>
           {isDone

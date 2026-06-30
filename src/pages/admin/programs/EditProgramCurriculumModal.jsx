@@ -524,7 +524,7 @@ export default function EditProgramCurriculumModal({
                 onClick={() => submit({ sendFamily: false, sendInstructor: false })}
                 disabled={busy || recipientsLoading}
                 style={ghostBtnStyle(busy)}
-                title="Save the curriculum change without emailing anyone."
+                title="Save the offering change without emailing anyone."
               >
                 Skip notes + save
               </button>
@@ -612,7 +612,7 @@ function Step1({
         </select>
         {curricula.length === 0 && (
           <div style={{ color: MUTED, fontSize: 12, marginTop: 6 }}>
-            No published classes in your library yet. Add one in Curricula first.
+            No published classes in your library yet. Add one in Offerings first.
           </div>
         )}
       </div>

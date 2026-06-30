@@ -426,7 +426,7 @@ export default function CurriculumNew() {
   return (
     <div>
       <div style={crumbs}>
-        <Link to="/admin/curricula" style={crumbLink}>Curricula</Link>
+        <Link to="/admin/curricula" style={crumbLink}>Offerings</Link>
         <span style={{ margin: "0 8px", color: MUTED }}>›</span>
         {attachTarget ? (
           <>
@@ -440,11 +440,11 @@ export default function CurriculumNew() {
       </div>
 
       <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>
-        {attachTarget ? `Add a doc to ${attachTarget.name}` : "Add a curriculum to your library"}
+        {attachTarget ? `Add a doc to ${attachTarget.name}` : "Add an offering to your library"}
       </h1>
       <p style={{ color: MUTED, fontSize: 14, margin: "6px 0 22px", lineHeight: 1.5 }}>
         {attachTarget
-          ? "We'll attach this doc to the existing curriculum and run extraction so the fields populate automatically."
+          ? "We'll attach this doc to the existing offering and run extraction so the fields populate automatically."
           : "One doc sets up the whole thing — your registration page, marketing flyer, parent emails, and instructor portal — without you re-typing a thing."}
       </p>
 
@@ -477,7 +477,7 @@ export default function CurriculumNew() {
             {attachExistingWork.approvedFields > 0 && (
               <><strong>{attachExistingWork.approvedFields} reviewed field{attachExistingWork.approvedFields === 1 ? "" : "s"}</strong></>
             )}
-            . Uploading a doc will re-extract everything and overwrite that work. The curriculum name will be preserved.
+            . Uploading a doc will re-extract everything and overwrite that work. The offering name will be preserved.
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, color: INK, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <input
@@ -495,7 +495,7 @@ export default function CurriculumNew() {
       {!attachTarget && (
         <div style={titleWarning}>
           <strong style={{ color: PURPLE }}>One thing before you upload:</strong>{" "}
-          the curriculum title in your doc becomes the public name parents see — on your registration page, flyers, emails, all of it. Make sure it matches the class offering name you market. You'll get to edit on the next screen.
+          the offering title in your doc becomes the public name parents see — on your registration page, flyers, emails, all of it. Make sure it matches the class offering name you market. You'll get to edit on the next screen.
         </div>
       )}
 
@@ -650,7 +650,7 @@ export default function CurriculumNew() {
             disabled={submitDisabled}
             style={submitDisabled ? primaryBtnDisabled : primaryBtn}
           >
-            {busy ? "Starting…" : "Extract curriculum →"}
+            {busy ? "Starting…" : "Extract offering →"}
           </button>
         </div>
       </div>

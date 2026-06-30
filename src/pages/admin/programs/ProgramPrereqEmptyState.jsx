@@ -106,9 +106,9 @@ export default function ProgramPrereqEmptyState({ hasCurricula, hasLocations, he
           number={1}
           done={hasCurricula}
           focused={focusedStep === 1}
-          title="Upload your curricula"
+          title="Upload your offerings"
           blurb="The lesson content your programs will use. Once you have one, I can pull skills out, write marketing emails, and assign it to programs."
-          ctaLabel="Add curricula"
+          ctaLabel="Add offerings"
           ctaTo="/admin/curricula/new"
         />
         <StepRow
@@ -125,7 +125,7 @@ export default function ProgramPrereqEmptyState({ hasCurricula, hasLocations, he
           done={false}
           focused={focusedStep === 3}
           title={bothDone ? "Create your first program" : "Create your first program (after 1 and 2)"}
-          blurb="Pick the curriculum and location, set the time and price, and you're done."
+          blurb="Pick the offering and location, set the time and price, and you're done."
           ctaLabel={bothDone ? "Start" : null}
           ctaTo={bothDone ? "/admin/programs/new" : null}
         />

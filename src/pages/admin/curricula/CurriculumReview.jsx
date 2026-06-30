@@ -257,7 +257,7 @@ export default function CurriculumReview() {
       ]);
       if (!mounted) return;
       if (curErr || !curRow) {
-        setLoadError(curErr?.message || "Curriculum not found.");
+        setLoadError(curErr?.message || "Offering not found.");
         setLoading(false);
         return;
       }
@@ -723,7 +723,7 @@ export default function CurriculumReview() {
   return (
     <div style={{ paddingBottom: 80 }}>
       <div style={crumbs}>
-        <Link to="/admin/curricula" style={crumbLink}>Curricula</Link>
+        <Link to="/admin/curricula" style={crumbLink}>Offerings</Link>
         <span style={{ margin: "0 8px", color: MUTED }}>›</span>
         <span>{curriculum.name}</span>
         <span style={{ margin: "0 8px", color: MUTED }}>›</span>
@@ -787,7 +787,7 @@ export default function CurriculumReview() {
 
           <section style={card}>
             <div style={sectionHead}>
-              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: INK }}>The full curriculum</h3>
+              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: INK }}>The full offering</h3>
               <span style={{ color: MUTED, fontSize: 12 }}>Edits save as you go</span>
             </div>
             <p style={sectionBlurb}>
@@ -795,7 +795,7 @@ export default function CurriculumReview() {
             </p>
 
             <FieldText
-              label="Curriculum name"
+              label="Offering name"
               value={curriculum.name ?? ""}
               onChange={(v) => saveTopFieldDebounced("name", { name: v }, v)}
               saved={savingField === "name"}
@@ -927,7 +927,7 @@ export default function CurriculumReview() {
             <FieldChips
               label="Final recap skills"
               inlineHelp="auto-filled · top 6"
-              help="The 6 skills most practiced across the whole curriculum. Featured in the final recap parent email at term end."
+              help="The 6 skills most practiced across the whole offering. Featured in the final recap parent email at term end."
               value={curriculum.final_recap_skills ?? []}
               onChange={(arr) => saveTopFieldDebounced("final_recap_skills", { final_recap_skills: arr }, arr, true)}
               flagged={isFieldFlagged({ curriculum, fieldName: "final_recap_skills", extractedRow: extractedByName.final_recap_skills })}
@@ -938,7 +938,7 @@ export default function CurriculumReview() {
             <FieldTextarea
               label="Final showcase"
               inlineHelp="optional"
-              help="If the curriculum ends with a capstone, performance, or family event. Powers the pre-launch reminder email."
+              help="If the offering ends with a capstone, performance, or family event. Powers the pre-launch reminder email."
               value={curriculum.final_showcase ?? ""}
               onChange={(v) => saveTopFieldDebounced("final_showcase", { final_showcase: v || null }, v)}
               flagged={isFieldFlagged({ curriculum, fieldName: "final_showcase", extractedRow: extractedByName.final_showcase })}
@@ -986,7 +986,7 @@ export default function CurriculumReview() {
               ) : (
                 <>
                   <button onClick={saveAsDraft} style={secondaryBtn}>Save as draft</button>
-                  <button onClick={startPublish} style={primaryBtn}>Publish curriculum →</button>
+                  <button onClick={startPublish} style={primaryBtn}>Publish offering →</button>
                 </>
               )}
             </div>
@@ -1821,7 +1821,7 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
         </h3>
         <p style={{ color: MUTED, fontSize: 13, margin: "0 0 16px", lineHeight: 1.45 }}>
           Upload an edited version of your curriculum doc. We'll re-run extraction on the new file.
-          The curriculum name and any programs / camps already linked to it stay attached.
+          The offering name and any programs / camps already linked to it stay attached.
         </p>
 
         <label style={{
@@ -1868,7 +1868,7 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
         }}>
           <strong style={{ color: "#7a1a1a", display: "block", marginBottom: 6 }}>Heads up — this overwrites your edits</strong>
           <div style={{ color: INK, fontSize: 13, lineHeight: 1.5, marginBottom: 10 }}>
-            All current sessions, recap templates, skill lists, and extracted fields will be replaced with whatever the new doc produces. Linked programs / camps + the curriculum name stay.
+            All current sessions, recap templates, skill lists, and extracted fields will be replaced with whatever the new doc produces. Linked programs / camps + the offering name stay.
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, color: INK, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <input
@@ -2120,8 +2120,8 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
     return (
       <label
         title={m.linked
-          ? "Already part of this curriculum. Untick to remove."
-          : "Tick to add to this curriculum."}
+          ? "Already part of this offering. Untick to remove."
+          : "Tick to add to this offering."}
         style={{
           display: "flex", alignItems: "flex-start", gap: 8,
           padding: "8px 10px", fontSize: 13, cursor: "pointer",
@@ -2154,7 +2154,7 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
             Programs and camps for {curriculumName}
           </h3>
           <p style={{ color: MUTED, fontSize: 13, margin: 0, lineHeight: 1.45 }}>
-            Tick the ones that belong to this curriculum. Rows in plum are already part of it — untick to remove.
+            Tick the ones that belong to this offering. Rows in plum are already part of it — untick to remove.
           </p>
         </div>
 
@@ -2191,7 +2191,7 @@ function LinkExistingModal({ curriculumId, curriculumName, organizationId, userI
               </div>
               {unlinkedRows.length === 0 ? (
                 <div style={{ color: MUTED, fontSize: 12, fontStyle: "italic", padding: "10px 4px" }}>
-                  Everything in your schedule is already part of a curriculum.
+                  Everything in your schedule is already part of an offering.
                 </div>
               ) : (
                 unlinkedRows.map((m) => <MatchRow key={m.key} m={m} />)
@@ -2385,7 +2385,7 @@ function PublishModal({
               <div style={timeSavedPill}>
                 {manual
                   ? <>✓ <strong style={{ marginLeft: 6, marginRight: 4 }}>Live and reusable</strong> — this now powers your registration page, emails, and instructor portal.</>
-                  : <>⏱ <strong style={{ marginLeft: 6, marginRight: 4 }}>Saved you {hoursSaved}+ hours</strong> of setup work for this curriculum.</>}
+                  : <>⏱ <strong style={{ marginLeft: 6, marginRight: 4 }}>Saved you {hoursSaved}+ hours</strong> of setup work for this offering.</>}
               </div>
 
               {recommendation && (
@@ -2447,9 +2447,9 @@ function PublishModal({
             </h3>
             <p style={{ color: MUTED, fontSize: 13, margin: "0 0 14px", lineHeight: 1.45 }}>
               {hasMatches
-                ? <>Looks like this might be the curriculum behind {programMatches.length === 1 ? "an" : "some"} existing scheduled program{programMatches.length === 1 ? "" : "s"}. Linking lets the schedule know about its lesson plan.</>
+                ? <>Looks like this might be the offering behind {programMatches.length === 1 ? "an" : "some"} existing scheduled program{programMatches.length === 1 ? "" : "s"}. Linking lets the schedule know about its lesson plan.</>
                 : totalPreLinked > 0
-                  ? <>This curriculum is already linked to {preLinkedSummary()} — no new matches to suggest. Publish to confirm.</>
+                  ? <>This offering is already linked to {preLinkedSummary()} — no new matches to suggest. Publish to confirm.</>
                   : <>No matching scheduled programs found — that's fine. We'll publish it to your library and you can schedule it from there.</>}
             </p>
             {totalPreLinked > 0 && (
