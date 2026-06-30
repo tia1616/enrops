@@ -465,17 +465,34 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // bucketed by Monday. Empty weeks (all schools off) simply don't appear.
   const weeks = useMemo(() => {
     if (state.status !== "ready") return [];
-    const starts = new Set();
+    const counts = new Map(); // weekStart(Monday) -> session count
     const pd = state.programDates ?? {};
-    for (const pid in pd) for (const dt of pd[pid]) starts.add(weekStartOf(dt));
-    if (starts.size === 0) return [];
-    const sorted = [...starts].sort();
-    const last = sorted[sorted.length - 1];
-    // Fill EVERY week from the term's first to last class-week. Weeks with no class
-    // (a district-wide break inside the term) appear as labeled "Break" weeks, not holes.
+    for (const pid in pd) for (const dt of pd[pid]) {
+      const ws = weekStartOf(dt);
+      counts.set(ws, (counts.get(ws) ?? 0) + 1);
+    }
+    if (counts.size === 0) return [];
+    const sorted = [...counts.keys()].sort();
+    // Split into segments wherever consecutive class-weeks are >4 weeks apart, so stray
+    // off-term dates (e.g. summer classes mis-tagged to a fall term) don't drag in weeks
+    // of phantom "break". Keep the densest segment = the actual term.
+    const GAP_DAYS = 28;
+    const segments = [[sorted[0]]];
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = (Date.parse(`${sorted[i]}T00:00:00Z`) - Date.parse(`${sorted[i - 1]}T00:00:00Z`)) / 86400000;
+      if (gap > GAP_DAYS) segments.push([]);
+      segments[segments.length - 1].push(sorted[i]);
+    }
+    let term = segments[0], best = -1;
+    for (const s of segments) {
+      const total = s.reduce((n, w) => n + (counts.get(w) ?? 0), 0);
+      if (total > best) { best = total; term = s; }
+    }
+    // Fill every week across the term so in-term breaks (e.g. Thanksgiving) show as
+    // labeled "Break" weeks rather than holes.
     const out = [];
-    for (let cur = sorted[0]; cur <= last; cur = addDaysIso(cur, 7)) {
-      out.push({ start: cur, end: addDaysIso(cur, 6), label: fmtWeekLabel(cur), isBreak: !starts.has(cur) });
+    for (let cur = term[0]; cur <= term[term.length - 1]; cur = addDaysIso(cur, 7)) {
+      out.push({ start: cur, end: addDaysIso(cur, 6), label: fmtWeekLabel(cur), isBreak: !counts.has(cur) });
     }
     return out;
   }, [state]);
