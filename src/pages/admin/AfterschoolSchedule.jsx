@@ -240,7 +240,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (!org?.id || !term) return;
     setState({ status: "loading" });
     try {
-      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes] = await Promise.all([
+      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes] = await Promise.all([
         supabase
           .from("programs")
           .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max")
@@ -273,6 +273,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .select("instructor_id, area, preference")
           .eq("organization_id", org.id)
           .eq("term", term),
+        // The afterschool scheduling_cycle for this term holds the auto-reminder
+        // toggle the cron gates on. Programs link by term (not cycle_id), and not
+        // every term has a cycle row yet — the Reminders control creates one on
+        // first enable. limit(1) keeps maybeSingle safe if a dupe ever exists.
+        supabase
+          .from("scheduling_cycles")
+          .select("id, auto_reminders_enabled")
+          .eq("organization_id", org.id)
+          .eq("cycle_type", "afterschool")
+          .eq("name", term)
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle(),
       ]);
       if (progRes.error) throw progRes.error;
       if (locRes.error) throw locRes.error;
@@ -280,6 +293,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (availRes.error) throw availRes.error;
       if (surveyRes.error) throw surveyRes.error;
       if (areaPrefRes.error) throw areaPrefRes.error;
+      if (cycleRes.error) throw cycleRes.error;
 
       const programs = (progRes.data ?? []).filter((p) => DAY_TO_CODE[dayKey(p.day_of_week)]);
       const programIds = programs.map((p) => p.id);
@@ -358,6 +372,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         survey: surveyRes.data ?? null,
         areaPrefs: areaPrefRes.data ?? [],
         enrollment,
+        cycle: cycleRes.data ?? null,
       });
     } catch (err) {
       console.error("AfterschoolSchedule load error:", err);
@@ -1099,6 +1114,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             ))}
           </div>
         </div>
+      )}
+
+      {state.programs.length > 0 && (
+        <AfterschoolReminders
+          org={org}
+          term={term}
+          cycle={state.cycle}
+          assignments={state.assignments}
+          onChanged={loadAll}
+        />
       )}
 
       {state.programs.length === 0 ? (
@@ -2005,6 +2030,107 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
         </div>
       </div>
     </Overlay>
+  );
+}
+
+// Reminder controls for after-school — the operator-facing mirror of the camp
+// reminder UI in Schedule.jsx. Holds the per-term auto-reminder toggle (which
+// lives on the afterschool scheduling_cycle the cron gates on), a "Send reminders
+// now" manual trigger, and a next-fire forecast. The cycle row may not exist yet
+// for a term (programs link by term, not cycle_id) — turning the toggle on creates
+// it so both this control and the cron have a row to read/write.
+function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
+  const [busy, setBusy] = useState(null); // 'toggle' | 'run' | null
+  const [err, setErr] = useState(null);
+  const [result, setResult] = useState(null); // { sent, flagged } from a manual run
+  const enabled = !!cycle?.auto_reminders_enabled;
+
+  // Forecast: published rows still awaiting a response, bucketed by their
+  // deadline-minus-3-days fire date; show the soonest. Same rule the cron uses.
+  const forecast = useMemo(() => {
+    const pending = (assignments ?? []).filter(
+      (a) => a.status === "published" && !a.reminder_sent_at && a.email_sent_at && a.deadline && !a.instructor_response_at,
+    );
+    if (pending.length === 0) return null;
+    const today = todayIso();
+    const buckets = new Map();
+    for (const a of pending) {
+      const computed = addDaysIso(a.deadline, -3);
+      const fire = computed < today ? today : computed;
+      if (!buckets.has(fire)) buckets.set(fire, new Set());
+      buckets.get(fire).add(a.instructor_id);
+    }
+    const next = [...buckets.keys()].sort()[0];
+    return { fireDate: next, instructorCount: buckets.get(next).size };
+  }, [assignments]);
+
+  async function setEnabled(next) {
+    setBusy("toggle"); setErr(null);
+    try {
+      if (cycle?.id) {
+        const { error } = await supabase.from("scheduling_cycles").update({ auto_reminders_enabled: next }).eq("id", cycle.id);
+        if (error) throw error;
+      } else if (next) {
+        // No cycle row for this term yet — create one (only on enable; "off" with
+        // no row is already the effective state). organization_id/name/cycle_type
+        // are the only required columns; the rest default.
+        const { error } = await supabase.from("scheduling_cycles").insert({
+          organization_id: org.id, name: term, cycle_type: "afterschool", auto_reminders_enabled: true,
+        });
+        if (error) throw error;
+      }
+      await onChanged();
+    } catch (e) {
+      setErr(e.message ?? "Couldn't update reminders.");
+      setTimeout(() => setErr(null), 6000);
+    } finally { setBusy(null); }
+  }
+
+  async function runNow() {
+    setBusy("run"); setErr(null); setResult(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("offer-reminders-cron", { body: { dry_run: false } });
+      if (error) {
+        let msg = error.message ?? "function error";
+        try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+        throw new Error(msg);
+      }
+      if (data?.error) throw new Error(data.error);
+      const sent = (data?.program_reminder_results ?? []).filter((r) => r.sent).length;
+      const flagged = data?.program_expired_count ?? 0;
+      setResult({ sent, flagged });
+      await onChanged();
+    } catch (e) {
+      setErr(`Couldn't send reminders: ${e.message ?? "unknown error"}`);
+      setTimeout(() => setErr(null), 8000);
+    } finally { setBusy(null); }
+  }
+
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+      <label style={{ display: "inline-flex", alignItems: "center", gap: 9, cursor: busy ? "default" : "pointer", fontSize: 13.5, color: INK, fontWeight: 600 }}>
+        <input type="checkbox" checked={enabled} disabled={!!busy} onChange={(e) => setEnabled(e.target.checked)} />
+        Auto-remind instructors who haven’t replied
+      </label>
+      <span style={{ fontSize: 12.5, color: MUTED }}>
+        {enabled
+          ? (forecast
+              ? <>Next nudge <strong style={{ color: INK }}>{fmtDateShort(forecast.fireDate)}</strong> → {forecast.instructorCount} instructor{forecast.instructorCount === 1 ? "" : "s"}</>
+              : "No replies outstanding right now.")
+          : "Off — instructors won’t be nudged automatically."}
+      </span>
+      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+        {result && (
+          <span style={{ fontSize: 12.5, color: OK_GREEN, fontWeight: 600 }}>
+            Sent {result.sent} reminder{result.sent === 1 ? "" : "s"}{result.flagged ? ` · flagged ${result.flagged} overdue` : ""}
+          </span>
+        )}
+        {err && <span style={{ fontSize: 12.5, color: CORAL, fontWeight: 600 }}>{err}</span>}
+        <button type="button" onClick={runNow} disabled={!!busy} style={{ background: enabled ? BRIGHT : "#fff", color: enabled ? "#fff" : MUTED, border: enabled ? "none" : `1px solid ${RULE}`, borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, fontFamily: "inherit" }}>
+          {busy === "run" ? "Sending…" : "Send reminders now"}
+        </button>
+      </div>
+    </div>
   );
 }
 
