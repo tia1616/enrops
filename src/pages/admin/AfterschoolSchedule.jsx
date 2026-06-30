@@ -1671,7 +1671,7 @@ function weekPillStyle(active) {
 // An orange dot flags weeks that need attention: a class that week has no instructor.
 function WeekRail({ weeks, signals, effective, onSelect }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, overflowX: "auto", padding: "2px 2px 8px" }}>
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, padding: "2px 2px 8px" }}>
       <button type="button" onClick={() => onSelect(null)} style={weekPillStyle(effective === null)}>Every week</button>
       {weeks.map((w) => {
         const sig = signals?.get(w.start);
