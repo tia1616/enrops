@@ -441,7 +441,7 @@ function renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, d
             <td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">
               Questions? Just reply to this email.
               <br /><br />
-              — Jessica, ${escape(org.name)}
+              — The ${escape(org.name)} team
             </td>
           </tr>
         </table>
@@ -484,6 +484,6 @@ function renderPatchText({ cycle, org, instructor, camps, portalUrl, deadline, l
   lines.push('');
   lines.push(`Questions? Just reply to this email.`);
   lines.push('');
-  lines.push(`— Jessica, ${org.name}`);
+  lines.push(`— The ${org.name} team`);
   return lines.join('\n');
 }
