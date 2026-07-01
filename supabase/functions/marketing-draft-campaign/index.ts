@@ -56,8 +56,12 @@ const DRAFT_MODEL = Deno.env.get("MARKETING_DRAFT_MODEL") ?? "claude-sonnet-4-6"
 // Multi-touchpoint schedules return ~6-9 emails worth of JSON. 16000 max_tokens
 // fits a 7-email series with html+text without truncation; if Ennie wants more,
 // future chunks can stream or paginate.
-const MAX_TOKENS = 16000;
-const CLAUDE_TIMEOUT_MS = 120_000;
+// 10k fits ~7 HTML-only emails comfortably. The model no longer writes the
+// plain-text copy (we derive it from the HTML), which roughly halves output
+// and generation time. Timeout is short enough that one attempt + one retry
+// still fits under the platform's wall-clock limit — fail fast, not hang.
+const MAX_TOKENS = 10000;
+const CLAUDE_TIMEOUT_MS = 55_000;
 const RECIPIENT_HARD_CAP = 5000;
 
 const corsHeaders = {
@@ -1428,7 +1432,6 @@ This is more useful to the operator than guessing or apologizing for the lack of
     `      "scheduled_at": "<ISO 8601 with timezone offset, e.g. 2026-05-21T10:00:00-07:00>",`,
     `      "subject": "<= 60 chars, uses tokens for any specifics>",`,
     `      "body_html": "<clean HTML, no wrappers, uses {{first_name}} and {{school}} merge tokens>",`,
-    `      "body_text": "<plain-text version>",`,
     `      "topics": ["<which input topics this touchpoint covers; subset of: ${topics.map((t) => `\\"${t}\\"`).join(", ")}>"]`,
     `    }`,
     `  ]`,
@@ -1439,11 +1442,12 @@ This is more useful to the operator than guessing or apologizing for the lack of
       ? `- Produce EXACTLY ${cadenceSlots.length} touchpoints — one for each slot in the FIXED SEND SCHEDULE above, in the same order. order_index 0 = the first slot, and so on, contiguous.`
       : `- Generate 2-7 touchpoints depending on duration (see cadence heuristics).`,
     `- order_index starts at 0 and is contiguous.`,
+    `- Do NOT include a body_text field. Write only body_html; the system generates the plain-text version from your HTML.`,
     useFixedCadence
       ? `- The SERVER sets the timing. Do NOT choose scheduled_at yourself — echo the slot's date if you like, but it will be overwritten with the exact send time from the FIXED SEND SCHEDULE.`
       : `- scheduled_at must be in the future (after today) and respect default send times.`,
     useFixedCadence
-      ? `- Match each touchpoint's tone to its slot purpose: a "kickoff" is fuller and paints the picture; a 24h reminder is three or four sentences, urgent but warm; a 48h reminder sits in between. Keep the JSON schema (subject, body_html, body_text, topics) otherwise identical for every slot.`
+      ? `- Match each touchpoint's tone to its slot purpose: a "kickoff" is fuller and paints the picture; a 24h reminder is three or four sentences, urgent but warm; a 48h reminder sits in between. Keep the JSON schema (subject, body_html, topics) otherwise identical for every slot.`
       : undefined,
     `- Each touchpoint's "topics" array must be a non-empty subset of the input topics.`,
     `- If a topic is ambiguous or you're unsure about something, put it in notes_to_operator — DON'T guess in the copy.`,
@@ -1963,7 +1967,7 @@ async function callClaude(systemPrompt: string, topics: string[]): Promise<
   const topicsLine = topics.length === 1
     ? `"${topics[0]}"`
     : topics.map((t) => `"${t}"`).join(" + ");
-  const userMessage = `Plan the full campaign schedule now. Topic(s): ${topicsLine}. Generate every touchpoint with its scheduled_at, subject, body_html, body_text, and topics array. Return the JSON object only.`;
+  const userMessage = `Plan the full campaign schedule now. Topic(s): ${topicsLine}. Generate every touchpoint with its scheduled_at, subject, body_html, and topics array (no body_text — the system derives it). Return the JSON object only.`;
 
   const attempt = async (): Promise<{ raw: string }> => {
     const controller = new AbortController();
@@ -2302,7 +2306,9 @@ Deno.serve(async (req: Request) => {
   for (const tp of schedule.touchpoints) {
     tp.subject = stripAiDashes(tp.subject);
     tp.body_html = stripAiDashes(tp.body_html);
-    tp.body_text = stripAiDashes(tp.body_text);
+    // Plain-text is derived server-side from the cleaned HTML — the model no
+    // longer writes body_text (halves generation time / avoids timeouts).
+    tp.body_text = stripHtml(tp.body_html ?? "");
   }
 
   // ---- Server-computed cadence enforcement ----
