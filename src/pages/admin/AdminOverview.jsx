@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
+import { fetchOrgTerms } from "../../lib/terms.js";
 import Ennie from "../../components/Ennie";
 
 const PURPLE = "#1C004F";
@@ -415,7 +416,7 @@ function WeekView({ org }) {
             <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {day.map((s) => (
                 <div key={s.id} style={{ background: "#fafaf3", border: `1px solid ${RULE}`, borderRadius: 6, padding: "4px 5px" }}>
-                  <div style={{ fontSize: 10, color: MUTED }}>{fmtTime(s.start_time)}</div>
+                  <div style={{ fontSize: 10, color: MUTED }}>{fmtClock(s.start_time)}</div>
                   <div style={{ fontSize: 11, fontWeight: 500, lineHeight: 1.2, color: INK }}>{s.curriculum_name}</div>
                 </div>
               ))}
@@ -478,7 +479,7 @@ function MonthView({ org }) {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 500, color: INK }}>{s.curriculum_name}</div>
-                  <div style={{ fontSize: 12, color: MUTED, marginTop: 1 }}>{fmtTime(s.start_time)}–{fmtTime(s.end_time)} · {s.location_name}</div>
+                  <div style={{ fontSize: 12, color: MUTED, marginTop: 1 }}>{fmtClock(s.start_time)}–{fmtClock(s.end_time)} · {s.location_name}</div>
                 </div>
               </div>
             );
@@ -790,16 +791,40 @@ function WinsStrip({ wins }) {
 }
 
 // "Today's schedule" — at-a-glance agenda of what's running today: time, topic,
-// location, instructor. Camps now; afterschool (via derive_program_session_dates)
-// is step 4b. Single accent only where a session needs cover.
-function fmtTime(t) {
+// location, instructor. Covers BOTH camps (week-long sessions) and after-school
+// (weekly recurring classes; "meets today" resolved via derive_program_session_dates
+// so closures/breaks are honored). Single coral accent only where a class has no
+// one to cover it today. Camps and after-school run in different seasons, so in
+// practice a given day is one or the other — but both are merged and time-sorted.
+const INSTRUCTOR_NAME_COLS = "first_name, preferred_name, last_name";
+function instructorName(i) {
+  if (!i) return null;
+  const n = `${i.preferred_name || i.first_name || ""}${i.last_name ? ` ${i.last_name}` : ""}`.trim();
+  return n || null;
+}
+// Stored times vary: camps use 24h ("09:00"); programs use 12h ("2:35 PM") or,
+// for some imported rows, 24h ("15:45"). Normalize both to minutes / a clock label.
+function timeToMinutes(t) {
+  if (!t) return 0;
+  const s = String(t).trim();
+  const m12 = /^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/.exec(s);
+  if (m12) {
+    let h = parseInt(m12[1], 10) % 12;
+    if (m12[3].toLowerCase() === "pm") h += 12;
+    return h * 60 + parseInt(m12[2], 10);
+  }
+  const m24 = /^(\d{1,2}):(\d{2})/.exec(s);
+  if (m24) return parseInt(m24[1], 10) * 60 + parseInt(m24[2], 10);
+  return 0;
+}
+function fmtClock(t) {
   if (!t) return "";
-  const [h, m] = String(t).split(":");
-  let hh = parseInt(h, 10);
-  if (Number.isNaN(hh)) return "";
-  const ap = hh >= 12 ? "PM" : "AM";
-  hh = hh % 12 || 12;
-  return `${hh}:${m} ${ap}`;
+  const min = timeToMinutes(t);
+  let h = Math.floor(min / 60);
+  const m = min % 60;
+  const ap = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${h}:${String(m).padStart(2, "0")} ${ap}`;
 }
 
 function TodayAgenda({ org }) {
@@ -811,41 +836,135 @@ function TodayAgenda({ org }) {
     (async () => {
       try {
         const today = new Date().toISOString().slice(0, 10);
-        // Camps are week-long sessions; "running today" = today within [starts_on, ends_on].
+        // Derive the weekday from the SAME UTC date the camp range uses (below), so
+        // the date and weekday never disagree near a midnight-UTC boundary.
+        const todayWeekday = new Date(`${today}T00:00:00Z`)
+          .toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" })
+          .toLowerCase();
+
+        // ---- Camps: week-long sessions; "running today" = today ∈ [starts_on, ends_on]. ----
         const { data: sessions, error: sErr } = await supabase
           .from("camp_sessions")
           .select("id, location_name, curriculum_name, start_time, end_time")
           .eq("organization_id", org.id)
           .lte("starts_on", today)
-          .gte("ends_on", today)
-          .order("start_time", { ascending: true });
+          .gte("ends_on", today);
         if (sErr) throw sErr;
 
-        const ids = (sessions ?? []).map((s) => s.id);
+        const campIds = (sessions ?? []).map((s) => s.id);
         const leadByCamp = new Map();
-        if (ids.length) {
+        if (campIds.length) {
           const { data: assigns } = await supabase
             .from("camp_assignments")
-            .select("camp_session_id, status, instructors(first_name, preferred_name, last_name)")
-            .in("camp_session_id", ids)
+            .select(`camp_session_id, status, instructors(${INSTRUCTOR_NAME_COLS})`)
+            .in("camp_session_id", campIds)
             .eq("role", "lead");
           for (const a of assigns ?? []) {
             if (a.status === "withdrawn" || a.status === "declined") continue;
-            const i = a.instructors;
-            if (!i) continue;
-            const name = `${i.preferred_name || i.first_name || ""}${i.last_name ? ` ${i.last_name}` : ""}`.trim();
+            const name = instructorName(a.instructors);
             if (name) leadByCamp.set(a.camp_session_id, name);
           }
         }
 
-        const built = (sessions ?? []).map((s) => ({
-          id: s.id,
+        const campRows = (sessions ?? []).map((s) => ({
+          id: `camp-${s.id}`,
           title: s.curriculum_name,
           location: s.location_name,
-          start: s.start_time,
-          end: s.end_time,
+          startLabel: fmtClock(s.start_time),
+          endLabel: fmtClock(s.end_time),
+          sortMin: timeToMinutes(s.start_time),
           instructor: leadByCamp.get(s.id) || null,
+          viaSub: false,
         }));
+
+        // ---- After-school: weekly recurring classes. Find classes whose weekday is
+        // today AND that belong to a currently-running term — bounded by
+        // first_session_date (no dependency on org_terms, which can be empty), then
+        // confirm today is a real session (not a break) via derive_program_session_dates.
+        // Effective teacher = a confirmed same-day substitute if any, else the lead;
+        // no one ⇒ "needs cover". Out of season nothing has a session dated today, so
+        // this stays silent until after-school is actually running.
+        const asRows = [];
+        {
+          const lookback = new Date(`${today}T00:00:00Z`);
+          lookback.setUTCDate(lookback.getUTCDate() - 180); // ~ one term + gap
+          const { data: progs } = await supabase
+            .from("programs")
+            .select("id, curriculum, day_of_week, start_time, end_time, program_location_id")
+            .eq("organization_id", org.id)
+            .not("status", "in", '("cancelled","archived")')
+            .lte("first_session_date", today)
+            .gte("first_session_date", lookback.toISOString().slice(0, 10));
+          const candidates = (progs ?? []).filter(
+            (p) => (p.day_of_week || "").trim().toLowerCase() === todayWeekday,
+          );
+          if (candidates.length) {
+            // Confirm each candidate actually meets today (honors closures/breaks).
+            const dateLists = await Promise.all(
+              candidates.map((p) =>
+                supabase.rpc("derive_program_session_dates", { p_program_id: p.id }).then((r) => r, () => ({ data: [] })),
+              ),
+            );
+            const meeting = candidates.filter((p, i) => {
+              const d = dateLists[i]?.data;
+              return Array.isArray(d) && d.includes(today);
+            });
+            if (meeting.length) {
+              const progIds = meeting.map((p) => p.id);
+              const locIds = Array.from(new Set(meeting.map((p) => p.program_location_id).filter(Boolean)));
+              const [{ data: locs }, { data: pAssigns }] = await Promise.all([
+                locIds.length
+                  ? supabase.from("program_locations").select("id, name").in("id", locIds)
+                  : Promise.resolve({ data: [] }),
+                supabase
+                  .from("program_assignments")
+                  .select(`id, program_id, status, instructors(${INSTRUCTOR_NAME_COLS})`)
+                  .in("program_id", progIds),
+              ]);
+              const locName = new Map((locs ?? []).map((l) => [l.id, l.name]));
+              const leadByProgram = new Map(); // program_id -> { assignmentId, name }
+              for (const a of pAssigns ?? []) {
+                if (a.status === "withdrawn" || a.status === "declined") continue;
+                const name = instructorName(a.instructors);
+                if (name && !leadByProgram.has(a.program_id)) {
+                  leadByProgram.set(a.program_id, { assignmentId: a.id, name });
+                }
+              }
+              // Confirmed same-day subs override the lead for today.
+              const leadAssignmentIds = Array.from(leadByProgram.values()).map((v) => v.assignmentId);
+              const subByAssignment = new Map();
+              if (leadAssignmentIds.length) {
+                const { data: subs } = await supabase
+                  .from("assignment_substitutions")
+                  .select(`parent_assignment_id, status, sub:instructors!sub_instructor_id(${INSTRUCTOR_NAME_COLS})`)
+                  .eq("parent_assignment_type", "program")
+                  .eq("date", today)
+                  .in("parent_assignment_id", leadAssignmentIds);
+                for (const s of subs ?? []) {
+                  if (s.status !== "confirmed" && s.status !== "taught") continue;
+                  const name = instructorName(s.sub);
+                  if (name) subByAssignment.set(s.parent_assignment_id, name);
+                }
+              }
+              for (const p of meeting) {
+                const lead = leadByProgram.get(p.id) || null;
+                const sub = lead ? subByAssignment.get(lead.assignmentId) : null;
+                asRows.push({
+                  id: `prog-${p.id}`,
+                  title: p.curriculum || "Class",
+                  location: locName.get(p.program_location_id) || "",
+                  startLabel: fmtClock(p.start_time),
+                  endLabel: fmtClock(p.end_time),
+                  sortMin: timeToMinutes(p.start_time),
+                  instructor: sub || lead?.name || null,
+                  viaSub: !!sub,
+                });
+              }
+            }
+          }
+        }
+
+        const built = [...campRows, ...asRows].sort((a, b) => a.sortMin - b.sortMin);
         if (!cancelled) setRows(built);
       } catch (e) {
         console.error("[admin/overview] today agenda load failed", e);
@@ -875,12 +994,12 @@ function TodayAgenda({ org }) {
           {rows.map((r) => (
             <div key={r.id} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "11px 14px", display: "flex", gap: 14, alignItems: "flex-start" }}>
               <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, color: MUTED, minWidth: 66, lineHeight: 1.5 }}>
-                {fmtTime(r.start)}<br />{fmtTime(r.end)}
+                {r.startLabel}<br />{r.endLabel}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{r.title}</div>
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-                  {r.location}{r.instructor ? ` · ${r.instructor}` : ""}
+                  {r.location}{r.instructor ? ` · ${r.instructor}${r.viaSub ? " (sub)" : ""}` : ""}
                 </div>
                 {!r.instructor && (
                   <span style={{ display: "inline-block", marginTop: 6, fontSize: 11, fontWeight: 600, color: CORAL, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, borderRadius: 6, padding: "2px 8px" }}>
