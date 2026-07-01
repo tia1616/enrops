@@ -339,6 +339,9 @@ export default function AICampaignBuilder() {
             subject: merged.subject ?? null,
             body_html: merged.body_html ?? null,
             body_text: merged.body_text ?? null,
+            // Preserve the server-computed timing reason so editing a resumed
+            // draft doesn't wipe the "why this email lands when it does" copy.
+            reason: merged.reason ?? null,
           },
           topics: merged.topics ?? [],
         })
@@ -378,6 +381,7 @@ export default function AICampaignBuilder() {
             subject: tp.subject ?? null,
             body_html: tp.body_html ?? null,
             body_text: tp.body_text ?? null,
+            reason: tp.reason ?? null,
           },
           topics: tp.topics ?? [],
         })
@@ -390,7 +394,7 @@ export default function AICampaignBuilder() {
       }
       // Refresh the local draft state so subsequent edits compare against
       // the latest persisted version (no surprise overwrites).
-      alert(`Saved — your edits are persisted. Campaign stays in DRAFT status until you click Approve. Reach the draft again from the campaign list (coming soon) or by re-walking Q1–Q4 with the same picks.`);
+      alert(`Saved! Your changes are safe. This stays a draft until you hit Approve — reopen it any time from Campaigns → Drafts → Resume.`);
     } finally {
       setBusyAction(null);
     }
@@ -483,6 +487,13 @@ export default function AICampaignBuilder() {
     }
     const tpCount = state.draft?.schedule?.touchpoints?.length ?? 0;
     const recipientCount = state.draft?.recipients?.count ?? 0;
+    // Guard: approving with no audience silently schedules to nobody. This is
+    // easy to hit on a RESUMED draft, whose recipients aren't re-resolved yet.
+    // Block it and send the operator back to pick the audience.
+    if (recipientCount === 0) {
+      alert('This campaign has no audience yet — approving now would send to nobody. Go back to "Who" and pick who should get it, then approve.');
+      return;
+    }
     if (!confirm(`Approve ${tpCount} touchpoint${tpCount === 1 ? "" : "s"} and schedule to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}? Once approved, Ennie sends each touchpoint at its scheduled time. You can't edit after this.`)) return;
     setBusyAction("approve");
     try {

@@ -39,7 +39,8 @@
 // Writes one row to marketing_campaigns with status='draft', draft_source=
 // 'ai_assisted', draft_inputs=<the inputs object>, draft_model=<model used>.
 
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+// Use the built-in Deno.serve (no external std import) — avoids a flaky
+// deno.land/std fetch at bundle time and is the current Supabase standard.
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import Anthropic from "npm:@anthropic-ai/sdk@0.96.0";
 
@@ -1639,30 +1640,39 @@ function computeCadenceSlots(inputs: DraftInputs, facts: GroundedFacts, nowMs: n
   else if (custom.end != null) endMs = custom.end;
   else endMs = kickoffMs + 30 * DAY_MS; // safe default for unrecognized durations
 
-  // ---- Deadlines from grounded facts (only future, in-window). ----
-  // Early-bird: earliest deadline among programs that actually set an early-bird price.
+  // ---- Deadlines from grounded facts. ----
+  // A deadline can only anchor a REMINDER if it's far enough out to actually
+  // send a "48h before" email — at least ~2 days. A program that starts
+  // tomorrow can't be reminded about, so it must NOT anchor OR collapse the
+  // campaign. Pick the earliest remindable, in-window deadline of each kind.
+  const REMINDABLE_FLOOR = kickoffMs + 2 * DAY_MS;
   let earlyBirdMs: number | null = null;
   for (const p of facts.programs) {
     if (p.early_bird_price_cents == null) continue;
     const d = dateOnlyToSendMs(p.early_bird_deadline);
     if (d == null) continue;
-    if (d > kickoffMs && d <= endMs && (earlyBirdMs == null || d < earlyBirdMs)) earlyBirdMs = d;
+    if (d >= REMINDABLE_FLOOR && d <= endMs && (earlyBirdMs == null || d < earlyBirdMs)) earlyBirdMs = d;
   }
-  // Start date: earliest of program first_session_date and camp starts_on.
+  // startDateMs = earliest remindable start (drives 48h/24h "last chance"
+  // reminders). latestStartMs = last start overall, used only to stop the drip
+  // once everything has started — never to collapse to a single early outlier.
   let startDateMs: number | null = null;
-  for (const p of facts.programs) {
-    const d = dateOnlyToSendMs(p.first_session_date);
-    if (d == null) continue;
-    if (d > kickoffMs && d <= endMs && (startDateMs == null || d < startDateMs)) startDateMs = d;
-  }
-  for (const c of facts.camps) {
-    const d = dateOnlyToSendMs(c.starts_on);
-    if (d == null) continue;
-    if (d > kickoffMs && d <= endMs && (startDateMs == null || d < startDateMs)) startDateMs = d;
-  }
+  let latestStartMs: number | null = null;
+  const considerStart = (d: number | null) => {
+    if (d == null) return;
+    if (d >= REMINDABLE_FLOOR && d <= endMs && (startDateMs == null || d < startDateMs)) startDateMs = d;
+    if (d > kickoffMs && (latestStartMs == null || d > latestStartMs)) latestStartMs = d;
+  };
+  for (const p of facts.programs) considerStart(dateOnlyToSendMs(p.first_session_date));
+  for (const c of facts.camps) considerStart(dateOnlyToSendMs(c.starts_on));
 
-  // Once registration closes / classes start, stop promoting: pull the window in.
-  if (startDateMs != null && startDateMs < endMs) endMs = startDateMs;
+  // Stop promoting once the LAST offering has started (don't drip into empty
+  // space) — but never past the operator's chosen duration, and NEVER collapse
+  // to the earliest start. A 2-month push over programs that start across
+  // months keeps its full window even if one program happens to start tomorrow.
+  if (latestStartMs != null && latestStartMs > kickoffMs && latestStartMs < endMs) {
+    endMs = latestStartMs;
+  }
 
   type Draft = { label: string; ms: number; reason: string; kind: "kickoff" | "reminder" | "build" };
   const slots: Draft[] = [];
@@ -1673,8 +1683,13 @@ function computeCadenceSlots(inputs: DraftInputs, facts: GroundedFacts, nowMs: n
   const deadlineCandidates = [earlyBirdMs, startDateMs].filter((x): x is number => x != null);
   const earliestDeadline = deadlineCandidates.length > 0 ? Math.min(...deadlineCandidates) : null;
 
-  // ---- Deadline-proximity collapse: earliest deadline within 7 days of kickoff. ----
-  if (earliestDeadline != null && earliestDeadline <= kickoffMs + 7 * DAY_MS) {
+  // ---- Deadline-proximity collapse: SHORT campaigns only. ----
+  // If the operator chose a short window (~2 weeks) and the earliest deadline is
+  // within a week, a full drip is pointless — collapse to announce + a final
+  // reminder. We do NOT collapse a 1-2 month campaign just because one deadline
+  // is near; long campaigns keep their weekly cadence.
+  const shortWindow = endMs - kickoffMs <= 16 * DAY_MS;
+  if (shortWindow && earliestDeadline != null && earliestDeadline <= kickoffMs + 7 * DAY_MS) {
     const before48 = earliestDeadline - 2 * DAY_MS;
     const before24 = earliestDeadline - 1 * DAY_MS;
     if (before48 > kickoffMs) {
@@ -2040,7 +2055,7 @@ async function callClaude(systemPrompt: string, topics: string[]): Promise<
 // Handler
 // ---------------------------------------------------------------------------
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonError("method not allowed", 405);
 
