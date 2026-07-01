@@ -370,15 +370,40 @@ function TouchpointRow({ tp, stats, timezone, canEdit = true, onUpdate, onSkip }
             {open && <TouchpointEditor tp={tp} onUpdate={onUpdate} />}
           </>
         ) : (
-          <div style={{ marginTop: 10, fontSize: 11, color: MUTED, fontStyle: "italic" }}>
-            {tp.status === "sent"
-              ? "Already sent — locked."
-              : tp.status === "sending"
-                ? "Sending now — locked."
-                : tp.status === "skipped"
-                  ? "Skipped — Ennie won't send this."
-                  : "Read-only."}
-          </div>
+          <>
+            <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <button
+                onClick={() => setOpen((v) => !v)}
+                style={{
+                  padding: "6px 12px", background: "#fff", color: INK, border: `1px solid ${RULE}`,
+                  borderRadius: 6, cursor: "pointer", fontSize: 12, fontFamily: "inherit",
+                }}
+              >
+                {open ? "Hide email" : "View email"}
+              </button>
+              <span style={{ fontSize: 11, color: MUTED, fontStyle: "italic" }}>
+                {tp.status === "sent"
+                  ? "Already sent — locked."
+                  : tp.status === "sending"
+                    ? "Sending now — locked."
+                    : tp.status === "skipped"
+                      ? "Skipped — Ennie won't send this."
+                      : "Read-only."}
+              </span>
+            </div>
+            {open && (
+              <div style={{ marginTop: 10, border: `1px solid ${RULE}`, borderRadius: 8, padding: 14, background: "#fafafa" }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: INK, marginBottom: 8 }}>{subject}</div>
+                <div
+                  style={{ fontSize: 13, color: INK, lineHeight: 1.5 }}
+                  dangerouslySetInnerHTML={{ __html: tp.payload?.body_html || "<em>(no content)</em>" }}
+                />
+                <div style={{ fontSize: 11, color: MUTED, marginTop: 10 }}>
+                  Merge fields like {"{{first_name}}"} fill in per family at send time.
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
