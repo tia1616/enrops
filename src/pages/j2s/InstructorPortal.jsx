@@ -471,18 +471,23 @@ export default function InstructorPortal() {
       const returnTo = seg
         ? `${window.location.origin}/${seg}/instructor`
         : `${window.location.origin}${window.location.pathname}`;
-      const { data, error: fnErr } = await supabase.functions.invoke("auth-send-magic-link", {
-        body: {
-          email,
-          redirect_to: returnTo,
-          context: "instructor",
-        },
-      });
-      if (fnErr) throw fnErr;
-      if (data?.error) throw new Error(data.error);
+      const body = { email, redirect_to: returnTo, context: "instructor" };
+      // One silent retry: the magic-link function can cold-start, and the first
+      // invoke occasionally returns a transient non-2xx. Retrying once keeps a
+      // one-off blip from ever reaching the instructor as an error.
+      let data, fnErr;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        ({ data, error: fnErr } = await supabase.functions.invoke("auth-send-magic-link", { body }));
+        if (!fnErr && !data?.error) break;
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 900));
+      }
+      if (fnErr || data?.error) throw new Error("send_failed");
       setSendMsg(`Check ${email} for your sign-in link.`);
-    } catch (err) {
-      setError(err.message ?? "Couldn't send the link. Try again.");
+    } catch {
+      // Never surface a raw SDK/edge message (e.g. "Edge Function returned a
+      // non-2xx status code") — instructors get plain-language copy per the
+      // no-tech-jargon rule.
+      setError("We couldn't send your sign-in link just now. Please try again in a moment.");
     } finally {
       setSendBusy(false);
     }
@@ -500,7 +505,7 @@ export default function InstructorPortal() {
       options: { redirectTo: returnTo },
     });
     if (err) {
-      setError(err.message);
+      setError("We couldn't start Google sign-in just now. Please try again, or use the email link below.");
       setSendBusy(false);
     }
   }
