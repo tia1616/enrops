@@ -25,7 +25,7 @@
 // may have no recipients captured yet.
 
 import { useEffect, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
@@ -37,6 +37,8 @@ export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // null = unknown; gates the empty-state copy (add-offerings vs build-first).
+  const [hasOfferings, setHasOfferings] = useState(null);
   // Tracks per-row in-flight actions so each row shows its own spinner without
   // freezing the whole list. Shape: { [campaignId]: 'cancel'|'pause'|'resume'|'delete'|'rename' }
   const [busyRows, setBusyRows] = useState({});
@@ -63,6 +65,20 @@ export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
         .limit(100);
       if (e) throw e;
       setCampaigns(data ?? []);
+
+      // Does the org have anything to market yet? Ennie drafts FROM programs/
+      // camps, so an org with none needs to add offerings before a campaign
+      // makes sense. Drives which empty-state copy shows. Non-fatal: on failure
+      // default to "has offerings" so we never wrongly nag.
+      try {
+        const [{ count: progCount }, { count: campCount }] = await Promise.all([
+          supabase.from("programs").select("id", { count: "exact", head: true }).eq("organization_id", org.id),
+          supabase.from("camp_sessions").select("id", { count: "exact", head: true }).eq("organization_id", org.id),
+        ]);
+        setHasOfferings((progCount ?? 0) + (campCount ?? 0) > 0);
+      } catch {
+        setHasOfferings(true);
+      }
     } catch (err) {
       setError(err?.message ?? "Couldn't load your campaigns. Refresh and try again.");
     } finally {
@@ -219,10 +235,24 @@ export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
       {loading ? (
         <div style={{ padding: 24, color: MUTED }}>Loading your campaigns…</div>
       ) : isEmpty ? (
-        <div style={{ border: `1px dashed ${RULE}`, borderRadius: 12, padding: 32, textAlign: "center", color: MUTED }}>
-          <p style={{ margin: "0 0 4px", color: INK, fontWeight: 600 }}>No campaigns yet</p>
-          <p style={{ margin: 0, fontSize: 13 }}>Click “Build a campaign” to set one up with Ennie.</p>
-        </div>
+        hasOfferings === false ? (
+          <div style={{ border: `1px dashed ${RULE}`, borderRadius: 12, padding: 32, textAlign: "center" }}>
+            <p style={{ margin: "0 0 8px", color: INK, fontWeight: 700, fontSize: 16 }}>Add your offerings to get started</p>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+              Ennie writes campaigns from your programs, camps, and offerings.{" "}
+              <Link to="/admin/programs" style={{ color: BRIGHT, fontWeight: 600 }}>Add offerings &amp; programs →</Link>
+              <br />Once they’re in, she’ll turn each one into a ready-to-send email series.
+            </p>
+            <div style={{ background: "#faf7ed", border: `1px solid ${RULE}`, borderRadius: 8, padding: "12px 14px", fontSize: 12.5, color: INK, textAlign: "left", lineHeight: 1.6 }}>
+              💡 <strong>A steady rhythm wins.</strong> Families re-enroll when they hear from you consistently — aim for about <strong>3–4 touchpoints a month</strong>. Structured, regular emails are the single biggest lever on parent lifetime value.
+            </div>
+          </div>
+        ) : (
+          <div style={{ border: `1px dashed ${RULE}`, borderRadius: 12, padding: 32, textAlign: "center", color: MUTED }}>
+            <p style={{ margin: "0 0 4px", color: INK, fontWeight: 600 }}>No campaigns yet</p>
+            <p style={{ margin: 0, fontSize: 13 }}>Click “Build a campaign” to set one up with Ennie.</p>
+          </div>
+        )
       ) : (
         <>
           {drafts.length > 0 && (

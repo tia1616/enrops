@@ -119,7 +119,7 @@ export default function Q1_What({ inputs, setField, onNext, onBack, canNext, onA
           }}
         >
           <Chevron open={pickerExpanded} color={MUTED} />
-          {pickerExpanded ? "Hide picker" : "Pick programs manually"}
+          {pickerExpanded ? "Hide picker" : "Pick programs manually, or send something else"}
         </button>
 
         {pickerExpanded && (
