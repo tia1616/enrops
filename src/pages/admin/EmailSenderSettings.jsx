@@ -24,6 +24,9 @@ export default function EmailSenderSettings() {
   const [fromName, setFromName] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [mailingAddress, setMailingAddress] = useState("");
+  // Snapshot of the last loaded/saved values so the Save button can grey out
+  // when there's nothing to save, and light up when you change something.
+  const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "" });
   const [preview, setPreview] = useState(null); // { from, reply_to }
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -61,6 +64,11 @@ export default function EmailSenderSettings() {
         setFromName(data?.email_from_name ?? "");
         setReplyTo(data?.email_reply_to ?? "");
         setMailingAddress(orgRow?.mailing_address ?? "");
+        setSaved({
+          fromName: data?.email_from_name ?? "",
+          replyTo: data?.email_reply_to ?? "",
+          mailingAddress: orgRow?.mailing_address ?? "",
+        });
         setTestTo(user?.email ?? "");
         await loadPreview();
         setLoading(false);
@@ -91,6 +99,7 @@ export default function EmailSenderSettings() {
         .eq("id", org.id);
       if (addrErr) throw addrErr;
       flash("Sender saved.");
+      setSaved({ fromName, replyTo, mailingAddress });
       await loadPreview();
     } catch (e) {
       setError(e.message ?? "Couldn't save your sender settings.");
@@ -116,6 +125,9 @@ export default function EmailSenderSettings() {
       setTesting(false);
     }
   }
+
+  const dirty =
+    fromName !== saved.fromName || replyTo !== saved.replyTo || mailingAddress !== saved.mailingAddress;
 
   if (loading) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
@@ -156,7 +168,7 @@ export default function EmailSenderSettings() {
         <div style={hint}>Required on marketing emails by law (CAN-SPAM). Shown in the footer.</div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
-          <button type="button" onClick={save} disabled={saving} style={primaryBtn(saving)}>{saving ? "Saving…" : "Save"}</button>
+          <button type="button" onClick={save} disabled={saving || !dirty} style={primaryBtn(saving || !dirty)}>{saving ? "Saving…" : dirty ? "Save" : "Saved ✓"}</button>
         </div>
       </div>
 
