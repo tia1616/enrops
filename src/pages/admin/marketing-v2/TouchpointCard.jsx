@@ -175,6 +175,15 @@ export default function TouchpointCard({
           <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
             {fmtScheduled(tp.scheduled_at, timezone)}
           </div>
+          {/* Why this email lands when it does — the server-computed cadence
+              stamps a plain-English reason on every touchpoint so the operator
+              understands the timing at a glance (Jessica's transparency ask). */}
+          {tp.reason && (
+            <div style={{ fontSize: 11, color: BRIGHT, marginTop: 3, display: "flex", gap: 4, alignItems: "flex-start", lineHeight: 1.35 }}>
+              <span aria-hidden>⏱</span>
+              <span>{tp.reason}</span>
+            </div>
+          )}
         </div>
         <Chevron open={open} color={MUTED} size={14} />
       </button>
@@ -204,6 +213,11 @@ export default function TouchpointCard({
                 fontSize: 13, fontFamily: "inherit", background: "#fff", color: INK,
               }}
             />
+            {tp.reason && (
+              <div style={{ fontSize: 12, color: INFO, marginTop: 6, lineHeight: 1.4 }}>
+                Ennie scheduled this for you: {tp.reason}
+              </div>
+            )}
           </div>
 
           {/* Per-recipient preview dropdown. Entries vary by campaign type:

@@ -52,9 +52,10 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 // MARKETING_DRAFT_MODEL env var if copy quality drops.
 const DRAFT_MODEL = Deno.env.get("MARKETING_DRAFT_MODEL") ?? "claude-sonnet-4-6";
 
-// Multi-touchpoint schedules return ~6-9 emails worth of JSON. 8000 max_tokens
-// fits comfortably; if Ennie wants more, future chunks can stream or paginate.
-const MAX_TOKENS = 8000;
+// Multi-touchpoint schedules return ~6-9 emails worth of JSON. 16000 max_tokens
+// fits a 7-email series with html+text without truncation; if Ennie wants more,
+// future chunks can stream or paginate.
+const MAX_TOKENS = 16000;
 const CLAUDE_TIMEOUT_MS = 120_000;
 const RECIPIENT_HARD_CAP = 5000;
 
@@ -1121,6 +1122,7 @@ function buildSystemPrompt(
   orgTimezone: string,
   programDetailsBlock: string, // pre-rendered KNOWN PROGRAM DETAILS section — grounded facts OR fuzzy curriculum matches
   topicsForPrompt: string[],   // explicit topics list (derived from grounded facts when present, else from legacy what)
+  cadenceSlots: CadenceSlot[], // server-computed fixed send schedule (empty for one-off sends); when non-empty the model writes to these exact slots and does NOT choose timing
 ): string {
   const v = (org.brand_voice ?? {}) as {
     audience?: string;
@@ -1331,7 +1333,14 @@ SCHEDULE-PLANNING RULES (you plan a multi-touchpoint sequence, not a single send
 PER-TENANT NOTES
 If the tenant has refined your voice over time (their "Ennie's notes" file), those corrections beat your defaults. None supplied yet for this draft.`;
 
-  const cadenceGuidance = `CADENCE HEURISTICS by duration:
+  // Multi-touchpoint timing is now SERVER-COMPUTED (computeCadenceSlots). When
+  // we have a fixed schedule, hand the model the exact slots and forbid it from
+  // choosing scheduled_at. Fall back to the old prose heuristics only if the
+  // server produced no slots (defensive — shouldn't happen for a valid campaign).
+  const useFixedCadence = !inputs.send_at && cadenceSlots.length > 0;
+  const cadenceGuidance = useFixedCadence
+    ? formatCadenceForPrompt(cadenceSlots)
+    : `CADENCE HEURISTICS by duration:
 - "2 weeks": 2-3 emails. Kickoff + 1 mid + 1 final-call if a deadline lives in-window.
 - "1 month": 4-6 emails. Kickoff, mid-window, plus 48h + 24h reminders for each deadline. Add a "thanks for registering" send if appropriate at the end.
 - "2 months": 5-7 emails. Slower build with longer gaps between general sends; ALWAYS the 48h + 24h reminders near deadlines.
@@ -1425,9 +1434,16 @@ This is more useful to the operator than guessing or apologizing for the lack of
     `}`,
     ``,
     `IMPORTANT:`,
-    `- Generate 2-7 touchpoints depending on duration (see cadence heuristics).`,
+    useFixedCadence
+      ? `- Produce EXACTLY ${cadenceSlots.length} touchpoints — one for each slot in the FIXED SEND SCHEDULE above, in the same order. order_index 0 = the first slot, and so on, contiguous.`
+      : `- Generate 2-7 touchpoints depending on duration (see cadence heuristics).`,
     `- order_index starts at 0 and is contiguous.`,
-    `- scheduled_at must be in the future (after today) and respect default send times.`,
+    useFixedCadence
+      ? `- The SERVER sets the timing. Do NOT choose scheduled_at yourself — echo the slot's date if you like, but it will be overwritten with the exact send time from the FIXED SEND SCHEDULE.`
+      : `- scheduled_at must be in the future (after today) and respect default send times.`,
+    useFixedCadence
+      ? `- Match each touchpoint's tone to its slot purpose: a "kickoff" is fuller and paints the picture; a 24h reminder is three or four sentences, urgent but warm; a 48h reminder sits in between. Keep the JSON schema (subject, body_html, body_text, topics) otherwise identical for every slot.`
+      : undefined,
     `- Each touchpoint's "topics" array must be a non-empty subset of the input topics.`,
     `- If a topic is ambiguous or you're unsure about something, put it in notes_to_operator — DON'T guess in the copy.`,
   ]
@@ -1547,6 +1563,260 @@ function resolveSendAtIso(sendAt: string, _orgTimezone: string): string {
 function resolveSendAtForPrompt(sendAt: string, orgTimezone: string): string {
   const iso = resolveSendAtIso(sendAt, orgTimezone);
   return `${iso}  (operator chose: ${sendAt === "now" ? "Send right away" : sendAt === "tomorrow_morning" ? "Tomorrow morning" : sendAt})`;
+}
+
+// ---------------------------------------------------------------------------
+// Server-computed cadence
+//
+// The MODEL used to pick its own scheduled_at values from prose cadence
+// heuristics — brittle, and it routinely mis-spaced sends or ignored deadlines.
+// Instead we compute the send schedule deterministically here from the grounded
+// facts (early-bird deadlines + first-session/camp-start dates) and hand the
+// model a FIXED list of slots to write copy for. The model no longer chooses
+// timing; the handler overwrites every scheduled_at from these slots.
+//
+// Send-time convention matches resolveSendAtIso: 17:00 UTC = 10am Pacific.
+// ---------------------------------------------------------------------------
+
+type CadenceSlot = {
+  order_index: number;
+  label: string;
+  scheduled_at: string;
+  reason: string;
+};
+
+// Parse a date-only string ("YYYY-MM-DD") into ms at 17:00 UTC (the send hour).
+// Returns null for empty / unparseable values.
+function dateOnlyToSendMs(d: string | null | undefined): number | null {
+  if (!d || typeof d !== "string") return null;
+  const m = d.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 17, 0, 0, 0);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// Parse the END date out of a "custom: YYYY-MM-DD to YYYY-MM-DD" duration.
+function parseCustomDuration(duration: string): { start: number | null; end: number | null } {
+  const m = duration.match(/custom:\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})/i);
+  if (!m) return { start: null, end: null };
+  return { start: dateOnlyToSendMs(m[1]), end: dateOnlyToSendMs(m[2]) };
+}
+
+// Compute the deterministic send schedule for a multi-touchpoint campaign.
+// Returns [] for one-off sends (caller passes []). See module comment above.
+function computeCadenceSlots(inputs: DraftInputs, facts: GroundedFacts, nowMs: number): CadenceSlot[] {
+  const SEND_UTC_HOUR = 17;
+  const DAY_MS = 86_400_000;
+  const atSend = (dateMs: number): string => {
+    const d = new Date(dateMs);
+    d.setUTCHours(SEND_UTC_HOUR, 0, 0, 0);
+    return d.toISOString();
+  };
+
+  // ---- Kickoff: today if before today's 17:00 UTC, else tomorrow. ----
+  const todayStart = new Date(nowMs);
+  todayStart.setUTCHours(0, 0, 0, 0);
+  const todaySend = new Date(todayStart.getTime());
+  todaySend.setUTCHours(SEND_UTC_HOUR, 0, 0, 0);
+  let kickoffMs = nowMs >= todaySend.getTime()
+    ? todayStart.getTime() + DAY_MS // tomorrow at 17:00 (atSend applied at return)
+    : todayStart.getTime();
+  kickoffMs = new Date(atSend(kickoffMs)).getTime();
+
+  const duration = inputs.duration ?? "";
+  const custom = parseCustomDuration(duration);
+
+  // Custom start floors the kickoff (never before the operator's start date).
+  if (custom.start != null && custom.start > kickoffMs) {
+    kickoffMs = custom.start;
+  }
+
+  // ---- Window end. ----
+  let endMs: number;
+  if (duration === "2 weeks") endMs = kickoffMs + 14 * DAY_MS;
+  else if (duration === "1 month") endMs = kickoffMs + 30 * DAY_MS;
+  else if (duration === "2 months") endMs = kickoffMs + 60 * DAY_MS;
+  else if (custom.end != null) endMs = custom.end;
+  else endMs = kickoffMs + 30 * DAY_MS; // safe default for unrecognized durations
+
+  // ---- Deadlines from grounded facts (only future, in-window). ----
+  // Early-bird: earliest deadline among programs that actually set an early-bird price.
+  let earlyBirdMs: number | null = null;
+  for (const p of facts.programs) {
+    if (p.early_bird_price_cents == null) continue;
+    const d = dateOnlyToSendMs(p.early_bird_deadline);
+    if (d == null) continue;
+    if (d > kickoffMs && d <= endMs && (earlyBirdMs == null || d < earlyBirdMs)) earlyBirdMs = d;
+  }
+  // Start date: earliest of program first_session_date and camp starts_on.
+  let startDateMs: number | null = null;
+  for (const p of facts.programs) {
+    const d = dateOnlyToSendMs(p.first_session_date);
+    if (d == null) continue;
+    if (d > kickoffMs && d <= endMs && (startDateMs == null || d < startDateMs)) startDateMs = d;
+  }
+  for (const c of facts.camps) {
+    const d = dateOnlyToSendMs(c.starts_on);
+    if (d == null) continue;
+    if (d > kickoffMs && d <= endMs && (startDateMs == null || d < startDateMs)) startDateMs = d;
+  }
+
+  // Once registration closes / classes start, stop promoting: pull the window in.
+  if (startDateMs != null && startDateMs < endMs) endMs = startDateMs;
+
+  type Draft = { label: string; ms: number; reason: string; kind: "kickoff" | "reminder" | "build" };
+  const slots: Draft[] = [];
+
+  // ---- Always: kickoff. ----
+  slots.push({ label: "kickoff", ms: kickoffMs, reason: "Kickoff — announce the campaign and set the hook.", kind: "kickoff" });
+
+  const deadlineCandidates = [earlyBirdMs, startDateMs].filter((x): x is number => x != null);
+  const earliestDeadline = deadlineCandidates.length > 0 ? Math.min(...deadlineCandidates) : null;
+
+  // ---- Deadline-proximity collapse: earliest deadline within 7 days of kickoff. ----
+  if (earliestDeadline != null && earliestDeadline <= kickoffMs + 7 * DAY_MS) {
+    const before48 = earliestDeadline - 2 * DAY_MS;
+    const before24 = earliestDeadline - 1 * DAY_MS;
+    if (before48 > kickoffMs) {
+      slots.push({ label: "final-reminder-48h", ms: before48, reason: "48 hours before the deadline", kind: "reminder" });
+    }
+    if (before24 > kickoffMs) {
+      slots.push({ label: "final-reminder-24h", ms: before24, reason: "24 hours before the deadline — final reminder", kind: "reminder" });
+    }
+    return finalizeSlots(slots, nowMs, kickoffMs, atSend);
+  }
+
+  // ---- Otherwise: per-deadline 48h/24h reminders. ----
+  const addReminderPair = (
+    deadlineMs: number | null,
+    label48: string,
+    reason48: string,
+    label24: string,
+    reason24: string,
+  ) => {
+    if (deadlineMs == null) return;
+    if (deadlineMs <= kickoffMs || deadlineMs > endMs) return;
+    const before48 = deadlineMs - 2 * DAY_MS;
+    const before24 = deadlineMs - 1 * DAY_MS;
+    if (before48 > kickoffMs) slots.push({ label: label48, ms: before48, reason: reason48, kind: "reminder" });
+    if (before24 > kickoffMs) slots.push({ label: label24, ms: before24, reason: reason24, kind: "reminder" });
+  };
+  addReminderPair(
+    earlyBirdMs,
+    "early-bird-48h", "48 hours before early-bird pricing ends",
+    "early-bird-24h", "24 hours before early-bird pricing ends — last chance to save",
+  );
+  addReminderPair(
+    startDateMs,
+    "last-call-48h", "48 hours before registration closes / classes start",
+    "last-call-24h", "24 hours before registration closes — final call",
+  );
+
+  const anyReminderAdded = slots.some((s) => s.kind === "reminder");
+
+  // ---- Weekly builds: kickoff+7d, +14d, ... while inside the window. ----
+  for (let t = kickoffMs + 7 * DAY_MS; t < endMs; t += 7 * DAY_MS) {
+    // Skip if within 2 days of an existing reminder or within 3 days of an existing build.
+    const nearReminder = slots.some((s) => s.kind === "reminder" && Math.abs(s.ms - t) <= 2 * DAY_MS);
+    if (nearReminder) continue;
+    const nearBuild = slots.some((s) => s.kind === "build" && Math.abs(s.ms - t) <= 3 * DAY_MS);
+    if (nearBuild) continue;
+    slots.push({ label: "weekly-build", ms: t, reason: "Weekly touchpoint to keep families engaged", kind: "build" });
+  }
+
+  // ---- If no deadline reminders exist, promote the last build to a final-call. ----
+  if (!anyReminderAdded) {
+    const builds = slots.filter((s) => s.kind === "build");
+    if (builds.length > 0) {
+      const last = builds.reduce((a, b) => (b.ms > a.ms ? b : a));
+      last.label = "final-call";
+      last.reason = "Last call before the campaign window closes.";
+    }
+  }
+
+  return finalizeSlots(slots, nowMs, kickoffMs, atSend);
+}
+
+// Sort, dedupe, cap at 7, guarantee future timing, and assign order_index.
+// Shared tail of computeCadenceSlots (both the collapse path and the full path).
+function finalizeSlots(
+  raw: Array<{ label: string; ms: number; reason: string; kind: "kickoff" | "reminder" | "build" }>,
+  nowMs: number,
+  kickoffMs: number,
+  atSend: (dateMs: number) => string,
+): CadenceSlot[] {
+  const DAY_MS = 86_400_000;
+  const HALF_DAY_MS = 12 * 60 * 60_000;
+
+  // Sort ascending by time.
+  let slots = [...raw].sort((a, b) => a.ms - b.ms);
+
+  // Dedupe any within 12h of each other: keep the earlier; prefer reminders over builds.
+  const deduped: typeof slots = [];
+  for (const s of slots) {
+    const clash = deduped.find((d) => Math.abs(d.ms - s.ms) < HALF_DAY_MS);
+    if (!clash) {
+      deduped.push(s);
+      continue;
+    }
+    // A kickoff/reminder always wins over a build; otherwise keep the earlier (already in `deduped`).
+    const rank = (k: string) => (k === "kickoff" ? 2 : k === "reminder" ? 1 : 0);
+    if (rank(s.kind) > rank(clash.kind)) {
+      deduped[deduped.indexOf(clash)] = s;
+    }
+  }
+  slots = deduped.sort((a, b) => a.ms - b.ms);
+
+  // Cap at 7: remove the "weekly-build" closest to the middle until <= 7.
+  // Never remove kickoff or any reminder.
+  while (slots.length > 7) {
+    const midIdx = (slots.length - 1) / 2;
+    let removeIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < slots.length; i++) {
+      if (slots[i].kind !== "build") continue;
+      const dist = Math.abs(i - midIdx);
+      if (dist < bestDist) {
+        bestDist = dist;
+        removeIdx = i;
+      }
+    }
+    if (removeIdx === -1) break; // no builds left to remove — leave it (all kickoff/reminders)
+    slots.splice(removeIdx, 1);
+  }
+
+  // Guarantee every scheduled_at is strictly in the future. Drop past slots,
+  // but ALWAYS keep at least the kickoff (pushed to now+1h if it's not future).
+  const future = slots.filter((s) => new Date(atSend(s.ms)).getTime() > nowMs);
+  if (future.length === 0) {
+    const pushedKickoffMs = kickoffMs > nowMs ? kickoffMs : nowMs + 60 * 60_000;
+    return [{
+      order_index: 0,
+      label: "kickoff",
+      scheduled_at: new Date(pushedKickoffMs).toISOString(),
+      reason: "Kickoff — announce the campaign and set the hook.",
+    }];
+  }
+  slots = future;
+
+  return slots.map((s, i) => ({
+    order_index: i,
+    label: s.label,
+    scheduled_at: atSend(s.ms),
+    reason: s.reason,
+  }));
+}
+
+// Render the fixed schedule as a prompt block the model writes copy against.
+function formatCadenceForPrompt(slots: CadenceSlot[]): string {
+  const lines = [
+    `FIXED SEND SCHEDULE — write EXACTLY these ${slots.length} emails, one per slot, in this order. Do NOT add, remove, reorder, or re-time them:`,
+  ];
+  for (const s of slots) {
+    const day = s.scheduled_at.slice(0, 10); // YYYY-MM-DD
+    lines.push(`- Slot ${s.order_index}: ${s.label} — sends ${day} — purpose: ${s.reason}`);
+  }
+  return lines.join("\n");
 }
 
 function escapeRegex(s: string): string {
@@ -1943,10 +2213,16 @@ serve(async (req: Request) => {
     programDetailsBlock = formatCurriculaForPrompt(curriculumMatches);
   }
 
+  // ---- Server-computed cadence ----
+  // One-off sends keep their single-touchpoint path (empty slots). Multi-touchpoint
+  // campaigns get a deterministic schedule the model writes copy against; the
+  // handler overwrites every scheduled_at from these slots below.
+  const cadenceSlots = inputs.send_at ? [] : computeCadenceSlots(inputs, facts, Date.now());
+
   // ---- Build prompt + call Claude ----
   const orgTimezone = orgRow.timezone ?? "America/Los_Angeles";
   const todayIso = new Date().toISOString();
-  const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone, programDetailsBlock, topicsArr);
+  const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone, programDetailsBlock, topicsArr, cadenceSlots);
   let claudeResult = await callClaude(systemPrompt, topicsArr);
   if (!claudeResult.ok) return jsonError(claudeResult.error, claudeResult.status);
   let { schedule, model } = claudeResult;
@@ -1954,17 +2230,25 @@ serve(async (req: Request) => {
 
   // Mechanical-check pass. Hard failures get one retry (Claude re-rolls).
   // Soft warnings always pass through to the operator for review.
+  // Count-mismatch (model returned a different number of touchpoints than the
+  // server-computed schedule has slots) also counts as a hard failure — the
+  // fixed cadence needs exactly one email per slot.
+  const countMismatch = (s: Schedule) =>
+    cadenceSlots.length > 0 && s.touchpoints.length !== cadenceSlots.length;
   let validation = validateSchedule(schedule, brandVoice);
   let retried = false;
-  if (validation.anyHard) {
+  if (validation.anyHard || countMismatch(schedule)) {
     retried = true;
     const retry = await callClaude(systemPrompt, topicsArr);
     if (retry.ok) {
       const retryValidation = validateSchedule(retry.schedule, brandVoice);
-      // Prefer the retry only if it has fewer hard failures (or zero).
-      const beforeHard = validation.results.reduce((n, r) => n + r.hard.length, 0);
-      const afterHard = retryValidation.results.reduce((n, r) => n + r.hard.length, 0);
-      if (afterHard < beforeHard) {
+      // Score = hard failures + a heavy penalty for count mismatch. Prefer the
+      // retry only if it scores strictly better (fewer problems).
+      const score = (s: Schedule, v: { results: TouchpointValidation[] }) =>
+        v.results.reduce((n, r) => n + r.hard.length, 0) + (countMismatch(s) ? 1000 : 0);
+      const beforeScore = score(schedule, validation);
+      const afterScore = score(retry.schedule, retryValidation);
+      if (afterScore < beforeScore) {
         schedule = retry.schedule;
         model = retry.model;
         validation = retryValidation;
@@ -2006,6 +2290,36 @@ serve(async (req: Request) => {
     tp.body_text = stripAiDashes(tp.body_text);
   }
 
+  // ---- Server-computed cadence enforcement ----
+  // The model wrote the copy; the SERVER owns the timing. Map the model's
+  // touchpoints onto the fixed slots by array order: overwrite scheduled_at +
+  // label from the slot, and remember the slot reason for the payload. Extra
+  // touchpoints (model over-produced) are truncated. A short list is a hard
+  // failure — the count-mismatch retry above should have fixed it; if it's
+  // still short, we refuse rather than silently persist an incomplete schedule.
+  const reasonByOrderIndex = new Map<number, string>();
+  if (cadenceSlots.length > 0) {
+    if (schedule.touchpoints.length < cadenceSlots.length) {
+      return jsonError(
+        "Ennie returned fewer emails than the schedule needs — try again",
+        502,
+        { expected_touchpoints: cadenceSlots.length, got: schedule.touchpoints.length },
+      );
+    }
+    // Truncate any extras beyond the slot count.
+    if (schedule.touchpoints.length > cadenceSlots.length) {
+      schedule.touchpoints = schedule.touchpoints.slice(0, cadenceSlots.length);
+    }
+    for (let i = 0; i < cadenceSlots.length; i++) {
+      const slot = cadenceSlots[i];
+      const tp = schedule.touchpoints[i];
+      tp.scheduled_at = slot.scheduled_at;
+      tp.label = slot.label;
+      tp.order_index = slot.order_index;
+      reasonByOrderIndex.set(slot.order_index, slot.reason);
+    }
+  }
+
   // First touchpoint = the "lead" email; its subject/body populate the parent
   // campaigns row so the existing campaigns list keeps working.
   const lead = schedule.touchpoints[0];
@@ -2044,6 +2358,7 @@ serve(async (req: Request) => {
       subject: tp.subject ?? null,
       body_html: tp.body_html ?? null,
       body_text: tp.body_text ?? null,
+      reason: reasonByOrderIndex.get(tp.order_index) ?? null,
     },
     topics: tp.topics,
   }));
@@ -2070,6 +2385,7 @@ serve(async (req: Request) => {
         subject: (tp.payload as { subject?: string })?.subject ?? null,
         body_html: (tp.payload as { body_html?: string })?.body_html ?? null,
         body_text: (tp.payload as { body_text?: string })?.body_text ?? null,
+        reason: (tp.payload as { reason?: string })?.reason ?? null,
         topics: tp.topics,
       })),
     },

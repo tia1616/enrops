@@ -120,6 +120,13 @@ async function friendlyDraftError(error) {
   if (typeof code === "string" && code.startsWith("audience ")) {
     return "Only the Parents audience is supported in this build. Partners + Instructors are coming soon.";
   }
+  // A null payload means a platform-level failure (timeout / crash) whose body
+  // isn't the edge function's own JSON — `code` is then the SDK's generic
+  // "Edge Function returned a non-2xx status code" string. Translate that into
+  // something a non-technical operator can actually act on.
+  if (!payload) {
+    return "Ennie hit a snag drafting this — it may have taken too long. Give it another try; if it keeps failing, let us know.";
+  }
   return `Couldn't draft the campaign: ${code}`;
 }
 
