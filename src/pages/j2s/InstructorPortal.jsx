@@ -354,30 +354,34 @@ export default function InstructorPortal() {
     const all = rows ?? [];
     if (all.length === 0) { setSubAssignments([]); return; }
 
-    const campParentIds = all.filter((r) => r.parent_assignment_type === "camp").map((r) => r.parent_assignment_id);
-    const progParentIds = all.filter((r) => r.parent_assignment_type === "program").map((r) => r.parent_assignment_id);
+    // Parent camp/program display fields come from a SECURITY DEFINER resolver
+    // (get_my_sub_details) that returns ONLY whitelisted fields — the sub never
+    // reads the raw parent assignment row, which carries the regular instructor's
+    // comp (distance_bonus_cents) and private decline/change notes. Reshape the
+    // result back into the camp_parent / program_parent shape the sub cards and
+    // detail view already expect, so nothing downstream changes.
+    const { data: details, error: dErr } = await supabase.rpc("get_my_sub_details");
+    if (dErr) console.warn("[loadSubAssignments] details fetch failed:", dErr.message);
+    const bySubId = new Map((details ?? []).map((d) => [d.substitution_id, d]));
 
-    const [campParents, progParents] = await Promise.all([
-      campParentIds.length === 0
-        ? Promise.resolve({ data: [] })
-        : supabase.from("camp_assignments")
-          .select("id, instructor_id, camp_session_id, camp_sessions(id, curriculum_id, curriculum_name, location_name, location_id, starts_on, ends_on, start_time, end_time, week_num, current_enrollment, program_locations:location_id(name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions))")
-          .in("id", campParentIds),
-      progParentIds.length === 0
-        ? Promise.resolve({ data: [] })
-        : supabase.from("program_assignments")
-          .select("id, instructor_id, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, program_location_id, program_locations:program_location_id(name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions))")
-          .in("id", progParentIds),
-    ]);
-
-    const campParentById = new Map((campParents.data ?? []).map((p) => [p.id, p]));
-    const progParentById = new Map((progParents.data ?? []).map((p) => [p.id, p]));
-
-    const enriched = all.map((r) => ({
-      ...r,
-      camp_parent: r.parent_assignment_type === "camp" ? campParentById.get(r.parent_assignment_id) ?? null : null,
-      program_parent: r.parent_assignment_type === "program" ? progParentById.get(r.parent_assignment_id) ?? null : null,
-    }));
+    const enriched = all.map((r) => {
+      const d = bySubId.get(r.id) ?? null;
+      const camp_parent = (r.parent_assignment_type === "camp" && d)
+        ? {
+            id: d.parent_assignment_id,
+            instructor_id: d.covered_instructor_id,
+            camp_sessions: d.session ? { ...d.session, program_locations: d.location ?? null } : null,
+          }
+        : null;
+      const program_parent = (r.parent_assignment_type === "program" && d)
+        ? {
+            id: d.parent_assignment_id,
+            instructor_id: d.covered_instructor_id,
+            programs: d.session ? { ...d.session, program_locations: d.location ?? null } : null,
+          }
+        : null;
+      return { ...r, camp_parent, program_parent };
+    });
     setSubAssignments(enriched);
   }
 

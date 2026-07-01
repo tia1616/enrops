@@ -83,12 +83,19 @@ serve(async (req: Request) => {
       // PostgREST can't join. Two-step lookup: gather the sub's parent
       // assignment IDs, then check if any of those camp_assignments points
       // to a camp_session with this curriculum.
+      // A sub's materials access expires 2 days after their sub day — same
+      // window as the roster (data minimization; a one-day sub shouldn't keep
+      // curriculum access indefinitely). date >= today-2 ⟺ current_date <= date+2.
+      const cutoff = new Date();
+      cutoff.setUTCDate(cutoff.getUTCDate() - 2);
+      const cutoffDate = cutoff.toISOString().slice(0, 10);
       const { data: subRows, error: subErr } = await supabase
         .from('assignment_substitutions')
         .select('parent_assignment_id')
         .eq('sub_instructor_id', me.id)
         .eq('parent_assignment_type', 'camp')
-        .in('status', ['confirmed', 'taught']);
+        .in('status', ['confirmed', 'taught'])
+        .gte('date', cutoffDate);
       if (subErr) {
         console.error('assignment_substitutions lookup error:', subErr);
         return json({ error: 'lookup_failed' }, 500);

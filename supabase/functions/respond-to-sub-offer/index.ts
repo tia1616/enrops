@@ -256,12 +256,15 @@ async function sendCoordinationEmail(
   let regularId: string | null = null;
   let curriculumName = '';
   let locationName: string | null = null;
+  let campSessionId: string | null = null;
+  let programId: string | null = null;
   if (subRow.parent_assignment_type === 'camp') {
     const { data: parent } = await supabase
       .from('camp_assignments').select('instructor_id, camp_session_id')
       .eq('id', subRow.parent_assignment_id).maybeSingle();
     if (!parent) return;
     regularId = parent.instructor_id;
+    campSessionId = parent.camp_session_id;
     if (parent.camp_session_id) {
       const { data: sess } = await supabase
         .from('camp_sessions').select('curriculum_name, location_name')
@@ -274,6 +277,7 @@ async function sendCoordinationEmail(
       .eq('id', subRow.parent_assignment_id).maybeSingle();
     if (!parent) return;
     regularId = parent.instructor_id;
+    programId = parent.program_id;
     if (parent.program_id) {
       const { data: prog } = await supabase
         .from('programs').select('curriculum, program_location_id')
@@ -344,13 +348,44 @@ async function sendCoordinationEmail(
     `— ${senderFirstName} @ ${org?.name ?? ''}`,
   ].filter((line) => line !== undefined).join('\n');
 
+  // Loop in the OTHER confirmed instructors on this session/program (esp. the
+  // LEAD) so whoever is actually on-site with the sub that day knows who's
+  // covering — the covered regular (in `to`) is typically the one who's OUT.
+  const coEmails: string[] = [];
+  if (campSessionId) {
+    const { data: coRows } = await supabase
+      .from('camp_assignments')
+      .select('instructor:instructors(email)')
+      .eq('camp_session_id', campSessionId)
+      .eq('status', 'confirmed')
+      .neq('instructor_id', regularId);
+    for (const row of coRows ?? []) {
+      const e = (row as { instructor?: { email?: string } }).instructor?.email;
+      if (e) coEmails.push(e);
+    }
+  } else if (programId) {
+    const { data: coRows } = await supabase
+      .from('program_assignments')
+      .select('instructor:instructors(email)')
+      .eq('program_id', programId)
+      .eq('status', 'confirmed')
+      .neq('instructor_id', regularId);
+    for (const row of coRows ?? []) {
+      const e = (row as { instructor?: { email?: string } }).instructor?.email;
+      if (e) coEmails.push(e);
+    }
+  }
+
   const fromName = branding?.email_from_name ?? org?.name ?? 'Enrops';
   const fromEmail = `${fromName} <hello@updates.journeytosteam.com>`;
   const replyTo = branding?.email_reply_to ?? org?.alert_email ?? undefined;
   const to = [regular.email, me.email];
-  const cc = org?.alert_email && org.alert_email !== regular.email && org.alert_email !== me.email
-    ? [org.alert_email]
-    : undefined;
+  // CC the other co-instructors + the org alert inbox, minus anyone already on `to`.
+  const ccSet = new Set<string>();
+  for (const e of coEmails) ccSet.add(e);
+  if (org?.alert_email) ccSet.add(org.alert_email);
+  for (const t of to) ccSet.delete(t);
+  const cc = ccSet.size ? Array.from(ccSet) : undefined;
 
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST',
