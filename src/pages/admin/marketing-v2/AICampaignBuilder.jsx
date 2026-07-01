@@ -183,6 +183,17 @@ function reducer(state, action) {
         },
       };
     }
+    case "REMOVE_TOUCHPOINT": {
+      if (!state.draft) return state;
+      const tps = (state.draft.schedule?.touchpoints ?? []).filter((tp) => tp.id !== action.id);
+      return {
+        ...state,
+        draft: {
+          ...state.draft,
+          schedule: { ...state.draft.schedule, touchpoints: tps },
+        },
+      };
+    }
     case "REMOVE_RECIPIENT": {
       if (!state.draft) return state;
       const r = state.draft.recipients ?? { ids: [], count: 0 };
@@ -328,6 +339,30 @@ export default function AICampaignBuilder() {
   // so React state is the latest, then PATCHes the row using the merged
   // (existing + patch) payload. Skips DB write if no campaign_id yet (the
   // operator is still building before the first Draft call).
+  // Remove an email from the plan entirely (drafts). Deletes the touchpoint row
+  // (RLS tp_org_admin_write allows it) and drops it from local state. Guards
+  // against removing the last email — a campaign needs at least one.
+  const removeTouchpoint = async (id) => {
+    const tps = state.draft?.schedule?.touchpoints ?? [];
+    if (tps.length <= 1) {
+      alert("A campaign needs at least one email. Edit this one instead of removing it.");
+      return;
+    }
+    const tp = tps.find((t) => t.id === id);
+    if (!window.confirm(`Remove this email${tp?.subject ? ` ("${tp.subject}")` : ""} from the plan? This can't be undone.`)) return;
+    try {
+      const { error } = await supabase
+        .from("marketing_campaign_touchpoints")
+        .delete()
+        .eq("id", id)
+        .eq("organization_id", org.id);
+      if (error) { alert(`Couldn't remove that email: ${error.message}`); return; }
+      dispatch({ type: "REMOVE_TOUCHPOINT", id });
+    } catch (e) {
+      alert(`Couldn't remove that email: ${e?.message ?? "unknown error"}`);
+    }
+  };
+
   const commitTouchpoint = async (id, patch) => {
     dispatch({ type: "UPDATE_TOUCHPOINT", id, patch });
     if (!state.draft?.campaign_id) return;
@@ -714,6 +749,7 @@ export default function AICampaignBuilder() {
         onReset={() => dispatch({ type: "RESET" })}
         onUpdateTouchpoint={updateTouchpoint}
         onCommitTouchpoint={commitTouchpoint}
+        onRemoveTouchpoint={removeTouchpoint}
         onRemoveRecipient={removeRecipient}
         onSaveDraft={onSaveDraft}
         onSendTest={onSendTest}

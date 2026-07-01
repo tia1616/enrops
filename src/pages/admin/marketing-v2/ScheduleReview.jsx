@@ -40,6 +40,7 @@ export default function ScheduleReview({
   onReset,
   onUpdateTouchpoint,
   onCommitTouchpoint,
+  onRemoveTouchpoint,
   onRemoveRecipient,
   onSaveDraft,
   onSendTest,
@@ -279,6 +280,7 @@ export default function ScheduleReview({
           topicColors={topicColors}
           onUpdate={onUpdateTouchpoint}
           onCommit={onCommitTouchpoint}
+          onRemove={touchpoints.length > 1 ? onRemoveTouchpoint : undefined}
           onSendTest={onSendTest}
           onRegenerate={onRegenerate}
           // Per-school preview: list of {id, name} for the dropdown,

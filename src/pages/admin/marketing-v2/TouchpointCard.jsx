@@ -50,6 +50,7 @@ export default function TouchpointCard({
   onCommit,
   onSendTest,
   onRegenerate,
+  onRemove,
   // Picked schools for the per-school preview dropdown. Each {id, name}.
   // Empty array hides the dropdown (camps-only campaigns, one-off mode).
   pickedLocations = [],
@@ -325,6 +326,18 @@ export default function TouchpointCard({
             >
               {sendingTest ? "Sending test…" : "Send test to me"}
             </button>
+            {onRemove && (
+              <button
+                onClick={() => onRemove(tp.id)}
+                style={{
+                  background: "#fff", border: `1px solid ${RULE}`, color: "#b3261e",
+                  padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                  fontSize: 12, fontFamily: "inherit",
+                }}
+              >
+                Remove from plan
+              </button>
+            )}
             {/* "Also lands in the parent portal feed" was sitting next to
                 Send-test and read as if the test sent to parents too.
                 Dropped — when the parent-portal feed ships we'll re-surface
