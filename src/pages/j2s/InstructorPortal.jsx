@@ -2601,7 +2601,7 @@ function LocationSection({ location, fallbackName }) {
 
       {!hasAnyDetails && (
         <div style={{ marginTop: 10, fontSize: 13, color: MUTED, fontStyle: "italic" }}>
-          Details coming soon — Jessica is still finalizing this site's info. Email her if you need anything before then.
+          Details coming soon — your Program Manager is still finalizing this site's info. Reach out to them if you need anything before then.
         </div>
       )}
     </section>
