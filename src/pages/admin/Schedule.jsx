@@ -14,6 +14,7 @@ import Chevron from "../../components/Chevron.jsx";
 import NotifyRemovalModal from "./NotifyRemovalModal";
 import AssignSubModal from "./AssignSubModal";
 import AfterschoolSchedule from "./AfterschoolSchedule";
+import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -2006,6 +2007,7 @@ export default function Schedule() {
         onArchiveCycle={handleArchiveCycle}
         onUnarchiveCycle={handleUnarchiveCycle}
       />
+      <NeedsCoverBanner org={org} parentType="camp" />
       {saveError && (
         <div style={{
           background: `${CORAL}1F`,

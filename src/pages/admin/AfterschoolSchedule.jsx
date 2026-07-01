@@ -14,6 +14,7 @@ import { supabase } from "../../lib/supabase";
 import NotifyRemovalModal from "./NotifyRemovalModal.jsx";
 import AssignSubModal from "./AssignSubModal";
 import HatGuide from "../../components/HatGuide";
+import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -1115,6 +1116,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           </div>
         </div>
       )}
+
+      <NeedsCoverBanner org={org} parentType="program" />
 
       {state.programs.length > 0 && (
         <AfterschoolReminders
