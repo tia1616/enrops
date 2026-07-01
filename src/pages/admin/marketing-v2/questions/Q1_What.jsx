@@ -330,10 +330,21 @@ function ProgramsPicker({ orgId, selected, onChange }) {
             );
           })}
           {selected.length > 0 && (
-            <span style={{
-              marginLeft: "auto", fontSize: 12, color: PURPLE, fontWeight: 600,
-            }}>
-              {selected.length} selected
+            <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 12, color: PURPLE, fontWeight: 600 }}>
+                {selected.length} selected
+              </span>
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                style={{
+                  background: "transparent", border: "none", padding: 0,
+                  color: MUTED, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  textDecoration: "underline", fontFamily: "inherit",
+                }}
+              >
+                Clear all
+              </button>
             </span>
           )}
         </div>
@@ -598,6 +609,19 @@ function CampsPicker({ orgId, selected, onChange }) {
         >
           {allSelected ? "Clear all" : `Select all ${rows.length} upcoming`}
         </button>
+        {selected.length > 0 && !allSelected && (
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            style={{
+              background: "transparent", border: "none", padding: 0,
+              color: MUTED, fontSize: 12, fontWeight: 600, cursor: "pointer",
+              textDecoration: "underline", fontFamily: "inherit", marginLeft: 4,
+            }}
+          >
+            Clear all
+          </button>
+        )}
       </div>
 
       <SearchInput value={q} onChange={setQ} placeholder="Search by curriculum or location…" />
