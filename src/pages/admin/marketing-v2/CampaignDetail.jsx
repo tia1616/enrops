@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
+import { usePermissions } from "../../../lib/permissions";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/tokens.jsx";
 import EditableField from "./EditableField.jsx";
 import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
@@ -51,6 +52,10 @@ export default function CampaignDetail({ campaignId, org, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const timezone = org?.timezone ?? "America/Los_Angeles";
+  // Rename + touchpoint edits/skips are owner/admin-only writes (RLS). Staff can
+  // open and read this view but shouldn't see write controls that no-op.
+  const perm = usePermissions();
+  const isAdmin = perm.role === "owner" || perm.role === "admin";
 
   useEffect(() => {
     if (campaignId && org?.id) load();
@@ -207,12 +212,16 @@ export default function CampaignDetail({ campaignId, org, onBack }) {
                 <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700, marginBottom: 4 }}>
                   Campaign
                 </div>
-                <EditableField
-                  value={campaign.name || "Untitled campaign"}
-                  onChange={renameCampaign}
-                  placeholder="Untitled campaign"
-                  style={{ fontWeight: 700 }}
-                />
+                {isAdmin ? (
+                  <EditableField
+                    value={campaign.name || "Untitled campaign"}
+                    onChange={renameCampaign}
+                    placeholder="Untitled campaign"
+                    style={{ fontWeight: 700 }}
+                  />
+                ) : (
+                  <div style={{ fontWeight: 700, color: INK }}>{campaign.name || "Untitled campaign"}</div>
+                )}
               </div>
               {status && (
                 <span style={{ fontSize: 12, fontWeight: 700, color: status.color, whiteSpace: "nowrap", flexShrink: 0 }}>
@@ -246,6 +255,7 @@ export default function CampaignDetail({ campaignId, org, onBack }) {
                 tp={tp}
                 stats={byTp[tp.id] ?? { sent: 0, opened: 0, clicked: 0 }}
                 timezone={timezone}
+                canEdit={isAdmin}
                 onUpdate={(patch) => updateTouchpoint(tp, patch)}
                 onSkip={() => skipTouchpoint(tp)}
               />
@@ -297,8 +307,10 @@ function Engagement({ eng }) {
 
 // One touchpoint row. Sent/other statuses render read-only; only 'queued'
 // touchpoints get the editor + Skip button.
-function TouchpointRow({ tp, stats, timezone, onUpdate, onSkip }) {
-  const editable = tp.status === "queued";
+function TouchpointRow({ tp, stats, timezone, canEdit = true, onUpdate, onSkip }) {
+  // Only owner/admin can edit/skip an un-sent touchpoint (RLS). Everyone else
+  // sees the same read-only rendering used for already-sent touchpoints.
+  const editable = canEdit && tp.status === "queued";
   const [open, setOpen] = useState(false);
   const badge = tpStatusBadge(tp.status);
   const label = tp.payload?.label || "email";
@@ -379,6 +391,38 @@ function TouchpointEditor({ tp, onUpdate }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const bodyHtml = tp.payload?.body_html ?? "";
 
+  // Send-time is edited locally while the field has focus and only persisted on
+  // blur (and only if it actually changed) — writing on every keystroke fired a
+  // DB write per character. `savingTime` locks the field while the write lands
+  // so rapid edits can't race.
+  const [timeInput, setTimeInput] = useState(fmtDatetimeInput(tp.scheduled_at));
+  const [savingTime, setSavingTime] = useState(false);
+
+  // Keep the local field in sync if the row's scheduled_at changes from outside
+  // (e.g. a save elsewhere) — but not while we're mid-save.
+  useEffect(() => {
+    if (!savingTime) setTimeInput(fmtDatetimeInput(tp.scheduled_at));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tp.scheduled_at]);
+
+  async function commitTime() {
+    if (savingTime) return;
+    const local = new Date(timeInput);
+    if (isNaN(local.getTime())) {
+      // Bad/blank value — snap back to the persisted time.
+      setTimeInput(fmtDatetimeInput(tp.scheduled_at));
+      return;
+    }
+    const nextIso = local.toISOString();
+    if (nextIso === tp.scheduled_at) return; // no real change
+    setSavingTime(true);
+    try {
+      await onUpdate({ scheduled_at: nextIso });
+    } finally {
+      setSavingTime(false);
+    }
+  }
+
   return (
     <div style={{ marginTop: 12, display: "grid", gap: 12, borderTop: `1px solid ${RULE}`, paddingTop: 12 }}>
       <EditableField
@@ -394,14 +438,14 @@ function TouchpointEditor({ tp, onUpdate }) {
         </div>
         <input
           type="datetime-local"
-          value={fmtDatetimeInput(tp.scheduled_at)}
-          onChange={(e) => {
-            const local = new Date(e.target.value);
-            if (!isNaN(local.getTime())) onUpdate({ scheduled_at: local.toISOString() });
-          }}
+          value={timeInput}
+          disabled={savingTime}
+          onChange={(e) => setTimeInput(e.target.value)}
+          onBlur={commitTime}
           style={{
             padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6,
             fontSize: 13, fontFamily: "inherit", background: "#fff", color: INK,
+            opacity: savingTime ? 0.6 : 1,
           }}
         />
       </div>
@@ -474,7 +518,11 @@ function deriveStatus(campaign, tps) {
   if (campaign.status === "paused") return { label: "Paused", color: WARN };
   if (tps.some((t) => t.status === "sending")) return { label: "Sending now", color: INFO };
   if (tps.some((t) => t.status === "queued")) return { label: "Scheduled", color: INFO };
-  if (tps.length > 0 && tps.every((t) => t.status === "sent" || t.status === "skipped")) {
+  // Nothing left pending (no queued/sending above). Treat failed/skipped/
+  // cancelled as terminal so a single failed touchpoint no longer drops the
+  // whole campaign back to "Scheduled" — if any touchpoint actually sent, the
+  // campaign is "Sent".
+  if (tps.length > 0 && tps.some((t) => t.status === "sent")) {
     return { label: "Sent", color: OK };
   }
   return { label: "Scheduled", color: INFO };

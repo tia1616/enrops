@@ -36,7 +36,8 @@
 // phone, child_first_name, child_last_name, school_name, city, state, zip,
 // tags, source.
 
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+// Built-in Deno.serve (no external std import) — avoids a flaky deno.land/std
+// fetch at bundle time; current Supabase standard.
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -176,7 +177,7 @@ function stringArray(v: unknown): string[] {
     .filter((t) => t !== "");
 }
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonError("method not allowed", 405);
 
@@ -228,6 +229,9 @@ serve(async (req: Request) => {
   // - dedupe by lowercased email (last wins) so a single upsert can't hit the
   //   "cannot affect row a second time" error from duplicate conflict keys.
   let invalid = 0;
+  // In-batch duplicate emails are silently collapsed (last-wins) below. Count
+  // how many valid rows get dropped that way so `skipped` is honest.
+  let skipped = 0;
   const byEmail = new Map<string, RecipientRow>();
   for (const c of rawContacts) {
     const email = (str(c.email) ?? "").toLowerCase();
@@ -235,6 +239,7 @@ serve(async (req: Request) => {
       invalid++;
       continue;
     }
+    if (byEmail.has(email)) skipped++;
     byEmail.set(email, {
       organization_id,
       email,
@@ -255,7 +260,7 @@ serve(async (req: Request) => {
 
   const rows = Array.from(byEmail.values());
   if (rows.length === 0) {
-    return jsonOk({ inserted: 0, updated: 0, skipped: 0, invalid });
+    return jsonOk({ inserted: 0, updated: 0, skipped, invalid });
   }
 
   // Service-role client for the write. The org-admin gate above + the forced
@@ -265,6 +270,12 @@ serve(async (req: Request) => {
   // ---- Split into net-new vs existing so we can report inserted vs updated ----
   // The upsert itself is one round-trip; this SELECT is only for accurate
   // counts (upsert alone can't tell you which rows already existed).
+  // Key the existing-check on the FULL conflict target — (org, email,
+  // school_name, source) — not email alone, so a row that shares an email but
+  // differs in school_name counts as new, not "updated". school_name is
+  // coalesced to "" on the rows we write, so compare against that same value.
+  const keyOf = (email: string, schoolName: string | null) =>
+    `${email}|${schoolName ?? ""}`;
   const emails = rows.map((r) => r.email);
   const existing = new Set<string>();
   // Chunk the .in() lookup — a 5k-item IN list is unwieldy for one request.
@@ -272,7 +283,7 @@ serve(async (req: Request) => {
     const slice = emails.slice(i, i + 500);
     const { data: hits, error: selErr } = await supabase
       .from("marketing_recipients")
-      .select("email")
+      .select("email, school_name")
       .eq("organization_id", organization_id)
       .eq("source", source)
       .in("email", slice);
@@ -280,7 +291,7 @@ serve(async (req: Request) => {
       return jsonError(`contact lookup failed: ${selErr.message}`, 500);
     }
     for (const h of hits ?? []) {
-      if (h?.email) existing.add(String(h.email).toLowerCase());
+      if (h?.email) existing.add(keyOf(String(h.email).toLowerCase(), h.school_name));
     }
   }
 
@@ -292,12 +303,11 @@ serve(async (req: Request) => {
     return jsonError(`contact import failed: ${upErr.message}`, 500);
   }
 
-  // `existing` counts rows that matched (org, source, email). It slightly
-  // over-counts "updated" only if two incoming rows share an email but differ
-  // in school_name — dedupe above collapses those to one, so in practice this
-  // is exact for the common (single school_name per email) case.
-  const updated = rows.filter((r) => existing.has(r.email)).length;
+  // `existing` holds the full conflict-target key (org, source, email,
+  // school_name) of rows already in the table, so this "updated" count is exact
+  // even when an email appears under more than one school_name.
+  const updated = rows.filter((r) => existing.has(keyOf(r.email, r.school_name))).length;
   const inserted = rows.length - updated;
 
-  return jsonOk({ inserted, updated, skipped: 0, invalid });
+  return jsonOk({ inserted, updated, skipped, invalid });
 });

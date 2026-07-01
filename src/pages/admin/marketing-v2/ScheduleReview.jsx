@@ -45,6 +45,9 @@ export default function ScheduleReview({
   onSendTest,
   onApprove,
   onRegenerate,
+  // Approve is an owner/admin-only write (RLS). Hidden for staff so they don't
+  // click a button that silently no-ops.
+  canApprove = true,
   busy,
   // Which long-running button is in flight, if any. Lets each button show its
   // OWN spinner text ("Saving…" / "Sending test…" / "Approving…") instead of
@@ -341,23 +344,25 @@ export default function ScheduleReview({
           >
             {busyAction === "test" ? "Sending test…" : "Send test to me"}
           </button>
-          <button
-            onClick={onApprove}
-            disabled={busy || touchpoints.length === 0}
-            style={{
-              background: busyAction === "approve"
-                ? "#9b87b9"  // softened purple while the approve write is in-flight
-                : (busy || touchpoints.length === 0 ? "#cfcfcf" : PURPLE),
-              color: "#fff", border: "none",
-              padding: "10px 16px", borderRadius: 6,
-              cursor: busy || touchpoints.length === 0 ? "wait" : "pointer",
-              fontSize: 14, fontWeight: 600, fontFamily: "inherit",
-              transition: "background 0.15s ease",
-              opacity: busy && busyAction !== "approve" ? 0.5 : 1,
-            }}
-          >
-            {busyAction === "approve" ? "Approving…" : "Approve & schedule ✨"}
-          </button>
+          {canApprove && (
+            <button
+              onClick={onApprove}
+              disabled={busy || touchpoints.length === 0}
+              style={{
+                background: busyAction === "approve"
+                  ? "#9b87b9"  // softened purple while the approve write is in-flight
+                  : (busy || touchpoints.length === 0 ? "#cfcfcf" : PURPLE),
+                color: "#fff", border: "none",
+                padding: "10px 16px", borderRadius: 6,
+                cursor: busy || touchpoints.length === 0 ? "wait" : "pointer",
+                fontSize: 14, fontWeight: 600, fontFamily: "inherit",
+                transition: "background 0.15s ease",
+                opacity: busy && busyAction !== "approve" ? 0.5 : 1,
+              }}
+            >
+              {busyAction === "approve" ? "Approving…" : "Approve & schedule ✨"}
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -27,6 +27,7 @@
 import { useReducer, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { usePermissions } from "../../../lib/permissions";
 import { PURPLE, BRIGHT, RULE, INK, MUTED, OK } from "../marketing/tokens.jsx";
 import Q1_What from "./questions/Q1_What.jsx";
 import Q2_Who from "./questions/Q2_Who.jsx";
@@ -288,6 +289,10 @@ function isStepValid(step, inputs) {
 
 export default function AICampaignBuilder() {
   const { org, user } = useOutletContext() ?? {};
+  // Approve & schedule is an owner/admin-only write (RLS). Gate the button so
+  // staff (who can reach Family Comms) don't click a silent no-op.
+  const perm = usePermissions();
+  const isAdmin = perm.role === "owner" || perm.role === "admin";
   const navigate = useNavigate();
   const [state, dispatch] = useReducer(reducer, INITIAL);
   // Tracks which long-running button is currently in flight so each button can
@@ -714,6 +719,7 @@ export default function AICampaignBuilder() {
         onSendTest={onSendTest}
         onApprove={onApprove}
         onRegenerate={onRegenerate}
+        canApprove={isAdmin}
         busy={busyAction !== null}
         busyAction={busyAction}
       />

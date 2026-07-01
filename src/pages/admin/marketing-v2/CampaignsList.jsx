@@ -27,6 +27,7 @@
 import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { usePermissions } from "../../../lib/permissions";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import SenderSetupNotice from "./SenderSetupNotice.jsx";
@@ -34,6 +35,12 @@ import EditableField from "./EditableField.jsx";
 
 export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
   const { org } = useOutletContext() ?? {};
+  // Campaign writes (rename/pause/resume/cancel/delete) are owner/admin only at
+  // the DB (RLS). Staff can reach this tab (Family Comms = send) but can't write,
+  // so hide the write actions for them — showing buttons that silently no-op is
+  // worse than not showing them.
+  const perm = usePermissions();
+  const isAdmin = perm.role === "owner" || perm.role === "admin";
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -262,6 +269,7 @@ export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
                   key={c.id}
                   campaign={c}
                   busy={busyRows[c.id]}
+                  isAdmin={isAdmin}
                   onRename={(name) => renameCampaign(c, name)}
                   onResume={() => onResume?.(c.id)}
                   onDelete={() => deleteDraft(c)}
@@ -277,6 +285,7 @@ export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
                   key={c.id}
                   campaign={c}
                   busy={busyRows[c.id]}
+                  isAdmin={isAdmin}
                   onRename={(name) => renameCampaign(c, name)}
                   onOpen={() => onOpenDetail?.(c.id)}
                   onPause={() => setStatus(c, "paused", "pause")}
@@ -308,7 +317,16 @@ function Section({ title, hint, children }) {
 
 // Small building block: an inline-editable campaign name. Reuses EditableField
 // (click-to-edit) and shows a subtle "renaming…" hint while the write lands.
-function CampaignName({ campaign, onRename, renaming }) {
+function CampaignName({ campaign, onRename, renaming, canRename = true }) {
+  // Non-admins can't rename (RLS blocks the UPDATE), so show the name as plain
+  // text instead of a click-to-edit field.
+  if (!canRename) {
+    return (
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontWeight: 600, color: INK }}>{shortName(campaign.name) || "Untitled campaign"}</div>
+      </div>
+    );
+  }
   return (
     <div style={{ minWidth: 0, flex: 1 }}>
       <EditableField
@@ -322,7 +340,7 @@ function CampaignName({ campaign, onRename, renaming }) {
   );
 }
 
-function DraftRow({ campaign, busy, onRename, onResume, onDelete }) {
+function DraftRow({ campaign, busy, isAdmin = true, onRename, onResume, onDelete }) {
   const tps = campaign.marketing_campaign_touchpoints ?? [];
   const badge = { label: "Draft", color: WARN };
   const deleting = busy === "delete";
@@ -331,7 +349,7 @@ function DraftRow({ campaign, busy, onRename, onResume, onDelete }) {
     <div style={{ border: `1px solid ${RULE}`, borderRadius: 12, padding: 16, background: "#fff" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <CampaignName campaign={campaign} onRename={onRename} renaming={busy === "rename"} />
+          <CampaignName campaign={campaign} onRename={onRename} renaming={busy === "rename"} canRename={isAdmin} />
           <p style={{ margin: "6px 0 0", fontSize: 12, color: MUTED }}>
             {tps.length} email{tps.length === 1 ? "" : "s"} drafted
             {" · "}
@@ -344,25 +362,28 @@ function DraftRow({ campaign, busy, onRename, onResume, onDelete }) {
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
         <PrimaryBtn onClick={onResume} disabled={!!busy}>Resume</PrimaryBtn>
-        <DangerBtn onClick={onDelete} disabled={!!busy}>
-          {deleting ? "Deleting…" : "Delete"}
-        </DangerBtn>
+        {isAdmin && (
+          <DangerBtn onClick={onDelete} disabled={!!busy}>
+            {deleting ? "Deleting…" : "Delete"}
+          </DangerBtn>
+        )}
       </div>
     </div>
   );
 }
 
-function ScheduledRow({ campaign, busy, onRename, onOpen, onPause, onResume, onCancel }) {
+function ScheduledRow({ campaign, busy, isAdmin = true, onRename, onOpen, onPause, onResume, onCancel }) {
   const tps = campaign.marketing_campaign_touchpoints ?? [];
   const queued = tps.filter((t) => t.status === "queued");
   const sent = tps.filter((t) => t.status === "sent");
   const recipients = campaign.approved_recipient_ids?.length ?? 0;
   const display = deriveStatus(campaign, tps);
-  // Cancel is only meaningful while unsent touchpoints remain — a fully-sent
-  // or already-cancelled campaign has nothing left to stop.
-  const canCancel = campaign.status !== "cancelled" && queued.length > 0;
-  const canPause = campaign.status === "sending";
-  const canResume = campaign.status === "paused";
+  // Pause/resume/cancel are owner/admin-only writes (RLS). Cancel is only
+  // meaningful while unsent touchpoints remain — a fully-sent or already-
+  // cancelled campaign has nothing left to stop.
+  const canCancel = isAdmin && campaign.status !== "cancelled" && queued.length > 0;
+  const canPause = isAdmin && campaign.status === "sending";
+  const canResume = isAdmin && campaign.status === "paused";
 
   const nextSend = queued.length > 0
     ? queued.map((t) => t.scheduled_at).sort()[0]
@@ -372,7 +393,7 @@ function ScheduledRow({ campaign, busy, onRename, onOpen, onPause, onResume, onC
     <div style={{ border: `1px solid ${RULE}`, borderRadius: 12, padding: 16, background: "#fff" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <CampaignName campaign={campaign} onRename={onRename} renaming={busy === "rename"} />
+          <CampaignName campaign={campaign} onRename={onRename} renaming={busy === "rename"} canRename={isAdmin} />
           <p style={{ margin: "6px 0 0", fontSize: 12, color: MUTED }}>
             {recipients} recipient{recipients === 1 ? "" : "s"}
             {" · "}
@@ -469,7 +490,11 @@ function deriveStatus(campaign, tps) {
   if (campaign.status === "paused") return { label: "Paused", color: WARN };
   if (tps.some((t) => t.status === "sending")) return { label: "Sending now", color: INFO };
   if (tps.some((t) => t.status === "queued")) return { label: "Scheduled", color: INFO };
-  if (tps.length > 0 && tps.every((t) => t.status === "sent" || t.status === "skipped")) {
+  // Nothing left pending (no queued/sending above). Treat failed/skipped/
+  // cancelled as terminal so a single failed touchpoint no longer drops the
+  // whole campaign back to "Scheduled" — if any touchpoint actually sent, the
+  // campaign is "Sent".
+  if (tps.length > 0 && tps.some((t) => t.status === "sent")) {
     return { label: "Sent", color: OK };
   }
   return { label: "Scheduled", color: INFO };
