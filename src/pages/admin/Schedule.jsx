@@ -1657,7 +1657,7 @@ export default function Schedule() {
     setSaveError(null);
     try {
       const { data, error } = await supabase.functions.invoke("offer-reminders-cron", {
-        body: { dry_run: dryRun },
+        body: { dry_run: dryRun, scope: "camp" },
       });
       if (error) {
         let realMsg = error.message ?? "function error";

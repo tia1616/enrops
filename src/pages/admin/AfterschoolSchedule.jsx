@@ -2089,7 +2089,11 @@ function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
   async function runNow() {
     setBusy("run"); setErr(null); setResult(null);
     try {
-      const { data, error } = await supabase.functions.invoke("offer-reminders-cron", { body: { dry_run: false } });
+      // Scope the run to THIS term's after-school reminders only — never touch
+      // camp/summer or other terms from this button.
+      const { data, error } = await supabase.functions.invoke("offer-reminders-cron", {
+        body: { dry_run: false, scope: "program", organization_id: org.id, term },
+      });
       if (error) {
         let msg = error.message ?? "function error";
         try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}

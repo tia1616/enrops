@@ -22,7 +22,13 @@
 //
 // Inputs:
 //   { dry_run?: boolean }   — when true, returns the lists without mutating
-// Trigger: pg_cron daily, or admin-invoke from Calendar UI's manual button.
+//   { scope?: 'all'|'camp'|'program', organization_id?, term? }
+//     — 'all' (default, nightly cron) runs both types for every org. A manual
+//       "Send reminders now" passes its page's type so the camp button never
+//       nudges after-school and vice-versa; after-school also passes org+term to
+//       contain the run to the term on screen.
+// Trigger: pg_cron daily (scope 'all'), or admin-invoke from a Scheduling page's
+// manual button (scoped).
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
@@ -135,9 +141,25 @@ serve(async (req: Request) => {
 
   try {
     let dry_run = false;
+    // scope: 'all' (nightly cron — both types, every org) is the default. A manual
+    // "Send reminders now" from a page passes its own type ('camp' | 'program') so
+    // the camp button never nudges after-school instructors and vice-versa; the
+    // after-school button also passes organization_id + term to contain the run to
+    // exactly the term the operator is looking at.
+    let scope = 'all';
+    let scopeOrg: string | null = null;
+    let scopeTerm: string | null = null;
     if (req.method === 'POST') {
-      try { const b = await req.json(); dry_run = !!b.dry_run; } catch {}
+      try {
+        const b = await req.json();
+        dry_run = !!b.dry_run;
+        if (b.scope === 'camp' || b.scope === 'program') scope = b.scope;
+        scopeOrg = b.organization_id ?? null;
+        scopeTerm = b.term ?? null;
+      } catch {}
     }
+    const runCamp = scope === 'all' || scope === 'camp';
+    const runProgram = scope === 'all' || scope === 'program';
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const today = todayISO();
@@ -146,10 +168,12 @@ serve(async (req: Request) => {
 
     // -------------------- REMINDER PASS --------------------
     // Skip cycles where the admin disabled auto-reminders for this batch.
-    const { data: enabledCycles } = await supabase
-      .from('scheduling_cycles')
-      .select('id')
-      .eq('auto_reminders_enabled', true);
+    const { data: enabledCycles } = runCamp
+      ? await supabase
+          .from('scheduling_cycles')
+          .select('id')
+          .eq('auto_reminders_enabled', true)
+      : { data: [] };
     const enabledCycleIds = (enabledCycles ?? []).map((c) => c.id);
     const { data: enabledSessions } = enabledCycleIds.length
       ? await supabase.from('camp_sessions').select('id').in('cycle_id', enabledCycleIds)
@@ -284,7 +308,7 @@ serve(async (req: Request) => {
 
     // -------------------- EXPIRE PASS --------------------
     let expired: any[] = [];
-    if (!dry_run) {
+    if (runCamp && !dry_run) {
       const { data, error: expErr } = await supabase
         .from('camp_assignments')
         .update({ flagged_reason: 'deadline_passed' })
@@ -306,7 +330,7 @@ serve(async (req: Request) => {
           }))
         );
       }
-    } else {
+    } else if (runCamp) {
       // In dry_run, just count what would expire.
       const { data, error: expErr } = await supabase
         .from('camp_assignments')
@@ -318,6 +342,7 @@ serve(async (req: Request) => {
       if (expErr) return json({ error: `expire dry_run query: ${expErr.message}`, reminder_results: reminderResults }, 500);
       expired = data ?? [];
     }
+    // (When !runCamp — a program-scoped manual run — the camp expire pass is skipped entirely.)
 
     // ==================== AFTER-SCHOOL (PROGRAM) PASSES ====================
     // Same two passes as camps, but program/term-shaped. Programs recur weekly
@@ -325,11 +350,13 @@ serve(async (req: Request) => {
     // toggle lives on the org's afterschool scheduling_cycle. Two different orgs
     // can each have an "FA26" afterschool cycle with opposite toggle states, so
     // we gate on the (organization_id, term) PAIR — never by term name alone.
-    const { data: asCycles } = await supabase
-      .from('scheduling_cycles')
-      .select('organization_id, name')
-      .eq('cycle_type', 'afterschool')
-      .eq('auto_reminders_enabled', true);
+    const { data: asCycles } = runProgram
+      ? await supabase
+          .from('scheduling_cycles')
+          .select('organization_id, name')
+          .eq('cycle_type', 'afterschool')
+          .eq('auto_reminders_enabled', true)
+      : { data: [] };
     const enabledProgramKeys = new Set((asCycles ?? []).map((c) => `${c.organization_id}:${c.name}`));
     const asOrgIds = Array.from(new Set((asCycles ?? []).map((c) => c.organization_id)));
     const asTermNames = Array.from(new Set((asCycles ?? []).map((c) => c.name)));
@@ -343,7 +370,9 @@ serve(async (req: Request) => {
         .in('organization_id', asOrgIds)
         .in('term', asTermNames);
       eligibleProgramIds = (progRows ?? [])
-        .filter((p: any) => enabledProgramKeys.has(`${p.organization_id}:${p.term}`))
+        .filter((p: any) => enabledProgramKeys.has(`${p.organization_id}:${p.term}`)
+          && (!scopeOrg || p.organization_id === scopeOrg)
+          && (!scopeTerm || p.term === scopeTerm))
         .map((p: any) => p.id);
     }
 
