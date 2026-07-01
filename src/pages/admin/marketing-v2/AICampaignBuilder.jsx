@@ -290,7 +290,10 @@ function isStepValid(step, inputs) {
     // Custom range: only valid once both start and end dates are filled
     if (d.startsWith("custom")) {
       const m = d.match(/^custom:\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})/);
-      return !!m;
+      if (!m) return false;
+      // End must be after start (ISO dates compare lexicographically) — an
+      // end <= start would silently collapse the schedule to a single email.
+      return m[2] > m[1];
     }
     return true;
   }

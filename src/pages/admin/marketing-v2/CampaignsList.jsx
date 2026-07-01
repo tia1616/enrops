@@ -108,12 +108,16 @@ export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
     setRowBusy(c.id, "rename");
     setError(null);
     try {
-      const { error: e } = await supabase
+      const { data, error: e } = await supabase
         .from("marketing_campaigns")
         .update({ name: trimmed })
         .eq("id", c.id)
-        .eq("organization_id", org.id);
+        .eq("organization_id", org.id)
+        .select("id");
       if (e) throw e;
+      // A 0-row result means RLS blocked the write (e.g. non-admin) — surface it
+      // rather than showing false success.
+      if (!data || data.length === 0) throw new Error("You don't have permission to rename this campaign.");
       await load();
     } catch (err) {
       setError(`Couldn't rename that campaign: ${err?.message ?? "unknown error"}`);
@@ -126,12 +130,14 @@ export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
     setRowBusy(c.id, verb);
     setError(null);
     try {
-      const { error: e } = await supabase
+      const { data, error: e } = await supabase
         .from("marketing_campaigns")
         .update({ status, updated_at: new Date().toISOString() })
         .eq("id", c.id)
-        .eq("organization_id", org.id);
+        .eq("organization_id", org.id)
+        .select("id");
       if (e) throw e;
+      if (!data || data.length === 0) throw new Error("You don't have permission to change this campaign.");
       await load();
     } catch (err) {
       setError(`Couldn't ${verb} that campaign: ${err?.message ?? "unknown error"}`);
@@ -164,8 +170,10 @@ export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
         .from("marketing_campaigns")
         .update({ status: "cancelled", updated_at: nowIso })
         .eq("id", c.id)
-        .eq("organization_id", org.id);
+        .eq("organization_id", org.id)
+        .select("id");
       if (cRes.error) throw cRes.error;
+      if (!cRes.data || cRes.data.length === 0) throw new Error("You don't have permission to cancel this campaign.");
 
       await load();
     } catch (err) {

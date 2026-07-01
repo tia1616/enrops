@@ -1557,8 +1557,10 @@ function resolveSendAtIso(sendAt: string, _orgTimezone: string): string {
   // submitted local-time without timezone. Assume Pacific for now (matches
   // resolveSendAtIso's tomorrow_morning assumption).
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(sendAt)) {
-    // Treat as if it were UTC offset by 7h (PDT). Cheap. Refine per-tenant later.
-    return new Date(sendAt + "Z").toISOString().replace(/\.\d{3}Z$/, "Z");
+    // Treat the operator's wall-clock time as Pacific (PDT, UTC-7) so a "3pm"
+    // pick sends at 3pm Pacific — NOT 3pm UTC (which was 7h early). Refine to a
+    // real per-tenant timezone when we onboard non-Pacific orgs.
+    return new Date(sendAt + "-07:00").toISOString().replace(/\.\d{3}Z$/, "Z");
   }
   // Already-ISO-ish: pass through
   return sendAt;
