@@ -36,11 +36,15 @@ import ScheduleReview from "./ScheduleReview.jsx";
 import DraftingScreen from "./DraftingScreen.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import CampaignsList from "./CampaignsList.jsx";
+import CampaignDetail from "./CampaignDetail.jsx";
 
 const INITIAL = {
-  // "list" = the Campaigns landing (scheduled-campaign list + Build button).
-  // The numbered wizard (1..4 → "review") is entered via START_NEW.
+  // "list"   = the Campaigns landing (drafts + scheduled list + Build button).
+  // 1..4 → "review" = the numbered wizard, entered via START_NEW / LOAD_DRAFT.
+  // "detail" = read/manage a single scheduled campaign (detail_id holds which).
   step: "list",
+  // Which campaign the "detail" step is showing. Set by OPEN_DETAIL.
+  detail_id: null,
   inputs: {
     what: {
       mode: "programs",
@@ -195,6 +199,23 @@ function reducer(state, action) {
     case "START_NEW":
       // Fresh wizard from the list (or "Build another" on the success screen).
       return { ...INITIAL, step: 1 };
+    case "LOAD_DRAFT":
+      // Resume an existing draft: hydrate the wizard from the saved campaign +
+      // its touchpoints and jump straight to the review screen. inputs come
+      // from the draft's draft_inputs (merged over INITIAL so any newer input
+      // fields not present on an older draft still have sane defaults).
+      return {
+        ...INITIAL,
+        step: "review",
+        inputs: {
+          ...INITIAL.inputs,
+          ...(action.inputs ?? {}),
+        },
+        draft: action.draft,
+      };
+    case "OPEN_DETAIL":
+      // Open a scheduled campaign's detail/manage view.
+      return { ...INITIAL, step: "detail", detail_id: action.campaignId };
     case "GO_LIST":
       // Back to the Campaigns landing, discarding any in-progress wizard state.
       return { ...INITIAL, step: "list" };
@@ -551,6 +572,71 @@ export default function AICampaignBuilder() {
     });
   }
 
+  // Resume a saved draft from the Campaigns list. Fetches the campaign row +
+  // its touchpoints, maps each touchpoint to the builder's in-memory shape,
+  // and dispatches LOAD_DRAFT to hydrate the review screen. Recipients are a
+  // best-effort snapshot from approved_recipient_ids (drafts may have none yet).
+  const resumeDraft = async (campaignId) => {
+    if (!campaignId || !org?.id) return;
+    try {
+      const [cRes, tpRes] = await Promise.all([
+        supabase
+          .from("marketing_campaigns")
+          .select("id, name, status, draft_inputs, approved_recipient_ids")
+          .eq("id", campaignId)
+          .eq("organization_id", org.id)
+          .maybeSingle(),
+        supabase
+          .from("marketing_campaign_touchpoints")
+          .select("id, order_index, scheduled_at, status, payload, topics")
+          .eq("campaign_id", campaignId)
+          .eq("organization_id", org.id)
+          .order("order_index", { ascending: true }),
+      ]);
+      if (cRes.error) throw cRes.error;
+      if (tpRes.error) throw tpRes.error;
+      const campaign = cRes.data;
+      if (!campaign) {
+        alert("Couldn't open that draft — it may have been deleted, or you don't have access.");
+        return;
+      }
+      // Map each touchpoint row to the builder's touchpoint shape.
+      const touchpoints = (tpRes.data ?? []).map((tp) => ({
+        id: tp.id,
+        type: "email",
+        order_index: tp.order_index,
+        label: tp.payload?.label ?? "",
+        subject: tp.payload?.subject ?? "",
+        body_html: tp.payload?.body_html ?? "",
+        body_text: tp.payload?.body_text ?? "",
+        reason: tp.payload?.reason ?? "",
+        topics: tp.topics ?? [],
+        scheduled_at: tp.scheduled_at,
+        status: tp.status,
+      }));
+      const recipientIds = campaign.approved_recipient_ids ?? [];
+      const draft = {
+        campaign_id: campaign.id,
+        schedule: {
+          summary: "",
+          notes_to_operator: "",
+          touchpoints,
+        },
+        sender: { name: org?.default_sender_name, email: org?.default_sender_email },
+        recipients: {
+          ids: recipientIds,
+          count: recipientIds.length,
+          segment_summary: "",
+        },
+        mechanical_checks: null,
+        warning: null,
+      };
+      dispatch({ type: "LOAD_DRAFT", inputs: campaign.draft_inputs ?? {}, draft });
+    } catch (err) {
+      alert(`Couldn't open that draft: ${err?.message ?? "unknown error"}`);
+    }
+  };
+
   // ---- Render ----
   if (!org) {
     return (
@@ -561,7 +647,23 @@ export default function AICampaignBuilder() {
   }
 
   if (state.step === "list") {
-    return <CampaignsList onNew={() => dispatch({ type: "START_NEW" })} />;
+    return (
+      <CampaignsList
+        onNew={() => dispatch({ type: "START_NEW" })}
+        onResume={(campaignId) => resumeDraft(campaignId)}
+        onOpenDetail={(campaignId) => dispatch({ type: "OPEN_DETAIL", campaignId })}
+      />
+    );
+  }
+
+  if (state.step === "detail") {
+    return (
+      <CampaignDetail
+        campaignId={state.detail_id}
+        org={org}
+        onBack={() => dispatch({ type: "GO_LIST" })}
+      />
+    );
   }
 
   if (state.step === "review" && state.scheduled) {
