@@ -379,12 +379,16 @@ async function sendCoordinationEmail(
   const fromName = branding?.email_from_name ?? org?.name ?? 'Enrops';
   const fromEmail = `${fromName} <hello@updates.journeytosteam.com>`;
   const replyTo = branding?.email_reply_to ?? org?.alert_email ?? undefined;
-  const to = [regular.email, me.email];
+  // Normalize for both sending and dedup — emails are effectively
+  // case-insensitive and stored with inconsistent case across import paths, so
+  // compare lowercased to avoid the same person landing on both To and Cc.
+  const norm = (s: string) => s.trim().toLowerCase();
+  const to = [norm(regular.email), norm(me.email)];
+  const toSet = new Set(to);
   // CC the other co-instructors + the org alert inbox, minus anyone already on `to`.
   const ccSet = new Set<string>();
-  for (const e of coEmails) ccSet.add(e);
-  if (org?.alert_email) ccSet.add(org.alert_email);
-  for (const t of to) ccSet.delete(t);
+  for (const e of coEmails) { const n = norm(e); if (!toSet.has(n)) ccSet.add(n); }
+  if (org?.alert_email) { const n = norm(org.alert_email); if (!toSet.has(n)) ccSet.add(n); }
   const cc = ccSet.size ? Array.from(ccSet) : undefined;
 
   const r = await fetch('https://api.resend.com/emails', {
