@@ -395,6 +395,10 @@ export default function AICampaignBuilder() {
       // Refresh the local draft state so subsequent edits compare against
       // the latest persisted version (no surprise overwrites).
       alert(`Saved! Your changes are safe. This stays a draft until you hit Approve — reopen it any time from Campaigns → Drafts → Resume.`);
+      // Return to the Campaigns list so the operator sees their saved draft and
+      // isn't stranded on the review screen (the top tabs / sidebar are route
+      // links to the route we're already on, so they can't reset the wizard).
+      dispatch({ type: "GO_LIST" });
     } finally {
       setBusyAction(null);
     }
@@ -729,7 +733,7 @@ export default function AICampaignBuilder() {
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", paddingBottom: 96 }}>
-      <FamilyCommsTabs active="marketing" />
+      <FamilyCommsTabs active="marketing" onReset={() => dispatch({ type: "GO_LIST" })} />
       <ProgressHeader step={state.step} />
       {state.step === 1 && <Q1_What {...sharedProps} />}
       {state.step === 2 && <Q2_Who {...sharedProps} />}

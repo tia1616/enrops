@@ -9,7 +9,7 @@
 import { Link } from "react-router-dom";
 import { PURPLE, BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 
-export default function FamilyCommsTabs({ active }) {
+export default function FamilyCommsTabs({ active, onReset }) {
   return (
     <div
       style={{
@@ -21,7 +21,14 @@ export default function FamilyCommsTabs({ active }) {
       role="tablist"
       aria-label="Family Comms surfaces"
     >
-      <TabLink to="/admin/family-comms/marketing" active={active === "marketing"}>
+      <TabLink
+        to="/admin/family-comms/marketing"
+        active={active === "marketing"}
+        // When we're already ON the marketing route but deep in the campaign
+        // wizard (list vs wizard is internal state, not a route), a plain Link
+        // to the same route is a no-op. onReset lets the host reset to the list.
+        onClick={active === "marketing" && onReset ? (e) => { e.preventDefault(); onReset(); } : undefined}
+      >
         Campaigns
       </TabLink>
       <TabLink to="/admin/family-comms/automations" active={active === "automations"}>
@@ -34,10 +41,11 @@ export default function FamilyCommsTabs({ active }) {
   );
 }
 
-function TabLink({ to, active, children }) {
+function TabLink({ to, active, children, onClick }) {
   return (
     <Link
       to={to}
+      onClick={onClick}
       role="tab"
       aria-selected={active}
       style={{
