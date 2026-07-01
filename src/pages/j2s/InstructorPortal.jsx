@@ -361,12 +361,12 @@ export default function InstructorPortal() {
       campParentIds.length === 0
         ? Promise.resolve({ data: [] })
         : supabase.from("camp_assignments")
-          .select("id, camp_session_id, camp_sessions(id, curriculum_id, curriculum_name, location_name, location_id, starts_on, ends_on, start_time, end_time, week_num, current_enrollment, program_locations:location_id(name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions))")
+          .select("id, instructor_id, camp_session_id, camp_sessions(id, curriculum_id, curriculum_name, location_name, location_id, starts_on, ends_on, start_time, end_time, week_num, current_enrollment, program_locations:location_id(name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions))")
           .in("id", campParentIds),
       progParentIds.length === 0
         ? Promise.resolve({ data: [] })
         : supabase.from("program_assignments")
-          .select("id, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, program_location_id, program_locations:program_location_id(name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions))")
+          .select("id, instructor_id, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, program_location_id, program_locations:program_location_id(name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions))")
           .in("id", progParentIds),
     ]);
 
@@ -379,6 +379,17 @@ export default function InstructorPortal() {
       program_parent: r.parent_assignment_type === "program" ? progParentById.get(r.parent_assignment_id) ?? null : null,
     }));
     setSubAssignments(enriched);
+  }
+
+  // Resolve the co-instructor list for a sub. loadAssignments /
+  // loadAfterschoolAssignments populate these maps via SECURITY DEFINER RPCs
+  // that (as of the sub-visibility fix) include sessions/programs the caller is
+  // subbing on, so a sub sees the lead + whoever they're covering for.
+  function subCoInstructors(s) {
+    if (!s) return [];
+    return s.parent_assignment_type === "camp"
+      ? (coInstructors[s.camp_parent?.camp_sessions?.id] || [])
+      : (coInstructorsProgram[s.program_parent?.programs?.id] || []);
   }
 
   // Load any open cycles (not archived) for this instructor's org plus a flag
@@ -640,7 +651,15 @@ export default function InstructorPortal() {
           ? prev.filter((s) => s.id !== substitutionId)
           : prev.map((s) => s.id === substitutionId ? { ...s, status: "confirmed" } : s),
       );
-      await loadSubAssignments(instructor.instructor_id);
+      // Refresh the sub list AND the co-instructor maps: accepting flips the sub
+      // to confirmed, which is what makes the parent camp readable and surfaces
+      // the lead/co-instructors — those maps come from loadAssignments, so they'd
+      // otherwise stay stale (lines blank) until a full reload.
+      await Promise.all([
+        loadSubAssignments(instructor.instructor_id),
+        loadAssignments(instructor.instructor_id),
+        loadAfterschoolAssignments(instructor.instructor_id),
+      ]);
     } catch (err) {
       setError(err.message ?? "Couldn't send your response.");
     } finally {
@@ -969,6 +988,7 @@ export default function InstructorPortal() {
       <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <SubDetailView
           sub={selectedSub}
+          coInstructors={subCoInstructors(selectedSub)}
           onBack={() => { setView("schedule"); setSelectedSubId(null); }}
           onMarkTaught={() => handleSubMarkTaught(selectedSub.id)}
           markBusy={subActingOn?.id === selectedSub.id && subActingOn?.action === "mark"}
@@ -1132,6 +1152,7 @@ export default function InstructorPortal() {
             <SubOfferCard
               key={s.id}
               sub={s}
+              coInstructors={subCoInstructors(s)}
               busy={subActingOn?.id === s.id}
               busyAction={subActingOn?.id === s.id ? subActingOn.action : null}
               onAccept={() => handleSubResponse(s.id, "accept")}
@@ -1186,6 +1207,7 @@ export default function InstructorPortal() {
             <SubOfferCard
               key={s.id}
               sub={s}
+              coInstructors={subCoInstructors(s)}
               readOnly
               onOpen={() => { setSelectedSubId(s.id); setView("sub-detail"); }}
             />
@@ -1450,11 +1472,12 @@ function Section({ title, children }) {
 // Mark Taught button (date-of or after). The component reads from either
 // sub.camp_parent (camp sub) or sub.program_parent (afterschool sub) — set
 // by loadSubAssignments.
-function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, onOpen }) {
+function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, onOpen, coInstructors = [] }) {
   const [declineOpen, setDeclineOpen] = useState(false);
   const [reason, setReason] = useState("");
 
   const isCamp = sub.parent_assignment_type === "camp";
+  const coveredInstructorId = isCamp ? sub.camp_parent?.instructor_id : sub.program_parent?.instructor_id;
   const sess = isCamp ? sub.camp_parent?.camp_sessions ?? null : null;
   const prog = !isCamp ? sub.program_parent?.programs ?? null : null;
   const loc = isCamp ? sess?.program_locations ?? null : prog?.program_locations ?? null;
@@ -1478,6 +1501,11 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, on
       <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
         {friendlyDate}{timeRange ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
       </div>
+      {coInstructors.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <SubInstructorLines coInstructors={coInstructors} coveredInstructorId={coveredInstructorId} />
+        </div>
+      )}
       {/* Location + arrival/dismissal + notes render inline on the pending
           offer so the instructor can decide whether to accept. On the confirmed
           (read-only) card they move behind "View details" to keep the schedule
@@ -1595,6 +1623,29 @@ function fmtTimePretty(t) {
 
 function roleLabel(r) {
   return r === "developing" ? "Developing" : "Lead";
+}
+
+// Instructor lines for a SUB. A sub covers one instructor's slot for a single
+// day, so the person whose day they're filling (the parent assignment's
+// instructor) isn't on site that day — showing them under "Teaching with" would
+// be wrong. Split them out as "Covering for" and hand the remaining instructor(s)
+// — the ones actually there that day, e.g. the lead — to CoInstructorLine.
+function SubInstructorLines({ coInstructors = [], coveredInstructorId }) {
+  if (!coInstructors.length) return null;
+  const covered = coveredInstructorId
+    ? coInstructors.find((c) => c.instructor_id === coveredInstructorId) ?? null
+    : null;
+  const teammates = coInstructors.filter((c) => c.instructor_id !== coveredInstructorId);
+  return (
+    <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+      {covered && (
+        <div style={{ marginBottom: teammates.length ? 4 : 0 }}>
+          Covering for <span style={{ color: INK, fontWeight: 600 }}>{covered.name}</span> ({roleLabel(covered.role)})
+        </div>
+      )}
+      <CoInstructorLine coInstructors={teammates} />
+    </div>
+  );
 }
 
 // Names the other instructor(s) on the same camp/class — a lead sees their
@@ -2318,11 +2369,12 @@ function AssignmentDetailView({ assignment, coInstructors = [], onBack }) {
 // DailyCheckInSection — the card itself carries the one-tap "Mark this day as
 // taught". Roster + lessons only apply to camp subs (mirrors the card's prior
 // inline behavior); program subs show location only.
-function SubDetailView({ sub, onBack, onMarkTaught, markBusy, error }) {
+function SubDetailView({ sub, onBack, onMarkTaught, markBusy, error, coInstructors = [] }) {
   const isCamp = sub.parent_assignment_type === "camp";
   const sess = isCamp ? sub.camp_parent?.camp_sessions ?? null : null;
   const prog = !isCamp ? sub.program_parent?.programs ?? null : null;
   const loc = isCamp ? sess?.program_locations ?? null : prog?.program_locations ?? null;
+  const coveredInstructorId = isCamp ? sub.camp_parent?.instructor_id : sub.program_parent?.instructor_id;
 
   const curriculumName = isCamp ? (sess?.curriculum_name ?? "this camp") : (prog?.curriculum ?? "this program");
   const venueName = loc?.name ?? (isCamp ? sess?.location_name : null) ?? "";
@@ -2381,6 +2433,11 @@ function SubDetailView({ sub, onBack, onMarkTaught, markBusy, error }) {
         <div style={{ marginTop: 8, fontSize: 12, color: sub.status === "taught" ? OK_GREEN : MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
           {sub.status === "taught" ? "✓ Taught" : "✓ Accepted"}
         </div>
+        {coInstructors.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <SubInstructorLines coInstructors={coInstructors} coveredInstructorId={coveredInstructorId} />
+          </div>
+        )}
         {sub.notes && (
           <div style={{ fontSize: 13, color: INK, marginTop: 12, padding: 10, background: CREAM, borderLeft: `3px solid ${VIOLET}`, borderRadius: 4 }}>
             <span style={{ color: MUTED, fontWeight: 600 }}>Note: </span>{sub.notes}
