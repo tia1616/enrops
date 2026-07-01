@@ -1038,7 +1038,7 @@ function daysUntil(dateStr) {
 // within a kind; acts always above fyis. Copy is plain and real — no invented stats
 // (automation_off uses the template's own description). Counts are aggregated so one
 // card stands for N items, keeping the list inside the cap.
-function buildImportant(sig, openHires) {
+function buildImportant(sig, openHires, subSignals) {
   const out = [];
   // ---- Acts ----
   if (sig?.finish_stripe) out.push({
@@ -1058,11 +1058,19 @@ function buildImportant(sig, openHires) {
       cta: { to: "/admin/schedule", label: "Open the schedule →" },
     });
   }
-  if (sig?.sub_coverage > 0) out.push({
-    key: "sub_coverage", kind: "act", prio: 3,
-    title: sig.sub_coverage === 1 ? "A class needs sub coverage" : `${sig.sub_coverage} classes need sub coverage`,
-    detail: "An instructor can't make a date and no sub is locked in yet.",
+  // Genuinely uncovered — a sub said no and nobody's filling in. Urgent act.
+  if (subSignals?.uncovered > 0) out.push({
+    key: "needs_cover", kind: "act", prio: 3,
+    title: subSignals.uncovered === 1 ? "A class day has no one to cover it" : `${subSignals.uncovered} class days have no one to cover them`,
+    detail: "A sub said no and nobody's filling in yet — line up another sub, or have the lead take it.",
     cta: { to: "/admin/schedule", label: "Find a sub →" },
+  });
+  // Offer still out — calmer FYI, not an urgent act.
+  if (subSignals?.awaiting > 0) out.push({
+    key: "sub_pending", kind: "fyi", prio: 9,
+    title: subSignals.awaiting === 1 ? "A sub offer is still out" : `${subSignals.awaiting} sub offers are still out`,
+    detail: "You've asked someone to cover a day — just waiting to hear back.",
+    cta: { to: "/admin/schedule", label: "View schedule →" },
   });
   if (sig?.low_enrollment > 0) out.push({
     key: "low_enrollment", kind: "act", prio: 4,
@@ -1113,20 +1121,44 @@ function buildImportant(sig, openHires) {
 function ImportantToday({ org, user, openHires }) {
   const [sig, setSig] = useState(null);               // get_home_signals row
   const [dismissals, setDismissals] = useState(null); // Map signal_key -> row
+  const [subSignals, setSubSignals] = useState(null); // { uncovered, awaiting }
   const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     if (!org?.id) return;
     let cancelled = false;
     (async () => {
-      const [sigRes, disRes] = await Promise.all([
+      const today = new Date().toISOString().slice(0, 10);
+      const [sigRes, disRes, subsRes] = await Promise.all([
         supabase.rpc("get_home_signals", { p_org: org.id }),
         supabase.from("homescreen_dismissals").select("signal_key, dismissed_until, permanent").eq("organization_id", org.id),
+        // Precise sub-coverage split (get_home_signals lumps pending+declined and
+        // over-counts re-covered days). Group upcoming subs per class+date: a slot
+        // with a confirmed/taught sub is covered; else pending ⇒ still awaiting a
+        // reply; else declined ⇒ genuinely uncovered ("needs cover").
+        supabase.from("assignment_substitutions")
+          .select("parent_assignment_id, parent_assignment_type, date, status")
+          .eq("organization_id", org.id)
+          .gte("date", today),
       ]);
       if (cancelled) return;
       if (sigRes.error) { console.error("[admin/overview] signals load failed", sigRes.error); setSig({}); }
       else setSig(Array.isArray(sigRes.data) ? sigRes.data[0] || {} : sigRes.data || {});
       setDismissals(new Map((disRes.data ?? []).map((r) => [r.signal_key, r])));
+
+      const slots = new Map(); // "type:parent:date" -> Set<status>
+      for (const s of subsRes.data ?? []) {
+        const k = `${s.parent_assignment_type}:${s.parent_assignment_id}:${s.date}`;
+        if (!slots.has(k)) slots.set(k, new Set());
+        slots.get(k).add(s.status);
+      }
+      let uncovered = 0, awaiting = 0;
+      for (const st of slots.values()) {
+        if (st.has("confirmed") || st.has("taught")) continue; // already covered
+        else if (st.has("pending")) awaiting++;                // offer still out
+        else if (st.has("declined")) uncovered++;              // no one coming
+      }
+      setSubSignals({ uncovered, awaiting });
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
@@ -1144,7 +1176,7 @@ function ImportantToday({ org, user, openHires }) {
   if (sig === null || dismissals === null) return null; // quiet while loading
 
   const now = Date.now();
-  const all = buildImportant(sig, openHires).filter((s) => {
+  const all = buildImportant(sig, openHires, subSignals).filter((s) => {
     const d = dismissals.get(s.key);
     if (!d) return true;
     if (d.permanent) return false;
