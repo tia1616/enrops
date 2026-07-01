@@ -1158,13 +1158,18 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: `repeat(5, minmax(0, 1fr))`, gap: 12, alignItems: "start" }}>
-          {DAYS.map((d) => {
+          {DAYS.map((d, i) => {
             const items = grid.get(d.code) ?? [];
+            // In a specific week each column is a real calendar day — show its date.
+            // In the "Every week" overview there's no single date, so fall back to a count.
+            const colDate = effectiveWeek ? addDaysIso(effectiveWeek, i) : null;
             return (
               <div key={d.code} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: PURPLE, textAlign: "center", padding: "6px 0", borderBottom: `2px solid ${RULE}` }}>
                   {d.label}
-                  <span style={{ color: MUTED, fontWeight: 500, marginLeft: 6 }}>{items.length}</span>
+                  <span style={{ color: MUTED, fontWeight: 500, marginLeft: 6 }}>
+                    {colDate ? fmtWeekLabel(colDate) : items.length}
+                  </span>
                 </div>
                 {items.length === 0 ? (
                   <div style={{ color: MUTED, fontSize: 12, textAlign: "center", padding: "12px 0" }}>—</div>
