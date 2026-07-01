@@ -339,6 +339,11 @@ export default function AdminLayout() {
             })}
           </nav>
 
+          {/* Always-available feedback path for early partners. Lives here in the
+              sidebar (not a floating corner pill) so it never covers page action
+              bars like marketing's "Approve & schedule". */}
+          <FeedbackWidget org={org} />
+
           {/* Lifetime time-saved tally — every Director action contributes. */}
           {timeSavedTotal != null && timeSavedTotal > 0 && (
             <div style={{ position: "relative", padding: "0 12px", marginBottom: 8 }}>
@@ -467,9 +472,6 @@ export default function AdminLayout() {
           )}
         </main>
       </div>
-
-      {/* Always-available feedback path for early partners (fixed, bottom-right). */}
-      <FeedbackWidget org={org} />
     </div>
   );
 }

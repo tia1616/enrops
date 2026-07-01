@@ -1,6 +1,11 @@
-// FeedbackWidget — a persistent "Feedback" button (fixed, bottom-right) that
-// opens a free-text modal. On submit it calls the submit-feedback edge fn,
-// which saves the row (RLS-scoped) and emails the platform inbox.
+// FeedbackWidget — a persistent "Share feedback" button that opens a free-text
+// modal. On submit it calls the submit-feedback edge fn, which saves the row
+// (RLS-scoped) and emails the platform inbox.
+//
+// Lives in the admin SIDEBAR footer (not a floating corner pill) — a bottom-right
+// float overlapped pages with full-width fixed action bars (e.g. marketing's
+// "Approve & schedule"). The sidebar is always visible, so feedback stays one
+// click away without ever covering page controls.
 //
 // Always available (never dismissed) so the feedback path never disappears —
 // distinct from the one-time AnnouncementBanner. Page/user/org context is
@@ -99,34 +104,34 @@ export default function FeedbackWidget({ org }) {
 
   return (
     <>
-      {/* Floating button — always visible, fixed bottom-right */}
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label="Send feedback"
-        style={{
-          position: "fixed",
-          right: 20,
-          bottom: 20,
-          zIndex: 1000,
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "11px 16px",
-          background: BRIGHT,
-          color: "#fff",
-          border: "none",
-          borderRadius: 999,
-          fontSize: 14,
-          fontWeight: 600,
-          fontFamily: "'Poppins', system-ui, sans-serif",
-          cursor: "pointer",
-          boxShadow: "0 4px 14px rgba(28, 0, 79, 0.22)",
-        }}
-      >
-        <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1 }}>💬</span>
-        Feedback
-      </button>
+      {/* Sidebar button — always visible in the admin nav, never over page content */}
+      <div style={{ padding: "0 12px", marginBottom: 8 }}>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label="Send feedback"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "10px 14px",
+            background: BRIGHT,
+            color: "#fff",
+            border: "none",
+            borderRadius: 10,
+            fontSize: 13.5,
+            fontWeight: 600,
+            fontFamily: "'Poppins', system-ui, sans-serif",
+            cursor: "pointer",
+          }}
+        >
+          <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1 }}>💬</span>
+          Share feedback
+        </button>
+      </div>
 
       {open && (
         <div
