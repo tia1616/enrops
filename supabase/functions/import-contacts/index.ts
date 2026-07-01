@@ -216,7 +216,12 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  const source = (typeof b.source === "string" && b.source.trim()) || "csv_import";
+  // marketing_recipients.source has a CHECK constraint — anything outside this
+  // set (including the old 'csv_import' default) is rejected by Postgres. Coerce
+  // an unknown/absent source to 'manual' so an upload can never 500 on it.
+  const ALLOWED_SOURCES = new Set(["manual", "am_afterschool", "squarespace_summer", "enrops_registration"]);
+  const rawSource = typeof b.source === "string" ? b.source.trim() : "";
+  const source = ALLOWED_SOURCES.has(rawSource) ? rawSource : "manual";
 
   // ---- Guard: org-admin gate ----
   // Caller must be a platform admin OR an accepted owner/admin of this org.

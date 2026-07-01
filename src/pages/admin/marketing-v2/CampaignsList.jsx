@@ -262,22 +262,6 @@ export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
         )
       ) : (
         <>
-          {drafts.length > 0 && (
-            <Section title="Drafts" hint="Not scheduled yet — pick up where you left off, or clear it out.">
-              {drafts.map((c) => (
-                <DraftRow
-                  key={c.id}
-                  campaign={c}
-                  busy={busyRows[c.id]}
-                  isAdmin={isAdmin}
-                  onRename={(name) => renameCampaign(c, name)}
-                  onResume={() => onResume?.(c.id)}
-                  onDelete={() => deleteDraft(c)}
-                />
-              ))}
-            </Section>
-          )}
-
           {scheduled.length > 0 && (
             <Section title="Scheduled" hint="Approved campaigns Ennie is sending for you.">
               {scheduled.map((c) => (
@@ -291,6 +275,22 @@ export default function CampaignsList({ onNew, onResume, onOpenDetail }) {
                   onPause={() => setStatus(c, "paused", "pause")}
                   onResume={() => setStatus(c, "sending", "resume")}
                   onCancel={() => cancelCampaign(c)}
+                />
+              ))}
+            </Section>
+          )}
+
+          {drafts.length > 0 && (
+            <Section title="Drafts" hint="Not scheduled yet — pick up where you left off, or clear it out.">
+              {drafts.map((c) => (
+                <DraftRow
+                  key={c.id}
+                  campaign={c}
+                  busy={busyRows[c.id]}
+                  isAdmin={isAdmin}
+                  onRename={(name) => renameCampaign(c, name)}
+                  onResume={() => onResume?.(c.id)}
+                  onDelete={() => deleteDraft(c)}
                 />
               ))}
             </Section>

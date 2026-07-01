@@ -309,7 +309,7 @@ function UploadModal({ orgId, onClose, onImported }) {
       // but trimming here keeps the payload lean.
       const payload = contacts.filter((c) => EMAIL_RE.test((c.email ?? "").trim().toLowerCase()));
       const { data, error: fnErr } = await supabase.functions.invoke("import-contacts", {
-        body: { organization_id: orgId, contacts: payload, source: "csv_import" },
+        body: { organization_id: orgId, contacts: payload, source: "manual" },
       });
       if (fnErr) {
         let msg = fnErr.message ?? "Import failed.";
