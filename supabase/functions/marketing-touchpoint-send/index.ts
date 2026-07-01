@@ -181,6 +181,7 @@ type Org = {
   logo_url: string | null;
   vip_offering: VipOffering | null;
   active_registration_term: string | null;
+  mailing_address: string | null;
   // Nested one-to-one from org_branding (PostgREST returns object or 1-elem array).
   org_branding: { primary_color: string | null } | { primary_color: string | null }[] | null;
 };
@@ -314,7 +315,7 @@ serve(async (req: Request) => {
   // ---- Load org ----
   const { data: org, error: oErr } = await supabase
     .from("organizations")
-    .select("id, name, slug, default_sender_name, default_sender_email, brand_voice, logo_url, vip_offering, active_registration_term, org_branding(primary_color)")
+    .select("id, name, slug, default_sender_name, default_sender_email, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, org_branding(primary_color)")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
@@ -966,6 +967,7 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   tokens.set("sender_email", brand.sender_email || "");
   tokens.set("reply_to", brand.reply_to || "");
   tokens.set("logo_url", org.logo_url || "");
+  tokens.set("mailing_address", org.mailing_address || "");
   tokens.set("closer", org.brand_voice?.closer || "");
   tokens.set("phone", org.brand_voice?.phone || "");
   tokens.set("website", org.brand_voice?.website || "");
@@ -1235,6 +1237,7 @@ function wrapInEmailShell(innerHtml: string, tokens: Map<string, string>): strin
   const senderName = tokens.get("sender_name") || orgName;
   const unsubscribeUrl = tokens.get("unsubscribe_url") || "";
   const logoUrl = tokens.get("logo_url") || "";
+  const mailingAddress = (tokens.get("mailing_address") || "").trim();
 
   // Defensive: if for some reason unsubscribe_url didn't resolve, don't render
   // an empty <a href=""> — Resend would still send but the link would be broken.
@@ -1246,6 +1249,12 @@ function wrapInEmailShell(innerHtml: string, tokens: Map<string, string>): strin
 
   const logoBlock = logoUrl
     ? `<div style="text-align:center;margin-bottom:16px;"><img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(orgName)}" style="max-width:160px;height:auto;"></div>`
+    : "";
+
+  // Physical postal address (CAN-SPAM). Rendered under the unsubscribe line
+  // only when the org has set one — J2S has none yet and must keep sending.
+  const addressBlock = mailingAddress
+    ? `<br><div style="margin-top:4px;">${escapeHtml(mailingAddress)}</div>`
     : "";
 
   return `<!doctype html>
@@ -1263,7 +1272,7 @@ ${innerHtml}
 </div>
 <div style="margin-top:16px;padding:0 12px;font-size:11px;color:#6b7280;line-height:1.6;text-align:center;">
 You're receiving this because your family is on ${escapeHtml(senderName || orgName || "our")}'s mailing list.
-${unsubBlock ? `<br>${unsubBlock}` : ""}
+${unsubBlock ? `<br>${unsubBlock}` : ""}${addressBlock}
 </div>
 </div>
 </body>

@@ -23,6 +23,7 @@ export default function EmailSenderSettings() {
   const { org, user } = useOutletContext();
   const [fromName, setFromName] = useState("");
   const [replyTo, setReplyTo] = useState("");
+  const [mailingAddress, setMailingAddress] = useState("");
   const [preview, setPreview] = useState(null); // { from, reply_to }
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -50,9 +51,16 @@ export default function EmailSenderSettings() {
         .select("email_from_name, email_reply_to")
         .eq("organization_id", org.id)
         .maybeSingle();
+      // mailing_address lives on organizations (CAN-SPAM footer), not org_branding.
+      const { data: orgRow } = await supabase
+        .from("organizations")
+        .select("mailing_address")
+        .eq("id", org.id)
+        .maybeSingle();
       if (!cancelled) {
         setFromName(data?.email_from_name ?? "");
         setReplyTo(data?.email_reply_to ?? "");
+        setMailingAddress(orgRow?.mailing_address ?? "");
         setTestTo(user?.email ?? "");
         await loadPreview();
         setLoading(false);
@@ -76,6 +84,12 @@ export default function EmailSenderSettings() {
       const { error: e } = await supabase
         .from("org_branding").upsert(fields, { onConflict: "organization_id" });
       if (e) throw e;
+      // mailing_address lives on organizations (its own row already exists).
+      const { error: addrErr } = await supabase
+        .from("organizations")
+        .update({ mailing_address: mailingAddress.trim() || null })
+        .eq("id", org.id);
+      if (addrErr) throw addrErr;
       flash("Sender saved.");
       await loadPreview();
     } catch (e) {
@@ -136,6 +150,10 @@ export default function EmailSenderSettings() {
         <label style={{ ...lbl, marginTop: 18 }}>Reply-to email</label>
         <input type="email" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="e.g. hello@yourprogram.com" style={input} />
         <div style={hint}>Where replies land when a family hits "reply." Use an inbox you actually check.</div>
+
+        <label style={{ ...lbl, marginTop: 18 }}>Mailing address</label>
+        <textarea value={mailingAddress} onChange={(e) => setMailingAddress(e.target.value)} placeholder="e.g. 123 Main St, Portland, OR 97201" rows={2} style={{ ...input, resize: "vertical", lineHeight: 1.5 }} />
+        <div style={hint}>Required on marketing emails by law (CAN-SPAM). Shown in the footer.</div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
           <button type="button" onClick={save} disabled={saving} style={primaryBtn(saving)}>{saving ? "Saving…" : "Save"}</button>

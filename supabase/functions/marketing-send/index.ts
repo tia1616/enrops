@@ -106,7 +106,7 @@ type Recipient = {
   school_name: string | null;
 };
 
-type Org = { id: string; name: string; logo_url: string | null; logo_email_url: string | null };
+type Org = { id: string; name: string; logo_url: string | null; logo_email_url: string | null; mailing_address: string | null };
 
 // Request contract. Keep additive — UI and back-end agree on this shape.
 type SendRequest = {
@@ -181,7 +181,7 @@ serve(async (req: Request) => {
     // ---- Load org ----
     const { data: org, error: oErr } = await supabase
       .from('organizations')
-      .select('id, name, slug, logo_url, logo_email_url')
+      .select('id, name, slug, logo_url, logo_email_url, mailing_address')
       .eq('id', orgId)
       .single<Org>();
     if (oErr || !org) return json({ error: `org not found: ${oErr?.message}` }, 404);
@@ -772,6 +772,7 @@ ${dividerForFallSection}
   <p style="margin:0 0 12px;">jessica@journeytosteam.com &middot; (971) 258-2178</p>
   <p style="margin:0 0 14px;">You&rsquo;re receiving this because your child participated in a Journey to STEAM program at ${escapeHtml(ctx.displayName)}. Hit reply anytime &mdash; it goes straight to Jessica.</p>
   <p style="margin:0;font-size:12px;color:${MUTED};">Don&rsquo;t want emails like this? <a href="${escapeHtml(unsubscribeUrl)}" style="color:${MUTED};text-decoration:underline;">Unsubscribe</a>.</p>
+  ${org.mailing_address?.trim() ? `<p style="margin:6px 0 0;font-size:12px;color:${MUTED};">${escapeHtml(org.mailing_address.trim())}</p>` : ''}
 </td></tr>
 
 </table>
