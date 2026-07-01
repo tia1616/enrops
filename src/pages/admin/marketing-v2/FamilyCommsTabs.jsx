@@ -27,6 +27,9 @@ export default function FamilyCommsTabs({ active }) {
       <TabLink to="/admin/family-comms/automations" active={active === "automations"}>
         Automations
       </TabLink>
+      <TabLink to="/admin/family-comms/contacts" active={active === "contacts"}>
+        Contacts
+      </TabLink>
     </div>
   );
 }
