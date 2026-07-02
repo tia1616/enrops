@@ -16,6 +16,7 @@ import AutomationsTab from './pages/admin/marketing-v2/AutomationsTab.jsx';
 import ContactsTab from './pages/admin/marketing-v2/ContactsTab.jsx';
 import Schedule from './pages/admin/Schedule.jsx';
 import SchedulePrint from './pages/admin/SchedulePrint.jsx';
+import ClassSchedule from './pages/admin/ClassSchedule.jsx';
 import ExtractionTest from './pages/admin/dev/ExtractionTest.jsx';
 import CurriculaList from './pages/admin/curricula/CurriculaList.jsx';
 import CurriculumNew from './pages/admin/curricula/CurriculumNew.jsx';
@@ -143,6 +144,7 @@ export default function App() {
         <Route path="marketing-v2" element={<Navigate to="/admin/family-comms/marketing" replace />} />
         <Route path="schedule" element={<Schedule />} />
         <Route path="schedule/print" element={<SchedulePrint />} />
+        <Route path="class-schedule" element={<ClassSchedule />} />
         <Route path="curricula" element={<CurriculaList />} />
         <Route path="curricula/new" element={<CurriculumNew />} />
         <Route path="curricula/:id/extracting" element={<CurriculumExtracting />} />
