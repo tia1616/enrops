@@ -19,6 +19,7 @@ create table if not exists public.class_schedule (
   program_location_id uuid references program_locations(id) on delete set null,
   instructor_name text,
   instructor_email text,
+  instructor_id uuid references instructors(id) on delete set null,  -- structured link to the roster
   age_min integer,
   age_max integer,
   age_format text check (age_format is null or age_format = any (array['grade','age'])),
@@ -34,6 +35,7 @@ create table if not exists public.class_schedule (
 
 create index if not exists class_schedule_org_idx on public.class_schedule(organization_id);
 create index if not exists class_schedule_org_day_idx on public.class_schedule(organization_id, day_of_week);
+create index if not exists class_schedule_instructor_idx on public.class_schedule(instructor_id) where instructor_id is not null;
 
 alter table public.class_schedule enable row level security;
 
