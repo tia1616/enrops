@@ -376,6 +376,9 @@ serve(async (req: Request) => {
       .from("programs")
       .select("id, curriculum, term, program_location_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
       .eq("organization_id", campaign.organization_id)
+      // Exclude cancelled programs so a program cancelled after a draft was built
+      // isn't advertised (parity with the camp render).
+      .neq("status", "cancelled")
       .in("id", programIds);
     pickedPrograms = (progs ?? []) as ProgramRow[];
   }
@@ -1503,6 +1506,9 @@ async function renderPreview(
       .from("programs")
       .select("id, curriculum, term, program_location_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
       .eq("organization_id", campaign.organization_id)
+      // Exclude cancelled programs so a program cancelled after a draft was built
+      // isn't advertised (parity with the camp render).
+      .neq("status", "cancelled")
       .in("id", programIds);
     pickedPrograms = (progs ?? []) as ProgramRow[];
   }

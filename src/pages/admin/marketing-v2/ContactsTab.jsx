@@ -16,7 +16,7 @@
 //
 // Org comes from useOutletContext — never hardcoded. Copy is tenant-neutral.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
@@ -273,6 +273,16 @@ function ContactsList({ orgId, refreshKey }) {
   const [total, setTotal] = useState(0);
   const [err, setErr] = useState(null);
   const [tagOptions, setTagOptions] = useState([]);
+  const [debouncedQ, setDebouncedQ] = useState("");
+  const seqRef = useRef(0);
+
+  // Debounce the search box so we fire one query after typing settles, not per
+  // keystroke. Reset to page 0 in the SAME batch as the debounced term so the
+  // fetch effect fires once, not twice (stale page + separate reset).
+  useEffect(() => {
+    const h = setTimeout(() => { setDebouncedQ(q); setPage(0); }, 200);
+    return () => clearTimeout(h);
+  }, [q]);
 
   // Distinct tags for the filter dropdown (single page is plenty for a picker).
   useEffect(() => {
@@ -293,11 +303,13 @@ function ContactsList({ orgId, refreshKey }) {
     return () => { alive = false; };
   }, [orgId, refreshKey]);
 
-  // Any filter change returns to the first page.
-  useEffect(() => { setPage(0); }, [q, tag, refreshKey]);
+  // A fresh import (refreshKey) returns to the first page. Search + tag changes
+  // reset the page inline at their source (batched), so no extra fetch fires here.
+  useEffect(() => { setPage(0); }, [refreshKey]);
 
   useEffect(() => {
     if (!orgId) return;
+    const seq = ++seqRef.current;
     let alive = true;
     setRows(null);
     setErr(null);
@@ -309,21 +321,25 @@ function ContactsList({ orgId, refreshKey }) {
         .order("created_at", { ascending: false })
         .range(page * LIST_PAGE, page * LIST_PAGE + LIST_PAGE - 1);
       if (tag) query = query.contains("tags", [tag]);
-      // Strip PostgREST-significant chars so a stray comma/paren can't break the or() filter.
-      const safe = q.replace(/[,()%]/g, " ").trim();
+      // Strip PostgREST-significant chars (incl. the * and _ wildcards) so search
+      // is literal and a stray comma/paren can't break the or() filter.
+      const safe = debouncedQ.replace(/[,()%*_]/g, " ").trim();
       if (safe) {
         query = query.or(
           `parent_name.ilike.%${safe}%,email.ilike.%${safe}%,child_first_name.ilike.%${safe}%,child_last_name.ilike.%${safe}%`,
         );
       }
       const { data, error, count } = await query;
-      if (!alive) return;
+      // Ignore superseded (out-of-order) responses and unmounts.
+      if (!alive || seq !== seqRef.current) return;
       if (error) { setErr(error.message); setRows([]); return; }
       setRows(data ?? []);
       setTotal(count ?? 0);
+      // If a filter or a delete shrank the set below the current page, step back.
+      if ((data?.length ?? 0) === 0 && page > 0) setPage(0);
     })();
     return () => { alive = false; };
-  }, [orgId, q, tag, page, refreshKey]);
+  }, [orgId, debouncedQ, tag, page, refreshKey]);
 
   const from = total === 0 ? 0 : page * LIST_PAGE + 1;
   const to = Math.min((page + 1) * LIST_PAGE, total);
@@ -339,7 +355,7 @@ function ContactsList({ orgId, refreshKey }) {
         />
         <select
           value={tag}
-          onChange={(e) => setTag(e.target.value)}
+          onChange={(e) => { setTag(e.target.value); setPage(0); }}
           style={{ padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", background: "#fff", color: INK }}
         >
           <option value="">All tags</option>

@@ -782,6 +782,7 @@ async function loadGroundedFacts(
       .from("programs")
       .select("id, term, curriculum, curriculum_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents, age_min, age_max, short_description, program_locations(name)")
       .eq("organization_id", orgId)
+      .neq("status", "cancelled")
       .in("id", structured.program_ids ?? []);
     if (error) {
       console.error("loadGroundedFacts programs error:", error.message);
