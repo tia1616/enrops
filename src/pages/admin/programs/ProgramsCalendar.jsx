@@ -421,7 +421,13 @@ export default function ProgramsCalendar() {
       {loading && <div style={{ color: MUTED, padding: 12 }}>Loading {term ? `${term} ` : ""}programs…</div>}
       {error && <div style={errorBox}>Could not load programs: {error}</div>}
       {!loading && !error && programs.length === 0 && (
-        <div style={emptyState}>No programs scheduled{term ? ` for ${term}` : ""} yet.</div>
+        <div style={emptyState}>
+          No programs scheduled{term ? ` for ${term}` : ""} yet.
+          <div style={{ marginTop: 8, fontSize: 13 }}>
+            Running ongoing classes instead of term registration?{" "}
+            <Link to="/admin/class-schedule" style={{ color: BRIGHT, fontWeight: 600 }}>Upload your class schedule →</Link>
+          </div>
+        </div>
       )}
 
       {!loading && !error && programs.length > 0 && (

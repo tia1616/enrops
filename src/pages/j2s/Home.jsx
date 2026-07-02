@@ -23,6 +23,9 @@ import {
 // stops each one rendering as its own one-school "district".
 const OTHER_DISTRICT = 'Other schools & sites';
 
+// Week order for the recurring class schedule (day_of_week stored Title-Case).
+const WEEKLY_DAY_ORDER = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+
 export default function J2SHome() {
   const { org } = useOutletContext();
   const ORG_SLUG = org.slug;
@@ -42,6 +45,7 @@ export default function J2SHome() {
   // Program id to scroll-to + highlight, set when arriving via a shared
   // per-program link (/<slug>?program=<id>).
   const [highlightProgram, setHighlightProgram] = useState('');
+  const [weeklyClasses, setWeeklyClasses] = useState([]); // recurring class_schedule (outside-registration tenants), safe public view
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -106,11 +110,34 @@ export default function J2SHome() {
       });
     }
 
+    // Recurring weekly classes for outside-registration tenants (no term/checkout).
+    // Read from the anon-safe view (no coach email/notes). Only renders a section
+    // when rows exist, so registration tenants (J2S) are unaffected.
+    const { data: wc } = await supabase
+      .from('class_schedule_public')
+      .select('id, title, day_of_week, start_time, end_time, location_text, age_min, age_max, capacity')
+      .eq('organization_id', org.id);
+
     setSchools(sc || []);
     setPrograms(pg || []);
     setVipBundles(bundles);
+    setWeeklyClasses(wc || []);
     setLoading(false);
   }
+
+  // Group the recurring classes by weekday for display.
+  const weeklyByDay = useMemo(() => {
+    const sorted = [...weeklyClasses].sort((a, b) =>
+      ((WEEKLY_DAY_ORDER[a.day_of_week] ?? 9) - (WEEKLY_DAY_ORDER[b.day_of_week] ?? 9)) ||
+      (a.start_time || '').localeCompare(b.start_time || ''));
+    const groups = [];
+    for (const c of sorted) {
+      const last = groups[groups.length - 1];
+      if (last && last.day === c.day_of_week) last.items.push(c);
+      else groups.push({ day: c.day_of_week, items: [c] });
+    }
+    return groups;
+  }, [weeklyClasses]);
 
   // Only districts that have at least one school with an open program. Schools
   // with no district collect under a single "Other schools & sites" bucket
@@ -223,8 +250,42 @@ export default function J2SHome() {
         </div>
       </section>
 
+      {/* Weekly class schedule — only for outside-registration tenants that
+          uploaded a class_schedule. Registration tenants (J2S) have none, so this
+          renders nothing for them. Read-only "what's happening each week". */}
+      {weeklyByDay.length > 0 && (
+        <section className="relative -mt-16 pb-4">
+          <div className="mx-auto max-w-4xl px-4 sm:px-6">
+            <div className="rounded-3xl border border-j2s-purple/10 bg-white p-6 shadow-card sm:p-10">
+              <h2 className="font-titan text-2xl text-j2s-ink sm:text-3xl">This week&rsquo;s schedule</h2>
+              <p className="mt-2 text-sm text-j2s-ink/70">Our weekly classes, by day.</p>
+              <div className="mt-6 space-y-6">
+                {weeklyByDay.map((g) => (
+                  <div key={g.day}>
+                    <h3 className="font-bold uppercase tracking-widest text-xs text-j2s-purple">{g.day}</h3>
+                    <ul className="mt-2 divide-y divide-j2s-purple/10">
+                      {g.items.map((c) => {
+                        const time = [c.start_time, c.end_time].filter(Boolean).join(' – ');
+                        return (
+                          <li key={c.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2">
+                            <span className="font-semibold text-j2s-ink">{c.title}</span>
+                            <span className="text-sm text-j2s-ink/70">
+                              {time}{c.location_text ? `${time ? ' · ' : ''}${c.location_text}` : ''}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Finder */}
-      <section className="relative -mt-16 pb-16">
+      <section className={`relative pb-16 ${weeklyByDay.length > 0 ? 'pt-4' : '-mt-16'}`}>
         <div className="mx-auto max-w-4xl px-4 sm:px-6">
           <div className="rounded-3xl border border-j2s-purple/10 bg-white p-6 shadow-card sm:p-10">
             <h2 className="font-titan text-2xl text-j2s-ink sm:text-3xl">
