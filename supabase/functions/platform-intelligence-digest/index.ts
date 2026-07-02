@@ -31,8 +31,12 @@ const FROM_EMAIL = 'Enrops <hello@updates.journeytosteam.com>';
 // Add each as its capture is wired (see docs/moat/INTELLIGENCE_LAYER_RULES.md).
 const INSTRUMENTED_FEATURES: Record<string, string> = {
   programs: 'Programs',       // DB triggers (create/publish)
+  campaigns: 'Campaigns',     // DB trigger (campaign_sent)
+  curricula: 'Curricula',     // DB trigger (curriculum_published) [+ edge fn extract, batch 2]
+  payroll: 'Payroll',         // DB trigger (payroll_approved) [+ edge fn instructor_paid, batch 2]
   scheduling: 'Scheduling',   // send-offers edge fn (offer_sent)
-  // Next: rosters, campaigns, curricula, instructors, payroll, finances, …
+  // Added as each edge fn is instrumented (batch 2): rosters, instructors,
+  // contacts, partners, finances.
 };
 
 function esc(s: unknown): string {
