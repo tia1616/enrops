@@ -10,7 +10,10 @@
 //   4. Fire on BOTH outcomes: success at the happy path, 'fail' at the error path.
 //   5. dedupeKey for anything retriable (e.g. a stripe/session id).
 
-import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+// NOTE: the client param is typed `any` (not SupabaseClient) on purpose. Different
+// edge fns import supabase-js via slightly different esm.sh build URLs (e.g. a
+// pinned v135 path), which TypeScript treats as INCOMPATIBLE SupabaseClient types.
+// We only ever call `.rpc()` on it, so `any` accepts a client from any build.
 
 // THE TAXONOMY — single source of truth for platform-usage events (server-side).
 export const FEATURE = {
@@ -72,7 +75,7 @@ export interface LogPlatformEventArgs {
 }
 
 // deno-lint-ignore no-explicit-any
-export async function logPlatformEvent(admin: SupabaseClient<any>, args: LogPlatformEventArgs): Promise<void> {
+export async function logPlatformEvent(admin: any, args: LogPlatformEventArgs): Promise<void> {
   try {
     const { error } = await admin.rpc('log_platform_event', {
       p_feature: args.feature,
