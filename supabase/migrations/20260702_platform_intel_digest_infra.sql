@@ -1,0 +1,25 @@
+-- 20260702_platform_intel_digest_infra.sql
+--
+-- PROD-ONLY infra for the WEEKLY platform-intelligence digest (edge fn
+-- `platform-intelligence-digest` emails Jessica what operators used / didn't use /
+-- where it failed, across all tenants). Prod-only, NOT a staging-parity concern.
+--
+-- Re-runnable SQL ships elsewhere (platform_events_layer, platform_digest_rpcs,
+-- the *_triggers migrations). This file DOCUMENTS the manual prod steps:
+--
+--   1. Reuses the existing `replay_digest_cron_secret` Vault secret (gate). No new
+--      secret, and NO PostHog key needed — usage is read straight from the DB.
+--   2. Edge fn `supabase/functions/platform-intelligence-digest/` deployed with
+--      verify_jwt=false (authenticates callers itself against the gate secret).
+--   3. pg_cron 'platform-intel-digest-weekly' (Mon ~8am PT = '0 15 * * 1'):
+--        select cron.schedule('platform-intel-digest-weekly', '0 15 * * 1', $job$
+--          select net.http_post(
+--            url := 'https://iuasfpztkmrtagivlhtj.supabase.co/functions/v1/platform-intelligence-digest',
+--            headers := jsonb_build_object('Content-Type','application/json',
+--              'Authorization','Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name='replay_digest_cron_secret')));
+--        $job$);
+--
+-- Manual test-fire (once deployed): POST the endpoint with ?force=true to send an
+-- email even before there's a week of usage data.
+
+select 1;

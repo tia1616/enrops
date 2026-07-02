@@ -11,6 +11,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -332,6 +333,19 @@ serve(async (req: Request) => {
       } catch (err: any) {
         failed.push({ instructor_id: instructorId, reason: `unexpected: ${err.message ?? String(err)}` });
       }
+    }
+
+    // intelligence: record the real send as platform usage (one event per send
+    // action, not per instructor). Preview/test aren't real usage. Fail-safe.
+    if (mode === 'send') {
+      await logPlatformEvent(supabase, {
+        feature: FEATURE.SCHEDULING,
+        action: ACTION.OFFER_SENT,
+        outcome: sent.length > 0 ? OUTCOME.SUCCESS : OUTCOME.FAIL,
+        organizationId: cycle.organization_id,
+        actorUserId: userData.user.id,
+        metadata: { sent_count: sent.length, failed_count: failed.length },
+      });
     }
 
     return json({
