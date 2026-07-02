@@ -408,6 +408,7 @@ async function deriveScopeFromPicks(orgId, what) {
     const { data: camps } = await supabase
       .from("camp_sessions")
       .select("location_name, program_locations(district)")
+      .neq("status", "cancelled")
       .in("id", what.camp_session_ids);
     const campsByDistrict = new Map();
     let untaggedCount = 0;
@@ -617,6 +618,7 @@ function AreaMultiSelect({ orgId, selected, onChange, campSessionIds = [] }) {
       const { data } = await supabase
         .from("camp_sessions")
         .select("program_locations(district)")
+        .neq("status", "cancelled")
         .in("id", campSessionIds);
       if (!alive) return;
       const dists = new Set();

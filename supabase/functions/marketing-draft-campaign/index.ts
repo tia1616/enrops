@@ -818,6 +818,10 @@ async function loadGroundedFacts(
       .from("camp_sessions")
       .select("id, week_num, session_type, location_name, curriculum_name, curriculum_id, starts_on, ends_on, start_time, end_time, ages_min, ages_max, current_enrollment")
       .eq("organization_id", orgId)
+      // Cancelled camps must not ground the AI copy — they're excluded from the
+      // rendered email (marketing-touchpoint-send), so grounding on them would
+      // write copy about camps that never appear.
+      .neq("status", "cancelled")
       .in("id", structured.camp_session_ids ?? []);
     if (error) {
       console.error("loadGroundedFacts camps error:", error.message);

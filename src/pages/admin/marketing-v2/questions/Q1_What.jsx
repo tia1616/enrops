@@ -527,6 +527,10 @@ function CampsPicker({ orgId, selected, onChange }) {
       .from("camp_sessions")
       .select("id, week_num, session_type, location_name, curriculum_name, curriculum_id, starts_on, ends_on, current_enrollment, status, curricula(class_size_min, class_size_max)")
       .eq("organization_id", orgId)
+      // Cancelled camps can't be advertised — the email render excludes them,
+      // so don't offer them for selection (picking them silently derives an
+      // area with no camps to show).
+      .neq("status", "cancelled")
       .gte("starts_on", todayIso())
       .order("starts_on")
       .order("location_name")
