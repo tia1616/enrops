@@ -233,6 +233,10 @@ export default function ContactsTab() {
         </div>
       )}
 
+      {count > 0 && org?.id && (
+        <ContactsList orgId={org.id} refreshKey={refreshKey} />
+      )}
+
       {uploading && org?.id && (
         <UploadModal
           orgId={org.id}
@@ -243,6 +247,150 @@ export default function ContactsTab() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ─── Contacts list (view + search + filter by tag) ───────────────────────────
+// The Contacts tab used to show only a count — no way to actually see who's on
+// the list or confirm tags landed. This is a paginated, tenant-safe viewer
+// (marketing_recipients RLS is org-gated) with name/email search + a tag filter.
+const LIST_PAGE = 25;
+const listCell = { padding: "8px 10px", borderBottom: `1px solid ${RULE}`, whiteSpace: "nowrap", color: INK, verticalAlign: "top" };
+function pagerBtn(disabled) {
+  return {
+    padding: "5px 12px", background: disabled ? "#f3f3f3" : "#fff",
+    color: disabled ? MUTED : PURPLE, border: `1px solid ${RULE}`, borderRadius: 6,
+    fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: disabled ? "not-allowed" : "pointer",
+  };
+}
+
+function ContactsList({ orgId, refreshKey }) {
+  const [q, setQ] = useState("");
+  const [tag, setTag] = useState(""); // "" = all tags
+  const [page, setPage] = useState(0);
+  const [rows, setRows] = useState(null);
+  const [total, setTotal] = useState(0);
+  const [err, setErr] = useState(null);
+  const [tagOptions, setTagOptions] = useState([]);
+
+  // Distinct tags for the filter dropdown (single page is plenty for a picker).
+  useEffect(() => {
+    if (!orgId) return;
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("marketing_recipients")
+        .select("tags")
+        .eq("organization_id", orgId)
+        .not("tags", "is", null)
+        .limit(2000);
+      if (!alive) return;
+      const set = new Set();
+      for (const r of data ?? []) for (const t of r.tags ?? []) if (t) set.add(t);
+      setTagOptions([...set].sort());
+    })();
+    return () => { alive = false; };
+  }, [orgId, refreshKey]);
+
+  // Any filter change returns to the first page.
+  useEffect(() => { setPage(0); }, [q, tag, refreshKey]);
+
+  useEffect(() => {
+    if (!orgId) return;
+    let alive = true;
+    setRows(null);
+    setErr(null);
+    (async () => {
+      let query = supabase
+        .from("marketing_recipients")
+        .select("id, email, parent_name, child_first_name, child_last_name, geo_segment, tags", { count: "exact" })
+        .eq("organization_id", orgId)
+        .order("created_at", { ascending: false })
+        .range(page * LIST_PAGE, page * LIST_PAGE + LIST_PAGE - 1);
+      if (tag) query = query.contains("tags", [tag]);
+      // Strip PostgREST-significant chars so a stray comma/paren can't break the or() filter.
+      const safe = q.replace(/[,()%]/g, " ").trim();
+      if (safe) {
+        query = query.or(
+          `parent_name.ilike.%${safe}%,email.ilike.%${safe}%,child_first_name.ilike.%${safe}%,child_last_name.ilike.%${safe}%`,
+        );
+      }
+      const { data, error, count } = await query;
+      if (!alive) return;
+      if (error) { setErr(error.message); setRows([]); return; }
+      setRows(data ?? []);
+      setTotal(count ?? 0);
+    })();
+    return () => { alive = false; };
+  }, [orgId, q, tag, page, refreshKey]);
+
+  const from = total === 0 ? 0 : page * LIST_PAGE + 1;
+  const to = Math.min((page + 1) * LIST_PAGE, total);
+
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 16 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search name or email…"
+          style={{ flex: "1 1 220px", padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", color: INK }}
+        />
+        <select
+          value={tag}
+          onChange={(e) => setTag(e.target.value)}
+          style={{ padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", background: "#fff", color: INK }}
+        >
+          <option value="">All tags</option>
+          {tagOptions.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </div>
+
+      <div style={{ overflowX: "auto", border: `1px solid ${RULE}`, borderRadius: 6 }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
+          <thead>
+            <tr>
+              {["Email", "Parent", "Child", "Area", "Tags"].map((h) => (
+                <th key={h} style={{ position: "sticky", top: 0, background: CREAM, textAlign: "left", padding: "8px 10px", color: MUTED, fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${RULE}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows === null ? (
+              <tr><td colSpan={5} style={{ padding: 16, color: MUTED, fontSize: 13 }}>Loading…</td></tr>
+            ) : err ? (
+              <tr><td colSpan={5} style={{ padding: 16, color: RED, fontSize: 13 }}>Couldn&apos;t load contacts: {err}</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={5} style={{ padding: 16, color: MUTED, fontSize: 13 }}>No contacts match{tag ? ` the tag “${tag}”` : ""}{q ? ` “${q}”` : ""}.</td></tr>
+            ) : rows.map((r) => (
+              <tr key={r.id}>
+                <td style={listCell}><strong>{r.email}</strong></td>
+                <td style={listCell}>{r.parent_name || <span style={{ color: MUTED }}>—</span>}</td>
+                <td style={listCell}>{[r.child_first_name, r.child_last_name].filter(Boolean).join(" ") || <span style={{ color: MUTED }}>—</span>}</td>
+                <td style={listCell}>{r.geo_segment || <span style={{ color: MUTED }}>—</span>}</td>
+                <td style={listCell}>
+                  {(r.tags ?? []).length === 0 ? <span style={{ color: MUTED }}>—</span> : (
+                    <span style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {r.tags.map((t) => (
+                        <span key={t} style={{ fontSize: 11, fontWeight: 600, color: PURPLE, background: `${PURPLE}0F`, border: `1px solid ${PURPLE}22`, borderRadius: 999, padding: "1px 8px", whiteSpace: "nowrap" }}>{t}</span>
+                      ))}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10, fontSize: 12, color: MUTED }}>
+        <span>{total === 0 ? "No contacts" : `Showing ${from}–${to} of ${total.toLocaleString()}`}</span>
+        <span style={{ display: "flex", gap: 6 }}>
+          <button type="button" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))} style={pagerBtn(page === 0)}>← Prev</button>
+          <button type="button" disabled={to >= total} onClick={() => setPage((p) => p + 1)} style={pagerBtn(to >= total)}>Next →</button>
+        </span>
+      </div>
     </div>
   );
 }
