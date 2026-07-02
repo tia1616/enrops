@@ -42,8 +42,13 @@ const NAV = [
     // reference library) last. Per Arielle's feedback 2026-06-25.
     to: "/admin/programs", label: "Programs",
     tabs: [
-      { to: "/admin/programs", label: "Scheduled programs" },
-      { to: "/admin/class-schedule", label: "Class schedule" },
+      // A tenant is one type: they run registration through Enrops (term programs)
+      // OR they upload their own schedule. Show both tabs; disable the one that
+      // doesn't apply with a why (Enrops house style: disabled + coaching note).
+      { to: "/admin/programs", label: "Scheduled programs", regOnly: true,
+        offReason: "You bring your own registration — use Class schedule instead." },
+      { to: "/admin/class-schedule", label: "Class schedule", outsideRegOnly: true,
+        offReason: "You run registration through Enrops — your classes are under Scheduled programs." },
       { to: "/admin/rosters", label: "Class rosters" },
       { to: "/admin/curricula", label: "Offerings" },
     ],
@@ -146,7 +151,7 @@ export default function AdminLayout() {
         // Fetch org name + branding (display only — does not gate access)
         const { data: orgRow } = await supabase
           .from("organizations")
-          .select("id, name, slug, active_registration_term")
+          .select("id, name, slug, active_registration_term, uses_enrops_registration")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;
@@ -447,6 +452,30 @@ export default function AdminLayout() {
               {activeTabSection.tabs.map((t) => {
                 const tabActive =
                   location.pathname === t.to || location.pathname.startsWith(t.to + "/");
+                // Registration vs outside-registration tenant: disable (don't hide)
+                // the tab that doesn't apply, with a hover reason.
+                const usesReg = org?.uses_enrops_registration !== false; // default true
+                const disabled = (t.regOnly && !usesReg) || (t.outsideRegOnly && usesReg);
+                if (disabled) {
+                  return (
+                    <span
+                      key={t.to}
+                      title={t.offReason || ""}
+                      style={{
+                        padding: "8px 14px",
+                        borderBottom: "2px solid transparent",
+                        color: `${MUTED}80`,
+                        fontWeight: 500,
+                        fontSize: 13,
+                        position: "relative",
+                        top: 1,
+                        cursor: "not-allowed",
+                      }}
+                    >
+                      {t.label}
+                    </span>
+                  );
+                }
                 return (
                   <Link
                     key={t.to}
