@@ -26,6 +26,10 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const OK_GREEN = "#3a7c3a";
 
+// Week order for grouping recurring class_schedule rows (day_of_week is stored
+// Title-Case, e.g. "Monday").
+const WEEKLY_DAY_ORDER = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+
 function fmt(date) {
   if (!date) return "";
   return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
@@ -90,6 +94,7 @@ export default function InstructorPortal() {
   const [showPast, setShowPast] = useState(false);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState(null);
   const [selectedSubId, setSelectedSubId] = useState(null);
+  const [weeklyClasses, setWeeklyClasses] = useState([]); // class_schedule rows assigned to me (outside-registration tenants)
 
   useEffect(() => {
     let mounted = true;
@@ -217,7 +222,7 @@ export default function InstructorPortal() {
 
       // No onboarding row OR overall_status='complete' OR 'not_invited':
       // they're a regular onboarded instructor; render the schedule.
-      await Promise.all([loadAssignments(linkData.instructor_id), loadAfterschoolAssignments(linkData.instructor_id), loadSubAssignments(linkData.instructor_id), loadCycles(linkData), loadAfterschoolSurveys(linkData)]);
+      await Promise.all([loadAssignments(linkData.instructor_id), loadAfterschoolAssignments(linkData.instructor_id), loadSubAssignments(linkData.instructor_id), loadCycles(linkData), loadAfterschoolSurveys(linkData), loadWeeklyClasses(linkData.instructor_id)]);
       setPhase("ready");
     } catch (err) {
       setError(err.message ?? "Couldn't link your account.");
@@ -240,7 +245,7 @@ export default function InstructorPortal() {
     if (row.overall_status === "complete" || row.completed_at) {
       // Either freshly complete or already-been-complete — drop into the
       // schedule view immediately.
-      await Promise.all([loadAssignments(instructor.id), loadAfterschoolAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor), loadAfterschoolSurveys(instructor)]);
+      await Promise.all([loadAssignments(instructor.id), loadAfterschoolAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor), loadAfterschoolSurveys(instructor), loadWeeklyClasses(instructor.id)]);
       setPhase("ready");
     }
   }
@@ -296,6 +301,24 @@ export default function InstructorPortal() {
       }
       setCoInstructors(bySession);
     }
+  }
+
+  // Weekly recurring classes (class_schedule) this instructor is assigned to —
+  // for outside-registration tenants whose schedule isn't term/offer-based.
+  // Read-only: no accept/decline, it's just "what you teach each week". RLS
+  // (instructor_self_read_class_schedule) scopes to this instructor's own rows.
+  async function loadWeeklyClasses(instructorId) {
+    const { data, error: wErr } = await supabase
+      .from("class_schedule")
+      .select("id, title, day_of_week, start_time, end_time, location_text, capacity, notes")
+      .eq("instructor_id", instructorId)
+      .eq("status", "active");
+    if (wErr) {
+      console.warn("[loadWeeklyClasses] failed:", wErr.message);
+      setWeeklyClasses([]);
+      return;
+    }
+    setWeeklyClasses(data ?? []);
   }
 
   // After-school offers (program_assignments). Mirrors loadAssignments but for
@@ -825,7 +848,7 @@ export default function InstructorPortal() {
             // Pending_* and payouts_disabled statuses won't flip to 'complete',
             // but the contractor still wants out of the completion card and
             // into the schedule view. Load schedule data and switch phases.
-            await Promise.all([loadAssignments(instructor.id), loadAfterschoolAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor), loadAfterschoolSurveys(instructor)]);
+            await Promise.all([loadAssignments(instructor.id), loadAfterschoolAssignments(instructor.id), loadSubAssignments(instructor.id), loadCycles(instructor), loadAfterschoolSurveys(instructor), loadWeeklyClasses(instructor.id)]);
             setPhase("ready");
           }}
         />
@@ -1224,7 +1247,30 @@ export default function InstructorPortal() {
         </Section>
       )}
 
-      {currentAssignments.length === 0 && programAssignments.length === 0 && confirmedSubCount === 0 && needsSurvey.length === 0 && needsAfterschoolSurvey.length === 0 && pastAssignments.length === 0 && (
+      {weeklyClasses.length > 0 && (
+        <Section title="Your weekly classes">
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {[...weeklyClasses]
+              .sort((a, b) =>
+                ((WEEKLY_DAY_ORDER[a.day_of_week] ?? 9) - (WEEKLY_DAY_ORDER[b.day_of_week] ?? 9)) ||
+                (a.start_time || "").localeCompare(b.start_time || ""))
+              .map((c) => {
+                const time = [c.start_time, c.end_time].filter(Boolean).join(" – ");
+                return (
+                  <div key={c.id} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "10px 14px" }}>
+                    <div style={{ fontWeight: 700, color: INK, fontSize: 14 }}>{c.title}</div>
+                    <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>
+                      {c.day_of_week}{time ? ` · ${time}` : ""}{c.location_text ? ` · ${c.location_text}` : ""}
+                    </div>
+                    {c.notes && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>{c.notes}</div>}
+                  </div>
+                );
+              })}
+          </div>
+        </Section>
+      )}
+
+      {currentAssignments.length === 0 && programAssignments.length === 0 && confirmedSubCount === 0 && needsSurvey.length === 0 && needsAfterschoolSurvey.length === 0 && pastAssignments.length === 0 && weeklyClasses.length === 0 && (
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, color: MUTED, textAlign: "center" }}>
           No schedule yet. Your admin will email you when it's ready.
         </div>
