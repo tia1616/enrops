@@ -18,7 +18,7 @@
 // Org comes from useOutletContext — never hardcoded. Copy is tenant-neutral.
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "./marketing/tokens.jsx";
 
@@ -151,6 +151,8 @@ export default function ClassSchedule() {
   const [err, setErr] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [instructors, setInstructors] = useState([]); // org's roster, for the assign picker
+  const [assignErr, setAssignErr] = useState("");
 
   useEffect(() => {
     if (!org?.id) return;
@@ -160,7 +162,7 @@ export default function ClassSchedule() {
       setErr(null);
       const { data, error } = await supabase
         .from("class_schedule")
-        .select("id, title, day_of_week, start_time, end_time, location_text, instructor_name, age_min, age_max, capacity")
+        .select("id, title, day_of_week, start_time, end_time, location_text, instructor_name, instructor_id, age_min, age_max, capacity")
         .eq("organization_id", org.id)
         .order("created_at", { ascending: true });
       if (cancelled) return;
@@ -169,6 +171,39 @@ export default function ClassSchedule() {
     })();
     return () => { cancelled = true; };
   }, [org?.id, refreshKey]);
+
+  // The org's instructor roster powers the per-class "assign instructor" picker.
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("instructors")
+        .select("id, first_name, last_name, is_active")
+        .eq("organization_id", org.id)
+        .order("first_name", { ascending: true });
+      if (!cancelled) setInstructors(data ?? []);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
+  // Assign (or clear) the recurring instructor for one class. Optimistic; on
+  // failure we revert to the prior value and surface a message. RLS (can_edit_org)
+  // gates the write — an operator can only touch their own org's rows.
+  async function assignInstructor(rowId, instructorId) {
+    const prior = rows?.find((r) => r.id === rowId)?.instructor_id ?? null;
+    const next = instructorId || null;
+    setAssignErr("");
+    setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, instructor_id: next } : r)));
+    const { error } = await supabase
+      .from("class_schedule")
+      .update({ instructor_id: next })
+      .eq("id", rowId);
+    if (error) {
+      setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, instructor_id: prior } : r)));
+      setAssignErr("Couldn't save that instructor. Please try again.");
+    }
+  }
 
   const count = rows?.length ?? 0;
 
@@ -211,7 +246,9 @@ export default function ClassSchedule() {
         </div>
       )}
 
-      {count > 0 && <ScheduleList rows={rows} />}
+      {assignErr && <div style={{ fontSize: 12, color: RED, marginBottom: 8 }}>{assignErr}</div>}
+
+      {count > 0 && <ScheduleList rows={rows} instructors={instructors} onAssign={assignInstructor} />}
 
       {uploading && org?.id && (
         <UploadModal
@@ -233,7 +270,16 @@ function ageRange(r) {
   return `${r.age_min ?? r.age_max}`;
 }
 
-function ScheduleList({ rows }) {
+function instructorLabel(ins) {
+  return [ins.first_name, ins.last_name].filter(Boolean).join(" ").trim() || "(unnamed)";
+}
+
+function ScheduleList({ rows, instructors = [], onAssign }) {
+  const activeInstructors = useMemo(
+    () => instructors.filter((i) => i.is_active !== false),
+    [instructors],
+  );
+
   // Group by day (schedule reads best day-by-day), days in week order.
   const byDay = useMemo(() => {
     const sorted = [...rows].sort((a, b) => {
@@ -251,6 +297,11 @@ function ScheduleList({ rows }) {
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 16 }}>
+      {onAssign && activeInstructors.length === 0 && (
+        <div style={{ background: `${PURPLE}08`, border: `1px solid ${PURPLE}22`, borderRadius: 8, padding: "10px 12px", marginBottom: 12, fontSize: 12.5, color: INK }}>
+          Add people to your <Link to="/admin/instructors" style={{ color: BRIGHT, fontWeight: 600 }}>instructor roster</Link> to assign them to these classes.
+        </div>
+      )}
       <div style={{ overflowX: "auto", border: `1px solid ${RULE}`, borderRadius: 6 }}>
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
           <thead>
@@ -268,12 +319,43 @@ function ScheduleList({ rows }) {
                 </tr>
                 {g.items.map((r) => {
                   const time = [r.start_time, r.end_time].filter(Boolean).join(" – ");
+                  // Show the free-text name from the upload as a hint only while
+                  // this class isn't linked to a roster instructor yet.
+                  const showUploadHint = !r.instructor_id && r.instructor_name;
+                  // Options are the active roster, but always keep this class's
+                  // current assignment selectable even if that instructor was later
+                  // marked inactive — so the row never silently reads "Unassigned".
+                  const options = [...activeInstructors];
+                  if (r.instructor_id && !options.some((i) => i.id === r.instructor_id)) {
+                    const assigned = instructors.find((i) => i.id === r.instructor_id);
+                    if (assigned) options.unshift(assigned);
+                  }
                   return (
                     <tr key={r.id}>
                       <td style={listCell}><strong>{r.title}</strong></td>
                       <td style={listCell}>{time || <span style={{ color: MUTED }}>—</span>}</td>
                       <td style={listCell}>{r.location_text || <span style={{ color: MUTED }}>—</span>}</td>
-                      <td style={listCell}>{r.instructor_name || <span style={{ color: MUTED }}>—</span>}</td>
+                      <td style={listCell}>
+                        {onAssign ? (
+                          <>
+                            <select
+                              value={r.instructor_id || ""}
+                              onChange={(e) => onAssign(r.id, e.target.value)}
+                              style={{ maxWidth: 160, padding: "3px 6px", border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 12, fontFamily: "inherit", background: "#fff", color: INK }}
+                            >
+                              <option value="">Unassigned</option>
+                              {options.map((i) => (
+                                <option key={i.id} value={i.id}>{instructorLabel(i)}</option>
+                              ))}
+                            </select>
+                            {showUploadHint && (
+                              <div style={{ fontSize: 10.5, color: MUTED, marginTop: 2 }}>from upload: {r.instructor_name}</div>
+                            )}
+                          </>
+                        ) : (
+                          r.instructor_name || <span style={{ color: MUTED }}>—</span>
+                        )}
+                      </td>
                       <td style={listCell}>{ageRange(r) || <span style={{ color: MUTED }}>—</span>}</td>
                       <td style={listCell}>{r.capacity ?? <span style={{ color: MUTED }}>—</span>}</td>
                     </tr>
