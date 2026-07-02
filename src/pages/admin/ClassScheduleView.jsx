@@ -50,8 +50,11 @@ export default function ClassScheduleView({ orgId, assignable = false, refreshKe
     return () => { cancelled = true; };
   }, [orgId, refreshKey]);
 
+  // Load the roster whether assignable or not: the assign dropdown needs it, and
+  // read-only mode needs it to resolve an assigned instructor_id to a name (else
+  // an assigned class would render "(unnamed)").
   useEffect(() => {
-    if (!orgId || !assignable) return;
+    if (!orgId) return;
     let cancelled = false;
     (async () => {
       const { data } = await supabase
@@ -62,7 +65,7 @@ export default function ClassScheduleView({ orgId, assignable = false, refreshKe
       if (!cancelled) setInstructors(data ?? []);
     })();
     return () => { cancelled = true; };
-  }, [orgId, assignable, refreshKey]);
+  }, [orgId, refreshKey]);
 
   async function assignInstructor(rowId, instructorId) {
     const prior = rows?.find((r) => r.id === rowId)?.instructor_id ?? null;
@@ -137,9 +140,10 @@ export default function ClassScheduleView({ orgId, assignable = false, refreshKe
                     const assigned = instructors.find((i) => i.id === r.instructor_id);
                     if (assigned) options.unshift(assigned);
                   }
-                  const assignedName = r.instructor_id
-                    ? instructorLabel(instructors.find((i) => i.id === r.instructor_id) || {})
-                    : "";
+                  // Resolve to a real roster name; fall back to the free-text
+                  // upload name if the id isn't found (never show "(unnamed)").
+                  const assignedRow = r.instructor_id ? instructors.find((i) => i.id === r.instructor_id) : null;
+                  const assignedName = assignedRow ? instructorLabel(assignedRow) : "";
                   return (
                     <tr key={r.id}>
                       <td style={listCell}><strong>{r.title}</strong></td>
