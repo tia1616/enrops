@@ -1128,35 +1128,24 @@ function ImportantToday({ org, user, openHires }) {
     if (!org?.id) return;
     let cancelled = false;
     (async () => {
-      const today = new Date().toISOString().slice(0, 10);
       const [sigRes, disRes, subsRes] = await Promise.all([
         supabase.rpc("get_home_signals", { p_org: org.id }),
         supabase.from("homescreen_dismissals").select("signal_key, dismissed_until, permanent").eq("organization_id", org.id),
-        // Precise sub-coverage split (get_home_signals lumps pending+declined and
-        // over-counts re-covered days). Group upcoming subs per class+date: a slot
-        // with a confirmed/taught sub is covered; else pending ⇒ still awaiting a
-        // reply; else declined ⇒ genuinely uncovered ("needs cover").
-        supabase.from("assignment_substitutions")
-          .select("parent_assignment_id, parent_assignment_type, date, status")
-          .eq("organization_id", org.id)
-          .gte("date", today),
+        // Sub-coverage via the shared get_sub_coverage RPC (single source of truth
+        // with NeedsCoverBanner). Returns only slots on LIVE parents, already split
+        // into 'uncovered' (declined, no one coming) and 'awaiting' (offer still
+        // out) — so cancelled/withdrawn/deleted classes can't inflate this card.
+        supabase.rpc("get_sub_coverage", { p_org: org.id }),
       ]);
       if (cancelled) return;
       if (sigRes.error) { console.error("[admin/overview] signals load failed", sigRes.error); setSig({}); }
       else setSig(Array.isArray(sigRes.data) ? sigRes.data[0] || {} : sigRes.data || {});
       setDismissals(new Map((disRes.data ?? []).map((r) => [r.signal_key, r])));
 
-      const slots = new Map(); // "type:parent:date" -> Set<status>
-      for (const s of subsRes.data ?? []) {
-        const k = `${s.parent_assignment_type}:${s.parent_assignment_id}:${s.date}`;
-        if (!slots.has(k)) slots.set(k, new Set());
-        slots.get(k).add(s.status);
-      }
       let uncovered = 0, awaiting = 0;
-      for (const st of slots.values()) {
-        if (st.has("confirmed") || st.has("taught")) continue; // already covered
-        else if (st.has("pending")) awaiting++;                // offer still out
-        else if (st.has("declined")) uncovered++;              // no one coming
+      for (const r of subsRes.data ?? []) {
+        if (r.state === "uncovered") uncovered++;
+        else if (r.state === "awaiting") awaiting++;
       }
       setSubSignals({ uncovered, awaiting });
     })();

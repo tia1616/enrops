@@ -1,12 +1,14 @@
 // NeedsCoverBanner — coral alert for a schedule page listing upcoming class-days
-// that are genuinely UNCOVERED: a sub declined (or was never confirmed) and no
-// one else is filling in for that class+date. Silent when everything's covered.
+// that are genuinely UNCOVERED: a sub declined and no one else is filling in for
+// that class+date. Silent when everything's covered.
 //
-// Self-contained: fetches its own data keyed by org + parent type ('camp' |
-// 'program'), so it drops onto Schedule.jsx (camps) and AfterschoolSchedule.jsx
-// (after-school) without touching their state. Mirrors the homescreen split in
-// AdminOverview — a slot with a confirmed/taught sub is covered; a still-pending
-// offer is "awaiting", not shown here; only declined-with-no-replacement surfaces.
+// Data comes from ONE source of truth — the get_sub_coverage(p_org) RPC — shared
+// with the homescreen (AdminOverview). The RPC only returns slots whose parent
+// class is still alive (camp not cancelled/withdrawn, program not cancelled,
+// parent not deleted), so a cancelled/orphaned class can't leave a stale
+// "needs cover" alarm here. It splits coverage the same way the homescreen does:
+// confirmed/taught => covered (not returned), pending => 'awaiting' (not shown
+// here), declined => 'uncovered' (shown). We filter to this page's parentType.
 //
 // Read-only surfacing (v1). Clearing happens through the existing sub UI (assign
 // a sub for that day). "Lead can cover after all" + click-to-jump are fast-follows.
@@ -25,11 +27,6 @@ function fmtDate(iso) {
     weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
   });
 }
-function personName(i) {
-  if (!i) return null;
-  const n = `${i.preferred_name || i.first_name || ""}${i.last_name ? ` ${i.last_name}` : ""}`.trim();
-  return n || null;
-}
 
 export default function NeedsCoverBanner({ org, parentType }) {
   const [items, setItems] = useState([]);
@@ -39,66 +36,16 @@ export default function NeedsCoverBanner({ org, parentType }) {
     let cancelled = false;
     (async () => {
       try {
-        const today = new Date().toISOString().slice(0, 10);
-        const { data: subs } = await supabase
-          .from("assignment_substitutions")
-          .select("parent_assignment_id, date, status, sub:instructors!sub_instructor_id(first_name, preferred_name, last_name)")
-          .eq("organization_id", org.id)
-          .eq("parent_assignment_type", parentType)
-          .gte("date", today);
-
-        // Group by class+date; keep only genuinely-uncovered slots.
-        const slots = new Map();
-        for (const r of subs ?? []) {
-          const k = `${r.parent_assignment_id}|${r.date}`;
-          if (!slots.has(k)) slots.set(k, { parent: r.parent_assignment_id, date: r.date, statuses: new Set(), decliner: null });
-          const g = slots.get(k);
-          g.statuses.add(r.status);
-          if (r.status === "declined" && !g.decliner) g.decliner = personName(r.sub);
-        }
-        const uncovered = [];
-        for (const g of slots.values()) {
-          if (g.statuses.has("confirmed") || g.statuses.has("taught")) continue; // covered
-          if (g.statuses.has("pending")) continue;                                // still awaiting
-          if (g.statuses.has("declined")) uncovered.push(g);                      // no one coming
-        }
-        if (uncovered.length === 0) { if (!cancelled) setItems([]); return; }
-
-        // Resolve a human class label for each uncovered parent assignment.
-        const parentIds = Array.from(new Set(uncovered.map((u) => u.parent)));
-        const labelBy = new Map();
-        if (parentType === "camp") {
-          const { data: cas } = await supabase.from("camp_assignments").select("id, camp_session_id").in("id", parentIds);
-          const sessIds = Array.from(new Set((cas ?? []).map((c) => c.camp_session_id).filter(Boolean)));
-          const { data: sess } = sessIds.length
-            ? await supabase.from("camp_sessions").select("id, curriculum_name, location_name").in("id", sessIds)
-            : { data: [] };
-          const sessById = new Map((sess ?? []).map((s) => [s.id, s]));
-          for (const c of cas ?? []) {
-            const s = sessById.get(c.camp_session_id);
-            labelBy.set(c.id, s ? `${s.curriculum_name || "A class"}${s.location_name ? ` · ${s.location_name}` : ""}` : "A class");
-          }
-        } else {
-          const { data: pas } = await supabase.from("program_assignments").select("id, program_id").in("id", parentIds);
-          const progIds = Array.from(new Set((pas ?? []).map((p) => p.program_id).filter(Boolean)));
-          const { data: progs } = progIds.length
-            ? await supabase.from("programs").select("id, curriculum, program_location_id").in("id", progIds)
-            : { data: [] };
-          const progById = new Map((progs ?? []).map((p) => [p.id, p]));
-          const locIds = Array.from(new Set((progs ?? []).map((p) => p.program_location_id).filter(Boolean)));
-          const { data: locs } = locIds.length
-            ? await supabase.from("program_locations").select("id, name").in("id", locIds)
-            : { data: [] };
-          const locName = new Map((locs ?? []).map((l) => [l.id, l.name]));
-          for (const p of pas ?? []) {
-            const pr = progById.get(p.program_id);
-            const loc = pr ? locName.get(pr.program_location_id) : null;
-            labelBy.set(p.id, pr ? `${pr.curriculum || "A class"}${loc ? ` · ${loc}` : ""}` : "A class");
-          }
-        }
-
-        const built = uncovered
-          .map((u) => ({ ...u, label: labelBy.get(u.parent) || "A class" }))
+        const { data, error } = await supabase.rpc("get_sub_coverage", { p_org: org.id });
+        if (error) throw error;
+        const built = (data ?? [])
+          .filter((r) => r.parent_assignment_type === parentType && r.state === "uncovered")
+          .map((r) => ({
+            parent: r.parent_assignment_id,
+            date: r.slot_date,
+            decliner: r.decliner_name || null,
+            label: `${r.curriculum_label || "A class"}${r.location_label ? ` · ${r.location_label}` : ""}`,
+          }))
           .sort((a, b) => a.date.localeCompare(b.date));
         if (!cancelled) setItems(built);
       } catch (e) {
