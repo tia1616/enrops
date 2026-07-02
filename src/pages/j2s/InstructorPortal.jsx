@@ -142,7 +142,7 @@ export default function InstructorPortal() {
             last_name: target.last_name,
             preferred_name: target.preferred_name,
           };
-          await Promise.all([loadAssignments(target.id), loadAfterschoolAssignments(target.id), loadSubAssignments(target.id), loadCycles(targetInst), loadAfterschoolSurveys(targetInst)]);
+          await Promise.all([loadAssignments(target.id), loadAfterschoolAssignments(target.id), loadSubAssignments(target.id), loadCycles(targetInst), loadAfterschoolSurveys(targetInst), loadWeeklyClasses(target.id)]);
           setPhase("ready");
           return;
         }
