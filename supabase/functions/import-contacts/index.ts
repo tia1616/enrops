@@ -283,12 +283,16 @@ Deno.serve(async (req: Request) => {
     `${email}|${schoolName ?? ""}`;
   const emails = rows.map((r) => r.email);
   const existing = new Set<string>();
+  // Prior tags per existing row, so a re-import ADDS tags instead of replacing
+  // them (the Mailchimp model — import only ever adds; removal happens in the
+  // tag manager). Keyed on the same (email|school_name) as `existing`.
+  const priorTags = new Map<string, string[]>();
   // Chunk the .in() lookup — a 5k-item IN list is unwieldy for one request.
   for (let i = 0; i < emails.length; i += 500) {
     const slice = emails.slice(i, i + 500);
     const { data: hits, error: selErr } = await supabase
       .from("marketing_recipients")
-      .select("email, school_name")
+      .select("email, school_name, tags")
       .eq("organization_id", organization_id)
       .eq("source", source)
       .in("email", slice);
@@ -296,8 +300,19 @@ Deno.serve(async (req: Request) => {
       return jsonError(`contact lookup failed: ${selErr.message}`, 500);
     }
     for (const h of hits ?? []) {
-      if (h?.email) existing.add(keyOf(String(h.email).toLowerCase(), h.school_name));
+      if (h?.email) {
+        const k = keyOf(String(h.email).toLowerCase(), h.school_name);
+        existing.add(k);
+        priorTags.set(k, stringArray(h.tags));
+      }
     }
+  }
+
+  // Union each row's incoming tags with what the contact already had, so tags
+  // accumulate across uploads and a tag-less re-import never wipes them.
+  for (const row of rows) {
+    const prior = priorTags.get(keyOf(row.email, row.school_name)) ?? [];
+    row.tags = [...new Set([...prior, ...row.tags])];
   }
 
   // ---- Upsert on the real unique key (update-or-insert) ----

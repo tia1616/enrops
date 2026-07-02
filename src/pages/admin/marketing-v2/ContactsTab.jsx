@@ -126,13 +126,18 @@ function parseCsv(text) {
 }
 
 // Turn the confirmed column mapping into contact objects the edge fn accepts.
-function buildContacts(headers, rows, mapping) {
+// bulkTags are applied to EVERY contact in the file (the "tag everyone" box),
+// unioned with any per-row tags from a mapped Group/tag column.
+function buildContacts(headers, rows, mapping, bulkTags = []) {
   const idx = {};
   for (const f of CONTACT_FIELDS) idx[f.key] = mapping[f.key] ? headers.indexOf(mapping[f.key]) : -1;
   const at = (row, key) => (idx[key] >= 0 ? (row[idx[key]] ?? "").toString().trim() : "");
   const out = [];
   for (const row of rows) {
     const email = at(row, "email");
+    // Per-row column tags ∪ "tag everyone" tags, de-duped. The importer merges
+    // these into any tags a contact already has, so imports only ADD.
+    const rowTags = [...new Set([...(idx.tags >= 0 ? splitTags(at(row, "tags")) : []), ...bulkTags])];
     // Keep every row for the preview/count; the edge fn does the final
     // validity gate. We surface the valid-email count so the operator sees it.
     out.push({
@@ -145,9 +150,7 @@ function buildContacts(headers, rows, mapping) {
       city: at(row, "city") || null,
       state: at(row, "state") || null,
       zip: at(row, "zip") || null,
-      // Only include tags when the operator actually mapped a group/tag column,
-      // so a re-import that omits it doesn't wipe existing tags on merge.
-      ...(idx.tags >= 0 ? { tags: splitTags(at(row, "tags")) } : {}),
+      ...(rowTags.length ? { tags: rowTags } : {}),
     });
   }
   return out;
@@ -255,6 +258,29 @@ function UploadModal({ orgId, onClose, onImported }) {
   const [mapping, setMapping] = useState({});
   const [consent, setConsent] = useState(false);
   const [result, setResult] = useState(null);
+  const [bulkTags, setBulkTags] = useState([]);
+  const [existingTags, setExistingTags] = useState([]);
+
+  // Existing tags power the "tag everyone" autocomplete + the tidy-up nudge.
+  // Single page is fine — autocomplete doesn't need every tail tag, and the
+  // operator can still type a brand-new one.
+  useEffect(() => {
+    if (!orgId) return;
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("marketing_recipients")
+        .select("tags")
+        .eq("organization_id", orgId)
+        .not("tags", "is", null)
+        .limit(2000);
+      if (!alive) return;
+      const set = new Set();
+      for (const r of data ?? []) for (const t of r.tags ?? []) if (t) set.add(t);
+      setExistingTags([...set].sort());
+    })();
+    return () => { alive = false; };
+  }, [orgId]);
 
   async function startParse() {
     setError("");
@@ -304,8 +330,8 @@ function UploadModal({ orgId, onClose, onImported }) {
   }
 
   const contacts = useMemo(
-    () => (step === "mapping" ? buildContacts(rawHeaders, rawRows, mapping) : []),
-    [step, rawHeaders, rawRows, mapping],
+    () => (step === "mapping" ? buildContacts(rawHeaders, rawRows, mapping, bulkTags) : []),
+    [step, rawHeaders, rawRows, mapping, bulkTags],
   );
   const validEmailCount = useMemo(
     () => contacts.filter((c) => EMAIL_RE.test((c.email ?? "").trim().toLowerCase())).length,
@@ -442,6 +468,9 @@ function UploadModal({ orgId, onClose, onImported }) {
             validEmailCount={validEmailCount}
             consent={consent}
             setConsent={setConsent}
+            bulkTags={bulkTags}
+            setBulkTags={setBulkTags}
+            existingTags={existingTags}
             onBack={() => setStep("pick")}
             onCommit={commit}
           />
@@ -461,12 +490,13 @@ function UploadModal({ orgId, onClose, onImported }) {
   );
 }
 
-function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailCount, consent, setConsent, onBack, onCommit }) {
+function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailCount, consent, setConsent, bulkTags, setBulkTags, existingTags, onBack, onCommit }) {
   const emailMapped = !!mapping.email;
   const preview = contacts.slice(0, 10);
   // Only the columns the operator actually mapped — so the preview shows exactly
   // what will be saved per contact, with no empty "not in this file" clutter.
-  const mappedFields = CONTACT_FIELDS.filter((f) => mapping[f.key]);
+  // Show the tag column too when they're bulk-tagging (even without a tag column).
+  const mappedFields = CONTACT_FIELDS.filter((f) => mapping[f.key] || (f.key === "tags" && bulkTags.length > 0));
   const canSave = emailMapped && validEmailCount > 0 && consent;
 
   return (
@@ -493,6 +523,8 @@ function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailC
           </div>
         ))}
       </div>
+
+      <BulkTagAssign bulkTags={bulkTags} setBulkTags={setBulkTags} existingTags={existingTags} />
 
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6 }}>
@@ -591,6 +623,59 @@ function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailC
           style={{ padding: "8px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: canSave ? "pointer" : "not-allowed", opacity: canSave ? 1 : 0.5 }}
         >Add {validEmailCount.toLocaleString()} contact{validEmailCount === 1 ? "" : "s"}</button>
       </div>
+    </div>
+  );
+}
+
+// "Tag everyone in this upload" — apply one or more labels to every contact in
+// the file. The common case when an export has no group/tier column. Autocompletes
+// from the org's existing tags so operators reuse instead of fragmenting.
+function BulkTagAssign({ bulkTags, setBulkTags, existingTags }) {
+  const [draft, setDraft] = useState("");
+  const add = (raw) => {
+    const t = (raw ?? "").trim();
+    if (!t) return;
+    if (!bulkTags.includes(t)) setBulkTags([...bulkTags, t]);
+    setDraft("");
+  };
+  const tooMany = existingTags.length >= 25;
+  return (
+    <div style={{ background: `${PURPLE}06`, border: `1px solid ${PURPLE}22`, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: INK, marginBottom: 2 }}>
+        Tag everyone in this upload <span style={{ color: MUTED, fontWeight: 400 }}>(optional)</span>
+      </div>
+      <p style={{ margin: "0 0 8px", fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
+        Handy when your file has no group column — e.g. tag this whole list <em>All-Inclusive</em>. Added to every
+        contact here, on top of any Group/tag column. Re-importing later adds tags; it never removes them.
+      </p>
+      {bulkTags.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+          {bulkTags.map((t) => (
+            <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: PURPLE, background: "#fff", border: `1px solid ${PURPLE}33`, borderRadius: 999, padding: "3px 6px 3px 10px" }}>
+              🏷 {t}
+              <button type="button" onClick={() => setBulkTags(bulkTags.filter((x) => x !== t))} aria-label={`Remove ${t}`}
+                style={{ border: "none", background: "transparent", color: MUTED, cursor: "pointer", fontSize: 14, lineHeight: 1 }}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        list="existing-tags-list"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(draft); } }}
+        onBlur={() => add(draft)}
+        placeholder="Type a tag and press Enter…"
+        style={{ width: "100%", padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 5, fontSize: 13, fontFamily: "inherit", background: "#fff", color: INK }}
+      />
+      <datalist id="existing-tags-list">
+        {existingTags.map((t) => <option key={t} value={t} />)}
+      </datalist>
+      {tooMany && (
+        <p style={{ margin: "6px 0 0", fontSize: 11.5, color: "#7a5510" }}>
+          You already have {existingTags.length} tags — reuse one above where you can, to keep your list tidy.
+        </p>
+      )}
     </div>
   );
 }
