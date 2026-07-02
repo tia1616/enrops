@@ -66,11 +66,18 @@ The v1 sweep only logged the happy path (`initiated`, `payment_completed`). You 
 
 **Known deferrals (reasoned, not silent):** the top-level `create-checkout` catch and the post-payment parent-account-provision failure are NOT logged — neither has clean org/registration attribution without refactoring the money path, and the account-provision case is post-payment (already alerted, not a conversion signal). Fast-follow if provisioning-reliability metrics are wanted.
 
-**Boundary with PostHog (no double-instrumentation):** money/enrollment funnel → `intelligence.enrollment_events` (first-party, exact, server-side). Behavioral operator usage ("what features do they use") → PostHog (`AnalyticsBridge`, operator app only, privacy-masked). Same event never goes to both. **No child PII ever goes to PostHog** (third-party) — only org_id + anonymized IDs.
+## Part 2: platform-usage events (`intelligence.platform_events`) — decided 2026-07-02
 
-## Readout = the next chunk (Ennie-led, not a BI wall)
+Jessica's intelligence ask is broader than enrollment: *what do operators USE across the whole platform, what do they NOT use, and where does it succeed/fail?* This is a SECOND sealed table alongside `enrollment_events`, same seam/rules, captured **entirely server-side — no front-end, no PostHog** (an earlier front-end/PostHog build was reverted; the DB layer is the single source of truth and the durable moat).
 
-The per-operator readout (their own funnel + drop-off + what Ennie says about it) is a separate chunk with real UX decisions — deliberately NOT built blind. It reaches an operator only via a SECURITY DEFINER RPC that scopes to their own org and aggregates (Rule 5: never another operator's raw rows). Keep it a few high-signal numbers + Ennie narration, not a 40-widget dashboard.
+- **Table** `intelligence.platform_events` (`20260702_platform_events_layer.sql`): `organization_id, actor_user_id, feature, action, outcome (success|fail), metadata, dedupe_key`. Sealed, append-only, no client grants.
+- **Doorway** `public.log_platform_event(...)` — SECURITY DEFINER, service_role only, fail-safe (never throws).
+- **Taxonomy** (single source): `_shared/logPlatformEvent.ts` (`FEATURE`/`ACTION`/`OUTCOME` constants). Use constants, never string literals.
+- **Two capture paths:** (a) edge functions call `logPlatformEvent()` at their success/fail path (e.g. `send-offers` → `offer_sent`); (b) pure client-side table writes are captured by **SECURITY DEFINER DB triggers** that call the doorway (e.g. `programs` create/publish). Both are backend — the front-end is never touched.
+- **"What they don't use"** = a feature in the instrumented set with zero events; it needs no event.
+- **Readout** = the WEEKLY platform-owner digest (`platform-intelligence-digest` edge fn, mirrors `replay-digest`): reads `platform_usage_summary()` + `platform_funnel_summary()` (both cross-tenant, service_role-only, Rule 5) and emails Jessica. Not a per-tenant UI.
+
+**PostHog stays in its lane:** PostHog (`AnalyticsBridge`) already captures *pageviews* (which screens operators open) + session replay — that's the only place behavioral/front-end signal lives, and it needs no new code. Feature-usage *outcomes* live in `platform_events` (DB). No double-instrumentation; **no child PII to PostHog**.
 
 ## Recommendation engine = later
 
