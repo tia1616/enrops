@@ -5,7 +5,7 @@
 // Multi-tenant: all data RLS-scoped by org.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
 import { fetchOrgTerms } from "../../lib/terms.js";
@@ -14,6 +14,7 @@ import Chevron from "../../components/Chevron.jsx";
 import NotifyRemovalModal from "./NotifyRemovalModal";
 import AssignSubModal from "./AssignSubModal";
 import AfterschoolSchedule from "./AfterschoolSchedule";
+import ClassScheduleView from "./ClassScheduleView.jsx";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 
 const PURPLE = "#1C004F";
@@ -991,6 +992,25 @@ export default function Schedule() {
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enriched, focusedWeek, searchText, selectedInstructors, selectedLocations, selectedStatuses]);
+
+  // Outside-registration tenants: their families register elsewhere, so there's no
+  // term/camp machinery — scheduling IS the uploaded weekly class_schedule, and
+  // instructors are assigned right here (the platform's one place to assign).
+  if (org && org.uses_enrops_registration === false) {
+    return (
+      <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+        <div style={{ marginBottom: 16 }}>
+          <h1 style={{ color: INK, fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>Schedule</h1>
+          <p style={{ color: MUTED, fontSize: 14, margin: 0, lineHeight: 1.5 }}>
+            Your weekly classes and who teaches them. Assign a coach to each class below.
+            Add or change classes under{" "}
+            <Link to="/admin/class-schedule" style={{ color: BRIGHT, fontWeight: 600 }}>Class schedule</Link>.
+          </p>
+        </div>
+        <ClassScheduleView orgId={org.id} assignable />
+      </div>
+    );
+  }
 
   // After-school mode short-circuits the entire camp UI. The afterschool component
   // renders its own header with the unified term selector (camp cycles + terms).
