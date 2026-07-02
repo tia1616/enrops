@@ -314,10 +314,19 @@ function UploadModal({ orgId, onClose, onImported }) {
     if (step !== "mapping") return [];
     return sourceKind === "doc" ? extractedRows : buildRows(rawHeaders, rawRows, mapping);
   }, [step, sourceKind, extractedRows, rawHeaders, rawRows, mapping]);
+
+  // Editable copy of the parsed/extracted rows — the operator fixes AI mis-reads
+  // or column-map quirks here before saving. Re-syncs whenever the parse changes
+  // (a new file, or a remap of columns), which resets manual edits by design.
+  const [editRows, setEditRows] = useState([]);
+  useEffect(() => { setEditRows(built); }, [built]);
+  const updateRow = (i, key, value) => setEditRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, [key]: value } : r)));
+  const removeRow = (i) => setEditRows((rs) => rs.filter((_, idx) => idx !== i));
+
   // A row imports only if it has a title AND a recognizable day (server rule).
   const importable = useMemo(
-    () => built.filter((r) => (r.title ?? "").toString().trim() && dayRecognized(r.day_of_week)),
-    [built],
+    () => editRows.filter((r) => (r.title ?? "").toString().trim() && dayRecognized(r.day_of_week)),
+    [editRows],
   );
 
   async function commit() {
@@ -328,7 +337,7 @@ function UploadModal({ orgId, onClose, onImported }) {
     setStep("committing");
     try {
       const { data, error: fnErr } = await supabase.functions.invoke("import-class-schedule", {
-        body: { organization_id: orgId, rows: built, source: sourceKind === "doc" ? "upload_doc" : "upload_csv", mode },
+        body: { organization_id: orgId, rows: editRows, source: sourceKind === "doc" ? "upload_doc" : "upload_csv", mode },
       });
       if (fnErr) {
         let msg = fnErr.message ?? "Import failed.";
@@ -402,7 +411,8 @@ function UploadModal({ orgId, onClose, onImported }) {
           <MappingStep
             isDoc={sourceKind === "doc"}
             headers={rawHeaders} rows={rawRows} mapping={mapping} setMapping={setMapping}
-            built={built} importable={importable} mode={mode} setMode={setMode}
+            editRows={editRows} updateRow={updateRow} removeRow={removeRow}
+            importable={importable} mode={mode} setMode={setMode}
             onBack={() => setStep("pick")} onCommit={commit}
           />
         )}
@@ -433,30 +443,39 @@ function ExtractingStep() {
   );
 }
 
-function MappingStep({ isDoc, headers, rows, mapping, setMapping, built, importable, mode, setMode, onBack, onCommit }) {
+const EDIT_COLS = [
+  { key: "title", label: "Class", w: 150, req: true },
+  { key: "day_of_week", label: "Day", w: 90, req: true },
+  { key: "start_time", label: "Start", w: 78 },
+  { key: "end_time", label: "End", w: 78 },
+  { key: "location_text", label: "Location", w: 120 },
+  { key: "instructor_name", label: "Instructor", w: 110 },
+  { key: "age_min", label: "Age min", w: 60 },
+  { key: "age_max", label: "Age max", w: 60 },
+  { key: "capacity", label: "Cap", w: 52 },
+];
+
+function MappingStep({ isDoc, headers, rows, mapping, setMapping, editRows, updateRow, removeRow, importable, mode, setMode, onBack, onCommit }) {
   const titleMapped = !!mapping.title;
   const dayMapped = !!mapping.day_of_week;
-  const ready = isDoc ? built.length > 0 : (titleMapped && dayMapped);
-  const preview = built.slice(0, 12);
-  const mappedFields = isDoc
-    ? SCHEDULE_FIELDS.filter((f) => built.some((r) => (r[f.key] ?? "") !== ""))
-    : SCHEDULE_FIELDS.filter((f) => mapping[f.key]);
+  const ready = isDoc ? editRows.length > 0 : (titleMapped && dayMapped);
   const canSave = ready && importable.length > 0;
+  const inputStyle = { padding: "4px 6px", borderRadius: 4, fontSize: 12, fontFamily: "inherit", background: "#fff", color: INK };
 
   return (
     <div>
       {isDoc ? (
         <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: INK, lineHeight: 1.5 }}>
-          We pulled <strong>{built.length}</strong> class{built.length === 1 ? "" : "es"} from your document.
-          Give it a quick look — AI can miss or mis-read things. We&apos;ll tidy up day &amp; time
-          formatting when you save.
+          We pulled <strong>{editRows.length}</strong> class{editRows.length === 1 ? "" : "es"} from your document.
+          <strong> Check and edit</strong> anything the AI got wrong below — fix a name, day, or time, or remove a
+          row. We&apos;ll tidy up day &amp; time formatting when you save.
         </div>
       ) : (
         <>
           <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: INK, lineHeight: 1.5 }}>
             Read <strong>{rows.length}</strong> row{rows.length === 1 ? "" : "s"}. Confirm which column is which —
-            we guessed where we could. <strong>Class name</strong> and <strong>Day</strong> are required; we&apos;ll
-            tidy up day &amp; time formatting when you save.
+            we guessed where we could — then <strong>edit any value</strong> below.
+            <strong> Class name</strong> and <strong>Day</strong> are required.
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
@@ -477,49 +496,54 @@ function MappingStep({ isDoc, headers, rows, mapping, setMapping, built, importa
       )}
 
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6 }}>Preview (first {preview.length})</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6 }}>Review &amp; edit your classes</div>
         <div style={{ fontSize: 12, color: importable.length > 0 ? OK : WARN, fontWeight: 600 }}>
-          {importable.length.toLocaleString()} of {built.length.toLocaleString()} row{built.length === 1 ? "" : "s"} will import
+          {importable.length.toLocaleString()} of {editRows.length.toLocaleString()} row{editRows.length === 1 ? "" : "s"} will import
         </div>
       </div>
 
       {!ready ? (
         <div style={{ background: `${WARN}1A`, color: WARN, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 6 }}>
-          Map <strong>Class name</strong> and <strong>Day</strong> to see a preview.
+          Map <strong>Class name</strong> and <strong>Day</strong> to see your classes.
         </div>
       ) : (
         <>
-          <div style={{ border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 6, maxHeight: 280, overflow: "auto" }}>
+          <div style={{ border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 6, maxHeight: 300, overflow: "auto" }}>
             <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
               <thead>
                 <tr>
-                  {mappedFields.map((f) => (
-                    <th key={f.key} style={{ position: "sticky", top: 0, background: CREAM, textAlign: "left", padding: "6px 10px", color: MUTED, fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${RULE}` }}>
-                      {f.label}
+                  {EDIT_COLS.map((c) => (
+                    <th key={c.key} style={{ position: "sticky", top: 0, background: CREAM, textAlign: "left", padding: "6px 8px", color: MUTED, fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${RULE}` }}>
+                      {c.label}{c.req && <span style={{ color: RED }}> *</span>}
                     </th>
                   ))}
+                  <th style={{ position: "sticky", top: 0, background: CREAM, borderBottom: `1px solid ${RULE}` }} />
                 </tr>
               </thead>
               <tbody>
-                {preview.map((r, i) => {
-                  const willImport = (r.title ?? "").toString().trim() && dayRecognized(r.day_of_week);
+                {editRows.map((r, i) => {
+                  const noTitle = !(r.title ?? "").toString().trim();
+                  const badDay = (r.day_of_week ?? "") !== "" && !dayRecognized(r.day_of_week);
+                  const willImport = !noTitle && !badDay && dayRecognized(r.day_of_week);
                   return (
                     <tr key={i} style={{ background: willImport ? "#fff" : `${RED}0D` }}>
-                      {mappedFields.map((f) => {
-                        const val = r[f.key] ?? "";
-                        const badDay = f.key === "day_of_week" && val && !dayRecognized(val);
+                      {EDIT_COLS.map((c) => {
+                        const flag = (c.key === "title" && noTitle) || (c.key === "day_of_week" && (badDay || !(r.day_of_week ?? "").toString().trim()));
                         return (
-                          <td key={f.key} style={{ padding: "6px 10px", borderBottom: `1px solid ${RULE}`, whiteSpace: "nowrap", color: INK, verticalAlign: "top" }}>
-                            {f.key === "title" ? (
-                              <span><strong>{val || "(no name)"}</strong>{!val && <span style={{ color: RED, fontSize: 11 }}> · skipped</span>}</span>
-                            ) : badDay ? (
-                              <span style={{ color: RED }}>{val} · unreadable</span>
-                            ) : (
-                              val || <span style={{ color: MUTED }}>—</span>
-                            )}
+                          <td key={c.key} style={{ padding: "4px 6px", borderBottom: `1px solid ${RULE}`, verticalAlign: "top" }}>
+                            <input
+                              value={r[c.key] ?? ""}
+                              onChange={(e) => updateRow(i, c.key, e.target.value)}
+                              placeholder={c.req ? "required" : ""}
+                              style={{ ...inputStyle, width: c.w, border: `1px solid ${flag ? RED : RULE}` }}
+                            />
                           </td>
                         );
                       })}
+                      <td style={{ padding: "4px 6px", borderBottom: `1px solid ${RULE}`, verticalAlign: "top" }}>
+                        <button type="button" onClick={() => removeRow(i)} title="Remove this class"
+                          style={{ border: "none", background: "transparent", color: MUTED, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "2px 4px" }}>×</button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -527,7 +551,8 @@ function MappingStep({ isDoc, headers, rows, mapping, setMapping, built, importa
             </table>
           </div>
           <p style={{ margin: "0 0 14px", fontSize: 11.5, color: MUTED }}>
-            Showing the first {preview.length} of {built.length.toLocaleString()} row{built.length === 1 ? "" : "s"}. Rows without a class name or a readable day are skipped — <strong>{importable.length.toLocaleString()}</strong> will import.
+            Edit any cell, or remove a row with ×. Rows without a class name or a readable day (shown in red) won&apos;t
+            import — fix or remove them. <strong>{importable.length.toLocaleString()}</strong> will import.
           </p>
         </>
       )}
