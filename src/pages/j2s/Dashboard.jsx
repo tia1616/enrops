@@ -107,6 +107,22 @@ const TAB_ICONS = { today: IconToday, schedule: IconSchedule, classes: IconClass
 /* ------------------------------------------------------------------ */
 /*  Main component                                                     */
 /* ------------------------------------------------------------------ */
+const WEEKLY_DAY_ORDER = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+
+// Group recurring class_schedule rows by weekday, in week order.
+function groupClassesByDay(classes) {
+  const sorted = [...classes].sort((a, b) =>
+    ((WEEKLY_DAY_ORDER[a.day_of_week] ?? 9) - (WEEKLY_DAY_ORDER[b.day_of_week] ?? 9)) ||
+    (a.start_time || '').localeCompare(b.start_time || ''));
+  const groups = [];
+  for (const c of sorted) {
+    const last = groups[groups.length - 1];
+    if (last && last.day === c.day_of_week) last.items.push(c);
+    else groups.push({ day: c.day_of_week, items: [c] });
+  }
+  return groups;
+}
+
 export default function Dashboard() {
   const { org } = useOutletContext();
   const { user, loading: authLoading } = useAuth();
@@ -125,6 +141,7 @@ export default function Dashboard() {
   const [prefs, setPrefs] = useState(null);
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [prefsSaved, setPrefsSaved] = useState(false);
+  const [weeklyClasses, setWeeklyClasses] = useState([]); // org's recurring class schedule (outside-registration tenants), safe public view
 
   const toggleCard = useCallback((id) => {
     setExpandedCards((prev) => {
@@ -158,6 +175,15 @@ export default function Dashboard() {
       if (!p) { setError('no_parent'); setLoading(false); return; }
       setParent(p);
       setPrefs({ ...DEFAULT_PREFS, ...(p.communication_preferences || {}) });
+
+      // Org's recurring weekly classes (outside-registration tenants). Read from
+      // the anon-safe view (no coach email/notes). Only renders when rows exist,
+      // so registration tenants (J2S) are unaffected.
+      const { data: wc } = await supabase
+        .from('class_schedule_public')
+        .select('id, title, day_of_week, start_time, end_time, location_text')
+        .eq('organization_id', org.id);
+      setWeeklyClasses(wc || []);
 
       // 2a. Afterschool registrations
       const { data: asRegs } = await supabase
@@ -383,6 +409,33 @@ export default function Dashboard() {
             <span className="shrink-0 rounded-full bg-white px-3.5 py-1.5 text-xs font-bold text-j2s-purple">Register →</span>
           </div>
         </Link>
+      )}
+
+      {/* Org's weekly class schedule — for outside-registration tenants whose
+          families aren't enrolled through Enrops. Only renders when the org has a
+          class_schedule; registration tenants (J2S) show nothing here. */}
+      {weeklyClasses.length > 0 && (
+        <div className="mb-6 rounded-2xl border border-j2s-purple/10 bg-white p-5 shadow-card sm:p-6">
+          <h2 className="font-titan text-xl text-j2s-ink">This week&rsquo;s schedule</h2>
+          <div className="mt-4 space-y-5">
+            {groupClassesByDay(weeklyClasses).map((g) => (
+              <div key={g.day}>
+                <h3 className="text-xs font-bold uppercase tracking-widest text-j2s-purple">{g.day}</h3>
+                <ul className="mt-2 divide-y divide-j2s-purple/10">
+                  {g.items.map((c) => {
+                    const time = [c.start_time, c.end_time].filter(Boolean).join(' – ');
+                    return (
+                      <li key={c.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2">
+                        <span className="font-semibold text-j2s-ink">{c.title}</span>
+                        <span className="text-sm text-j2s-ink/70">{time}{c.location_text ? `${time ? ' · ' : ''}${c.location_text}` : ''}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       <div className="sticky top-0 z-10 -mx-4 bg-white/95 px-4 backdrop-blur sm:-mx-6 sm:px-6">
