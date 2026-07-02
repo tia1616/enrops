@@ -464,6 +464,9 @@ function UploadModal({ orgId, onClose, onImported }) {
 function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailCount, consent, setConsent, onBack, onCommit }) {
   const emailMapped = !!mapping.email;
   const preview = contacts.slice(0, 10);
+  // Only the columns the operator actually mapped — so the preview shows exactly
+  // what will be saved per contact, with no empty "not in this file" clutter.
+  const mappedFields = CONTACT_FIELDS.filter((f) => mapping[f.key]);
   const canSave = emailMapped && validEmailCount > 0 && consent;
 
   return (
@@ -501,24 +504,66 @@ function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailC
       </div>
 
       {!emailMapped ? (
-        <div style={{ background: `${WARN}1A`, color: WARN, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 14 }}>
+        <div style={{ background: `${WARN}1A`, color: WARN, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 6 }}>
           Pick the column that holds email addresses to see a preview.
         </div>
       ) : (
-        <div style={{ background: CREAM, padding: 10, borderRadius: 6, marginBottom: 14, maxHeight: 220, overflow: "auto" }}>
-          {preview.map((c, i) => {
-            const valid = EMAIL_RE.test((c.email ?? "").trim().toLowerCase());
-            return (
-              <div key={i} style={{ fontSize: 12, color: INK, padding: "4px 0", borderBottom: i < preview.length - 1 ? `1px dashed ${RULE}` : "none" }}>
-                <strong style={{ color: valid ? INK : RED }}>{c.email || "(no email)"}</strong>
-                {!valid && <span style={{ color: RED, fontSize: 11 }}> · will be skipped</span>}
-                {c.parent_name && <span style={{ color: MUTED }}> · {c.parent_name}</span>}
-                {c.school_name && <span style={{ color: MUTED }}> · {c.school_name}</span>}
-                {c.tags?.length > 0 && <span style={{ color: PURPLE }}> · 🏷 {c.tags.join(", ")}</span>}
-              </div>
-            );
-          })}
-        </div>
+        <>
+          {/* Full table of every MAPPED field, so the operator sees exactly what
+              will be saved for each contact — not just email + name. Only mapped
+              columns show (no "not in this file" clutter); scrolls if wide. */}
+          <div style={{ border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 6, maxHeight: 260, overflow: "auto" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  {mappedFields.map((f) => (
+                    <th key={f.key} style={{
+                      position: "sticky", top: 0, background: CREAM, textAlign: "left",
+                      padding: "6px 10px", color: MUTED, fontWeight: 700, fontSize: 10.5,
+                      textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap",
+                      borderBottom: `1px solid ${RULE}`,
+                    }}>
+                      {f.label.replace(/\s*\(.*\)$/, "")}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {preview.map((c, i) => {
+                  const valid = EMAIL_RE.test((c.email ?? "").trim().toLowerCase());
+                  return (
+                    <tr key={i} style={{ background: valid ? "#fff" : `${RED}0D` }}>
+                      {mappedFields.map((f) => {
+                        const val = f.key === "tags" ? (c.tags ?? []).join(", ") : (c[f.key] ?? "");
+                        return (
+                          <td key={f.key} style={{
+                            padding: "6px 10px", borderBottom: `1px solid ${RULE}`,
+                            whiteSpace: "nowrap", color: f.key === "tags" ? PURPLE : INK,
+                            verticalAlign: "top",
+                          }}>
+                            {f.key === "email" ? (
+                              <span>
+                                <strong style={{ color: valid ? INK : RED }}>{c.email || "(no email)"}</strong>
+                                {!valid && <span style={{ color: RED, fontSize: 11 }}> · will be skipped</span>}
+                              </span>
+                            ) : f.key === "tags" ? (
+                              val ? <span>🏷 {val}</span> : <span style={{ color: MUTED }}>—</span>
+                            ) : (
+                              val || <span style={{ color: MUTED }}>—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p style={{ margin: "0 0 14px", fontSize: 11.5, color: MUTED }}>
+            Showing the first {preview.length} of {contacts.length.toLocaleString()} contact{contacts.length === 1 ? "" : "s"}. Only columns you mapped appear here — that&apos;s exactly what gets saved. Blank cells show as “—”.
+          </p>
+        </>
       )}
 
       <label style={{ display: "flex", alignItems: "flex-start", gap: 8, background: `${PURPLE}06`, border: `1px solid ${PURPLE}22`, borderRadius: 8, padding: 12, marginBottom: 14, cursor: "pointer" }}>
