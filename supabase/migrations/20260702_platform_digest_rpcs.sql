@@ -31,7 +31,8 @@ as $$
     'all_time', jsonb_build_object(
       'initiated',       count(*) filter (where ini),
       'paid',            count(*) filter (where ini and paid),
-      'abandoned',       count(*) filter (where ini and not paid and not failed and not cofailed),
+      'abandoned',       count(*) filter (where ini and not paid and not failed and not cofailed
+                                            and ini_at < now() - interval '24 hours'),
       'payment_failed',  count(*) filter (where failed and not paid),
       'checkout_failed', count(*) filter (where cofailed and not paid)
     )

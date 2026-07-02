@@ -11,12 +11,15 @@ security definer
 set search_path = public, intelligence
 as $$
 begin
+  -- Fire on each real draft->open transition (the guard prevents open->open
+  -- and other-column updates from firing). NO dedupe key: a re-publish is a
+  -- genuine, repeated use of the publish feature and should count.
   if new.status = 'open' and (old.status is distinct from 'open') then
     perform public.log_platform_event(
       'programs', 'program_published', 'success',
       new.organization_id, auth.uid(),
       jsonb_build_object('program_id', new.id),
-      now(), 'program_published:' || new.id::text
+      now(), null
     );
   end if;
   return new;
@@ -42,6 +45,17 @@ begin
     jsonb_build_object('program_id', new.id, 'status', new.status),
     now(), 'program_created:' || new.id::text
   );
+  -- Created-and-published in one write (status='open' at insert): the update
+  -- trigger never sees an INSERT, so log the publish here too, or born-open
+  -- programs are invisible to publish metrics.
+  if new.status = 'open' then
+    perform public.log_platform_event(
+      'programs', 'program_published', 'success',
+      new.organization_id, auth.uid(),
+      jsonb_build_object('program_id', new.id, 'born_open', true),
+      now(), null
+    );
+  end if;
   return new;
 end;
 $$;

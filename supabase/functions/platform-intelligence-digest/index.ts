@@ -74,11 +74,16 @@ serve(async (req) => {
 
     const seen = new Set(usageRowsRaw.map((u) => u.feature));
     const trackedUsed = usageRowsRaw.filter((u) => u.feature in INSTRUMENTED_FEATURES);
+    const untracked = usageRowsRaw.filter((u) => !(u.feature in INSTRUMENTED_FEATURES));
     const untouched = Object.keys(INSTRUMENTED_FEATURES).filter((k) => !seen.has(k));
-    const totalTrackedEvents = trackedUsed.reduce((s, u) => s + (Number(u.success) || 0) + (Number(u.fail) || 0), 0);
+    const evt = (u: any) => (Number(u.success) || 0) + (Number(u.fail) || 0);
+    const totalAllEvents = usageRowsRaw.reduce((s, u) => s + evt(u), 0);
+    const untrackedEvents = untracked.reduce((s, u) => s + evt(u), 0);
 
-    // --- 2. Skip noise when there's nothing yet (unless forced). ---
-    if (totalTrackedEvents === 0 && !force) {
+    // --- 2. Skip only when there's genuinely nothing (unless forced). Count ALL
+    //     usage, not just labeled features, so a stale INSTRUMENTED_FEATURES map
+    //     can never make us skip a week that actually had activity. ---
+    if (totalAllEvents === 0 && !force) {
       return json({ events: 0, emailed: false, note: 'no feature usage in window; email skipped' }, 200);
     }
 
@@ -119,6 +124,9 @@ serve(async (req) => {
             </tr>${usageHtml}</table>`
         : `<p style="font-size:14px">No tracked-feature usage in this window yet — this fills in as operators work in the app.</p>`}
       ${untouchedHtml}
+      ${untrackedEvents > 0
+        ? `<p style="font-size:13px;margin:8px 0 0;color:#8a6d00">Also captured but not yet labeled here: ${untracked.map((u) => esc(u.feature)).join(', ')} (${untrackedEvents} events) — add to the digest's feature list.</p>`
+        : ''}
       ${funnelHtml}
       <p style="margin-top:18px;font-size:12px;color:#6b6b6b">Usage = server-side platform_events (edge-fn logs + DB triggers). Untouched features are candidates for onboarding nudges.</p>
     </div>`;
@@ -133,7 +141,7 @@ serve(async (req) => {
         html,
       }),
     });
-    return json({ events: totalTrackedEvents, features_used: trackedUsed.length, untouched: untouched.length, emailed: r.ok }, 200);
+    return json({ events: totalAllEvents, features_used: trackedUsed.length, untouched: untouched.length, emailed: r.ok }, 200);
   } catch (e) {
     console.error('platform-intelligence-digest error:', String(e));
     return json({ error: 'Unexpected', detail: String(e) }, 500);
