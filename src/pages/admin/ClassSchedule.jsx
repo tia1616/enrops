@@ -123,6 +123,16 @@ function parseCsv(text) {
   return { headers, data };
 }
 
+// Read a File into base64 (no data-URL prefix) for the extraction edge fn.
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] || "");
+    r.onerror = () => reject(r.error || new Error("Could not read that file."));
+    r.readAsDataURL(file);
+  });
+}
+
 // Turn the confirmed column mapping into schedule-row objects for the edge fn.
 function buildRows(headers, rows, mapping) {
   const idx = {};
@@ -281,21 +291,35 @@ function ScheduleList({ rows }) {
 // ─── Upload modal ───────────────────────────────────────────────────────────
 
 function UploadModal({ orgId, onClose, onImported }) {
-  const [step, setStep] = useState("pick"); // pick | parsing | mapping | committing | done
+  const [step, setStep] = useState("pick"); // pick | parsing | extracting | mapping | committing | done
   const [file, setFile] = useState(null);
   const [error, setError] = useState("");
+  const [sourceKind, setSourceKind] = useState("csv"); // csv (spreadsheet) | doc (PDF/Word via AI)
   const [rawHeaders, setRawHeaders] = useState([]);
   const [rawRows, setRawRows] = useState([]);
   const [mapping, setMapping] = useState({});
+  const [extractedRows, setExtractedRows] = useState([]); // rows Claude pulled from a PDF/Word doc
   const [mode, setMode] = useState("replace"); // replace | append
   const [result, setResult] = useState(null);
 
-  async function startParse() {
+  // Dispatch on file type: a spreadsheet is parsed + column-mapped client-side
+  // (no AI); a PDF/Word/text doc goes to the extraction fn (Claude), which
+  // returns rows already in our field shape — then both share the review step.
+  function startParse() {
     setError("");
     if (!file) { setError("Pick a file first."); return; }
+    const name = (file.name || "").toLowerCase();
+    const isSpreadsheet = name.endsWith(".csv") || name.endsWith(".xlsx") || name.endsWith(".xls")
+      || /spreadsheetml|ms-excel|text\/csv/.test(file.type || "");
+    if (isSpreadsheet) { startSpreadsheet(name); return; }
+    if (/\.(pdf|docx?|txt|md)$/.test(name)) { startExtract(); return; }
+    setError("Upload a spreadsheet (CSV/Excel), a PDF, or a Word doc.");
+  }
+
+  async function startSpreadsheet(name) {
+    setSourceKind("csv");
     setStep("parsing");
     try {
-      const name = (file.name || "").toLowerCase();
       const isExcel = name.endsWith(".xlsx") || name.endsWith(".xls") || /spreadsheetml|ms-excel/.test(file.type || "");
       let headers = [];
       let data = [];
@@ -330,10 +354,44 @@ function UploadModal({ orgId, onClose, onImported }) {
     }
   }
 
-  const built = useMemo(
-    () => (step === "mapping" ? buildRows(rawHeaders, rawRows, mapping) : []),
-    [step, rawHeaders, rawRows, mapping],
-  );
+  async function startExtract() {
+    setSourceKind("doc");
+    setStep("extracting");
+    try {
+      const file_base64 = await fileToBase64(file);
+      const { data, error: fnErr } = await supabase.functions.invoke("extract-schedule-details", {
+        body: { organization_id: orgId, filename: file.name, file_base64 },
+      });
+      if (fnErr) {
+        let msg = fnErr.message ?? "We couldn't read that file.";
+        try {
+          const resp = fnErr?.context?.response ?? fnErr?.context;
+          if (resp && typeof resp.clone === "function") {
+            const text = await resp.clone().text();
+            try { const p = JSON.parse(text); if (p?.error) msg = p.error; } catch { /* not JSON */ }
+          }
+        } catch { /* ignore */ }
+        throw new Error(msg);
+      }
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      if (rows.length === 0) {
+        setError("We couldn't find any classes in that document. Try a spreadsheet, or check the file.");
+        setStep("pick");
+        return;
+      }
+      setExtractedRows(rows);
+      setStep("mapping");
+    } catch (e) {
+      console.error("[ClassSchedule] extract failed", e);
+      setError(e.message ?? "We couldn't read that file.");
+      setStep("pick");
+    }
+  }
+
+  const built = useMemo(() => {
+    if (step !== "mapping") return [];
+    return sourceKind === "doc" ? extractedRows : buildRows(rawHeaders, rawRows, mapping);
+  }, [step, sourceKind, extractedRows, rawHeaders, rawRows, mapping]);
   // A row imports only if it has a title AND a recognizable day (server rule).
   const importable = useMemo(
     () => built.filter((r) => (r.title ?? "").toString().trim() && dayRecognized(r.day_of_week)),
@@ -342,13 +400,13 @@ function UploadModal({ orgId, onClose, onImported }) {
 
   async function commit() {
     setError("");
-    if (!mapping.title) { setError("Map the Class name column first."); return; }
-    if (!mapping.day_of_week) { setError("Map the Day column first."); return; }
+    if (sourceKind === "csv" && !mapping.title) { setError("Map the Class name column first."); return; }
+    if (sourceKind === "csv" && !mapping.day_of_week) { setError("Map the Day column first."); return; }
     if (importable.length === 0) { setError("No rows have both a class name and a recognizable day."); return; }
     setStep("committing");
     try {
       const { data, error: fnErr } = await supabase.functions.invoke("import-class-schedule", {
-        body: { organization_id: orgId, rows: built, source: "upload_csv", mode },
+        body: { organization_id: orgId, rows: built, source: sourceKind === "doc" ? "upload_doc" : "upload_csv", mode },
       });
       if (fnErr) {
         let msg = fnErr.message ?? "Import failed.";
@@ -377,9 +435,10 @@ function UploadModal({ orgId, onClose, onImported }) {
           <div>
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: INK }}>Upload schedule</h2>
             <p style={{ margin: "4px 0 0", fontSize: 12, color: MUTED }}>
-              {step === "pick" && "Upload a spreadsheet of your weekly classes. Your column names don't have to match ours — we'll figure them out."}
+              {step === "pick" && "Upload your schedule — a spreadsheet, a PDF, or a Word doc. We'll pull out your classes either way."}
               {step === "parsing" && "Reading your file…"}
-              {step === "mapping" && "Confirm which column is which, then review before saving."}
+              {step === "extracting" && "Reading your schedule with AI…"}
+              {step === "mapping" && (sourceKind === "doc" ? "Review what we pulled from your document before saving." : "Confirm which column is which, then review before saving.")}
               {step === "committing" && "Building your schedule…"}
               {step === "done" && "Done."}
             </p>
@@ -392,13 +451,14 @@ function UploadModal({ orgId, onClose, onImported }) {
         {step === "pick" && (
           <div>
             <p style={{ margin: "0 0 12px", fontSize: 13, color: INK, lineHeight: 1.55 }}>
-              Upload a spreadsheet from <strong>Google Sheets, Excel, or a CSV</strong>. At minimum we
-              need a <strong>class name</strong> and a <strong>day</strong> — everything else (time,
-              location, instructor, ages) is optional. You&apos;ll review before anything saves.
+              Send your schedule however you keep it — a <strong>spreadsheet</strong> (Google Sheets,
+              Excel, CSV) reads instantly, and a <strong>PDF or Word doc</strong> works too (we read it
+              with AI). At minimum we need a <strong>class name</strong> and a <strong>day</strong>;
+              time, location, instructor, and ages are optional. You&apos;ll review before anything saves.
             </p>
             <label htmlFor="schedule-upload-file" style={{ display: "block", fontSize: 12.5, color: MUTED, marginBottom: 6 }}>Choose your file:</label>
             <input id="schedule-upload-file" type="file"
-              accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              accept=".csv,.xlsx,.xls,.pdf,.docx,.doc,.txt,.md,text/csv,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)} style={{ fontSize: 13, marginBottom: 10 }} />
             {file && <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>Selected: <strong>{file.name}</strong> ({Math.round(file.size / 1024)} KB)</div>}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
@@ -414,8 +474,11 @@ function UploadModal({ orgId, onClose, onImported }) {
           </div>
         )}
 
+        {step === "extracting" && <ExtractingStep />}
+
         {step === "mapping" && (
           <MappingStep
+            isDoc={sourceKind === "doc"}
             headers={rawHeaders} rows={rawRows} mapping={mapping} setMapping={setMapping}
             built={built} importable={importable} mode={mode} setMode={setMode}
             onBack={() => setStep("pick")} onCommit={commit}
@@ -428,36 +491,68 @@ function UploadModal({ orgId, onClose, onImported }) {
   );
 }
 
-function MappingStep({ headers, rows, mapping, setMapping, built, importable, mode, setMode, onBack, onCommit }) {
+function ExtractingStep() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div style={{ padding: "36px 0", textAlign: "center" }}>
+      <div style={{ fontSize: 34, lineHeight: 1, marginBottom: 10 }}>📄→🗓️</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>Reading your schedule with AI…</div>
+      <div style={{ fontSize: 13, color: MUTED, marginTop: 6 }}>
+        Pulling out your classes, days, and times. Usually about 10–20 seconds.
+      </div>
+      <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>
+        Elapsed: <strong>{elapsed}s</strong>
+      </div>
+    </div>
+  );
+}
+
+function MappingStep({ isDoc, headers, rows, mapping, setMapping, built, importable, mode, setMode, onBack, onCommit }) {
   const titleMapped = !!mapping.title;
   const dayMapped = !!mapping.day_of_week;
-  const ready = titleMapped && dayMapped;
+  const ready = isDoc ? built.length > 0 : (titleMapped && dayMapped);
   const preview = built.slice(0, 12);
-  const mappedFields = SCHEDULE_FIELDS.filter((f) => mapping[f.key]);
+  const mappedFields = isDoc
+    ? SCHEDULE_FIELDS.filter((f) => built.some((r) => (r[f.key] ?? "") !== ""))
+    : SCHEDULE_FIELDS.filter((f) => mapping[f.key]);
   const canSave = ready && importable.length > 0;
 
   return (
     <div>
-      <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: INK, lineHeight: 1.5 }}>
-        Read <strong>{rows.length}</strong> row{rows.length === 1 ? "" : "s"}. Confirm which column is which —
-        we guessed where we could. <strong>Class name</strong> and <strong>Day</strong> are required; we&apos;ll
-        tidy up day &amp; time formatting when you save.
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
-        {SCHEDULE_FIELDS.map((def) => (
-          <div key={def.key} style={{ padding: "4px 2px" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: INK, marginBottom: 2 }}>
-              {def.label}{def.required && <span style={{ color: RED, marginLeft: 3 }}>*</span>}
-            </div>
-            <select value={mapping[def.key] || ""} onChange={(e) => setMapping({ ...mapping, [def.key]: e.target.value || undefined })}
-              style={{ width: "100%", padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 12, fontFamily: "inherit", background: "#fff", color: INK }}>
-              <option value="">— not in this file —</option>
-              {headers.map((h, i) => <option key={i} value={h}>{h}</option>)}
-            </select>
+      {isDoc ? (
+        <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: INK, lineHeight: 1.5 }}>
+          We pulled <strong>{built.length}</strong> class{built.length === 1 ? "" : "es"} from your document.
+          Give it a quick look — AI can miss or mis-read things. We&apos;ll tidy up day &amp; time
+          formatting when you save.
+        </div>
+      ) : (
+        <>
+          <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: INK, lineHeight: 1.5 }}>
+            Read <strong>{rows.length}</strong> row{rows.length === 1 ? "" : "s"}. Confirm which column is which —
+            we guessed where we could. <strong>Class name</strong> and <strong>Day</strong> are required; we&apos;ll
+            tidy up day &amp; time formatting when you save.
           </div>
-        ))}
-      </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+            {SCHEDULE_FIELDS.map((def) => (
+              <div key={def.key} style={{ padding: "4px 2px" }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: INK, marginBottom: 2 }}>
+                  {def.label}{def.required && <span style={{ color: RED, marginLeft: 3 }}>*</span>}
+                </div>
+                <select value={mapping[def.key] || ""} onChange={(e) => setMapping({ ...mapping, [def.key]: e.target.value || undefined })}
+                  style={{ width: "100%", padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 12, fontFamily: "inherit", background: "#fff", color: INK }}>
+                  <option value="">— not in this file —</option>
+                  {headers.map((h, i) => <option key={i} value={h}>{h}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6 }}>Preview (first {preview.length})</div>
