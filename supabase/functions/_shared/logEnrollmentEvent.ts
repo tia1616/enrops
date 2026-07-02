@@ -17,6 +17,8 @@ import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 export const ENROLLMENT_ACTIONS = {
   INITIATED: 'initiated',                     // checkout session created
   PAYMENT_COMPLETED: 'payment_completed',     // payment succeeded
+  PAYMENT_FAILED: 'payment_failed',           // a charge did not clear (e.g. ACH/bank transfer bounced) — the failure half of the funnel
+  CHECKOUT_FAILED: 'checkout_failed',         // the checkout could not be set up (e.g. installment schedule failed to persist) — reg never reached Stripe
   WAITLIST_ADDED: 'waitlist_added',
   WAITLIST_CONVERTED: 'waitlist_converted',
   CANCELLED: 'cancelled',

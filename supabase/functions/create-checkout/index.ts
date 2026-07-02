@@ -282,6 +282,16 @@ serve(async (req) => {
         } catch (expireErr) {
           console.error('Failed to expire orphaned session:', expireErr);
         }
+        // intelligence: log the checkout setup failure (fail-safe; IDs/facts only, no PII)
+        for (const regId of registration_ids) {
+          await logEnrollmentEvent(admin, {
+            actionType: ENROLLMENT_ACTIONS.CHECKOUT_FAILED,
+            organizationId: orgId,
+            registrationId: regId,
+            metadata: { stage: 'installment_schedule_persist', use_installments: true },
+            dedupeKey: `checkout_failed:${session.id}:${regId}`,
+          });
+        }
         return json({ error: 'Could not persist installment schedule. Please try again.' }, 500);
       }
 

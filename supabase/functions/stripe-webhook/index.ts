@@ -414,6 +414,16 @@ serve(async (req) => {
         subject: 'Bank transfer (ACH) failed — follow up needed',
         body: `A family's bank transfer did not clear (e.g. insufficient funds). The seat is still held (confirmed) but unpaid. Registration IDs: ${regIds.join(', ')}. Parent: ${meta.parent_name || ''} ${session.customer_email || meta.parent_email || ''}. Contact the family to arrange payment, or release the seat.`,
       });
+      // intelligence: log the failure half of the funnel (fail-safe; metadata is IDs/facts only, no PII)
+      for (const regId of regIds) {
+        await logEnrollmentEvent(admin, {
+          actionType: ENROLLMENT_ACTIONS.PAYMENT_FAILED,
+          organizationId: regForOrg?.organization_id,
+          registrationId: regId,
+          metadata: { payment_method: 'us_bank_account', reason: 'ach_not_cleared', amount_total_cents: session.amount_total ?? null },
+          dedupeKey: `payment_failed:${event.id}:${regId}`,
+        });
+      }
     } else if (event.type === 'account.updated') {
       await handleAccountUpdated(admin, event);
     } else if (event.type === 'account.application.deauthorized') {

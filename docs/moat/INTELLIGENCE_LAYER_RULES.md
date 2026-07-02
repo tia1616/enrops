@@ -50,6 +50,28 @@ Built by migration `20260604_intelligence_schema.sql`.
 
 ---
 
+## v2 (2026-07-02): capture the FAILURE half + the metrics layer
+
+The v1 sweep only logged the happy path (`initiated`, `payment_completed`). You cannot answer *"what's not working and why"* from success events alone, and you can never backfill a failure you never recorded. v2 adds:
+
+**New failure events** (open vocabulary, no migration; constants in `_shared/logEnrollmentEvent.ts`):
+- `payment_failed` — a charge did not clear (ACH/bank transfer bounce). Logged in `stripe-webhook` `checkout.session.async_payment_failed`, alongside the existing operator alert. metadata: `{ payment_method, reason, amount_total_cents }`.
+- `checkout_failed` — the checkout could not be set up (installment schedule failed to persist; the reg never reached Stripe). Logged in `create-checkout`. metadata: `{ stage, use_installments }`.
+
+**Why is answerable, not guessed:** failure events carry a structured `reason`/`stage` in metadata (Stripe decline codes etc.). Decline codes and payment-method type are facts, NOT PII — Rule 4 still holds (no names/emails/phones).
+
+**Abandonment is derived, not logged.** You can't know at initiation that a checkout will be abandoned — it's the *absence* of a follow-up event. So it's a query (`intelligence.abandoned_registrations`), not an event.
+
+**Metrics layer (single source of the funnel definition).** `20260702_intelligence_funnel_views.sql` adds sealed rollup views: `registration_funnel` (base, one row per reg), `enrollment_funnel_by_org`, `abandoned_registrations`, `action_volume` (drift/typo visibility). No surface hand-rolls funnel math against raw events. Conversion = `initiated_and_paid / initiated` (≤100%, instrumented window only — `initiated` capture began 2026-06-05; earlier `payment_completed` rows were backfilled without a matching `initiated`).
+
+**Known deferrals (reasoned, not silent):** the top-level `create-checkout` catch and the post-payment parent-account-provision failure are NOT logged — neither has clean org/registration attribution without refactoring the money path, and the account-provision case is post-payment (already alerted, not a conversion signal). Fast-follow if provisioning-reliability metrics are wanted.
+
+**Boundary with PostHog (no double-instrumentation):** money/enrollment funnel → `intelligence.enrollment_events` (first-party, exact, server-side). Behavioral operator usage ("what features do they use") → PostHog (`AnalyticsBridge`, operator app only, privacy-masked). Same event never goes to both. **No child PII ever goes to PostHog** (third-party) — only org_id + anonymized IDs.
+
+## Readout = the next chunk (Ennie-led, not a BI wall)
+
+The per-operator readout (their own funnel + drop-off + what Ennie says about it) is a separate chunk with real UX decisions — deliberately NOT built blind. It reaches an operator only via a SECURITY DEFINER RPC that scopes to their own org and aggregates (Rule 5: never another operator's raw rows). Keep it a few high-signal numbers + Ennie narration, not a 40-widget dashboard.
+
 ## Recommendation engine = later
 
 The *capture* starts now (every uncaptured week is data we can never backfill). The *recommendation engine* that turns events into "70% of providers…" advice is a post–July-3 / August+ platform capability. Don't conflate the two.
