@@ -43,6 +43,7 @@ const NAV = [
     to: "/admin/programs", label: "Programs",
     tabs: [
       { to: "/admin/programs", label: "Scheduled programs" },
+      { to: "/admin/class-schedule", label: "Class schedule" },
       { to: "/admin/rosters", label: "Class rosters" },
       { to: "/admin/curricula", label: "Offerings" },
     ],
@@ -59,7 +60,6 @@ const NAV = [
     to: "/admin/schedule", label: "Instructors",
     tabs: [
       { to: "/admin/schedule", label: "Schedule" },
-      { to: "/admin/class-schedule", label: "Class schedule" },
       { to: "/admin/instructors", label: "Instructor Roster" },
     ],
   },
