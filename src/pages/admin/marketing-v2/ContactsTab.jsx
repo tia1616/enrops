@@ -741,7 +741,7 @@ function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailC
             </table>
           </div>
           <p style={{ margin: "0 0 14px", fontSize: 11.5, color: MUTED }}>
-            Showing the first {preview.length} of {contacts.length.toLocaleString()} contact{contacts.length === 1 ? "" : "s"}. Only columns you mapped appear here — that&apos;s exactly what gets saved. Blank cells show as “—”.
+            Showing the first {preview.length} of {contacts.length.toLocaleString()} row{contacts.length === 1 ? "" : "s"}. Only mapped columns appear, and only rows with a valid email — <strong>{validEmailCount.toLocaleString()}</strong> — will be saved. Blank cells show as “—”.
           </p>
         </>
       )}

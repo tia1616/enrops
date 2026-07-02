@@ -244,7 +244,8 @@ Deno.serve(async (req: Request) => {
       invalid++;
       continue;
     }
-    if (byEmail.has(email)) skipped++;
+    const prior = byEmail.get(email);
+    if (prior) skipped++;
     byEmail.set(email, {
       organization_id,
       email,
@@ -258,7 +259,9 @@ Deno.serve(async (req: Request) => {
       city: str(c.city),
       state: str(c.state),
       zip: str(c.zip),
-      tags: stringArray(c.tags),
+      // Union tags across rows sharing an email (e.g. multi-child lines) so a
+      // per-row tag isn't lost to last-wins dedup within the same upload.
+      tags: [...new Set([...(prior?.tags ?? []), ...stringArray(c.tags)])],
       source,
     });
   }

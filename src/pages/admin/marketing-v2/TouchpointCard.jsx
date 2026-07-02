@@ -91,6 +91,10 @@ export default function TouchpointCard({
   // email gets dedicated space while the card keeps the editor in view.
   const [drawerOpen, setDrawerOpen] = useState(false);
   const isPreviewing = !!previewLocationId;
+  // The area/school the operator is previewing as — drives the drawer header
+  // ("in Portland" for an area, "at Lincoln Elementary" for a school), matching
+  // the "Preview as parent in" dropdown instead of a representative school name.
+  const previewEntry = pickedLocations.find((l) => l.value === previewLocationId);
 
   const loadPreview = async (locationId) => {
     if (!locationId || !campaignId) return;
@@ -351,6 +355,8 @@ export default function TouchpointCard({
         open={drawerOpen && isPreviewing}
         onClose={() => setDrawerOpen(false)}
         schoolName={previewData?.used_school_name}
+        previewLabel={previewEntry?.label}
+        previewKind={previewEntry?.kind}
         subject={previewData?.subject}
         bodyHtml={previewData?.body_html}
         loading={previewLoading}

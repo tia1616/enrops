@@ -13,6 +13,8 @@ export default function EmailPreviewDrawer({
   open,
   onClose,
   schoolName,
+  previewLabel,
+  previewKind,
   subject,
   bodyHtml,
   loading = false,
@@ -27,6 +29,14 @@ export default function EmailPreviewDrawer({
   }, [open, onClose]);
 
   if (!open) return null;
+
+  // Prefer the operator's picked audience entry (area or school) over the
+  // server's representative school name, so an area preview reads "in Portland"
+  // not "at Overlook House". Area → "in", school → "at".
+  const headerName = previewLabel ?? schoolName;
+  const previewHeader = headerName
+    ? `As a parent ${previewKind === "area" ? "in" : "at"} ${headerName}`
+    : "Rendered email";
 
   return (
     <div
@@ -59,7 +69,7 @@ export default function EmailPreviewDrawer({
               fontSize: 15, fontWeight: 700, color: PURPLE, lineHeight: 1.3, marginTop: 2,
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
             }}>
-              {schoolName ? `As a parent at ${schoolName}` : "Rendered email"}
+              {previewHeader}
             </div>
           </div>
           <button
