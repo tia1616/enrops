@@ -41,6 +41,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
 type InstructorPayModel = 'legacy_own_platform' | 'enrops_platform';
 
@@ -498,6 +499,11 @@ serve(async (req: Request) => {
       }
     }
 
+    await logPlatformEvent(supabase, {
+      feature: FEATURE.PAYROLL, action: ACTION.INSTRUCTOR_PAID, outcome: OUTCOME.SUCCESS,
+      organizationId: instructor.organization_id, actorUserId: callerAuthId,
+      metadata: { payout_id: payoutId, amount_cents: totalCents, via_stripe: viaStripe },
+    });
     return json({
       ok: true,
       payout_id: payoutId,

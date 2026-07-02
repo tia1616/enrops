@@ -39,6 +39,7 @@
 // Built-in Deno.serve (no external std import) — avoids a flaky deno.land/std
 // fetch at bundle time; current Supabase standard.
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from "../_shared/logPlatformEvent.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -332,5 +333,10 @@ Deno.serve(async (req: Request) => {
   const updated = rows.filter((r) => existing.has(keyOf(r.email, r.school_name))).length;
   const inserted = rows.length - updated;
 
+  await logPlatformEvent(supabase, {
+    feature: FEATURE.CONTACTS, action: ACTION.CONTACTS_IMPORTED, outcome: OUTCOME.SUCCESS,
+    organizationId: organization_id, actorUserId: caller.userId,
+    metadata: { inserted, updated, skipped, invalid },
+  });
   return jsonOk({ inserted, updated, skipped, invalid });
 });

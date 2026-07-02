@@ -29,6 +29,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -171,6 +172,14 @@ serve(async (req: Request) => {
       `disabled=${disabledReason ?? 'none'}, changed=${changed})`,
     );
 
+    // Log stripe_connected only on the transition to active (not on every poll).
+    if (changed && nextStatus === 'active') {
+      await logPlatformEvent(supabase, {
+        feature: FEATURE.FINANCES, action: ACTION.STRIPE_CONNECTED, outcome: OUTCOME.SUCCESS,
+        organizationId: org.id, actorUserId: callerAuthId,
+        metadata: {},
+      });
+    }
     return json({
       stripe_account_status: nextStatus,
       stripe_charges_enabled: chargesEnabled,

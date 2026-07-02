@@ -14,6 +14,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
 interface ContractorInviteBody {
   instructor_id?: string;
@@ -264,6 +265,11 @@ serve(async (req: Request) => {
       );
     }
 
+    await logPlatformEvent(supabase, {
+      feature: FEATURE.INSTRUCTORS, action: ACTION.INSTRUCTOR_INVITED, outcome: OUTCOME.SUCCESS,
+      organizationId: instructorRow.organization_id, actorUserId: callerAuthId,
+      metadata: { instructor_id: instructorRow.id },
+    });
     return json({
       success: true,
       instructor_id: instructorRow.id,

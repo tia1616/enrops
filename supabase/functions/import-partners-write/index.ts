@@ -42,6 +42,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -405,6 +406,11 @@ serve(async (req: Request) => {
       }
     }
 
+    await logPlatformEvent(supabase, {
+      feature: FEATURE.PARTNERS, action: ACTION.PARTNERS_IMPORTED, outcome: OUTCOME.SUCCESS,
+      organizationId: orgId, actorUserId: userData.user.id,
+      metadata: { partners_created: partnersCreated, partners_merged: partnersMerged, contacts_created: contactsCreated },
+    });
     return json({
       partners_created: partnersCreated,
       partners_merged: partnersMerged,
