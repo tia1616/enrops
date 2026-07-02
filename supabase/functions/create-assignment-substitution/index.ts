@@ -345,11 +345,15 @@ serve(async (req: Request) => {
       .update({ email_sent_at: new Date().toISOString() })
       .eq('id', substitutionId);
 
-    await logPlatformEvent(supabase, {
-      feature: FEATURE.SCHEDULING, action: ACTION.SUB_ASSIGNED, outcome: OUTCOME.SUCCESS,
-      organizationId: orgId, actorUserId: callerAuthId,
-      metadata: { substitution_id: substitutionId, mode },
-    });
+    // Only a real send counts as usage (matches send-offers / invite-parents /
+    // matcher guards). Test-fires still upsert the row but aren't production use.
+    if (mode === 'send') {
+      await logPlatformEvent(supabase, {
+        feature: FEATURE.SCHEDULING, action: ACTION.SUB_ASSIGNED, outcome: OUTCOME.SUCCESS,
+        organizationId: orgId, actorUserId: callerAuthId,
+        metadata: { substitution_id: substitutionId },
+      });
+    }
     return json({
       ok: true,
       substitution_id: substitutionId,
