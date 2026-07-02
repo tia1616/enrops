@@ -81,7 +81,7 @@ type ParentsFilter =
   // for backward-compat with in-flight drafts; resolveParents normalizes it
   // into `areas: string[]`.
   | { type: "area"; areas?: string[]; area?: string }
-  | { type: "segment"; segments: string[] }
+  | { type: "tag"; tags: string[] }
   | { type: "natural"; text: string };
 
 type WhoInput =
@@ -550,12 +550,15 @@ async function resolveParents(
         : `parents across ${areas.length} areas (${joinWithAnd(areas)})`;
       break;
     }
-    case "segment": {
-      if (!Array.isArray(filter.segments) || filter.segments.length === 0) {
-        return { ok: false, error: "filter.segments required for type=segment", status: 400 };
+    case "tag": {
+      if (!Array.isArray(filter.tags) || filter.tags.length === 0) {
+        return { ok: false, error: "filter.tags required for type=tag", status: 400 };
       }
-      query = query.overlaps("segments", filter.segments);
-      segmentSummary = `parents tagged ${joinWithAnd(filter.segments)}`;
+      // Operator-applied labels (e.g. membership tier), set at contact import.
+      // Targeting lives on `tags`; the `segments` column is reserved for system
+      // markers (_internal_admin), so it is deliberately NOT used here.
+      query = query.overlaps("tags", filter.tags);
+      segmentSummary = `parents tagged ${joinWithAnd(filter.tags)}`;
       break;
     }
     case "natural": {
@@ -2347,12 +2350,30 @@ Deno.serve(async (req: Request) => {
   // campaigns row so the existing campaigns list keeps working.
   const lead = schedule.touchpoints[0];
 
+  // Human-friendly campaign name from the picks (term + type + count) instead of
+  // jamming every curriculum title together and truncating mid-word. A single
+  // pick just uses that offering's name.
+  const campaignName = ((): string => {
+    const mode = parsed.structuredWhat?.mode;
+    if (mode === "programs" && facts.programs.length > 0) {
+      if (facts.programs.length === 1) return facts.programs[0].curriculum ?? "After-school campaign";
+      const terms = [...new Set(facts.programs.map((p) => p.term).filter(Boolean))];
+      const termPart = terms.length === 1 ? `${terms[0]} ` : "";
+      return `${termPart}after-school: ${facts.programs.length} programs`;
+    }
+    if (mode === "camps" && facts.camps.length > 0) {
+      if (facts.camps.length === 1) return facts.camps[0].curriculum_name ?? "Camp campaign";
+      return `Camps: ${facts.camps.length} sessions`;
+    }
+    return topicsArr[0] ?? "Campaign";
+  })().slice(0, 200);
+
   // ---- Persist parent campaign row ----
   const { data: inserted, error: iErr } = await supabase
     .from("marketing_campaigns")
     .insert({
       organization_id,
-      name: topicsArr.join(" + ").slice(0, 200),
+      name: campaignName,
       campaign_type: "custom",
       status: "draft",
       subject_template: lead?.subject ?? topicsArr.join(" + "),

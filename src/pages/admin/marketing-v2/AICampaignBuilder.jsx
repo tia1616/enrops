@@ -276,7 +276,7 @@ function isStepValid(step, inputs) {
       if (Array.isArray(f.areas)) return f.areas.length > 0;
       return typeof f.area === "string" && f.area.length > 0;
     }
-    if (f.type === "segment") return Array.isArray(f.segments) && f.segments.length > 0;
+    if (f.type === "tag") return Array.isArray(f.tags) && f.tags.length > 0;
     if (f.type === "person") return !!f.recipient_id;
     return false;
   }

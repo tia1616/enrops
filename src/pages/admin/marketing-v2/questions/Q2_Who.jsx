@@ -31,9 +31,7 @@ const PARENT_SCOPES = [
   { value: "master_list", label: "Master list (everyone)" },
   { value: "school", label: "A specific school…" },
   { value: "area", label: "An area…" },
-  // "segment" intentionally dropped 2026-06-01 — no segments built yet;
-  // the underlying multi-select component stays in this file for when
-  // segments come back. Add the option back here to re-expose.
+  { value: "tag", label: "A group / tag…" },
   { value: "person", label: "Just one person…" },
 ];
 
@@ -94,7 +92,7 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
     const next = { type, derived_from_picks_key: picksKey };
     if (type === "school") next.school_ids = [];
     if (type === "area") next.areas = [];
-    if (type === "segment") next.segments = [];
+    if (type === "tag") next.tags = [];
     if (type === "person") next.recipient_id = null;
     setField("who", { audience: "parents", filter: next });
   }
@@ -167,11 +165,11 @@ export default function Q2_Who({ inputs, setField, onNext, onBack, canNext }) {
             campSessionIds={what?.camp_session_ids ?? []}
           />
         )}
-        {who.filter?.type === "segment" && (
-          <SegmentMultiSelect
+        {who.filter?.type === "tag" && (
+          <TagMultiSelect
             orgId={org?.id}
-            selected={who.filter.segments ?? []}
-            onChange={(segments) => updateFilter({ segments })}
+            selected={who.filter.tags ?? []}
+            onChange={(tags) => updateFilter({ tags })}
           />
         )}
         {who.filter?.type === "person" && (
@@ -700,8 +698,11 @@ function AreaMultiSelect({ orgId, selected, onChange, campSessionIds = [] }) {
   );
 }
 
-// ---------- Segment multi-select (distinct unnest of segments) ----------
-function SegmentMultiSelect({ orgId, selected, onChange }) {
+// ---------- Tag / group multi-select (distinct unnest of tags) ----------
+// Operator-applied labels (e.g. membership tier), set when uploading contacts.
+// Targets marketing_recipients.tags — the `segments` column is reserved for
+// system markers (_internal_admin), so operator grouping lives on `tags`.
+function TagMultiSelect({ orgId, selected, onChange }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -710,24 +711,22 @@ function SegmentMultiSelect({ orgId, selected, onChange }) {
     let alive = true;
     setRows(null);
     setErr(null);
-    // Paginated for the same reason as AreaMultiSelect — .limit(5000) was
-    // silently truncating for tenants with > 5000 recipients (no current
-    // tenant is that big, but eliminating the cliff before it's a problem).
+    // Paginated so tenants with many recipients don't silently truncate.
     (async () => {
       const PAGE = 1000;
       const counts = new Map();
       for (let off = 0; ; off += PAGE) {
         const { data, error } = await supabase
           .from("marketing_recipients")
-          .select("segments")
+          .select("tags")
           .eq("organization_id", orgId)
-          .not("segments", "is", null)
+          .not("tags", "is", null)
           .range(off, off + PAGE - 1);
         if (!alive) return;
         if (error) { setErr(error.message); return; }
         if (!data || data.length === 0) break;
         for (const r of data) {
-          for (const s of r.segments ?? []) {
+          for (const s of r.tags ?? []) {
             if (!s) continue;
             counts.set(s, (counts.get(s) ?? 0) + 1);
           }
@@ -753,18 +752,18 @@ function SegmentMultiSelect({ orgId, selected, onChange }) {
         onAll={() => onChange((rows ?? []).map((s) => s.key))}
         onNone={() => onChange([])}
       />
-      <ListBody loading={!rows} error={err} empty={!err && rows && rows.length === 0 ? "No saved segments yet — tag recipients to use this filter." : null}>
+      <ListBody loading={!rows} error={err} empty={!err && rows && rows.length === 0 ? "No groups or tags yet — add a “Group / tag” column when you upload contacts to use this filter." : null}>
         {(rows ?? []).map((s) => (
           <CheckRow
             key={s.key}
             checked={selected.includes(s.key)}
             onChange={() => toggle(s.key)}
-            label={<span style={{ fontFamily: "ui-monospace, monospace" }}>{s.key}</span>}
+            label={s.key}
             aside={`${s.count} parents`}
           />
         ))}
       </ListBody>
-      <FooterCount n={selected.length} singular="segment selected" plural="segments selected" />
+      <FooterCount n={selected.length} singular="group selected" plural="groups selected" />
     </ListWrap>
   );
 }

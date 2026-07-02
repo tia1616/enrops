@@ -46,7 +46,18 @@ const CONTACT_FIELDS = [
     aliases: ["state", "province", "region"] },
   { key: "zip", label: "ZIP / postal code",
     aliases: ["zip", "zipcode", "postalcode", "postcode", "zip_code"] },
+  // Optional grouping label (e.g. membership tier). Lands in
+  // marketing_recipients.tags and powers the "A group / tag…" campaign audience.
+  { key: "tags", label: "Group / tag (e.g. membership tier)",
+    aliases: ["tag", "tags", "group", "groups", "segment", "tier", "membership", "membershiptype", "membershipoption", "plan", "level", "category"] },
 ];
+
+// A group/tier cell may hold one value ("All-Inclusive $120") or several
+// ("vip, scholarship"). Split on comma/semicolon into a clean tag array.
+function splitTags(v) {
+  if (!v) return [];
+  return v.split(/[;,]/).map((t) => t.trim()).filter(Boolean);
+}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -134,6 +145,9 @@ function buildContacts(headers, rows, mapping) {
       city: at(row, "city") || null,
       state: at(row, "state") || null,
       zip: at(row, "zip") || null,
+      // Only include tags when the operator actually mapped a group/tag column,
+      // so a re-import that omits it doesn't wipe existing tags on merge.
+      ...(idx.tags >= 0 ? { tags: splitTags(at(row, "tags")) } : {}),
     });
   }
   return out;
@@ -500,6 +514,7 @@ function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailC
                 {!valid && <span style={{ color: RED, fontSize: 11 }}> · will be skipped</span>}
                 {c.parent_name && <span style={{ color: MUTED }}> · {c.parent_name}</span>}
                 {c.school_name && <span style={{ color: MUTED }}> · {c.school_name}</span>}
+                {c.tags?.length > 0 && <span style={{ color: PURPLE }}> · 🏷 {c.tags.join(", ")}</span>}
               </div>
             );
           })}
