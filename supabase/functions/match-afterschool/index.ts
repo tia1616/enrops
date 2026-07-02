@@ -38,6 +38,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -505,6 +506,13 @@ serve(async (req) => {
     let totalSets = 0, maxSets = 0;
     for (const s of setsByInstr.values()) { totalSets += s.size; if (s.size > maxSets) maxSets = s.size; }
 
+    if (!dryRun) {
+      await logPlatformEvent(admin, {
+        feature: FEATURE.SCHEDULING, action: ACTION.INSTRUCTORS_MATCHED, outcome: OUTCOME.SUCCESS,
+        organizationId: organizationId, actorUserId: userData.user.id,
+        metadata: { term, kind: 'afterschool' },
+      });
+    }
     return json({
       organization_id: organizationId,
       term,

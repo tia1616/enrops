@@ -41,6 +41,7 @@ import {
   SoftScoreContext,
   VENUE_REGION_MAP,
 } from './lib.ts';
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -362,6 +363,13 @@ serve(async (req) => {
       }
     }
 
+    if (!dry_run) {
+      await logPlatformEvent(admin, {
+        feature: FEATURE.SCHEDULING, action: ACTION.INSTRUCTORS_MATCHED, outcome: OUTCOME.SUCCESS,
+        organizationId: orgId,
+        metadata: { cycle_id, kind: 'camp' },
+      });
+    }
     return json({
       ...output,
       organization_id: orgId,
