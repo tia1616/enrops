@@ -30,13 +30,16 @@ const FROM_EMAIL = 'Enrops <hello@updates.journeytosteam.com>';
 // here with zero events = an honest "untouched" (instrumented-but-unused) signal.
 // Add each as its capture is wired (see docs/moat/INTELLIGENCE_LAYER_RULES.md).
 const INSTRUMENTED_FEATURES: Record<string, string> = {
-  programs: 'Programs',       // DB triggers (create/publish)
-  campaigns: 'Campaigns',     // DB trigger (campaign_sent)
-  curricula: 'Curricula',     // DB trigger (curriculum_published) [+ edge fn extract, batch 2]
-  payroll: 'Payroll',         // DB trigger (payroll_approved) [+ edge fn instructor_paid, batch 2]
-  scheduling: 'Scheduling',   // send-offers edge fn (offer_sent)
-  // Added as each edge fn is instrumented (batch 2): rosters, instructors,
-  // contacts, partners, finances.
+  programs: 'Programs',           // DB triggers (create/publish)
+  campaigns: 'Campaigns',         // DB trigger (campaign_sent)
+  curricula: 'Curricula',         // DB trigger (published) + edge fn (extract)
+  payroll: 'Payroll',             // DB trigger (approved) + edge fn (instructor_paid)
+  scheduling: 'Scheduling',       // send-offers + create-assignment-substitution
+  rosters: 'Rosters',             // import-camp/program-roster + invite-parents
+  instructors: 'Instructors',     // contractor-invite + admin-upload-background-check
+  contacts: 'Contacts',           // import-contacts
+  partners: 'Partners',           // import-partners-write
+  finances: 'Finances / Stripe',  // sync-operator-stripe-status (stripe_connected)
 };
 
 function esc(s: unknown): string {

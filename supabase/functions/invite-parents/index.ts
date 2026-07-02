@@ -19,6 +19,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 import { isEmailAllowed, emailGuardActive } from '../_shared/emailGuard.ts';
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -208,6 +209,14 @@ serve(async (req) => {
     }
 
     console.log(`invite-parents: org=${organizationId} program=${programId} invited=${invited} skipped_active=${skippedActive} held_back=${heldBack} failed=${failed}`);
+    if (!preview) {
+      await logPlatformEvent(admin, {
+        feature: FEATURE.ROSTERS, action: ACTION.FAMILIES_INVITED,
+        outcome: invited > 0 ? OUTCOME.SUCCESS : OUTCOME.FAIL,
+        organizationId: organizationId, actorUserId: userData.user.id,
+        metadata: { invited, skipped_active: skippedActive, failed, program_id: programId },
+      });
+    }
     return json({ invited, skipped_active: skippedActive, skipped_no_email: skippedNoEmail, held_back: heldBack, failed, failed_reasons: failedReasons, total_candidates: deliverable.length });
   } catch (e) {
     console.error('invite-parents error:', (e as Error).message);

@@ -25,6 +25,7 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from "../_shared/logPlatformEvent.ts";
 import Anthropic from "npm:@anthropic-ai/sdk@0.96.0";
 import { detectExt, parseDocument } from "./parse.ts";
 import { DEFAULT_PROMPT_VERSION, PROMPT_VERSIONS, type PromptVersion } from "./prompts.ts";
@@ -622,6 +623,13 @@ serve(async (req) => {
     }
 
     scheduleBackground(processExtractionInBackground(body.document_id, promptVersion, body.preserve_name === true));
+    // Log the extraction kick-off (service-role client — the doorway is service_role only).
+    const adminForLog = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    await logPlatformEvent(adminForLog, {
+      feature: FEATURE.CURRICULA, action: ACTION.CURRICULUM_EXTRACTED, outcome: OUTCOME.SUCCESS,
+      organizationId: doc.organization_id, actorUserId: caller.userId,
+      metadata: { curriculum_id: doc.curriculum_id, document_id: body.document_id },
+    });
     return jsonOk({ ok: true, document_id: body.document_id, curriculum_id: doc.curriculum_id });
   }
 

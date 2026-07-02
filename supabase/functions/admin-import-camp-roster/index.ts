@@ -47,6 +47,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -346,6 +347,12 @@ serve(async (req: Request) => {
       }
     }
 
+    await logPlatformEvent(supabase, {
+      feature: FEATURE.ROSTERS, action: ACTION.ROSTER_IMPORTED,
+      outcome: (results.imported + results.updated) > 0 ? OUTCOME.SUCCESS : OUTCOME.FAIL,
+      organizationId: orgId, actorUserId: callerAuthId,
+      metadata: { kind: 'camp', imported: results.imported, updated: results.updated, skipped: results.skipped },
+    });
     return json(results);
   } catch (err) {
     console.error('admin-import-camp-roster fatal:', err);

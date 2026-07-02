@@ -31,6 +31,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient, clientIp } from '../_shared/instructor.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
+import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
 interface RequestBody {
   instructor_id?: string;
@@ -179,6 +180,11 @@ serve(async (req: Request) => {
     //    pending_background_check (it'll see checkr_clear=true now).
     const gate = await runGateCheck(supabase, instructorId);
 
+    await logPlatformEvent(supabase, {
+      feature: FEATURE.INSTRUCTORS, action: ACTION.BACKGROUND_CHECK_UPLOADED, outcome: OUTCOME.SUCCESS,
+      organizationId: instructorRow.organization_id, actorUserId: callerAuthId,
+      metadata: { instructor_id: instructorId },
+    });
     return json({ success: true, gate });
   } catch (err) {
     console.error('admin-upload-background-check fatal:', err);
