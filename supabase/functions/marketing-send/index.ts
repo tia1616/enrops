@@ -140,6 +140,12 @@ serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
+    // Caller's bearer token — forwarded verbatim into the self-invoked
+    // continuation below. marketing-send is verify_jwt=true (not listed in
+    // config.toml) AND does its own getCaller/assertRole, so a continuation
+    // without this header is rejected before it can resume the send.
+    const callerAuth = req.headers.get('Authorization');
+
     const body = await req.json();
     const parsed = parseRequest(body);
     if ('error' in parsed) return json({ error: parsed.error }, parsed.status);
@@ -535,22 +541,48 @@ serve(async (req: Request) => {
     // self-invocation to keep working in the background. Dedup against
     // marketing_sends.status='sent' means the continuation picks up exactly
     // where we left off without re-sending anyone.
+    //
+    // MANUAL TEST (continuation auth): create a J2S campaign with a recipient
+    // list large enough to exceed one invocation (or temporarily lower the
+    // time budget), send in mode='send', then confirm in the function logs:
+    //   - "continuation scheduled ok (depth 1)" appears (NOT "continuation
+    //     REJECTED: HTTP 401"), and
+    //   - every recipient ends in marketing_sends.status='sent' after the chain
+    //     finishes (i.e. the send did not stall after the first invocation).
     let continuationFired = false;
     if (outOfTime && chainDepth < MAX_CHAIN_DEPTH) {
-      try {
-        const continuationBody = { ...(body as Record<string, unknown>), _chainDepth: chainDepth + 1 };
-        const continuationPromise = fetch(req.url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(continuationBody),
-        }).catch(err => console.error('continuation fetch failed:', err));
-        const edgeRuntime = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
-        if (edgeRuntime?.waitUntil) {
-          edgeRuntime.waitUntil(continuationPromise);
+      if (!callerAuth) {
+        // Can't authenticate a continuation without the caller's token. Don't
+        // claim one fired — surface it so the operator re-runs to finish the send.
+        console.error('continuation NOT scheduled: no Authorization header on caller request');
+      } else {
+        try {
+          const continuationBody = { ...(body as Record<string, unknown>), _chainDepth: chainDepth + 1 };
+          const nextDepth = chainDepth + 1;
+          const continuationPromise = fetch(req.url, {
+            method: 'POST',
+            // Forward the caller's bearer token so the continuation passes both
+            // platform verify_jwt AND the in-function getCaller/assertRole checks.
+            headers: { 'Content-Type': 'application/json', 'Authorization': callerAuth },
+            body: JSON.stringify(continuationBody),
+          })
+            .then(async (res) => {
+              if (res.ok) {
+                console.log(`continuation scheduled ok (depth ${nextDepth})`);
+              } else {
+                const detail = await res.text().catch(() => '');
+                console.error(`continuation REJECTED: HTTP ${res.status} ${detail.slice(0, 300)}`);
+              }
+            })
+            .catch(err => console.error('continuation fetch failed:', err));
+          const edgeRuntime = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
+          if (edgeRuntime?.waitUntil) {
+            edgeRuntime.waitUntil(continuationPromise);
+          }
+          continuationFired = true;
+        } catch (e) {
+          console.error('failed to schedule continuation:', e);
         }
-        continuationFired = true;
-      } catch (e) {
-        console.error('failed to schedule continuation:', e);
       }
     }
 

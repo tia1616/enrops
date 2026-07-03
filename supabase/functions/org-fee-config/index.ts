@@ -45,7 +45,7 @@ serve(async (req) => {
 
     const { data, error } = await admin
       .from('organizations')
-      .select('fee_pass_through, platform_fee_card_pct, platform_fee_cap_cents')
+      .select('fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents')
       .eq('slug', slug)
       .eq('status', 'active')
       .single();
@@ -53,17 +53,20 @@ serve(async (req) => {
     if (error || !data) {
       // Unknown/inactive slug: return absorb defaults so the UI just shows the
       // base price (never throws the registration flow).
-      return json({ fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_cap_cents: 0 });
+      return json({ fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0 });
     }
 
+    // Return BOTH method rates so the family-facing "Platform fee" line matches
+    // whichever method the family selects on StepPay (card vs bank transfer).
     return json({
       fee_pass_through: !!data.fee_pass_through,
       platform_fee_card_pct: Number(data.platform_fee_card_pct) || 0,
+      platform_fee_ach_pct: Number(data.platform_fee_ach_pct) || 0,
       platform_fee_cap_cents: Number(data.platform_fee_cap_cents) || 0,
     });
   } catch (err) {
     console.error('org-fee-config error:', err);
     // Fail safe to absorb display.
-    return json({ fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_cap_cents: 0 });
+    return json({ fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0 });
   }
 });

@@ -1,5 +1,14 @@
 // create-checkout v13 — creates a Stripe Checkout session for already-written registrations.
 //
+// PATCH 8 (2026-07-03): pay-in-full is now a SINGLE payment method per session,
+//   chosen by the family up front (request `payment_method`: 'card' |
+//   'us_bank_account', default card). Fixes over-collection: a Checkout Session
+//   sets application_fee_amount once, before the family picks, and card vs ACH
+//   carry different Stripe-fee recovery when stripe_fee_payer='tenant'. The fee
+//   (application_fee_amount + any pass-through line) is now computed for the
+//   selected method, so it always matches what Stripe charges. Bank transfer is
+//   still offered — just as its own session. Installments remain card-only.
+//
 // PATCH 7 (2026-05-27): Stripe Connect destination charges.
 //   Looks up the registration's org and, if it has an active connected
 //   account (stripe_account_id + stripe_charges_enabled), adds:
@@ -80,6 +89,7 @@ serve(async (req) => {
       cancel_path,
       use_installments,
       installment_schedule,
+      payment_method,
     } = await req.json();
 
     if (!registration_ids?.length || !line_items?.length) {
@@ -357,13 +367,24 @@ serve(async (req) => {
     const orgIdStd = regForOrgStd?.organization_id || null;
     const orgConfigStd = (regForOrgStd?.organizations ?? null) as ConnectOrgConfig | null;
     const orgTermStd = (regForOrgStd?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
-    const connectParamsStd = buildConnectChargeParams(total_cents, 'card', orgConfigStd, orgIdStd);
 
-    // Pass-through: when the operator opts in (fee_pass_through), add the 1% as a
-    // visible "Platform fee" line so the family covers it. application_fee_amount
-    // above is unchanged (still 1% of base). Method-agnostic (card/ACH both 1%).
+    // The family picks card vs bank transfer BEFORE redirecting (passed as
+    // payment_method), so we build a SINGLE-method Checkout Session and compute
+    // the fee for exactly that method. This is required for correctness: a Session
+    // sets application_fee_amount ONCE, before the customer chooses, and card vs
+    // ACH carry very different Stripe-fee recovery (card ~2.9%+30¢ vs ACH ~0.8%,
+    // $5 cap). Offering both in one session would over- or under-collect on the
+    // method that wasn't used to compute the fee. Default to card; installments
+    // are always card-only (handled above, off-session ACH debits out of scope).
+    const selectedMethod: 'card' | 'us_bank_account' =
+      payment_method === 'us_bank_account' ? 'us_bank_account' : 'card';
+    const connectParamsStd = buildConnectChargeParams(total_cents, selectedMethod, orgConfigStd, orgIdStd);
+
+    // Pass-through: when the operator opts in (fee_pass_through), add the platform
+    // fee as a visible "Platform fee" line so the family covers it — computed for
+    // the SAME method as application_fee_amount above, so the two always agree.
     if (orgConfigStd) {
-      const feeLineStd = passThroughLineItem(total_cents, 'card', orgConfigStd);
+      const feeLineStd = passThroughLineItem(total_cents, selectedMethod, orgConfigStd);
       if (feeLineStd) stripeLineItems.push(feeLineStd);
     }
 
@@ -383,12 +404,11 @@ serve(async (req) => {
     };
 
     const session = await stripe.checkout.sessions.create({
-      // Pay-in-full accepts card AND bank transfer (ACH). Both carry the same
-      // 1% platform fee, so application_fee_amount is identical regardless of
-      // which the family picks at Stripe. Installments stay card-only (off-
-      // session ACH debits are out of scope). us_bank_account requires a
-      // Customer to store the debit mandate, so have Checkout create one.
-      payment_method_types: ['card', 'us_bank_account'],
+      // Single method, chosen by the family up front, so application_fee_amount
+      // (set above with selectedMethod) matches what Stripe actually charges.
+      // us_bank_account requires a Customer to store the debit mandate, so
+      // customer_creation:'always' below covers the ACH case.
+      payment_method_types: [selectedMethod],
       line_items: stripeLineItems,
       mode: 'payment',
       customer_email: parent_email,

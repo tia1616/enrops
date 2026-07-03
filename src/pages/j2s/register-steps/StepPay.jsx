@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { formatMoney } from '../../../lib/pricing.js';
 
 export default function StepPay({
@@ -17,13 +17,24 @@ export default function StepPay({
     ? installmentSchedule[0].amount_cents
     : pricing.total_cents;
 
+  // The family picks card vs bank transfer HERE, before we redirect, so the
+  // backend can build a single-method Stripe session with the fee computed for
+  // exactly that method (card and ACH carry different fees). Installments are
+  // card-only, so the selector is hidden and card is forced in that case.
+  const [method, setMethod] = useState('card');
+  const effectiveMethod = useInstallments ? 'card' : method;
+  const isBank = effectiveMethod === 'us_bank_account';
+
   // Pass-through: when the operator passes the platform fee to families, the
   // family pays the price PLUS the fee. Mirror the backend (computePlatformFee:
   // round(amount * rate), capped) so this pre-redirect total matches exactly
-  // what Stripe charges. org fee config comes from the org-fee-config edge fn
-  // (the anon org view intentionally excludes fee columns). Absorb orgs add 0.
+  // what Stripe charges — using the SAME method the family selected. org fee
+  // config comes from the org-fee-config edge fn (the anon org view intentionally
+  // excludes fee columns). Absorb orgs add 0.
   const passThrough = !!org?.fee_pass_through;
-  const feeRate = Number(org?.platform_fee_card_pct) || 0;
+  const feeRate = isBank
+    ? Number(org?.platform_fee_ach_pct) || 0
+    : Number(org?.platform_fee_card_pct) || 0;
   const feeCap = Number(org?.platform_fee_cap_cents) || Infinity;
   const feeOn = (cents) => (passThrough ? Math.min(Math.round(cents * feeRate), feeCap) : 0);
   const charged = (cents) => cents + feeOn(cents);
@@ -109,16 +120,60 @@ export default function StepPay({
         </div>
       )}
 
+      {/* Payment method chooser — bank transfer is card's cheaper cousin for
+          large tuition, so we surface it up front. Hidden for installments
+          (card-on-file only). */}
+      {!useInstallments && (
+        <div className="mt-6">
+          <p className="mb-2 text-sm font-bold uppercase tracking-widest text-j2s-purple-dark">
+            How would you like to pay?
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setMethod('card')}
+              className={`flex items-center gap-3 rounded-xl border-2 px-4 py-4 text-left transition ${
+                !isBank
+                  ? 'border-j2s-purple bg-j2s-purple-soft/40'
+                  : 'border-j2s-purple/15 bg-white hover:border-j2s-purple/40'
+              }`}
+            >
+              <span className="text-2xl">💳</span>
+              <span>
+                <span className="block font-bold text-j2s-ink">Credit or debit card</span>
+                <span className="block text-xs text-j2s-ink/60">Instant — spot confirmed right away</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMethod('us_bank_account')}
+              className={`flex items-center gap-3 rounded-xl border-2 px-4 py-4 text-left transition ${
+                isBank
+                  ? 'border-j2s-purple bg-j2s-purple-soft/40'
+                  : 'border-j2s-purple/15 bg-white hover:border-j2s-purple/40'
+              }`}
+            >
+              <span className="text-2xl">🏦</span>
+              <span>
+                <span className="block font-bold text-j2s-ink">Bank transfer (ACH)</span>
+                <span className="block text-xs text-j2s-ink/60">1–3 business days — spot held meanwhile</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="mt-8 space-y-3 rounded-2xl bg-j2s-purple-soft/30 p-6">
         <p className="flex items-start gap-2 text-sm text-j2s-ink/80">
           <span className="text-j2s-purple">🔒</span>
-          Payment processed securely by Stripe. We never see your card details.
+          Payment processed securely by Stripe. We never see your{' '}
+          {isBank ? 'bank details' : 'card details'}.
         </p>
-        {!useInstallments && (
+        {isBank && (
           <p className="flex items-start gap-2 text-sm text-j2s-ink/80">
             <span className="text-j2s-purple">🏦</span>
-            Pay by card or bank transfer. Bank transfers take 1–3 business days to
-            clear — your spot is held the whole time.
+            Bank transfers take 1–3 business days to clear — your spot is held the
+            whole time.
           </p>
         )}
         <p className="flex items-start gap-2 text-sm text-j2s-ink/80">
@@ -133,7 +188,7 @@ export default function StepPay({
       </div>
 
       <button
-        onClick={onCheckout}
+        onClick={() => onCheckout(effectiveMethod)}
         disabled={submitting}
         className={`mt-8 w-full rounded-xl px-6 py-5 text-lg font-bold text-white shadow-pop transition ${
           submitting

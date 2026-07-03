@@ -249,7 +249,7 @@ export default function Register() {
     setSchools(schoolsRes.data || []);
     setPrograms(programsRes.data || []);
     setWaivers(waiversRes.data || []);
-    setFeeConfig(feeRes?.data || { fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_cap_cents: 0 });
+    setFeeConfig(feeRes?.data || { fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0 });
     setLoading(false);
   }
 
@@ -309,7 +309,10 @@ export default function Register() {
     navigate(`/${ORG_SLUG}?keep=1`);
   }
 
-  async function handleCheckout() {
+  // paymentMethod: 'card' | 'us_bank_account', chosen on StepPay. Passed to
+  // create-checkout so it builds a single-method session with the matching fee.
+  // Ignored on the installments path (always card).
+  async function handleCheckout(paymentMethod = 'card') {
     setSubmitting(true);
     setError('');
     try {
@@ -354,6 +357,7 @@ export default function Register() {
         origin: window.location.origin,
         success_path: `/${ORG_SLUG}/register/success`,
         cancel_path: `/${ORG_SLUG}/register`,
+        payment_method: paymentMethod,
       };
       if (useInstallments) {
         checkoutPayload.use_installments = true;
