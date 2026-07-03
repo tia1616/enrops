@@ -56,6 +56,12 @@ verify_jwt = false
 [functions.marketing-resend-webhook]
 verify_jwt = false
 
+# Weekly platform-intelligence digest cron entrypoint — authenticates callers
+# itself against the replay_digest_cron_secret gate (see
+# 20260702_platform_intel_digest_infra.sql), so it must NOT require a JWT.
+[functions.platform-intelligence-digest]
+verify_jwt = false
+
 # Note: prod also has admin-convert-logo, sync-operator-stripe-status,
 # dev-seed-designer-access as verify_jwt=false, but those are NOT in this
 # repo (prod-only / legacy), so they're intentionally omitted here.
