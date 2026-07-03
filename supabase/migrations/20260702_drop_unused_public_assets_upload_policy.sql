@@ -1,0 +1,17 @@
+-- 2026-07-02 — Tenant folder isolation, step B-i(1).
+-- Drop the over-permissive `Authenticated upload` INSERT policy on
+-- storage.objects. Its WITH CHECK was only `bucket_id = 'public-assets'`,
+-- i.e. ANY authenticated user could write to ANY path in public-assets —
+-- a cross-tenant write hole at multi-tenant.
+--
+-- Verified 2026-07-02: NO code writes to public-assets (every .upload() in
+-- the app targets a private doc bucket; avatars are bundled at app origin;
+-- the j2s logo/banner were set via service-role/manual). So this policy has
+-- zero callers and dropping it breaks nothing. When a logo/asset-upload UI
+-- is built, route writes through a service-role edge fn (matches org-assets,
+-- which has no INSERT policy) rather than restoring a client-side policy.
+--
+-- Reversible — to restore:
+--   create policy "Authenticated upload" on storage.objects
+--     for insert to authenticated with check (bucket_id = 'public-assets');
+drop policy if exists "Authenticated upload" on storage.objects;
