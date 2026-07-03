@@ -14,6 +14,12 @@
 //
 // Idempotent: parents who already have an auth account (by email) are skipped,
 // so re-running never double-invites.
+//
+// MANUAL CHECK (auth pagination): on a project with > PER_PAGE (1000) auth users,
+// invite a program whose roster includes a parent whose auth account sorts onto a
+// LATER page. Run in preview mode and confirm that parent shows as skipped_active
+// (if they've signed in) rather than a fresh candidate — proving existing users
+// beyond the first page are detected and not re-created.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
@@ -127,10 +133,24 @@ serve(async (req) => {
     // Look up existing auth users. We RE-SEND to accounts that exist but never
     // signed in (e.g. a prior send failed) instead of silently skipping them, and
     // skip only families who have actually signed in already (truly onboarded).
-    const { data: userList } = await admin.auth.admin.listUsers();
+    //
+    // Paginate through ALL auth users: a single unpaginated listUsers() returns
+    // only the first page (default 50), so once the project has more users than
+    // one page, existing parents beyond it look missing → duplicate createUser
+    // attempts, failed invites, and un-healed parents.auth_id. Match the
+    // perPage=1000 that admin-list-members already uses, and loop pages so we're
+    // correct beyond 1000 users too. MAX_PAGES is a defensive runaway cap.
     const userByEmail = new Map<string, any>();
-    for (const u of userList?.users ?? []) {
-      if (u.email) userByEmail.set(u.email.toLowerCase(), u);
+    const PER_PAGE = 1000;
+    const MAX_PAGES = 50;
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const { data: pageData, error: listErr } = await admin.auth.admin.listUsers({ page, perPage: PER_PAGE });
+      if (listErr) return json({ error: `List users: ${listErr.message}` }, 500);
+      const users = pageData?.users ?? [];
+      for (const u of users) {
+        if (u.email) userByEmail.set(u.email.toLowerCase(), u);
+      }
+      if (users.length < PER_PAGE) break;
     }
 
     let skippedActive = 0;
