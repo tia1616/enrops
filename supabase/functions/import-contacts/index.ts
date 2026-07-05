@@ -145,6 +145,7 @@ type IncomingContact = {
   state?: unknown;
   zip?: unknown;
   tags?: unknown;
+  child_birthdate?: unknown;
 };
 
 // Row shape written to marketing_recipients. school_name is coalesced to "" so
@@ -163,6 +164,12 @@ type RecipientRow = {
   zip: string | null;
   tags: string[];
   source: string;
+  // Set false to welcome this contact via the welcome_contact automation; true
+  // ("existing families" import choice) means skip the welcome. Batch-level flag.
+  suppress_welcome: boolean;
+  // Child DOB (YYYY-MM-DD) when the source doc carried one; drives the birthday
+  // automation for contacts. Null when unknown.
+  child_birthdate: string | null;
 };
 
 function str(v: unknown): string | null {
@@ -176,6 +183,19 @@ function stringArray(v: unknown): string[] {
   return v
     .map((t) => (t === null || t === undefined ? "" : String(t).trim()))
     .filter((t) => t !== "");
+}
+
+// Parse a birthdate string into an ISO date (YYYY-MM-DD) for the date column.
+// Accepts the extractor's normalized YYYY-MM-DD and common M/D/YYYY. Returns
+// null for anything unrecognized — never guess a date.
+function parseDate(v: unknown): string | null {
+  const s = str(v);
+  if (!s) return null;
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+  return null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -224,6 +244,10 @@ Deno.serve(async (req: Request) => {
   const rawSource = typeof b.source === "string" ? b.source.trim() : "";
   const source = ALLOWED_SOURCES.has(rawSource) ? rawSource : "manual";
 
+  // "Existing families" import choice → skip the welcome for every row in this
+  // batch. Defaults to false (welcome new families) when the client omits it.
+  const suppressWelcome = b.suppress_welcome === true;
+
   // ---- Guard: org-admin gate ----
   // Caller must be a platform admin OR an accepted owner/admin of this org.
   if (!caller.isPlatformAdmin && !caller.adminOrgIds.has(organization_id)) {
@@ -264,6 +288,10 @@ Deno.serve(async (req: Request) => {
       // per-row tag isn't lost to last-wins dedup within the same upload.
       tags: [...new Set([...(prior?.tags ?? []), ...stringArray(c.tags)])],
       source,
+      suppress_welcome: suppressWelcome,
+      // Keep a birthdate once captured — a duplicate row without one must not
+      // wipe it (mirrors the tags-union rule).
+      child_birthdate: parseDate(c.child_birthdate) ?? prior?.child_birthdate ?? null,
     });
   }
 
@@ -291,12 +319,15 @@ Deno.serve(async (req: Request) => {
   // them (the Mailchimp model — import only ever adds; removal happens in the
   // tag manager). Keyed on the same (email|school_name) as `existing`.
   const priorTags = new Map<string, string[]>();
+  // Prior birthdate per existing row — preserve a captured DOB when a later
+  // import for the same contact doesn't include one.
+  const priorBirthdate = new Map<string, string | null>();
   // Chunk the .in() lookup — a 5k-item IN list is unwieldy for one request.
   for (let i = 0; i < emails.length; i += 500) {
     const slice = emails.slice(i, i + 500);
     const { data: hits, error: selErr } = await supabase
       .from("marketing_recipients")
-      .select("email, school_name, tags")
+      .select("email, school_name, tags, child_birthdate")
       .eq("organization_id", organization_id)
       .eq("source", source)
       .in("email", slice);
@@ -308,6 +339,7 @@ Deno.serve(async (req: Request) => {
         const k = keyOf(String(h.email).toLowerCase(), h.school_name);
         existing.add(k);
         priorTags.set(k, stringArray(h.tags));
+        priorBirthdate.set(k, (h as { child_birthdate?: string | null }).child_birthdate ?? null);
       }
     }
   }
@@ -315,8 +347,11 @@ Deno.serve(async (req: Request) => {
   // Union each row's incoming tags with what the contact already had, so tags
   // accumulate across uploads and a tag-less re-import never wipes them.
   for (const row of rows) {
-    const prior = priorTags.get(keyOf(row.email, row.school_name)) ?? [];
+    const k = keyOf(row.email, row.school_name);
+    const prior = priorTags.get(k) ?? [];
     row.tags = [...new Set([...prior, ...row.tags])];
+    // Preserve an existing DOB if this import didn't bring one.
+    if (!row.child_birthdate) row.child_birthdate = priorBirthdate.get(k) ?? null;
   }
 
   // ---- Upsert on the real unique key (update-or-insert) ----
