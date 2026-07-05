@@ -669,10 +669,12 @@ function UploadModal({ orgId, onClose, onImported }) {
         // actually uploads a spreadsheet (keeps it out of the main bundle).
         const buf = await file.arrayBuffer();
         const XLSX = await import("xlsx");
-        const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+        // cellDates + raw:false so Excel date cells (stored internally as serial
+        // numbers like 43573) render as readable dates, not the raw number.
+        const wb = XLSX.read(new Uint8Array(buf), { type: "array", cellDates: true });
         const sheet = wb.Sheets[wb.SheetNames[0]];
         if (!sheet) throw new Error("no-sheet");
-        const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" });
+        const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "", raw: false, dateNF: "yyyy-mm-dd" });
         headers = (aoa[0] || []).map((c) => (c == null ? "" : String(c)));
         data = aoa.slice(1)
           .map((row) => row.map((c) => (c == null ? "" : String(c))))
