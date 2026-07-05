@@ -117,6 +117,7 @@ const SYSTEM_PROMPT = [
   '  phone            (string)  digits as written, any format',
   '  child_first_name (string)  the enrolled child, if the row names one',
   '  child_last_name  (string)',
+  '  child_birthdate  (string)  the child date of birth as YYYY-MM-DD if determinable, else exactly as written',
   '  school_name      (string)  the center / school / site the family is tied to',
   '  city             (string)',
   '  state            (string)  2-letter state code if present',
@@ -145,7 +146,7 @@ function userPrompt(docText: string): string {
 }
 
 // Fields the client review screen (ContactsTab CONTACT_FIELDS) understands.
-const CONTACT_KEYS = ["email", "parent_name", "phone", "child_first_name", "child_last_name", "school_name", "city", "state", "zip"] as const;
+const CONTACT_KEYS = ["email", "parent_name", "phone", "child_first_name", "child_last_name", "child_birthdate", "school_name", "city", "state", "zip"] as const;
 type ContactRow = Record<(typeof CONTACT_KEYS)[number], string | null>;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
