@@ -273,6 +273,9 @@ async function runAutomation(
     case "birthday":
       audience = await resolveBirthdayAudience(supabase, a);
       break;
+    case "contact_added":
+      audience = await resolveContactAddedAudience(supabase, a);
+      break;
     case "event_registration_confirmed":
       // Handled by stripe-webhook (registration table → confirmation email).
       // Cron isn't the right trigger here — checkout completion is event-driven.
@@ -1165,6 +1168,66 @@ async function resolveBirthdayAudience(
     });
 }
 
+// ─── Contact added (welcome_contact) ────────────────────────────────────────
+// Contact-based, NOT enrollment-based: fires off marketing_recipients so it
+// reaches every family a tenant loads (CRM contacts), not just those who
+// registered through Enrops. Two guardrails against a blast:
+//   - suppress_welcome = true  → set by the "existing families" import choice,
+//     so importing an existing roster never welcomes the whole list.
+//   - a short created-at window (days_window, default 2) → enabling the
+//     automation only touches very recently added contacts, never months of
+//     history. Idempotency (context_key) makes re-runs safe.
+// Deliverability: welcome is 'informational' (exempt from the promotional
+// unsubscribe filter), but we still skip anyone on marketing_suppressions so a
+// hard bounce / complaint can't be re-hit and hurt the sending domain.
+async function resolveContactAddedAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  const days = pickNumber(a.timing_override?.days_window, a.template.default_timing?.days_window, 2);
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+
+  const { data, error } = await supabase
+    .from("marketing_recipients")
+    .select("id, email, parent_name, child_first_name, created_at")
+    .eq("organization_id", a.organization_id)
+    .eq("suppress_welcome", false)
+    .gte("created_at", since);
+  if (error) throw error;
+  if (!data || data.length === 0) return [];
+
+  // Org-scoped suppression list (deliverability guard — see header note).
+  const { data: supp } = await supabase
+    .from("marketing_suppressions")
+    .select("email")
+    .eq("organization_id", a.organization_id);
+  const suppressed = new Set(((supp ?? []) as Array<{ email: string }>).map((s) => (s.email || "").toLowerCase()));
+
+  return (data as Array<{ id: string; email: string | null; parent_name: string | null; child_first_name: string | null }>)
+    .filter((r) => r.email && !suppressed.has(r.email.toLowerCase()))
+    .map((r) => ({
+      context_key: `contact:${r.id}:welcome`,
+      parent_id: null,
+      parent_email: r.email as string,
+      parent_first_name: firstNameFromFull(r.parent_name),
+      child_first_name: r.child_first_name ?? null,
+      program_name: "",
+      program_start_date: "",
+      program_end_date: "",
+      location_name: "",
+      abandoned_resume_url: "",
+      age_turning: "",
+      final_showcase_raw: "",
+      mid_term_skills_raw: [],
+      final_recap_skills_raw: [],
+      arrival_instructions_raw: "",
+      dismissal_instructions_raw: "",
+      session_dates_raw: [],
+      register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+      next_term_available: false,
+    }));
+}
+
 // ─── Abandoned registration ─────────────────────────────────────────────────
 async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationRow): Promise<AudienceEntry[]> {
   const hours = pickNumber(a.timing_override?.hours_after_pending, a.template.default_timing?.hours_after_pending, 24);
@@ -1457,4 +1520,19 @@ function formatDate(iso: string): string {
     month: "long",
     day: "numeric",
   });
+}
+
+// Pull a first name from a contact's stored full name for {{first_name}}.
+// Contacts are normalized to "First Last" on import, but tolerate a stray
+// "Last, First" too. Null when there's no usable name — buildTokens then falls
+// back to "there".
+function firstNameFromFull(full: string | null | undefined): string | null {
+  if (!full) return null;
+  const t = full.trim();
+  if (!t) return null;
+  if (t.includes(",")) {
+    const after = t.split(",")[1]?.trim();
+    if (after) return after.split(/\s+/)[0];
+  }
+  return t.split(/\s+/)[0];
 }
