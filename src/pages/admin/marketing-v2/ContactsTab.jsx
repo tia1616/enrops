@@ -661,6 +661,9 @@ function UploadModal({ orgId, onClose, onImported }) {
     // Clear any state from a prior parse so a failed/retried upload can't carry
     // a previous file's rows into the review table.
     setRawHeaders([]); setRawRows([]); setMapping({}); setElapsed(0);
+    // Reset per-file choices too, so a Back → re-parse of a DIFFERENT file can't
+    // inherit the prior file's consent tick, bulk tags, or welcome choice.
+    setConsent(false); setBulkTags([]); setWelcomeChoice("new");
     try {
       const name = (file.name || "").toLowerCase();
 

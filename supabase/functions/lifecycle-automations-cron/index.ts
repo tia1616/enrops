@@ -1186,12 +1186,12 @@ async function resolveContactAddedAudience(
   a: AutomationRow,
 ): Promise<AudienceEntry[]> {
   // Only welcome contacts added AFTER this automation was turned on — never the
-  // existing back-catalog. enabled_at is stamped when the operator flips it on;
-  // fall back to a short window only if it's somehow unset, so we never blast
-  // history. Idempotency (context_key) keeps re-runs single-send.
-  const days = pickNumber(a.timing_override?.days_window, a.template.default_timing?.days_window, 2);
-  const windowStart = new Date(Date.now() - days * 86400000).toISOString();
-  const since = a.enabled_at ?? windowStart;
+  // existing back-catalog. FAIL-CLOSED: if enabled_at is somehow unset (an enable
+  // that bypassed the UI — a seed or manual SQL), skip entirely rather than fall
+  // back to a time window, so we can never blast a fresh bulk import. The UI
+  // always stamps enabled_at on toggle-on; idempotency keeps re-runs single-send.
+  if (!a.enabled_at) return [];
+  const since = a.enabled_at;
 
   const { data, error } = await supabase
     .from("marketing_recipients")
@@ -1203,10 +1203,13 @@ async function resolveContactAddedAudience(
   if (!data || data.length === 0) return [];
 
   // Org-scoped suppression list (deliverability guard — see header note).
-  const { data: supp } = await supabase
+  // Fail-closed: if we can't load it, throw so this run is skipped and retried —
+  // never send blind and risk re-hitting a hard bounce / complaint.
+  const { data: supp, error: suppErr } = await supabase
     .from("marketing_suppressions")
     .select("email")
     .eq("organization_id", a.organization_id);
+  if (suppErr) throw suppErr;
   const suppressed = new Set(((supp ?? []) as Array<{ email: string }>).map((s) => (s.email || "").toLowerCase()));
 
   return (data as Array<{ id: string; email: string | null; parent_name: string | null; child_first_name: string | null }>)
