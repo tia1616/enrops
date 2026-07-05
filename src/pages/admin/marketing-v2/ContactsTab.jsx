@@ -46,6 +46,8 @@ const CONTACT_FIELDS = [
     aliases: ["state", "province", "region"] },
   { key: "zip", label: "ZIP / postal code",
     aliases: ["zip", "zipcode", "postalcode", "postcode", "zip_code"] },
+  { key: "child_birthdate", label: "Child date of birth",
+    aliases: ["childbirthdate", "childdob", "dob", "birthdate", "dateofbirth", "birthday", "studentdob", "studentbirthdate", "childbirthday"] },
   // Optional grouping label (e.g. membership tier). Lands in
   // marketing_recipients.tags and powers the "A group / tag…" campaign audience.
   { key: "tags", label: "Group / tag (e.g. membership tier)",
@@ -150,11 +152,30 @@ function buildContacts(headers, rows, mapping, bulkTags = []) {
       city: at(row, "city") || null,
       state: at(row, "state") || null,
       zip: at(row, "zip") || null,
+      child_birthdate: at(row, "child_birthdate") || null,
       ...(rowTags.length ? { tags: rowTags } : {}),
     });
   }
   return out;
 }
+
+// Read a File to base64 (no "data:" prefix) for the extract-contacts edge fn.
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const res = String(reader.result || "");
+      const comma = res.indexOf(",");
+      resolve(comma >= 0 ? res.slice(comma + 1) : res);
+    };
+    reader.onerror = () => reject(reader.error || new Error("read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+// PDF/Word are AI-extracted server-side and come back already keyed to our
+// fields, so we skip column-mapping and feed the review table a 1:1 mapping.
+const DOC_COLUMNS = ["email", "parent_name", "phone", "child_first_name", "child_last_name", "child_birthdate", "school_name", "city", "state", "zip"];
 
 export default function ContactsTab() {
   const { org } = useOutletContext() ?? {};
@@ -424,6 +445,8 @@ function UploadModal({ orgId, onClose, onImported }) {
   const [result, setResult] = useState(null);
   const [bulkTags, setBulkTags] = useState([]);
   const [existingTags, setExistingTags] = useState([]);
+  // "new" (send the welcome) | "existing" (skip it). Drives suppress_welcome.
+  const [welcomeChoice, setWelcomeChoice] = useState("new");
 
   // Existing tags power the "tag everyone" autocomplete + the tidy-up nudge.
   // Single page is fine — autocomplete doesn't need every tail tag, and the
@@ -452,6 +475,37 @@ function UploadModal({ orgId, onClose, onImported }) {
     setStep("parsing");
     try {
       const name = (file.name || "").toLowerCase();
+
+      // PDF / Word can't be parsed in the browser — send to the AI extractor,
+      // which returns rows already keyed to our fields. Skip column-mapping.
+      if (name.endsWith(".pdf") || name.endsWith(".docx")) {
+        const file_base64 = await fileToBase64(file);
+        const { data, error: exErr } = await supabase.functions.invoke("extract-contacts", {
+          body: { organization_id: orgId, filename: file.name, file_base64 },
+        });
+        if (exErr) {
+          let msg = exErr.message ?? "We couldn't read that file.";
+          try {
+            const resp = exErr?.context?.response ?? exErr?.context;
+            if (resp && typeof resp.clone === "function") {
+              const t = await resp.clone().text();
+              try { const p = JSON.parse(t); if (p?.error) msg = p.error; } catch { /* not JSON */ }
+            }
+          } catch { /* ignore */ }
+          setError(msg); setStep("pick"); return;
+        }
+        const exRows = Array.isArray(data?.rows) ? data.rows : [];
+        if (exRows.length === 0) {
+          setError("We couldn't find any families with an email in that file. Try a spreadsheet instead.");
+          setStep("pick"); return;
+        }
+        setRawHeaders(DOC_COLUMNS);
+        setRawRows(exRows.map((r) => DOC_COLUMNS.map((k) => (r?.[k] ?? "").toString())));
+        setMapping(Object.fromEntries(DOC_COLUMNS.map((k) => [k, k])));
+        setStep("mapping");
+        return;
+      }
+
       const isExcel = name.endsWith(".xlsx") || name.endsWith(".xls")
         || /spreadsheetml|ms-excel/.test(file.type || "");
 
@@ -513,7 +567,7 @@ function UploadModal({ orgId, onClose, onImported }) {
       // but trimming here keeps the payload lean.
       const payload = contacts.filter((c) => EMAIL_RE.test((c.email ?? "").trim().toLowerCase()));
       const { data, error: fnErr } = await supabase.functions.invoke("import-contacts", {
-        body: { organization_id: orgId, contacts: payload, source: "manual" },
+        body: { organization_id: orgId, contacts: payload, source: "manual", suppress_welcome: welcomeChoice === "existing" },
       });
       if (fnErr) {
         let msg = fnErr.message ?? "Import failed.";
@@ -556,8 +610,8 @@ function UploadModal({ orgId, onClose, onImported }) {
           <div>
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: INK }}>Upload contacts</h2>
             <p style={{ margin: "4px 0 0", fontSize: 12, color: MUTED }}>
-              {step === "pick" && "Upload a CSV of your families. Your column names don't have to match ours — we'll figure them out."}
-              {step === "parsing" && "Reading your file…"}
+              {step === "pick" && "Upload a spreadsheet or PDF of your families — we'll pull out the contacts for you."}
+              {step === "parsing" && "Reading your file… a PDF can take a few seconds."}
               {step === "mapping" && "Confirm which column is which, then review before saving."}
               {step === "committing" && "Saving to your list…"}
               {step === "done" && "Done."}
@@ -580,10 +634,11 @@ function UploadModal({ orgId, onClose, onImported }) {
         {step === "pick" && (
           <div>
             <p style={{ margin: "0 0 12px", fontSize: 13, color: INK, lineHeight: 1.55 }}>
-              Add your families&apos; contact info in one go. Upload a spreadsheet from
-              <strong> Google Sheets, Excel, or a CSV</strong>. At minimum we need an
-              <strong> email</strong> column — everything else is optional. You&apos;ll review
-              the mapping before anything saves.
+              Add your families&apos; contact info in one go. Upload a
+              <strong> spreadsheet (CSV or Excel)</strong> or a <strong> PDF</strong> —
+              even a roster or sign-up export from another system. We&apos;ll pull out
+              the families and you&apos;ll review everything before it saves. All we
+              really need is an <strong>email</strong> for each.
             </p>
             <label
               htmlFor="contacts-upload-file"
@@ -592,7 +647,7 @@ function UploadModal({ orgId, onClose, onImported }) {
             <input
               id="contacts-upload-file"
               type="file"
-              accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              accept=".csv,.xlsx,.xls,.pdf,.docx,text/csv,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               style={{ fontSize: 13, marginBottom: 10 }}
             />
@@ -635,6 +690,8 @@ function UploadModal({ orgId, onClose, onImported }) {
             bulkTags={bulkTags}
             setBulkTags={setBulkTags}
             existingTags={existingTags}
+            welcomeChoice={welcomeChoice}
+            setWelcomeChoice={setWelcomeChoice}
             onBack={() => setStep("pick")}
             onCommit={commit}
           />
@@ -654,7 +711,7 @@ function UploadModal({ orgId, onClose, onImported }) {
   );
 }
 
-function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailCount, consent, setConsent, bulkTags, setBulkTags, existingTags, onBack, onCommit }) {
+function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailCount, consent, setConsent, bulkTags, setBulkTags, existingTags, welcomeChoice, setWelcomeChoice, onBack, onCommit }) {
   const emailMapped = !!mapping.email;
   const preview = contacts.slice(0, 10);
   // Only the columns the operator actually mapped — so the preview shows exactly
@@ -761,6 +818,24 @@ function MappingStep({ headers, rows, mapping, setMapping, contacts, validEmailC
           </p>
         </>
       )}
+
+      <div style={{ background: `${PURPLE}06`, border: `1px solid ${PURPLE}22`, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: INK, marginBottom: 8 }}>
+          Are these new families or your existing list?
+        </div>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8, cursor: "pointer" }}>
+          <input type="radio" name="welcome-choice" checked={welcomeChoice === "new"} onChange={() => setWelcomeChoice("new")} style={{ marginTop: 2 }} />
+          <span style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+            <strong>New families</strong> — send them a welcome email (if your Welcome automation is on).
+          </span>
+        </label>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+          <input type="radio" name="welcome-choice" checked={welcomeChoice === "existing"} onChange={() => setWelcomeChoice("existing")} style={{ marginTop: 2 }} />
+          <span style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+            <strong>My existing families</strong> — skip the welcome. They&apos;ll still get your other updates.
+          </span>
+        </label>
+      </div>
 
       <label style={{ display: "flex", alignItems: "flex-start", gap: 8, background: `${PURPLE}06`, border: `1px solid ${PURPLE}22`, borderRadius: 8, padding: 12, marginBottom: 14, cursor: "pointer" }}>
         <input
