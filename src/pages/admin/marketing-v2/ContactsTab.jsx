@@ -298,6 +298,8 @@ function ContactsList({ orgId, refreshKey }) {
   const [debouncedQ, setDebouncedQ] = useState("");
   const [editId, setEditId] = useState(null); // contact being edited, or null
   const [localRefresh, setLocalRefresh] = useState(0); // bump to re-fetch after an edit
+  const [newTagOpen, setNewTagOpen] = useState(false);
+  const [newTag, setNewTag] = useState("");
   const seqRef = useRef(0);
 
   // Debounce the search box so we fire one query after typing settles, not per
@@ -313,16 +315,17 @@ function ContactsList({ orgId, refreshKey }) {
     if (!orgId) return;
     let alive = true;
     (async () => {
-      const { data } = await supabase
-        .from("marketing_recipients")
-        .select("tags")
-        .eq("organization_id", orgId)
-        .not("tags", "is", null)
-        .limit(2000);
+      // Filter list = tags in use ∪ the saved-tags registry, so a freshly
+      // created tag (not yet on any contact) still shows up.
+      const [usedRes, regRes] = await Promise.all([
+        supabase.from("marketing_recipients").select("tags").eq("organization_id", orgId).not("tags", "is", null).limit(2000),
+        supabase.from("marketing_tags").select("name").eq("organization_id", orgId),
+      ]);
       if (!alive) return;
       const set = new Set();
-      for (const r of data ?? []) for (const t of r.tags ?? []) if (t) set.add(t);
-      setTagOptions([...set].sort());
+      for (const r of usedRes.data ?? []) for (const t of r.tags ?? []) if (t) set.add(t);
+      for (const r of regRes.data ?? []) if (r.name) set.add(r.name);
+      setTagOptions([...set].sort((a, b) => a.localeCompare(b)));
     })();
     return () => { alive = false; };
   }, [orgId, refreshKey, localRefresh]);
@@ -365,6 +368,20 @@ function ContactsList({ orgId, refreshKey }) {
     return () => { alive = false; };
   }, [orgId, debouncedQ, tag, page, refreshKey, localRefresh]);
 
+  // Create a reusable tag (saved-tags registry). RLS org-scopes the insert; a
+  // duplicate just means it already exists, so we add it locally either way.
+  async function createTag() {
+    const name = newTag.trim();
+    if (!name) { setNewTagOpen(false); return; }
+    const { error } = await supabase.from("marketing_tags").insert({ organization_id: orgId, name });
+    // Duplicate just means it already exists — fine. Log anything else; the tag
+    // won't persist and the next re-sync drops it (rare; RLS-gated insert).
+    if (error && !/duplicate|unique/i.test(error.message)) console.error("[ContactsTab] create tag failed", error);
+    setTagOptions((prev) => [...new Set([...prev, name])].sort((a, b) => a.localeCompare(b)));
+    setNewTag("");
+    setNewTagOpen(false);
+  }
+
   const from = total === 0 ? 0 : page * LIST_PAGE + 1;
   const to = Math.min((page + 1) * LIST_PAGE, total);
 
@@ -385,6 +402,22 @@ function ContactsList({ orgId, refreshKey }) {
           <option value="">All tags</option>
           {tagOptions.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
+        {newTagOpen ? (
+          <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+            <input
+              autoFocus
+              value={newTag}
+              onChange={(e) => setNewTag(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); createTag(); } if (e.key === "Escape") { setNewTagOpen(false); setNewTag(""); } }}
+              placeholder="New tag name"
+              style={{ padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", color: INK, width: 150 }}
+            />
+            <button type="button" onClick={createTag} style={{ padding: "8px 12px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Add</button>
+            <button type="button" onClick={() => { setNewTagOpen(false); setNewTag(""); }} style={{ background: "transparent", border: "none", color: MUTED, fontSize: 16, cursor: "pointer" }} aria-label="Cancel">✕</button>
+          </span>
+        ) : (
+          <button type="button" onClick={() => setNewTagOpen(true)} style={{ padding: "8px 12px", background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>+ New tag</button>
+        )}
       </div>
 
       <div style={{ overflowX: "auto", border: `1px solid ${RULE}`, borderRadius: 6 }}>
@@ -439,6 +472,7 @@ function ContactsList({ orgId, refreshKey }) {
         <EditContactModal
           orgId={orgId}
           contactId={editId}
+          suggestions={tagOptions}
           onClose={() => setEditId(null)}
           onSaved={() => { setEditId(null); setLocalRefresh((n) => n + 1); }}
         />
@@ -450,7 +484,7 @@ function ContactsList({ orgId, refreshKey }) {
 // Edit a single contact — fields + tags. Writes directly to marketing_recipients
 // (RLS org-gates the update). Import only ever ADDS tags; this is where an
 // operator removes/fixes them or corrects a detail after upload.
-function EditContactModal({ orgId, contactId, onClose, onSaved }) {
+function EditContactModal({ orgId, contactId, onClose, onSaved, suggestions = [] }) {
   const [row, setRow] = useState(null);
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
@@ -559,7 +593,8 @@ function EditContactModal({ orgId, contactId, onClose, onSaved }) {
                 ))}
               </div>
               <div style={{ display: "flex", gap: 6 }}>
-                <input style={{ ...fld, flex: 1 }} value={tagInput} onChange={(e) => setTagInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }} placeholder="Add a tag (e.g. VIP), press Enter" />
+                <input list="edit-tag-suggestions" style={{ ...fld, flex: 1 }} value={tagInput} onChange={(e) => setTagInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }} placeholder="Add a tag (e.g. VIP), press Enter" />
+                <datalist id="edit-tag-suggestions">{suggestions.map((s) => <option key={s} value={s} />)}</datalist>
                 <button type="button" onClick={addTag} style={{ padding: "7px 12px", background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Add</button>
               </div>
             </div>
