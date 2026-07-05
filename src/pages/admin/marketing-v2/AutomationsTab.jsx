@@ -130,19 +130,25 @@ export default function AutomationsTab() {
     const wasEnabled = !!existing?.enabled;
     try {
       if (existing) {
+        // Stamp enabled_at when flipping ON so contact-based automations only
+        // reach contacts added after this moment (never the back-catalog).
+        const nowEnabled = !existing.enabled;
+        const patch = nowEnabled
+          ? { enabled: true, enabled_at: new Date().toISOString() }
+          : { enabled: false };
         const { error: upErr } = await supabase
           .from("automations")
-          .update({ enabled: !existing.enabled })
+          .update(patch)
           .eq("id", existing.id);
         if (upErr) throw upErr;
         setAutomationByTpl((prev) => ({
           ...prev,
-          [tpl.id]: { ...existing, enabled: !existing.enabled },
+          [tpl.id]: { ...existing, ...patch },
         }));
       } else {
         const { data, error: insErr } = await supabase
           .from("automations")
-          .insert({ organization_id: org.id, template_id: tpl.id, enabled: true })
+          .insert({ organization_id: org.id, template_id: tpl.id, enabled: true, enabled_at: new Date().toISOString() })
           .select()
           .single();
         if (insErr) throw insErr;

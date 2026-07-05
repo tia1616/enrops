@@ -34,7 +34,7 @@
 //
 // marketing_recipients columns touched: organization_id, email, parent_name,
 // phone, child_first_name, child_last_name, school_name, city, state, zip,
-// tags, source.
+// tags, source, suppress_welcome, child_birthdate.
 
 // Built-in Deno.serve (no external std import) — avoids a flaky deno.land/std
 // fetch at bundle time; current Supabase standard.
@@ -167,8 +167,9 @@ type RecipientRow = {
   // Set false to welcome this contact via the welcome_contact automation; true
   // ("existing families" import choice) means skip the welcome. Batch-level flag.
   suppress_welcome: boolean;
-  // Child DOB (YYYY-MM-DD) when the source doc carried one; drives the birthday
-  // automation for contacts. Null when unknown.
+  // Child DOB (YYYY-MM-DD) when the source doc carried one. Stored so the
+  // birthday automation can fire off contacts once its resolver is extended to
+  // read marketing_recipients (today it reads enrolled students only). Null when unknown.
   child_birthdate: string | null;
 };
 
@@ -185,17 +186,28 @@ function stringArray(v: unknown): string[] {
     .filter((t) => t !== "");
 }
 
-// Parse a birthdate string into an ISO date (YYYY-MM-DD) for the date column.
-// Accepts the extractor's normalized YYYY-MM-DD and common M/D/YYYY. Returns
-// null for anything unrecognized — never guess a date.
+// Parse a birthdate string into a REAL ISO date (YYYY-MM-DD) for the date
+// column. Accepts the extractor's normalized YYYY-MM-DD and common M/D/YYYY.
+// Returns null for anything unrecognized OR out-of-range — never guess, and
+// never emit an invalid date: a single bad DOB (e.g. "13/40/2015") must not
+// fail the whole upsert batch (Postgres rejects out-of-range dates).
 function parseDate(v: unknown): string | null {
   const s = str(v);
   if (!s) return null;
+  let y = "", mo = "", d = "";
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
-  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (m) return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
-  return null;
+  if (m) { y = m[1]; mo = m[2]; d = m[3]; }
+  else {
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); // assume US month/day/year
+    if (m) { y = m[3]; mo = m[1]; d = m[2]; }
+  }
+  if (!m) return null;
+  const iso = `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  // Reject overflow (13th month, Feb 30, etc.): JS rolls these over, so a
+  // round-trip mismatch means the input wasn't a real calendar date.
+  const dt = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(dt.getTime()) || dt.toISOString().slice(0, 10) !== iso) return null;
+  return iso;
 }
 
 Deno.serve(async (req: Request) => {
@@ -322,12 +334,16 @@ Deno.serve(async (req: Request) => {
   // Prior birthdate per existing row — preserve a captured DOB when a later
   // import for the same contact doesn't include one.
   const priorBirthdate = new Map<string, string | null>();
+  // Prior welcome-suppression per existing row — a re-import must NOT flip a
+  // family we already decided about (re-importing an existing "skip welcome"
+  // list as "new" shouldn't retroactively welcome them). Mirrors tags/birthdate.
+  const priorSuppress = new Map<string, boolean>();
   // Chunk the .in() lookup — a 5k-item IN list is unwieldy for one request.
   for (let i = 0; i < emails.length; i += 500) {
     const slice = emails.slice(i, i + 500);
     const { data: hits, error: selErr } = await supabase
       .from("marketing_recipients")
-      .select("email, school_name, tags, child_birthdate")
+      .select("email, school_name, tags, child_birthdate, suppress_welcome")
       .eq("organization_id", organization_id)
       .eq("source", source)
       .in("email", slice);
@@ -340,6 +356,7 @@ Deno.serve(async (req: Request) => {
         existing.add(k);
         priorTags.set(k, stringArray(h.tags));
         priorBirthdate.set(k, (h as { child_birthdate?: string | null }).child_birthdate ?? null);
+        priorSuppress.set(k, (h as { suppress_welcome?: boolean }).suppress_welcome === true);
       }
     }
   }
@@ -352,6 +369,9 @@ Deno.serve(async (req: Request) => {
     row.tags = [...new Set([...prior, ...row.tags])];
     // Preserve an existing DOB if this import didn't bring one.
     if (!row.child_birthdate) row.child_birthdate = priorBirthdate.get(k) ?? null;
+    // Preserve an existing contact's welcome decision — the batch flag only
+    // applies to brand-new contacts, never re-flips one we already imported.
+    if (existing.has(k)) row.suppress_welcome = priorSuppress.get(k) ?? row.suppress_welcome;
   }
 
   // ---- Upsert on the real unique key (update-or-insert) ----

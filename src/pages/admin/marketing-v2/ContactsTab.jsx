@@ -473,6 +473,9 @@ function UploadModal({ orgId, onClose, onImported }) {
     setError("");
     if (!file) { setError("Pick a file first."); return; }
     setStep("parsing");
+    // Clear any state from a prior parse so a failed/retried upload can't carry
+    // a previous file's rows into the review table.
+    setRawHeaders([]); setRawRows([]); setMapping({});
     try {
       const name = (file.name || "").toLowerCase();
 

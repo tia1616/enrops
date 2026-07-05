@@ -65,6 +65,7 @@ interface AutomationRow {
   subject_override: string | null;
   body_override: string | null;
   timing_override: Record<string, unknown> | null;
+  enabled_at: string | null;
   template: TemplateRow;
   org: { id: string; slug: string; name: string };
 }
@@ -208,7 +209,7 @@ serve(async (req) => {
   const { data: automations, error: loadErr } = await supabase
     .from("automations")
     .select(`
-      id, organization_id, template_id, enabled, subject_override, body_override, timing_override,
+      id, organization_id, template_id, enabled, subject_override, body_override, timing_override, enabled_at,
       template:automation_templates!inner (
         id, key, display_name, trigger_type, applies_to_program_type, mailing_type,
         default_subject, default_body, default_timing, time_saved_minutes_per_send, is_v1_enabled
@@ -1184,8 +1185,13 @@ async function resolveContactAddedAudience(
   supabase: SupabaseClient,
   a: AutomationRow,
 ): Promise<AudienceEntry[]> {
+  // Only welcome contacts added AFTER this automation was turned on — never the
+  // existing back-catalog. enabled_at is stamped when the operator flips it on;
+  // fall back to a short window only if it's somehow unset, so we never blast
+  // history. Idempotency (context_key) keeps re-runs single-send.
   const days = pickNumber(a.timing_override?.days_window, a.template.default_timing?.days_window, 2);
-  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const windowStart = new Date(Date.now() - days * 86400000).toISOString();
+  const since = a.enabled_at ?? windowStart;
 
   const { data, error } = await supabase
     .from("marketing_recipients")

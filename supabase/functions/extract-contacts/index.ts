@@ -252,7 +252,7 @@ Deno.serve(async (req: Request) => {
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
     const msg = await anthropic.messages.create({
       model: SONNET_MODEL,
-      max_tokens: 8000,
+      max_tokens: 16000, // headroom for large rosters (~400 families) so the JSON isn't truncated mid-array
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: userPrompt(docText) }],
     });
