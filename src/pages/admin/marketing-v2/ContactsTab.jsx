@@ -21,6 +21,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
+import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
 
 const CREAM = "#FBFBFB";
 const RED = "#b53737";
@@ -436,6 +437,14 @@ function ContactsList({ orgId, refreshKey }) {
 
 function UploadModal({ orgId, onClose, onImported }) {
   const [step, setStep] = useState("pick"); // pick | parsing | mapping | committing | done
+  const [elapsed, setElapsed] = useState(0); // live m:ss counter for the file read (PDF = AI extract)
+
+  // Tick the elapsed counter once per second while a file is being read.
+  useEffect(() => {
+    if (step !== "parsing") return undefined;
+    const id = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [step]);
   const [file, setFile] = useState(null);
   const [error, setError] = useState("");
   const [rawHeaders, setRawHeaders] = useState([]);
@@ -475,7 +484,7 @@ function UploadModal({ orgId, onClose, onImported }) {
     setStep("parsing");
     // Clear any state from a prior parse so a failed/retried upload can't carry
     // a previous file's rows into the review table.
-    setRawHeaders([]); setRawRows([]); setMapping({});
+    setRawHeaders([]); setRawRows([]); setMapping({}); setElapsed(0);
     try {
       const name = (file.name || "").toLowerCase();
 
@@ -676,7 +685,8 @@ function UploadModal({ orgId, onClose, onImported }) {
 
         {step === "parsing" && (
           <div style={{ padding: "40px 0", textAlign: "center", color: MUTED, fontSize: 14 }}>
-            Reading your file…
+            <div style={{ marginBottom: 10 }}>Reading your file…</div>
+            <ElapsedTimer seconds={elapsed} />
           </div>
         )}
 
