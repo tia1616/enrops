@@ -296,6 +296,8 @@ function ContactsList({ orgId, refreshKey }) {
   const [err, setErr] = useState(null);
   const [tagOptions, setTagOptions] = useState([]);
   const [debouncedQ, setDebouncedQ] = useState("");
+  const [editId, setEditId] = useState(null); // contact being edited, or null
+  const [localRefresh, setLocalRefresh] = useState(0); // bump to re-fetch after an edit
   const seqRef = useRef(0);
 
   // Debounce the search box so we fire one query after typing settles, not per
@@ -323,7 +325,7 @@ function ContactsList({ orgId, refreshKey }) {
       setTagOptions([...set].sort());
     })();
     return () => { alive = false; };
-  }, [orgId, refreshKey]);
+  }, [orgId, refreshKey, localRefresh]);
 
   // A fresh import (refreshKey) returns to the first page. Search + tag changes
   // reset the page inline at their source (batched), so no extra fetch fires here.
@@ -361,7 +363,7 @@ function ContactsList({ orgId, refreshKey }) {
       if ((data?.length ?? 0) === 0 && page > 0) setPage(0);
     })();
     return () => { alive = false; };
-  }, [orgId, debouncedQ, tag, page, refreshKey]);
+  }, [orgId, debouncedQ, tag, page, refreshKey, localRefresh]);
 
   const from = total === 0 ? 0 : page * LIST_PAGE + 1;
   const to = Math.min((page + 1) * LIST_PAGE, total);
@@ -389,18 +391,18 @@ function ContactsList({ orgId, refreshKey }) {
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
           <thead>
             <tr>
-              {["Email", "Parent", "Child", "Area", "Tags"].map((h) => (
+              {["Email", "Parent", "Child", "Area", "Tags", ""].map((h) => (
                 <th key={h} style={{ position: "sticky", top: 0, background: CREAM, textAlign: "left", padding: "8px 10px", color: MUTED, fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${RULE}` }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {rows === null ? (
-              <tr><td colSpan={5} style={{ padding: 16, color: MUTED, fontSize: 13 }}>Loading…</td></tr>
+              <tr><td colSpan={6} style={{ padding: 16, color: MUTED, fontSize: 13 }}>Loading…</td></tr>
             ) : err ? (
-              <tr><td colSpan={5} style={{ padding: 16, color: RED, fontSize: 13 }}>Couldn&apos;t load contacts: {err}</td></tr>
+              <tr><td colSpan={6} style={{ padding: 16, color: RED, fontSize: 13 }}>Couldn&apos;t load contacts: {err}</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={5} style={{ padding: 16, color: MUTED, fontSize: 13 }}>No contacts match{tag ? ` the tag “${tag}”` : ""}{q ? ` “${q}”` : ""}.</td></tr>
+              <tr><td colSpan={6} style={{ padding: 16, color: MUTED, fontSize: 13 }}>No contacts match{tag ? ` the tag “${tag}”` : ""}{q ? ` “${q}”` : ""}.</td></tr>
             ) : rows.map((r) => (
               <tr key={r.id}>
                 <td style={listCell}><strong>{r.email}</strong></td>
@@ -416,6 +418,9 @@ function ContactsList({ orgId, refreshKey }) {
                     </span>
                   )}
                 </td>
+                <td style={{ ...listCell, textAlign: "right" }}>
+                  <button type="button" onClick={() => setEditId(r.id)} style={{ padding: "3px 10px", background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Edit</button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -428,6 +433,142 @@ function ContactsList({ orgId, refreshKey }) {
           <button type="button" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))} style={pagerBtn(page === 0)}>← Prev</button>
           <button type="button" disabled={to >= total} onClick={() => setPage((p) => p + 1)} style={pagerBtn(to >= total)}>Next →</button>
         </span>
+      </div>
+
+      {editId && (
+        <EditContactModal
+          orgId={orgId}
+          contactId={editId}
+          onClose={() => setEditId(null)}
+          onSaved={() => { setEditId(null); setLocalRefresh((n) => n + 1); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Edit a single contact — fields + tags. Writes directly to marketing_recipients
+// (RLS org-gates the update). Import only ever ADDS tags; this is where an
+// operator removes/fixes them or corrects a detail after upload.
+function EditContactModal({ orgId, contactId, onClose, onSaved }) {
+  const [row, setRow] = useState(null);
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("marketing_recipients")
+        .select("id, email, parent_name, phone, child_first_name, child_last_name, child_birthdate, school_name, city, state, zip, tags")
+        .eq("id", contactId)
+        .eq("organization_id", orgId)
+        .maybeSingle();
+      if (!alive) return;
+      if (error || !data) { setErr(error?.message ?? "Couldn't load this contact."); return; }
+      setRow({ ...data, tags: data.tags ?? [] });
+    })();
+    return () => { alive = false; };
+  }, [contactId, orgId]);
+
+  const set = (k, v) => setRow((r) => ({ ...r, [k]: v }));
+  function addTag() {
+    const parts = splitTags(tagInput);
+    if (!parts.length) return;
+    setRow((r) => ({ ...r, tags: [...new Set([...(r.tags ?? []), ...parts])] }));
+    setTagInput("");
+  }
+  const removeTag = (t) => setRow((r) => ({ ...r, tags: (r.tags ?? []).filter((x) => x !== t) }));
+
+  async function save() {
+    setErr("");
+    const email = (row.email ?? "").trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) { setErr("Enter a valid email — nothing sends without it."); return; }
+    setSaving(true);
+    // Writes to marketing_recipients go through a service-role edge fn (the table
+    // grants withhold UPDATE from the client). The fn re-validates + org-scopes.
+    const { error } = await supabase.functions.invoke("update-contact", {
+      body: {
+        organization_id: orgId,
+        id: contactId,
+        email,
+        parent_name: row.parent_name,
+        phone: row.phone,
+        child_first_name: row.child_first_name,
+        child_last_name: row.child_last_name,
+        child_birthdate: row.child_birthdate || null,
+        school_name: row.school_name,
+        city: row.city,
+        state: row.state,
+        zip: row.zip,
+        tags: row.tags ?? [],
+      },
+    });
+    if (error) {
+      let msg = error.message ?? "Couldn't save.";
+      try {
+        const resp = error?.context?.response ?? error?.context;
+        if (resp && typeof resp.clone === "function") {
+          const t = await resp.clone().text();
+          try { const p = JSON.parse(t); if (p?.error) msg = p.error; } catch { /* not JSON */ }
+        }
+      } catch { /* ignore */ }
+      setErr(msg);
+      setSaving(false);
+      return;
+    }
+    onSaved();
+  }
+
+  const fld = { width: "100%", padding: "7px 9px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", color: INK, boxSizing: "border-box" };
+  const lbl = { fontSize: 11, fontWeight: 600, color: MUTED, marginBottom: 3, display: "block" };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "5vh 16px", zIndex: 200, fontFamily: "inherit" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, maxWidth: 560, width: "100%", padding: 22, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 10px 40px rgba(0,0,0,0.25)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: INK }}>Edit contact</h2>
+          <button type="button" onClick={onClose} style={{ background: "transparent", border: "none", color: MUTED, fontSize: 18, cursor: "pointer" }} aria-label="Close">✕</button>
+        </div>
+        {err && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 12 }}>{err}</div>}
+        {row === null ? (
+          <div style={{ padding: "30px 0", textAlign: "center", color: MUTED, fontSize: 13 }}>Loading…</div>
+        ) : (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+              <div style={{ gridColumn: "1 / -1" }}><label style={lbl}>Email *</label><input style={fld} value={row.email ?? ""} onChange={(e) => set("email", e.target.value)} /></div>
+              <div><label style={lbl}>Parent / guardian</label><input style={fld} value={row.parent_name ?? ""} onChange={(e) => set("parent_name", e.target.value)} /></div>
+              <div><label style={lbl}>Phone</label><input style={fld} value={row.phone ?? ""} onChange={(e) => set("phone", e.target.value)} /></div>
+              <div><label style={lbl}>Child first name</label><input style={fld} value={row.child_first_name ?? ""} onChange={(e) => set("child_first_name", e.target.value)} /></div>
+              <div><label style={lbl}>Child last name</label><input style={fld} value={row.child_last_name ?? ""} onChange={(e) => set("child_last_name", e.target.value)} /></div>
+              <div><label style={lbl}>Child birthdate</label><input type="date" style={fld} value={row.child_birthdate ?? ""} onChange={(e) => set("child_birthdate", e.target.value)} /></div>
+              <div><label style={lbl}>School / center</label><input style={fld} value={row.school_name ?? ""} onChange={(e) => set("school_name", e.target.value)} /></div>
+              <div><label style={lbl}>City</label><input style={fld} value={row.city ?? ""} onChange={(e) => set("city", e.target.value)} /></div>
+              <div><label style={lbl}>State</label><input style={fld} value={row.state ?? ""} onChange={(e) => set("state", e.target.value)} /></div>
+              <div><label style={lbl}>ZIP</label><input style={fld} value={row.zip ?? ""} onChange={(e) => set("zip", e.target.value)} /></div>
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={lbl}>Tags</label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 6 }}>
+                {(row.tags ?? []).length === 0 ? <span style={{ color: MUTED, fontSize: 12 }}>No tags yet</span> : row.tags.map((t) => (
+                  <span key={t} style={{ fontSize: 11.5, fontWeight: 600, color: PURPLE, background: `${PURPLE}0F`, border: `1px solid ${PURPLE}22`, borderRadius: 999, padding: "2px 6px 2px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {t}
+                    <button type="button" onClick={() => removeTag(t)} style={{ background: "transparent", border: "none", color: PURPLE, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0 }} aria-label={`Remove ${t}`}>×</button>
+                  </span>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input style={{ ...fld, flex: 1 }} value={tagInput} onChange={(e) => setTagInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }} placeholder="Add a tag (e.g. VIP), press Enter" />
+                <button type="button" onClick={addTag} style={{ padding: "7px 12px", background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Add</button>
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
+              <button type="button" onClick={onClose} style={{ padding: "8px 14px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>Cancel</button>
+              <button type="button" onClick={save} disabled={saving} style={{ padding: "8px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.6 : 1 }}>{saving ? "Saving…" : "Save changes"}</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
