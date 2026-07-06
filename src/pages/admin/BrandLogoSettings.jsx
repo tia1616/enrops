@@ -347,7 +347,7 @@ export default function BrandLogoSettings() {
       {/* Banner */}
       <div style={{ marginTop: 16, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 4 }}>Banner</div>
-        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>A wide photo shown across the top of your registration page. Optional.</div>
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>A wide photo across the top of your <strong>registration page</strong> — not used in emails (those lead with your logo). Optional; leave it empty for a clean page.</div>
         <div style={{ width: "100%", maxWidth: 480, aspectRatio: "16 / 5", borderRadius: 8, border: `1px ${bannerUrl ? "solid" : "dashed"} ${RULE}`, display: "flex", alignItems: "center", justifyContent: "center", background: "#faf9ff", overflow: "hidden" }}>
           {bannerUrl
             ? <img src={bannerUrl} alt="Your banner" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
