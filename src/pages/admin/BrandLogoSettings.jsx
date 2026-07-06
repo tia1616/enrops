@@ -60,9 +60,11 @@ export default function BrandLogoSettings() {
     if (e.target) e.target.value = "";
     if (!file) return;
     setError("");
-    const OK = ["image/png", "image/jpeg", "image/webp"];
+    // SVG is allowed for the web logo; we auto-generate an email-safe PNG on save
+    // (email clients don't render SVG). PNG/JPG/WebP pass through.
+    const OK = ["image/svg+xml", "image/png", "image/jpeg", "image/webp"];
     if (!OK.includes(file.type)) {
-      setError("Please choose a PNG, JPG, or WebP. (SVG doesn't display in email.)");
+      setError("Please choose an SVG, PNG, JPG, or WebP image.");
       return;
     }
     if (file.size > 2_000_000) {
@@ -92,13 +94,14 @@ export default function BrandLogoSettings() {
     setSaving(true); setError("");
     try {
       const url = logoUrl.trim() || null;
-      // One file → both the web logo and the email-header logo.
-      const { error: e } = await supabase
-        .from("organizations")
-        .update({ logo_url: url, logo_email_url: url })
-        .eq("id", org.id);
+      // Route through update-org-logo: it sets logo_url AND derives the email-safe
+      // PNG (logo_email_url) via regenerate-email-logo. One upload → web + email.
+      const { data, error: e } = await supabase.functions.invoke("update-org-logo", {
+        body: { organization_id: org.id, logo_url: url },
+      });
       if (e) throw e;
-      flash("Logo saved.");
+      if (data?.error) throw new Error(data.error);
+      flash(url ? "Logo saved." : "Logo removed.");
       setSaved(logoUrl);
     } catch (e) {
       setError(e.message ?? "Couldn't save your logo.");
@@ -133,7 +136,7 @@ export default function BrandLogoSettings() {
               : <span style={{ color: MUTED, fontSize: 12 }}>No logo yet</span>}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={handleFile} style={{ display: "none" }} />
+            <input ref={fileRef} type="file" accept="image/svg+xml,image/png,image/jpeg,image/webp" onChange={handleFile} style={{ display: "none" }} />
             <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} style={ghostBtn(uploading)}>
               {uploading ? "Uploading…" : logoUrl ? "Replace logo" : "Upload logo"}
             </button>
@@ -143,8 +146,8 @@ export default function BrandLogoSettings() {
           </div>
         </div>
         <div style={{ fontSize: 12.5, color: MUTED, marginTop: 12, lineHeight: 1.5 }}>
-          PNG, JPG, or WebP, under 2 MB. A transparent PNG looks best on both light and dark backgrounds.
-          (SVG isn't supported — many email apps won't show it.)
+          SVG, PNG, JPG, or WebP, under 2 MB. A transparent PNG or SVG looks best on both light and dark
+          backgrounds — we'll make an email-friendly version automatically.
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
