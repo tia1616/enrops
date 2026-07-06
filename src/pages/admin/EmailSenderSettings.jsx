@@ -341,8 +341,8 @@ export default function EmailSenderSettings() {
               <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Preview</div>
               <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 16 }}>
                 <div style={{ marginTop: 4, paddingTop: 16, borderTop: "1px solid #eee", color: "#555", fontSize: 14, lineHeight: 1.5 }}>
-                  {sigImageUrl && <img src={sigImageUrl} alt="Signature" style={{ maxHeight: 64, maxWidth: 220, height: "auto", display: "block", margin: "0 0 10px" }} />}
                   <div dangerouslySetInnerHTML={{ __html: sigPreviewHtml }} />
+                  {sigImageUrl && <img src={sigImageUrl} alt="Signature" style={{ maxHeight: 64, maxWidth: 220, height: "auto", display: "block", margin: sigPreviewHtml ? "12px 0 0" : "0" }} />}
                 </div>
               </div>
             </div>

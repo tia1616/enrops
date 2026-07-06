@@ -258,9 +258,9 @@ export function renderSignatureBlock(brand: OrgBrand): string {
   const text = (brand.email_signature ?? '').trim();
   const img = (brand.email_signature_image_url ?? '').trim();
   if (!text && !img) return '';
-  const imgBlock = img
-    ? `<img src="${escapeAttr(img)}" alt="${escapeAttr(brand.org_name)}" style="max-height:64px;max-width:220px;height:auto;display:block;margin:0 0 10px;" />`
-    : '';
   const textBlock = text ? `<div>${text}</div>` : '';
-  return `<div style="margin-top:28px;padding-top:16px;border-top:1px solid #eee;color:#555;font-size:14px;line-height:1.5;">${imgBlock}${textBlock}</div>`;
+  const imgBlock = img
+    ? `<img src="${escapeAttr(img)}" alt="${escapeAttr(brand.org_name)}" style="max-height:64px;max-width:220px;height:auto;display:block;margin:${text ? '12px' : '0'} 0 0;" />`
+    : '';
+  return `<div style="margin-top:28px;padding-top:16px;border-top:1px solid #eee;color:#555;font-size:14px;line-height:1.5;">${textBlock}${imgBlock}</div>`;
 }
