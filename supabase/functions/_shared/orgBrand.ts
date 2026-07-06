@@ -37,7 +37,8 @@ export interface OrgBrand {
   // Tenant-specific ONLY — never cascades to the Enrops org (a tenant that hasn't
   // set a signature simply gets none; it must not inherit Enrops's).
   email_signature: string | null;      // HTML (safe subset from the friendly editor)
-  email_signature_image_url: string | null; // optional logo/headshot, public URL
+  email_signature_image_url: string | null; // custom logo/headshot URL (used when mode = 'custom')
+  email_signature_image_mode: 'logo' | 'custom' | 'none' | null; // null = legacy (fall back to url)
   // Whether the FROM line is the tenant's own verified domain, a per-tenant
   // address on the shared platform domain, or a fallback. Useful for logging.
   sender_source: 'tenant' | 'platform_shared' | 'platform' | 'hardcoded';
@@ -82,6 +83,7 @@ interface BrandingRow {
   logo_url: string | null;
   email_signature: string | null;
   email_signature_image_url: string | null;
+  email_signature_image_mode: string | null;
 }
 
 /** The domain part of an email address (after the @), trimmed, or null. */
@@ -104,7 +106,7 @@ async function fetchOrg(supabase: SupabaseClient, where: { id?: string; slug?: s
 async function fetchBranding(supabase: SupabaseClient, orgId: string): Promise<BrandingRow | null> {
   const { data } = await supabase
     .from('org_branding')
-    .select('primary_color, secondary_color, accent_color, page_bg_color, email_from_name, email_reply_to, logo_url, email_signature, email_signature_image_url')
+    .select('primary_color, secondary_color, accent_color, page_bg_color, email_from_name, email_reply_to, logo_url, email_signature, email_signature_image_url, email_signature_image_mode')
     .eq('organization_id', orgId)
     .maybeSingle();
   return data as BrandingRow | null;
@@ -214,6 +216,7 @@ export async function loadOrgBrand(
     // the platform's signature). Absent → null → no block renders.
     email_signature: pick(tenantBranding?.email_signature),
     email_signature_image_url: pick(tenantBranding?.email_signature_image_url),
+    email_signature_image_mode: (pick(tenantBranding?.email_signature_image_mode) as OrgBrand['email_signature_image_mode']),
 
     primary_color:
       pick(tenantBranding?.primary_color, enropsBranding?.primary_color) ?? ENROPS_DEFAULTS.primary_color,
@@ -256,7 +259,17 @@ function escapeAttr(s: string): string {
  */
 export function renderSignatureBlock(brand: OrgBrand): string {
   const text = (brand.email_signature ?? '').trim();
-  const img = (brand.email_signature_image_url ?? '').trim();
+  // Resolve the signature image by its stored mode. 'logo' tracks the org's
+  // CURRENT logo (not a snapshot), 'custom' uses the uploaded image, 'none' shows
+  // nothing. null = legacy rows (saved before the mode column) → fall back to the
+  // stored URL so existing signatures render unchanged.
+  const mode = brand.email_signature_image_mode;
+  const img = (
+    mode === 'logo'   ? (brand.logo_url ?? '')
+    : mode === 'custom' ? (brand.email_signature_image_url ?? '')
+    : mode === 'none'   ? ''
+    : (brand.email_signature_image_url ?? '') // legacy
+  ).trim();
   if (!text && !img) return '';
   const textBlock = text ? `<div>${text}</div>` : '';
   const imgBlock = img
