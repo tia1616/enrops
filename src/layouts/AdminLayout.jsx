@@ -151,7 +151,7 @@ export default function AdminLayout() {
         // Fetch org name + branding (display only — does not gate access)
         const { data: orgRow } = await supabase
           .from("organizations")
-          .select("id, name, slug, active_registration_term, uses_enrops_registration")
+          .select("id, name, slug, active_registration_term, uses_enrops_registration, venue_model")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;
@@ -312,6 +312,14 @@ export default function AdminLayout() {
           <nav style={{ padding: "12px 8px", flex: 1 }}>
             {visibleNav.map((item) => {
               const active = navItemActive(item, location.pathname);
+              // Own-venue tenants (a center/studio, no external partner schools)
+              // see the /admin/schools surface as plain "Locations" — mirror the
+              // page's own reframing so the sidebar matches. Partner tenants (J2S)
+              // are unaffected and keep "Partners".
+              const label =
+                item.to === "/admin/schools" && org?.venue_model === "own_venue"
+                  ? "Locations"
+                  : item.label;
               return (
                 <Link
                   key={item.to}
@@ -334,7 +342,7 @@ export default function AdminLayout() {
                     pointerEvents: item.soon ? "none" : "auto",
                   }}
                 >
-                  <span>{item.label}</span>
+                  <span>{label}</span>
                   {item.soon && (
                     <span style={{ fontSize: 10, color: MUTED, fontWeight: 500, textTransform: "uppercase", letterSpacing: 0.5 }}>
                       soon
