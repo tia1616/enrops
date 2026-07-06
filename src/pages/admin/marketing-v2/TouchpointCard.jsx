@@ -8,6 +8,11 @@ import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
 import Chevron from "../../../components/Chevron.jsx";
 import { supabase } from "../../../lib/supabase.js";
 import { INK, MUTED, PURPLE, BRIGHT, RULE, OK, INFO } from "../marketing/tokens.jsx";
+// Shared editor round-trip helpers — single source of truth for body_html
+// <-> editable-text conversion + token highlighting + plain-text extraction.
+// Previously duplicated inline here (and in CampaignDetail.jsx); consolidated
+// so the HTML-escaping fix lives in exactly one place.
+import { htmlToEditable, editableToHtml, highlightTokens, stripHtml } from "./bodyEditorUtils.js";
 
 function fmtScheduled(iso, timezone) {
   if (!iso) return "—";
@@ -365,64 +370,6 @@ export default function TouchpointCard({
       />
     </>
   );
-}
-
-function stripHtml(html) {
-  if (!html) return "";
-  return html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-}
-
-// Wraps merge tokens like {{first_name}} in a styled span so operators can
-// see at a glance which bits get personalized at send time.
-//
-// CRITICAL: only highlights tokens in TEXT content, not tokens inside HTML
-// attribute values. Wrapping a token in <span> inside <a href="..."> would
-// produce `<a href="<span...>...">` — invalid HTML that the browser parses
-// unpredictably, swallowing the anchor tag entirely and leaking the href as
-// plain text. The negative lookahead `(?![^<]*>)` matches a token only when
-// there's an unclosed `<` before the next `>`, i.e. the token sits in text
-// content not inside an attribute. Bug surfaced 2026-06-02 when Ennie wrote
-// `<a href="{{register_url}}">Grab the rate →</a>` and operators saw the
-// rendered preview as `{{register_url}}">Grab the rate →` with no link.
-function highlightTokens(html) {
-  if (!html) return "";
-  return html.replace(/\{\{(\w+)\}\}(?![^<]*>)/g, (_, name) =>
-    `<span style="display:inline-block;padding:0 6px;border-radius:4px;background:#f0e3e8;color:#1C004F;font-size:0.9em;font-weight:600;font-family:ui-monospace,monospace;">{{${name}}}</span>`,
-  );
-}
-
-// Convert stored HTML (what Ennie writes, what the server renders) into the
-// plain-text form an operator edits.
-// - <p>...</p> blocks become blank-line-separated blocks.
-// - <a href="X">Y</a> becomes [Y](X) so the operator can edit the visible
-//   text without breaking the URL.
-// - <em>X</em>/<i>X</i> become _X_ and <strong>X</strong>/<b>X</b> become
-//   **X**, so Ennie's emphasis survives a no-touch round-trip.
-// - Merge tokens like {{first_name}} pass through untouched.
-function htmlToEditable(html) {
-  if (!html) return "";
-  let text = html;
-  text = text.replace(/<a\s+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, href, inner) => `[${inner.trim()}](${href})`);
-  text = text.replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, inner) => `**${inner}**`);
-  text = text.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, inner) => `_${inner}_`);
-  text = text.replace(/<\/p>\s*<p[^>]*>/gi, "\n\n");
-  text = text.replace(/<p[^>]*>/gi, "");
-  text = text.replace(/<\/p>/gi, "");
-  return text.trim();
-}
-
-// Reverse: convert markdown back to HTML, then wrap each blank-line-separated
-// block in <p>...</p>. Links first (so a paragraph that's just a link still
-// wraps in <p>); then **bold** and _italic_. The underscore pattern requires
-// non-space content so plain identifiers like _internal_method don't match
-// unless they sit next to spaces or line boundaries on both sides.
-function editableToHtml(text) {
-  if (!text) return "";
-  let html = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${href}">${label}</a>`);
-  html = html.replace(/\*\*([^*\n]+)\*\*/g, (_, inner) => `<strong>${inner}</strong>`);
-  html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s.,;:!?)]|$)/g, (_m, pre, inner) => `${pre}<em>${inner}</em>`);
-  const paragraphs = html.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-  return paragraphs.map((p) => `<p>${p}</p>`).join("");
 }
 
 function BodyEditor({ value, onChange, onCommit }) {
