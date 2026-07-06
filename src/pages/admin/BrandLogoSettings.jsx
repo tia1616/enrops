@@ -90,7 +90,7 @@ export default function BrandLogoSettings() {
   const [savedLogo, setSavedLogo] = useState("");
   const [colors, setColors] = useState(DEFAULTS);
   const [savedColors, setSavedColors] = useState(DEFAULTS);
-  const [paletteNote, setPaletteNote] = useState(false); // "colors picked from your logo"
+  const [suggested, setSuggested] = useState(null); // palette found in the logo, offered (not auto-applied)
   const [bannerUrl, setBannerUrl] = useState("");
   const [savedBanner, setSavedBanner] = useState("");
   const [loading, setLoading] = useState(true);
@@ -151,19 +151,11 @@ export default function BrandLogoSettings() {
       const { data: pub } = supabase.storage.from("org-assets").getPublicUrl(path);
       if (!pub?.publicUrl) throw new Error("Couldn't get the image URL.");
       setLogoUrl(pub.publicUrl);
-      // Auto-pick brand colors from the logo — but only fields the operator
-      // hasn't already changed from the default, so a deliberate choice is never
-      // overwritten. They can still adjust any picker afterward.
+      // Offer colors found in the logo as a SUGGESTION — never auto-apply. Logo
+      // pixel-frequency is an unreliable guess (a colorful icon outweighs the
+      // brand-color text), so the operator decides whether to use them.
       const palette = await extractLogoPalette(file);
-      if (palette && (palette.primary || palette.secondary || palette.accent)) {
-        setColors((prev) => ({
-          ...prev,
-          primary: prev.primary === DEFAULTS.primary && palette.primary ? palette.primary : prev.primary,
-          secondary: prev.secondary === DEFAULTS.secondary && palette.secondary ? palette.secondary : prev.secondary,
-          accent: prev.accent === DEFAULTS.accent && palette.accent ? palette.accent : prev.accent,
-        }));
-        setPaletteNote(true);
-      }
+      setSuggested(palette && (palette.primary || palette.secondary || palette.accent) ? palette : null);
     } catch (err) {
       setError(err.message ?? "Couldn't upload that image.");
     } finally {
@@ -201,6 +193,18 @@ export default function BrandLogoSettings() {
   const colorsDirty = COLOR_FIELDS.some((f) => colors[f.key] !== savedColors[f.key]);
   const bannerDirty = bannerUrl !== savedBanner;
   const dirty = logoDirty || colorsDirty || bannerDirty;
+
+  // Apply the logo-suggested colors into the pickers (operator's explicit click).
+  function applySuggested() {
+    if (!suggested) return;
+    setColors((prev) => ({
+      ...prev,
+      primary: suggested.primary || prev.primary,
+      secondary: suggested.secondary || prev.secondary,
+      accent: suggested.accent || prev.accent,
+    }));
+    setSuggested(null);
+  }
 
   async function save() {
     setSaving(true); setError("");
@@ -263,7 +267,7 @@ export default function BrandLogoSettings() {
               {uploading ? "Uploading…" : logoUrl ? "Replace logo" : "Upload logo"}
             </button>
             {logoUrl && !uploading && (
-              <button type="button" onClick={() => setLogoUrl("")} style={{ ...ghostBtn(false), color: MUTED, borderColor: RULE }}>Remove</button>
+              <button type="button" onClick={() => { setLogoUrl(""); setSuggested(null); }} style={{ ...ghostBtn(false), color: MUTED, borderColor: RULE }}>Remove</button>
             )}
           </div>
         </div>
@@ -276,12 +280,16 @@ export default function BrandLogoSettings() {
       {/* Colors */}
       <div style={{ marginTop: 16, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 4 }}>Colors</div>
-        {paletteNote ? (
-          <div style={{ fontSize: 12.5, color: GREEN_INK, background: GREEN_BG, border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 10px", marginBottom: 14, lineHeight: 1.5 }}>
-            ✨ We picked these from your logo — adjust any of them below.
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>Pick your brand colors, or upload a logo above for suggestions.</div>
+        {suggested && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#faf9ff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+            <span style={{ fontSize: 12.5, color: INK, fontWeight: 600 }}>Found in your logo:</span>
+            {[suggested.primary, suggested.secondary, suggested.accent].filter(Boolean).map((hex) => (
+              <span key={hex} title={hex} style={{ width: 22, height: 22, borderRadius: 5, background: hex, border: `1px solid ${RULE}` }} />
+            ))}
+            <button type="button" onClick={applySuggested} style={{ ...ghostBtn(false), padding: "6px 12px", marginLeft: 4 }}>Use these</button>
+            <button type="button" onClick={() => setSuggested(null)} style={{ ...ghostBtn(false), padding: "6px 12px", color: MUTED, borderColor: RULE }}>Dismiss</button>
           </div>
-        ) : (
-          <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>Click a swatch to pick your color. Upload a logo and we'll suggest colors from it.</div>
         )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 14 }}>
           {COLOR_FIELDS.map((f) => (
