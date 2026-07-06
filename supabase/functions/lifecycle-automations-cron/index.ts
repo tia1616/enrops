@@ -1419,14 +1419,20 @@ function buildSessionDatesBlock(sessions: string[] | null | undefined, brand: Or
   if (!sessions || sessions.length === 0) return "";
   const valid = sessions.filter((s) => typeof s === "string" && s.trim().length > 0);
   if (valid.length === 0) return "";
-  const first = formatDate(valid[0]);
-  const last = formatDate(valid[valid.length - 1]);
   const count = valid.length;
-  const sessionWord = count === 1 ? "session" : "sessions";
-  const summary = count === 1
-    ? `One session on ${first}.`
-    : `${count} weekly ${sessionWord}, starting ${first} and ending ${last}.`;
-  return `<div style="background:#f5f4ee;padding:14px 18px;margin:16px 0;border-radius:6px;border-left:3px solid ${brand.primary_color};"><p style="margin:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${brand.primary_color};">Schedule</p><p style="margin:0;color:#1A1530;font-size:14px;line-height:1.55;">${escapeHtml(summary)}</p></div>`;
+  const labelStyle = `margin:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${brand.primary_color};`;
+  const textStyle = "margin:0;color:#1A1530;font-size:14px;line-height:1.55;";
+  if (count === 1) {
+    const only = escapeHtml(`One session, on ${formatDate(valid[0])}.`);
+    return `<div style="background:#f5f4ee;padding:14px 18px;margin:16px 0;border-radius:6px;border-left:3px solid ${brand.primary_color};"><p style="${labelStyle}">Schedule</p><p style="${textStyle}">${only}</p></div>`;
+  }
+  // List every session date so parents see exactly which days their child has
+  // class (derive_program_session_dates already honors district/location
+  // closures, so gaps are real). Count line + the dates — no "starting X ending
+  // Y" summary, which would just repeat the first and last dates in the list.
+  const header = escapeHtml(`${count} weekly sessions:`);
+  const dates = escapeHtml(valid.map(formatDateShort).join(", "));
+  return `<div style="background:#f5f4ee;padding:14px 18px;margin:16px 0;border-radius:6px;border-left:3px solid ${brand.primary_color};"><p style="${labelStyle}">Schedule</p><p style="${textStyle}margin-bottom:4px;font-weight:700;">${header}</p><p style="${textStyle}">${dates}</p></div>`;
 }
 
 // Build the "Arrival" / "Dismissal" location-instructions block. Renders
@@ -1586,6 +1592,15 @@ function formatDate(iso: string): string {
   return new Date(iso + "T00:00:00").toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
+    day: "numeric",
+  });
+}
+
+// Compact date for inline lists, e.g. "2026-09-02" → "Sep 2". Used by the
+// Schedule block so 10–12 session dates fit on a scannable line.
+function formatDateShort(iso: string): string {
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-US", {
+    month: "short",
     day: "numeric",
   });
 }
