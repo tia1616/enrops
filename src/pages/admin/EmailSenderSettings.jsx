@@ -329,7 +329,7 @@ export default function EmailSenderSettings() {
             ref={sigTextRef}
             value={sigText}
             onChange={(e) => setSigText(e.target.value)}
-            placeholder={"Warm regards,\nRichelle Caubang\nDirector, Mrs. Richelle\n(480) 555-0199"}
+            placeholder={"Warm regards,\nJordan Rivera\nDirector, Bright Minds Academy\n(555) 123-4567"}
             rows={4}
             style={{ ...input, resize: "vertical", lineHeight: 1.5 }}
           />
