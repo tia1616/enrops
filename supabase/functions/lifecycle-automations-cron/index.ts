@@ -126,6 +126,7 @@ interface AudienceEntry {
   session_dates_raw: string[];  // derive_program_session_dates output for afterschool — drives {{session_dates_block}}. Empty for camps.
   register_url: string;         // org's base registration URL
   next_term_available: boolean; // true if org has programs/camps starting >14 days out — drives {{next_term_link_block}}
+  program_time?: string;        // drives {{program_time}} — a comma-prefixed time clause (e.g. ", 9:00 AM – 12:00 PM") or "" when unknown. Set by the Welcome resolvers only.
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -520,6 +521,7 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     program_name: "Mini Robotics",
     program_start_date: "Monday, June 17",
     program_end_date: "Friday, June 21",
+    program_time: ", 9:00 AM – 12:00 PM",
     location_name: "Beaverton STEAM Hub",
     abandoned_resume_url: "#",
     age_turning: "8",
@@ -672,7 +674,7 @@ async function resolveTestEntryContent(
   if (campSessionId) {
     const { data: c, error } = await supabase
       .from("camp_sessions")
-      .select(`id, curriculum_name, starts_on, ends_on, location_name, curriculum_id,
+      .select(`id, curriculum_name, starts_on, ends_on, start_time, end_time, location_name, curriculum_id,
         curricula ( final_showcase, mid_term_skills, final_recap_skills ),
         program_locations ( parent_arrival_instructions, parent_dismissal_instructions )`)
       .eq("id", campSessionId)
@@ -684,6 +686,7 @@ async function resolveTestEntryContent(
       program_name: camp.curriculum_name ?? "your camp",
       program_start_date: camp.starts_on ? formatDate(camp.starts_on) : "",
       program_end_date: camp.ends_on ? formatDate(camp.ends_on) : "",
+      program_time: timeClause(camp.start_time, camp.end_time, false),
       location_name: camp.location_name ?? "",
       final_showcase_raw: camp.curricula?.final_showcase ?? "",
       mid_term_skills_raw: (camp.curricula?.mid_term_skills as string[] | null) ?? [],
@@ -699,7 +702,7 @@ async function resolveTestEntryContent(
   if (programId) {
     const { data: p, error } = await supabase
       .from("programs")
-      .select(`id, curriculum, first_session_date, program_location_id, curriculum_id,
+      .select(`id, curriculum, first_session_date, start_time, end_time, program_location_id, curriculum_id,
         program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ),
         curricula ( final_showcase, mid_term_skills, final_recap_skills )`)
       .eq("id", programId)
@@ -716,6 +719,7 @@ async function resolveTestEntryContent(
       program_name: prog.curriculum ?? "your program",
       program_start_date: prog.first_session_date ? formatDate(prog.first_session_date) : "",
       program_end_date: sessions.length > 0 ? formatDate(sessions[sessions.length - 1]) : "",
+      program_time: timeClause(prog.start_time, prog.end_time, true),
       location_name: prog.program_locations?.name ?? "",
       final_showcase_raw: prog.curricula?.final_showcase ?? "",
       mid_term_skills_raw: (prog.curricula?.mid_term_skills as string[] | null) ?? [],
@@ -761,7 +765,7 @@ async function resolveWelcomeAudience(
         id, parent_id,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+        programs!inner ( id, curriculum, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
       `)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
@@ -798,6 +802,8 @@ async function resolveWelcomeAudience(
         program_name: r.programs.curriculum ?? "your program",
         program_start_date: formatDate(r.programs.first_session_date),
         program_end_date: "",
+        // programs.start_time/end_time are already human text ("3:25 PM"); use as-is.
+        program_time: timeClause(r.programs.start_time, r.programs.end_time, true),
         location_name: r.programs.program_locations?.name ?? "",
         abandoned_resume_url: "",
         age_turning: "",
@@ -819,7 +825,7 @@ async function resolveWelcomeAudience(
         id, parent_id,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        camp_sessions!inner ( id, curriculum_name, starts_on, ends_on, location_id, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills ), program_locations ( parent_arrival_instructions, parent_dismissal_instructions ) )
+        camp_sessions!inner ( id, curriculum_name, starts_on, ends_on, start_time, end_time, location_id, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills ), program_locations ( parent_arrival_instructions, parent_dismissal_instructions ) )
       `)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
@@ -829,8 +835,55 @@ async function resolveWelcomeAudience(
     if (eventRegistrationId) q = q.eq("id", eventRegistrationId);
     const { data, error } = await q;
     if (error) throw error;
-    return (data ?? [])
-      .filter((r: any) => r.parents?.email && r.students?.id)
+
+    const rows = (data ?? []).filter((r: any) => r.parents?.email && r.students?.id);
+    if (rows.length === 0) return [];
+
+    // One welcome per child per camp — where a "camp" is a curriculum at a venue.
+    // A multi-week camp is stored as N weekly camp_sessions rows sharing the same
+    // (curriculum, location); without this a family gets a fresh welcome as EACH
+    // week enters the window (a child in a 4-week camp got 4 welcomes). Collapse
+    // each (parent, student, camp) to the child's EARLIEST session — that single
+    // session is the one welcome. Grouping is by curriculum + venue, NOT venue
+    // alone: a child doing two DIFFERENT camps at the same venue (different
+    // curricula, e.g. LEGO one week and Robotics another) still gets a heads-up
+    // for each. Earlier weeks may already be past today's window, so we look at
+    // ALL of the child's confirmed camp sessions — not just the windowed ones —
+    // so a later week whose earlier week already fired is correctly skipped.
+    const venueKey = (locId: string | null, locName: string | null) =>
+      locId ? `loc:${locId}` : `name:${(locName ?? "").trim().toLowerCase()}`;
+    // A camp run = a curriculum at a venue. Prefer curriculum_id; fall back to
+    // curriculum_name so rows missing the id still group by the named camp.
+    const runKey = (locId: string | null, locName: string | null, currId: string | null, currName: string | null) =>
+      `${venueKey(locId, locName)}|${currId ? `c:${currId}` : `cn:${(currName ?? "").trim().toLowerCase()}`}`;
+    const studentIds = Array.from(new Set(rows.map((r: any) => r.students.id)));
+    const { data: allCampRegs, error: allErr } = await supabase
+      .from("registrations")
+      .select("parent_id, student_id, camp_sessions!inner ( id, starts_on, location_id, location_name, curriculum_id, curriculum_name )")
+      .eq("organization_id", a.organization_id)
+      .eq("status", "confirmed")
+      .not("camp_session_id", "is", null)
+      .in("student_id", studentIds);
+    if (allErr) throw allErr;
+
+    // keeper = the (earliest starts_on, then lowest id) session per (parent, student, camp)
+    const keeper = new Map<string, { starts_on: string; id: string }>();
+    for (const cr of (allCampRegs ?? []) as any[]) {
+      const cs = cr.camp_sessions;
+      if (!cs?.id || !cs.starts_on) continue;
+      const k = `${cr.parent_id}|${cr.student_id}|${runKey(cs.location_id, cs.location_name, cs.curriculum_id, cs.curriculum_name)}`;
+      const cur = keeper.get(k);
+      if (!cur || cs.starts_on < cur.starts_on || (cs.starts_on === cur.starts_on && cs.id < cur.id)) {
+        keeper.set(k, { starts_on: cs.starts_on, id: cs.id });
+      }
+    }
+
+    return rows
+      .filter((r: any) => {
+        const cs = r.camp_sessions;
+        const k = `${r.parents.id}|${r.students.id}|${runKey(cs.location_id, cs.location_name, cs.curriculum_id, cs.curriculum_name)}`;
+        return keeper.get(k)?.id === cs.id;
+      })
       .map((r: any) => ({
         context_key: `camp:${r.camp_sessions.id}:parent:${r.parents.id}:student:${r.students.id}`,
         parent_id: r.parents.id,
@@ -840,6 +893,8 @@ async function resolveWelcomeAudience(
         program_name: r.camp_sessions.curriculum_name ?? "your camp",
         program_start_date: formatDate(r.camp_sessions.starts_on),
         program_end_date: r.camp_sessions.ends_on ? formatDate(r.camp_sessions.ends_on) : "",
+        // camp_sessions.start_time/end_time are Postgres `time` values → format.
+        program_time: timeClause(r.camp_sessions.start_time, r.camp_sessions.end_time, false),
         location_name: r.camp_sessions.location_name ?? "",
         abandoned_resume_url: "",
         age_turning: "",
@@ -1305,6 +1360,10 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     program_name: entry.program_name,
     program_start_date: entry.program_start_date,
     program_end_date: entry.program_end_date,
+    // Comma-prefixed time clause so the template reads naturally with OR without
+    // a known time: "starts {{program_start_date}}{{program_time}}." →
+    // "…July 6, 9:00 AM – 12:00 PM." when set, or "…July 6." when "".
+    program_time: entry.program_time ?? "",
     location_name: entry.location_name,
     age_turning: entry.age_turning,
     abandoned_resume_url: entry.abandoned_resume_url,
@@ -1529,6 +1588,34 @@ function formatDate(iso: string): string {
     month: "long",
     day: "numeric",
   });
+}
+
+// Format a camp_sessions clock value ("HH:MM:SS", a Postgres `time`) as a
+// human 12-hour string: "09:00:00" → "9:00 AM", "15:30:00" → "3:30 PM".
+// Returns "" for null/unparseable so the caller can omit the time cleanly.
+function formatClockTime(t: string | null | undefined): string {
+  if (!t) return "";
+  const parts = String(t).split(":");
+  let h = parseInt(parts[0], 10);
+  const m = parseInt(parts[1] ?? "0", 10);
+  if (Number.isNaN(h)) return "";
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12; if (h === 0) h = 12;
+  const mm = String(Number.isNaN(m) ? 0 : m).padStart(2, "0");
+  return `${h}:${mm} ${ampm}`;
+}
+
+// Build the comma-prefixed {{program_time}} clause from a start/end pair.
+// Renders only when BOTH ends are present, so we never show a half-open range.
+// `preformatted` = true for afterschool (programs.start_time/end_time are
+// already human text like "3:25 PM"); false for camps (Postgres time values
+// that need formatClockTime). Empty string when either end is missing — the
+// template then reads fine without any time. Uses an en dash (–).
+function timeClause(start: string | null | undefined, end: string | null | undefined, preformatted: boolean): string {
+  const s = preformatted ? (start ?? "").trim() : formatClockTime(start);
+  const e = preformatted ? (end ?? "").trim() : formatClockTime(end);
+  if (!s || !e) return "";
+  return `, ${s} – ${e}`;
 }
 
 // Pull a first name from a contact's stored full name for {{first_name}}.
