@@ -137,9 +137,24 @@ export async function loadOrgBrand(
     domainOf(ENROPS_DEFAULTS.sender_email)!;
   const tenantSlug = (tenantOrg?.slug ?? '').trim() || null;
 
+  // A tenant's OWN From address is safe ONLY if its domain is the tenant's
+  // VERIFIED sending domain (org.sending_domain). Sending from an unauthenticated
+  // domain makes Resend reject the message and the email silently fails — so when
+  // it isn't verified we fall back to the always-verified shared platform domain.
+  // This makes a "won't-send" sender state impossible: a tenant cannot break
+  // delivery by setting a custom From. Their own address is still used as the
+  // reply_to below, so replies reach them. (Matches how Mailchimp/Klaviyo/HubSpot
+  // gate custom sending domains behind DNS verification.)
+  const tenantCustomSender = pick(tenantOrg?.default_sender_email);
+  const tenantSenderVerified = !!(
+    tenantCustomSender &&
+    tenantOrg?.sending_domain &&
+    domainOf(tenantCustomSender)?.toLowerCase() === tenantOrg.sending_domain.trim().toLowerCase()
+  );
+
   const senderEmail =
-    // 1. Tenant's own verified domain (e.g. J2S on updates.journeytosteam.com) — advanced/grandfathered.
-    pick(tenantOrg?.default_sender_email) ??
+    // 1. Tenant's own domain, but ONLY when it is their verified sending domain.
+    (tenantSenderVerified ? tenantCustomSender : null) ??
     // 2. Default for every other tenant: a per-tenant address on the shared verified platform domain.
     (tenantSlug ? `${tenantSlug}@${platformDomain}` : null) ??
     // 3. Platform itself (no tenant) → Enrops sender, then hardcoded last resort.
