@@ -73,6 +73,8 @@ export default function EmailSenderSettings() {
   // as sanitized HTML in org_branding.email_signature.
   const [sigHtml, setSigHtml] = useState("");
   const [sigImageUrl, setSigImageUrl] = useState("");
+  const [orgLogo, setOrgLogo] = useState(""); // canonical org logo (Settings → Logo)
+  const [sigImgMode, setSigImgMode] = useState("none"); // 'logo' | 'custom' | 'none'
   const [uploadingSig, setUploadingSig] = useState(false);
   const sigFileRef = useRef(null);
   const sigEditorRef = useRef(null);
@@ -118,25 +120,34 @@ export default function EmailSenderSettings() {
       // mailing_address lives on organizations (CAN-SPAM footer), not org_branding.
       const { data: orgRow } = await supabase
         .from("organizations")
-        .select("mailing_address")
+        .select("mailing_address, logo_url")
         .eq("id", org.id)
         .maybeSingle();
       if (!cancelled) {
         const sig = sanitizeSignatureHtml(data?.email_signature ?? "");
         const sigImg = data?.email_signature_image_url ?? "";
+        const logo = orgRow?.logo_url ?? "";
+        // Mode is stored explicitly now. Legacy rows (null mode) fall back to the
+        // old URL-equality guess so their signatures keep rendering the same way.
+        const mode = data?.email_signature_image_mode
+          ?? (!sigImg ? "none" : (logo && sigImg === logo) ? "logo" : "custom");
+        const customImg = mode === "custom" ? sigImg : "";
         initialSig.current = sig;
         sigHydrated.current = false; // re-hydrate the editor for this org
         setFromName(data?.email_from_name ?? "");
         setReplyTo(data?.email_reply_to ?? "");
         setMailingAddress(orgRow?.mailing_address ?? "");
         setSigHtml(sig);
-        setSigImageUrl(sigImg);
+        setSigImageUrl(customImg);
+        setOrgLogo(logo);
+        setSigImgMode(mode);
         setSaved({
           fromName: data?.email_from_name ?? "",
           replyTo: data?.email_reply_to ?? "",
           mailingAddress: orgRow?.mailing_address ?? "",
           sigHtml: sig,
-          sigImageUrl: sigImg,
+          sigImageUrl: customImg,
+          sigImgMode: mode,
         });
         setTestTo(user?.email ?? "");
         await loadPreview();
@@ -166,7 +177,10 @@ export default function EmailSenderSettings() {
         email_from_name: fromName.trim() || null,
         email_reply_to: replyTo.trim() || null,
         email_signature: htmlHasText(cleanSig) ? cleanSig : null,
-        email_signature_image_url: sigImageUrl.trim() || null,
+        email_signature_image_mode: sigImgMode,
+        // Only 'custom' stores a URL; 'logo' resolves to the live org logo at
+        // send time, 'none' stores nothing.
+        email_signature_image_url: sigImgMode === "custom" ? (sigImageUrl.trim() || null) : null,
         updated_at: new Date().toISOString(),
       };
       // org_branding is keyed on organization_id (its PK) — upsert so it inserts
@@ -181,7 +195,7 @@ export default function EmailSenderSettings() {
         .eq("id", org.id);
       if (addrErr) throw addrErr;
       flash("Sender saved.");
-      setSaved({ fromName, replyTo, mailingAddress, sigHtml, sigImageUrl });
+      setSaved({ fromName, replyTo, mailingAddress, sigHtml, sigImageUrl, sigImgMode });
       await loadPreview();
     } catch (e) {
       setError(e.message ?? "Couldn't save your sender settings.");
@@ -247,11 +261,13 @@ export default function EmailSenderSettings() {
     }
   }
 
-  function removeSigImage() {
-    // Clears the reference; the file stays in storage (harmless, org-scoped).
-    // Save to persist the removal.
-    setSigImageUrl("");
-  }
+  // Signature image mode. "Use my logo" tracks the org logo live (resolved at
+  // send time — no snapshot); "different image" keeps the uploaded custom image;
+  // "none" shows nothing. We keep sigImageUrl untouched across switches so a
+  // custom upload survives toggling to logo/none and back.
+  function chooseLogoImg() { setSigImgMode("logo"); }
+  function chooseCustomImg() { setSigImgMode("custom"); }
+  function chooseNoImg() { setSigImgMode("none"); }
 
   // Read the editor's current HTML into state (sanitized) — drives preview,
   // dirty-check, and save. We never write back to the DOM here, so the cursor
@@ -306,11 +322,13 @@ export default function EmailSenderSettings() {
   }
 
   const sigPreviewHtml = sanitizeSignatureHtml(sigHtml);
-  const hasSignature = htmlHasText(sigPreviewHtml) || !!sigImageUrl;
+  // The image shown in the preview/email depends on the chosen mode.
+  const sigPreviewImg = sigImgMode === "logo" ? orgLogo : sigImgMode === "custom" ? sigImageUrl : "";
+  const hasSignature = htmlHasText(sigPreviewHtml) || !!sigPreviewImg;
 
   const dirty =
     fromName !== saved.fromName || replyTo !== saved.replyTo || mailingAddress !== saved.mailingAddress ||
-    sigHtml !== saved.sigHtml || sigImageUrl !== saved.sigImageUrl;
+    sigHtml !== saved.sigHtml || sigImageUrl !== saved.sigImageUrl || sigImgMode !== saved.sigImgMode;
 
   if (loading) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
@@ -360,24 +378,36 @@ export default function EmailSenderSettings() {
             image (logo or headshot) and a few lines about you.
           </div>
 
-          {/* Image */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
-            {sigImageUrl ? (
-              <img src={sigImageUrl} alt="Signature" style={{ maxHeight: 56, maxWidth: 180, height: "auto", borderRadius: 6, border: `1px solid ${RULE}` }} />
-            ) : (
-              <div style={{ width: 56, height: 56, borderRadius: 6, border: `1px dashed ${RULE}`, display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontSize: 11 }}>No image</div>
-            )}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <input ref={sigFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={handleSigImage} style={{ display: "none" }} />
-              <button type="button" onClick={() => sigFileRef.current?.click()} disabled={uploadingSig} style={ghostBtn(uploadingSig)}>
-                {uploadingSig ? "Uploading…" : sigImageUrl ? "Replace image" : "Add image"}
-              </button>
-              {sigImageUrl && !uploadingSig && (
-                <button type="button" onClick={removeSigImage} style={{ ...ghostBtn(false), color: MUTED, borderColor: RULE }}>Remove</button>
-              )}
-            </div>
+          {/* Image choice — reuse the org logo, a different image, or none. */}
+          <div style={{ ...lbl, marginTop: 4 }}>Image</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button type="button" onClick={chooseLogoImg} style={segBtn(sigImgMode === "logo")}>Use my logo</button>
+            <button type="button" onClick={chooseCustomImg} style={segBtn(sigImgMode === "custom")}>Use a different image</button>
+            <button type="button" onClick={chooseNoImg} style={segBtn(sigImgMode === "none")}>No image</button>
           </div>
-          <div style={hint}>PNG, JPG, or GIF, under 1 MB. A logo or headshot works best.</div>
+
+          {sigImgMode === "logo" && (
+            orgLogo
+              ? <div style={{ marginTop: 12 }}><img src={orgLogo} alt="Your logo" style={{ maxHeight: 56, maxWidth: 180, height: "auto", borderRadius: 6, border: `1px solid ${RULE}` }} /></div>
+              : <div style={{ ...hint, marginTop: 10 }}>You haven't added a logo yet. <Link to="/admin/branding" style={{ color: BRIGHT, fontWeight: 600, textDecoration: "none" }}>Add your logo →</Link></div>
+          )}
+
+          {sigImgMode === "custom" && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
+                {sigImageUrl ? (
+                  <img src={sigImageUrl} alt="Signature image" style={{ maxHeight: 56, maxWidth: 180, height: "auto", borderRadius: 6, border: `1px solid ${RULE}` }} />
+                ) : (
+                  <div style={{ width: 56, height: 56, borderRadius: 6, border: `1px dashed ${RULE}`, display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontSize: 11 }}>No image</div>
+                )}
+                <input ref={sigFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={handleSigImage} style={{ display: "none" }} />
+                <button type="button" onClick={() => sigFileRef.current?.click()} disabled={uploadingSig} style={ghostBtn(uploadingSig)}>
+                  {uploadingSig ? "Uploading…" : sigImageUrl ? "Replace image" : "Upload image"}
+                </button>
+              </div>
+              <div style={hint}>A badge or headshot. PNG, JPG, or GIF, under 1 MB.</div>
+            </>
+          )}
 
           {/* WYSIWYG editor — bold shows bold, links show as links. No syntax. */}
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 14, marginBottom: 6 }}>
@@ -421,7 +451,7 @@ export default function EmailSenderSettings() {
               <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 16 }}>
                 <div style={{ marginTop: 4, paddingTop: 16, borderTop: "1px solid #eee", color: "#555", fontSize: 14, lineHeight: 1.5 }}>
                   <div dangerouslySetInnerHTML={{ __html: sigPreviewHtml }} />
-                  {sigImageUrl && <img src={sigImageUrl} alt="Signature" style={{ maxHeight: 64, maxWidth: 220, height: "auto", display: "block", margin: htmlHasText(sigPreviewHtml) ? "12px 0 0" : "0" }} />}
+                  {sigPreviewImg && <img src={sigPreviewImg} alt="Signature" style={{ maxHeight: 64, maxWidth: 220, height: "auto", display: "block", margin: htmlHasText(sigPreviewHtml) ? "12px 0 0" : "0" }} />}
                 </div>
               </div>
             </div>
@@ -457,5 +487,6 @@ const lbl = { display: "block", fontSize: 13, fontWeight: 600, color: INK, margi
 const hint = { fontSize: 12.5, color: MUTED, marginTop: 6, lineHeight: 1.5 };
 const input = { width: "100%", padding: "10px 12px", border: `1.5px solid ${RULE}`, borderRadius: 8, fontSize: 14, color: INK, background: "#fff", fontFamily: "inherit", boxSizing: "border-box" };
 const fmtBtn = { minWidth: 32, padding: "5px 10px", background: "#fff", color: INK, border: `1.5px solid ${RULE}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", cursor: "pointer", lineHeight: 1 };
+function segBtn(active) { return { padding: "7px 12px", background: active ? "#f0e3e8" : "#fff", color: active ? PURPLE : INK, border: `1.5px solid ${active ? BRIGHT : RULE}`, borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }; }
 function primaryBtn(disabled) { return { padding: "9px 18px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1 }; }
 function ghostBtn(disabled) { return { padding: "9px 14px", background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1 }; }
