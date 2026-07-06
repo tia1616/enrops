@@ -44,6 +44,9 @@ export default function EmailSenderSettings() {
   const [saving, setSaving] = useState(false);
   const [testTo, setTestTo] = useState("");
   const [testing, setTesting] = useState(false);
+  // Inline result shown right at the Send-test button (the page-top toast is
+  // off-screen once you've scrolled down to this section).
+  const [testMsg, setTestMsg] = useState(null); // { kind: 'ok'|'warn'|'err', text }
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
 
@@ -130,18 +133,19 @@ export default function EmailSenderSettings() {
   }
 
   async function sendTest() {
-    if (!testTo.trim()) { setError("Enter an email to send the test to."); return; }
+    setTestMsg(null);
+    if (!testTo.trim()) { setTestMsg({ kind: "err", text: "Enter an email to send the test to." }); return; }
     setTesting(true); setError("");
     try {
       const { data, error: e } = await supabase.functions.invoke("tenant-sender", {
         body: { organization_id: org.id, action: "test", to: testTo.trim() },
       });
       if (e) throw e;
-      if (data?.held_back) flash(`On staging, ${testTo.trim()} isn't on the test allow-list — nothing sent.`);
-      else if (data?.sent) flash(`Test sent to ${data.to}. Check that inbox.`);
-      else setError(data?.error ? `Couldn't send: ${data.error}` : "Couldn't send the test.");
+      if (data?.held_back) setTestMsg({ kind: "warn", text: `On staging, ${testTo.trim()} isn't on the test allow-list — nothing sent.` });
+      else if (data?.sent) setTestMsg({ kind: "ok", text: `✓ Test sent to ${data.to}. Check that inbox.` });
+      else setTestMsg({ kind: "err", text: data?.error ? `Couldn't send: ${data.error}` : "Couldn't send the test." });
     } catch (e) {
-      setError(e.message ?? "Couldn't send the test email.");
+      setTestMsg({ kind: "err", text: e.message ?? "Couldn't send the test email." });
     } finally {
       setTesting(false);
     }
@@ -361,6 +365,14 @@ export default function EmailSenderSettings() {
           <input type="email" value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="you@example.com" style={{ ...input, flex: 1, minWidth: 220 }} />
           <button type="button" onClick={sendTest} disabled={testing} style={ghostBtn(testing)}>{testing ? "Sending…" : "Send test"}</button>
         </div>
+        {testMsg && (
+          <div style={{
+            marginTop: 12, padding: "10px 12px", borderRadius: 8, fontSize: 13,
+            background: testMsg.kind === "ok" ? GREEN_BG : testMsg.kind === "warn" ? "#fffbeb" : "#fef2f2",
+            border: `1px solid ${testMsg.kind === "ok" ? "#bbf7d0" : testMsg.kind === "warn" ? "#fde68a" : "#fecaca"}`,
+            color: testMsg.kind === "ok" ? GREEN_INK : testMsg.kind === "warn" ? "#92400e" : "#991b1b",
+          }}>{testMsg.text}</div>
+        )}
       </div>
     </div>
   );
