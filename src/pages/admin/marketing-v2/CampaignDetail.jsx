@@ -18,6 +18,10 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import { usePermissions } from "../../../lib/permissions";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/tokens.jsx";
+// Shared editor round-trip helpers — single source of truth. Was duplicated
+// inline here as editableFromHtml/htmlFromEditable/stripHtml; consolidated onto
+// bodyEditorUtils.js so the HTML-escaping fix lives in one place.
+import { htmlToEditable, editableToHtml, stripHtml } from "./bodyEditorUtils.js";
 import EditableField from "./EditableField.jsx";
 import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
 
@@ -490,8 +494,8 @@ function TouchpointEditor({ tp, onUpdate }) {
           )}
         </div>
         <EditableField
-          value={editableFromHtml(bodyHtml)}
-          onChange={(v) => onUpdate({ payload: { body_html: htmlFromEditable(v), body_text: stripHtml(v) } })}
+          value={htmlToEditable(bodyHtml)}
+          onChange={(v) => onUpdate({ payload: { body_html: editableToHtml(v), body_text: stripHtml(v) } })}
           multiline
           rows={10}
           placeholder="Click to write the email body"
@@ -572,30 +576,3 @@ function fmtDatetimeInput(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function stripHtml(html) {
-  if (!html) return "";
-  return html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-}
-
-// Mirror TouchpointCard's editable<->HTML round-trip so the editor here reads
-// and writes the same shape the builder/renderer expect.
-function editableFromHtml(html) {
-  if (!html) return "";
-  let text = html;
-  text = text.replace(/<a\s+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, href, inner) => `[${inner.trim()}](${href})`);
-  text = text.replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, inner) => `**${inner}**`);
-  text = text.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, inner) => `_${inner}_`);
-  text = text.replace(/<\/p>\s*<p[^>]*>/gi, "\n\n");
-  text = text.replace(/<p[^>]*>/gi, "");
-  text = text.replace(/<\/p>/gi, "");
-  return text.trim();
-}
-
-function htmlFromEditable(text) {
-  if (!text) return "";
-  let html = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${href}">${label}</a>`);
-  html = html.replace(/\*\*([^*\n]+)\*\*/g, (_, inner) => `<strong>${inner}</strong>`);
-  html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s.,;:!?)]|$)/g, (_m, pre, inner) => `${pre}<em>${inner}</em>`);
-  const paragraphs = html.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-  return paragraphs.map((p) => `<p>${p}</p>`).join("");
-}

@@ -16,6 +16,40 @@
 
 const PURPLE = "#1C004F";
 
+// --- HTML entity escaping for operator-typed TEXT ------------------------
+// The editor round-trip stores operator text as HTML (body_html / body_override
+// / email_signature). Operator-typed characters that are STRUCTURAL in HTML —
+// `&`, `<`, `>` — must be entity-escaped when we build that HTML, or:
+//   • a literal `<…>` is emitted raw into outgoing email + the admin preview
+//     (rendered via dangerouslySetInnerHTML — self-XSS in the admin session),
+//   • htmlToEditable's catch-all tag-stripper deletes any `<…>` run on reload,
+//     silently dropping the operator's text, and
+//   • the dirty-check misbehaves because the round-trip isn't stable.
+//
+// We escape ONLY these three characters — deliberately NOT `"` or `'`. Reason:
+// existing stored bodies contain entities we did NOT author (&quot;, &#39;,
+// &rsquo;, &mdash; from Ennie-generated HTML). unescapeText only reverses the
+// three we produce, so every other entity round-trips byte-for-byte exactly as
+// it did before this change. Widening the set would start decoding those on
+// load and re-encoding them differently on save — a needless backward-compat
+// hazard. Token values are escaped separately at send time (htmlEscapeSafe in
+// the send functions); this layer escapes the body TEXT the operator types.
+export function escapeText(s) {
+  return String(s)
+    .replace(/&/g, "&amp;") // must run FIRST so we don't double-encode below
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Inverse of escapeText. `&amp;` is reversed LAST so a literal "&lt;" the
+// operator typed (stored as "&amp;lt;") comes back as "&lt;", not "<".
+export function unescapeText(s) {
+  return String(s)
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
 // Tokens whose resolved value is a pre-rendered HTML <div> block (built by the
 // cron/send function, not escaped). They must sit BETWEEN paragraphs, never
 // inside a <p> — a block-level <div> nested in <p> is invalid HTML that email
@@ -90,6 +124,13 @@ export function htmlToEditable(html) {
     BLOCK_TOKENS.has(name) ? `\n\n{{${name}}}\n\n` : m,
   );
   text = text.replace(/\n{3,}/g, "\n\n");
+  // Decode the structural entities we escape on the way out, so the operator
+  // sees `<`, `>`, `&` as literals in the textarea. Runs AFTER the catch-all
+  // tag-stripper above so a stored `&lt;script&gt;` becomes the literal text
+  // `<script>` (shown, not executed) instead of being stripped as a real tag.
+  // Other entities (&quot;, &#39;, &rsquo;, …) are intentionally left as-is —
+  // same as before this change — so they keep round-tripping unchanged.
+  text = unescapeText(text);
   return text.trim();
 }
 
@@ -100,7 +141,17 @@ export function htmlToEditable(html) {
 // they sit next to spaces / line boundaries on both sides.
 export function editableToHtml(text) {
   if (!text) return "";
-  let html = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${href}">${label}</a>`);
+  // Escape structural HTML chars in the operator's TEXT before we inject any
+  // real tags below. The markdown delimiters we match on (* _ [ ] ( )) aren't
+  // escaped, so the transforms still fire; everything the operator typed as
+  // literal content is now safe. Generated tags (<a>, <strong>, <em>, <p>,
+  // <br>) are added AFTER this and stay real. htmlToEditable reverses it.
+  let html = escapeText(text);
+  // Links FIRST so a paragraph that's just a link still wraps in <p>. The
+  // destination now tolerates one level of balanced parens so a URL like
+  // https://maps.google.com/?q=(1,2) isn't truncated at the first ")". (Deeper
+  // nesting than one level is not supported — vanishingly rare in real URLs.)
+  html = html.replace(/\[([^\]]+)\]\(((?:[^()]|\([^()]*\))*)\)/g, (_, label, href) => `<a href="${href}">${label}</a>`);
   html = html.replace(/\*\*([^*\n]+)\*\*/g, (_, inner) => `<strong>${inner}</strong>`);
   html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s.,;:!?)]|$)/g, (_m, pre, inner) => `${pre}<em>${inner}</em>`);
   // Build blocks line by line. A line that's ONLY a pre-rendered block token is
@@ -133,7 +184,11 @@ export function editableToHtml(text) {
   return out.join("");
 }
 
+// Produce the plain-text alternative (body_text) from body_html: drop tags,
+// collapse whitespace, and decode entities so the text/plain email part shows
+// a real `<`, `>`, `&` — not `&lt;`. Without the unescape, now that bodies are
+// entity-escaped, the plain-text part would leak literal `&lt;` to recipients.
 export function stripHtml(html) {
   if (!html) return "";
-  return html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  return unescapeText(html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim());
 }
