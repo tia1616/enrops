@@ -212,11 +212,18 @@ export default function BrandLogoSettings() {
       // Logo goes through the edge fn (sets logo_url + derives the email PNG).
       if (logoDirty) {
         const url = logoUrl.trim() || null;
-        const { data, error: e } = await supabase.functions.invoke("update-org-logo", {
-          body: { organization_id: org.id, logo_url: url },
-        });
-        if (e) throw e;
-        if (data?.error) throw new Error(data.error);
+        // Edge functions can return a transient 503 on a cold-start; retry once
+        // with a short backoff before surfacing an error.
+        let lastErr = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const { data, error: e } = await supabase.functions.invoke("update-org-logo", {
+            body: { organization_id: org.id, logo_url: url },
+          });
+          if (!e && !data?.error) { lastErr = null; break; }
+          lastErr = e ? new Error(e.message) : new Error(data.error);
+          if (attempt === 0) await new Promise((r) => setTimeout(r, 800));
+        }
+        if (lastErr) throw lastErr;
       }
       // Colors + banner go straight to org_branding. Build the payload from only
       // what changed so untouched fields (e.g. default colors) are never written.
@@ -233,7 +240,12 @@ export default function BrandLogoSettings() {
       flash("Branding saved.");
       setSavedLogo(logoUrl); setSavedColors(colors); setSavedBanner(bannerUrl);
     } catch (e) {
-      setError(e.message ?? "Couldn't save your branding.");
+      const raw = e?.message ?? "";
+      // Never surface raw edge/runtime jargon to the operator.
+      const friendly = /non-2xx|edge function|failed to fetch|503|network|fetcherror/i.test(raw)
+        ? "Couldn't save just now — please click Save again."
+        : (raw || "Couldn't save your branding.");
+      setError(friendly);
     } finally {
       setSaving(false);
     }
