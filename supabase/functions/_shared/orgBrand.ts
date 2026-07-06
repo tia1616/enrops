@@ -33,6 +33,11 @@ export interface OrgBrand {
   secondary_color: string;
   accent_color: string;
   page_bg_color: string;
+  // Per-tenant email signature, shown above the footer of every outgoing email.
+  // Tenant-specific ONLY — never cascades to the Enrops org (a tenant that hasn't
+  // set a signature simply gets none; it must not inherit Enrops's).
+  email_signature: string | null;      // HTML (safe subset from the friendly editor)
+  email_signature_image_url: string | null; // optional logo/headshot, public URL
   // Whether the FROM line is the tenant's own verified domain, a per-tenant
   // address on the shared platform domain, or a fallback. Useful for logging.
   sender_source: 'tenant' | 'platform_shared' | 'platform' | 'hardcoded';
@@ -75,6 +80,8 @@ interface BrandingRow {
   email_from_name: string | null;
   email_reply_to: string | null;
   logo_url: string | null;
+  email_signature: string | null;
+  email_signature_image_url: string | null;
 }
 
 /** The domain part of an email address (after the @), trimmed, or null. */
@@ -97,7 +104,7 @@ async function fetchOrg(supabase: SupabaseClient, where: { id?: string; slug?: s
 async function fetchBranding(supabase: SupabaseClient, orgId: string): Promise<BrandingRow | null> {
   const { data } = await supabase
     .from('org_branding')
-    .select('primary_color, secondary_color, accent_color, page_bg_color, email_from_name, email_reply_to, logo_url')
+    .select('primary_color, secondary_color, accent_color, page_bg_color, email_from_name, email_reply_to, logo_url, email_signature, email_signature_image_url')
     .eq('organization_id', orgId)
     .maybeSingle();
   return data as BrandingRow | null;
@@ -203,6 +210,11 @@ export async function loadOrgBrand(
         enropsBranding?.logo_url,
       ),
 
+    // Signature is tenant-only: no cascade to Enrops (a tenant must never inherit
+    // the platform's signature). Absent → null → no block renders.
+    email_signature: pick(tenantBranding?.email_signature),
+    email_signature_image_url: pick(tenantBranding?.email_signature_image_url),
+
     primary_color:
       pick(tenantBranding?.primary_color, enropsBranding?.primary_color) ?? ENROPS_DEFAULTS.primary_color,
     secondary_color:
@@ -220,4 +232,35 @@ export async function loadOrgBrand(
  */
 export function formatFromAddress(brand: OrgBrand): string {
   return `${brand.sender_name} <${brand.sender_email}>`;
+}
+
+/** Escape a string for safe use inside a double-quoted HTML attribute. */
+function escapeAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Render the tenant's email signature block (image + text) for injection above
+ * the footer of every outgoing email. Returns '' when the tenant has set no
+ * signature — so orgs without one are byte-for-byte unchanged (backward compat).
+ *
+ * `email_signature` is HTML from the friendly Comms editor (the same safe subset
+ * as body_override: <p>/<strong>/<em>/<a>/<br>), so it is emitted as-is. The
+ * image is our own <img> tag with the URL attribute-escaped. Used by BOTH send
+ * shells (lifecycle-automations-cron + marketing-touchpoint-send) so the
+ * signature is identical across automated and campaign email.
+ */
+export function renderSignatureBlock(brand: OrgBrand): string {
+  const text = (brand.email_signature ?? '').trim();
+  const img = (brand.email_signature_image_url ?? '').trim();
+  if (!text && !img) return '';
+  const imgBlock = img
+    ? `<img src="${escapeAttr(img)}" alt="${escapeAttr(brand.org_name)}" style="max-height:64px;max-width:220px;height:auto;display:block;margin:0 0 10px;" />`
+    : '';
+  const textBlock = text ? `<div>${text}</div>` : '';
+  return `<div style="margin-top:28px;padding-top:16px;border-top:1px solid #eee;color:#555;font-size:14px;line-height:1.5;">${imgBlock}${textBlock}</div>`;
 }

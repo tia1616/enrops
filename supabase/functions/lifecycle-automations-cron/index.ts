@@ -27,7 +27,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
-import { loadOrgBrand, formatFromAddress, type OrgBrand } from "../_shared/orgBrand.ts";
+import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -1536,6 +1536,7 @@ function wrapInShell(innerBody: string, brand: OrgBrand): string {
 <div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
 <div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">
 ${innerBody}
+${renderSignatureBlock(brand)}
 </div>
 <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
 ${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()}
