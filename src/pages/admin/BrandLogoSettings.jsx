@@ -37,12 +37,16 @@ export default function BrandLogoSettings() {
   const [savedLogo, setSavedLogo] = useState("");
   const [colors, setColors] = useState(DEFAULTS);
   const [savedColors, setSavedColors] = useState(DEFAULTS);
+  const [bannerUrl, setBannerUrl] = useState("");
+  const [savedBanner, setSavedBanner] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadingBanner, setUploadingBanner] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const fileRef = useRef(null);
+  const bannerRef = useRef(null);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 3000); }
 
@@ -54,7 +58,7 @@ export default function BrandLogoSettings() {
       const { data: o } = await supabase
         .from("organizations").select("logo_url, logo_email_url").eq("id", org.id).maybeSingle();
       const { data: b } = await supabase
-        .from("org_branding").select("primary_color, secondary_color, accent_color, page_bg_color")
+        .from("org_branding").select("primary_color, secondary_color, accent_color, page_bg_color, banner_image_url")
         .eq("organization_id", org.id).maybeSingle();
       if (!cancelled) {
         const url = o?.logo_url || o?.logo_email_url || "";
@@ -64,8 +68,10 @@ export default function BrandLogoSettings() {
           accent: b?.accent_color || DEFAULTS.accent,
           pageBg: b?.page_bg_color || DEFAULTS.pageBg,
         };
+        const banner = b?.banner_image_url || "";
         setLogoUrl(url); setSavedLogo(url);
         setColors(c); setSavedColors(c);
+        setBannerUrl(banner); setSavedBanner(banner);
         setLoading(false);
       }
     })();
@@ -98,9 +104,36 @@ export default function BrandLogoSettings() {
     }
   }
 
+  async function handleBanner(e) {
+    const file = e.target.files?.[0];
+    if (e.target) e.target.value = "";
+    if (!file) return;
+    setError("");
+    // Banner is a photo shown on the public page (not in email) — raster only.
+    const OK = ["image/png", "image/jpeg", "image/webp"];
+    if (!OK.includes(file.type)) { setError("Please choose a PNG, JPG, or WebP for the banner."); return; }
+    if (file.size > 3_000_000) { setError("That banner is over 3 MB. Please use a smaller file."); return; }
+    setUploadingBanner(true);
+    try {
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const path = `${org.id}/banner/${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("org-assets").upload(path, file, { contentType: file.type, upsert: false });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from("org-assets").getPublicUrl(path);
+      if (!pub?.publicUrl) throw new Error("Couldn't get the image URL.");
+      setBannerUrl(pub.publicUrl);
+    } catch (err) {
+      setError(err.message ?? "Couldn't upload that banner.");
+    } finally {
+      setUploadingBanner(false);
+    }
+  }
+
   const logoDirty = logoUrl !== savedLogo;
   const colorsDirty = COLOR_FIELDS.some((f) => colors[f.key] !== savedColors[f.key]);
-  const dirty = logoDirty || colorsDirty;
+  const bannerDirty = bannerUrl !== savedBanner;
+  const dirty = logoDirty || colorsDirty || bannerDirty;
 
   async function save() {
     setSaving(true); setError("");
@@ -114,21 +147,22 @@ export default function BrandLogoSettings() {
         if (e) throw e;
         if (data?.error) throw new Error(data.error);
       }
-      // Colors go straight to org_branding (only when changed, so untouched
-      // defaults are never written).
-      if (colorsDirty) {
-        const { error: e } = await supabase.from("org_branding").upsert({
-          organization_id: org.id,
-          primary_color: colors.primary,
-          secondary_color: colors.secondary,
-          accent_color: colors.accent,
-          page_bg_color: colors.pageBg,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: "organization_id" });
+      // Colors + banner go straight to org_branding. Build the payload from only
+      // what changed so untouched fields (e.g. default colors) are never written.
+      if (colorsDirty || bannerDirty) {
+        const payload = { organization_id: org.id, updated_at: new Date().toISOString() };
+        if (colorsDirty) {
+          payload.primary_color = colors.primary;
+          payload.secondary_color = colors.secondary;
+          payload.accent_color = colors.accent;
+          payload.page_bg_color = colors.pageBg;
+        }
+        if (bannerDirty) payload.banner_image_url = bannerUrl.trim() || null;
+        const { error: e } = await supabase.from("org_branding").upsert(payload, { onConflict: "organization_id" });
         if (e) throw e;
       }
       flash("Branding saved.");
-      setSavedLogo(logoUrl); setSavedColors(colors);
+      setSavedLogo(logoUrl); setSavedColors(colors); setSavedBanner(bannerUrl);
     } catch (e) {
       setError(e.message ?? "Couldn't save your branding.");
     } finally {
@@ -205,6 +239,27 @@ export default function BrandLogoSettings() {
             <a href="#" onClick={(e) => e.preventDefault()} style={{ color: colors.secondary, fontSize: 13, fontWeight: 600 }}>a link</a>
           </div>
         </div>
+      </div>
+
+      {/* Banner */}
+      <div style={{ marginTop: 16, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 4 }}>Banner</div>
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>A wide photo shown across the top of your registration page. Optional.</div>
+        <div style={{ width: "100%", maxWidth: 480, aspectRatio: "16 / 5", borderRadius: 8, border: `1px ${bannerUrl ? "solid" : "dashed"} ${RULE}`, display: "flex", alignItems: "center", justifyContent: "center", background: "#faf9ff", overflow: "hidden" }}>
+          {bannerUrl
+            ? <img src={bannerUrl} alt="Your banner" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            : <span style={{ color: MUTED, fontSize: 12 }}>No banner yet</span>}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          <input ref={bannerRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={handleBanner} style={{ display: "none" }} />
+          <button type="button" onClick={() => bannerRef.current?.click()} disabled={uploadingBanner} style={ghostBtn(uploadingBanner)}>
+            {uploadingBanner ? "Uploading…" : bannerUrl ? "Replace banner" : "Upload banner"}
+          </button>
+          {bannerUrl && !uploadingBanner && (
+            <button type="button" onClick={() => setBannerUrl("")} style={{ ...ghostBtn(false), color: MUTED, borderColor: RULE }}>Remove</button>
+          )}
+        </div>
+        <div style={{ fontSize: 12.5, color: MUTED, marginTop: 12, lineHeight: 1.5 }}>PNG, JPG, or WebP, under 3 MB. A wide image (about 3:1) works best.</div>
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
