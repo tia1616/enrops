@@ -151,12 +151,10 @@ export default function BrandLogoSettings() {
       // what changed so untouched fields (e.g. default colors) are never written.
       if (colorsDirty || bannerDirty) {
         const payload = { organization_id: org.id, updated_at: new Date().toISOString() };
-        if (colorsDirty) {
-          payload.primary_color = colors.primary;
-          payload.secondary_color = colors.secondary;
-          payload.accent_color = colors.accent;
-          payload.page_bg_color = colors.pageBg;
-        }
+        // Only write colors the operator ACTUALLY changed. Writing all four would
+        // pin untouched fields (still showing the platform default in the picker)
+        // to that default value in the DB, detaching them from the fallback.
+        COLOR_FIELDS.forEach((f) => { if (colors[f.key] !== savedColors[f.key]) payload[f.col] = colors[f.key]; });
         if (bannerDirty) payload.banner_image_url = bannerUrl.trim() || null;
         const { error: e } = await supabase.from("org_branding").upsert(payload, { onConflict: "organization_id" });
         if (e) throw e;
