@@ -969,7 +969,9 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   tokens.set("sender_name", senderForBody);
   tokens.set("sender_email", brand.sender_email || "");
   tokens.set("reply_to", brand.reply_to || "");
-  tokens.set("logo_url", org.logo_url || "");
+  // Use the email-safe logo from the shared brand loader (logo_email_url PNG),
+  // NOT org.logo_url which may be an SVG that email clients won't render.
+  tokens.set("logo_url", brand.logo_url || "");
   // Per-tenant signature (image + text), rendered by the shared helper so it's
   // identical to lifecycle automation email. Empty string when unset → no block.
   tokens.set("signature_block", renderSignatureBlock(brand));

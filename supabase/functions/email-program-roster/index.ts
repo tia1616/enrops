@@ -86,7 +86,7 @@ serve(async (req: Request) => {
 
     const { data: org } = await supabase
       .from('organizations')
-      .select('id, name, slug, sending_domain, default_sender_email, default_sender_name')
+      .select('id, name, slug, sending_domain, default_sender_email, default_sender_name, logo_email_url, logo_url')
       .eq('id', program.organization_id)
       .maybeSingle();
     if (!org) return json({ error: 'org not found' }, 404);
@@ -216,7 +216,9 @@ serve(async (req: Request) => {
 
     // ── Build the PDF ──────────────────────────────────────────────────────
     const pdfBytes = await buildRosterPdf({
-      orgName: org.name, primaryColor, logoUrl: branding?.logo_url ?? null,
+      orgName: org.name, primaryColor,
+      // Canonical logo: email-safe PNG first, then source, then legacy field.
+      logoUrl: org.logo_email_url ?? org.logo_url ?? branding?.logo_url ?? null,
       program, location, partner, instructors, students,
     });
     const pdfBase64 = bytesToBase64(pdfBytes);
