@@ -45,6 +45,20 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+// Staging safety (2026-07-06 incident): staging holds real emails imported for
+// testing, but must NEVER actually email a real person. On staging we mask every
+// imported address to a non-deliverable @example.com at write time, preserving
+// tia1616+ test inboxes. Prod stores the real address. Detected by the staging
+// project ref in the Supabase URL (infra guard, not tenant logic).
+const IS_STAGING_SANDBOX = SUPABASE_URL.includes("mumfymlapolsfdnpewci");
+function sandboxEmail(email: string): string {
+  if (!IS_STAGING_SANDBOX) return email;
+  if (email.startsWith("tia1616+") || email.endsWith("@example.com")) return email;
+  const at = email.indexOf("@");
+  if (at < 0) return email;
+  return `${email.slice(0, at)}__${email.slice(at + 1).replace(/\./g, "_")}@example.com`;
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -276,11 +290,13 @@ Deno.serve(async (req: Request) => {
   let skipped = 0;
   const byEmail = new Map<string, RecipientRow>();
   for (const c of rawContacts) {
-    const email = (str(c.email) ?? "").toLowerCase();
-    if (!email || !EMAIL_RE.test(email)) {
+    const rawEmail = (str(c.email) ?? "").toLowerCase();
+    if (!rawEmail || !EMAIL_RE.test(rawEmail)) {
       invalid++;
       continue;
     }
+    // Staging masks real addresses at import (see sandboxEmail); prod stores real.
+    const email = sandboxEmail(rawEmail);
     const prior = byEmail.get(email);
     if (prior) skipped++;
     byEmail.set(email, {
