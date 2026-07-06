@@ -81,7 +81,7 @@ serve(async (req: Request) => {
 
     const { data: org } = await supabase
       .from('organizations')
-      .select('id, name, slug, sending_domain, default_sender_email, default_sender_name')
+      .select('id, name, slug, sending_domain, default_sender_email, default_sender_name, logo_email_url, logo_url')
       .eq('id', camp.organization_id)
       .maybeSingle();
     if (!org) return json({ error: 'org not found' }, 404);
@@ -209,7 +209,9 @@ serve(async (req: Request) => {
     const pdfBytes = await buildRosterPdf({
       orgName: org.name,
       primaryColor,
-      logoUrl: branding?.logo_url ?? null,
+      // Canonical logo: the email-safe PNG (works in pdf-lib) first, then the
+      // source logo, then the legacy org_branding field. Tracks logo changes.
+      logoUrl: org.logo_email_url ?? org.logo_url ?? branding?.logo_url ?? null,
       camp,
       location,
       partner,
