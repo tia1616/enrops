@@ -1,34 +1,52 @@
-// /admin/schools — the unified Partners surface. A "partner" is one thing to the
-// operator (a school / Parks & Rec / church / community org) even though the
-// schema keeps partners + program_locations as two tables joined by partner_id.
-// SchoolsList renders them as one list (partner + its venues); Calendars stays
-// its own tab. The old per-table "Partners (classic)" + "Locations (classic)"
-// tabs were retired 2026-06-23 once the J2S data reconciliation made the unified
-// list clean — bulk "Find missing addresses" was ported into SchoolsList.
+// /admin/schools — the places a tenant runs classes. Two shapes, chosen by
+// organizations.venue_model (single source of truth — see the 20260706 migration):
+//
+//   'partner_venues' (default, e.g. J2S) — the tenant runs programs INSIDE other
+//       people's places. Partner-first: SchoolsList renders each partner + its
+//       venue(s); a venue with no partner is an orphan to link. Title "Partners".
+//
+//   'own_venue' (e.g. Shoreview Chess, Mrs. Richelle) — the tenant runs at its
+//       OWN location(s). No external partner; a partner-less venue is NORMAL.
+//       LocationsList renders the venues directly. Title "Locations".
+//
+// The Calendars tab (closure / no-class days that flow into session dates) stays
+// in BOTH shapes. Only the first tab (Partners vs Locations) and the title swap.
 
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useOutletContext } from 'react-router-dom';
 import SchoolsList from './schools/SchoolsList';
+import LocationsList from './LocationsList';
 import CalendarsList from './CalendarsList';
 
-const PURPLE = '#1C004F';
-const BRIGHT = '#5847C9';   // indigo - active tabs/actions (Figma)
 const INK = '#1a1a1a';
 const MUTED = '#6b6b6b';
 const RULE = '#e2dfd5';
+const BRIGHT = '#5847C9';   // indigo - active tabs/actions (Figma)
 
-// The unified Partners surface (a partner = a school / Parks & Rec / church /
-// community org, with its venue(s)). "Partner" is the schema-accurate,
-// multi-tenant-safe umbrella term — not every tenant runs at schools. The old
-// per-table Partners + Locations tabs stay as a labeled "classic" fallback
-// during the transition — retired once the J2S data reconciliation (Workstream
-// 2) lets the unified list cleanly replace them. Calendars stays its own tab.
-const TABS = [
-  { key: 'schools',   label: 'Partners',  help: 'Every partner you work with — schools, Parks & Rec, churches, community orgs — with its venue(s), contacts, calendar, and what runs there. One place per partner.' },
-  { key: 'calendars', label: 'Calendars', help: "District academic calendars — no-school days that flow into every program's session dates." },
+// Tab definitions per venue_model. `key` stays 'schools' for the first tab in
+// both shapes so existing ?tab=schools deep links keep working — only the label,
+// help copy, and rendered list change.
+const OWN_VENUE_TABS = [
+  { key: 'schools',   label: 'Locations',
+    help: 'The places you run your classes — your center, studios, or online. Add each one’s address, room, and arrival details once and they flow into every roster and reminder.' },
+  { key: 'calendars', label: 'Calendars',
+    help: 'Closure and no-class days that flow into every program’s session dates.' },
+];
+
+const PARTNER_TABS = [
+  { key: 'schools',   label: 'Partners',
+    help: 'Every partner you work with — schools, Parks & Rec, churches, community orgs — with its venue(s), contacts, calendar, and what runs there. One place per partner.' },
+  { key: 'calendars', label: 'Calendars',
+    help: 'District academic calendars — no-school days that flow into every program’s session dates.' },
 ];
 
 export default function SchoolsLocations() {
+  const { org } = useOutletContext() ?? {};
   const [params, setParams] = useSearchParams();
+
+  const ownVenue = org?.venue_model === 'own_venue';
+  const TABS = ownVenue ? OWN_VENUE_TABS : PARTNER_TABS;
+  const title = ownVenue ? 'Locations' : 'Partners';
+
   const tab = params.get('tab') || 'schools';
   const active = TABS.find((t) => t.key === tab) ?? TABS[0];
 
@@ -38,7 +56,7 @@ export default function SchoolsLocations() {
     <div>
       <header style={{ marginBottom: 12 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.3 }}>
-          Partners
+          {title}
         </h1>
         <p style={{ color: MUTED, marginTop: 6, fontSize: 13.5, lineHeight: 1.5 }}>
           {active.help}
@@ -73,7 +91,9 @@ export default function SchoolsLocations() {
         })}
       </div>
 
-      {tab === 'calendars' ? <CalendarsList /> : <SchoolsList />}
+      {tab === 'calendars'
+        ? <CalendarsList />
+        : (ownVenue ? <LocationsList embedded /> : <SchoolsList />)}
     </div>
   );
 }

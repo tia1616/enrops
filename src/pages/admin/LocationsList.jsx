@@ -72,7 +72,11 @@ const EMPTY_DRAFT = {
   notes: "",
 };
 
-export default function LocationsList() {
+// `embedded` — rendered inside SchoolsLocations as the own-venue "Locations"
+// tab. In that mode the page already owns the <h1> + intro, so suppress this
+// component's own header card and show just the action buttons (mirrors how
+// SchoolsList is a pure list). Standalone (default) keeps the full header.
+export default function LocationsList({ embedded = false }) {
   const { org } = useOutletContext() ?? {};
   const [searchParams, setSearchParams] = useSearchParams();
   const [locations, setLocations] = useState([]);
@@ -339,60 +343,72 @@ export default function LocationsList() {
     return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
   }
 
+  const actions = (
+    <>
+      {placesEnabled && missingAddressCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setFindingAddresses(true)}
+          title="Look up addresses for every location that doesn't have one yet"
+          style={{
+            padding: "10px 14px",
+            background: "transparent",
+            color: BRIGHT,
+            border: `1.5px solid ${BRIGHT}`,
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 700,
+            fontFamily: "inherit",
+            cursor: "pointer",
+          }}
+        >
+          ✨ Find missing addresses ({missingAddressCount})
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={startNew}
+        disabled={editingId === "new"}
+        style={btn(BRIGHT, "#fff", false, editingId === "new")}
+      >
+        + Add new venue
+      </button>
+    </>
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <header style={{
-        background: "#fff",
-        border: `1px solid ${RULE}`,
-        borderRadius: 12,
-        padding: "18px 22px",
-        display: "flex",
-        flexWrap: "wrap",
-        gap: 16,
-        alignItems: "center",
-        justifyContent: "space-between",
-      }}>
-        <div>
-          <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>Locations</h1>
-          <div style={{ color: MUTED, marginTop: 4, fontSize: 14, maxWidth: 720 }}>
-            Venues where your programs run. <strong>Address, room number, arrival
-            and dismissal instructions, food/drink policy, venue contact, and
-            notes</strong> all show up in every offer, add-on offer, and reminder
-            email instructors get for a camp here — so write them with the instructor
-            in mind.
+      {embedded ? (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end" }}>
+          {actions}
+        </div>
+      ) : (
+        <header style={{
+          background: "#fff",
+          border: `1px solid ${RULE}`,
+          borderRadius: 12,
+          padding: "18px 22px",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 16,
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}>
+          <div>
+            <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>Locations</h1>
+            <div style={{ color: MUTED, marginTop: 4, fontSize: 14, maxWidth: 720 }}>
+              Venues where your programs run. <strong>Address, room number, arrival
+              and dismissal instructions, food/drink policy, venue contact, and
+              notes</strong> all show up in every offer, add-on offer, and reminder
+              email instructors get for a camp here — so write them with the instructor
+              in mind.
+            </div>
           </div>
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          {placesEnabled && missingAddressCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setFindingAddresses(true)}
-              title="Look up addresses for every location that doesn't have one yet"
-              style={{
-                padding: "10px 14px",
-                background: "transparent",
-                color: BRIGHT,
-                border: `1.5px solid ${BRIGHT}`,
-                borderRadius: 8,
-                fontSize: 13,
-                fontWeight: 700,
-                fontFamily: "inherit",
-                cursor: "pointer",
-              }}
-            >
-              ✨ Find missing addresses ({missingAddressCount})
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={startNew}
-            disabled={editingId === "new"}
-            style={btn(BRIGHT, "#fff", false, editingId === "new")}
-          >
-            + Add new venue
-          </button>
-        </div>
-      </header>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {actions}
+          </div>
+        </header>
+      )}
 
       {findingAddresses && (
         <FindMissingAddressesModal
