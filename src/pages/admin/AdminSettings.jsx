@@ -168,9 +168,9 @@ export default function AdminSettings() {
         <h2 style={sectionTitle}>Branding</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Your logo</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Logo &amp; colors</div>
             <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Upload it once — it appears at the top of every email you send and on your registration page.
+              Set your logo and brand colors once — they appear on your registration page and every email you send.
             </div>
           </div>
           <Link to="/admin/branding" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
