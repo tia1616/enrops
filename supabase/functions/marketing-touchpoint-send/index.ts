@@ -25,7 +25,7 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
-import { loadOrgBrand, formatFromAddress, type OrgBrand } from "../_shared/orgBrand.ts";
+import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -970,6 +970,9 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   tokens.set("sender_email", brand.sender_email || "");
   tokens.set("reply_to", brand.reply_to || "");
   tokens.set("logo_url", org.logo_url || "");
+  // Per-tenant signature (image + text), rendered by the shared helper so it's
+  // identical to lifecycle automation email. Empty string when unset → no block.
+  tokens.set("signature_block", renderSignatureBlock(brand));
   tokens.set("mailing_address", org.mailing_address || "");
   tokens.set("closer", org.brand_voice?.closer || "");
   tokens.set("phone", org.brand_voice?.phone || "");
@@ -1241,6 +1244,8 @@ function wrapInEmailShell(innerHtml: string, tokens: Map<string, string>): strin
   const unsubscribeUrl = tokens.get("unsubscribe_url") || "";
   const logoUrl = tokens.get("logo_url") || "";
   const mailingAddress = (tokens.get("mailing_address") || "").trim();
+  // Pre-rendered by renderSignatureBlock(brand); "" when the org has no signature.
+  const signatureBlock = tokens.get("signature_block") || "";
 
   // Defensive: if for some reason unsubscribe_url didn't resolve, don't render
   // an empty <a href=""> — Resend would still send but the link would be broken.
@@ -1272,6 +1277,7 @@ function wrapInEmailShell(innerHtml: string, tokens: Map<string, string>): strin
 <div style="background:#ffffff;border-radius:10px;padding:32px 28px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
 ${logoBlock}
 ${innerHtml}
+${signatureBlock}
 </div>
 <div style="margin-top:16px;padding:0 12px;font-size:11px;color:#6b7280;line-height:1.6;text-align:center;">
 You're receiving this because your family is on ${escapeHtml(senderName || orgName || "our")}'s mailing list.

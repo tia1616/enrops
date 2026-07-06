@@ -13,7 +13,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress, renderSignatureBlock } from '../_shared/orgBrand.ts';
 import { isEmailAllowed, emailGuardActive } from '../_shared/emailGuard.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -79,6 +79,7 @@ serve(async (req) => {
           html: `<div style="font-family:Arial,sans-serif;font-size:15px;color:#1a1a1a;line-height:1.6;">
             <p>This is a test email from <strong>${brand.org_name}</strong>, sent through Enrops.</p>
             <p>If it landed in your inbox, your sender is working. It was sent from <strong>${from}</strong>, and replies go to <strong>${brand.reply_to}</strong>.</p>
+            ${renderSignatureBlock(brand)}
           </div>`,
           tags: [{ name: 'type', value: 'sender_test' }],
         }),
