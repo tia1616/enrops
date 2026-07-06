@@ -2411,6 +2411,7 @@ function AssignmentDetailView({ assignment, coInstructors = [], onBack }) {
         campSessionId={s.id}
         startsOn={s.starts_on}
         endsOn={s.ends_on}
+        classDays={s.class_days}
       />
       <RosterSection campSessionId={s.id} enrollment={s.current_enrollment} startsOn={s.starts_on} />
       <LessonsSection curriculumId={s.curriculum_id} curriculumName={s.curriculum_name} />
@@ -2670,7 +2671,7 @@ function LocationSection({ location, fallbackName }) {
 // Assumes weekday-only camps (Mon-Fri). If a tenant ever runs Saturday/
 // Sunday camps, this will hide those days and we need a workdays setting.
 // Same shape as `session_type` on camp_sessions — a v2 enhancement.
-function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn }) {
+function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, classDays }) {
   const [confirmations, setConfirmations] = useState(null); // null = loading; Map by date string
   const [busyDate, setBusyDate] = useState(null);
   const [err, setErr] = useState("");
@@ -2705,7 +2706,7 @@ function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn }) 
     return () => { cancelled = true; };
   }, [campSessionId]);
 
-  const days = useMemo(() => weekdayRange(startsOn, endsOn), [startsOn, endsOn]);
+  const days = useMemo(() => weekdayRange(startsOn, endsOn, classDays), [startsOn, endsOn, classDays]);
   const todayStr = todayLocalISO();
 
   async function markTaught(dateStr) {
@@ -2854,16 +2855,28 @@ function DayRow({ date, isToday, isFuture, existing, loading, busy, onMark }) {
   );
 }
 
-// Generate Mon-Fri dates in [start, end] inclusive. Both inputs YYYY-MM-DD.
-// Skips Saturdays (day=6) and Sundays (day=0).
-function weekdayRange(start, end) {
+const DOW_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+// Dates in [start, end] inclusive that the camp actually MEETS. Both inputs
+// YYYY-MM-DD. When classDays is provided (lowercase day names as stored on
+// camp_sessions.class_days, e.g. ["monday","wednesday"]), only those weekdays
+// are included — so a Mon/Wed camp doesn't list Tuesday. Falls back to Mon–Fri
+// (skips Sat/Sun) only for legacy rows that have no class_days set.
+function weekdayRange(start, end, classDays) {
   if (!start || !end) return [];
+  const allowed = Array.isArray(classDays) && classDays.length > 0
+    ? new Set(classDays.map((d) => String(d).trim().toLowerCase()))
+    : null;
   const out = [];
   const s = new Date(`${start}T00:00:00`);
   const e = new Date(`${end}T00:00:00`);
   for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
     const day = d.getDay();
-    if (day === 0 || day === 6) continue;
+    if (allowed) {
+      if (!allowed.has(DOW_NAMES[day])) continue;
+    } else if (day === 0 || day === 6) {
+      continue;
+    }
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
     const dd = String(d.getDate()).padStart(2, "0");
