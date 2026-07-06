@@ -9,7 +9,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
-import { htmlToEditable, editableToHtml } from "./marketing-v2/bodyEditorUtils.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -20,25 +19,72 @@ const PANEL = "#fff";
 const GREEN_BG = "#f0fdf4";
 const GREEN_INK = "#166534";
 
+// The signature is authored in a WYSIWYG box and injected raw into outgoing
+// email HTML, so we sanitize before storing: keep only a tiny formatting tag
+// set, drop every attribute except a safe href on links. Combined with
+// paste-as-plain-text, an operator can't smuggle scripts/styles into an email.
+const SIG_ALLOWED_TAGS = new Set(["B", "STRONG", "I", "EM", "U", "A", "BR", "P", "DIV", "SPAN"]);
+const SIG_DROP_WITH_CONTENT = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED"]);
+function sanitizeSignatureHtml(html) {
+  if (!html) return "";
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+  const root = doc.body.firstChild;
+  const walk = (node) => {
+    let mutated = false;
+    [...node.childNodes].forEach((child) => {
+      if (child.nodeType === 3) return; // text — keep
+      if (child.nodeType !== 1) { child.remove(); mutated = true; return; } // comments etc
+      if (SIG_DROP_WITH_CONTENT.has(child.tagName)) { child.remove(); mutated = true; return; } // never keep code
+      if (!SIG_ALLOWED_TAGS.has(child.tagName)) {
+        while (child.firstChild) node.insertBefore(child.firstChild, child); // unwrap, keep text
+        child.remove();
+        mutated = true;
+        return;
+      }
+      [...child.attributes].forEach((a) => {
+        if (child.tagName === "A" && a.name.toLowerCase() === "href") {
+          if (!/^(https?:\/\/|mailto:)/i.test(a.value)) child.removeAttribute("href");
+        } else {
+          child.removeAttribute(a.name); // strip style/class/on*/everything else
+        }
+      });
+      walk(child);
+    });
+    if (mutated) walk(node); // re-process after unwrapping nested disallowed tags
+  };
+  walk(root);
+  return root.innerHTML;
+}
+function htmlHasText(html) {
+  if (!html) return false;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return (doc.body.textContent || "").trim().length > 0;
+}
+function escapeAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 export default function EmailSenderSettings() {
   const { org, user } = useOutletContext();
   const [fromName, setFromName] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [mailingAddress, setMailingAddress] = useState("");
-  // Signature: friendly editable text (light markdown) + an optional image URL.
-  // Stored as HTML in org_branding.email_signature; edited here as plain text.
-  const [sigText, setSigText] = useState("");
+  // Signature: rich HTML (from the WYSIWYG box) + an optional image URL. Stored
+  // as sanitized HTML in org_branding.email_signature.
+  const [sigHtml, setSigHtml] = useState("");
   const [sigImageUrl, setSigImageUrl] = useState("");
   const [uploadingSig, setUploadingSig] = useState(false);
   const sigFileRef = useRef(null);
-  const sigTextRef = useRef(null);
+  const sigEditorRef = useRef(null);
+  const sigHydrated = useRef(false); // set the editor's innerHTML exactly once
+  const initialSig = useRef("");
+  const savedRange = useRef(null); // caret/selection saved before the link form steals focus
   // Inline "add link" mini-form state (so operators never type link syntax).
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
-  const linkSel = useRef({ start: 0, end: 0 });
   // Snapshot of the last loaded/saved values so the Save button can grey out
   // when there's nothing to save, and light up when you change something.
-  const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "", sigText: "", sigImageUrl: "" });
+  const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "", sigHtml: "", sigImageUrl: "" });
   const [preview, setPreview] = useState(null); // { from, reply_to }
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -76,18 +122,20 @@ export default function EmailSenderSettings() {
         .eq("id", org.id)
         .maybeSingle();
       if (!cancelled) {
-        const sig = htmlToEditable(data?.email_signature ?? "");
+        const sig = sanitizeSignatureHtml(data?.email_signature ?? "");
         const sigImg = data?.email_signature_image_url ?? "";
+        initialSig.current = sig;
+        sigHydrated.current = false; // re-hydrate the editor for this org
         setFromName(data?.email_from_name ?? "");
         setReplyTo(data?.email_reply_to ?? "");
         setMailingAddress(orgRow?.mailing_address ?? "");
-        setSigText(sig);
+        setSigHtml(sig);
         setSigImageUrl(sigImg);
         setSaved({
           fromName: data?.email_from_name ?? "",
           replyTo: data?.email_reply_to ?? "",
           mailingAddress: orgRow?.mailing_address ?? "",
-          sigText: sig,
+          sigHtml: sig,
           sigImageUrl: sigImg,
         });
         setTestTo(user?.email ?? "");
@@ -99,15 +147,25 @@ export default function EmailSenderSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id]);
 
+  // Seed the contentEditable's HTML once after load — React must not re-write it
+  // on every keystroke (that would fight the cursor). We read innerHTML back into
+  // state on input instead.
+  useEffect(() => {
+    if (!loading && sigEditorRef.current && !sigHydrated.current) {
+      sigEditorRef.current.innerHTML = initialSig.current;
+      sigHydrated.current = true;
+    }
+  }, [loading]);
+
   async function save() {
     setSaving(true); setError("");
     try {
-      const sigHtml = editableToHtml(sigText.trim());
+      const cleanSig = sanitizeSignatureHtml(sigHtml);
       const fields = {
         organization_id: org.id,
         email_from_name: fromName.trim() || null,
         email_reply_to: replyTo.trim() || null,
-        email_signature: sigHtml || null,
+        email_signature: htmlHasText(cleanSig) ? cleanSig : null,
         email_signature_image_url: sigImageUrl.trim() || null,
         updated_at: new Date().toISOString(),
       };
@@ -123,7 +181,7 @@ export default function EmailSenderSettings() {
         .eq("id", org.id);
       if (addrErr) throw addrErr;
       flash("Sender saved.");
-      setSaved({ fromName, replyTo, mailingAddress, sigText, sigImageUrl });
+      setSaved({ fromName, replyTo, mailingAddress, sigHtml, sigImageUrl });
       await loadPreview();
     } catch (e) {
       setError(e.message ?? "Couldn't save your sender settings.");
@@ -195,52 +253,64 @@ export default function EmailSenderSettings() {
     setSigImageUrl("");
   }
 
-  // Formatting buttons wrap the highlighted text with the underlying markers so
-  // the operator never types or sees syntax — they highlight and click, and the
-  // preview shows the real result. Bold/italic wrap in place.
-  function wrapSelection(marker) {
-    const ta = sigTextRef.current;
-    if (!ta) return;
-    const start = ta.selectionStart ?? sigText.length;
-    const end = ta.selectionEnd ?? sigText.length;
-    const sel = sigText.slice(start, end) || "text";
-    const next = sigText.slice(0, start) + marker + sel + marker + sigText.slice(end);
-    setSigText(next);
-    requestAnimationFrame(() => {
-      ta.focus();
-      const pos = start + marker.length;
-      ta.setSelectionRange(pos, pos + sel.length);
-    });
+  // Read the editor's current HTML into state (sanitized) — drives preview,
+  // dirty-check, and save. We never write back to the DOM here, so the cursor
+  // stays put while typing.
+  function syncSig() {
+    const raw = sigEditorRef.current?.innerHTML ?? "";
+    setSigHtml(htmlHasText(raw) || /<img|<a\b/i.test(raw) ? sanitizeSignatureHtml(raw) : "");
   }
 
-  // Link: capture the selection first (opening the mini-form drops focus), then
-  // insert on confirm. The operator sees a "Text" + "Web address" form, never
-  // the [text](url) markup.
+  // Toolbar formatting. execCommand is deprecated but universally supported and
+  // is the lightest way to get true WYSIWYG bold/italic/link without a heavy
+  // editor dependency. Buttons use onMouseDown+preventDefault so clicking them
+  // doesn't blur the editor and drop the selection.
+  function exec(cmd) {
+    sigEditorRef.current?.focus();
+    document.execCommand(cmd, false, null);
+    syncSig();
+  }
+
   function openLink() {
-    const ta = sigTextRef.current;
-    linkSel.current = { start: ta?.selectionStart ?? sigText.length, end: ta?.selectionEnd ?? sigText.length };
+    const sel = window.getSelection();
+    savedRange.current = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
     setLinkUrl("");
     setLinkOpen(true);
   }
   function addLink() {
     let url = linkUrl.trim();
     if (!url) { setLinkOpen(false); return; }
-    if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
-    const { start, end } = linkSel.current;
-    const label = sigText.slice(start, end) || url.replace(/^https?:\/\//i, "");
-    const next = sigText.slice(0, start) + `[${label}](${url})` + sigText.slice(end);
-    setSigText(next);
+    if (!/^(https?:\/\/|mailto:)/i.test(url)) url = `https://${url}`;
+    const ed = sigEditorRef.current;
+    ed?.focus();
+    const sel = window.getSelection();
+    if (savedRange.current && sel) { sel.removeAllRanges(); sel.addRange(savedRange.current); }
+    if (sel && sel.isCollapsed) {
+      const label = url.replace(/^https?:\/\//i, "").replace(/^mailto:/i, "");
+      document.execCommand("insertHTML", false, `<a href="${escapeAttr(url)}">${escapeAttr(label)}</a>`);
+    } else {
+      document.execCommand("createLink", false, url);
+    }
+    syncSig();
     setLinkOpen(false);
     setLinkUrl("");
   }
 
-  // Live HTML of the signature exactly as the email will render it.
-  const sigPreviewHtml = editableToHtml(sigText.trim());
-  const hasSignature = !!(sigPreviewHtml || sigImageUrl);
+  // Paste as plain text — strips pasted fonts/colors/scripts so the signature
+  // stays clean and safe; the operator re-formats with the toolbar.
+  function onSigPaste(e) {
+    e.preventDefault();
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    document.execCommand("insertText", false, text);
+    syncSig();
+  }
+
+  const sigPreviewHtml = sanitizeSignatureHtml(sigHtml);
+  const hasSignature = htmlHasText(sigPreviewHtml) || !!sigImageUrl;
 
   const dirty =
     fromName !== saved.fromName || replyTo !== saved.replyTo || mailingAddress !== saved.mailingAddress ||
-    sigText !== saved.sigText || sigImageUrl !== saved.sigImageUrl;
+    sigHtml !== saved.sigHtml || sigImageUrl !== saved.sigImageUrl;
 
   if (loading) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
@@ -248,6 +318,9 @@ export default function EmailSenderSettings() {
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: "8px 0 40px" }}>
+      <style>{`.sig-editor:empty:before{content:attr(data-ph);color:#9ca3af;}
+.sig-editor a{color:${BRIGHT};}
+.sig-editor:focus{outline:none;border-color:${BRIGHT};}`}</style>
       <Link to="/admin/settings" style={{ fontSize: 13, color: MUTED, textDecoration: "none" }}>← Settings</Link>
       <h1 style={{ margin: "8px 0 4px", color: PURPLE, fontSize: 24, fontWeight: 700 }}>Email sender</h1>
       <p style={{ color: MUTED, fontSize: 14, marginTop: 0, lineHeight: 1.5, maxWidth: 560 }}>
@@ -295,7 +368,7 @@ export default function EmailSenderSettings() {
               <div style={{ width: 56, height: 56, borderRadius: 6, border: `1px dashed ${RULE}`, display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontSize: 11 }}>No image</div>
             )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <input ref={sigFileRef} type="file" accept="image/*" onChange={handleSigImage} style={{ display: "none" }} />
+              <input ref={sigFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={handleSigImage} style={{ display: "none" }} />
               <button type="button" onClick={() => sigFileRef.current?.click()} disabled={uploadingSig} style={ghostBtn(uploadingSig)}>
                 {uploadingSig ? "Uploading…" : sigImageUrl ? "Replace image" : "Add image"}
               </button>
@@ -306,12 +379,11 @@ export default function EmailSenderSettings() {
           </div>
           <div style={hint}>PNG, JPG, or GIF, under 1 MB. A logo or headshot works best.</div>
 
-          {/* Text with a simple formatting toolbar — highlight, then click. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12, marginBottom: 6 }}>
-            <button type="button" onClick={() => wrapSelection("**")} title="Bold" style={{ ...fmtBtn, fontWeight: 800 }}>B</button>
-            <button type="button" onClick={() => wrapSelection("_")} title="Italic" style={{ ...fmtBtn, fontStyle: "italic" }}>i</button>
-            <button type="button" onClick={openLink} title="Add a link" style={fmtBtn}>🔗 Link</button>
-            <span style={{ fontSize: 12.5, color: MUTED, marginLeft: 4 }}>Highlight text, then click to format.</span>
+          {/* WYSIWYG editor — bold shows bold, links show as links. No syntax. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 14, marginBottom: 6 }}>
+            <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => exec("bold")} title="Bold" style={{ ...fmtBtn, fontWeight: 800 }}>B</button>
+            <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => exec("italic")} title="Italic" style={{ ...fmtBtn, fontStyle: "italic" }}>i</button>
+            <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={openLink} title="Add a link" style={fmtBtn}>🔗 Link</button>
           </div>
           {linkOpen && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "0 0 8px", padding: 10, background: "#faf9ff", border: `1px solid ${RULE}`, borderRadius: 8, flexWrap: "wrap" }}>
@@ -329,15 +401,18 @@ export default function EmailSenderSettings() {
               <button type="button" onClick={() => setLinkOpen(false)} style={{ ...ghostBtn(false), padding: "7px 12px", color: MUTED, borderColor: RULE }}>Cancel</button>
             </div>
           )}
-          <textarea
-            ref={sigTextRef}
-            value={sigText}
-            onChange={(e) => setSigText(e.target.value)}
-            placeholder={"Warm regards,\nJordan Rivera\nDirector, Bright Minds Academy\n(555) 123-4567"}
-            rows={4}
-            style={{ ...input, resize: "vertical", lineHeight: 1.5 }}
+          <div
+            ref={sigEditorRef}
+            className="sig-editor"
+            contentEditable
+            suppressContentEditableWarning
+            data-ph="Highlight text to make it bold, italic, or a link."
+            onInput={syncSig}
+            onBlur={syncSig}
+            onPaste={onSigPaste}
+            style={{ ...input, minHeight: 96, lineHeight: 1.5, cursor: "text" }}
           />
-          <div style={hint}>Type your sign-off. What you see in the preview below is exactly what families and staff will get.</div>
+          <div style={hint}>Type your sign-off — highlight any text and use the buttons above to format it. The preview below is exactly what families and staff will get.</div>
 
           {/* Live preview */}
           {hasSignature && (
@@ -346,7 +421,7 @@ export default function EmailSenderSettings() {
               <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 16 }}>
                 <div style={{ marginTop: 4, paddingTop: 16, borderTop: "1px solid #eee", color: "#555", fontSize: 14, lineHeight: 1.5 }}>
                   <div dangerouslySetInnerHTML={{ __html: sigPreviewHtml }} />
-                  {sigImageUrl && <img src={sigImageUrl} alt="Signature" style={{ maxHeight: 64, maxWidth: 220, height: "auto", display: "block", margin: sigPreviewHtml ? "12px 0 0" : "0" }} />}
+                  {sigImageUrl && <img src={sigImageUrl} alt="Signature" style={{ maxHeight: 64, maxWidth: 220, height: "auto", display: "block", margin: htmlHasText(sigPreviewHtml) ? "12px 0 0" : "0" }} />}
                 </div>
               </div>
             </div>
