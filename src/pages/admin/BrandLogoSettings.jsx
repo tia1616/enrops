@@ -212,16 +212,26 @@ export default function BrandLogoSettings() {
       // Logo goes through the edge fn (sets logo_url + derives the email PNG).
       if (logoDirty) {
         const url = logoUrl.trim() || null;
-        // Edge functions can return a transient 503 on a cold-start; retry once
-        // with a short backoff before surfacing an error.
+        // Edge functions can return a transient 5xx on a cold-start. Retry ONCE
+        // on a transient failure; for a real error (e.g. 403) surface the
+        // function's own message and don't retry.
         let lastErr = null;
         for (let attempt = 0; attempt < 2; attempt++) {
           const { data, error: e } = await supabase.functions.invoke("update-org-logo", {
             body: { organization_id: org.id, logo_url: url },
           });
           if (!e && !data?.error) { lastErr = null; break; }
-          lastErr = e ? new Error(e.message) : new Error(data.error);
-          if (attempt === 0) await new Promise((r) => setTimeout(r, 800));
+          const status = e?.context?.status;
+          // invoke() gives a generic "non-2xx" message; read the real error body.
+          let msg = data?.error || "";
+          if (!msg && e?.context?.clone) { try { msg = (await e.context.clone().json())?.error || ""; } catch { /* body not JSON */ } }
+          // Transient only when there's a real error object with a missing/5xx
+          // status (cold-start 5xx or network/relay). A 200-with-error-body is a
+          // real app error → surface its message, don't retry.
+          const transient = !!e && (!status || status >= 500);
+          lastErr = { message: msg, transient };
+          if (attempt === 0 && transient) { await new Promise((r) => setTimeout(r, 800)); continue; }
+          break; // real error → don't retry
         }
         if (lastErr) throw lastErr;
       }
@@ -241,10 +251,12 @@ export default function BrandLogoSettings() {
       setSavedLogo(logoUrl); setSavedColors(colors); setSavedBanner(bannerUrl);
     } catch (e) {
       const raw = e?.message ?? "";
-      // Never surface raw edge/runtime jargon to the operator.
-      const friendly = /non-2xx|edge function|failed to fetch|503|network|fetcherror/i.test(raw)
+      const jargon = /non-2xx|edge function|failed to fetch|network|fetcherror/i.test(raw);
+      // Transient failure or opaque jargon → ask to retry; a real error with a
+      // clean message → show it. Never surface runtime jargon to the operator.
+      const friendly = e?.transient || jargon
         ? "Couldn't save just now — please click Save again."
-        : (raw || "Couldn't save your branding.");
+        : (raw || "Couldn't save your branding — please try again.");
       setError(friendly);
     } finally {
       setSaving(false);
