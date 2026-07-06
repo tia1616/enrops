@@ -110,6 +110,21 @@ export function htmlToEditable(html) {
   text = text.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, inner) => `_${inner}_`);
   text = text.replace(/<\/p>\s*<p[^>]*>/gi, "\n\n");
   text = text.replace(/<br\s*\/?>/gi, "\n");
+  // Rich blocks Ennie emits for campaign bodies that DO have a plain-text
+  // editing form — convert them instead of letting the catch-all below delete
+  // them (which silently dropped operators' bulleted program lineups):
+  //   <ul>/<ol> + <li>  ->  "• item" lines  (round-trips back to a real list)
+  //   <h1..6>           ->  a **bold** line (headings have no other plain form
+  //                          in this editor; text is preserved, size becomes bold)
+  //   <small>           ->  unwrapped to plain text (styling dropped, text kept)
+  // Runs AFTER the <a>/<strong>/<em> conversions above so nested emphasis/links
+  // inside a <li> survive as [..](..) / **..** inside the bullet line.
+  // The marker is "• " (U+2022), NOT "- ": operators sign off with "- {{sender_name}}",
+  // and a "-" marker would swallow that dash into a bogus bullet (real prod loss).
+  text = text.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m, inner) => `\n• ${inner.trim()}`);
+  text = text.replace(/<\/?(?:ul|ol)[^>]*>/gi, "\n\n");
+  text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_m, inner) => `\n\n**${inner.trim()}**\n\n`);
+  text = text.replace(/<\/?small[^>]*>/gi, "");
   text = text.replace(/<p[^>]*>/gi, "");
   text = text.replace(/<\/p>/gi, "");
   // Safety net: drop any remaining HTML tag (keep its inner text) so unhandled
@@ -161,6 +176,7 @@ export function editableToHtml(text) {
   // lines inside what looks like one paragraph.
   const out = [];
   let buffer = [];
+  let listItems = [];
   const flush = () => {
     // Join with <br> so adjacent lines (one Enter) become line breaks inside
     // the paragraph — a literal "\n" here would collapse to a space in HTML,
@@ -170,17 +186,34 @@ export function editableToHtml(text) {
     if (para) out.push(`<p>${para}</p>`);
     buffer = [];
   };
+  const flushList = () => {
+    // A run of "- item" lines becomes one <ul>. Mirrors htmlToEditable, which
+    // turns <li> back into "- " lines, so a bulleted list round-trips cleanly.
+    if (listItems.length) out.push(`<ul>${listItems.map((it) => `<li>${it}</li>`).join("")}</ul>`);
+    listItems = [];
+  };
   for (const line of html.split("\n")) {
+    // "• " (bullet + space) at line start marks a list item. A run of them
+    // groups into one <ul>; anything else closes the list. We use "•" not "-"
+    // so a "- {{sender_name}}" sign-off dash isn't mistaken for a bullet.
+    const listItem = line.match(/^\s*•\s+(.+)$/);
     if (isBlockTokenLine(line)) {
       flush();
+      flushList();
       out.push(line.trim());
+    } else if (listItem) {
+      flush(); // text before the list closes into its own <p>
+      listItems.push(listItem[1].trim());
     } else if (line.trim() === "") {
       flush();
+      flushList();
     } else {
+      flushList(); // a normal line ends any open list
       buffer.push(line);
     }
   }
   flush();
+  flushList();
   return out.join("");
 }
 
