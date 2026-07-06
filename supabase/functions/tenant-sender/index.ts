@@ -76,7 +76,8 @@ serve(async (req) => {
           to,
           reply_to: brand.reply_to,
           subject: `Test email from ${brand.org_name}`,
-          html: `<div style="font-family:Arial,sans-serif;font-size:15px;color:#1a1a1a;line-height:1.6;">
+          html: `<div style="font-family:Arial,sans-serif;font-size:15px;color:#1a1a1a;line-height:1.6;max-width:600px;margin:0 auto;">
+            ${brand.logo_url ? `<div style="text-align:center;padding:4px 0 18px;"><img src="${String(brand.logo_url).replace(/"/g, "&quot;")}" alt="${String(brand.org_name).replace(/[<>"]/g, "")}" style="max-height:56px;max-width:220px;height:auto;" /></div>` : ""}
             <p>This is a test email from <strong>${brand.org_name}</strong>, sent through Enrops.</p>
             <p>If it landed in your inbox, your sender is working. It was sent from <strong>${from}</strong>, and replies go to <strong>${brand.reply_to}</strong>.</p>
             ${renderSignatureBlock(brand)}

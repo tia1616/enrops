@@ -31,12 +31,66 @@ const COLOR_FIELDS = [
   { key: "pageBg", col: "page_bg_color", label: "Page background", help: "Behind your registration page." },
 ];
 
+function rgbToHex(r, g, b) {
+  return "#" + [r, g, b].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+// Pull a small brand palette from an uploaded logo — draw it to a tiny canvas,
+// keep the saturated non-background pixels, return the most common distinct
+// colors. Runs entirely client-side; returns null on any failure (extraction is
+// a nicety, never a blocker). The file is a same-origin blob so getImageData
+// isn't tainted; SVGs rasterize to the canvas the same way.
+async function extractLogoPalette(file) {
+  try {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+    const S = 64;
+    const canvas = document.createElement("canvas");
+    canvas.width = S; canvas.height = S;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, S, S);
+    URL.revokeObjectURL(url);
+    const { data } = ctx.getImageData(0, 0, S, S);
+    const buckets = new Map();
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+      if (a < 128) continue;                          // transparent
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      const sat = mx === 0 ? 0 : (mx - mn) / mx;
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (sat < 0.18) continue;                        // near-grey (bg/black/white)
+      if (lum > 244 || lum < 12) continue;             // too light/dark
+      const key = `${r >> 4}|${g >> 4}|${b >> 4}`;     // quantize into buckets
+      const cur = buckets.get(key) || { n: 0, r: 0, g: 0, b: 0 };
+      cur.n++; cur.r += r; cur.g += g; cur.b += b;
+      buckets.set(key, cur);
+    }
+    const sorted = [...buckets.values()]
+      .map((c) => ({ n: c.n, r: Math.round(c.r / c.n), g: Math.round(c.g / c.n), b: Math.round(c.b / c.n) }))
+      .sort((a, b) => b.n - a.n);
+    if (!sorted.length) return null;
+    const dist = (a, b) => Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b);
+    const picked = [];
+    for (const c of sorted) {
+      if (picked.every((p) => dist(p, c) > 60)) picked.push(c);
+      if (picked.length >= 3) break;
+    }
+    return {
+      primary: picked[0] ? rgbToHex(picked[0].r, picked[0].g, picked[0].b) : null,
+      secondary: picked[1] ? rgbToHex(picked[1].r, picked[1].g, picked[1].b) : null,
+      accent: picked[2] ? rgbToHex(picked[2].r, picked[2].g, picked[2].b) : null,
+    };
+  } catch { return null; }
+}
+
 export default function BrandLogoSettings() {
   const { org } = useOutletContext();
   const [logoUrl, setLogoUrl] = useState("");
   const [savedLogo, setSavedLogo] = useState("");
   const [colors, setColors] = useState(DEFAULTS);
   const [savedColors, setSavedColors] = useState(DEFAULTS);
+  const [paletteNote, setPaletteNote] = useState(false); // "colors picked from your logo"
   const [bannerUrl, setBannerUrl] = useState("");
   const [savedBanner, setSavedBanner] = useState("");
   const [loading, setLoading] = useState(true);
@@ -97,6 +151,19 @@ export default function BrandLogoSettings() {
       const { data: pub } = supabase.storage.from("org-assets").getPublicUrl(path);
       if (!pub?.publicUrl) throw new Error("Couldn't get the image URL.");
       setLogoUrl(pub.publicUrl);
+      // Auto-pick brand colors from the logo — but only fields the operator
+      // hasn't already changed from the default, so a deliberate choice is never
+      // overwritten. They can still adjust any picker afterward.
+      const palette = await extractLogoPalette(file);
+      if (palette && (palette.primary || palette.secondary || palette.accent)) {
+        setColors((prev) => ({
+          ...prev,
+          primary: prev.primary === DEFAULTS.primary && palette.primary ? palette.primary : prev.primary,
+          secondary: prev.secondary === DEFAULTS.secondary && palette.secondary ? palette.secondary : prev.secondary,
+          accent: prev.accent === DEFAULTS.accent && palette.accent ? palette.accent : prev.accent,
+        }));
+        setPaletteNote(true);
+      }
     } catch (err) {
       setError(err.message ?? "Couldn't upload that image.");
     } finally {
@@ -209,7 +276,13 @@ export default function BrandLogoSettings() {
       {/* Colors */}
       <div style={{ marginTop: 16, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 4 }}>Colors</div>
-        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>Click a swatch to pick your color.</div>
+        {paletteNote ? (
+          <div style={{ fontSize: 12.5, color: GREEN_INK, background: GREEN_BG, border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 10px", marginBottom: 14, lineHeight: 1.5 }}>
+            ✨ We picked these from your logo — adjust any of them below.
+          </div>
+        ) : (
+          <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>Click a swatch to pick your color. Upload a logo and we'll suggest colors from it.</div>
+        )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 14 }}>
           {COLOR_FIELDS.map((f) => (
             <label key={f.key} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
