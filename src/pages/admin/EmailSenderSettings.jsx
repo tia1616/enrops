@@ -31,6 +31,11 @@ export default function EmailSenderSettings() {
   const [sigImageUrl, setSigImageUrl] = useState("");
   const [uploadingSig, setUploadingSig] = useState(false);
   const sigFileRef = useRef(null);
+  const sigTextRef = useRef(null);
+  // Inline "add link" mini-form state (so operators never type link syntax).
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const linkSel = useRef({ start: 0, end: 0 });
   // Snapshot of the last loaded/saved values so the Save button can grey out
   // when there's nothing to save, and light up when you change something.
   const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "", sigText: "", sigImageUrl: "" });
@@ -186,6 +191,45 @@ export default function EmailSenderSettings() {
     setSigImageUrl("");
   }
 
+  // Formatting buttons wrap the highlighted text with the underlying markers so
+  // the operator never types or sees syntax — they highlight and click, and the
+  // preview shows the real result. Bold/italic wrap in place.
+  function wrapSelection(marker) {
+    const ta = sigTextRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart ?? sigText.length;
+    const end = ta.selectionEnd ?? sigText.length;
+    const sel = sigText.slice(start, end) || "text";
+    const next = sigText.slice(0, start) + marker + sel + marker + sigText.slice(end);
+    setSigText(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + marker.length;
+      ta.setSelectionRange(pos, pos + sel.length);
+    });
+  }
+
+  // Link: capture the selection first (opening the mini-form drops focus), then
+  // insert on confirm. The operator sees a "Text" + "Web address" form, never
+  // the [text](url) markup.
+  function openLink() {
+    const ta = sigTextRef.current;
+    linkSel.current = { start: ta?.selectionStart ?? sigText.length, end: ta?.selectionEnd ?? sigText.length };
+    setLinkUrl("");
+    setLinkOpen(true);
+  }
+  function addLink() {
+    let url = linkUrl.trim();
+    if (!url) { setLinkOpen(false); return; }
+    if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+    const { start, end } = linkSel.current;
+    const label = sigText.slice(start, end) || url.replace(/^https?:\/\//i, "");
+    const next = sigText.slice(0, start) + `[${label}](${url})` + sigText.slice(end);
+    setSigText(next);
+    setLinkOpen(false);
+    setLinkUrl("");
+  }
+
   // Live HTML of the signature exactly as the email will render it.
   const sigPreviewHtml = editableToHtml(sigText.trim());
   const hasSignature = !!(sigPreviewHtml || sigImageUrl);
@@ -258,17 +302,38 @@ export default function EmailSenderSettings() {
           </div>
           <div style={hint}>PNG, JPG, or GIF, under 1 MB. A logo or headshot works best.</div>
 
-          {/* Text */}
+          {/* Text with a simple formatting toolbar — highlight, then click. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12, marginBottom: 6 }}>
+            <button type="button" onClick={() => wrapSelection("**")} title="Bold" style={{ ...fmtBtn, fontWeight: 800 }}>B</button>
+            <button type="button" onClick={() => wrapSelection("_")} title="Italic" style={{ ...fmtBtn, fontStyle: "italic" }}>i</button>
+            <button type="button" onClick={openLink} title="Add a link" style={fmtBtn}>🔗 Link</button>
+            <span style={{ fontSize: 12.5, color: MUTED, marginLeft: 4 }}>Highlight text, then click to format.</span>
+          </div>
+          {linkOpen && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "0 0 8px", padding: 10, background: "#faf9ff", border: `1px solid ${RULE}`, borderRadius: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12.5, color: INK, fontWeight: 600 }}>Web address:</span>
+              <input
+                type="text"
+                value={linkUrl}
+                onChange={(e) => setLinkUrl(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addLink(); } }}
+                placeholder="yourwebsite.com"
+                autoFocus
+                style={{ ...input, flex: 1, minWidth: 180, padding: "7px 10px" }}
+              />
+              <button type="button" onClick={addLink} style={{ ...ghostBtn(false), padding: "7px 12px" }}>Add link</button>
+              <button type="button" onClick={() => setLinkOpen(false)} style={{ ...ghostBtn(false), padding: "7px 12px", color: MUTED, borderColor: RULE }}>Cancel</button>
+            </div>
+          )}
           <textarea
+            ref={sigTextRef}
             value={sigText}
             onChange={(e) => setSigText(e.target.value)}
             placeholder={"Warm regards,\nRichelle Caubang\nDirector, Mrs. Richelle\n(480) 555-0199"}
             rows={4}
-            style={{ ...input, marginTop: 12, resize: "vertical", lineHeight: 1.5 }}
+            style={{ ...input, resize: "vertical", lineHeight: 1.5 }}
           />
-          <div style={hint}>
-            Use <strong>**bold**</strong>, <em>_italic_</em>, and [link text](https://…) for a link. New lines become new lines.
-          </div>
+          <div style={hint}>Type your sign-off. What you see in the preview below is exactly what families and staff will get.</div>
 
           {/* Live preview */}
           {hasSignature && (
@@ -304,5 +369,6 @@ export default function EmailSenderSettings() {
 const lbl = { display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 };
 const hint = { fontSize: 12.5, color: MUTED, marginTop: 6, lineHeight: 1.5 };
 const input = { width: "100%", padding: "10px 12px", border: `1.5px solid ${RULE}`, borderRadius: 8, fontSize: 14, color: INK, background: "#fff", fontFamily: "inherit", boxSizing: "border-box" };
+const fmtBtn = { minWidth: 32, padding: "5px 10px", background: "#fff", color: INK, border: `1.5px solid ${RULE}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", cursor: "pointer", lineHeight: 1 };
 function primaryBtn(disabled) { return { padding: "9px 18px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1 }; }
 function ghostBtn(disabled) { return { padding: "9px 14px", background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1 }; }
