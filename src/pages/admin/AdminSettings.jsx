@@ -170,7 +170,7 @@ export default function AdminSettings() {
           <div>
             <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>How your emails show up</div>
             <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Set the sender name and reply-to address families see on your invites, waivers, and reminders. We handle the sending domain — no DNS setup.
+              Set the sender name, reply-to address, email signature, and mailing address that show on your invites, waivers, and reminders. We handle the sending domain — no DNS setup.
             </div>
           </div>
           <Link to="/admin/email-sender" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
