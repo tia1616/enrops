@@ -3,8 +3,9 @@
 // Accept or Request Change per camp. Class detail + My Availability are v2.
 
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
 import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
@@ -1485,6 +1486,7 @@ function AfterschoolSurveyBanner({ survey, onStart }) {
 }
 
 function Shell({ children, instructorName, onSignOut }) {
+  const { slug = "j2s" } = useParams();
   return (
     <div style={{
       minHeight: "100vh",
@@ -1494,15 +1496,18 @@ function Shell({ children, instructorName, onSignOut }) {
       padding: "32px 16px",
     }}>
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22, gap: 12, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <span style={{ fontWeight: 800, fontSize: 22, color: PURPLE, letterSpacing: -0.3 }}>Enrops</span>
             <span style={{ fontSize: 13, color: MUTED }}>Instructor portal</span>
           </div>
           {instructorName && onSignOut && (
-            <button type="button" onClick={onSignOut} style={{ background: "transparent", border: `1px solid ${PURPLE}`, color: PURPLE, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
-              Sign out
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <PortalSwitcher current="instructor" slug={slug} />
+              <button type="button" onClick={onSignOut} style={{ background: "transparent", border: `1px solid ${PURPLE}`, color: PURPLE, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
+                Sign out
+              </button>
+            </div>
           )}
         </div>
         {children}

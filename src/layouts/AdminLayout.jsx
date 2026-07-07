@@ -12,13 +12,13 @@ import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
+import PortalSwitcher from "../components/PortalSwitcher.jsx";
 import { setOrgGroup } from "../lib/analytics";
 
 // Enrops brand tokens
 const PURPLE = "#1C004F";   // deep plum — wordmark, headings, body accents
 const BRIGHT = "#5847C9";   // indigo — primary actions + active nav (sampled #6857E1, darkened a step per Jessica)
 const LAVENDER = "#F2F0FF"; // sidebar background (sampled from Figma)
-const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -106,11 +106,6 @@ export default function AdminLayout() {
   const [user, setUser] = useState(null);
   const [orgMember, setOrgMember] = useState(null);
   const [org, setOrg] = useState(null);
-  // "Many admins also teach" — when the signed-in admin has an active row
-  // in the instructors table for this org, we render an "Open my instructor
-  // view" link in the sidebar so they can flip into the instructor portal
-  // from any admin page. Null = unchecked / not an instructor.
-  const [adminInstructorSlug, setAdminInstructorSlug] = useState(null);
   const [debugInfo, setDebugInfo] = useState(null);
   // Lifetime time-saved tally (rolling sum of time_saved_events for this org).
   // See project_enrops_time_saved memory: every Director action that completes
@@ -157,22 +152,6 @@ export default function AdminLayout() {
         if (!mounted) return;
         setOrg(orgRow);
         setAuthState("ready");
-
-        // Is this admin ALSO in the instructors table for the same org?
-        // Drives the sidebar "Open my instructor view" link. Not auth-
-        // gating — purely a discoverability affordance for operator-
-        // instructors. Failures fall through silently.
-        const { data: alsoInstructor } = await supabase
-          .from("instructors")
-          .select("id")
-          .eq("auth_user_id", session.user.id)
-          .eq("organization_id", memberRow.organization_id)
-          .eq("is_active", true)
-          .maybeSingle();
-        if (!mounted) return;
-        if (alsoInstructor) {
-          setAdminInstructorSlug(orgRow?.slug ?? defaultTenantSlug());
-        }
       } catch (err) {
         console.error("AdminLayout auth error:", err);
         if (mounted) setAuthState("unauthorized");
@@ -401,31 +380,13 @@ export default function AdminLayout() {
             </div>
           )}
 
-          {/* "Open my instructor view" — renders only when this admin is
-              also an instructor in the same org. Lets operator-instructors
-              flip into the instructor portal from any admin page without
-              hunting on the overview. */}
-          {adminInstructorSlug && (
-            <div style={{ padding: "0 12px 12px" }}>
-              <Link
-                to={`/${adminInstructorSlug}/instructor`}
-                style={{
-                  display: "block",
-                  padding: "9px 12px",
-                  background: `${VIOLET}1F`,
-                  border: `1px solid ${VIOLET}66`,
-                  borderRadius: 8,
-                  color: PURPLE,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  textDecoration: "none",
-                  textAlign: "center",
-                }}
-              >
-                Open my instructor view →
-              </Link>
-            </div>
-          )}
+          {/* Cross-portal switcher — renders a link to any OTHER surface this
+              user can reach (instructor portal, family dashboard). Shows only
+              for operators who also teach and/or are a parent; single-role
+              admins see nothing. */}
+          <div style={{ padding: "0 12px 12px" }}>
+            <PortalSwitcher current="admin" slug={org?.slug ?? defaultTenantSlug()} block />
+          </div>
 
           <div style={{ padding: "12px 20px", borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED }}>
             <div style={{ marginBottom: 10 }}>
