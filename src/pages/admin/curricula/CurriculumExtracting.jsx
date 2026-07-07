@@ -235,7 +235,7 @@ export default function CurriculumExtracting() {
             ? "We pulled out the details. Ready for you to review."
             : isFailed
               ? `We had trouble reading ${primaryDoc?.original_filename ?? "this doc"}.`
-              : "This usually takes 30–45 seconds. You can stay here or come back later — we'll keep going either way."}
+              : "This usually takes 30–60 seconds. You can stay here or come back later — we'll keep going either way."}
         </p>
         {isWorking && (
           <div style={{ textAlign: "center", marginTop: -2, marginBottom: 4 }}>
