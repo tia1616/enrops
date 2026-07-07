@@ -371,7 +371,7 @@ export default function LocationsList({ embedded = false }) {
         disabled={editingId === "new"}
         style={btn(BRIGHT, "#fff", false, editingId === "new")}
       >
-        + Add new venue
+        + Add a location
       </button>
     </>
   );
@@ -397,8 +397,8 @@ export default function LocationsList({ embedded = false }) {
           <div>
             <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>Locations</h1>
             <div style={{ color: MUTED, marginTop: 4, fontSize: 14, maxWidth: 720 }}>
-              Venues where your programs run. <strong>Address, room number, arrival
-              and dismissal instructions, food/drink policy, venue contact, and
+              Locations where you run your classes. <strong>Address, room number, arrival
+              and dismissal instructions, food/drink policy, location contact, and
               notes</strong> all show up in every offer, add-on offer, and reminder
               email instructors get for a camp here — so write them with the instructor
               in mind.
@@ -424,7 +424,7 @@ export default function LocationsList({ embedded = false }) {
       )}
 
       {loading ? (
-        <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>Loading venues…</div>
+        <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>Loading locations…</div>
       ) : locations.length === 0 ? (
         <div style={{
           background: "#fff",
@@ -435,7 +435,7 @@ export default function LocationsList({ embedded = false }) {
           color: MUTED,
           fontSize: 14,
         }}>
-          No venues yet. Click <strong>+ Add new venue</strong> to set up your first one.
+          No locations yet. Click <strong>+ Add a location</strong> to set up your first one.
         </div>
       ) : (
         locations.map((loc) => (
@@ -456,7 +456,7 @@ export default function LocationsList({ embedded = false }) {
             style={{ width: "100%", maxWidth: 560, height: "100%", background: "#fff", boxShadow: "-12px 0 40px rgba(0,0,0,0.18)", overflowY: "auto", borderTopLeftRadius: 12, borderBottomLeftRadius: 12 }}
           >
             <EditCard
-              title={editingId === "new" ? "New venue" : (locations.find((l) => l.id === editingId)?.name ?? "")}
+              title={editingId === "new" ? "New location" : (locations.find((l) => l.id === editingId)?.name ?? "")}
               draft={draft}
               bind={bind}
               applyPlace={applyPlace}
@@ -515,7 +515,7 @@ function DisplayCard({ loc, campCount, districtName, onEdit }) {
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
           {populatedFields.length === 0 && contactBits.length === 0 ? (
             <div style={{ fontSize: 13, color: CORAL, fontStyle: "italic" }}>
-              No details filled in yet — instructors won't see any extra info for this venue.
+              No details filled in yet — instructors won't see any extra info for this location.
             </div>
           ) : (
             <>
@@ -527,7 +527,7 @@ function DisplayCard({ loc, campCount, districtName, onEdit }) {
               ))}
               {contactBits.length > 0 && (
                 <div style={{ fontSize: 13, color: INK, lineHeight: 1.4 }}>
-                  <span style={{ color: MUTED, fontWeight: 600 }}>Venue contact: </span>
+                  <span style={{ color: MUTED, fontWeight: 600 }}>Location contact: </span>
                   {contactBits.join(" · ")}
                 </div>
               )}
@@ -556,7 +556,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>
-          {isNew ? "New venue" : `Editing ${title}`}
+          {isNew ? "New location" : `Editing ${title}`}
         </div>
         <div style={{ fontSize: 11, color: MUTED }}>
           Fields marked <span style={{ color: OK_GREEN, fontWeight: 600 }}>visible to instructors</span> show up in offer emails.
@@ -564,9 +564,9 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
       </div>
 
       <Field
-        label="Venue name *"
+        label="Location name *"
         hint={placesEnabled
-          ? "Start typing — we'll find the school or venue and fill in the address for you. Or just type the name."
+          ? "Start typing — we'll find the place and fill in the address for you. Or just type the name."
           : "The human-readable label that shows on the calendar and in emails."}
         instructorFacing
       >
@@ -587,7 +587,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
         <input type="text" {...bind("address")} placeholder="e.g. 2037 Douglas St, Forest Grove, OR 97116" style={inputStyle} />
       </Field>
 
-      <Field label="Area" hint="The area this venue is in (e.g. Portland, Hillsboro). Instructors rank areas in their availability survey, and instructor matching uses it. Defaults to the city from the address.">
+      <Field label="Area" hint="The area this location is in (e.g. Portland, Hillsboro). Instructors rank areas in their availability survey, and instructor matching uses it. Defaults to the city from the address.">
         <input type="text" {...bind("area")} placeholder={parseCity(draft.address) ? `e.g. ${parseCity(draft.address)} (from address)` : "e.g. Portland"} style={inputStyle} />
         {!draft.area?.trim() && parseCity(draft.address) && (
           <button
@@ -666,18 +666,18 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
       </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
-        <Field label="Venue contact name" instructorFacing>
+        <Field label="Location contact name" instructorFacing>
           <input type="text" {...bind("contact_name")} placeholder="e.g. Jane Smith" style={inputStyle} />
         </Field>
-        <Field label="Venue contact phone" instructorFacing>
+        <Field label="Location contact phone" instructorFacing>
           <input type="text" {...bind("contact_phone")} placeholder="e.g. 503-555-1234" style={inputStyle} />
         </Field>
-        <Field label="Venue contact email" instructorFacing>
+        <Field label="Location contact email" instructorFacing>
           <input type="email" {...bind("contact_email")} placeholder="e.g. jane@venue.org" style={inputStyle} />
         </Field>
       </div>
 
-      <Field label="Notes" hint="Anything else worth telling the instructor about this venue." instructorFacing>
+      <Field label="Notes" hint="Anything else worth telling the instructor about this location." instructorFacing>
         <textarea {...bind("notes")} placeholder="e.g. Air conditioning is unreliable on hot days — bring a fan." rows={2} style={textareaStyle} />
       </Field>
 
@@ -688,7 +688,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
           Cancel
         </button>
         <button type="button" onClick={onSave} disabled={saving} style={btn(BRIGHT, "#fff", false, saving)}>
-          {saving ? "Saving…" : (isNew ? "Add venue" : "Save changes")}
+          {saving ? "Saving…" : (isNew ? "Add location" : "Save changes")}
         </button>
       </div>
     </div>
