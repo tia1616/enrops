@@ -264,7 +264,7 @@ function buildParentEmail(firstName: string, signInUrl: string): string {
         View my dashboard
       </a>
     </div>
-    <p style="margin:0;font-size:13px;color:#6b6880;">This link expires in 24 hours. Questions? Reach us at <a href="mailto:info@journeytosteam.com" style="color:#674EE8;">info@journeytosteam.com</a></p>
+    <p style="margin:0;font-size:13px;color:#6b6880;">This link expires in 24 hours. Questions? Reach us at <a href="mailto:support@journeytosteam.com" style="color:#674EE8;">support@journeytosteam.com</a></p>
   </div>
 </div>
 </body></html>`;

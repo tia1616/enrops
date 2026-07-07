@@ -18,7 +18,7 @@ export const TENANTS = {
     },
     displayFont: '"Titan One"',
     bodyFont: '"Nunito Sans"',
-    supportEmail: 'info@journeytosteam.com',
+    supportEmail: 'support@journeytosteam.com',
     supportPhone: '(971) 258-2178',
     waiverFamily: 'j2s', // to match against waivers.name
   },
