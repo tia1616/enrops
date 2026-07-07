@@ -162,10 +162,10 @@ export default function RegisterSuccess() {
       <p className="mt-8 text-center text-sm text-j2s-ink/60">
         Questions? Reach us at{' '}
         <a
-          href="mailto:info@journeytosteam.com"
+          href="mailto:support@journeytosteam.com"
           className="font-semibold text-j2s-purple hover:underline"
         >
-          info@journeytosteam.com
+          support@journeytosteam.com
         </a>
       </p>
     </div>

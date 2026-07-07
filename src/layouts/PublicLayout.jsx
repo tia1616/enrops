@@ -127,7 +127,7 @@ function J2SBrandedShell({ org, user, signOut, location }) {
             <div>
               <h4 className="font-titan text-sm uppercase tracking-wider text-j2s-orange">Contact</h4>
               <p className="mt-3 text-sm">
-                <a href="mailto:info@journeytosteam.com" className="hover:text-white">info@journeytosteam.com</a>
+                <a href="mailto:support@journeytosteam.com" className="hover:text-white">support@journeytosteam.com</a>
                 <br />
                 <a href="tel:+19712582178" className="hover:text-white">(971) 258-2178</a>
               </p>

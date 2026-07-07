@@ -547,7 +547,7 @@ export default function J2SHome() {
               <div className="mt-8 rounded-xl bg-j2s-purple-soft p-6 text-center text-j2s-ink/70">
                 No open programs at this school yet. Check back soon or{' '}
                 <a
-                  href="mailto:info@journeytosteam.com"
+                  href="mailto:support@journeytosteam.com"
                   className="font-semibold text-j2s-purple hover:underline"
                 >
                   reach out to us

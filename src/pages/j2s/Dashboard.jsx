@@ -172,7 +172,20 @@ export default function Dashboard() {
         .eq('auth_id', user.id)
         .maybeSingle();
       if (pErr) { setError('fetch_failed'); setLoading(false); return; }
-      if (!p) { setError('no_parent'); setLoading(false); return; }
+      if (!p) {
+        // No family record for this user. The header "My account" link and the
+        // family login both funnel everyone to this dashboard, so an instructor
+        // or org admin can land here by mistake. Route them to their real home
+        // instead of dead-ending on "couldn't find your account".
+        const slug = org?.slug || 'j2s';
+        const [{ data: inst }, { data: mem }] = await Promise.all([
+          supabase.from('instructors').select('id').eq('auth_user_id', user.id).eq('is_active', true).maybeSingle(),
+          supabase.from('org_members').select('role').eq('auth_user_id', user.id).maybeSingle(),
+        ]);
+        if (inst) { navigate(`/${slug}/instructor`, { replace: true }); return; }
+        if (mem) { navigate(`/${slug}/admin`, { replace: true }); return; }
+        setError('no_account'); setLoading(false); return;
+      }
       setParent(p);
       setPrefs({ ...DEFAULT_PREFS, ...(p.communication_preferences || {}) });
 
@@ -367,12 +380,16 @@ export default function Dashboard() {
       </div>
     );
   }
-  if (error === 'no_parent') {
+  if (error === 'no_account') {
     return (
       <div className="mx-auto max-w-xl px-4 py-12 text-center">
         <h2 className="font-titan text-2xl text-j2s-purple">Hmm, we couldn't find your account.</h2>
         <p className="mt-3 text-j2s-ink/70">This sometimes happens if your account is still being set up. Please email us and we'll sort it out right away.</p>
         <a href={`mailto:${supportEmail}`} className="mt-6 inline-block rounded-lg bg-j2s-purple px-6 py-3 font-bold text-white transition hover:bg-j2s-purple-dark">Email {supportEmail}</a>
+        <p className="mt-6 text-sm text-j2s-ink/60">
+          Are you an instructor?{' '}
+          <Link to={`/${org?.slug || 'j2s'}/instructor`} className="font-semibold text-j2s-purple hover:underline">Go to the instructor portal →</Link>
+        </p>
       </div>
     );
   }
