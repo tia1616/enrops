@@ -67,6 +67,9 @@ export default function TouchpointCard({
   hasContentPicks = true,
   // Campaign id for the preview API call. Empty disables preview.
   campaignId,
+  // Org id — powers "Save as template" / "Use a saved template" (saved_email_templates
+  // is org-scoped). When absent the template controls are hidden (nothing breaks).
+  organizationId,
 }) {
   const [open, setOpen] = useState(defaultOpen);
   // Local pending state for the per-card Send-test button so the operator
@@ -316,6 +319,15 @@ export default function TouchpointCard({
             onCommit={(v) => onCommit?.(tp.id, { body_html: v, body_text: stripHtml(v) })}
           />
 
+          {organizationId && (
+            <TemplateControls
+              organizationId={organizationId}
+              subject={tp.subject}
+              bodyHtml={tp.body_html ?? ""}
+              onApply={(patch) => (onCommit ?? onUpdate)(tp.id, patch)}
+            />
+          )}
+
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {/* Regenerate button hidden until task #7's regenerate flag ships
                 in marketing-draft-campaign. Currently fires a dev stub alert
@@ -454,6 +466,171 @@ function BodyEditor({ value, onChange, onCommit }) {
           <p style={{ margin: "4px 0 0", color: OK, fontStyle: "italic" }}>
             ✨ Every edit teaches Ennie a phrase you prefer or drop. Future drafts will reflect your voice automatically — less editing each campaign.
           </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Save-as-template / Use-a-saved-template controls under the body editor.
+// Lets an operator stash the current subject+body as a reusable template, or
+// drop a saved one into this touchpoint. Templates live in saved_email_templates
+// (org-scoped, RLS-gated). Reuse writes through onApply → the touchpoint's
+// onCommit/onUpdate so it persists exactly like a normal edit.
+function TemplateControls({ organizationId, subject, bodyHtml, onApply }) {
+  const [mode, setMode] = useState(null); // null | 'save' | 'use'
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState(null); // {kind:'ok'|'err', text}
+  const [templates, setTemplates] = useState(null); // null=not loaded yet
+  const [pickId, setPickId] = useState("");
+  const [useErr, setUseErr] = useState(false); // load failed in the "use" picker
+
+  const showFlash = (kind, text) => setFlash({ kind, text });
+
+  const save = async () => {
+    const nm = name.trim();
+    if (!nm) { showFlash("err", "Give it a name first."); return; }
+    if (!bodyHtml && !(subject && subject.trim())) { showFlash("err", "Nothing to save yet — write a subject or body."); return; }
+    setBusy(true);
+    setFlash(null);
+    const { data: userData } = await supabase.auth.getUser();
+    const { error } = await supabase.from("saved_email_templates").insert({
+      organization_id: organizationId,
+      name: nm,
+      subject: subject && subject.trim() ? subject : null,
+      body_html: bodyHtml || null,
+      body_text: stripHtml(bodyHtml) || null,
+      created_by: userData?.user?.id ?? null,
+    });
+    setBusy(false);
+    if (error) { showFlash("err", "Couldn't save. Try again."); return; }
+    setName("");
+    setMode(null);
+    setTemplates(null); // force reload next time the picker opens
+    showFlash("ok", `Saved “${nm}” to your templates.`);
+  };
+
+  const openUse = async () => {
+    setMode("use");
+    setFlash(null);
+    setUseErr(false);
+    if (templates !== null) return;
+    setBusy(true);
+    const { data, error } = await supabase
+      .from("saved_email_templates")
+      .select("id, name, subject, body_html")
+      .eq("organization_id", organizationId)
+      .order("updated_at", { ascending: false });
+    setBusy(false);
+    // Leave templates === null on error so the empty-state ("none yet") copy
+    // doesn't render alongside the error — useErr owns that branch instead.
+    if (error) { setUseErr(true); return; }
+    setTemplates(data ?? []);
+  };
+
+  const applyPick = (id) => {
+    setPickId(id);
+    if (!id) return;
+    const t = (templates ?? []).find((x) => x.id === id);
+    if (!t) return;
+    // Only overwrite fields the template actually HAS. A subject-only template
+    // must not wipe the body the operator already wrote (and vice-versa) — the
+    // body guard is the symmetric partner of the subject guard below.
+    const patch = {};
+    if (t.body_html && t.body_html.trim()) {
+      patch.body_html = t.body_html;
+      patch.body_text = stripHtml(t.body_html);
+    }
+    if (t.subject && t.subject.trim()) patch.subject = t.subject;
+    if (patch.body_html == null && patch.subject == null) {
+      showFlash("err", "That template is empty.");
+      setPickId("");
+      return;
+    }
+    onApply(patch);
+    setMode(null);
+    setPickId("");
+    showFlash("ok", `Loaded “${t.name}”. Edit it here as needed.`);
+  };
+
+  const linkBtn = {
+    background: "transparent", border: "none", color: PURPLE,
+    cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: 600, padding: 0,
+  };
+  const fieldStyle = {
+    padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6,
+    fontSize: 13, fontFamily: "inherit", color: INK, background: "#fff",
+  };
+
+  return (
+    <div style={{ borderTop: `1px dashed ${RULE}`, paddingTop: 10, display: "grid", gap: 8 }}>
+      {mode === null && (
+        <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+          <button type="button" onClick={() => { setMode("save"); setFlash(null); }} style={linkBtn}>
+            Save as template
+          </button>
+          <button type="button" onClick={openUse} style={linkBtn}>
+            Use a saved template
+          </button>
+        </div>
+      )}
+
+      {mode === "save" && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Name this template (e.g. Win-back)"
+            style={{ ...fieldStyle, flex: 1, minWidth: 180 }}
+            autoFocus
+            onKeyDown={(e) => { if (e.key === "Enter") save(); }}
+          />
+          <button
+            type="button"
+            onClick={save}
+            disabled={busy}
+            style={{
+              background: BRIGHT, color: "#fff", border: "none", borderRadius: 999,
+              padding: "7px 14px", fontSize: 12, fontWeight: 700, fontFamily: "inherit",
+              cursor: busy ? "wait" : "pointer",
+            }}
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+          <button type="button" onClick={() => { setMode(null); setName(""); }} disabled={busy} style={linkBtn}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {mode === "use" && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {busy ? (
+            <span style={{ fontSize: 12, color: MUTED }}>Loading your templates…</span>
+          ) : useErr ? (
+            <span style={{ fontSize: 12, color: "#b3261e" }}>Couldn&apos;t load your templates. Try again.</span>
+          ) : (templates && templates.length > 0) ? (
+            <select value={pickId} onChange={(e) => applyPick(e.target.value)} style={{ ...fieldStyle, cursor: "pointer" }}>
+              <option value="">Pick a template to drop in…</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          ) : (
+            <span style={{ fontSize: 12, color: MUTED }}>
+              No saved templates yet. Save one first, or add them in the Templates tab.
+            </span>
+          )}
+          <button type="button" onClick={() => { setMode(null); setPickId(""); }} style={linkBtn}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {flash && (
+        <div style={{ fontSize: 12, color: flash.kind === "ok" ? OK : "#b3261e" }}>
+          {flash.text}
         </div>
       )}
     </div>

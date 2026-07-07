@@ -14,6 +14,7 @@ import AdminOverview from './pages/admin/AdminOverview.jsx';
 import AICampaignBuilder from './pages/admin/marketing-v2/AICampaignBuilder.jsx';
 import AutomationsTab from './pages/admin/marketing-v2/AutomationsTab.jsx';
 import ContactsTab from './pages/admin/marketing-v2/ContactsTab.jsx';
+import TemplatesTab from './pages/admin/marketing-v2/TemplatesTab.jsx';
 import Schedule from './pages/admin/Schedule.jsx';
 import SchedulePrint from './pages/admin/SchedulePrint.jsx';
 import ClassSchedule from './pages/admin/ClassSchedule.jsx';
@@ -142,6 +143,7 @@ export default function App() {
         <Route path="family-comms/marketing" element={<AICampaignBuilder />} />
         <Route path="family-comms/automations" element={<AutomationsTab />} />
         <Route path="family-comms/contacts" element={<ContactsTab />} />
+        <Route path="family-comms/templates" element={<TemplatesTab />} />
         <Route path="marketing-v2" element={<Navigate to="/admin/family-comms/marketing" replace />} />
         <Route path="schedule" element={<Schedule />} />
         <Route path="schedule/print" element={<SchedulePrint />} />
