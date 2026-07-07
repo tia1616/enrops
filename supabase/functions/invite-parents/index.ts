@@ -23,7 +23,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress, renderSignatureBlock, OrgBrand } from '../_shared/orgBrand.ts';
 import { isEmailAllowed, emailGuardActive } from '../_shared/emailGuard.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
@@ -268,6 +268,7 @@ function buildInviteEmail(brand: OrgBrand, firstName: string, signInUrl: string,
       </a>
     </div>
     <p style="margin:0;font-size:13px;color:#6b6b6b;line-height:1.6;">This one-click link works for 24 hours.${loginUrl ? ` After that you can sign in any time at <a href="${loginUrl}" style="color:${primary};">your parent portal</a> — we'll email you a fresh link.` : ''} Questions? Just reply to this email.</p>
+    ${renderSignatureBlock(brand)}
   </div>
 </div>
 </body></html>`;

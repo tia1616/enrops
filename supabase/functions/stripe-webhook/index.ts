@@ -40,7 +40,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress, renderSignatureBlock, OrgBrand } from '../_shared/orgBrand.ts';
 import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
 import { handleTransferReversed as sharedHandleTransferReversed } from '../_shared/handleTransferReversed.ts';
@@ -696,6 +696,7 @@ ${summaryBlock}
 <div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
 <div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">
 ${innerBody}
+${renderSignatureBlock(brand)}
 </div>
 <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
 ${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()}
