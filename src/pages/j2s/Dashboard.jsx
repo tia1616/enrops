@@ -3,6 +3,7 @@ import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { getTenant } from '../../lib/tenants.js';
+import { getUserRoles } from '../../lib/useUserRoles.js';
 import WaiverGate from './WaiverGate.jsx';
 
 /* ------------------------------------------------------------------ */
@@ -178,12 +179,9 @@ export default function Dashboard() {
         // or org admin can land here by mistake. Route them to their real home
         // instead of dead-ending on "couldn't find your account".
         const slug = org?.slug || 'j2s';
-        const [{ data: inst }, { data: mem }] = await Promise.all([
-          supabase.from('instructors').select('id').eq('auth_user_id', user.id).eq('is_active', true).maybeSingle(),
-          supabase.from('org_members').select('role').eq('auth_user_id', user.id).maybeSingle(),
-        ]);
-        if (inst) { navigate(`/${slug}/instructor`, { replace: true }); return; }
-        if (mem) { navigate(`/${slug}/admin`, { replace: true }); return; }
+        const roles = await getUserRoles(user.id);
+        if (roles.isInstructor) { navigate(`/${slug}/instructor`, { replace: true }); return; }
+        if (roles.isAdmin) { navigate('/admin', { replace: true }); return; }
         setError('no_account'); setLoading(false); return;
       }
       setParent(p);

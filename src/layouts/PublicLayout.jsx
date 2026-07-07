@@ -17,6 +17,7 @@ import { Outlet, Link, useLocation, NavLink, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx';
 import { supabase } from '../lib/supabase.js';
 import PwaInstallButton from '../components/pwa/PwaInstallButton.jsx';
+import PortalSwitcher from '../components/PortalSwitcher.jsx';
 
 const ENROPS_PURPLE = '#1C004F';
 const ENROPS_VIOLET = '#8C88FF';
@@ -96,6 +97,7 @@ function J2SBrandedShell({ org, user, signOut, location }) {
             <PwaInstallButton />
             {user ? (
               <>
+                <PortalSwitcher current="family" slug={org.slug} />
                 <NavLink to={`${home}/dashboard`} className={({ isActive }) => `rounded-lg px-3 py-2 transition ${isActive ? 'bg-j2s-purple-soft text-j2s-purple-dark' : 'text-j2s-ink hover:bg-j2s-purple-soft'}`}>
                   My account
                 </NavLink>
@@ -174,6 +176,7 @@ function EnropsBrandedShell({ org, user, signOut, location }) {
             <PwaInstallButton />
             {user ? (
               <>
+                <PortalSwitcher current="family" slug={org.slug} />
                 <NavLink to={`${home}/dashboard`} style={({ isActive }) => ({ padding: '6px 12px', borderRadius: 6, color: isActive ? ENROPS_PURPLE : '#1a1a1a', textDecoration: 'none', background: isActive ? `${ENROPS_VIOLET}22` : 'transparent' })}>
                   My account
                 </NavLink>
