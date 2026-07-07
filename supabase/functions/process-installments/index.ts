@@ -54,7 +54,7 @@ import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildConnectChargeParams, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
 import { passThroughFeeCents } from '../_shared/passThroughFee.ts';
-import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress, renderSignatureBlock, OrgBrand } from '../_shared/orgBrand.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -645,7 +645,8 @@ async function sendParentDeclineNotice({
   <p>A quick note — the ${installmentLabel} installment for <strong>${escapeHtml(summary)}</strong> didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.</p>
   <p><strong>${childPrograms.length === 1 ? `${escapeHtml(childPrograms[0].name)}'s spot is` : 'Their spots are'} still held</strong> — we won't drop the registration${childPrograms.length === 1 ? '' : 's'} while we sort this out.</p>
   <p>To update your card on file, reply to this email and we'll send you a secure link.</p>
-  <p>Thanks for your patience,<br/>${escapeHtml(senderFirst)}<br/><span style="color:#666;">${escapeHtml(brand.org_name)}</span><br/><a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p>
+  <p style="margin-bottom:4px;">Thanks for your patience,</p>
+  ${renderSignatureBlock(brand) || `<p style="margin-top:0;">${escapeHtml(senderFirst)}<br/><span style="color:#666;">${escapeHtml(brand.org_name)}</span><br/><a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p>`}
 </div>`.trim();
 
   try {
