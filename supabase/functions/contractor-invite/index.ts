@@ -15,6 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
 
 interface ContractorInviteBody {
   instructor_id?: string;
@@ -213,6 +214,8 @@ serve(async (req: Request) => {
       return json({ error: 'email_not_configured' }, 500);
     }
 
+    const brand = await loadOrgBrand(supabase, instructorRow.organization_id);
+
     const firstName = instructorRow.first_name ?? 'there';
     const subject = `${org.name} — start your contractor onboarding in enrops`;
 
@@ -232,6 +235,7 @@ serve(async (req: Request) => {
       firstName,
       orgName: org.name ?? 'enrops',
       magicLink,
+      signatureBlock: renderSignatureBlock(brand),
     });
 
     const resp = await fetch('https://api.resend.com/emails', {
@@ -281,8 +285,8 @@ serve(async (req: Request) => {
   }
 });
 
-function buildEmailHtml(args: { firstName: string; orgName: string; magicLink: string }): string {
-  const { firstName, orgName, magicLink } = args;
+function buildEmailHtml(args: { firstName: string; orgName: string; magicLink: string; signatureBlock: string }): string {
+  const { firstName, orgName, magicLink, signatureBlock } = args;
   return `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1a1a1a;max-width:560px;margin:0 auto;padding:24px;line-height:1.6;">
   <h2 style="font-size:20px;margin:0 0 16px 0;">Start your contractor onboarding</h2>
@@ -293,6 +297,7 @@ function buildEmailHtml(args: { firstName: string; orgName: string; magicLink: s
   </p>
   <p style="color:#666;font-size:14px;">If the button doesn't work, paste this link into your browser:<br/><span style="word-break:break-all;">${magicLink}</span></p>
   <p>Please complete by Friday, June 12.</p>
+  ${signatureBlock}
 </div>`.trim();
 }
 

@@ -12,6 +12,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -99,6 +100,9 @@ serve(async (req: Request) => {
     const fromName = brandingRow?.email_from_name ?? org.name;
     const replyTo = brandingRow?.email_reply_to ?? null;
 
+    // Tenant email signature — loaded once per org (outside the recipient loop).
+    const brand = await loadOrgBrand(supabase, cycle.organization_id);
+
     // Recipients: all active instructors for this org. Skip rows without an email.
     const { data: instructors, error: instErr } = await supabase
       .from('instructors')
@@ -131,6 +135,7 @@ serve(async (req: Request) => {
         portalUrl,
         deadlineLabel,
         primaryColor,
+        signatureHtml: renderSignatureBlock(brand),
       });
       const text = renderText({
         instructorName: inst.first_name,
@@ -217,8 +222,9 @@ function renderHtml(params: {
   portalUrl: string;
   deadlineLabel: string;
   primaryColor: string;
+  signatureHtml: string;
 }): string {
-  const { instructorName, orgName, cycleDisplay, portalUrl, deadlineLabel, primaryColor } = params;
+  const { instructorName, orgName, cycleDisplay, portalUrl, deadlineLabel, primaryColor, signatureHtml } = params;
   const hi = instructorName ? `Hi ${instructorName}` : 'Hi there';
   const deadlineLine = deadlineLabel
     ? `<p style="margin: 16px 0 0; font-size: 14px; color: ${TEXT};"><strong>Please submit by ${deadlineLabel}.</strong></p>`
@@ -244,9 +250,9 @@ function renderHtml(params: {
       You'll get to accept or request a change on each camp before anything is final. If the button doesn't work, paste this link into your browser:<br/>
       <span style="color:${TEXT};word-break:break-all;">${portalUrl}</span>
     </p>
-    <p style="margin:16px 0 0;font-size:13px;color:${MUTED};">
+    ${signatureHtml || `<p style="margin:16px 0 0;font-size:13px;color:${MUTED};">
       Thanks,<br/>${orgName}
-    </p>
+    </p>`}
   </div>
 </body></html>`;
 }

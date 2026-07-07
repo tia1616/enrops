@@ -18,6 +18,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -204,6 +205,9 @@ serve(async (req: Request) => {
       email_reply_to: brandingRow?.email_reply_to ?? null,
     };
 
+    // Tenant email signature — loaded once per org (outside the instructor loop).
+    const brand = await loadOrgBrand(supabase, orgId);
+
     // Group by instructor — Skyler with 2 pending camps gets one email listing both.
     const byInstructor = new Map<string, typeof targets>();
     for (const a of targets) {
@@ -245,7 +249,7 @@ serve(async (req: Request) => {
         : `${camps.length} more ${unitLabel(cycle.cycle_type, camps.length)} on your ${cycleDisplay} schedule`;
       if (!org.slug) throw new Error(`send-patch-offer: org ${org.id} has no slug; cannot build portal URL`);
       const portalUrl = `https://enrops.com/${org.slug}/instructor`;
-      const html = renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById });
+      const html = renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand) });
       const text = renderPatchText({ cycle, org, instructor, camps, portalUrl, deadline, locationById });
 
       previews.push({ instructor_id: instructorId, to: instructor.email!, subject, html, text });
@@ -363,7 +367,7 @@ function renderVenueDetailsText(loc: any): string[] {
   return out;
 }
 
-function renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById }: any) {
+function renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml }: any) {
   const primary = branding.primary_color ?? DEFAULT_PRIMARY;
   const firstName = instructor.first_name ?? 'there';
   const cycleDisplay = cycleDisplayName(cycle.name);
@@ -440,8 +444,8 @@ function renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, d
           <tr>
             <td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">
               Questions? Just reply to this email.
-              <br /><br />
-              — The ${escape(org.name)} team
+              ${signatureHtml || `<br /><br />
+              — The ${escape(org.name)} team`}
             </td>
           </tr>
         </table>

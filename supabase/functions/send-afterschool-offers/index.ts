@@ -15,6 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -120,6 +121,9 @@ serve(async (req: Request) => {
     const fromName = brandingRow?.email_from_name ?? org.name;
     const replyTo = brandingRow?.email_reply_to ?? null;
 
+    // Tenant email signature — loaded once per org (outside the instructor loop).
+    const brand = await loadOrgBrand(supabase, organizationId);
+
     // Programs for this term (open only).
     const { data: progs } = await supabase
       .from('programs')
@@ -180,7 +184,7 @@ serve(async (req: Request) => {
         .sort((x: any, y: any) => (parse12h(x.p.start_time) ?? 0) - (parse12h(y.p.start_time) ?? 0));
 
       const subject = `Your ${termDisplay} after-school schedule is ready — please review`;
-      const html = renderHtml({ org, primary, firstName: inst.preferred_name ?? inst.first_name ?? 'there', termDisplay, classes, portalUrl, deadline, locById });
+      const html = renderHtml({ org, primary, firstName: inst.preferred_name ?? inst.first_name ?? 'there', termDisplay, classes, portalUrl, deadline, locById, signatureHtml: renderSignatureBlock(brand) });
       const text = renderText({ org, firstName: inst.preferred_name ?? inst.first_name ?? 'there', termDisplay, classes, portalUrl, deadline, locById });
       const recipient = mode === 'send' ? inst.email : TEST_INBOX;
       previews.push({ instructor_id: instructorId, to: recipient, subject, html, text });
@@ -255,7 +259,7 @@ function venueHtml(loc: any): string {
   return `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">${lines.join('')}</div>`;
 }
 
-function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, deadline, locById }: any) {
+function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, deadline, locById, signatureHtml }: any) {
   const rows = classes.map(({ a, p }: any) => {
     const loc = p.program_location_id ? locById.get(p.program_location_id) : undefined;
     const area = loc?.area ? ` · ${escape(loc.area)}` : '';
@@ -291,7 +295,7 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
       <tr><td style="padding:24px 32px 6px;" align="left">
         <a href="${portalUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;font-weight:700;">Review and respond →</a>
       </td></tr>
-      <tr><td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">Once you've responded to every class, you're set. Questions? Just reply to this email.<br/><br/>— ${escape(org.name)}</td></tr>
+      <tr><td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">Once you've responded to every class, you're set. Questions? Just reply to this email.${signatureHtml || `<br/><br/>— ${escape(org.name)}`}</td></tr>
     </table>
   </td></tr></table></body></html>`;
 }
