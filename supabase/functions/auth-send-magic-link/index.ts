@@ -95,53 +95,59 @@ serve(async (req: Request) => {
       throw new Error('Could not generate sign-in link');
     }
 
-    // Build email HTML based on context
-    const isAdmin = context === 'admin';
+    // Choose the wording from the recipient's ACTUAL role, not just the login
+    // page's context hint — so an instructor who signs in via the parent login
+    // (or vice-versa) still gets the right copy. Context only governs the
+    // auto-create behavior (above) and keeps admin wording for an admin who
+    // signed in through the admin page.
+    //
+    // Instructor is matched by EMAIL (not auth_user_id): a first-time
+    // contractor's auth user may have just been created and their instructors
+    // row isn't linked to it yet (linking happens later in the portal).
+    const [{ data: instructorRow }, { data: adminRow }, { data: parentRow }] = await Promise.all([
+      supabase.from('instructors').select('id, first_name').ilike('email', email).eq('is_active', true).limit(1).maybeSingle(),
+      supabase.from('org_members').select('id').eq('auth_user_id', user.id).not('accepted_at', 'is', null).limit(1).maybeSingle(),
+      supabase.from('parents').select('first_name').eq('auth_id', user.id).limit(1).maybeSingle(),
+    ]);
 
-    // For instructors / onboarding contractors, prefer the first_name on their
-    // instructors row over auth user metadata.
+    // Contractor still mid-onboarding keeps the gentler onboarding copy so we
+    // never say "view your schedule" before they have one.
+    let template: 'admin' | 'onboarding' | 'instructor' | 'parent';
+    if (isOnboarding) {
+      template = 'onboarding';
+    } else if (context === 'admin' && adminRow) {
+      template = 'admin';
+    } else if (instructorRow) {
+      const { data: onboardingRow } = await supabase
+        .from('contractor_onboarding_status')
+        .select('overall_status')
+        .eq('instructor_id', instructorRow.id)
+        .maybeSingle();
+      template = onboardingRow && onboardingRow.overall_status !== 'complete' ? 'onboarding' : 'instructor';
+    } else if (adminRow) {
+      template = 'admin';
+    } else {
+      template = 'parent';
+    }
+    console.log(`magic-link template=${template} (context=${context}) for ${email}`);
+
+    // Prefer the name on the matching role row over auth metadata.
     let firstName = user.user_metadata?.full_name
       ? user.user_metadata.full_name.split(' ')[0]
       : 'there';
-    if (needsInstructorLookup) {
-      const { data: instructorRow } = await supabase
-        .from('instructors')
-        .select('id, first_name')
-        .ilike('email', email)
-        .eq('is_active', true)
-        .maybeSingle();
-      if (instructorRow?.first_name) firstName = instructorRow.first_name;
+    if (instructorRow?.first_name) firstName = instructorRow.first_name;
+    else if (parentRow?.first_name) firstName = parentRow.first_name;
 
-      // If signed-in URL targets the instructor portal but the contractor
-      // is still mid-onboarding, switch to onboarding copy so the email
-      // doesn't say "view your schedule" before they have one.
-      if (isInstructor && instructorRow?.id) {
-        const { data: onboardingRow } = await supabase
-          .from('contractor_onboarding_status')
-          .select('overall_status')
-          .eq('instructor_id', instructorRow.id)
-          .maybeSingle();
-        if (onboardingRow && onboardingRow.overall_status !== 'complete') {
-          isInstructor = false;
-          isOnboarding = true;
-        }
-      }
-    }
-
-    const subject = isAdmin
-      ? 'Sign in to Enrops Admin'
-      : isOnboarding
-      ? 'Continue your Journey to STEAM onboarding'
-      : isInstructor
-      ? 'Sign in to view your schedule'
+    const subject =
+      template === 'admin' ? 'Sign in to Enrops Admin'
+      : template === 'onboarding' ? 'Continue your Journey to STEAM onboarding'
+      : template === 'instructor' ? 'Sign in to view your schedule'
       : 'Sign in to Journey to STEAM';
 
-    const html = isAdmin
-      ? buildAdminEmail(firstName, signInUrl)
-      : isOnboarding
-      ? buildOnboardingEmail(firstName, signInUrl)
-      : isInstructor
-      ? buildInstructorEmail(firstName, signInUrl)
+    const html =
+      template === 'admin' ? buildAdminEmail(firstName, signInUrl)
+      : template === 'onboarding' ? buildOnboardingEmail(firstName, signInUrl)
+      : template === 'instructor' ? buildInstructorEmail(firstName, signInUrl)
       : buildParentEmail(firstName, signInUrl);
 
     // Send via Resend
