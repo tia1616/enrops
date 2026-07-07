@@ -1179,49 +1179,126 @@ async function resolveBirthdayAudience(
     return parts[1] === month && parts[2] === day;
   });
 
-  if (birthdayStudents.length === 0) return [];
-
+  // ── Enrolled students (reg-gated) — behavior UNCHANGED for reg tenants (J2S).
   // Only message families with at least one confirmed registration — avoids
   // sending happy-birthday to a student record that never registered for anything.
-  const studentIds = birthdayStudents.map((s: any) => s.id);
-  const { data: regs, error: rErr } = await supabase
-    .from("registrations")
-    .select("student_id")
+  let studentEntries: AudienceEntry[] = [];
+  if (birthdayStudents.length > 0) {
+    const studentIds = birthdayStudents.map((s: any) => s.id);
+    const { data: regs, error: rErr } = await supabase
+      .from("registrations")
+      .select("student_id")
+      .eq("organization_id", a.organization_id)
+      .eq("status", "confirmed")
+      .in("student_id", studentIds);
+    if (rErr) throw rErr;
+    const registeredStudentIds = new Set((regs ?? []).map((r: any) => r.student_id));
+    studentEntries = birthdayStudents
+      .filter((s: any) => registeredStudentIds.has(s.id) && s.parents?.email)
+      .map((s: any) => {
+        const birthYear = Number(s.birthdate.split("-")[0]);
+        return {
+          context_key: `student:${s.id}:year:${year}`,
+          parent_id: s.parents.id,
+          parent_email: s.parents.email,
+          parent_first_name: s.parents.first_name,
+          child_first_name: s.first_name,
+          program_name: "",
+          program_start_date: "",
+          program_end_date: "",
+          location_name: "",
+          abandoned_resume_url: "",
+          age_turning: String(year - birthYear),
+          final_showcase_raw: "",
+          mid_term_skills_raw: [],
+          final_recap_skills_raw: [],
+          arrival_instructions_raw: "",
+          dismissal_instructions_raw: "",
+          session_dates_raw: [],
+          register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+          // ⓘ default-zero defaults for resolvers that don't carry per-program
+          // arrival/dismissal/session data (birthday, abandoned).
+          next_term_available: nextTermAvailable,
+        };
+      });
+  }
+
+  // ── Contacts (marketing_recipients) — relationship automation, NO registration
+  // required, so subscription/non-reg tenants (Richelle, Demetrius) get birthdays
+  // off their uploaded list. ADDITIVE to the student path above. Deduped by child
+  // first name + email (seeded from the student entries), so a family present as
+  // both a student and a contact under the SAME email is emailed once. Cross-email
+  // dedup is best-effort: a HYBRID tenant that runs registration AND uploads the
+  // same family as a contact under a DIFFERENT email could get two — no current
+  // tenant does (reg tenants have no contact birthdates; non-reg tenants have no
+  // students). Matching on child-name-only is deliberately avoided: it would wrongly
+  // merge two different families with a same-named child and drop one's birthday.
+  // Honors marketing_suppressions (deliverability). Does NOT honor suppress_welcome
+  // — that flag is welcome-specific; a family skipped from the welcome should still
+  // get a birthday note. Runs even when there are 0 birthday students (Richelle).
+  const { data: contactsAll, error: cErr } = await supabase
+    .from("marketing_recipients")
+    .select("id, email, parent_name, child_first_name, child_birthdate")
     .eq("organization_id", a.organization_id)
-    .eq("status", "confirmed")
-    .in("student_id", studentIds);
-  if (rErr) throw rErr;
+    .not("child_birthdate", "is", null);
+  if (cErr) throw cErr;
+  const birthdayContacts = (contactsAll ?? []).filter((c: any) => {
+    if (!c.child_birthdate || !c.email) return false;
+    const p = String(c.child_birthdate).split("-").map(Number);
+    return p[1] === month && p[2] === day;
+  });
 
-  const registeredStudentIds = new Set((regs ?? []).map((r: any) => r.student_id));
+  let contactEntries: AudienceEntry[] = [];
+  if (birthdayContacts.length > 0) {
+    // Deliverability suppression (org-scoped). Fail-closed: throw so the run is
+    // skipped + retried rather than send blind and re-hit a hard bounce/complaint.
+    const { data: supp, error: suppErr } = await supabase
+      .from("marketing_suppressions")
+      .select("email")
+      .eq("organization_id", a.organization_id);
+    if (suppErr) throw suppErr;
+    const suppressed = new Set(((supp ?? []) as Array<{ email: string }>).map((s) => (s.email || "").toLowerCase()));
+    // Dedup key = child first name + recipient email, seeded with the student
+    // entries so a student-and-contact family is only emailed once.
+    const dedupKey = (child: string | null, email: string) =>
+      `${(child || "").toLowerCase().trim()}|${email.toLowerCase().trim()}`;
+    const seen = new Set(studentEntries.map((e) => dedupKey(e.child_first_name, e.parent_email)));
+    contactEntries = birthdayContacts
+      .filter((c: any) => {
+        const email = String(c.email);
+        if (suppressed.has(email.toLowerCase())) return false;
+        const key = dedupKey(c.child_first_name, email);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map((c: any) => {
+        const birthYear = Number(String(c.child_birthdate).split("-")[0]);
+        return {
+          context_key: `contact:${c.id}:birthday:year:${year}`,
+          parent_id: null,
+          parent_email: String(c.email),
+          parent_first_name: firstNameFromFull(c.parent_name),
+          child_first_name: c.child_first_name ?? null,
+          program_name: "",
+          program_start_date: "",
+          program_end_date: "",
+          location_name: "",
+          abandoned_resume_url: "",
+          age_turning: String(year - birthYear),
+          final_showcase_raw: "",
+          mid_term_skills_raw: [],
+          final_recap_skills_raw: [],
+          arrival_instructions_raw: "",
+          dismissal_instructions_raw: "",
+          session_dates_raw: [],
+          register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+          next_term_available: nextTermAvailable,
+        };
+      });
+  }
 
-  return birthdayStudents
-    .filter((s: any) => registeredStudentIds.has(s.id) && s.parents?.email)
-    .map((s: any) => {
-      const birthYear = Number(s.birthdate.split("-")[0]);
-      return {
-        context_key: `student:${s.id}:year:${year}`,
-        parent_id: s.parents.id,
-        parent_email: s.parents.email,
-        parent_first_name: s.parents.first_name,
-        child_first_name: s.first_name,
-        program_name: "",
-        program_start_date: "",
-        program_end_date: "",
-        location_name: "",
-        abandoned_resume_url: "",
-        age_turning: String(year - birthYear),
-        final_showcase_raw: "",
-        mid_term_skills_raw: [],
-        final_recap_skills_raw: [],
-        arrival_instructions_raw: "",
-        dismissal_instructions_raw: "",
-        session_dates_raw: [],
-        register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
-        // ⓘ default-zero defaults for resolvers that don't carry per-program
-        // arrival/dismissal/session data (birthday, abandoned).
-        next_term_available: nextTermAvailable,
-      };
-    });
+  return [...studentEntries, ...contactEntries];
 }
 
 // ─── Contact added (welcome_contact) ────────────────────────────────────────
