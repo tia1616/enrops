@@ -18,6 +18,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
+import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -94,6 +95,8 @@ serve(async (req: Request) => {
     const primaryColor = branding?.primary_color ?? DEFAULT_PRIMARY;
     const fromName = branding?.email_from_name ?? org.default_sender_name ?? org.name;
     const replyTo = branding?.email_reply_to ?? null;
+
+    const brand = await loadOrgBrand(supabase, camp.organization_id);
 
     let location: any = null;
     let partner: any = null;
@@ -246,6 +249,7 @@ serve(async (req: Request) => {
       instructors,
       camperCount: campers.length,
       message,
+      signatureHtml: renderSignatureBlock(brand),
     });
     const text = renderEmailText({
       orgName: org.name,
@@ -629,8 +633,9 @@ function renderEmailHtml(params: {
   instructors: Array<{ name: string; phone: string; email: string; role: string }>;
   camperCount: number;
   message: string;
+  signatureHtml: string;
 }): string {
-  const { orgName, primaryColor, camp, location, partner, instructors, camperCount, message } = params;
+  const { orgName, primaryColor, camp, location, partner, instructors, camperCount, message, signatureHtml } = params;
   const greeting = partner?.partner_name ? `Hello ${escapeHtml(partner.partner_name)} team,` : 'Hello,';
   const where = location?.name || camp.location_name || '';
   const dateRange = fmtDateRange(camp.starts_on, camp.ends_on);
@@ -665,7 +670,7 @@ function renderEmailHtml(params: {
       <p style="margin:18px 0 0;font-size:13px;color:${MUTED};line-height:1.5;">
         If anything looks off — names missing, dates wrong — just reply and we'll sort it.
       </p>
-      <p style="margin:14px 0 0;font-size:13px;color:${INK};">— ${escapeHtml(orgName)}</p>
+      ${signatureHtml || `<p style="margin:14px 0 0;font-size:13px;color:${INK};">— ${escapeHtml(orgName)}</p>`}
     </div>
   </div>
 </body></html>`;

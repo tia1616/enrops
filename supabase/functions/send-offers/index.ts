@@ -12,6 +12,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -183,6 +184,9 @@ serve(async (req: Request) => {
       email_reply_to: brandingRow?.email_reply_to ?? null,
     };
 
+    // Tenant email signature — loaded once per org (outside the instructor loop).
+    const brand = await loadOrgBrand(supabase, cycle.organization_id);
+
     // Preview and Test include confirmed AND published — both are non-mutating, so
     // they let admins inspect and re-test without changing the send-state.
     // Real Send fires only on 'confirmed' so it never re-mails already-published rows.
@@ -264,7 +268,7 @@ serve(async (req: Request) => {
       const subject = `Your ${cycleDisplay} schedule is ready — please review`;
       if (!org.slug) throw new Error(`send-offers: org ${org.id} has no slug; cannot build portal URL`);
       const portalUrl = `https://enrops.com/${org.slug}/instructor`;
-      const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById });
+      const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand) });
       const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById });
       const recipient = mode === 'send' ? instructor.email! : TEST_INBOX;
 
@@ -404,7 +408,7 @@ function renderVenueDetailsText(loc: LocationDetails | undefined): string[] {
   return out;
 }
 
-function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById }: {
+function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml }: {
   cycle: Cycle;
   org: Org;
   branding: Branding;
@@ -413,6 +417,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
   portalUrl: string;
   deadline: string | null;
   locationById: Map<string, LocationDetails>;
+  signatureHtml: string;
 }) {
   const primary = branding.primary_color ?? DEFAULT_PRIMARY;
   const firstName = instructor.preferred_name ?? instructor.first_name ?? 'there';
@@ -492,8 +497,8 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
           <tr>
             <td style="padding:14px 32px 8px;font-size:13px;color:${MUTED};line-height:1.55;">
               Once you've responded to every ${unitLabel(cycle.cycle_type, 1)}, you're set. Questions? Just reply to this email.
-              <br /><br />
-              — The ${escape(org.name)} team
+              ${signatureHtml || `<br /><br />
+              — The ${escape(org.name)} team`}
             </td>
           </tr>
           <tr>

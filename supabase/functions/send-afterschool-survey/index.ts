@@ -13,6 +13,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -95,6 +96,9 @@ serve(async (req: Request) => {
     const fromName = brandingRow?.email_from_name ?? org.name;
     const replyTo = brandingRow?.email_reply_to ?? null;
 
+    // Tenant email signature — loaded once per org (outside the recipient loop).
+    const brand = await loadOrgBrand(supabase, organizationId);
+
     const { data: instructors, error: instErr } = await supabase
       .from('instructors')
       .select('id, first_name, last_name, email')
@@ -118,7 +122,7 @@ serve(async (req: Request) => {
 
     for (const inst of recipients) {
       const subject = `Tell ${org.name} which days you can teach this ${termDisplay} — ~2 minutes`;
-      const html = renderHtml({ instructorName: inst.first_name, orgName: org.name, termDisplay, portalUrl, deadlineLabel, primaryColor });
+      const html = renderHtml({ instructorName: inst.first_name, orgName: org.name, termDisplay, portalUrl, deadlineLabel, primaryColor, signatureHtml: renderSignatureBlock(brand) });
       const text = renderText({ instructorName: inst.first_name, orgName: org.name, termDisplay, portalUrl, deadlineLabel });
       const recipient = mode === 'send' ? inst.email! : TEST_INBOX;
       previews.push({ instructor_id: inst.id, to: recipient, subject, html, text });
@@ -181,8 +185,9 @@ function renderHtml(params: {
   portalUrl: string;
   deadlineLabel: string;
   primaryColor: string;
+  signatureHtml: string;
 }): string {
-  const { instructorName, orgName, termDisplay, portalUrl, deadlineLabel, primaryColor } = params;
+  const { instructorName, orgName, termDisplay, portalUrl, deadlineLabel, primaryColor, signatureHtml } = params;
   const hi = instructorName ? `Hi ${instructorName}` : 'Hi there';
   const deadlineLine = deadlineLabel
     ? `<p style="margin: 16px 0 0; font-size: 14px; color: ${TEXT};"><strong>Please submit by ${deadlineLabel}.</strong></p>`
@@ -208,9 +213,9 @@ function renderHtml(params: {
       You'll get to accept or request a change on each class before anything is final. If the button doesn't work, paste this link into your browser:<br/>
       <span style="color:${TEXT};word-break:break-all;">${portalUrl}</span>
     </p>
-    <p style="margin:16px 0 0;font-size:13px;color:${MUTED};">
+    ${signatureHtml || `<p style="margin:16px 0 0;font-size:13px;color:${MUTED};">
       Thanks,<br/>${orgName}
-    </p>
+    </p>`}
   </div>
 </body></html>`;
 }

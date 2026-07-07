@@ -192,6 +192,7 @@ export async function loadOrgBrand(
 
     sender_name: senderName,
     sender_email: senderEmail,
+    sender_source: senderSource,
 
     reply_to:
       pick(
