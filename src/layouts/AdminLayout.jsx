@@ -288,6 +288,13 @@ export default function AdminLayout() {
             </div>
           </div>
 
+          {/* Cross-portal switcher — shows only for operators who also teach
+              and/or are a parent. Placed up top so it's discoverable, not
+              buried at the foot of the sidebar. Single-role admins see nothing. */}
+          <div style={{ padding: "14px 20px 0" }}>
+            <PortalSwitcher current="admin" slug={org?.slug ?? defaultTenantSlug()} label="Switch view" block />
+          </div>
+
           <nav style={{ padding: "12px 8px", flex: 1 }}>
             {visibleNav.map((item) => {
               const active = navItemActive(item, location.pathname);
@@ -379,14 +386,6 @@ export default function AdminLayout() {
               </Link>
             </div>
           )}
-
-          {/* Cross-portal switcher — renders a link to any OTHER surface this
-              user can reach (instructor portal, family dashboard). Shows only
-              for operators who also teach and/or are a parent; single-role
-              admins see nothing. */}
-          <div style={{ padding: "0 12px 12px" }}>
-            <PortalSwitcher current="admin" slug={org?.slug ?? defaultTenantSlug()} block />
-          </div>
 
           <div style={{ padding: "12px 20px", borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED }}>
             <div style={{ marginBottom: 10 }}>

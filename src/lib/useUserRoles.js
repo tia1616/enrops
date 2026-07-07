@@ -13,15 +13,19 @@ import { supabase } from './supabase.js';
 
 export async function getUserRoles(userId) {
   if (!userId) return { isParent: false, isInstructor: false, isAdmin: false };
+  // `.limit(1).maybeSingle()` (not a bare `.maybeSingle()`) so a person who
+  // belongs to 2+ orgs or teaches for 2+ providers on one email doesn't throw
+  // on "multiple rows" — we only need to know a qualifying row EXISTS. The
+  // org_members query pre-filters to accepted memberships (admin's gate).
   const [{ data: p }, { data: i }, { data: m }] = await Promise.all([
-    supabase.from('parents').select('id').eq('auth_id', userId).maybeSingle(),
-    supabase.from('instructors').select('id').eq('auth_user_id', userId).eq('is_active', true).maybeSingle(),
-    supabase.from('org_members').select('accepted_at').eq('auth_user_id', userId).maybeSingle(),
+    supabase.from('parents').select('id').eq('auth_id', userId).limit(1).maybeSingle(),
+    supabase.from('instructors').select('id').eq('auth_user_id', userId).eq('is_active', true).limit(1).maybeSingle(),
+    supabase.from('org_members').select('id').eq('auth_user_id', userId).not('accepted_at', 'is', null).limit(1).maybeSingle(),
   ]);
   return {
     isParent: !!p,
     isInstructor: !!i,
-    isAdmin: !!(m && m.accepted_at),
+    isAdmin: !!m,
   };
 }
 
