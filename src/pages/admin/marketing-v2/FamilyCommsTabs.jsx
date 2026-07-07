@@ -37,6 +37,9 @@ export default function FamilyCommsTabs({ active, onReset }) {
       <TabLink to="/admin/family-comms/contacts" active={active === "contacts"}>
         Contacts
       </TabLink>
+      <TabLink to="/admin/family-comms/templates" active={active === "templates"}>
+        Templates
+      </TabLink>
     </div>
   );
 }

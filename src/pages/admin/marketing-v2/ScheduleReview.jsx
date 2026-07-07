@@ -288,6 +288,7 @@ export default function ScheduleReview({
           pickedLocations={pickedLocations}
           hasContentPicks={hasContentPicks}
           campaignId={draft?.campaign_id}
+          organizationId={org?.id}
         />
       ))}
 
