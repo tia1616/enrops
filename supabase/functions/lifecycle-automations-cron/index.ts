@@ -1465,7 +1465,7 @@ async function resolveReviewRequestAudience(
   a: AutomationRow,
 ): Promise<AudienceEntry[]> {
   if (!a.enabled_at) return [];
-  const days = Math.max(1, pickNumber(a.timing_override?.days_after, a.template.default_timing?.days_after, 42));
+  const days = Math.max(1, pickNumber(a.timing_override?.days_after, a.template.default_timing?.days_after, 30));
   // 3-day grace window so a slightly-delayed cron still catches the anchor date.
   const windowStart = new Date(Date.now() - (days + 3) * 86400000).toISOString().slice(0, 10);
   const latest = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
@@ -1918,8 +1918,16 @@ function wrapInShell(innerBody: string, brand: OrgBrand, unsubscribeUrl = ""): s
     ? `<img src="${brand.logo_url}" alt="${escapeHtml(brand.org_name)}" style="max-height:56px;display:block;margin:0 auto;" />`
     : `<div style="color:${brand.primary_color};font-size:18px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;text-align:center;">${escapeHtml(brand.org_name)}</div>`;
 
-  // Promotional sends only: a plain unsubscribe line. Empty string for
-  // informational sends keeps their footer identical to before this change.
+  // Promotional sends only: the tenant's physical postal address (CAN-SPAM
+  // requires it in commercial email) followed by a plain unsubscribe line. Both
+  // gate on unsubscribeUrl so INFORMATIONAL sends keep their footer identical to
+  // before this change. Address renders only when the org has set one (empty for
+  // tenants who haven't — best-effort, matching the campaign path). Newlines in
+  // the stored address become <br> after escaping.
+  const addr = (brand.mailing_address ?? "").trim();
+  const addressBlock = unsubscribeUrl && addr
+    ? `<br>${escapeHtml(addr).replace(/\n/g, "<br>")}`
+    : "";
   const unsubBlock = unsubscribeUrl
     ? `<br><a href="${escapeHtml(unsubscribeUrl)}" style="color:#888;text-decoration:underline;">Unsubscribe</a>`
     : "";
@@ -1937,7 +1945,7 @@ ${innerBody}
 ${renderSignatureBlock(brand)}
 </div>
 <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
-${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()}${unsubBlock}
+${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()}${addressBlock}${unsubBlock}
 </div>
 </div>
 </body></html>`;

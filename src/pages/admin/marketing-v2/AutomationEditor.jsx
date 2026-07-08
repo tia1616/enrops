@@ -181,6 +181,17 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
+  // Operator-editable send timing. Only templates whose default_timing carries a
+  // numeric days_after expose this control (review_request, check_in). The value
+  // writes automations.timing_override.days_after; equal-to-default clears the
+  // override. Held as a string so the input can be transiently empty while typing.
+  const hasDaysAfterTiming = typeof template?.default_timing?.days_after === "number";
+  const defaultDaysAfter = hasDaysAfterTiming ? template.default_timing.days_after : null;
+  const savedDaysAfter = automation?.timing_override?.days_after ?? defaultDaysAfter;
+  const [daysAfter, setDaysAfter] = useState(savedDaysAfter != null ? String(savedDaysAfter) : "");
+  // Label the timing by what the delay is measured from, per template.
+  const timingAnchorLabel = template.key === "review_request" ? "a family joins" : "the first session";
+
   // Real-data test picker. testSources holds the org's camps/programs eligible
   // for this template; selectedSource is "camp:<id>" / "program:<id>" / "" (sample).
   const sourceType = TEST_SOURCE_BY_TEMPLATE_KEY[template.key] ?? null;
@@ -330,10 +341,15 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   }, [showingServerPreview, serverPreview, previewHtml]);
 
   const tokens = TOKENS_BY_TEMPLATE_KEY[template.key] ?? [];
-  const hasOverride = (automation?.subject_override != null) || (automation?.body_override != null);
+  const hasOverride = (automation?.subject_override != null) || (automation?.body_override != null) || (automation?.timing_override != null);
   const subjectDirty = subject !== (automation?.subject_override ?? template.default_subject);
   const bodyDirty = body !== (automation?.body_override ?? template.default_body);
-  const dirty = subjectDirty || bodyDirty;
+  // Clamp ≥1; empty/invalid falls back to the template default. Mirrors the cron.
+  const parsedDaysAfter = hasDaysAfterTiming
+    ? Math.max(1, parseInt(daysAfter, 10) || defaultDaysAfter || 1)
+    : null;
+  const timingDirty = hasDaysAfterTiming && parsedDaysAfter !== savedDaysAfter;
+  const dirty = subjectDirty || bodyDirty || timingDirty;
 
   async function handleSave() {
     setSaving(true);
@@ -350,6 +366,14 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // keeps the table clean and makes "Reset" semantically simple.
       const subjectOverride = cleanedSubject !== template.default_subject ? cleanedSubject : null;
       const bodyOverride = cleanedBody !== template.default_body ? cleanedBody : null;
+      // Timing override: only for templates with the control, and only when it
+      // differs from the default (equal-to-default clears it, like subject/body).
+      const patch = { subject_override: subjectOverride, body_override: bodyOverride };
+      if (hasDaysAfterTiming) {
+        patch.timing_override = parsedDaysAfter !== defaultDaysAfter
+          ? { ...(automation?.timing_override ?? {}), days_after: parsedDaysAfter }
+          : null;
+      }
       // Capture prior values BEFORE the upsert so we can append edit history.
       const prevSubject = automation?.subject_override ?? null;
       const prevBody = automation?.body_override ?? null;
@@ -357,7 +381,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       if (automation?.id) {
         const { data, error: upErr } = await supabase
           .from("automations")
-          .update({ subject_override: subjectOverride, body_override: bodyOverride })
+          .update(patch)
           .eq("id", automation.id)
           .select()
           .single();
@@ -370,8 +394,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             organization_id: orgId,
             template_id: template.id,
             enabled: false,
-            subject_override: subjectOverride,
-            body_override: bodyOverride,
+            ...patch,
           })
           .select()
           .single();
@@ -436,6 +459,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // No row to reset — just revert local editor state.
       setSubject(template.default_subject);
       setBody(template.default_body);
+      if (hasDaysAfterTiming) setDaysAfter(String(defaultDaysAfter));
       return;
     }
     setResetting(true);
@@ -444,15 +468,18 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     try {
       const prevSubject = automation?.subject_override ?? null;
       const prevBody = automation?.body_override ?? null;
+      const resetPatch = { subject_override: null, body_override: null };
+      if (hasDaysAfterTiming) resetPatch.timing_override = null;
       const { data, error: upErr } = await supabase
         .from("automations")
-        .update({ subject_override: null, body_override: null })
+        .update(resetPatch)
         .eq("id", automation.id)
         .select()
         .single();
       if (upErr) throw upErr;
       setSubject(template.default_subject);
       setBody(template.default_body);
+      if (hasDaysAfterTiming) setDaysAfter(String(defaultDaysAfter));
       // Reset is ALSO a voice signal — operator decided their custom version
       // wasn't right. Append rows for any field that had a non-null override.
       await appendEditHistory({
@@ -641,6 +668,34 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               Drag any token into the body where you want it, or click to copy.
             </p>
           </div>
+
+          {/* Timing — only for templates with an editable days_after offset */}
+          {hasDaysAfterTiming && (
+            <div style={{ marginBottom: 24 }}>
+              <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                Timing
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 14, color: INK }}>Send this</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={daysAfter}
+                  onChange={(e) => setDaysAfter(e.target.value)}
+                  onBlur={() => { if (daysAfter === "" || Number(daysAfter) < 1) setDaysAfter(String(defaultDaysAfter)); }}
+                  style={{
+                    width: 72, padding: "8px 10px", fontSize: 14, color: INK,
+                    border: `1px solid ${RULE}`, borderRadius: 6, outline: "none",
+                    background: "#fff", textAlign: "center",
+                  }}
+                />
+                <span style={{ fontSize: 14, color: INK }}>days after {timingAnchorLabel}.</span>
+              </div>
+              <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED }}>
+                Default is {defaultDaysAfter} days. Pick the point where families have felt the value but it&apos;s still fresh.
+              </p>
+            </div>
+          )}
 
           {/* Live preview */}
           <div style={{ marginBottom: 8 }}>
