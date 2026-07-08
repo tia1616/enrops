@@ -1,12 +1,16 @@
 // send-availability-survey: opens the instructor-portal availability survey for
-// a cycle and emails every active instructor a link to fill it out.
+// a cycle and emails active instructors a link to fill it out.
 //
-// Input: { cycle_id: string, mode: 'preview' | 'test' | 'send', deadline?: string }
-//   - mode 'preview': returns rendered HTML for every recipient, no DB writes, no sends
-//   - mode 'test':    sends each rendered email to TEST_INBOX (overrides instructor.email);
+// Input: { cycle_id, mode: 'preview'|'test'|'send',
+//          deadline?: string, instructor_ids?: string[], intro?: string }
+//   - mode 'preview': returns rendered HTML for every (filtered) recipient, no DB writes, no sends
+//   - mode 'test':    sends ONE rendered email to the logged-in caller;
 //                     does NOT flip scheduling_cycles.availability_survey_opened_at
 //   - mode 'send':    sends to real instructor.email, flips opened_at + survey_deadline
 //   - deadline:       optional ISO date or timestamptz. Surfaces in the email + portal banner.
+//   - instructor_ids: optional subset of active instructors to target (straggler / new-hire
+//                     nudge). Omitted/empty = all active instructors.
+//   - intro:          optional editable lead paragraph. Omitted/blank = default copy.
 //
 // Multi-tenant: queries scoped by organization (inferred from cycle.organization_id).
 
@@ -18,7 +22,6 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-const TEST_INBOX = 'jessica@journeytosteam.com';
 const DEFAULT_PRIMARY = '#1C004F';
 const TEXT = '#1a1a1a';
 const MUTED = '#6b6b6b';
@@ -52,6 +55,10 @@ serve(async (req: Request) => {
     const cycleId: string | undefined = body.cycle_id;
     const mode: 'preview' | 'test' | 'send' = body.mode ?? 'preview';
     const deadline: string | null = body.deadline ?? null;
+    const instructorIds: string[] | null = Array.isArray(body.instructor_ids) && body.instructor_ids.length > 0
+      ? body.instructor_ids
+      : null;
+    const intro: string | null = typeof body.intro === 'string' && body.intro.trim() ? body.intro.trim() : null;
 
     if (!cycleId) return json({ error: 'cycle_id is required' }, 400);
     if (!['preview', 'test', 'send'].includes(mode)) {
@@ -111,9 +118,20 @@ serve(async (req: Request) => {
       .eq('is_active', true);
     if (instErr) return json({ error: `instructors query: ${instErr.message}` }, 500);
 
-    const recipients = (instructors ?? []).filter((i: any) => !!i.email);
+    // Optional subset (straggler / new-hire nudge). Filter to the requested ids,
+    // then drop anyone without an email.
+    const idSet = instructorIds ? new Set(instructorIds) : null;
+    const recipients = (instructors ?? [])
+      .filter((i: any) => !idSet || idSet.has(i.id))
+      .filter((i: any) => !!i.email);
     if (recipients.length === 0) {
-      return json({ sent: 0, failed: [], preview: [], note: 'No active instructors with email addresses for this org.' });
+      return json({ sent: 0, failed: [], preview: [], note: 'No active instructors with email addresses for this selection.' });
+    }
+
+    // Test mode routes to the logged-in caller — never a hardcoded inbox (multi-tenant).
+    const callerEmail = userData.user.email;
+    if (mode === 'test' && !callerEmail) {
+      return json({ error: 'Your account has no email address to send the test to.' }, 400);
     }
 
     const cycleDisplay = cycleDisplayName(cycle.name);
@@ -122,59 +140,46 @@ serve(async (req: Request) => {
     const effectiveDeadline = deadline ?? cycle.survey_deadline ?? null;
     const deadlineLabel = fmtDeadline(effectiveDeadline);
 
+    const subject = `Tell ${org.name} when you can work this ${cycleDisplay} — ~2 minutes`;
     const previews: Array<{ instructor_id: string; to: string; subject: string; html: string; text: string }> = [];
     const sent: string[] = [];
     const failed: Array<{ instructor_id: string; reason: string }> = [];
 
+    // Render one email per (filtered) recipient. `to` is who would actually receive
+    // it on a real send — the honest preview address.
     for (const inst of recipients) {
-      const subject = `Tell ${org.name} when you can work this ${cycleDisplay} — ~2 minutes`;
-      const html = renderHtml({
-        instructorName: inst.first_name,
-        orgName: org.name,
-        cycleDisplay,
-        portalUrl,
-        deadlineLabel,
-        primaryColor,
-        signatureHtml: renderSignatureBlock(brand),
-      });
-      const text = renderText({
-        instructorName: inst.first_name,
-        orgName: org.name,
-        cycleDisplay,
-        portalUrl,
-        deadlineLabel,
-      });
-      const recipient = mode === 'send' ? inst.email! : TEST_INBOX;
-      previews.push({ instructor_id: inst.id, to: recipient, subject, html, text });
+      const html = renderHtml({ instructorName: inst.first_name, orgName: org.name, cycleDisplay, intro, portalUrl, deadlineLabel, primaryColor, signatureHtml: renderSignatureBlock(brand) });
+      const text = renderText({ instructorName: inst.first_name, orgName: org.name, cycleDisplay, intro, portalUrl, deadlineLabel });
+      previews.push({ instructor_id: inst.id, to: inst.email!, subject, html, text });
+    }
 
-      if (mode === 'preview') continue;
-
+    const fromDomain = 'updates.journeytosteam.com';
+    const fromEmail = `${fromName} <hello@${fromDomain}>`;
+    async function sendOne(to: string, subj: string, html: string, text: string): Promise<{ ok: true } | { ok: false; reason: string }> {
       try {
-        const fromDomain = 'updates.journeytosteam.com';
-        const fromEmail = `${fromName} <hello@${fromDomain}>`;
         const r = await fetch('https://api.resend.com/emails', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${RESEND_API_KEY}`,
-          },
-          body: JSON.stringify({
-            from: fromEmail,
-            to: recipient,
-            reply_to: replyTo ?? undefined,
-            subject: mode === 'test' ? `[TEST] ${subject}` : subject,
-            html,
-            text,
-          }),
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
+          body: JSON.stringify({ from: fromEmail, to, reply_to: replyTo ?? undefined, subject: subj, html, text }),
         });
-        if (!r.ok) {
-          const errText = await r.text();
-          failed.push({ instructor_id: inst.id, reason: `resend ${r.status}: ${errText.slice(0, 200)}` });
-          continue;
-        }
-        sent.push(inst.id);
+        if (!r.ok) return { ok: false, reason: `resend ${r.status}: ${(await r.text()).slice(0, 200)}` };
+        return { ok: true };
       } catch (err) {
-        failed.push({ instructor_id: inst.id, reason: (err as Error).message });
+        return { ok: false, reason: (err as Error).message };
+      }
+    }
+
+    if (mode === 'test') {
+      // One representative email to the caller — instructors are not contacted.
+      const p = previews[0];
+      const res = await sendOne(callerEmail!, `[TEST] ${subject}`, p.html, p.text);
+      if (res.ok) sent.push(p.instructor_id);
+      else failed.push({ instructor_id: p.instructor_id, reason: res.reason });
+    } else if (mode === 'send') {
+      for (const p of previews) {
+        const res = await sendOne(p.to, subject, p.html, p.text);
+        if (res.ok) sent.push(p.instructor_id);
+        else failed.push({ instructor_id: p.instructor_id, reason: res.reason });
       }
     }
 
@@ -215,16 +220,27 @@ function json(body: unknown, status = 200) {
   });
 }
 
+// The editable lead paragraph. Blank/omitted falls back to the default copy.
+function introHtml(intro: string | null, cycleDisplay: string): string {
+  const text = intro ?? `We're planning the ${cycleDisplay} schedule and want to know when and where you'd like to work.`;
+  return escapeHtml(text).replace(/\n{2,}/g, '</p><p style="margin:0 0 12px;font-size:15px;line-height:1.55;">').replace(/\n/g, '<br/>');
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function renderHtml(params: {
   instructorName: string | null;
   orgName: string;
   cycleDisplay: string;
+  intro: string | null;
   portalUrl: string;
   deadlineLabel: string;
   primaryColor: string;
   signatureHtml: string;
 }): string {
-  const { instructorName, orgName, cycleDisplay, portalUrl, deadlineLabel, primaryColor, signatureHtml } = params;
+  const { instructorName, orgName, cycleDisplay, intro, portalUrl, deadlineLabel, primaryColor, signatureHtml } = params;
   const hi = instructorName ? `Hi ${instructorName}` : 'Hi there';
   const deadlineLine = deadlineLabel
     ? `<p style="margin: 16px 0 0; font-size: 14px; color: ${TEXT};"><strong>Please submit by ${deadlineLabel}.</strong></p>`
@@ -235,7 +251,7 @@ function renderHtml(params: {
   <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid ${BORDER};border-radius:10px;padding:28px;">
     <h1 style="margin:0 0 12px;font-size:20px;font-weight:700;color:${primaryColor};letter-spacing:-0.3px;">${hi},</h1>
     <p style="margin:0 0 12px;font-size:15px;line-height:1.55;">
-      We're planning the ${cycleDisplay} schedule and want to know when and where you'd like to work.
+      ${introHtml(intro, cycleDisplay)}
     </p>
     <p style="margin:0 0 16px;font-size:15px;line-height:1.55;">
       The survey takes about 2 minutes. You'll set which weeks you're available, your preferred locations and subjects, and whether you want to lead a camp or support one as a developing instructor.
@@ -261,15 +277,17 @@ function renderText(params: {
   instructorName: string | null;
   orgName: string;
   cycleDisplay: string;
+  intro: string | null;
   portalUrl: string;
   deadlineLabel: string;
 }): string {
-  const { instructorName, orgName, cycleDisplay, portalUrl, deadlineLabel } = params;
+  const { instructorName, orgName, cycleDisplay, intro, portalUrl, deadlineLabel } = params;
   const hi = instructorName ? `Hi ${instructorName},` : 'Hi there,';
+  const introText = intro ?? `We're planning the ${cycleDisplay} schedule and want to know when and where you'd like to work.`;
   const deadlineLine = deadlineLabel ? `\nPlease submit by ${deadlineLabel}.\n` : '';
   return `${hi}
 
-We're planning the ${cycleDisplay} schedule and want to know when and where you'd like to work.
+${introText}
 
 The survey takes about 2 minutes. You'll set which weeks you're available, your preferred locations and subjects, and whether you want to lead a camp or support one as a developing instructor.
 

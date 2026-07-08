@@ -4233,9 +4233,9 @@ function InstructorPickerPanel({ eligibleInstructors, selectedInstructorIds, onC
 }
 
 // SurveyDialog: lets the admin release the availability survey to instructors.
-// 'preview' opens the rendered email in PreviewViewer; 'test' routes every send
-// to the test inbox without flipping the cycle's opened_at; 'send' actually
-// emails every active instructor and unlocks the portal banner.
+// 'preview' opens the rendered email in PreviewViewer; 'test' sends one sample
+// email to the logged-in caller without flipping the cycle's opened_at; 'send'
+// actually emails every active instructor and unlocks the portal banner.
 function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadlineChange, busy, onChoose, onClose }) {
   if (dialog.mode === "result") {
     const p = dialog.payload;
@@ -4250,7 +4250,7 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
           )}
           {p.mode === "test" && p.sent > 0 && (
             <div style={{ marginTop: 10, padding: 10, background: `${VIOLET}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
-              All emails went to <strong>jessica@journeytosteam.com</strong> only — the survey hasn't actually been released yet.
+              A test email went to <strong>your inbox</strong> only — the survey hasn't actually been released yet.
             </div>
           )}
           {p.failed && p.failed.length > 0 && (
@@ -4298,7 +4298,7 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
         />
         <DialogChoice
           title="Send to me first (recommended)"
-          subtitle="Every instructor's email arrives in your inbox so you can read exactly what they'll see. Survey stays closed — re-run as many times as you want."
+          subtitle="A sample email arrives in your inbox so you can read exactly what instructors will see. Survey stays closed — re-run as many times as you want."
           disabled={busy}
           onClick={() => onChoose("test")}
           tone="warn"
