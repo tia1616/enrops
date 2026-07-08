@@ -18,6 +18,16 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const SECRET = Deno.env.get('MARKETING_UNSUBSCRIBE_SECRET')!;
+// Browser GET clicks redirect to this site's /unsubscribed page. The Supabase
+// edge platform force-serves function HTML as text/plain (anti-phishing), so an
+// HTML page returned here renders as raw source. A 302 to the app (enrops.com /
+// staging site) sidesteps that — the browser follows the redirect and the SPA
+// renders a real confirmation. Per-environment via PUBLIC_SITE_URL.
+const PUBLIC_SITE = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
+function confirmationRedirect(params: Record<string, string>): Response {
+  const qs = new URLSearchParams(params).toString();
+  return Response.redirect(`${PUBLIC_SITE}/unsubscribed?${qs}`, 302);
+}
 
 const DEFAULT_PRIMARY = '#674EE8';
 const DEFAULT_ACCENT = '#F8A638';
@@ -58,7 +68,7 @@ serve(async (req: Request) => {
   // leaked secret being used against a deleted/unknown org.
   const { data: org } = await supabase
     .from('organizations')
-    .select('id, name, logo_url, logo_email_url')
+    .select('id, slug, name, logo_url, logo_email_url')
     .eq('id', orgId)
     .maybeSingle();
   if (!org) {
@@ -99,12 +109,13 @@ serve(async (req: Request) => {
     });
   }
 
-  // Browser click — render a branded confirmation page using the org's colors.
-  const branding = await loadBranding(supabase, orgId);
-  const html = renderConfirmationPage(email, org, branding);
-  return new Response(html, {
-    status: 200,
-    headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' },
+  // Browser click — redirect to the app's /unsubscribed page (see PUBLIC_SITE
+  // note). It renders the confirmation with the org name; React escapes the
+  // values, so email/name in the query string are display-safe.
+  return confirmationRedirect({
+    org: org.slug ?? '',
+    name: org.name ?? '',
+    email,
   });
 });
 
@@ -253,33 +264,10 @@ function errorResponse(req: Request, status: number, message: string): Response 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Unsubscribe</title>
-<style>
-  body { margin:0; padding:0; background:#f5f5f7; font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif; color:#1f2937; }
-  .wrap { max-width:520px; margin:0 auto; padding:48px 20px; text-align:center; }
-  .card { background:#ffffff; border:1px solid #e5e7eb; border-radius:14px; padding:40px 32px; }
-  h1 { font-size:22px; margin:0 0 12px; }
-  p { font-size:16px; margin:0; color:#6b7280; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <h1>We couldn't process that request.</h1>
-    <p>${escapeHtml(message)}</p>
-  </div>
-</div>
-</body>
-</html>`;
-  return new Response(html, {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' },
-  });
+  // Browser GET error — redirect to the app's /unsubscribed page in an error
+  // state (it shows a generic "invalid or expired" message + a reply fallback).
+  // Same reason as the success path: HTML returned here renders as raw source.
+  return confirmationRedirect({ error: '1' });
 }
 
 function escapeHtml(s: string): string {
