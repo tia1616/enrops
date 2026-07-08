@@ -52,7 +52,7 @@ INSERT INTO public.automation_templates (
   '<p style="margin:0 0 16px;">Hi {{first_name}},</p>
 <p style="margin:0 0 16px;">It''s been a little while since {{child_first_name}} started with {{org_name}}, and we''d love to know how it''s going.</p>
 <p style="margin:0 0 16px;">If you have a minute, a short review really helps other families find us, and it means a lot to our team. You can leave one here:</p>
-<p style="margin:0 0 16px;"><a href="https://your-review-link-here" style="color:#674EE8;font-weight:600;">Leave a quick review</a></p>
+<p style="margin:0 0 16px;"><a href="https://your-review-link-here" style="color:#674EE8;font-weight:600;">Add your review link here</a></p>
 <p style="margin:0 0 16px;">And if there''s anything we could be doing better, just reply to this email. We read every one.</p>
 <p style="margin:0;">Warmly,<br>{{sender_name}}</p>',
   '{"days_after": 42}'::jsonb,
@@ -62,3 +62,11 @@ INSERT INTO public.automation_templates (
   110
 )
 ON CONFLICT (key) DO NOTHING;
+
+-- Correct an already-seeded row (staging) so the placeholder link text reads as
+-- an obvious to-do rather than a live "Leave a quick review" link. Idempotent;
+-- only touches the platform default_body, never an operator's body_override.
+UPDATE public.automation_templates
+SET default_body = replace(default_body, '>Leave a quick review</a>', '>Add your review link here</a>')
+WHERE key = 'review_request'
+  AND default_body LIKE '%>Leave a quick review</a>%';
