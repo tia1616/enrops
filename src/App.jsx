@@ -8,6 +8,7 @@ import J2SRegisterSuccess from './pages/j2s/RegisterSuccess.jsx';
 import J2SLogin from './pages/j2s/Login.jsx';
 import J2SDashboard from './pages/j2s/Dashboard.jsx';
 import PolicyPage from './pages/PolicyPage.jsx';
+import Unsubscribed from './pages/Unsubscribed.jsx';
 import AdminLayout from './layouts/AdminLayout.jsx';
 import AdminLogin from './pages/admin/AdminLogin.jsx';
 import AdminOverview from './pages/admin/AdminOverview.jsx';
@@ -74,6 +75,10 @@ export default function App() {
       <Route path="/data-retention" element={<PolicyPage policyType="data-retention" orgSlug="enrops" />} />
       <Route path="/subprocessors" element={<PolicyPage policyType="subprocessors" orgSlug="enrops" />} />
       <Route path="/dpa" element={<PolicyPage policyType="dpa" orgSlug="enrops" />} />
+      {/* Public marketing-unsubscribe confirmation. The unsubscribe edge fn
+          records the opt-out then 302s here (it can't render HTML itself —
+          Supabase serves function HTML as text/plain). No auth. */}
+      <Route path="/unsubscribed" element={<Unsubscribed />} />
       {/* Public per-tenant tree: /:slug/* resolves the org from the URL slug.
           J2S still hits this (slug='j2s') so /j2s/register etc. keep working
           unchanged. The `/:slug/instructor` and `/:slug/admin/*` routes below
