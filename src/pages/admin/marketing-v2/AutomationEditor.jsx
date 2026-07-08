@@ -174,12 +174,18 @@ function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryCo
 // so the body's only <a> is always the review link.)
 const REVIEW_LINK_PLACEHOLDER_HREF = "your-review-link-here";
 
-// Add https:// when the operator pastes a bare domain; leave a full URL / mailto as-is.
+// Normalize a pasted review URL into a safe https link. We STRIP characters that
+// can't legitimately be in a URL and that would break out of the href attribute
+// (", ', <, >, backtick, whitespace, backslash) — we can't rely on HTML-escaping
+// them because the save path (decodeCommonEntities) would undo the escaping. Any
+// non-http(s) scheme (javascript:, data:, mailto:, …) is stripped and forced to
+// https://, yielding an inert web link rather than a live dangerous scheme. A
+// bare domain also gets https://.
 function normalizeReviewUrl(raw) {
-  const s = (raw || "").trim();
+  const s = (raw || "").trim().replace(/["'<>`\s\\]/g, "");
   if (!s) return "";
-  if (/^(https?:|mailto:)/i.test(s)) return s;
-  return `https://${s}`;
+  if (/^https?:\/\//i.test(s)) return s;
+  return `https://${s.replace(/^[a-z][a-z0-9+.-]*:\/*/i, "").replace(/^\/+/, "")}`;
 }
 
 // Pull the review URL out of the body's anchor — "" when it's still the
@@ -200,7 +206,9 @@ function setReviewUrlInBody(body, url) {
     : `<a href="https://${REVIEW_LINK_PLACEHOLDER_HREF}" style="color:#674EE8;font-weight:600;">Add your review link here</a>`;
   const src = body || "";
   if (/<a\s+[^>]*>.*?<\/a>/is.test(src)) {
-    return src.replace(/<a\s+[^>]*>.*?<\/a>/is, anchor);
+    // Function replacer (not a string) so a URL containing "$" isn't mangled by
+    // String.replace's $-substitution ($&, $1, $$ …).
+    return src.replace(/<a\s+[^>]*>.*?<\/a>/is, () => anchor);
   }
   // Operator deleted the anchor entirely — append a paragraph with the link back.
   return `${src}\n<p style="margin:0 0 16px;">${anchor}</p>`;

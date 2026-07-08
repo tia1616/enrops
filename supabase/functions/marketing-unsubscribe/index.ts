@@ -2,15 +2,15 @@
 //
 // Handles two cases:
 // 1. GET with ?email&org&t — user clicked the link in an email. Verify HMAC,
-//    insert suppression (idempotent), render a branded confirmation page.
+//    insert suppression (idempotent), then 302-REDIRECT to the app's
+//    /unsubscribed page. We can't render HTML here: the Supabase edge platform
+//    force-serves function HTML as text/plain (anti-phishing), so a page returned
+//    from this function shows as raw source. The SPA renders the confirmation.
 // 2. POST with the same query params — Gmail/Yahoo one-click (RFC 8058). Same
 //    verify + insert, return 200 JSON. No HTML body required.
 //
 // HMAC token is computed over `${lowercased_email}:${org_id}` using
 // MARKETING_UNSUBSCRIBE_SECRET. Constant-time compare on verify.
-//
-// Tenant-aware: confirmation page reads org_branding + organizations so other
-// tenants get their own colors, logo, and name without any code change.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
