@@ -55,7 +55,7 @@ INSERT INTO public.automation_templates (
 <p style="margin:0 0 16px;"><a href="https://your-review-link-here" style="color:#674EE8;font-weight:600;">Add your review link here</a></p>
 <p style="margin:0 0 16px;">And if there''s anything we could be doing better, just reply to this email. We read every one.</p>
 <p style="margin:0;">Warmly,<br>{{sender_name}}</p>',
-  '{"days_after": 42}'::jsonb,
+  '{"days_after": 30}'::jsonb,
   4,
   false,
   true,
@@ -63,10 +63,13 @@ INSERT INTO public.automation_templates (
 )
 ON CONFLICT (key) DO NOTHING;
 
--- Correct an already-seeded row (staging) so the placeholder link text reads as
--- an obvious to-do rather than a live "Leave a quick review" link. Idempotent;
--- only touches the platform default_body, never an operator's body_override.
+-- Correct an already-seeded row (staging) to the current defaults: the placeholder
+-- link text reads as an obvious to-do (not a live "Leave a quick review" link),
+-- and the timing default is 30 days (a more standard "they've settled in and seen
+-- value" window than the original 42). Idempotent; only touches the platform
+-- default_body/default_timing, never an operator's per-org overrides.
 UPDATE public.automation_templates
-SET default_body = replace(default_body, '>Leave a quick review</a>', '>Add your review link here</a>')
+SET default_body = replace(default_body, '>Leave a quick review</a>', '>Add your review link here</a>'),
+    default_timing = '{"days_after": 30}'::jsonb
 WHERE key = 'review_request'
-  AND default_body LIKE '%>Leave a quick review</a>%';
+  AND (default_body LIKE '%>Leave a quick review</a>%' OR default_timing->>'days_after' = '42');

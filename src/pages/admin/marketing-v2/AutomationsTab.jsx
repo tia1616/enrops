@@ -259,6 +259,10 @@ export default function AutomationsTab() {
           const disabledTemplate = !tpl.is_v1_enabled;
           const enabled = !!auto?.enabled;
           const isSaving = savingTplId === tpl.id;
+          // A template still carrying the placeholder review link can't be turned
+          // on (see toggleAutomation). Surface that inline so the reason is visible
+          // right at the card, not only in the page-top error banner.
+          const needsReviewLink = !enabled && (auto?.body_override ?? tpl.default_body ?? "").includes(REVIEW_LINK_PLACEHOLDER);
 
           return (
             <li
@@ -325,6 +329,25 @@ export default function AutomationsTab() {
                       >
                         Connect Stripe to unlock →
                       </Link>
+                    )}
+                    {needsReviewLink && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingTpl((prev) => (prev?.id === tpl.id ? prev : tpl))}
+                        style={{
+                          background: "#fef5e6",
+                          color: WARN,
+                          border: "none",
+                          padding: "3px 10px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          lineHeight: 1.4,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Add your review link to turn this on →
+                      </button>
                     )}
                   </div>
                 </div>

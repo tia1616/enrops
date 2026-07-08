@@ -39,6 +39,10 @@ export interface OrgBrand {
   email_signature: string | null;      // HTML (safe subset from the friendly editor)
   email_signature_image_url: string | null; // custom logo/headshot URL (used when mode = 'custom')
   email_signature_image_mode: 'logo' | 'custom' | 'none' | null; // null = legacy (fall back to url)
+  // Tenant's physical postal address (CAN-SPAM). Rendered in the footer of
+  // MARKETING sends only. Tenant-only — never cascades to Enrops (a tenant that
+  // hasn't set one simply gets no address block, matching the campaign path).
+  mailing_address: string | null;
   // Whether the FROM line is the tenant's own verified domain, a per-tenant
   // address on the shared platform domain, or a fallback. Useful for logging.
   sender_source: 'tenant' | 'platform_shared' | 'platform' | 'hardcoded';
@@ -71,6 +75,7 @@ interface OrgRow {
   sending_domain: string | null;
   alert_email: string | null;
   logo_email_url: string | null;
+  mailing_address: string | null;
 }
 
 interface BrandingRow {
@@ -96,7 +101,7 @@ function domainOf(email: string | null | undefined): string | null {
 async function fetchOrg(supabase: SupabaseClient, where: { id?: string; slug?: string }): Promise<OrgRow | null> {
   let q = supabase
     .from('organizations')
-    .select('id, slug, name, email, default_sender_name, default_sender_email, sending_domain, alert_email, logo_email_url');
+    .select('id, slug, name, email, default_sender_name, default_sender_email, sending_domain, alert_email, logo_email_url, mailing_address');
   if (where.id)    q = q.eq('id', where.id);
   if (where.slug)  q = q.eq('slug', where.slug);
   const { data } = await q.maybeSingle();
@@ -218,6 +223,10 @@ export async function loadOrgBrand(
     email_signature: pick(tenantBranding?.email_signature),
     email_signature_image_url: pick(tenantBranding?.email_signature_image_url),
     email_signature_image_mode: (pick(tenantBranding?.email_signature_image_mode) as OrgBrand['email_signature_image_mode']),
+
+    // CAN-SPAM postal address — tenant-only (no Enrops cascade), rendered in the
+    // marketing footer when set. Empty for tenants who haven't added one yet.
+    mailing_address: pick(tenantOrg?.mailing_address),
 
     primary_color:
       pick(tenantBranding?.primary_color, enropsBranding?.primary_color) ?? ENROPS_DEFAULTS.primary_color,
