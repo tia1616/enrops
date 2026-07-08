@@ -437,6 +437,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return m;
   }, [state]);
 
+  // Session dates where this instructor is unavailable for a program (weekly-class
+  // sub-coverage conflicts). Shared by the picker warning, the board card, and the
+  // review modal so all three surface the same "needs a sub" dates.
+  function unavailableConflicts(instructorId, program) {
+    const av = availByInstr.get(instructorId);
+    const blackout = Array.isArray(av?.unavailable_dates) ? av.unavailable_dates.map((d) => String(d).slice(0, 10)) : [];
+    if (!blackout.length || !program) return [];
+    const sessions = (state.status === "ready" ? (state.programDates?.[program.id] ?? []) : []).map((s) => String(s).slice(0, 10));
+    return sessions.filter((s) => blackout.includes(s)).sort();
+  }
+
   const locArea = useMemo(() => {
     const m = new Map();
     if (state.status === "ready") for (const l of state.locations) m.set(l.id, l.area ?? null);
@@ -467,10 +478,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const status = deriveStatus(p.id, state.assignments);
       const own = state.assignments.filter((a) => a.program_id === p.id && a.status !== "withdrawn" && a.status !== "declined");
       const lead = own.find((a) => a.role === "lead") ?? own[0] ?? null;
-      m.set(p.id, { status, lead });
+      // Dates the assigned lead flagged as unavailable that land on this class's
+      // sessions — surfaced on the card so the conflict is visible without opening it.
+      const subNeeded = lead?.instructor_id ? unavailableConflicts(lead.instructor_id, p) : [];
+      m.set(p.id, { status, lead, subNeeded });
     }
     return m;
-  }, [state]);
+  }, [state, availByInstr]);
 
   // program_id -> { ids:Set<instructor_id>, names:string[], subs:[{name,date,status}] } for live subs.
   // Powers the card sub indicator and lets the instructor filter surface a program a person only SUBs.
@@ -670,12 +684,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
     // Date-specific unavailability: a weekly class isn't blocked by a missed session,
     // but flag which of this class's dates need a sub so it's not an invisible landmine.
-    const blackout = Array.isArray(av.unavailable_dates) ? av.unavailable_dates.map((d) => String(d).slice(0, 10)) : [];
-    if (blackout.length) {
-      const sessions = (state.programDates?.[program.id] ?? []).map((s) => String(s).slice(0, 10));
-      const hits = sessions.filter((s) => blackout.includes(s));
-      if (hits.length) warnings.push(`${first} is unavailable on ${listDates(hits)} — will need a sub ${hits.length === 1 ? "that day" : "those days"}.`);
-    }
+    const hits = unavailableConflicts(instructorId, program);
+    if (hits.length) warnings.push(`${first} is unavailable on ${listDates(hits)} — will need a sub ${hits.length === 1 ? "that day" : "those days"}.`);
     return { ok: true, reason: null, pref, warnings };
   }
 
@@ -1271,6 +1281,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         tint={colorMap.get(loc)}
                         status={e?.status}
                         lead={e?.lead}
+                        subNeeded={e?.subNeeded}
                         sub={subInfoByProgram.get(p.id)}
                         weekDate={weekDate}
                         weekSub={weekSub}
@@ -1361,6 +1372,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           program={reviewFor.program}
           assignment={reviewFor.assignment}
           loc={locName.get(reviewFor.program.program_location_id) ?? "—"}
+          subNeeded={unavailableConflicts(reviewFor.assignment.instructor_id, reviewFor.program)}
           onReply={(msg) => submitReply(reviewFor.assignment, msg)}
           onReassign={() => { const p = reviewFor.program; setReviewFor(null); setPicker({ program: p }); }}
           onRemove={() => handleReviewRemove(reviewFor.program, reviewFor.assignment)}
@@ -1766,7 +1778,12 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                         <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>all term</div>
                       </td>
                       <td style={td}>{enr ? <><span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span></> : <span style={{ color: MUTED }}>—</span>}</td>
-                      <td style={td}>{who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>}</td>
+                      <td style={td}>
+                        {who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>}
+                        {e?.subNeeded?.length > 0 && (
+                          <div style={{ fontSize: 11, color: CORAL, fontWeight: 600 }}>⚠ out {listDates(e.subNeeded)} — needs a sub</div>
+                        )}
+                      </td>
                       <td style={td}><Pill status={e?.status} /></td>
                     </tr>
                   );
@@ -1822,9 +1839,11 @@ function WeekRail({ weeks, signals, effective, onSelect }) {
   );
 }
 
-function ProgramCard({ program, loc, tint, status, lead, sub, weekDate, weekSub, onClick, onSubClick }) {
+function ProgramCard({ program, loc, tint, status, lead, sub, subNeeded, weekDate, weekSub, onClick, onSubClick }) {
   const sc = statusColor(status);
   const who = lead ? (lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "") : null;
+  // In week mode, only flag if THIS week's session is one the lead can't make.
+  const conflictDates = weekDate ? (subNeeded ?? []).filter((d) => d === weekDate) : (subNeeded ?? []);
   // Week mode shows only THIS week's coverage; recurring mode summarizes all sub days.
   const subsForLine = weekDate ? (weekSub ? [weekSub] : []) : (sub?.subs ?? []);
   return (
@@ -1855,6 +1874,11 @@ function ProgramCard({ program, loc, tint, status, lead, sub, weekDate, weekSub,
           </span>
         </div>
         <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
+        {conflictDates.length > 0 && (
+          <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.3 }}>
+            ⚠ {who?.split(" ")[0] || "Lead"} out {listDates(conflictDates)} — needs a sub
+          </div>
+        )}
       </button>
       {lead && <SubLineAS subs={subsForLine} onClick={() => onSubClick && onSubClick(weekDate ?? null)} />}
     </div>
@@ -2373,7 +2397,7 @@ function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
   );
 }
 
-function OfferReviewModal({ program, assignment, loc, onReply, onReassign, onRemove, onClose }) {
+function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReassign, onRemove, onClose }) {
   const [thread, setThread] = useState(null);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
@@ -2430,6 +2454,11 @@ function OfferReviewModal({ program, assignment, loc, onReply, onReassign, onRem
         <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc} · {program.day_of_week}{program.start_time ? ` · ${fmtTimeRange(program.start_time, program.end_time)}` : ""}</div>
         <div style={{ fontSize: 13, color: INK, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 600 }}>{who}</span> <Pill status={pillStatus} /></div>
         {assignment.deadline && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Response due {fmtDeadline(assignment.deadline)}</div>}
+        {subNeeded?.length > 0 && (
+          <div style={{ marginTop: 8, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, color: INK, fontWeight: 500 }}>
+            ⚠ {who.split(" ")[0]} is unavailable on {listDates(subNeeded)} — line up a sub for {subNeeded.length === 1 ? "that date" : "those dates"}.
+          </div>
+        )}
       </div>
       <div style={{ maxHeight: "46vh", overflowY: "auto", padding: "14px 18px" }}>
         {isChange && assignment.change_request_message && (
