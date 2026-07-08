@@ -62,7 +62,7 @@ interface TemplateRow {
   key: string;
   display_name: string;
   trigger_type: string;
-  applies_to_program_type: "camps" | "afterschool" | "both";
+  applies_to_program_type: "camps" | "afterschool" | "both" | "all";
   mailing_type: "informational" | "marketing";
   default_subject: string;
   default_body: string;
@@ -413,6 +413,14 @@ async function sendOne(
   const unsubscribeUrl = a.template.mailing_type === "marketing"
     ? await computeUnsubscribeUrl(entry.parent_email, a.organization_id)
     : "";
+  // Fail-closed compliance: never send a promotional email without a working
+  // unsubscribe link. If the secret is unset, computeUnsubscribeUrl returns "" —
+  // skip (don't record) so it retries once configured, rather than permanently
+  // recording a CAN-SPAM-noncompliant send under an idempotency key.
+  if (a.template.mailing_type === "marketing" && !unsubscribeUrl) {
+    console.error("[lifecycle-automations-cron] marketing send skipped — no unsubscribe URL (MARKETING_UNSUBSCRIBE_SECRET unset)");
+    return "failed";
+  }
   const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl);
   const plainText = unsubscribeUrl
     ? `${htmlToPlainText(innerBody)}\n\nUnsubscribe: ${unsubscribeUrl}`
@@ -1415,18 +1423,31 @@ async function resolveContactAddedAudience(
 // PROMOTIONAL (mailing_type='marketing'): both anchors filter
 // marketing_suppressions (fail-closed), and sendOne appends an unsubscribe link.
 //
-// Dedup: one review ask per parent EMAIL per run (a review is about the family's
-// experience, not per-child), registration preferred over contact. Idempotency
-// (UNIQUE automation_id+context_key) keeps re-runs single-send.
+// Dedup: ONE review ask per family (email) per CALENDAR YEAR — context_key is
+// keyed on email+year, so a multi-kid family, a re-imported contact, or a family
+// that's both a registrant and a contact gets a single ask, and it may recur in a
+// later year. Idempotency (UNIQUE automation_id+context_key) enforces it.
+//
+// FORWARD-ONLY (fail-closed, mirrors resolveContactAddedAudience): fires only for
+// anchors on/after the automation was enabled, so toggling it on never blasts the
+// back-catalog of families who joined weeks ago. Reaching existing families needs
+// a deliberate count-and-confirm send (not built). If enabled_at is unset (a seed
+// or manual enable that bypassed the UI), skip entirely rather than risk a blast.
 async function resolveReviewRequestAudience(
   supabase: SupabaseClient,
   a: AutomationRow,
 ): Promise<AudienceEntry[]> {
-  const days = pickNumber(a.timing_override?.days_after, a.template.default_timing?.days_after, 42);
+  if (!a.enabled_at) return [];
+  const days = Math.max(1, pickNumber(a.timing_override?.days_after, a.template.default_timing?.days_after, 42));
   // 3-day grace window so a slightly-delayed cron still catches the anchor date.
-  // Idempotency dedups across days.
-  const earliest = new Date(Date.now() - (days + 3) * 86400000).toISOString().slice(0, 10);
+  const windowStart = new Date(Date.now() - (days + 3) * 86400000).toISOString().slice(0, 10);
   const latest = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  // Forward-only: never anchor before the automation was enabled. Until `days`
+  // days after enabling, earliest > latest so every anchor filters out (0 sends) —
+  // exactly what prevents the on-enable back-catalog blast.
+  const enabledDay = a.enabled_at.slice(0, 10);
+  const earliest = windowStart > enabledDay ? windowStart : enabledDay;
+  const year = new Date().getUTCFullYear();
   const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
 
   const regEntries: AudienceEntry[] = [];
@@ -1450,7 +1471,7 @@ async function resolveReviewRequestAudience(
     for (const r of (data ?? []) as any[]) {
       if (!r.parents?.email || !r.students?.id) continue;
       regEntries.push(makeReviewEntry({
-        context_key: `review:reg:program:${r.programs.id}:student:${r.students.id}`,
+        year,
         parentId: r.parents.id,
         email: r.parents.email,
         parentFirstName: r.parents.first_name,
@@ -1500,7 +1521,7 @@ async function resolveReviewRequestAudience(
       // Only fire when the camp-run's FIRST week lands in the anchor window.
       if (cs.starts_on < earliest || cs.starts_on > latest) continue;
       regEntries.push(makeReviewEntry({
-        context_key: `review:reg:camp:${cs.id}:student:${r.students.id}`,
+        year,
         parentId: r.parents.id,
         email: r.parents.email,
         parentFirstName: r.parents.first_name,
@@ -1526,7 +1547,7 @@ async function resolveReviewRequestAudience(
       const added = String(c.created_at).slice(0, 10);
       if (added < earliest || added > latest) continue;
       contactEntries.push(makeReviewEntry({
-        context_key: `review:contact:${c.id}`,
+        year,
         parentId: null,
         email: c.email,
         parentFirstName: firstNameFromFull(c.parent_name),
@@ -1548,10 +1569,10 @@ async function resolveReviewRequestAudience(
   if (suppErr) throw suppErr;
   const suppressed = new Set(((supp ?? []) as Array<{ email: string }>).map((s) => (s.email || "").toLowerCase()));
 
-  // ── Merge + dedup by email: one review ask per parent per run, registration
-  // preferred over contact. Registration entries are sorted deterministically
-  // (by context_key) so a multi-kid parent keeps a STABLE representative across
-  // days → idempotency holds.
+  // ── Merge + dedup by email: one entry per family per run, registration
+  // preferred over contact (processed first). context_key is email+year, so a
+  // family is asked once per year regardless of which anchor or child surfaced
+  // them — the in-run dedup just avoids sending twice within a single run.
   const out: AudienceEntry[] = [];
   const seenEmail = new Set<string>();
   const take = (e: AudienceEntry) => {
@@ -1561,7 +1582,7 @@ async function resolveReviewRequestAudience(
     seenEmail.add(email);
     out.push(e);
   };
-  regEntries.sort((x, y) => x.context_key.localeCompare(y.context_key)).forEach(take);
+  regEntries.forEach(take);
   contactEntries.forEach(take);
   return out;
 }
@@ -1569,7 +1590,7 @@ async function resolveReviewRequestAudience(
 // Build a review-request AudienceEntry with the program-specific blocks empty
 // (a review ask carries none). Keeps the resolver terse + consistent.
 function makeReviewEntry(p: {
-  context_key: string;
+  year: number;
   parentId: string | null;
   email: string;
   parentFirstName: string | null;
@@ -1579,7 +1600,9 @@ function makeReviewEntry(p: {
   nextTermAvailable: boolean;
 }): AudienceEntry {
   return {
-    context_key: p.context_key,
+    // Email+year → one review ask per family per calendar year, whichever anchor
+    // (registration or contact) or child surfaced them.
+    context_key: `review:${p.email.toLowerCase()}:${p.year}`,
     parent_id: p.parentId,
     parent_email: p.email,
     parent_first_name: p.parentFirstName,

@@ -145,7 +145,7 @@ function renderTokens(template, tokens) {
   });
 }
 
-function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryColor, orgSlug) {
+function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryColor, orgSlug, isMarketing = false) {
   const tokens = sampleTokens(orgName, senderName, primaryColor, orgSlug);
   const renderedSubject = renderTokens(subject, tokens);
   const renderedBody = renderTokens(body, tokens);
@@ -162,7 +162,7 @@ function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryCo
   <div style="padding:8px 30px 12px;color:#6b6880;font-size:12px;background:#fbfaf6;"><strong>Subject:</strong> ${escapeHtmlSafe(renderedSubject)}</div>
   <div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
   <div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">${renderedBody}</div>
-  <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">${safeName} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}</div>
+  <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">${safeName} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}${isMarketing ? '<br><a href="#" style="color:#888;text-decoration:underline;">Unsubscribe</a>' : ''}</div>
 </div>
 </body></html>`;
 }
@@ -311,8 +311,8 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   }, [success, error]);
 
   const previewHtml = useMemo(
-    () => buildPreviewHtml(subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug),
-    [subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug],
+    () => buildPreviewHtml(subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type === "marketing"),
+    [subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type],
   );
 
   // What the iframe actually shows. When a real source is picked AND the server
