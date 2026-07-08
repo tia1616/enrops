@@ -9,6 +9,9 @@
 //   - session_midpoint             (mid_recap)
 //   - session_last_day             (final_recap)
 //   - birthday                     (birthday)
+//   - contact_added                (welcome_contact)
+//   - days_after_engagement        (review_request — dual anchor: N days after a
+//                                   first session OR after a contact was added)
 //
 // Intentionally not fired here:
 //   - event_registration_confirmed (handled by stripe-webhook, not cron)
@@ -21,9 +24,12 @@
 // automation row. Resume URLs use org.slug (not hardcoded). No tenant strings
 // in this file.
 //
-// Mailing-type: every send here bypasses the marketing promotional-unsubscribe
-// filter because templates are mailing_type='informational'. Parents who
-// unsubscribed from marketing campaigns still receive lifecycle service comms.
+// Mailing-type: informational templates (welcome, recaps, birthday) reach every
+// family regardless of marketing opt-out — they're service comms. Marketing
+// templates (review_request) are promotional: their resolvers filter
+// marketing_suppressions, and sendOne appends a CAN-SPAM unsubscribe link via
+// wrapInShell. So mailing_type drives BOTH suppression filtering (in the
+// resolver) and the unsubscribe footer (at send).
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
@@ -33,6 +39,14 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const PUBLIC_SITE_URL = Deno.env.get("PUBLIC_SITE_URL") ?? "https://enrops.com";
+// Shared with the marketing send path — the same secret + the same
+// marketing-unsubscribe endpoint verify the HMAC token, so a link generated here
+// unsubscribes correctly. Empty when the secret isn't set: computeUnsubscribeUrl
+// then returns "" and a marketing send proceeds WITHOUT a link but still honors
+// marketing_suppressions. We never block a send on a missing secret, and never
+// render a broken unsubscribe link.
+const UNSUBSCRIBE_SECRET = Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET") ?? "";
+const UNSUBSCRIBE_ENDPOINT = `${SUPABASE_URL}/functions/v1/marketing-unsubscribe`;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -278,6 +292,9 @@ async function runAutomation(
     case "contact_added":
       audience = await resolveContactAddedAudience(supabase, a);
       break;
+    case "days_after_engagement":
+      audience = await resolveReviewRequestAudience(supabase, a);
+      break;
     case "event_registration_confirmed":
       // Handled by stripe-webhook (registration table → confirmation email).
       // Cron isn't the right trigger here — checkout completion is event-driven.
@@ -390,7 +407,16 @@ async function sendOne(
   const tokens = buildTokens(entry, brand);
   const subject = renderTokens(a.subject_override ?? a.template.default_subject, tokens);
   const innerBody = renderTokens(a.body_override ?? a.template.default_body, tokens);
-  const fullHtml = wrapInShell(innerBody, brand);
+  // Promotional templates (mailing_type='marketing', e.g. review_request) carry a
+  // CAN-SPAM unsubscribe link keyed to this recipient; informational sends pass
+  // "" so their HTML + text stay byte-for-byte unchanged.
+  const unsubscribeUrl = a.template.mailing_type === "marketing"
+    ? await computeUnsubscribeUrl(entry.parent_email, a.organization_id)
+    : "";
+  const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl);
+  const plainText = unsubscribeUrl
+    ? `${htmlToPlainText(innerBody)}\n\nUnsubscribe: ${unsubscribeUrl}`
+    : htmlToPlainText(innerBody);
 
   let resendMessageId: string | null = null;
   let errorMessage: string | null = null;
@@ -408,7 +434,7 @@ async function sendOne(
         reply_to: brand.reply_to,
         subject,
         html: fullHtml,
-        text: htmlToPlainText(innerBody),
+        text: plainText,
         tags: [
           { name: "type", value: "lifecycle" },
           { name: "automation", value: a.template.key },
@@ -575,7 +601,14 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
 
   const subject = renderTokens(subjectTpl, tokens);
   const innerBody = renderTokens(bodyTpl, tokens);
-  const fullHtml = wrapInShell(innerBody, brand);
+  // Marketing templates show the unsubscribe footer in preview/test too. Real
+  // link for a test send (to_email present); a visible "#" placeholder for the
+  // on-screen preview so the operator sees the footer without minting a working
+  // token for a sample address.
+  const unsubscribeUrl = template.mailing_type === "marketing"
+    ? (input.to_email ? await computeUnsubscribeUrl(input.to_email, org.id) : "#")
+    : "";
+  const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl);
 
   return { ok: true, subject, html: fullHtml, brand, template_key: template.key, used_real_data: usedRealData };
 }
@@ -1396,6 +1429,205 @@ async function resolveContactAddedAudience(
     }));
 }
 
+// ─── Review request (dual anchor: registrations + contacts) ─────────────────
+// Fires ~N days (default 42) after a family's relationship started, asking for
+// a review. TWO anchors, unioned — so it works for BOTH tenant shapes:
+//   - Registration anchor: N days after the first session (afterschool program
+//     first_session_date; camps earliest session of a camp-run). Serves reg
+//     tenants (J2S).
+//   - Contact anchor: N days after a marketing_recipients contact was added.
+//     Serves contact-only tenants (Richelle's Kumon families — 0 registrations).
+// Mirrors the birthday resolver's student+contact union.
+//
+// PROMOTIONAL (mailing_type='marketing'): both anchors filter
+// marketing_suppressions (fail-closed), and sendOne appends an unsubscribe link.
+//
+// Dedup: one review ask per parent EMAIL per run (a review is about the family's
+// experience, not per-child), registration preferred over contact. Idempotency
+// (UNIQUE automation_id+context_key) keeps re-runs single-send.
+async function resolveReviewRequestAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  const days = pickNumber(a.timing_override?.days_after, a.template.default_timing?.days_after, 42);
+  // 3-day grace window so a slightly-delayed cron still catches the anchor date.
+  // Idempotency dedups across days.
+  const earliest = new Date(Date.now() - (days + 3) * 86400000).toISOString().slice(0, 10);
+  const latest = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
+
+  const regEntries: AudienceEntry[] = [];
+
+  // ── Registration anchor, afterschool: one per (parent, student, program).
+  {
+    const { data, error } = await supabase
+      .from("registrations")
+      .select(`
+        id, parent_id,
+        students!inner ( id, first_name ),
+        parents!inner ( id, first_name, email ),
+        programs!inner ( id, curriculum, first_session_date )
+      `)
+      .eq("organization_id", a.organization_id)
+      .eq("status", "confirmed")
+      .not("program_id", "is", null)
+      .gte("programs.first_session_date", earliest)
+      .lte("programs.first_session_date", latest);
+    if (error) throw error;
+    for (const r of (data ?? []) as any[]) {
+      if (!r.parents?.email || !r.students?.id) continue;
+      regEntries.push(makeReviewEntry({
+        context_key: `review:reg:program:${r.programs.id}:student:${r.students.id}`,
+        parentId: r.parents.id,
+        email: r.parents.email,
+        parentFirstName: r.parents.first_name,
+        childFirstName: r.students.first_name ?? null,
+        programName: r.programs.curriculum ?? "",
+        orgSlug: a.org.slug,
+        nextTermAvailable,
+      }));
+    }
+  }
+
+  // ── Registration anchor, camps: anchor to the EARLIEST session of each
+  // camp-run (a curriculum at a venue), so a multi-week camp stored as N weekly
+  // sessions produces ONE review ask, timed off week 1 — mirrors the welcome
+  // resolver's keeper logic. We look at ALL of the child's confirmed camp
+  // sessions (not just windowed ones) to find the true earliest week.
+  {
+    const { data, error } = await supabase
+      .from("registrations")
+      .select(`
+        parent_id,
+        students!inner ( id, first_name ),
+        parents!inner ( id, first_name, email ),
+        camp_sessions!inner ( id, curriculum_name, starts_on, location_id, location_name, curriculum_id )
+      `)
+      .eq("organization_id", a.organization_id)
+      .eq("status", "confirmed")
+      .not("camp_session_id", "is", null);
+    if (error) throw error;
+
+    const venueKey = (locId: string | null, locName: string | null) =>
+      locId ? `loc:${locId}` : `name:${(locName ?? "").trim().toLowerCase()}`;
+    const runKey = (locId: string | null, locName: string | null, currId: string | null, currName: string | null) =>
+      `${venueKey(locId, locName)}|${currId ? `c:${currId}` : `cn:${(currName ?? "").trim().toLowerCase()}`}`;
+    // keeper = earliest (starts_on, then lowest id) session per (parent, student, camp-run)
+    const keeper = new Map<string, any>();
+    for (const r of (data ?? []) as any[]) {
+      const cs = r.camp_sessions;
+      if (!r.parents?.email || !r.students?.id || !cs?.id || !cs.starts_on) continue;
+      const k = `${r.parents.id}|${r.students.id}|${runKey(cs.location_id, cs.location_name, cs.curriculum_id, cs.curriculum_name)}`;
+      const cur = keeper.get(k);
+      if (!cur || cs.starts_on < cur.cs.starts_on || (cs.starts_on === cur.cs.starts_on && cs.id < cur.cs.id)) {
+        keeper.set(k, { r, cs });
+      }
+    }
+    for (const { r, cs } of keeper.values()) {
+      // Only fire when the camp-run's FIRST week lands in the anchor window.
+      if (cs.starts_on < earliest || cs.starts_on > latest) continue;
+      regEntries.push(makeReviewEntry({
+        context_key: `review:reg:camp:${cs.id}:student:${r.students.id}`,
+        parentId: r.parents.id,
+        email: r.parents.email,
+        parentFirstName: r.parents.first_name,
+        childFirstName: r.students.first_name ?? null,
+        programName: cs.curriculum_name ?? "",
+        orgSlug: a.org.slug,
+        nextTermAvailable,
+      }));
+    }
+  }
+
+  // ── Contact anchor: marketing_recipients added N days ago.
+  const contactEntries: AudienceEntry[] = [];
+  {
+    const { data, error } = await supabase
+      .from("marketing_recipients")
+      .select("id, email, parent_name, child_first_name, created_at")
+      .eq("organization_id", a.organization_id)
+      .gte("created_at", earliest);
+    if (error) throw error;
+    for (const c of (data ?? []) as any[]) {
+      if (!c.email || !c.created_at) continue;
+      const added = String(c.created_at).slice(0, 10);
+      if (added < earliest || added > latest) continue;
+      contactEntries.push(makeReviewEntry({
+        context_key: `review:contact:${c.id}`,
+        parentId: null,
+        email: c.email,
+        parentFirstName: firstNameFromFull(c.parent_name),
+        childFirstName: c.child_first_name ?? null,
+        programName: "",
+        orgSlug: a.org.slug,
+        nextTermAvailable,
+      }));
+    }
+  }
+
+  // ── Suppression (promotional — filter BOTH anchors). Org-scoped. Fail-closed:
+  // if the list can't load, throw so this run is skipped + retried rather than
+  // sending a promotional email to someone who opted out.
+  const { data: supp, error: suppErr } = await supabase
+    .from("marketing_suppressions")
+    .select("email")
+    .eq("organization_id", a.organization_id);
+  if (suppErr) throw suppErr;
+  const suppressed = new Set(((supp ?? []) as Array<{ email: string }>).map((s) => (s.email || "").toLowerCase()));
+
+  // ── Merge + dedup by email: one review ask per parent per run, registration
+  // preferred over contact. Registration entries are sorted deterministically
+  // (by context_key) so a multi-kid parent keeps a STABLE representative across
+  // days → idempotency holds.
+  const out: AudienceEntry[] = [];
+  const seenEmail = new Set<string>();
+  const take = (e: AudienceEntry) => {
+    const email = e.parent_email.toLowerCase();
+    if (suppressed.has(email)) return;
+    if (seenEmail.has(email)) return;
+    seenEmail.add(email);
+    out.push(e);
+  };
+  regEntries.sort((x, y) => x.context_key.localeCompare(y.context_key)).forEach(take);
+  contactEntries.forEach(take);
+  return out;
+}
+
+// Build a review-request AudienceEntry with the program-specific blocks empty
+// (a review ask carries none). Keeps the resolver terse + consistent.
+function makeReviewEntry(p: {
+  context_key: string;
+  parentId: string | null;
+  email: string;
+  parentFirstName: string | null;
+  childFirstName: string | null;
+  programName: string;
+  orgSlug: string;
+  nextTermAvailable: boolean;
+}): AudienceEntry {
+  return {
+    context_key: p.context_key,
+    parent_id: p.parentId,
+    parent_email: p.email,
+    parent_first_name: p.parentFirstName,
+    child_first_name: p.childFirstName,
+    program_name: p.programName,
+    program_start_date: "",
+    program_end_date: "",
+    location_name: "",
+    abandoned_resume_url: "",
+    age_turning: "",
+    final_showcase_raw: "",
+    mid_term_skills_raw: [],
+    final_recap_skills_raw: [],
+    arrival_instructions_raw: "",
+    dismissal_instructions_raw: "",
+    session_dates_raw: [],
+    register_url: `${PUBLIC_SITE_URL}/${p.orgSlug}/register`,
+    next_term_available: p.nextTermAvailable,
+  };
+}
+
 // ─── Abandoned registration ─────────────────────────────────────────────────
 async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationRow): Promise<AudienceEntry[]> {
   const hours = pickNumber(a.timing_override?.hours_after_pending, a.template.default_timing?.hours_after_pending, 24);
@@ -1621,7 +1853,40 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function wrapInShell(innerBody: string, brand: OrgBrand): string {
+// Builds the per-recipient unsubscribe URL with an HMAC-signed token, verified
+// by the shared marketing-unsubscribe edge function before it inserts a
+// suppression row (a leaked URL pattern can't unsubscribe arbitrary addresses).
+// Ported verbatim from marketing-send so the same secret + endpoint verify it.
+// Returns "" when the secret isn't configured — the caller then omits the link
+// rather than rendering a broken one.
+async function computeUnsubscribeUrl(email: string, orgId: string): Promise<string> {
+  if (!UNSUBSCRIBE_SECRET) return "";
+  const lowered = email.toLowerCase();
+  const token = await hmacToken(lowered, orgId);
+  const params = new URLSearchParams({ email: lowered, org: orgId, t: token });
+  return `${UNSUBSCRIBE_ENDPOINT}?${params.toString()}`;
+}
+
+async function hmacToken(email: string, orgId: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(UNSUBSCRIBE_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${email}:${orgId}`));
+  const bytes = new Uint8Array(sig);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// unsubscribeUrl is "" for informational sends (welcome/recaps/birthday) — the
+// footer then renders EXACTLY as before, so those emails are byte-for-byte
+// unchanged. It's non-empty only for promotional (marketing) sends, adding a
+// CAN-SPAM unsubscribe line under the footer credit.
+function wrapInShell(innerBody: string, brand: OrgBrand, unsubscribeUrl = ""): string {
   // White-background shell with the tenant logo on top — no generic gradient
   // banner. Every provider will brand differently and a hardcoded purple
   // bleeds platform color into their identity. Wordmark fallback only when
@@ -1629,6 +1894,12 @@ function wrapInShell(innerBody: string, brand: OrgBrand): string {
   const logoBlock = brand.logo_url
     ? `<img src="${brand.logo_url}" alt="${escapeHtml(brand.org_name)}" style="max-height:56px;display:block;margin:0 auto;" />`
     : `<div style="color:${brand.primary_color};font-size:18px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;text-align:center;">${escapeHtml(brand.org_name)}</div>`;
+
+  // Promotional sends only: a plain unsubscribe line. Empty string for
+  // informational sends keeps their footer identical to before this change.
+  const unsubBlock = unsubscribeUrl
+    ? `<br><a href="${escapeHtml(unsubscribeUrl)}" style="color:#888;text-decoration:underline;">Unsubscribe</a>`
+    : "";
 
   // color-scheme meta tags tell Gmail/Apple Mail not to auto-invert the
   // white background in dark mode. Outlook ignores but most major clients
@@ -1643,7 +1914,7 @@ ${innerBody}
 ${renderSignatureBlock(brand)}
 </div>
 <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
-${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()}
+${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()}${unsubBlock}
 </div>
 </div>
 </body></html>`;

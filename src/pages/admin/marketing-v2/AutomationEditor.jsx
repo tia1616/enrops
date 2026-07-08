@@ -56,6 +56,11 @@ const TOKENS_BY_TEMPLATE_KEY = {
   birthday:               ["first_name", "child_first_name", "org_name", "sender_name", "age_turning"],
   abandoned_registration: ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "abandoned_resume_url"],
   survey_nudge:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name"],
+  // review_request reaches enrolled families AND bare contacts, so it only
+  // exposes tokens that resolve for both. Program-specific tokens are omitted:
+  // a contact has no program, so {{program_name}} would render empty. The review
+  // link itself is a plain URL the operator pastes into the body (not a token).
+  review_request:         ["first_name", "child_first_name", "org_name", "sender_name"],
 };
 
 // HTML-pre-rendered tokens — preview passes their sample HTML through verbatim.
