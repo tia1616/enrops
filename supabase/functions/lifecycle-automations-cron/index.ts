@@ -1057,7 +1057,15 @@ async function resolveRecapAudience(
   const includeAfterschool = a.template.applies_to_program_type === "afterschool" || a.template.applies_to_program_type === "both";
   const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
 
-  // 1. Camps
+  // 1. Camps — recap dates are computed at the CAMP-RUN level, not per weekly
+  // session. A multi-week camp is stored as N weekly camp_sessions sharing
+  // (cycle_id, location_name, curriculum_name); a family enrolls in a span of
+  // those weeks. Both recaps fire ONCE for the whole run, on the child's actual
+  // span — not once per week:
+  //   - final_recap: run's last day  = max(ends_on) over the child's weeks
+  //   - mid_recap:   run's midpoint   = halfway between first start & last end
+  // A single-week camp is just a one-week run (window == that session), so its
+  // dates and idempotency key are unchanged from the per-session behavior.
   if (includeCamps) {
     const { data: camps, error: cErr } = await supabase
       .from("camp_sessions")
@@ -1067,12 +1075,8 @@ async function resolveRecapAudience(
       .not("ends_on", "is", null);
     if (cErr) throw cErr;
 
-    const matchingCamps = (camps ?? []).filter((c: any) => {
-      return c.starts_on && c.ends_on && pickCampDate(c.starts_on, c.ends_on) === todayStr;
-    });
-
-    if (matchingCamps.length > 0) {
-      const campIds = matchingCamps.map((c: any) => c.id);
+    if ((camps ?? []).length > 0) {
+      const campById = new Map<string, any>((camps ?? []).map((c: any) => [c.id, c]));
       const { data: regs, error: rErr } = await supabase
         .from("registrations")
         .select(`
@@ -1082,69 +1086,53 @@ async function resolveRecapAudience(
         `)
         .eq("organization_id", a.organization_id)
         .eq("status", "confirmed")
-        .in("camp_session_id", campIds);
+        .in("camp_session_id", (camps ?? []).map((c: any) => c.id));
       if (rErr) throw rErr;
 
-      // Final-recap only: a multi-week camp-run is stored as N weekly
-      // camp_sessions sharing (cycle_id, location_name, curriculum_name). Its
-      // true "last day" is the run's latest ends_on, so the recap fires once —
-      // on the child's final week — not at the end of every week they attend.
-      // (mid_recap keeps per-session semantics; only "last day with us" is
-      // wrong to repeat.) A single-week camp's run-latest equals its own end,
-      // so it is never suppressed.
-      const suppress = new Set<string>();
-      if (contextSuffix === "final_recap") {
-        const runKey = (c: any) => `${c.cycle_id ?? ""}|${c.location_name ?? ""}|${c.curriculum_name ?? ""}`;
-        const studentIds = [...new Set((regs ?? []).map((r: any) => r.students?.id).filter(Boolean))] as string[];
-        if (studentIds.length > 0) {
-          const { data: runRegs, error: runErr } = await supabase
-            .from("registrations")
-            .select("student_id, camp_sessions!inner ( cycle_id, location_name, curriculum_name, ends_on )")
-            .eq("organization_id", a.organization_id)
-            .eq("status", "confirmed")
-            .in("student_id", studentIds);
-          if (runErr) throw runErr;
-          // Latest ends_on per (student, camp-run).
-          const runLast = new Map<string, string>();
-          for (const rr of (runRegs ?? []) as any[]) {
-            const cs = rr.camp_sessions;
-            if (!cs?.ends_on) continue;
-            const k = `${rr.student_id}::${cs.cycle_id ?? ""}|${cs.location_name ?? ""}|${cs.curriculum_name ?? ""}`;
-            const prev = runLast.get(k);
-            if (!prev || cs.ends_on > prev) runLast.set(k, cs.ends_on);
-          }
-          // Suppress today's send when a later week exists in the same run.
-          for (const r of (regs ?? []) as any[]) {
-            const camp = matchingCamps.find((c: any) => c.id === r.camp_session_id);
-            if (!camp || !r.students?.id) continue;
-            const last = runLast.get(`${r.students.id}::${runKey(camp)}`);
-            if (last && last > camp.ends_on) suppress.add(`${r.students.id}:${camp.id}`);
-          }
-        }
-      }
-
+      // Group each family's confirmed weeks into camp-runs, one entry per
+      // (student, run). Two families in the same run can have different spans,
+      // so the run window is computed per-student from their own weeks.
+      const runKeyOf = (c: any) => `${c.cycle_id ?? ""}|${c.location_name ?? ""}|${c.curriculum_name ?? ""}`;
+      const runs = new Map<string, { parent: any; student: any; sessions: any[] }>();
       for (const r of (regs ?? []) as any[]) {
         if (!r.parents?.email || !r.students?.id) continue;
-        const camp = matchingCamps.find((c: any) => c.id === r.camp_session_id);
+        const camp = campById.get(r.camp_session_id);
         if (!camp) continue;
-        if (suppress.has(`${r.students.id}:${camp.id}`)) continue;
+        const key = `${r.students.id}::${runKeyOf(camp)}`;
+        let agg = runs.get(key);
+        if (!agg) { agg = { parent: r.parents, student: r.students, sessions: [] }; runs.set(key, agg); }
+        agg.sessions.push(camp);
+      }
+
+      for (const agg of runs.values()) {
+        const sorted = agg.sessions.slice().sort((x, y) => (x.starts_on < y.starts_on ? -1 : x.starts_on > y.starts_on ? 1 : 0));
+        const first = sorted[0];
+        const runStart = sorted.reduce((m, s) => (s.starts_on < m ? s.starts_on : m), first.starts_on);
+        const runEnd = sorted.reduce((m, s) => (s.ends_on > m ? s.ends_on : m), first.ends_on);
+        if (pickCampDate(runStart, runEnd) !== todayStr) continue;
+        // Idempotency anchor: final keys on the LAST week, mid on the FIRST.
+        // Single-week runs are unaffected (first == last == the one session).
+        // For a multi-week run it lets the true final still send even if an
+        // earlier week already sent one under the old per-session logic, and
+        // dedups a mid against a mid already sent for an earlier week.
+        const anchor = contextSuffix === "final_recap" ? sorted[sorted.length - 1] : first;
         entries.push({
-          context_key: `camp:${camp.id}:parent:${r.parents.id}:student:${r.students.id}:${contextSuffix}`,
-          parent_id: r.parents.id,
-          parent_email: r.parents.email,
-          parent_first_name: r.parents.first_name,
-          child_first_name: r.students.first_name,
-          program_name: camp.curriculum_name ?? "your camp",
-          program_start_date: formatDate(camp.starts_on),
-          program_end_date: formatDate(camp.ends_on),
-          location_name: camp.location_name ?? "",
+          context_key: `camp:${anchor.id}:parent:${agg.parent.id}:student:${agg.student.id}:${contextSuffix}`,
+          parent_id: agg.parent.id,
+          parent_email: agg.parent.email,
+          parent_first_name: agg.parent.first_name,
+          child_first_name: agg.student.first_name,
+          program_name: first.curriculum_name ?? "your camp",
+          program_start_date: formatDate(runStart),
+          program_end_date: formatDate(runEnd),
+          location_name: first.location_name ?? "",
           abandoned_resume_url: "",
           age_turning: "",
-          final_showcase_raw: camp.curricula?.final_showcase ?? "",
-          mid_term_skills_raw: (camp.curricula?.mid_term_skills as string[] | null) ?? [],
-          final_recap_skills_raw: (camp.curricula?.final_recap_skills as string[] | null) ?? [],
-          arrival_instructions_raw: camp.program_locations?.parent_arrival_instructions ?? "",
-          dismissal_instructions_raw: camp.program_locations?.parent_dismissal_instructions ?? "",
+          final_showcase_raw: first.curricula?.final_showcase ?? "",
+          mid_term_skills_raw: (first.curricula?.mid_term_skills as string[] | null) ?? [],
+          final_recap_skills_raw: (first.curricula?.final_recap_skills as string[] | null) ?? [],
+          arrival_instructions_raw: first.program_locations?.parent_arrival_instructions ?? "",
+          dismissal_instructions_raw: first.program_locations?.parent_dismissal_instructions ?? "",
           session_dates_raw: [],
           register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
           next_term_available: nextTermAvailable,
