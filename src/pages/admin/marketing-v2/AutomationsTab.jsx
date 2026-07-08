@@ -28,6 +28,13 @@ import SenderSetupNotice from "./SenderSetupNotice.jsx";
 // column on automation_templates would be cleaner but premature now.
 const STRIPE_DEPENDENT_KEYS = new Set(["thank_you", "abandoned_registration"]);
 
+// A promotional template (review_request) ships with a placeholder review link
+// (href "https://your-review-link-here"). Turning it on before the operator
+// pastes a real review URL would email families a dead link, so the toggle is
+// gated on this sentinel no longer appearing in the effective body. Generic —
+// any template that seeds this placeholder is gated the same way.
+const REVIEW_LINK_PLACEHOLDER = "your-review-link-here";
+
 export default function AutomationsTab() {
   const { user, org } = useOutletContext();
   const [editingTpl, setEditingTpl] = useState(null);
@@ -124,10 +131,20 @@ export default function AutomationsTab() {
   async function toggleAutomation(tpl) {
     if (!tpl.is_v1_enabled) return;
     if (STRIPE_DEPENDENT_KEYS.has(tpl.key) && !stripeReady) return;
-    setSavingTplId(tpl.id);
-    setError(null);
     const existing = automationByTpl[tpl.id];
     const wasEnabled = !!existing?.enabled;
+    // Don't let a promotional template turn on with an unfilled placeholder
+    // link — families would get a dead link in a real send. Only blocks the
+    // OFF→ON transition; turning it off is always allowed. The effective body is
+    // the operator's override if set, else the platform default.
+    const goingOn = !wasEnabled;
+    const effectiveBody = existing?.body_override ?? tpl.default_body ?? "";
+    if (goingOn && effectiveBody.includes(REVIEW_LINK_PLACEHOLDER)) {
+      setError('Add your review link first — click Edit, replace the "Add your review link here" link with your Google, Yelp, or Facebook review URL, then Save.');
+      return;
+    }
+    setSavingTplId(tpl.id);
+    setError(null);
     try {
       if (existing) {
         // Stamp enabled_at when flipping ON so contact-based automations only
