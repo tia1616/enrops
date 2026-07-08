@@ -4242,7 +4242,11 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
     return (
       <ModalShell onClose={onClose} title={p.mode === "send" ? "Survey released" : "Test send complete"}>
         <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
-          <div><strong>{p.sent}</strong> of {p.recipient_count ?? "?"} email{p.sent === 1 ? "" : "s"} delivered.</div>
+          <div>
+            {p.mode === "test"
+              ? <>A sample email was delivered to <strong>your inbox</strong>.</>
+              : <><strong>{p.sent}</strong> of {p.recipient_count ?? "?"} email{p.sent === 1 ? "" : "s"} delivered.</>}
+          </div>
           {p.mode === "send" && p.sent > 0 && (
             <div style={{ marginTop: 10, padding: 10, background: `#3a7c3a1A`, borderRadius: 6, fontSize: 13, color: INK }}>
               The portal banner is now live for instructors. They can submit their availability any time before the deadline.

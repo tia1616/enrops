@@ -17,6 +17,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
+import { introParagraphHtml } from '../_shared/surveyEmail.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -223,11 +224,7 @@ function json(body: unknown, status = 200) {
 // The editable lead paragraph. Blank/omitted falls back to the default copy.
 function introHtml(intro: string | null, cycleDisplay: string): string {
   const text = intro ?? `We're planning the ${cycleDisplay} schedule and want to know when and where you'd like to work.`;
-  return escapeHtml(text).replace(/\n{2,}/g, '</p><p style="margin:0 0 12px;font-size:15px;line-height:1.55;">').replace(/\n/g, '<br/>');
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return introParagraphHtml(text);
 }
 
 function renderHtml(params: {

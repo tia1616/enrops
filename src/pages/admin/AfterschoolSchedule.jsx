@@ -818,23 +818,40 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   // Open the survey drawer. Pre-select recipients: never sent → all active
   // instructors; already open → only the non-responders (the straggler / new-hire
-  // nudge). Seed the intro with the default copy so it's editable in place.
+  // nudge). Only instructors with an email on file are selectable — the send skips
+  // anyone without one, so they must not be silently counted as recipients.
+  // Seed the intro with the default copy so it's editable in place, and pre-fill
+  // the deadline from the open survey (don't silently push it out on a re-send).
   function openSurvey() {
     if (state.status !== "ready") return;
     const submitted = new Set(state.availability.filter((a) => a.submitted_at).map((a) => a.instructor_id));
     const alreadyOpen = !!state.survey?.opened_at;
     const preselect = state.instructors
+      .filter((i) => !!i.email)
       .filter((i) => (alreadyOpen ? !submitted.has(i.id) : true))
       .map((i) => i.id);
     setSurveySelectedIds(new Set(preselect));
     setSurveyIntro(defaultSurveyIntro);
+    // Keep the survey's existing deadline on a re-send (blank stays blank if they
+    // opened it with no deadline); default to +10 business days on a first open.
+    // Normalize to YYYY-MM-DD for <input type="date"> in case the column ever
+    // carries a timestamp.
+    setSurveyDeadline(alreadyOpen ? (state.survey?.deadline ? String(state.survey.deadline).slice(0, 10) : "") : businessDaysFromToday(10));
     setSurveyDialog({ mode: "choose", payload: null });
   }
 
+  // Resolve the recipients: only selected instructors that actually have an email
+  // (the send skips the rest — never let a no-email id ride along and desync counts).
+  function surveyRecipientIds() {
+    if (state.status !== "ready" || !surveySelectedIds) return [];
+    const emailable = new Set(state.instructors.filter((i) => !!i.email).map((i) => i.id));
+    return Array.from(surveySelectedIds).filter((id) => emailable.has(id));
+  }
+
   function surveyBody(mode) {
-    const instructor_ids = surveySelectedIds && surveySelectedIds.size > 0 ? Array.from(surveySelectedIds) : null;
+    const ids = surveyRecipientIds();
     const intro = surveyIntro.trim() && surveyIntro.trim() !== defaultSurveyIntro ? surveyIntro.trim() : null;
-    return { organization_id: org.id, term, mode, deadline: surveyDeadline || null, instructor_ids, intro };
+    return { organization_id: org.id, term, mode, deadline: surveyDeadline || null, instructor_ids: ids, intro };
   }
 
   // In-app preview: renders the real survey email(s) without sending anything.
@@ -850,6 +867,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   }
 
   async function runSurvey(mode) {
+    // Hard guard: never send/test with an empty recipient set. The buttons are
+    // disabled at zero, but the edge fn reads an empty list as "everyone", so a
+    // stray call here must not blast the whole roster.
+    if (surveyRecipientIds().length === 0) {
+      setSaveError("Pick at least one instructor with an email on file before sending.");
+      setTimeout(() => setSaveError(null), 6000);
+      return;
+    }
     setBusy("survey");
     setSaveError(null);
     try {
@@ -1922,12 +1947,10 @@ function SurveyDialog({ dialog, term, instructors, availability, alreadyOpen, se
       <Overlay onClose={onClose}>
         <div style={{ padding: 24 }}>
           <h3 style={{ margin: "0 0 10px", color: INK }}>
-            {mode === "send" ? "Survey sent" : mode === "test" ? "Test sent to you" : "Preview ready"}
+            {mode === "send" ? "Survey sent" : "Test sent to you"}
           </h3>
           <p style={{ color: MUTED, fontSize: 14, margin: "0 0 12px" }}>
-            {mode === "preview"
-              ? `${data?.preview?.length ?? 0} instructor email(s) rendered — no emails sent.`
-              : mode === "test"
+            {mode === "test"
               ? "Sent one test to your inbox — instructors weren't contacted."
               : <><strong style={{ color: INK }}>{sent}</strong> of {data?.recipient_count ?? 0} instructor email(s) delivered.</>}
             {failed.length > 0 && ` ${failed.length} failed.`}
@@ -1952,10 +1975,16 @@ function SurveyDialog({ dialog, term, instructors, availability, alreadyOpen, se
   }
 
   const submitted = new Set((availability ?? []).filter((a) => a.submitted_at).map((a) => a.instructor_id));
-  const total = instructors.length;
-  const selCount = selectedIds?.size ?? 0;
-  const allSelected = total > 0 && selCount === total;
-  const nonResponderCount = instructors.filter((i) => !submitted.has(i.id)).length;
+  // Only instructors with an email can actually be sent to — the send skips the
+  // rest, so all counts and bulk-select actions operate over the emailable set.
+  const emailable = instructors.filter((i) => !!i.email);
+  const emailableCount = emailable.length;
+  const missingEmailCount = instructors.length - emailableCount;
+  // Count only selected instructors that can actually be sent to, so the label
+  // and the Send payload (which filters to emailable) never disagree.
+  const selCount = emailable.filter((i) => selectedIds?.has(i.id)).length;
+  const allSelected = emailableCount > 0 && selCount === emailableCount;
+  const nonResponderCount = emailable.filter((i) => !submitted.has(i.id)).length;
   const hasPreview = previews && previews.length > 0;
   const nameById = new Map(instructors.map((i) => [i.id, (i.preferred_name || i.first_name) + (i.last_name ? ` ${i.last_name}` : "")]));
 
@@ -1965,7 +1994,7 @@ function SurveyDialog({ dialog, term, instructors, availability, alreadyOpen, se
     setSelectedIds(next);
   }
   function selectNonResponders() {
-    setSelectedIds(new Set(instructors.filter((i) => !submitted.has(i.id)).map((i) => i.id)));
+    setSelectedIds(new Set(emailable.filter((i) => !submitted.has(i.id)).map((i) => i.id)));
   }
   async function doPreview() {
     setPvBusy(true); setPvErr(null);
@@ -2005,31 +2034,39 @@ function SurveyDialog({ dialog, term, instructors, availability, alreadyOpen, se
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <label style={{ fontSize: 13, fontWeight: 600, color: INK }}>
-            {selCount === 0 ? "No instructors selected" : allSelected ? `Sending to all ${total} instructors` : `Sending to ${selCount} of ${total}`}
+            {selCount === 0 ? "No instructors selected" : allSelected ? `Sending to all ${emailableCount} instructors` : `Sending to ${selCount} of ${emailableCount}`}
           </label>
           <div style={{ display: "flex", gap: 12 }}>
             {alreadyOpen && nonResponderCount > 0 && <button type="button" onClick={selectNonResponders} style={linkBtn}>Non-responders</button>}
-            <button type="button" onClick={() => setSelectedIds(allSelected ? new Set() : new Set(instructors.map((i) => i.id)))} style={linkBtn}>
+            <button type="button" onClick={() => setSelectedIds(allSelected ? new Set() : new Set(emailable.map((i) => i.id)))} style={linkBtn}>
               {allSelected ? "Clear all" : "Select all"}
             </button>
           </div>
         </div>
-        <div style={{ maxHeight: 180, overflowY: "auto", marginBottom: 16, border: `1px solid ${RULE}`, borderRadius: 8, padding: 8 }}>
-          {total === 0 && <div style={{ fontSize: 13, color: MUTED, padding: "4px 6px" }}>No active instructors with an email address for this term.</div>}
+        <div style={{ maxHeight: 180, overflowY: "auto", marginBottom: missingEmailCount > 0 ? 6 : 16, border: `1px solid ${RULE}`, borderRadius: 8, padding: 8 }}>
+          {instructors.length === 0 && <div style={{ fontSize: 13, color: MUTED, padding: "4px 6px" }}>No active instructors for this term.</div>}
           {instructors.map((i) => {
-            const checked = selectedIds?.has(i.id) ?? false;
+            const noEmail = !i.email;
+            const checked = !noEmail && (selectedIds?.has(i.id) ?? false);
             const hasSubmitted = submitted.has(i.id);
             return (
-              <label key={i.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", fontSize: 13, cursor: "pointer" }}>
-                <input type="checkbox" checked={checked} onChange={() => toggle(i.id)} />
+              <label key={i.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", fontSize: 13, cursor: noEmail ? "default" : "pointer", opacity: noEmail ? 0.55 : 1 }}>
+                <input type="checkbox" checked={checked} disabled={noEmail} onChange={() => toggle(i.id)} />
                 <span style={{ flex: 1 }}>{(i.preferred_name || i.first_name)}{i.last_name ? ` ${i.last_name}` : ""}</span>
-                {alreadyOpen && (
+                {noEmail ? (
+                  <Tag color={CORAL}>no email</Tag>
+                ) : alreadyOpen ? (
                   <Tag color={hasSubmitted ? OK_GREEN : MUTED}>{hasSubmitted ? "✓ submitted" : "○ waiting"}</Tag>
-                )}
+                ) : null}
               </label>
             );
           })}
         </div>
+        {missingEmailCount > 0 && (
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 16 }}>
+            {missingEmailCount} instructor{missingEmailCount === 1 ? " has" : "s have"} no email on file and can't be sent the survey. Add an email on their profile to include {missingEmailCount === 1 ? "them" : "them"}.
+          </div>
+        )}
 
         <button
           type="button"
@@ -2062,7 +2099,7 @@ function SurveyDialog({ dialog, term, instructors, availability, alreadyOpen, se
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={() => onRun("test")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, opacity: busy || selCount === 0 ? 0.6 : 1 }}>Send test to me</button>
             <button onClick={() => onRun("send")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy || selCount === 0 ? 0.6 : 1 }}>
-              {busy ? "Sending…" : allSelected ? `Send to all ${total}` : `Send to ${selCount}`}
+              {busy ? "Sending…" : allSelected ? `Send to all ${emailableCount}` : `Send to ${selCount}`}
             </button>
           </div>
         </div>

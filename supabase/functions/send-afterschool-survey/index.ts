@@ -18,6 +18,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
+import { introParagraphHtml } from '../_shared/surveyEmail.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -178,12 +179,15 @@ serve(async (req: Request) => {
     }
 
     // Real send: open the survey for the term so the portal banner unlocks.
-    // Preserve the original opened_at on a straggler re-send (don't reset it); only
-    // overwrite the deadline when the caller supplied a new one.
+    // Preserve the original opened_at on a straggler re-send (don't reset it). The
+    // deadline is authoritative from the caller: the drawer pre-fills the existing
+    // deadline, so whatever it sends is the operator's choice — including null,
+    // which clears it. This keeps the email's "submit by" line and the stored
+    // deadline in lockstep.
     if (mode === 'send') {
       const { data: existing } = await supabase
         .from('afterschool_survey_state')
-        .select('opened_at, deadline')
+        .select('opened_at')
         .eq('organization_id', organizationId)
         .eq('term', term)
         .maybeSingle();
@@ -194,7 +198,7 @@ serve(async (req: Request) => {
             organization_id: organizationId,
             term,
             opened_at: existing?.opened_at ?? new Date().toISOString(),
-            deadline: deadline ? deadline.slice(0, 10) : (existing?.deadline ?? null),
+            deadline: deadline ? deadline.slice(0, 10) : null,
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'organization_id,term' },
@@ -217,11 +221,7 @@ function json(body: unknown, status = 200) {
 // The editable lead paragraph. Blank/omitted falls back to the default copy.
 function introHtml(intro: string | null, termDisplay: string): string {
   const text = intro ?? `We're planning the ${termDisplay} after-school schedule and want to know which days you can teach.`;
-  return escapeHtml(text).replace(/\n{2,}/g, '</p><p style="margin:0 0 12px;font-size:15px;line-height:1.55;">').replace(/\n/g, '<br/>');
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return introParagraphHtml(text);
 }
 
 function renderHtml(params: {
