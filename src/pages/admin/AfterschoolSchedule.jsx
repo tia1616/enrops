@@ -73,6 +73,19 @@ function todayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// "2026-11-12" -> "Nov 12" (parsed at local noon so it never slips a day).
+function shortDate(iso) {
+  const d = new Date(`${String(iso).slice(0, 10)}T12:00:00`);
+  return isNaN(d) ? String(iso) : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// Human list of dates: up to 2 shown, then "+N more".
+function listDates(dates) {
+  const sorted = [...dates].sort();
+  if (sorted.length <= 2) return sorted.map(shortDate).join(" and ");
+  return `${shortDate(sorted[0])}, ${shortDate(sorted[1])} +${sorted.length - 2} more`;
+}
+
 const FILTER_STATUSES = [
   { key: "needs_hire", label: "Needs instructor" },
   { key: "change_requested", label: "Change requested" },
@@ -262,7 +275,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .order("first_name", { ascending: true }),
         supabase
           .from("instructor_term_availability")
-          .select("instructor_id, weekday_availability, max_days, needs_confirmation, notes, submitted_at")
+          .select("instructor_id, weekday_availability, max_days, needs_confirmation, notes, submitted_at, unavailable_dates")
           .eq("organization_id", org.id)
           .eq("term", term),
         supabase
@@ -655,6 +668,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const pref = area ? (areaPrefByInstr.get(instructorId) || {})[area] : undefined;
     if (pref === "unavailable") warnings.push(`${first} marked ${area} as a place they can't go.`);
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
+    // Date-specific unavailability: a weekly class isn't blocked by a missed session,
+    // but flag which of this class's dates need a sub so it's not an invisible landmine.
+    const blackout = Array.isArray(av.unavailable_dates) ? av.unavailable_dates.map((d) => String(d).slice(0, 10)) : [];
+    if (blackout.length) {
+      const sessions = (state.programDates?.[program.id] ?? []).map((s) => String(s).slice(0, 10));
+      const hits = sessions.filter((s) => blackout.includes(s));
+      if (hits.length) warnings.push(`${first} is unavailable on ${listDates(hits)} — will need a sub ${hits.length === 1 ? "that day" : "those days"}.`);
+    }
     return { ok: true, reason: null, pref, warnings };
   }
 
@@ -1901,13 +1922,19 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
             key={inst.id}
             onClick={() => onAssign(inst.id)}
             disabled={current?.instructor_id === inst.id}
-            style={{ width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 8, border: `1px solid ${RULE}`, background: current?.instructor_id === inst.id ? "#f3f1ea" : "#fff", cursor: current?.instructor_id === inst.id ? "default" : "pointer", marginBottom: 6, fontFamily: "inherit" }}
+            style={{ width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 8, border: `1px solid ${RULE}`, background: current?.instructor_id === inst.id ? "#f3f1ea" : "#fff", cursor: current?.instructor_id === inst.id ? "default" : "pointer", marginBottom: 6, fontFamily: "inherit" }}
           >
-            <span style={{ fontSize: 14, color: INK, fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
-            <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {(ev.pref === "preferred" || ev.pref === "highly_preferred") && <Tag color={OK_GREEN}>Prefers this area</Tag>}
-              {ev.warnings.length > 0 && <Tag color={CORAL}>⚠ {ev.warnings.length}</Tag>}
+            <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: 14, color: INK, fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
+              {ev.warnings.map((w, i) => (
+                <span key={i} style={{ fontSize: 12, color: CORAL, fontWeight: 500, lineHeight: 1.35 }}>⚠ {w}</span>
+              ))}
             </span>
+            {(ev.pref === "preferred" || ev.pref === "highly_preferred") && (
+              <span style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                <Tag color={OK_GREEN}>Prefers this area</Tag>
+              </span>
+            )}
           </button>
         ))}
         {ineligible.length > 0 && (

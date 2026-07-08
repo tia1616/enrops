@@ -4,13 +4,17 @@
 //   - how many days a week you want (a range)
 //   - which AREAS you prefer to teach in (ranked)
 // After-school is one class an hour, the same weekday all term, after dismissal —
-// so we ask only what the matcher uses. No curriculum, no blackout dates.
+// so we ask only what the matcher uses.
 // "Available from 1:00" means we can place you in any class you can reach in time
 // (arrive ~15 min before it starts) — so a part-time job until 1 doesn't cost you
 // the 2:00 classes you could actually teach.
+// We also capture specific dates the instructor already knows they can't make
+// (unavailable_dates) — a weekly class isn't blocked by one missed session, so
+// these surface as a "needs a sub that day" warning, not a scheduling block.
 //
 // Writes:
-//   - one row to instructor_term_availability (weekday_availability, min/max_days, notes)
+//   - one row to instructor_term_availability (weekday_availability, min/max_days,
+//     notes, unavailable_dates)
 //   - rows to instructor_term_area_preferences (one per area the instructor ranked)
 // keyed by (org, instructor, term). Pre-fills from existing rows so instructors can edit.
 
@@ -54,6 +58,14 @@ const CATEGORY_OPTIONS = [
   { value: "robotics", label: "Robotics" },
 ];
 
+// "2026-11-12" -> "Thu, Nov 12, 2026". Parsed at local noon so the date never
+// slips a day across time zones.
+function fmtDateLabel(d) {
+  const dt = new Date(`${String(d).slice(0, 10)}T12:00:00`);
+  if (isNaN(dt)) return String(d);
+  return dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+}
+
 function termTitle(term) {
   if (!term) return "this term";
   const m = /^(SU|FA|WI|SP)(\d{2})$/.exec(term);
@@ -83,6 +95,8 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   const [notes, setNotes] = useState("");
   const [areaPrefs, setAreaPrefs] = useState({});   // area -> preference
   const [categories, setCategories] = useState([]); // preferred families: lego/coding/robotics
+  const [unavailableDates, setUnavailableDates] = useState([]); // ["2026-11-12", ...]
+  const [dateToAdd, setDateToAdd] = useState("");
 
   const [areas, setAreas] = useState([]);
   const [hasExisting, setHasExisting] = useState(false);
@@ -94,7 +108,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       const [availRes, locRes, areaPrefRes] = await Promise.all([
         supabase
           .from("instructor_term_availability")
-          .select("weekday_availability, min_days, max_days, notes, submitted_at, preferred_categories")
+          .select("weekday_availability, min_days, max_days, notes, submitted_at, preferred_categories, unavailable_dates")
           .eq("instructor_id", instructorId)
           .eq("term", term)
           .maybeSingle(),
@@ -125,6 +139,11 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         setDaysRange(r ? r.value : "");
         setNotes(availRes.data.notes ?? "");
         setCategories(Array.isArray(availRes.data.preferred_categories) ? availRes.data.preferred_categories : []);
+        setUnavailableDates(
+          Array.isArray(availRes.data.unavailable_dates)
+            ? [...availRes.data.unavailable_dates].map((d) => String(d).slice(0, 10)).sort()
+            : [],
+        );
       }
 
       const distinctAreas = Array.from(
@@ -151,6 +170,16 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
   function toggleCategory(value) {
     setCategories((prev) => (prev.includes(value) ? prev.filter((c) => c !== value) : [...prev, value]));
+  }
+
+  function addUnavailableDate() {
+    if (!dateToAdd) return;
+    setUnavailableDates((prev) => (prev.includes(dateToAdd) ? prev : [...prev, dateToAdd].sort()));
+    setDateToAdd("");
+  }
+
+  function removeUnavailableDate(d) {
+    setUnavailableDates((prev) => prev.filter((x) => x !== d));
   }
 
   async function save() {
@@ -188,6 +217,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
             submitted_at: new Date().toISOString(),
             needs_confirmation: false,
             preferred_categories: categories,
+            unavailable_dates: unavailableDates.length ? unavailableDates : null,
           },
           { onConflict: "organization_id,instructor_id,term" },
         );
@@ -313,6 +343,29 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
             );
           })}
         </div>
+      </Card>
+
+      <Card title="Any dates you already know you can't make?" subtitle="Optional. Add specific dates you'll be out this term (a holiday, an appointment). You'll still be assigned your weekly class — we just flag those dates so your admin can line up a sub.">
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input type="date" value={dateToAdd} onChange={(e) => setDateToAdd(e.target.value)} style={{ ...inputStyle, width: 190 }} />
+          <button type="button" onClick={addUnavailableDate} disabled={!dateToAdd}
+            style={{ padding: "9px 16px", borderRadius: 6, border: `1px solid ${BRIGHT}`, background: dateToAdd ? "#fff" : CREAM, color: BRIGHT, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: dateToAdd ? "pointer" : "default", opacity: dateToAdd ? 1 : 0.5 }}>
+            Add date
+          </button>
+        </div>
+        {unavailableDates.length > 0 && (
+          <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {unavailableDates.map((d) => (
+              <span key={d} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 8px 6px 12px", borderRadius: 999, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, color: INK, fontSize: 13, fontWeight: 600 }}>
+                {fmtDateLabel(d)}
+                <button type="button" onClick={() => removeUnavailableDate(d)} aria-label={`Remove ${fmtDateLabel(d)}`}
+                  style={{ border: "none", background: "transparent", color: CORAL, fontSize: 16, lineHeight: 1, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </Card>
 
       <Card title="Anything else we should know?" subtitle="Optional — constraints or preferences that don't fit above.">
