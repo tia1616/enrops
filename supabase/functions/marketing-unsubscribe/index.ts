@@ -29,11 +29,6 @@ function confirmationRedirect(params: Record<string, string>): Response {
   return Response.redirect(`${PUBLIC_SITE}/unsubscribed?${qs}`, 302);
 }
 
-const DEFAULT_PRIMARY = '#674EE8';
-const DEFAULT_ACCENT = '#F8A638';
-const DEFAULT_PAGE_BG = '#f5f5f7';
-const DEFAULT_FONT_STACK = "-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif";
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'content-type',
@@ -157,106 +152,6 @@ function constantTimeEquals(a: string, b: string): boolean {
   return diff === 0;
 }
 
-// =====================================================================
-// Branding + rendering
-// =====================================================================
-
-type Branding = {
-  primary: string;
-  accent: string;
-  pageBg: string;
-  bodyFontStack: string;
-  headingFontStack: string;
-  googleFontsUrl: string | null;
-};
-
-async function loadBranding(supabase: any, orgId: string): Promise<Branding> {
-  const { data: b } = await supabase
-    .from('org_branding')
-    .select('primary_color, accent_color, page_bg_color, heading_font, body_font')
-    .eq('organization_id', orgId)
-    .maybeSingle();
-
-  let headingStack = DEFAULT_FONT_STACK;
-  let bodyStack = DEFAULT_FONT_STACK;
-  const fontParams: string[] = [];
-
-  const fontNames = [b?.heading_font, b?.body_font].filter(Boolean) as string[];
-  if (fontNames.length > 0) {
-    const { data: fonts } = await supabase
-      .from('available_fonts')
-      .select('name, google_fonts_param, fallback_stack')
-      .in('name', fontNames);
-    const byName = new Map<string, { name: string; google_fonts_param: string; fallback_stack: string }>(
-      (fonts ?? []).map((f: any) => [f.name, f]),
-    );
-    if (b?.heading_font && byName.has(b.heading_font)) {
-      const f = byName.get(b.heading_font)!;
-      headingStack = `'${f.name}',${f.fallback_stack}`;
-      fontParams.push(f.google_fonts_param);
-    }
-    if (b?.body_font && byName.has(b.body_font)) {
-      const f = byName.get(b.body_font)!;
-      bodyStack = `'${f.name}',${f.fallback_stack}`;
-      fontParams.push(f.google_fonts_param);
-    }
-  }
-
-  return {
-    primary: b?.primary_color ?? DEFAULT_PRIMARY,
-    accent: b?.accent_color ?? DEFAULT_ACCENT,
-    pageBg: b?.page_bg_color ?? DEFAULT_PAGE_BG,
-    bodyFontStack: bodyStack,
-    headingFontStack: headingStack,
-    googleFontsUrl: fontParams.length > 0
-      ? `https://fonts.googleapis.com/css2?${fontParams.map(p => `family=${p}`).join('&')}&display=swap`
-      : null,
-  };
-}
-
-function renderConfirmationPage(
-  email: string,
-  org: { name: string; logo_url: string | null; logo_email_url: string | null },
-  branding: Branding,
-): string {
-  const fontsLink = branding.googleFontsUrl
-    ? `<link rel="stylesheet" href="${escapeHtml(branding.googleFontsUrl)}">`
-    : '';
-  const logoUrl = org.logo_email_url ?? org.logo_url;
-  const logo = logoUrl
-    ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(org.name)}" style="width:160px;height:auto;display:block;margin:0 auto 24px;" />`
-    : `<p style="margin:0 0 24px;font-family:${branding.headingFontStack};font-size:22px;font-weight:700;color:${branding.primary};">${escapeHtml(org.name)}</p>`;
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Unsubscribed from ${escapeHtml(org.name)}</title>
-${fontsLink}
-<style>
-  body { margin:0; padding:0; background:${branding.pageBg}; font-family:${branding.bodyFontStack}; color:#1f2937; line-height:1.55; }
-  .wrap { max-width:520px; margin:0 auto; padding:48px 20px; text-align:center; }
-  .card { background:#ffffff; border:1px solid #e5e7eb; border-radius:14px; padding:40px 32px; }
-  h1 { font-family:${branding.headingFontStack}; font-size:26px; margin:0 0 12px; color:#1f2937; }
-  p { font-size:16px; margin:0 0 12px; }
-  .email { font-weight:600; color:${branding.primary}; word-break:break-all; }
-  .muted { color:#6b7280; font-size:14px; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="card">
-    ${logo}
-    <h1>You're unsubscribed.</h1>
-    <p>We won't send any more marketing emails to <span class="email">${escapeHtml(email)}</span>.</p>
-    <p class="muted">If you signed up by mistake or change your mind, just reply to any past email from us and we'll add you back.</p>
-  </div>
-</div>
-</body>
-</html>`;
-}
-
 function errorResponse(req: Request, status: number, message: string): Response {
   if (req.method === 'POST') {
     return new Response(JSON.stringify({ ok: false, error: message }), {
@@ -268,13 +163,4 @@ function errorResponse(req: Request, status: number, message: string): Response 
   // state (it shows a generic "invalid or expired" message + a reply fallback).
   // Same reason as the success path: HTML returned here renders as raw source.
   return confirmationRedirect({ error: '1' });
-}
-
-function escapeHtml(s: string): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
