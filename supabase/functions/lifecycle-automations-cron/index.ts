@@ -1061,7 +1061,7 @@ async function resolveRecapAudience(
   if (includeCamps) {
     const { data: camps, error: cErr } = await supabase
       .from("camp_sessions")
-      .select("id, starts_on, ends_on, curriculum_name, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills )")
+      .select("id, cycle_id, starts_on, ends_on, curriculum_name, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills )")
       .eq("organization_id", a.organization_id)
       .not("starts_on", "is", null)
       .not("ends_on", "is", null);
@@ -1085,10 +1085,49 @@ async function resolveRecapAudience(
         .in("camp_session_id", campIds);
       if (rErr) throw rErr;
 
+      // Final-recap only: a multi-week camp-run is stored as N weekly
+      // camp_sessions sharing (cycle_id, location_name, curriculum_name). Its
+      // true "last day" is the run's latest ends_on, so the recap fires once —
+      // on the child's final week — not at the end of every week they attend.
+      // (mid_recap keeps per-session semantics; only "last day with us" is
+      // wrong to repeat.) A single-week camp's run-latest equals its own end,
+      // so it is never suppressed.
+      const suppress = new Set<string>();
+      if (contextSuffix === "final_recap") {
+        const runKey = (c: any) => `${c.cycle_id ?? ""}|${c.location_name ?? ""}|${c.curriculum_name ?? ""}`;
+        const studentIds = [...new Set((regs ?? []).map((r: any) => r.students?.id).filter(Boolean))] as string[];
+        if (studentIds.length > 0) {
+          const { data: runRegs, error: runErr } = await supabase
+            .from("registrations")
+            .select("student_id, camp_sessions!inner ( cycle_id, location_name, curriculum_name, ends_on )")
+            .eq("organization_id", a.organization_id)
+            .eq("status", "confirmed")
+            .in("student_id", studentIds);
+          if (runErr) throw runErr;
+          // Latest ends_on per (student, camp-run).
+          const runLast = new Map<string, string>();
+          for (const rr of (runRegs ?? []) as any[]) {
+            const cs = rr.camp_sessions;
+            if (!cs?.ends_on) continue;
+            const k = `${rr.student_id}::${cs.cycle_id ?? ""}|${cs.location_name ?? ""}|${cs.curriculum_name ?? ""}`;
+            const prev = runLast.get(k);
+            if (!prev || cs.ends_on > prev) runLast.set(k, cs.ends_on);
+          }
+          // Suppress today's send when a later week exists in the same run.
+          for (const r of (regs ?? []) as any[]) {
+            const camp = matchingCamps.find((c: any) => c.id === r.camp_session_id);
+            if (!camp || !r.students?.id) continue;
+            const last = runLast.get(`${r.students.id}::${runKey(camp)}`);
+            if (last && last > camp.ends_on) suppress.add(`${r.students.id}:${camp.id}`);
+          }
+        }
+      }
+
       for (const r of (regs ?? []) as any[]) {
         if (!r.parents?.email || !r.students?.id) continue;
         const camp = matchingCamps.find((c: any) => c.id === r.camp_session_id);
         if (!camp) continue;
+        if (suppress.has(`${r.students.id}:${camp.id}`)) continue;
         entries.push({
           context_key: `camp:${camp.id}:parent:${r.parents.id}:student:${r.students.id}:${contextSuffix}`,
           parent_id: r.parents.id,
