@@ -167,6 +167,45 @@ function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryCo
 </body></html>`;
 }
 
+// review_request ships with a placeholder review link the operator must replace.
+// Rather than make a non-dev hand-edit HTML/markdown, review_request shows a
+// dedicated "Your review link" field that reads/writes the single <a> in the body.
+// (The unsubscribe link is added by the email shell at send, never in the body,
+// so the body's only <a> is always the review link.)
+const REVIEW_LINK_PLACEHOLDER_HREF = "your-review-link-here";
+
+// Add https:// when the operator pastes a bare domain; leave a full URL / mailto as-is.
+function normalizeReviewUrl(raw) {
+  const s = (raw || "").trim();
+  if (!s) return "";
+  if (/^(https?:|mailto:)/i.test(s)) return s;
+  return `https://${s}`;
+}
+
+// Pull the review URL out of the body's anchor — "" when it's still the
+// placeholder or there is no anchor.
+function extractReviewUrl(body) {
+  const m = (body || "").match(/<a\s+[^>]*href="([^"]*)"/i);
+  if (!m) return "";
+  return m[1].includes(REVIEW_LINK_PLACEHOLDER_HREF) ? "" : m[1];
+}
+
+// Write the operator's URL into the body's review anchor (rebuilding the whole
+// <a>…</a> so the visible text is always sensible). Empty url restores the
+// placeholder anchor, so the enable-guard re-blocks and no dead link can ship.
+function setReviewUrlInBody(body, url) {
+  const clean = normalizeReviewUrl(url);
+  const anchor = clean
+    ? `<a href="${escapeHtmlSafe(clean)}" style="color:#674EE8;font-weight:600;">Leave a quick review</a>`
+    : `<a href="https://${REVIEW_LINK_PLACEHOLDER_HREF}" style="color:#674EE8;font-weight:600;">Add your review link here</a>`;
+  const src = body || "";
+  if (/<a\s+[^>]*>.*?<\/a>/is.test(src)) {
+    return src.replace(/<a\s+[^>]*>.*?<\/a>/is, anchor);
+  }
+  // Operator deleted the anchor entirely — append a paragraph with the link back.
+  return `${src}\n<p style="margin:0 0 16px;">${anchor}</p>`;
+}
+
 export default function AutomationEditor({ template, automation, orgId, orgName, orgSlug, orgLogoUrl, orgSenderName, orgPrimaryColor, userEmail, onClose, onSaved }) {
   const [subject, setSubject] = useState(automation?.subject_override ?? template.default_subject);
   const [body, setBody] = useState(automation?.body_override ?? template.default_body);
@@ -191,6 +230,17 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const [daysAfter, setDaysAfter] = useState(savedDaysAfter != null ? String(savedDaysAfter) : "");
   // Label the timing by what the delay is measured from, per template.
   const timingAnchorLabel = template.key === "review_request" ? "a family joins" : "the first session";
+
+  // review_request: a dedicated "Your review link" field so the operator never
+  // hand-edits HTML to set the link. It reads/writes the single <a> in the body.
+  const isReviewLink = template.key === "review_request";
+  const [reviewLink, setReviewLink] = useState(
+    isReviewLink ? extractReviewUrl(automation?.body_override ?? template.default_body) : "",
+  );
+  function handleReviewLinkChange(value) {
+    setReviewLink(value);
+    setBody((prev) => setReviewUrlInBody(prev, value));
+  }
 
   // Real-data test picker. testSources holds the org's camps/programs eligible
   // for this template; selectedSource is "camp:<id>" / "program:<id>" / "" (sample).
@@ -460,6 +510,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       setSubject(template.default_subject);
       setBody(template.default_body);
       if (hasDaysAfterTiming) setDaysAfter(String(defaultDaysAfter));
+      if (isReviewLink) setReviewLink("");
       return;
     }
     setResetting(true);
@@ -480,6 +531,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       setSubject(template.default_subject);
       setBody(template.default_body);
       if (hasDaysAfterTiming) setDaysAfter(String(defaultDaysAfter));
+      if (isReviewLink) setReviewLink("");
       // Reset is ALSO a voice signal — operator decided their custom version
       // wasn't right. Append rows for any field that had a non-null override.
       await appendEditHistory({
@@ -576,6 +628,33 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               </span>
             </div>
           </div>
+
+          {/* Your review link — review_request only. The operator pastes their
+              review URL here; we splice it into the body's link so they never
+              touch HTML. Empty = the automation stays blocked from turning on. */}
+          {isReviewLink && (
+            <div style={{ marginBottom: 16 }}>
+              <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                Your review link
+              </span>
+              <input
+                type="url"
+                value={reviewLink}
+                onChange={(e) => handleReviewLinkChange(e.target.value)}
+                placeholder="Paste your Google, Yelp, or Facebook review link"
+                style={{
+                  width: "100%", padding: "10px 12px", fontSize: 14, color: INK,
+                  border: `1px solid ${reviewLink.trim() ? RULE : WARN}`,
+                  borderRadius: 6, outline: "none", background: "#fff", boxSizing: "border-box",
+                }}
+              />
+              <p style={{ margin: "4px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
+                {reviewLink.trim()
+                  ? <>We drop this into the message as a clickable link. Click <strong>Save</strong> below, then you can turn the automation on.</>
+                  : <>Paste the link where families leave you a review. Until you add it, this automation can&apos;t be turned on.</>}
+              </p>
+            </div>
+          )}
 
           {/* Body — toggle between rendered display (default) and markdown-ish
               edit mode. Operators never see raw HTML tags. Pattern mirrors
