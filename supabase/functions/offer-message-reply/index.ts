@@ -13,6 +13,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so portal links in test emails point at staging, not prod. Defaults to prod.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 
 const DEFAULT_PRIMARY = '#1C004F';
 const DEFAULT_PAGE_BG = '#FBFBFB';
@@ -144,7 +147,7 @@ serve(async (req: Request) => {
     const adminFirstName = userData.user.user_metadata?.full_name?.split(' ')[0] ?? 'your admin';
     if (!org?.slug) throw new Error(`offer-message-reply: org ${org?.id ?? 'null'} has no slug; cannot build portal URL`);
     if (!org?.name) throw new Error(`offer-message-reply: org ${org?.id ?? 'null'} has no name; cannot build subject line`);
-    const portalUrl = `https://enrops.com/${org.slug}/instructor`;
+    const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
     const subject = `Re: Your ${curriculumName} — ${org.name}`;
 
     const html = `<!doctype html><html lang="en"><body style="margin:0;padding:0;background:${DEFAULT_PAGE_BG};font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif;color:${TEXT};">

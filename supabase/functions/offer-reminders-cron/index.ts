@@ -36,6 +36,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so portal links in reminder emails point at staging, not prod. Defaults to prod.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 
 const DEFAULT_PRIMARY = '#1C004F';
 const DEFAULT_PAGE_BG = '#FBFBFB';
@@ -253,7 +256,7 @@ serve(async (req: Request) => {
       const deadline = theirRows[0].deadline;
       const cycleDisplay = cycleDisplayName(cycle?.name ?? '');
       if (!org?.slug) throw new Error(`offer-reminders-cron: org ${org?.id ?? 'null'} has no slug; cannot build portal URL`);
-      const portalUrl = `https://enrops.com/${org.slug}/instructor`;
+      const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
       const subject = `Reminder: please respond to your ${cycleDisplay} schedule`;
       const html = buildReminderHtml({ branding, instructor, camps, cycle, portalUrl, deadline, orgName: org?.name ?? '', locationById });
       const text = buildReminderText({ instructor, camps, cycle, portalUrl, deadline, orgName: org?.name ?? '', locationById });
@@ -449,7 +452,7 @@ serve(async (req: Request) => {
       const deadline = classes[0]?.a?.deadline ?? theirRows[0].deadline;
       const termDisplay = cycleDisplayName(classes[0]?.p?.term ?? '');
       if (!org?.slug) throw new Error(`offer-reminders-cron: org ${org?.id ?? 'null'} has no slug; cannot build portal URL`);
-      const portalUrl = `https://enrops.com/${org.slug}/instructor`;
+      const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
       const firstName = instructor.preferred_name ?? instructor.first_name ?? 'there';
       const subject = `Reminder: please respond to your ${termDisplay} after-school schedule`;
       const html = buildProgramReminderHtml({ branding, firstName, classes, termDisplay, portalUrl, deadline, orgName: org?.name ?? '', locationById });

@@ -29,6 +29,11 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, resolveInstructor, adminClient } from '../_shared/instructor.ts';
 
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so Stripe return/refresh links point at staging, not prod. Defaults to prod.
+// Stripe requires absolute URLs; PUBLIC_SITE_URL is always an absolute https origin.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
+
 const stripe = new Stripe(Deno.env.get('STRIPE_INSTRUCTOR_PLATFORM_KEY')!, {
   apiVersion: '2023-10-16',
   httpClient: Stripe.createFetchHttpClient(),
@@ -95,8 +100,8 @@ serve(async (req: Request) => {
         const link = await stripe.accountLinks.create({
           account: accountId,
           type: 'account_onboarding',
-          return_url: `https://enrops.com/${me.org_slug}/instructor?return=true`,
-          refresh_url: `https://enrops.com/${me.org_slug}/instructor?refresh=true`,
+          return_url: `${PUBLIC_SITE_URL}/${me.org_slug}/instructor?return=true`,
+          refresh_url: `${PUBLIC_SITE_URL}/${me.org_slug}/instructor?refresh=true`,
         });
         return json({ url: link.url, kind: 'onboarding' });
       }
