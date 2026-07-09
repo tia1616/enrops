@@ -99,6 +99,9 @@ interface TestSendParams {
   // instead of the hardcoded sample — a true preview. Only one is set at a time.
   test_camp_session_id: string | null;
   test_program_id: string | null;
+  // For no_school_day, which role variant to render/send. "instructor" swaps in
+  // the tailored instructor copy; anything else = the parent (default) copy.
+  audience?: "parent" | "instructor";
 }
 
 interface TestSendResult {
@@ -114,6 +117,7 @@ interface PreviewParams {
   preview_body: string | null;
   test_camp_session_id: string | null;
   test_program_id: string | null;
+  audience?: "parent" | "instructor";
 }
 
 interface PreviewResult {
@@ -198,6 +202,7 @@ serve(async (req) => {
   if (req.method === "POST") {
     try {
       const body = await req.json().catch(() => ({}));
+      const parsedAudience = body?.audience === "instructor" ? "instructor" : undefined;
       if (body?.mode === "test_send") {
         testSendParams = {
           organization_id: body.organization_id,
@@ -207,6 +212,7 @@ serve(async (req) => {
           preview_body: typeof body.preview_body === "string" ? body.preview_body : null,
           test_camp_session_id: typeof body.test_camp_session_id === "string" ? body.test_camp_session_id : null,
           test_program_id: typeof body.test_program_id === "string" ? body.test_program_id : null,
+          audience: parsedAudience,
         };
       } else if (body?.mode === "preview") {
         previewParams = {
@@ -216,6 +222,7 @@ serve(async (req) => {
           preview_body: typeof body.preview_body === "string" ? body.preview_body : null,
           test_camp_session_id: typeof body.test_camp_session_id === "string" ? body.test_camp_session_id : null,
           test_program_id: typeof body.test_program_id === "string" ? body.test_program_id : null,
+          audience: parsedAudience,
         };
       } else if (typeof body?.registration_id === "string") {
         eventRegistrationId = body.registration_id;
@@ -547,6 +554,7 @@ interface RenderInput {
   test_camp_session_id: string | null;
   test_program_id: string | null;
   to_email?: string; // only used to seed entry.parent_email for a test send
+  audience?: "parent" | "instructor"; // no_school_day: which role variant to render
 }
 interface RenderOutput {
   ok: boolean;
@@ -646,8 +654,16 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
 
   // Editor passes the current draft; fall back to template defaults so the
   // unmodified template can also be previewed/tested.
-  const subjectTpl = input.preview_subject ?? template.default_subject;
-  const bodyTpl = input.preview_body ?? template.default_body;
+  let subjectTpl = input.preview_subject ?? template.default_subject;
+  let bodyTpl = input.preview_body ?? template.default_body;
+  // no_school_day instructor variant: swap in the fixed instructor copy (not the
+  // operator's parent draft) and render {{first_name}} as an instructor. Lets the
+  // editor preview + test-send BOTH role variants of a two-audience automation.
+  if (template.key === "no_school_day" && input.audience === "instructor") {
+    subjectTpl = NO_SCHOOL_INSTRUCTOR_SUBJECT;
+    bodyTpl = NO_SCHOOL_INSTRUCTOR_BODY;
+    tokens["first_name"] = "Alex"; // sample instructor first name (parent sample is "Sarah")
+  }
 
   const subject = renderTokens(subjectTpl, tokens);
   const innerBody = renderTokens(bodyTpl, tokens);
@@ -692,6 +708,7 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
     test_camp_session_id: params.test_camp_session_id,
     test_program_id: params.test_program_id,
     to_email: params.test_to_email,
+    audience: params.audience,
   });
   if (!rendered.ok) return { ok: false, error: rendered.error };
 
@@ -736,6 +753,7 @@ async function runPreview(supabase: SupabaseClient, params: PreviewParams): Prom
     preview_body: params.preview_body,
     test_camp_session_id: params.test_camp_session_id,
     test_program_id: params.test_program_id,
+    audience: params.audience,
   });
   if (!rendered.ok) return { ok: false, error: rendered.error };
   return { ok: true, subject: rendered.subject, body_html: rendered.html, used_real_data: rendered.used_real_data };

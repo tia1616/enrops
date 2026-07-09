@@ -282,6 +282,16 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const [previewError, setPreviewError] = useState(null);
   const realSourceSelected = !!sourceType && !!selectedSource;
 
+  // no_school_day is a two-audience automation: the editable subject/body is the
+  // PARENT email; the instructor gets fixed tailored copy. This toggle previews +
+  // test-sends either variant. For no_school_day we always use the server preview
+  // (it renders sample data through the real pipeline, and knows the instructor
+  // copy) so the pane switches with the toggle. Other templates ignore audience.
+  const isTwoAudience = template.key === "no_school_day";
+  const [audience, setAudience] = useState("parent"); // "parent" | "instructor"
+  const audienceParam = audience === "instructor" ? "instructor" : undefined;
+  const wantsServerPreview = realSourceSelected || isTwoAudience;
+
   useEffect(() => {
     if (!sourceType || !orgId) return;
     let cancelled = false;
@@ -333,13 +343,13 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   // the system) so the pane shows true resolved content, not sample tokens.
   // Debounced so every keystroke in subject/body doesn't hammer the function.
   useEffect(() => {
-    if (!realSourceSelected) {
+    if (!wantsServerPreview) {
       setServerPreview(null);
       setPreviewError(null);
       setPreviewLoading(false);
       return;
     }
-    const [srcType, srcId] = selectedSource.split(":");
+    const [srcType, srcId] = (selectedSource || "").split(":");
     let cancelled = false;
     setPreviewLoading(true);
     setPreviewError(null);
@@ -356,6 +366,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               preview_body: body,
               test_camp_session_id: srcType === "camp" ? srcId : null,
               test_program_id: srcType === "program" ? srcId : null,
+              audience: audienceParam,
             },
           },
         );
@@ -372,7 +383,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       }
     }, 500);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [realSourceSelected, selectedSource, subject, body, orgId, template.key]);
+  }, [wantsServerPreview, realSourceSelected, selectedSource, subject, body, orgId, template.key, audienceParam]);
 
   function toggleBodyEdit() {
     if (editingBody) {
@@ -406,7 +417,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   // doc has no <base target="_blank">, so inject one — keeps in-iframe link
   // clicks opening a new tab instead of blanking the sandbox. Otherwise fall
   // back to the local sample render (also used while the server call is loading).
-  const showingServerPreview = realSourceSelected && !!serverPreview?.body_html;
+  const showingServerPreview = wantsServerPreview && !!serverPreview?.body_html;
   const displayedPreviewHtml = useMemo(() => {
     if (!showingServerPreview) return previewHtml;
     const html = serverPreview.body_html;
@@ -603,6 +614,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             preview_body: body,
             test_camp_session_id: srcType === "camp" ? srcId : null,
             test_program_id: srcType === "program" ? srcId : null,
+            audience: audienceParam,
           },
         },
       );
@@ -610,7 +622,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       if (data?.ok === false) {
         throw new Error(data?.error ?? "Send failed");
       }
-      setSuccess(`Test sent to ${testEmail}. Check your inbox.`);
+      setSuccess(`Test sent to ${testEmail}${isTwoAudience ? ` (${audience === "instructor" ? "instructor" : "families"} version)` : ""}. Check your inbox.`);
     } catch (e) {
       setError(e?.message ?? "Test send failed — try again");
     } finally {
@@ -629,6 +641,37 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       {/* Body — inline expansion within the parent row. No drawer, no
           backdrop. The Edit button on the row owns the open/close toggle. */}
       <div style={{ padding: 0 }}>
+          {/* Two-audience toggle (no_school_day) — preview + test either the
+              family or the instructor version. Editable fields below are always
+              the family copy; the instructor copy is a fixed tailored template. */}
+          {isTwoAudience && (
+            <div style={{ marginBottom: 16 }}>
+              <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                Preview &amp; test as
+              </span>
+              <div style={{ display: "inline-flex", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+                {[["parent", "Families"], ["instructor", "Instructor"]].map(([val, label]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setAudience(val)}
+                    style={{
+                      padding: "8px 16px", fontSize: 13, fontWeight: 600, border: "none",
+                      cursor: "pointer", background: audience === val ? PURPLE : "#fff",
+                      color: audience === val ? "#fff" : MUTED,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
+                {audience === "instructor"
+                  ? "Instructors get a fixed, tailored heads-up (not editable here). The preview and test below show that version."
+                  : "The subject and message below are the family version. Instructors get a matching heads-up — flip the toggle to preview it."}
+              </p>
+            </div>
+          )}
           {/* Subject */}
           <div style={{ marginBottom: 16 }}>
             <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
