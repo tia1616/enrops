@@ -36,6 +36,7 @@ import Finances from './pages/admin/Finances.jsx';
 import Payouts from './pages/admin/Payouts.jsx';
 import TeamPage from './pages/admin/team/TeamPage.jsx';
 import AdminSettings from './pages/admin/AdminSettings.jsx';
+import SurveySettings from './pages/admin/SurveySettings.jsx';
 import WaiverManager from './pages/admin/WaiverManager.jsx';
 import EmailSenderSettings from './pages/admin/EmailSenderSettings.jsx';
 import BrandLogoSettings from './pages/admin/BrandLogoSettings.jsx';
@@ -179,6 +180,7 @@ export default function App() {
         <Route path="team" element={<TeamPage />} />
         <Route path="time-saved" element={<TimeSavedPage />} />
         <Route path="settings" element={<AdminSettings />} />
+        <Route path="survey-settings" element={<SurveySettings />} />
         <Route path="waivers" element={<WaiverManager />} />
         <Route path="email-sender" element={<EmailSenderSettings />} />
         <Route path="branding" element={<BrandLogoSettings />} />
