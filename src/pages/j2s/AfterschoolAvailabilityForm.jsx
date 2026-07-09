@@ -50,8 +50,8 @@ const DAYS_RANGES = [
 // unavailable (what the matcher reads). "Willing" avoids colliding with the
 // weekday-availability question above.
 const PREF_OPTIONS = [
-  { value: "preferred", label: "Prefer", color: OK_GREEN },
-  { value: "available", label: "Willing", color: "#6B7280" },
+  { value: "preferred", label: "Love to", color: OK_GREEN },
+  { value: "available", label: "Happy to", color: "#6B7280" },
   { value: "unavailable", label: "Can't", color: CORAL },
 ];
 
@@ -338,7 +338,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         </select>
       </Card>
 
-      <Card title="Which areas do you want to teach in?" subtitle="For each area: 'Prefer' is where you'd most like to be, 'Willing' means you're happy to teach there, and 'Can't' means we won't schedule you there. Leaving one blank counts as willing.">
+      <Card title="Which areas do you want to teach in?" subtitle="For each area: 'Love to' is where you'd most like to be, 'Happy to' means you're glad to teach there, and 'Can't' means we won't schedule you there. Leaving one blank counts as happy to.">
         {areas.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
             Your admin hasn't set up teaching areas yet.
