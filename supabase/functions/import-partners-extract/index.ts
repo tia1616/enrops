@@ -4,6 +4,7 @@
 //
 // Input:
 //   {
+//     organization_id: string, // the org the operator is importing into
 //     source: 'csv' | 'xlsx' | 'text',
 //     payload: string,        // CSV/text content directly; XLSX is base64
 //     filename?: string,      // optional, surfaced in the prompt for hints
@@ -15,9 +16,10 @@
 //     notes?: string,
 //   }
 //
-// Auth: caller must be owner/admin of an org. Extraction is org-agnostic —
-// the same payload could be reviewed and imported into any org the caller
-// owns — but we still gate the call to authenticated admins.
+// Auth: caller must be owner/admin of the specified organization_id. The
+// extraction itself reads no tenant data (it only parses the operator's own
+// uploaded payload), but we scope the gate to the target org so the call
+// can't be made by an admin of some unrelated org.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
@@ -91,16 +93,18 @@ serve(async (req: Request) => {
 
   try {
     const body = await req.json();
+    const organizationId: string = body.organization_id ?? '';
     const source: 'csv' | 'xlsx' | 'text' = body.source;
     const payload: string = body.payload ?? '';
     const filename: string | undefined = body.filename;
 
+    if (!organizationId) return json({ error: 'organization_id is required' }, 400);
     if (!['csv', 'xlsx', 'text'].includes(source)) return json({ error: 'unknown source' }, 400);
     if (!payload) return json({ error: 'payload is empty' }, 400);
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Auth: caller must be owner/admin of at least one org.
+    // Auth: caller must be owner/admin of THIS organization.
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) return json({ error: 'auth required' }, 401);
     const token = authHeader.replace('Bearer ', '');
@@ -111,6 +115,7 @@ serve(async (req: Request) => {
       .from('org_members')
       .select('role')
       .eq('auth_user_id', userData.user.id)
+      .eq('organization_id', organizationId)
       .in('role', ['owner', 'admin']);
     if (!memberships || memberships.length === 0) return json({ error: 'forbidden' }, 403);
 
