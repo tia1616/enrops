@@ -882,7 +882,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   function surveyBody(mode) {
     const ids = surveyRecipientIds();
     const intro = surveyIntro.trim() && surveyIntro.trim() !== defaultSurveyIntro ? surveyIntro.trim() : null;
-    return { organization_id: org.id, term, mode, deadline: surveyDeadline || null, instructor_ids: ids, intro };
+    return { organization_id: org.id, term, mode, deadline: surveyDeadline || null, instructor_ids: ids, intro, app_base_url: window.location.origin };
   }
 
   // In-app preview: renders the real survey email(s) without sending anything.

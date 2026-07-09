@@ -46,11 +46,14 @@ const ROLE_OPTIONS = [
   { value: "developing_only", label: "Developing only", hint: "I'd rather support a lead instructor for now." },
 ];
 
-const CURRICULUM_CATEGORIES = [
-  { value: "lego", label: "LEGO" },
-  { value: "coding", label: "Coding" },
-  { value: "robotics", label: "Robotics" },
-];
+// Subject categories come from the provider's curricula (loaded in the effect),
+// so they're never hardcoded per tenant. Title-case the stored value for display.
+function titleCaseCategory(value) {
+  return String(value)
+    .split(/[\s_-]+/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
 
 function fmtShort(date) {
   if (!date) return "";
@@ -81,6 +84,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
   const [curPrefs, setCurPrefs] = useState({}); // category -> preference
 
   const [locations, setLocations] = useState([]);
+  const [categoryOptions, setCategoryOptions] = useState([]); // [{value,label}] from the org's curricula
   const [hasExisting, setHasExisting] = useState(false);
 
   const cycleWeeks = useMemo(() => Array.isArray(cycle?.weeks) ? cycle.weeks : [], [cycle]);
@@ -90,7 +94,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
     if (!instructor?.instructor_id || !cycle?.id || !instructor?.organization_id) return;
     let alive = true;
     (async () => {
-      const [availRes, locPrefRes, curPrefRes, venuesRes] = await Promise.all([
+      const [availRes, locPrefRes, curPrefRes, venuesRes, currRes] = await Promise.all([
         supabase
           .from("instructor_availability")
           .select("session_types, available_weeks, role_preference, saturdays_ok, unavailable_notes, notes, submitted_at")
@@ -112,6 +116,12 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
           .select("id, name")
           .eq("organization_id", instructor.organization_id)
           .order("name", { ascending: true }),
+        // Subject categories are the provider's own — from their curricula.
+        supabase
+          .from("curricula")
+          .select("category")
+          .eq("organization_id", instructor.organization_id)
+          .not("category", "is", null),
       ]);
       if (!alive) return;
 
@@ -136,6 +146,12 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
       setCurPrefs(curMap);
 
       setLocations(venuesRes.data ?? []);
+
+      const distinctCats = Array.from(
+        new Set((currRes.data ?? []).map((c) => c.category).filter(Boolean)),
+      ).sort((a, b) => a.localeCompare(b));
+      setCategoryOptions(distinctCats.map((c) => ({ value: c, label: titleCaseCategory(c) })));
+
       setLoaded(true);
     })();
     return () => { alive = false; };
@@ -364,18 +380,20 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         )}
       </Card>
 
-      <Card title="What do you like to teach?" subtitle="Pick your preference for each subject area. We'll match you to camps you'll enjoy.">
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {CURRICULUM_CATEGORIES.map((c) => (
-            <PrefRow
-              key={c.value}
-              label={c.label}
-              value={curPrefs[c.value]}
-              onChange={(v) => setCurPref(c.value, v)}
-            />
-          ))}
-        </div>
-      </Card>
+      {categoryOptions.length > 0 && (
+        <Card title="What do you like to teach?" subtitle="Pick your preference for each subject. We'll match you to camps you'll enjoy.">
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {categoryOptions.map((c) => (
+              <PrefRow
+                key={c.value}
+                label={c.label}
+                value={curPrefs[c.value]}
+                onChange={(v) => setCurPref(c.value, v)}
+              />
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card title="Are you interested in:" subtitle="Lead means you run the camp. Developing means you support an experienced lead instructor.">
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

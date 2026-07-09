@@ -55,11 +55,14 @@ const PREF_OPTIONS = [
   { value: "unavailable", label: "Can't", color: CORAL },
 ];
 
-const CATEGORY_OPTIONS = [
-  { value: "lego", label: "LEGO" },
-  { value: "coding", label: "Coding" },
-  { value: "robotics", label: "Robotics" },
-];
+// Subject categories come from the provider's curricula (see the load effect),
+// so they're never hardcoded per tenant. Title-case the stored value for display.
+function titleCaseCategory(value) {
+  return String(value)
+    .split(/[\s_-]+/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
 
 // "2026-11-12" -> "Thu, Nov 12, 2026". Parsed at local noon so the date never
 // slips a day across time zones.
@@ -100,7 +103,8 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   const [daysRange, setDaysRange] = useState("");
   const [notes, setNotes] = useState("");
   const [areaPrefs, setAreaPrefs] = useState({});   // area -> preference
-  const [categories, setCategories] = useState([]); // preferred families: lego/coding/robotics
+  const [categories, setCategories] = useState([]); // preferred families (provider's curricula categories)
+  const [categoryOptions, setCategoryOptions] = useState([]); // [{value,label}] from the org's curricula
   const [unavailableDates, setUnavailableDates] = useState([]); // ["2026-11-12", ...]
   const [dateToAdd, setDateToAdd] = useState("");
 
@@ -111,7 +115,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
     if (!instructorId || !orgId || !term) return;
     let alive = true;
     (async () => {
-      const [availRes, locRes, areaPrefRes] = await Promise.all([
+      const [availRes, locRes, areaPrefRes, currRes] = await Promise.all([
         supabase
           .from("instructor_term_availability")
           .select("weekday_availability, min_days, max_days, notes, submitted_at, preferred_categories, unavailable_dates")
@@ -128,6 +132,13 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           .select("area, preference")
           .eq("instructor_id", instructorId)
           .eq("term", term),
+        // Subject categories are the provider's own — sourced from their curricula
+        // (the same category the matcher reads), never hardcoded.
+        supabase
+          .from("curricula")
+          .select("category")
+          .eq("organization_id", orgId)
+          .not("category", "is", null),
       ]);
       if (!alive) return;
 
@@ -157,6 +168,11 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         new Set((locRes.data ?? []).map((l) => l.area).filter(Boolean)),
       ).sort((a, b) => a.localeCompare(b));
       setAreas(distinctAreas);
+
+      const distinctCats = Array.from(
+        new Set((currRes.data ?? []).map((c) => c.category).filter(Boolean)),
+      ).sort((a, b) => a.localeCompare(b));
+      setCategoryOptions(distinctCats.map((c) => ({ value: c, label: titleCaseCategory(c) })));
 
       const prefs = {};
       for (const r of areaPrefRes.data ?? []) prefs[r.area] = r.preference;
@@ -352,28 +368,30 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         )}
       </Card>
 
-      <Card title="Which do you most enjoy teaching?" subtitle="Pick any that apply — we'll try to send you classes in the families you like. You can teach all of them; this just helps us match well.">
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {CATEGORY_OPTIONS.map((opt) => {
-            const on = categories.includes(opt.value);
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => toggleCategory(opt.value)}
-                style={{
-                  padding: "8px 16px", borderRadius: 8, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
-                  border: `1px solid ${on ? OK_GREEN : RULE}`,
-                  background: on ? `${OK_GREEN}1F` : "#fff",
-                  color: on ? OK_GREEN : INK,
-                }}
-              >
-                {on ? "✓ " : ""}{opt.label}
-              </button>
-            );
-          })}
-        </div>
-      </Card>
+      {categoryOptions.length > 0 && (
+        <Card title="Which do you most enjoy teaching?" subtitle="Pick any that apply — we'll try to send you classes in the subjects you like. You can teach all of them; this just helps us match well.">
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {categoryOptions.map((opt) => {
+              const on = categories.includes(opt.value);
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => toggleCategory(opt.value)}
+                  style={{
+                    padding: "8px 16px", borderRadius: 8, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+                    border: `1px solid ${on ? OK_GREEN : RULE}`,
+                    background: on ? `${OK_GREEN}1F` : "#fff",
+                    color: on ? OK_GREEN : INK,
+                  }}
+                >
+                  {on ? "✓ " : ""}{opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
 
       <Card title="Any dates you already know you can't make?" subtitle="Optional. Add specific dates you'll be out this term (a holiday, an appointment). You'll still be assigned your weekly class — we just flag those dates so your admin can line up a sub.">
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>

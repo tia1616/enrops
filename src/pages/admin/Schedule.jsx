@@ -1711,6 +1711,7 @@ export default function Schedule() {
           cycle_id: state.cycle.id,
           mode,
           deadline: surveyDeadline || null,
+          app_base_url: window.location.origin,
         },
       });
       if (error) {
