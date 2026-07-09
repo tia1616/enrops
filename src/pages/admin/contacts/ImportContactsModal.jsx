@@ -374,7 +374,7 @@ export default function ImportContactsModal({ orgId, onClose, onImported }) {
             Authorization: `Bearer ${token}`,
             apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
           },
-          body: JSON.stringify({ source: 'text', payload: text.slice(0, 60000) }),
+          body: JSON.stringify({ organization_id: orgId, source: 'text', payload: text.slice(0, 60000) }),
         }
       );
       const json = await resp.json();

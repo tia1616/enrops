@@ -5,6 +5,7 @@
 //
 // Input:
 //   {
+//     organization_id: string, // the org this calendar is being extracted for
 //     url?: string,           // PDF URL (will be fetched server-side)
 //     pdf_base64?: string,    // PDF bytes as base64 (data: prefix allowed)
 //     filename?: string,      // optional hint for prompts/logs
@@ -21,8 +22,9 @@
 //     model_notes: string | null,
 //   }
 //
-// Auth: caller must be owner/admin of at least one org (mirrors
-// import-partners-extract). No DB writes; UI persists after review.
+// Auth: caller must be owner/admin of the specified organization_id (mirrors
+// import-partners-extract). No tenant DB reads or writes; UI persists after
+// review. The org gate scopes the call to the target tenant.
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
@@ -194,17 +196,20 @@ serve(async (req: Request) => {
 
   try {
     const body = (await req.json()) as {
+      organization_id?: string;
       url?: string;
       pdf_base64?: string;
       filename?: string;
       school_year_hint?: string;
     };
 
+    const organizationId = body.organization_id ?? "";
+    if (!organizationId) return json({ error: "organization_id is required." }, 400);
     if (!body.url && !body.pdf_base64) {
       return json({ error: "Provide either url or pdf_base64." }, 400);
     }
 
-    // Auth: owner/admin of at least one org
+    // Auth: owner/admin of THIS organization
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return json({ error: "Authorization required." }, 401);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -216,6 +221,7 @@ serve(async (req: Request) => {
       .from("org_members")
       .select("role")
       .eq("auth_user_id", userData.user.id)
+      .eq("organization_id", organizationId)
       .in("role", ["owner", "admin"]);
     if (!memberships || memberships.length === 0) {
       return json({ error: "Forbidden." }, 403);

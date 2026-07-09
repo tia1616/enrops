@@ -546,6 +546,18 @@ export default function CurriculumNew() {
         <div style={filetypes}>.pdf · .docx · .xlsx · .txt · .md &nbsp;·&nbsp; up to 25 MB</div>
         {primaryErr && <div style={inlineError}>{primaryErr}</div>}
 
+        {/* Privacy / ownership reassurance — shown before any doc is handed over,
+            covers both the file-drop and Drive-import paths. */}
+        <div style={privacyNote}>
+          <span style={{ fontSize: 16, lineHeight: 1, flexShrink: 0 }}>🔒</span>
+          <div>
+            <strong style={{ color: PURPLE, fontWeight: 600 }}>Your curriculum stays 100% yours.</strong>{" "}
+            Enrops never shares your lesson plans, materials, or documents with anyone, and the
+            system never trains on them or reuses them for other providers. You keep full ownership
+            and privacy of everything you upload.
+          </div>
+        </div>
+
         {/* Secondary zones (only when primary picked) */}
         {primary && (
           <>
@@ -660,6 +672,9 @@ export default function CurriculumNew() {
         <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>Don't have a document yet?</div>
         <div style={{ color: MUTED, fontSize: 13, margin: "6px 0 12px", lineHeight: 1.5 }}>
           No problem — name your offering and fill in the details yourself on the next screen. You can always add a document later and we'll auto-fill the rest.
+        </div>
+        <div style={{ color: MUTED, fontSize: 12, margin: "0 0 12px", lineHeight: 1.5 }}>
+          🔒 Anything you add stays 100% yours — Enrops never shares it and never trains on it.
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input
@@ -847,6 +862,20 @@ const replaceBtn = {
 };
 
 const filetypes = { textAlign: "center", color: MUTED, fontSize: 12, marginTop: 10 };
+
+const privacyNote = {
+  display: "flex",
+  gap: 10,
+  alignItems: "flex-start",
+  marginTop: 16,
+  padding: "12px 14px",
+  background: LAVENDER,
+  border: `1px solid ${RULE}`,
+  borderRadius: 8,
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: INK,
+};
 
 const revealNote = {
   background: INDIGO_SOFT,

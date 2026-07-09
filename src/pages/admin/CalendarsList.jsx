@@ -546,7 +546,7 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
     setModelNotes(null);
     try {
       const { data, error: fnErr } = await supabase.functions.invoke("extract-district-calendar", {
-        body: { ...payload, school_year_hint: schoolYear },
+        body: { ...payload, organization_id: org.id, school_year_hint: schoolYear },
       });
       if (fnErr) {
         // Edge function returned a non-2xx; supabase-js still gives us the body via fnErr.context
