@@ -234,27 +234,27 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
-  // Operator-editable send timing. Templates whose default_timing carries a
-  // numeric days_after (review_request, check_in) OR days_before (no_school_day)
-  // expose this control. The value writes automations.timing_override[timingKey];
-  // equal-to-default clears the override. Held as a string so the input can be
-  // transiently empty while typing.
-  const timingKey = typeof template?.default_timing?.days_before === "number"
-    ? "days_before"
-    : typeof template?.default_timing?.days_after === "number"
-      ? "days_after"
-      : null;
-  const hasTiming = timingKey != null;
+  // Operator-editable send timing. EXPLICIT per-template allowlist — which
+  // templates expose the control, which key it writes, and what the delay is
+  // measured from. Explicit (not "any template with a numeric timing key") so
+  // generalizing the control never silently pulls another template into scope:
+  // welcome_camp/welcome_afterschool also carry default_timing.days_before, but
+  // their send-timing was never operator-editable and this PR keeps it that way.
+  // The value writes automations.timing_override[timingKey]; equal-to-default
+  // clears the override. Held as a string so the input can be transiently empty.
+  const TIMING_CONTROLS = {
+    check_in:       { key: "days_after",  anchor: "the first session" },
+    review_request: { key: "days_after",  anchor: "a family joins" },
+    no_school_day:  { key: "days_before", anchor: "the no-school day" },
+  };
+  const timingCfg = TIMING_CONTROLS[template.key] ?? null;
+  const timingKey = timingCfg?.key ?? null;
+  const hasTiming = !!timingCfg && typeof template?.default_timing?.[timingKey] === "number";
   const timingIsBefore = timingKey === "days_before";
   const defaultTiming = hasTiming ? template.default_timing[timingKey] : null;
-  const savedTiming = automation?.timing_override?.[timingKey] ?? defaultTiming;
+  const savedTiming = hasTiming ? (automation?.timing_override?.[timingKey] ?? defaultTiming) : null;
   const [timingValue, setTimingValue] = useState(savedTiming != null ? String(savedTiming) : "");
-  // Label the timing by what the delay is measured from, per template.
-  const timingAnchorLabel = template.key === "review_request"
-    ? "a family joins"
-    : timingIsBefore
-      ? "the no-school day"
-      : "the first session";
+  const timingAnchorLabel = timingCfg?.anchor ?? "";
 
   // review_request: a dedicated "Your review link" field so the operator never
   // hand-edits HTML to set the link. It reads/writes the single <a> in the body.

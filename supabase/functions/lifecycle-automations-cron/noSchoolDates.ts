@@ -42,7 +42,13 @@ export function nsdWeekdaysStrictlyBetween(aIso: string, bIso: string): number {
 export function termToSchoolYear(term: string | null | undefined): string | null {
   if (!term || term.length < 4) return null;
   const prefix = term.slice(0, 2).toUpperCase();
-  const yy = parseInt(term.slice(2), 10);
+  const suffix = term.slice(2);
+  // Match the SQL term_to_school_year exactly: its `substring::integer` cast
+  // rejects any non-numeric suffix (returns NULL). parseInt would tolerate
+  // trailing garbage ("26x" → 26), so guard first — otherwise TS could classify
+  // a term the DB won't, and the sessions-vs-reminder invariant would drift.
+  if (!/^\d+$/.test(suffix)) return null;
+  const yy = parseInt(suffix, 10);
   if (!Number.isFinite(yy)) return null;
   const p2 = (n: number) => String(n).padStart(2, "0");
   if (prefix === "FA") return `20${p2(yy)}-20${p2(yy + 1)}`;

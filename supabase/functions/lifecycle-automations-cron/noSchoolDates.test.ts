@@ -75,6 +75,10 @@ Deno.test("termToSchoolYear mirrors the SQL function", () => {
   assertEquals(termToSchoolYear("SU26"), null); // camps never follow the school calendar
   assertEquals(termToSchoolYear("bogus"), null);
   assertEquals(termToSchoolYear(null), null);
+  // Strict-suffix guard: must reject what SQL's ::integer cast rejects, so the TS
+  // and SQL mirrors never classify a malformed term differently.
+  assertEquals(termToSchoolYear("FA26x"), null);
+  assertEquals(termToSchoolYear("FA2 "), null);
 });
 
 Deno.test("nsdWeekdayLower is timezone-stable", () => {

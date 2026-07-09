@@ -1829,7 +1829,7 @@ async function resolveNoSchoolDayAudience(
     // camps live in camp_sessions and never follow the school calendar).
     const { data: progs, error: progErr } = await supabase
       .from("programs")
-      .select("id, curriculum, term, day_of_week, first_session_date, session_count, status, instructor_email, instructor_name, program_location_id, program_locations!inner ( name, district )")
+      .select("id, curriculum, term, day_of_week, first_session_date, session_count, status, program_location_id, program_locations!inner ( name, district )")
       .eq("organization_id", a.organization_id)
       .eq("program_locations.district", cal.district);
     if (progErr) throw progErr;
@@ -1861,15 +1861,17 @@ async function resolveNoSchoolDayAudience(
       for (const p of relevantProgs as any[]) {
         const sessions = sessionsByProg.get(p.id) ?? [];
         if (sessions.length === 0) continue;
-        const firstMeeting = sessions[0];
         const lastMeeting = sessions[sessions.length - 1];
         const dow = String(p.day_of_week).toLowerCase();
 
         // The closure dates that would have been THIS program's class days — only
         // ones still in the future (never list a day that has already passed) and
-        // inside the program's run.
+        // inside the program's run. Lower bound is the program's INTENDED start
+        // (first_session_date), not derive's first meeting: a closure landing on
+        // the very first session is skipped BY derive, so anchoring on derive[0]
+        // would drop exactly the case that matters most (a cancelled week-1 class).
         const affected = period.dates.filter((d) =>
-          nsdWeekdayLower(d.iso) === dow && d.iso >= today && d.iso >= firstMeeting && d.iso <= lastMeeting,
+          nsdWeekdayLower(d.iso) === dow && d.iso >= today && d.iso >= p.first_session_date && d.iso <= lastMeeting,
         );
         if (affected.length === 0) continue;
 
@@ -1924,12 +1926,14 @@ async function resolveNoSchoolDayAudience(
           });
         }
 
-        // Instructor(s) — assigned + locked in. program_assignments is the source
-        // of truth; fall back to a denormalized instructor_email on the program
-        // row if present (other tenants may set it). 'confirmed' = the instructor
-        // accepted the offer (respond-to-assignment sets it); a still-'published'
-        // offer might yet be declined, so we don't pre-notify those. Armed-but-
-        // silent for J2S until FA26 scheduling writes confirmed assignments.
+        // Instructor(s) — assigned + locked in via program_assignments, the single
+        // source of truth. 'confirmed' = the instructor accepted the offer
+        // (respond-to-assignment sets it); a still-'published' offer might yet be
+        // declined, so we don't pre-notify those. instructors.email is NOT NULL, so
+        // no null-email path. Armed-but-silent for J2S until FA26 scheduling writes
+        // confirmed assignments. (No denormalized programs.instructor_email fallback:
+        // it's empty in every environment and the legacy path risks a cross-day
+        // double-send under a different context_key.)
         const { data: assigns, error: asgErr } = await supabase
           .from("program_assignments")
           .select("instructor:instructors ( id, first_name, email )")
@@ -1947,19 +1951,6 @@ async function resolveNoSchoolDayAudience(
             parent_id: null,
             parent_email: ins.email,
             parent_first_name: ins.first_name ?? null,
-            child_first_name: null,
-            recipient_role: "instructor",
-            subject_template: NO_SCHOOL_INSTRUCTOR_SUBJECT,
-            body_template: NO_SCHOOL_INSTRUCTOR_BODY,
-          });
-        }
-        if (seenInstr.size === 0 && p.instructor_email) {
-          entries.push({
-            ...base,
-            context_key: `noschool:${period.startIso}:program:${p.id}:instructor:row`,
-            parent_id: null,
-            parent_email: p.instructor_email,
-            parent_first_name: (p.instructor_name ?? "").split(" ")[0] || null,
             child_first_name: null,
             recipient_role: "instructor",
             subject_template: NO_SCHOOL_INSTRUCTOR_SUBJECT,
