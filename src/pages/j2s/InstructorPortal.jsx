@@ -81,6 +81,7 @@ export default function InstructorPortal() {
   const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role, email, phone }] } — camp co-teachers
   const [coInstructorsProgram, setCoInstructorsProgram] = useState({}); // { [program_id]: [...] } — after-school co-teachers
   const [programAssignments, setProgramAssignments] = useState([]); // after-school offers
+  const [scheduleByProgram, setScheduleByProgram] = useState({}); // { [program_id]: [{date,kind,reason}] } — session dates + no-school days
   const [subAssignments, setSubAssignments] = useState([]); // assignment_substitutions where I'm the sub
   const [actingOn, setActingOn] = useState(null);
   const [subActingOn, setSubActingOn] = useState(null); // { id, action } for in-flight Accept/Decline
@@ -339,6 +340,28 @@ export default function InstructorPortal() {
       return;
     }
     setProgramAssignments((data ?? []).map((a) => ({ ...a, kind: "program" })));
+
+    // Per-program session schedule (meeting dates + skipped no-school days with
+    // reasons) so the instructor sees the real dates their class meets, and why
+    // a week is off. Best-effort; the card falls back to "all term" if absent.
+    const programIds = [...new Set((data ?? []).map((a) => a.program_id).filter(Boolean))];
+    if (programIds.length > 0) {
+      const results = await Promise.all(
+        programIds.map((pid) => supabase.rpc("derive_program_session_schedule", { p_program_id: pid })),
+      );
+      const map = {};
+      programIds.forEach((pid, i) => {
+        if (results[i]?.error) {
+          console.warn("[loadAfterschoolAssignments] schedule fetch failed:", results[i].error.message);
+        }
+        // The RPC returns rows keyed entry_date/kind/reason; normalize entry_date -> date
+        // so the card render matches the batch RPC's { date, kind, reason } shape.
+        map[pid] = (results[i]?.data || []).map((x) => ({ date: x.entry_date, kind: x.kind, reason: x.reason }));
+      });
+      setScheduleByProgram(map);
+    } else {
+      setScheduleByProgram({});
+    }
 
     // After-school co-instructors (mirrors the camp path). Self-scoped RPC; names
     // + contact for the other instructor(s) on the same class. Best-effort.
@@ -1213,6 +1236,7 @@ export default function InstructorPortal() {
               key={a.id}
               assignment={a}
               coInstructors={coInstructorsProgram[a.program_id] || []}
+              schedule={scheduleByProgram[a.program_id] || []}
               messages={a.instructor_offer_messages || []}
               busy={actingOn === a.id}
               onAccept={() => handleAccept(a)}
@@ -1234,7 +1258,7 @@ export default function InstructorPortal() {
             />
           ))}
           {acceptedAS.map((a) => (
-            <AfterschoolAssignmentCard key={a.id} assignment={a} coInstructors={coInstructorsProgram[a.program_id] || []} readOnly />
+            <AfterschoolAssignmentCard key={a.id} assignment={a} coInstructors={coInstructorsProgram[a.program_id] || []} schedule={scheduleByProgram[a.program_id] || []} readOnly />
           ))}
           {subAssignments.filter((s) => s.status === "confirmed" || s.status === "taught").map((s) => (
             <SubOfferCard
@@ -1892,9 +1916,14 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
   );
 }
 
-function AfterschoolAssignmentCard({ assignment, coInstructors = [], messages = [], busy, onAccept, onRequestChange, readOnly }) {
+function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = [], messages = [], busy, onAccept, onRequestChange, readOnly }) {
   const p = assignment.programs;
+  const [showDates, setShowDates] = useState(false);
   if (!p) return null;
+
+  const scheduleRows = Array.isArray(schedule) ? schedule : [];
+  const sessionRows = scheduleRows.filter((x) => x?.kind === "session");
+  const closureRows = scheduleRows.filter((x) => x?.kind === "no_school");
   const statusColor =
     assignment.status === "confirmed" ? OK_GREEN :
     assignment.status === "change_requested" ? VIOLET :
@@ -1939,6 +1968,43 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], messages = 
       </div>
 
       <CoInstructorLine coInstructors={coInstructors} />
+
+      {sessionRows.length > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowDates((v) => !v)}
+            style={{ padding: 0, background: "transparent", border: "none", color: PURPLE, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", textAlign: "left" }}
+          >
+            {showDates ? "▾ Hide class dates" : `▸ View class dates (${sessionRows.length} session${sessionRows.length === 1 ? "" : "s"}${closureRows.length > 0 ? `, ${closureRows.length} no-school day${closureRows.length === 1 ? "" : "s"}` : ""})`}
+          </button>
+          {showDates && (
+            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 2 }}>
+              {(() => {
+                let n = 0;
+                return scheduleRows.map((x, idx) => {
+                  const label = new Date(`${x.date}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+                  if (x.kind === "no_school") {
+                    return (
+                      <div key={`ns-${idx}`} style={{ fontSize: 13, color: MUTED, display: "flex", gap: 8 }}>
+                        <span style={{ width: 92, flexShrink: 0, textDecoration: "line-through" }}>{label}</span>
+                        <span style={{ fontStyle: "italic" }}>No school · {x.reason || "No class"}</span>
+                      </div>
+                    );
+                  }
+                  n += 1;
+                  return (
+                    <div key={`s-${idx}`} style={{ fontSize: 13, color: INK, display: "flex", gap: 8 }}>
+                      <span style={{ width: 92, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{label}</span>
+                      <span style={{ color: MUTED }}>Session {n}</span>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          )}
+        </div>
+      )}
 
       {assignment.distance_bonus_cents ? (
         <div style={{ fontSize: 13, color: PURPLE, fontWeight: 600 }}>

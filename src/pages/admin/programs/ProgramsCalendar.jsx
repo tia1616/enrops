@@ -281,18 +281,22 @@ export default function ProgramsCalendar() {
           }
         }
 
-        // Batch-fetch derived session dates for every program in this term.
-        // Wraps derive_program_session_dates() which skips district closures
-        // and location closure_dates. RLS-gated via SECURITY INVOKER.
+        // Batch-fetch the full derived schedule for every program in this term.
+        // Wraps derive_program_session_schedule() — the same weekly walk as
+        // derive_program_session_dates(), but it also emits the SKIPPED
+        // no-school days (with the district's reason) so we can show them
+        // inline. Each value is an ordered array of
+        // { date, kind: 'session' | 'no_school', reason }. RLS-gated via
+        // SECURITY INVOKER. Session-only counts filter kind === 'session'.
         let datesByProgram = {};
         try {
           const { data: datesRows, error: datesErr } = await supabase.rpc(
-            "programs_with_session_dates",
+            "programs_with_session_schedule",
             { p_organization_id: org.id, p_term: term },
           );
           if (datesErr) throw datesErr;
           for (const r of datesRows ?? []) {
-            datesByProgram[r.program_id] = Array.isArray(r.session_dates) ? r.session_dates : [];
+            datesByProgram[r.program_id] = Array.isArray(r.schedule) ? r.schedule : [];
           }
         } catch (e) {
           // Don't break the page if dates can't load — the rest of the program
@@ -692,9 +696,12 @@ function summarizeSchool(programs, sessionDatesByProgram) {
   let requestedCount = 0;
   let approvedCount = 0;
   for (const p of programs) {
-    const dates = sessionDatesByProgram?.[p.id] ?? [];
-    totalSessions += dates.length;
-    for (const d of dates) {
+    // Values are full schedules ({date,kind,reason}); count real sessions only.
+    const sched = sessionDatesByProgram?.[p.id] ?? [];
+    const sessionDates = sched.filter((x) => x?.kind === "session");
+    totalSessions += sessionDates.length;
+    for (const x of sessionDates) {
+      const d = x.date;
       if (!firstDate || d < firstDate) firstDate = d;
       if (!lastDate || d > lastDate) lastDate = d;
     }
@@ -735,10 +742,13 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
   if (enr.pending > 0) breakdownParts.push(`+${enr.pending} pending`);
   const breakdown = breakdownParts.join(" · ");
 
-  const datesArr = Array.isArray(sessionDates) ? sessionDates : [];
-  const hasDates = datesArr.length > 0;
+  // sessionDates is the full schedule ({date,kind,reason}); the row count and
+  // "No dates" flag reflect real sessions only (no-school rows don't count).
+  const scheduleArr = Array.isArray(sessionDates) ? sessionDates : [];
+  const sessionRowCount = scheduleArr.filter((x) => x?.kind === "session").length;
+  const hasDates = sessionRowCount > 0;
   const dateCountLabel = hasDates
-    ? `${datesArr.length} session${datesArr.length === 1 ? "" : "s"}`
+    ? `${sessionRowCount} session${sessionRowCount === 1 ? "" : "s"}`
     : "No dates";
 
   return (
@@ -893,7 +903,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
     {isDatesExpanded && (
       <ExpandedProgramPanel
         program={p}
-        dates={datesArr}
+        dates={scheduleArr}
         districtHasCalendar={districtHasCalendar}
         onUpdate={onUpdate}
         onPublish={onPublish}
@@ -1175,8 +1185,14 @@ const expandInputStyle = {
 function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false }) {
   const [copied, setCopied] = useState(false);
 
+  // `dates` is the full schedule: [{ date, kind: 'session'|'no_school', reason }].
+  const schedule = Array.isArray(dates) ? dates : [];
+  const sessions = schedule.filter((x) => x?.kind === "session");
+  const closureCount = schedule.length - sessions.length;
+
   function copyList() {
-    const text = dates.map(formatSessionDate).join("\n");
+    // Copy real meeting dates only — the no-school rows are context, not sessions.
+    const text = sessions.map((x) => formatSessionDate(x.date)).join("\n");
     navigator.clipboard.writeText(text).then(
       () => {
         setCopied(true);
@@ -1193,8 +1209,7 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
   const showMissingCalendarWarning = districtHasCalendar === false;
 
   // No dates to show? Skip the panel entirely.
-  if (!Array.isArray(dates) || dates.length === 0) {
-    if (inline) return null;
+  if (sessions.length === 0) {
     return null;
   }
 
@@ -1213,10 +1228,11 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
     <Wrapper style={wrapperStyle}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5 }}>
-          Session dates · {dates.length}
+          Session dates · {sessions.length}
         </div>
         <div style={{ fontSize: 12, color: MUTED }}>
           Derived from this program's first session, day of week, and the {district || "location"} school calendar.
+          {closureCount > 0 && " No-school days are shown struck through and don't count as sessions."}
         </div>
         <button
           type="button"
@@ -1274,10 +1290,17 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
         gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
         gap: "4px 12px",
       }}>
-        {dates.map((d) => (
-          <div key={d} style={{ color: INK, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
-            {formatSessionDate(d)}
-          </div>
+        {schedule.map((x, idx) => (
+          x.kind === "no_school" ? (
+            <div key={`${x.date}-ns-${idx}`} style={{ fontSize: 13, fontVariantNumeric: "tabular-nums", color: MUTED }}>
+              <span style={{ textDecoration: "line-through" }}>{formatSessionDate(x.date)}</span>
+              <span style={{ fontStyle: "italic" }}> · {x.reason || "No school"}</span>
+            </div>
+          ) : (
+            <div key={`${x.date}-s-${idx}`} style={{ color: INK, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+              {formatSessionDate(x.date)}
+            </div>
+          )
         ))}
       </div>
     </Wrapper>

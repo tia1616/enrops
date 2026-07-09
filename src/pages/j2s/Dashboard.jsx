@@ -278,7 +278,8 @@ export default function Dashboard() {
           programId: pr?.id,
           sessionCount: maxSessions,
           sessions,
-          sessionDates: [], // filled by RPC below
+          sessionDates: [], // meeting dates only — filled by RPC below
+          sessionSchedule: [], // full schedule incl. no-school days — filled below
           sessionInfo: getSessionInfo(pr, sessions),
           skillsOverall: cur?.skills_overall,
         };
@@ -309,17 +310,26 @@ export default function Dashboard() {
         });
       });
 
-      // 4. Fetch actual session dates via derive_program_session_dates()
+      // 4. Fetch the full schedule via derive_program_session_schedule() —
+      // meeting dates AND the skipped no-school days (with reasons). We keep a
+      // meeting-dates-only array for the range summary + curriculum-session
+      // pairing, and the full schedule for the interleaved timeline render.
       if (programIdsForDates.length > 0) {
         const dateResults = await Promise.all(
           programIdsForDates.map(({ programId }) =>
-            supabase.rpc('derive_program_session_dates', { p_program_id: programId })
+            supabase.rpc('derive_program_session_schedule', { p_program_id: programId })
           )
         );
         programIdsForDates.forEach(({ enrollmentId }, i) => {
-          const dates = dateResults[i]?.data || [];
+          // The RPC returns rows keyed entry_date/kind/reason; normalize entry_date -> date.
+          const schedule = (dateResults[i]?.data || []).map((x) => ({ date: x.entry_date, kind: x.kind, reason: x.reason }));
           const entry = merged.find((e) => e.id === enrollmentId);
-          if (entry) entry.sessionDates = dates;
+          if (entry) {
+            entry.sessionSchedule = schedule;
+            entry.sessionDates = schedule
+              .filter((x) => x?.kind === 'session')
+              .map((x) => x.date);
+          }
         });
       }
 
@@ -597,53 +607,86 @@ function ScheduleTab({ enrollments }) {
             {e.location ? ` at ${e.location}` : ''}
           </p>
 
-          {e.sessionDates.length > 0 ? (
+          {(e.sessionSchedule?.length > 0 || e.sessionDates.length > 0) ? (
             <div className="mt-3 space-y-1">
-              {e.sessionDates.map((date, idx) => {
-                const isPast = date < todayStr;
-                const isToday = date === todayStr;
-                const session = e.sessions[idx];
-                return (
-                  <div
-                    key={date}
-                    className={`flex items-center gap-3 rounded-lg px-3 py-2 ${
-                      isToday ? 'bg-j2s-purple/10 ring-1 ring-j2s-purple/20' : isPast ? 'opacity-40' : 'bg-white'
-                    }`}
-                  >
-                    {/* Check or dot */}
-                    <div className="w-5 shrink-0 text-center">
-                      {isPast ? (
-                        <svg className="mx-auto h-4 w-4 text-j2s-green" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                        </svg>
-                      ) : isToday ? (
-                        <div className="mx-auto h-3 w-3 rounded-full bg-j2s-purple" />
-                      ) : (
-                        <div className="mx-auto h-2.5 w-2.5 rounded-full border-2 border-j2s-purple/30" />
-                      )}
-                    </div>
-
-                    {/* Date */}
-                    <p className={`w-28 shrink-0 text-sm ${isToday ? 'font-bold text-j2s-purple' : 'text-j2s-ink/80'}`}>
-                      {fmtDateShort(date)}
-                    </p>
-
-                    {/* Session title */}
-                    <div className="min-w-0 flex-1">
-                      {session ? (
-                        <p className={`text-sm truncate ${isToday ? 'font-semibold text-j2s-ink' : 'text-j2s-ink/80'}`}>
-                          {session.title}
+              {(() => {
+                // Prefer the full schedule (with no-school rows); fall back to
+                // meeting-dates-only if the schedule RPC didn't populate.
+                const rows = e.sessionSchedule?.length > 0
+                  ? e.sessionSchedule
+                  : e.sessionDates.map((date) => ({ date, kind: 'session', reason: null }));
+                const totalSessions = e.sessionDates.length;
+                let sessionIdx = -1; // running index into curriculum sessions
+                return rows.map((row) => {
+                  const date = row.date;
+                  if (row.kind === 'no_school') {
+                    const isPast = date < todayStr;
+                    return (
+                      <div
+                        key={`ns-${date}`}
+                        className={`flex items-center gap-3 rounded-lg px-3 py-2 ${isPast ? 'opacity-40' : ''}`}
+                      >
+                        <div className="w-5 shrink-0 text-center">
+                          <div className="mx-auto h-2.5 w-2.5 rounded-full border-2 border-j2s-ink/15" />
+                        </div>
+                        <p className="w-28 shrink-0 text-sm text-j2s-ink/40 line-through">
+                          {fmtDateShort(date)}
                         </p>
-                      ) : (
-                        <p className="text-sm text-j2s-ink/50">Session {idx + 1}</p>
-                      )}
-                    </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm italic text-j2s-ink/50 truncate">
+                            No school · {row.reason || 'No class'}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  }
+                  sessionIdx += 1;
+                  const idx = sessionIdx;
+                  const isPast = date < todayStr;
+                  const isToday = date === todayStr;
+                  const session = e.sessions[idx];
+                  return (
+                    <div
+                      key={`s-${date}`}
+                      className={`flex items-center gap-3 rounded-lg px-3 py-2 ${
+                        isToday ? 'bg-j2s-purple/10 ring-1 ring-j2s-purple/20' : isPast ? 'opacity-40' : 'bg-white'
+                      }`}
+                    >
+                      {/* Check or dot */}
+                      <div className="w-5 shrink-0 text-center">
+                        {isPast ? (
+                          <svg className="mx-auto h-4 w-4 text-j2s-green" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        ) : isToday ? (
+                          <div className="mx-auto h-3 w-3 rounded-full bg-j2s-purple" />
+                        ) : (
+                          <div className="mx-auto h-2.5 w-2.5 rounded-full border-2 border-j2s-purple/30" />
+                        )}
+                      </div>
 
-                    {/* Session number badge */}
-                    <span className="shrink-0 text-xs text-j2s-ink/50">{idx + 1}/{e.sessionDates.length}</span>
-                  </div>
-                );
-              })}
+                      {/* Date */}
+                      <p className={`w-28 shrink-0 text-sm ${isToday ? 'font-bold text-j2s-purple' : 'text-j2s-ink/80'}`}>
+                        {fmtDateShort(date)}
+                      </p>
+
+                      {/* Session title */}
+                      <div className="min-w-0 flex-1">
+                        {session ? (
+                          <p className={`text-sm truncate ${isToday ? 'font-semibold text-j2s-ink' : 'text-j2s-ink/80'}`}>
+                            {session.title}
+                          </p>
+                        ) : (
+                          <p className="text-sm text-j2s-ink/50">Session {idx + 1}</p>
+                        )}
+                      </div>
+
+                      {/* Session number badge */}
+                      <span className="shrink-0 text-xs text-j2s-ink/50">{idx + 1}/{totalSessions}</span>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           ) : (
             <p className="mt-3 text-sm text-j2s-ink/60">
