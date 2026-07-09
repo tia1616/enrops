@@ -29,12 +29,14 @@ import ProgramWizardNew from './pages/admin/programs/ProgramWizardNew.jsx';
 import ProgramRoster from './pages/admin/programs/ProgramRoster.jsx';
 import SchoolsLocations from './pages/admin/SchoolsLocations.jsx';
 import InstructorsPage from './pages/admin/instructors/InstructorsPage.jsx';
+import SurveyResponses from './pages/admin/instructors/SurveyResponses.jsx';
 import Payroll from './pages/admin/Payroll.jsx';
 import Rosters from './pages/admin/Rosters.jsx';
 import Finances from './pages/admin/Finances.jsx';
 import Payouts from './pages/admin/Payouts.jsx';
 import TeamPage from './pages/admin/team/TeamPage.jsx';
 import AdminSettings from './pages/admin/AdminSettings.jsx';
+import SurveySettings from './pages/admin/SurveySettings.jsx';
 import WaiverManager from './pages/admin/WaiverManager.jsx';
 import EmailSenderSettings from './pages/admin/EmailSenderSettings.jsx';
 import BrandLogoSettings from './pages/admin/BrandLogoSettings.jsx';
@@ -169,6 +171,8 @@ export default function App() {
         <Route path="calendars" element={<Navigate to="/admin/schools?tab=calendars" replace />} />
         <Route path="contacts" element={<Navigate to="/admin/schools" replace />} />
         <Route path="instructors" element={<InstructorsPage />} />
+        <Route path="availability" element={<SurveyResponses />} />
+        <Route path="survey-responses" element={<Navigate to="/admin/availability" replace />} />
         <Route path="payroll" element={<Payroll />} />
         <Route path="rosters" element={<Rosters />} />
         <Route path="finances" element={<Finances />} />
@@ -176,6 +180,7 @@ export default function App() {
         <Route path="team" element={<TeamPage />} />
         <Route path="time-saved" element={<TimeSavedPage />} />
         <Route path="settings" element={<AdminSettings />} />
+        <Route path="survey-settings" element={<SurveySettings />} />
         <Route path="waivers" element={<WaiverManager />} />
         <Route path="email-sender" element={<EmailSenderSettings />} />
         <Route path="branding" element={<BrandLogoSettings />} />

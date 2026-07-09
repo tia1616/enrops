@@ -98,6 +98,35 @@ function fmtShort(dateStr) {
   return new Date(`${dateStr}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+// Human list of dates: up to 2 shown, then "+N more".
+function listDates(dates) {
+  const sorted = [...dates].sort();
+  if (sorted.length <= 2) return sorted.map(fmtShort).join(" and ");
+  return `${fmtShort(sorted[0])}, ${fmtShort(sorted[1])} +${sorted.length - 2} more`;
+}
+
+const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+// Which of an instructor's unavailable dates fall inside a camp's week span (on a
+// day the camp actually meets). Non-blocking — surfaced as "needs a sub".
+function campUnavailableConflicts(av, session) {
+  const blackout = Array.isArray(av?.unavailable_dates) ? av.unavailable_dates.map((d) => String(d).slice(0, 10)) : [];
+  if (!blackout.length || !session?.starts_on || !session?.ends_on) return [];
+  const s = String(session.starts_on).slice(0, 10);
+  const e = String(session.ends_on).slice(0, 10);
+  // Match the board's render default: a camp with no class_days meets Mon–Fri.
+  const classDays = (Array.isArray(session.class_days) && session.class_days.length)
+    ? session.class_days.map((x) => String(x).toLowerCase())
+    : ["monday", "tuesday", "wednesday", "thursday", "friday"];
+  return blackout
+    .filter((d) => {
+      if (d < s || d > e) return false;
+      const wd = WEEKDAY_NAMES[new Date(`${d}T12:00:00`).getDay()];
+      return classDays.includes(wd);
+    })
+    .sort();
+}
+
 function addDaysIso(isoDate, n) {
   if (!isoDate || typeof n !== "number" || n < 0) return null;
   const d = new Date(`${isoDate}T00:00:00`);
@@ -367,6 +396,9 @@ export default function Schedule() {
   // Open-survey dialog state. mode 'choose' shows the preview/test/send buttons +
   // optional deadline picker; mode 'result' shows the send outcome.
   const [surveyDialog, setSurveyDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
+  const [orgSurveyIntro, setOrgSurveyIntro] = useState(""); // operator's saved default camp intro (org_survey_config)
+  const [surveyIntro, setSurveyIntro] = useState(""); // editable lead paragraph for this send
+  const [surveySelectedIds, setSurveySelectedIds] = useState(null); // Set<id> recipients | null = all emailable
   const [surveyDeadline, setSurveyDeadline] = useState(() => businessDaysFromToday(10));
   // Term/cycle picker — list of all non-archived cycles for this org + the currently
   // viewed one. selectedCycleId=null means "use the latest one I find" (default).
@@ -417,7 +449,7 @@ export default function Schedule() {
 
       const sessionsRes = await supabase
         .from("camp_sessions")
-        .select("id, location_name, week_num, session_type, curriculum_category, curriculum_name, start_time, end_time, current_enrollment, enrollment_synced_at, class_days, status")
+        .select("id, location_name, week_num, session_type, curriculum_category, curriculum_name, start_time, end_time, current_enrollment, enrollment_synced_at, class_days, status, starts_on, ends_on")
         .eq("cycle_id", cycle.id)
         .eq("status", "active")
         .order("location_name", { ascending: true });
@@ -425,7 +457,7 @@ export default function Schedule() {
       const sessions = sessionsRes.data ?? [];
       const sessionIds = sessions.map((s) => s.id);
 
-      const [assignmentsRes, instructorsRes, availabilityRes, locPrefRes, curPrefRes, declinesRes] = await Promise.all([
+      const [assignmentsRes, instructorsRes, availabilityRes, locPrefRes, curPrefRes, declinesRes, cfgRes] = await Promise.all([
         sessionIds.length
           ? supabase
               .from("camp_assignments")
@@ -440,7 +472,7 @@ export default function Schedule() {
           .order("first_name", { ascending: true }),
         supabase
           .from("instructor_availability")
-          .select("instructor_id, session_types, available_weeks, needs_confirmation, notes")
+          .select("instructor_id, session_types, available_weeks, needs_confirmation, notes, unavailable_dates, submitted_at")
           .eq("cycle_id", cycle.id),
         supabase
           .from("instructor_location_preferences")
@@ -454,6 +486,14 @@ export default function Schedule() {
           .from("session_declined_instructors")
           .select("camp_session_id, instructor_id, reason")
           .eq("cycle_id", cycle.id),
+        // Operator's saved survey config — the default camp intro used when the
+        // survey email goes out. Non-critical: a missing row = no saved default.
+        supabase
+          .from("org_survey_config")
+          .select("intro")
+          .eq("organization_id", org.id)
+          .eq("context", "camp")
+          .maybeSingle(),
       ]);
       if (assignmentsRes.error) throw assignmentsRes.error;
       if (instructorsRes.error) throw instructorsRes.error;
@@ -461,6 +501,7 @@ export default function Schedule() {
       if (locPrefRes.error) throw locPrefRes.error;
       if (curPrefRes.error) throw curPrefRes.error;
       if (declinesRes.error) throw declinesRes.error;
+      setOrgSurveyIntro(cfgRes?.data?.intro ?? "");
 
       // Load substitutions for all camp assignments so the grid can show sub indicators.
       const assignmentIds = (assignmentsRes.data ?? []).map((a) => a.id);
@@ -662,7 +703,13 @@ export default function Schedule() {
       const own = assignments.filter((a) => a.camp_session_id === s.id).map(annotate);
       const ownActive = own.filter((a) => a.status !== "withdrawn");
       const lead = ownActive.find((a) => a.role === "lead") ?? ownActive[0] ?? null;
-      byId.set(s.id, { session: s, status, assignment: lead, allAssignments: own, activeAssignments: ownActive });
+      // Date-specific unavailability flagged by the assigned lead/developing that
+      // lands inside this camp's week — surfaced on the card as "needs a sub".
+      const leadA = ownActive.find((a) => a.role === "lead") ?? null;
+      const devA = ownActive.find((a) => a.role === "developing") ?? null;
+      const leadSubNeeded = leadA ? campUnavailableConflicts(availMap.get(leadA.instructor_id), s) : [];
+      const devSubNeeded = devA ? campUnavailableConflicts(availMap.get(devA.instructor_id), s) : [];
+      byId.set(s.id, { session: s, status, assignment: lead, allAssignments: own, activeAssignments: ownActive, leadSubNeeded, devSubNeeded });
     }
     return byId;
   }, [state]);
@@ -855,7 +902,7 @@ export default function Schedule() {
         message: `Ready to ask instructors when they can work this ${cycleDisplayName(state.cycle.name)}? Releasing the survey emails ${n} active instructor${n === 1 ? "" : "s"} a link to fill it out.`,
         primary: {
           label: `Open survey · ${n} recipient${n === 1 ? "" : "s"}`,
-          onClick: () => setSurveyDialog({ mode: "choose", payload: null }),
+          onClick: () => openSurvey(),
         },
       });
     }
@@ -1697,12 +1744,61 @@ export default function Schedule() {
     }
   }
 
+  // Built-in fallback intro when the operator hasn't saved a default. Matches
+  // the edge fn's own default copy so an unchanged send reads the same.
+  function builtinCampIntro() {
+    return `We're planning the ${cycleDisplayName(state.cycle?.name)} schedule and want to know when and where you'd like to work.`;
+  }
+
+  // Open the survey drawer. Seed the intro from the operator's saved default
+  // (else the built-in copy) and pre-select recipients: never sent → all
+  // emailable instructors; already open → only the non-responders (the
+  // straggler / new-hire nudge). Only emailable instructors are selectable.
+  function openSurvey() {
+    if (state.status !== "ready") return;
+    const submitted = new Set((state.availability ?? []).filter((a) => a.submitted_at).map((a) => a.instructor_id));
+    const alreadyOpen = !!state.cycle.availability_survey_opened_at;
+    const preselect = state.instructors
+      .filter((i) => !!i.email)
+      .filter((i) => (alreadyOpen ? !submitted.has(i.id) : true))
+      .map((i) => i.id);
+    setSurveySelectedIds(new Set(preselect));
+    setSurveyIntro(orgSurveyIntro.trim() || builtinCampIntro());
+    // Restore the cycle's existing deadline on a re-send (blank stays blank);
+    // default to +10 business days only on a first open. Without this, reopening
+    // the drawer to nudge stragglers would silently reset the deadline to +10 and
+    // email the wrong date on send. Mirrors the after-school openSurvey.
+    setSurveyDeadline(alreadyOpen
+      ? (state.cycle.survey_deadline ? String(state.cycle.survey_deadline).slice(0, 10) : "")
+      : businessDaysFromToday(10));
+    setSurveyDialog({ mode: "choose", payload: null });
+  }
+
+  // Emailable recipients actually targeted by a real send: selected ∩ has-email.
+  function surveyRecipientIds() {
+    if (state.status !== "ready") return [];
+    return state.instructors
+      .filter((i) => !!i.email && (surveySelectedIds ? surveySelectedIds.has(i.id) : true))
+      .map((i) => i.id);
+  }
+
   // Release the availability survey to instructors. mode 'preview' returns the
-  // rendered email for review without sending; mode 'send' actually emails every
-  // active instructor and flips availability_survey_opened_at on the cycle so
+  // rendered email for review without sending; mode 'send' actually emails the
+  // selected instructors and flips availability_survey_opened_at on the cycle so
   // the portal banner unlocks. Deadline (optional) writes to survey_deadline.
   async function handleSendSurvey(mode) {
     if (state.status !== "ready") return;
+    // Target the selected instructors on a real send. Preview/test don't need a
+    // recipient list (preview renders one sample; test goes to the caller).
+    const ids = mode === "send" ? surveyRecipientIds() : null;
+    // Safety: never let a real send fall through to "everyone". The edge fn treats
+    // a missing instructor_ids as all-active, so an empty selection must hard-stop
+    // here rather than rely on the button's disabled state alone.
+    if (mode === "send" && (!ids || ids.length === 0)) {
+      setSaveError("Pick at least one instructor before sending the survey.");
+      setTimeout(() => setSaveError(null), 6000);
+      return;
+    }
     setBusy("sending_survey");
     setSaveError(null);
     try {
@@ -1711,6 +1807,11 @@ export default function Schedule() {
           cycle_id: state.cycle.id,
           mode,
           deadline: surveyDeadline || null,
+          app_base_url: window.location.origin,
+          // Edited intro for this send (seeded from the operator's saved default).
+          // Blank = the edge fn's built-in copy.
+          intro: surveyIntro.trim() || null,
+          ...(ids && ids.length > 0 ? { instructor_ids: ids } : {}),
         },
       });
       if (error) {
@@ -2018,6 +2119,7 @@ export default function Schedule() {
         canRematch={cycle.status === "collecting"}
         canRunReminders={state.assignments.some((a) => a.status === "published" && !a.instructor_response_at)}
         onApprove={handleApprove}
+        onSurveyClick={() => openSurvey()}
         onSendClick={() => setOfferDialog({ mode: "choose", payload: null })}
         onPreviewClick={handlePreviewOffers}
         onRerunAgent={handleRerunAgent}
@@ -2170,7 +2272,14 @@ export default function Schedule() {
         <SurveyDialog
           dialog={surveyDialog}
           cycleDisplay={cycleDisplayName(cycle.name)}
-          recipientCount={state.instructors.length}
+          instructors={state.instructors}
+          availability={state.availability}
+          alreadyOpen={!!cycle.availability_survey_opened_at}
+          selectedIds={surveySelectedIds}
+          setSelectedIds={setSurveySelectedIds}
+          intro={surveyIntro}
+          setIntro={setSurveyIntro}
+          defaultIntro={orgSurveyIntro.trim() || builtinCampIntro()}
           deadline={surveyDeadline}
           onDeadlineChange={setSurveyDeadline}
           busy={busy === "sending_survey"}
@@ -2417,7 +2526,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
+function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSurveyClick, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
   const otherCycles = (allCycles ?? []).filter((c) => c.id !== cycle.id);
   const hasOtherViews = otherCycles.length > 0 || (afterschoolTerms ?? []).length > 0;
   return (
@@ -2615,6 +2724,16 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
         )}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {onSurveyClick && (
+          <button
+            type="button"
+            onClick={onSurveyClick}
+            title={cycle.availability_survey_opened_at ? "Send the availability survey again (e.g. to instructors who haven't responded)" : "Send the availability survey to instructors"}
+            style={{ ...btn("transparent", BRIGHT, true), padding: "7px 12px", fontSize: 13 }}
+          >
+            {cycle.availability_survey_opened_at ? "Resend survey" : "Send survey"}
+          </button>
+        )}
         {lastOp && (
           <button
             type="button"
@@ -3135,7 +3254,7 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getVal
 }
 
 function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onSubClick, onChangeRequestClick }) {
-  const { session, status, assignment, allAssignments, activeAssignments } = item;
+  const { session, status, assignment, allAssignments, activeAssignments, leadSubNeeded = [], devSubNeeded = [] } = item;
   const [dropEffect, setDropEffect] = useState(null); // "ok" | "warn" | "block" | "self" | null
   const [hoverResult, setHoverResult] = useState(null); // full validation result during drag
   const isNeedsHire = status === "needs_hire";
@@ -3160,6 +3279,10 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
   // Only surface live subs (pending/confirmed/taught) — a declined sub leaves the lead covering.
   const leadSubActive = leadSub && SUB_SHOWN_STATUSES.has(leadSub.status) ? leadSub : null;
   const devSubActive = devSub && SUB_SHOWN_STATUSES.has(devSub.status) ? devSub : null;
+  // In the day-grid each card is one weekday; only flag the conflict on the day it
+  // actually falls (dayDate). In dateless views (no dayDate) show all conflict dates.
+  const leadDayConflicts = dayDate ? leadSubNeeded.filter((d) => d === dayDate) : leadSubNeeded;
+  const devDayConflicts = dayDate ? devSubNeeded.filter((d) => d === dayDate) : devSubNeeded;
   const wantsDeveloping = (session.current_enrollment ?? 0) >= DEVELOPING_THRESHOLD;
   const showDevelopingRow = wantsDeveloping || !!developing;
   const color = statusColor(status);
@@ -3299,6 +3422,11 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
       {leadSubActive && (
         <SubLine sub={leadSubActive} onClick={() => onSubClick && lead && onSubClick(session, lead)} />
       )}
+      {leadDayConflicts.length > 0 && (
+        <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.35, marginTop: 2 }}>
+          ⚠ out {listDates(leadDayConflicts)} — needs a sub
+        </div>
+      )}
       {showDevelopingRow && (
         <SlotRow
           label="Developing"
@@ -3311,6 +3439,11 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
       )}
       {showDevelopingRow && devSubActive && (
         <SubLine sub={devSubActive} onClick={() => onSubClick && developing && onSubClick(session, developing)} />
+      )}
+      {showDevelopingRow && devDayConflicts.length > 0 && (
+        <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.35, marginTop: 2 }}>
+          ⚠ out {listDates(devDayConflicts)} — needs a sub
+        </div>
       )}
       <div style={{
         fontSize: 11,
@@ -4233,16 +4366,20 @@ function InstructorPickerPanel({ eligibleInstructors, selectedInstructorIds, onC
 }
 
 // SurveyDialog: lets the admin release the availability survey to instructors.
-// 'preview' opens the rendered email in PreviewViewer; 'test' routes every send
-// to the test inbox without flipping the cycle's opened_at; 'send' actually
-// emails every active instructor and unlocks the portal banner.
-function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadlineChange, busy, onChoose, onClose }) {
+// 'preview' opens the rendered email in PreviewViewer; 'test' sends one sample
+// email to the logged-in caller without flipping the cycle's opened_at; 'send'
+// actually emails every active instructor and unlocks the portal banner.
+function SurveyDialog({ dialog, cycleDisplay, instructors = [], availability = [], alreadyOpen, selectedIds, setSelectedIds, intro, setIntro, defaultIntro, deadline, onDeadlineChange, busy, onChoose, onClose }) {
   if (dialog.mode === "result") {
     const p = dialog.payload;
     return (
       <ModalShell onClose={onClose} title={p.mode === "send" ? "Survey released" : "Test send complete"}>
         <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
-          <div><strong>{p.sent}</strong> of {p.recipient_count ?? "?"} email{p.sent === 1 ? "" : "s"} delivered.</div>
+          <div>
+            {p.mode === "test"
+              ? <>A sample email was delivered to <strong>your inbox</strong>.</>
+              : <><strong>{p.sent}</strong> of {p.recipient_count ?? "?"} email{p.sent === 1 ? "" : "s"} delivered.</>}
+          </div>
           {p.mode === "send" && p.sent > 0 && (
             <div style={{ marginTop: 10, padding: 10, background: `#3a7c3a1A`, borderRadius: 6, fontSize: 13, color: INK }}>
               The portal banner is now live for instructors. They can submit their availability any time before the deadline.
@@ -4250,7 +4387,7 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
           )}
           {p.mode === "test" && p.sent > 0 && (
             <div style={{ marginTop: 10, padding: 10, background: `${VIOLET}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
-              All emails went to <strong>jessica@journeytosteam.com</strong> only — the survey hasn't actually been released yet.
+              A test email went to <strong>your inbox</strong> only — the survey hasn't actually been released yet.
             </div>
           )}
           {p.failed && p.failed.length > 0 && (
@@ -4268,15 +4405,48 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
       </ModalShell>
     );
   }
+  // Recipient math — only emailable instructors can be sent to, so all counts and
+  // bulk actions operate over that set. Non-responders = emailable who haven't
+  // submitted (the straggler / new-hire nudge).
+  const submitted = new Set((availability ?? []).filter((a) => a.submitted_at).map((a) => a.instructor_id));
+  const emailable = (instructors ?? []).filter((i) => !!i.email);
+  const emailableCount = emailable.length;
+  const missingEmailCount = (instructors ?? []).length - emailableCount;
+  const selCount = emailable.filter((i) => selectedIds?.has(i.id)).length;
+  const allSelected = emailableCount > 0 && selCount === emailableCount;
+  const nonResponderCount = emailable.filter((i) => !submitted.has(i.id)).length;
+  const linkStyle = { border: "none", background: "none", color: BRIGHT, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: 0 };
+
+  function toggle(id) {
+    const next = new Set(selectedIds ?? []);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelectedIds(next);
+  }
+
   return (
     <ModalShell
       onClose={busy ? undefined : onClose}
-      title={`Open ${cycleDisplay} availability survey`}
+      title={`${alreadyOpen ? "Send" : "Open"} ${cycleDisplay} availability survey`}
     >
-      <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10, maxHeight: "70vh", overflowY: "auto" }}>
         <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
-          Emails {recipientCount} active instructor{recipientCount === 1 ? "" : "s"} a link to /j2s/instructor where they'll fill out which weeks, locations, and subjects they want to work.
+          Emails instructors a link to their portal where they'll fill out which weeks, areas, and subjects they want to work.
+          {alreadyOpen && nonResponderCount > 0 && ` ${nonResponderCount} haven't responded yet — pre-selected below.`}
         </div>
+
+        <label style={{ fontSize: 13, fontWeight: 600, color: INK }}>Message to instructors</label>
+        <textarea
+          value={intro ?? ""}
+          onChange={(e) => setIntro(e.target.value)}
+          rows={3}
+          placeholder={defaultIntro}
+          style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 6, border: `1px solid ${RULE}`, fontSize: 13, fontFamily: "inherit", lineHeight: 1.5, resize: "vertical" }}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: -4 }}>
+          <span style={{ fontSize: 12, color: MUTED }}>The button, link, and signature are added automatically.</span>
+          {defaultIntro && (intro ?? "").trim() !== defaultIntro && <button type="button" onClick={() => setIntro(defaultIntro)} style={linkStyle}>Reset to default</button>}
+        </div>
+
         <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: INK }}>
           <span style={{ minWidth: 110 }}>Submit by (optional):</span>
           <input
@@ -4286,9 +4456,38 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
             style={{ flex: 1, padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 13, fontFamily: "inherit" }}
           />
         </label>
-        <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.45, marginTop: -4 }}>
-          Shown in the email and the portal banner. Leave blank for no deadline.
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 2 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: INK }}>
+            {selCount === 0 ? "No instructors selected" : allSelected ? `Sending to all ${emailableCount}` : `Sending to ${selCount} of ${emailableCount}`}
+          </label>
+          <div style={{ display: "flex", gap: 12 }}>
+            {alreadyOpen && nonResponderCount > 0 && <button type="button" onClick={() => setSelectedIds(new Set(emailable.filter((i) => !submitted.has(i.id)).map((i) => i.id)))} style={linkStyle}>Non-responders</button>}
+            <button type="button" onClick={() => setSelectedIds(allSelected ? new Set() : new Set(emailable.map((i) => i.id)))} style={linkStyle}>{allSelected ? "Clear all" : "Select all"}</button>
+          </div>
         </div>
+        <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 6, padding: 8 }}>
+          {(instructors ?? []).length === 0 && <div style={{ fontSize: 13, color: MUTED, padding: "4px 6px" }}>No active instructors.</div>}
+          {(instructors ?? []).map((i) => {
+            const noEmail = !i.email;
+            const checked = !noEmail && (selectedIds?.has(i.id) ?? false);
+            const hasSubmitted = submitted.has(i.id);
+            const name = (i.preferred_name || i.first_name || "") + (i.last_name ? ` ${i.last_name}` : "");
+            return (
+              <label key={i.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", fontSize: 13, cursor: noEmail ? "default" : "pointer", opacity: noEmail ? 0.55 : 1 }}>
+                <input type="checkbox" checked={checked} disabled={noEmail} onChange={() => toggle(i.id)} />
+                <span style={{ flex: 1 }}>{name || i.email}</span>
+                {noEmail
+                  ? <span style={{ fontSize: 11, color: CORAL }}>no email</span>
+                  : hasSubmitted
+                    ? <span style={{ fontSize: 11, color: OK_GREEN }}>responded</span>
+                    : <span style={{ fontSize: 11, color: MUTED }}>no response</span>}
+              </label>
+            );
+          })}
+        </div>
+        {missingEmailCount > 0 && <div style={{ fontSize: 12, color: MUTED, marginTop: -4 }}>{missingEmailCount} instructor{missingEmailCount === 1 ? "" : "s"} without an email can't be sent to.</div>}
+
         <DialogChoice
           title="Preview the email"
           subtitle="Renders what one instructor would see. No emails are sent and the survey stays closed."
@@ -4298,15 +4497,15 @@ function SurveyDialog({ dialog, cycleDisplay, recipientCount, deadline, onDeadli
         />
         <DialogChoice
           title="Send to me first (recommended)"
-          subtitle="Every instructor's email arrives in your inbox so you can read exactly what they'll see. Survey stays closed — re-run as many times as you want."
+          subtitle="A sample email arrives in your inbox so you can read exactly what instructors will see. Survey stays closed — re-run as many times as you want."
           disabled={busy}
           onClick={() => onChoose("test")}
           tone="warn"
         />
         <DialogChoice
-          title="Open survey to all instructors"
-          subtitle={`Emails ${recipientCount} active instructor${recipientCount === 1 ? "" : "s"} for real and unlocks the portal banner. They can update their answers any time before the deadline.`}
-          disabled={busy}
+          title={alreadyOpen ? "Send to selected instructors" : "Open survey to selected instructors"}
+          subtitle={selCount === 0 ? "Pick at least one instructor above." : `Emails ${selCount} instructor${selCount === 1 ? "" : "s"} for real and unlocks the portal banner. They can update answers any time before the deadline.`}
+          disabled={busy || selCount === 0}
           onClick={() => onChoose("send")}
           tone="danger"
         />
@@ -5399,6 +5598,8 @@ function CandidatePicker({
       if (session.enrollment_synced_at && session.current_enrollment != null && session.current_enrollment < MIN_ENROLLMENT) warningsForBanner.push(`Enrollment is ${session.current_enrollment} — below the ${MIN_ENROLLMENT}-student minimum.`);
       if (sessionTypes.includes("full_day") && (session.session_type === "morning" || session.session_type === "afternoon")) warningsForBanner.push(`${inst.first_name} is reserved for full-day work.`);
       if (avail.needs_confirmation) warningsForBanner.push(`${inst.first_name}'s availability is unconfirmed.`);
+      const dateConflicts = campUnavailableConflicts(avail, session);
+      if (dateConflicts.length) warningsForBanner.push(`${inst.first_name} is unavailable on ${listDates(dateConflicts)} — would need a sub.`);
 
       let score = 0;
       if (locPref === "preferred") score += 2;

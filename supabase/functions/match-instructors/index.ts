@@ -105,6 +105,16 @@ serve(async (req) => {
     const cycle = cycleRow as SchedulingCycle;
     const orgId = cycle.organization_id;
 
+    // Venue->region map: the org's config is the single source (shared with the camp
+    // survey form). Falls back to the built-in constant when the org hasn't been seeded.
+    const { data: orgRow } = await admin
+      .from('organizations')
+      .select('venue_region_map')
+      .eq('id', orgId)
+      .single();
+    const orgRegionMap = (orgRow?.venue_region_map ?? {}) as Record<string, string>;
+    const regionMap = Object.keys(orgRegionMap).length > 0 ? orgRegionMap : VENUE_REGION_MAP;
+
     // ----- Camp sessions -----
     let campQuery = admin
       .from('camp_sessions')
@@ -116,16 +126,16 @@ serve(async (req) => {
     if (campsErr) return json({ error: `Load camp_sessions: ${campsErr.message}` }, 500);
     const camps = (campsRaw ?? []) as CampSession[];
 
-    // Pre-flight: every camp's location_name must be in VENUE_REGION_MAP. Catching
+    // Pre-flight: every camp's location_name must be in the region map. Catching
     // this up front beats throwing mid-algorithm and produces a useful error for ops.
     const unmappedVenues = [...new Set(camps.map((c) => c.location_name))].filter(
-      (v) => !(v in VENUE_REGION_MAP),
+      (v) => !(v in regionMap),
     );
     if (unmappedVenues.length > 0) {
       return json({
         error: 'Unmapped venues in camp_sessions',
         unmapped_venues: unmappedVenues,
-        hint: 'Add these to VENUE_REGION_MAP in supabase/functions/match-instructors/lib.ts',
+        hint: "Add these to the org's venue_region_map (Settings), so the camp survey + matcher agree on regions.",
       }, 500);
     }
 
@@ -217,7 +227,7 @@ serve(async (req) => {
     }
 
     const constraintCtx: ConstraintContext = { cycle, locPrefByKey };
-    const scoreCtx: SoftScoreContext = { locPrefByKey, currPrefByKey };
+    const scoreCtx: SoftScoreContext = { locPrefByKey, currPrefByKey, regionMap };
 
     // ----- Determine locked assignments + handle dismissal flow -----
     // Spec rules (file 05):

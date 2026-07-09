@@ -1,12 +1,16 @@
 // send-afterschool-survey: opens the afterschool availability survey for a term
-// and emails every active instructor a link to fill it out.
+// and emails active instructors a link to fill it out.
 //
-// Input: { organization_id: string, term: string, mode: 'preview'|'test'|'send', deadline?: string }
-//   - mode 'preview': returns rendered HTML for every recipient, no DB writes, no sends
-//   - mode 'test':    sends each rendered email to TEST_INBOX; does NOT open the survey
+// Input: { organization_id, term, mode: 'preview'|'test'|'send',
+//          deadline?: string, instructor_ids?: string[], intro?: string }
+//   - mode 'preview': returns rendered HTML for every (filtered) recipient, no DB writes, no sends
+//   - mode 'test':    sends ONE rendered email to the logged-in caller; does NOT open the survey
 //   - mode 'send':    sends to real instructor.email; upserts afterschool_survey_state
 //                     so the portal banner unlocks for everyone in the org
 //   - deadline:       optional ISO date. Surfaces in the email + portal banner.
+//   - instructor_ids: optional subset of active instructors to target (straggler / new-hire
+//                     nudge). Omitted/empty = all active instructors.
+//   - intro:          optional editable lead paragraph. Omitted/blank = default copy.
 //
 // Mirrors send-availability-survey (camps), but afterschool is term-keyed, not
 // cycle-keyed. Auth: caller must be owner/admin of the org.
@@ -14,12 +18,12 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
+import { introParagraphHtml } from '../_shared/surveyEmail.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-const TEST_INBOX = 'jessica@journeytosteam.com';
 const DEFAULT_PRIMARY = '#1C004F';
 const TEXT = '#1a1a1a';
 const MUTED = '#6b6b6b';
@@ -54,6 +58,10 @@ serve(async (req: Request) => {
     const term: string | undefined = body.term;
     const mode: 'preview' | 'test' | 'send' = body.mode ?? 'preview';
     const deadline: string | null = body.deadline ?? null;
+    const instructorIds: string[] | null = Array.isArray(body.instructor_ids) && body.instructor_ids.length > 0
+      ? body.instructor_ids
+      : null;
+    const intro: string | null = typeof body.intro === 'string' && body.intro.trim() ? body.intro.trim() : null;
 
     if (!organizationId) return json({ error: 'organization_id is required' }, 400);
     if (!term) return json({ error: 'term is required' }, 400);
@@ -106,61 +114,98 @@ serve(async (req: Request) => {
       .eq('is_active', true);
     if (instErr) return json({ error: `instructors query: ${instErr.message}` }, 500);
 
-    const recipients = (instructors ?? []).filter((i: any) => !!i.email);
+    // Optional subset (straggler / new-hire nudge). Filter to the requested ids,
+    // then drop anyone without an email.
+    const idSet = instructorIds ? new Set(instructorIds) : null;
+    const recipients = (instructors ?? [])
+      .filter((i: any) => !idSet || idSet.has(i.id))
+      .filter((i: any) => !!i.email);
     if (recipients.length === 0) {
-      return json({ sent: 0, failed: [], preview: [], note: 'No active instructors with email addresses for this org.' });
+      return json({ sent: 0, failed: [], preview: [], note: 'No active instructors with email addresses for this selection.' });
+    }
+
+    // Test mode routes to the logged-in caller — never a hardcoded inbox (multi-tenant).
+    const callerEmail = userData.user.email;
+    if (mode === 'test' && !callerEmail) {
+      return json({ error: 'Your account has no email address to send the test to.' }, 400);
     }
 
     const termDisplay = termDisplayName(term);
     if (!org.slug) throw new Error(`send-afterschool-survey: org ${org.id} has no slug; cannot build portal URL`);
-    const portalUrl = `https://enrops.com/${org.slug}/instructor`;
+    // Portal link points at the caller's app origin (staging on staging, prod on
+    // prod, tenant domain later) — falls back to prod if not supplied.
+    const appBase = typeof body.app_base_url === 'string' && /^https?:\/\//.test(body.app_base_url)
+      ? body.app_base_url.replace(/\/+$/, '')
+      : 'https://enrops.com';
+    const portalUrl = `${appBase}/${org.slug}/instructor`;
     const deadlineLabel = fmtDeadline(deadline);
 
+    const subject = `Tell ${org.name} which days you can teach this ${termDisplay} — ~2 minutes`;
     const previews: Array<{ instructor_id: string; to: string; subject: string; html: string; text: string }> = [];
     const sent: string[] = [];
     const failed: Array<{ instructor_id: string; reason: string }> = [];
 
+    // Render one email per (filtered) recipient. `to` is who would actually receive
+    // it on a real send — the honest preview address.
     for (const inst of recipients) {
-      const subject = `Tell ${org.name} which days you can teach this ${termDisplay} — ~2 minutes`;
-      const html = renderHtml({ instructorName: inst.first_name, orgName: org.name, termDisplay, portalUrl, deadlineLabel, primaryColor, signatureHtml: renderSignatureBlock(brand) });
-      const text = renderText({ instructorName: inst.first_name, orgName: org.name, termDisplay, portalUrl, deadlineLabel });
-      const recipient = mode === 'send' ? inst.email! : TEST_INBOX;
-      previews.push({ instructor_id: inst.id, to: recipient, subject, html, text });
+      const html = renderHtml({ instructorName: inst.first_name, orgName: org.name, termDisplay, intro, portalUrl, deadlineLabel, primaryColor, signatureHtml: renderSignatureBlock(brand) });
+      const text = renderText({ instructorName: inst.first_name, orgName: org.name, termDisplay, intro, portalUrl, deadlineLabel });
+      previews.push({ instructor_id: inst.id, to: inst.email!, subject, html, text });
+    }
 
-      if (mode === 'preview') continue;
-
+    const fromDomain = 'updates.journeytosteam.com';
+    const fromEmail = `${fromName} <hello@${fromDomain}>`;
+    async function sendOne(to: string, subj: string, html: string, text: string): Promise<{ ok: true } | { ok: false; reason: string }> {
       try {
-        const fromDomain = 'updates.journeytosteam.com';
-        const fromEmail = `${fromName} <hello@${fromDomain}>`;
         const r = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
-          body: JSON.stringify({
-            from: fromEmail,
-            to: recipient,
-            reply_to: replyTo ?? undefined,
-            subject: mode === 'test' ? `[TEST] ${subject}` : subject,
-            html,
-            text,
-          }),
+          body: JSON.stringify({ from: fromEmail, to, reply_to: replyTo ?? undefined, subject: subj, html, text }),
         });
-        if (!r.ok) {
-          const errText = await r.text();
-          failed.push({ instructor_id: inst.id, reason: `resend ${r.status}: ${errText.slice(0, 200)}` });
-          continue;
-        }
-        sent.push(inst.id);
+        if (!r.ok) return { ok: false, reason: `resend ${r.status}: ${(await r.text()).slice(0, 200)}` };
+        return { ok: true };
       } catch (err) {
-        failed.push({ instructor_id: inst.id, reason: (err as Error).message });
+        return { ok: false, reason: (err as Error).message };
+      }
+    }
+
+    if (mode === 'test') {
+      // One representative email to the caller — instructors are not contacted.
+      const p = previews[0];
+      const res = await sendOne(callerEmail!, `[TEST] ${subject}`, p.html, p.text);
+      if (res.ok) sent.push(p.instructor_id);
+      else failed.push({ instructor_id: p.instructor_id, reason: res.reason });
+    } else if (mode === 'send') {
+      for (const p of previews) {
+        const res = await sendOne(p.to, subject, p.html, p.text);
+        if (res.ok) sent.push(p.instructor_id);
+        else failed.push({ instructor_id: p.instructor_id, reason: res.reason });
       }
     }
 
     // Real send: open the survey for the term so the portal banner unlocks.
+    // Preserve the original opened_at on a straggler re-send (don't reset it). The
+    // deadline is authoritative from the caller: the drawer pre-fills the existing
+    // deadline, so whatever it sends is the operator's choice — including null,
+    // which clears it. This keeps the email's "submit by" line and the stored
+    // deadline in lockstep.
     if (mode === 'send') {
+      const { data: existing } = await supabase
+        .from('afterschool_survey_state')
+        .select('opened_at')
+        .eq('organization_id', organizationId)
+        .eq('term', term)
+        .maybeSingle();
       const { error: upErr } = await supabase
         .from('afterschool_survey_state')
         .upsert(
-          { organization_id: organizationId, term, opened_at: new Date().toISOString(), deadline: deadline ? deadline.slice(0, 10) : null, updated_at: new Date().toISOString() },
+          {
+            organization_id: organizationId,
+            term,
+            opened_at: existing?.opened_at ?? new Date().toISOString(),
+            deadline: deadline ? deadline.slice(0, 10) : null,
+            updated_at: new Date().toISOString(),
+          },
           { onConflict: 'organization_id,term' },
         );
       if (upErr) {
@@ -178,16 +223,23 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
 
+// The editable lead paragraph. Blank/omitted falls back to the default copy.
+function introHtml(intro: string | null, termDisplay: string): string {
+  const text = intro ?? `We're planning the ${termDisplay} after-school schedule and want to know which days you can teach.`;
+  return introParagraphHtml(text);
+}
+
 function renderHtml(params: {
   instructorName: string | null;
   orgName: string;
   termDisplay: string;
+  intro: string | null;
   portalUrl: string;
   deadlineLabel: string;
   primaryColor: string;
   signatureHtml: string;
 }): string {
-  const { instructorName, orgName, termDisplay, portalUrl, deadlineLabel, primaryColor, signatureHtml } = params;
+  const { instructorName, orgName, termDisplay, intro, portalUrl, deadlineLabel, primaryColor, signatureHtml } = params;
   const hi = instructorName ? `Hi ${instructorName}` : 'Hi there';
   const deadlineLine = deadlineLabel
     ? `<p style="margin: 16px 0 0; font-size: 14px; color: ${TEXT};"><strong>Please submit by ${deadlineLabel}.</strong></p>`
@@ -198,7 +250,7 @@ function renderHtml(params: {
   <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid ${BORDER};border-radius:10px;padding:28px;">
     <h1 style="margin:0 0 12px;font-size:20px;font-weight:700;color:${primaryColor};letter-spacing:-0.3px;">${hi},</h1>
     <p style="margin:0 0 12px;font-size:15px;line-height:1.55;">
-      We're planning the ${termDisplay} after-school schedule and want to know which days you can teach.
+      ${introHtml(intro, termDisplay)}
     </p>
     <p style="margin:0 0 16px;font-size:15px;line-height:1.55;">
       The survey takes about 2 minutes. You'll pick the weekdays you're free, the time window that works for you, any dates you can't make, and which schools you prefer.
@@ -224,15 +276,17 @@ function renderText(params: {
   instructorName: string | null;
   orgName: string;
   termDisplay: string;
+  intro: string | null;
   portalUrl: string;
   deadlineLabel: string;
 }): string {
-  const { instructorName, orgName, termDisplay, portalUrl, deadlineLabel } = params;
+  const { instructorName, orgName, termDisplay, intro, portalUrl, deadlineLabel } = params;
   const hi = instructorName ? `Hi ${instructorName},` : 'Hi there,';
+  const introText = intro ?? `We're planning the ${termDisplay} after-school schedule and want to know which days you can teach.`;
   const deadlineLine = deadlineLabel ? `\nPlease submit by ${deadlineLabel}.\n` : '';
   return `${hi}
 
-We're planning the ${termDisplay} after-school schedule and want to know which days you can teach.
+${introText}
 
 The survey takes about 2 minutes. You'll pick the weekdays you're free, the time window that works for you, any dates you can't make, and which schools you prefer.
 

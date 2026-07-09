@@ -73,6 +73,19 @@ function todayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// "2026-11-12" -> "Nov 12" (parsed at local noon so it never slips a day).
+function shortDate(iso) {
+  const d = new Date(`${String(iso).slice(0, 10)}T12:00:00`);
+  return isNaN(d) ? String(iso) : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// Human list of dates: up to 2 shown, then "+N more".
+function listDates(dates) {
+  const sorted = [...dates].sort();
+  if (sorted.length <= 2) return sorted.map(shortDate).join(" and ");
+  return `${shortDate(sorted[0])}, ${shortDate(sorted[1])} +${sorted.length - 2} more`;
+}
+
 const FILTER_STATUSES = [
   { key: "needs_hire", label: "Needs instructor" },
   { key: "change_requested", label: "Change requested" },
@@ -220,6 +233,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [picker, setPicker] = useState(null); // { program }
   const [surveyDialog, setSurveyDialog] = useState(null); // { mode:'choose'|'result', payload }
   const [surveyDeadline, setSurveyDeadline] = useState(() => businessDaysFromToday(10));
+  const [surveySelectedIds, setSurveySelectedIds] = useState(null); // Set<id> | null (=all)
+  const [surveyIntro, setSurveyIntro] = useState(""); // editable lead paragraph
+  const [orgSurveyIntro, setOrgSurveyIntro] = useState(""); // operator's saved default intro (org_survey_config)
   const [matchResult, setMatchResult] = useState(null);
   const [view, setView] = useState("grid"); // 'list' | 'grid' — default to the week-at-a-glance grid
   // Week focus for the week-grid view. undefined = use the default (current/upcoming) week;
@@ -241,7 +257,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (!org?.id || !term) return;
     setState({ status: "loading" });
     try {
-      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes] = await Promise.all([
+      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes] = await Promise.all([
         supabase
           .from("programs")
           .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max")
@@ -260,7 +276,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .order("first_name", { ascending: true }),
         supabase
           .from("instructor_term_availability")
-          .select("instructor_id, weekday_availability, max_days, needs_confirmation, notes, submitted_at")
+          .select("instructor_id, weekday_availability, max_days, needs_confirmation, notes, submitted_at, unavailable_dates")
           .eq("organization_id", org.id)
           .eq("term", term),
         supabase
@@ -287,6 +303,15 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .order("created_at", { ascending: true })
           .limit(1)
           .maybeSingle(),
+        // Operator's saved survey config — we only need the default intro here
+        // (the drawer pre-fills it). Non-critical: a missing row just means no
+        // saved default.
+        supabase
+          .from("org_survey_config")
+          .select("intro")
+          .eq("organization_id", org.id)
+          .eq("context", "afterschool")
+          .maybeSingle(),
       ]);
       if (progRes.error) throw progRes.error;
       if (locRes.error) throw locRes.error;
@@ -295,6 +320,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (surveyRes.error) throw surveyRes.error;
       if (areaPrefRes.error) throw areaPrefRes.error;
       if (cycleRes.error) throw cycleRes.error;
+      setOrgSurveyIntro(cfgRes.data?.intro ?? "");
 
       const programs = (progRes.data ?? []).filter((p) => DAY_TO_CODE[dayKey(p.day_of_week)]);
       const programIds = programs.map((p) => p.id);
@@ -422,6 +448,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return m;
   }, [state]);
 
+  // Session dates where this instructor is unavailable for a program (weekly-class
+  // sub-coverage conflicts). Shared by the picker warning, the board card, and the
+  // review modal so all three surface the same "needs a sub" dates.
+  function unavailableConflicts(instructorId, program) {
+    const av = availByInstr.get(instructorId);
+    const blackout = Array.isArray(av?.unavailable_dates) ? av.unavailable_dates.map((d) => String(d).slice(0, 10)) : [];
+    if (!blackout.length || !program) return [];
+    const sessions = (state.status === "ready" ? (state.programDates?.[program.id] ?? []) : []).map((s) => String(s).slice(0, 10));
+    return sessions.filter((s) => blackout.includes(s)).sort();
+  }
+
   const locArea = useMemo(() => {
     const m = new Map();
     if (state.status === "ready") for (const l of state.locations) m.set(l.id, l.area ?? null);
@@ -452,10 +489,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const status = deriveStatus(p.id, state.assignments);
       const own = state.assignments.filter((a) => a.program_id === p.id && a.status !== "withdrawn" && a.status !== "declined");
       const lead = own.find((a) => a.role === "lead") ?? own[0] ?? null;
-      m.set(p.id, { status, lead });
+      // Dates the assigned lead flagged as unavailable that land on this class's
+      // sessions — surfaced on the card so the conflict is visible without opening it.
+      const subNeeded = lead?.instructor_id ? unavailableConflicts(lead.instructor_id, p) : [];
+      m.set(p.id, { status, lead, subNeeded });
     }
     return m;
-  }, [state]);
+  }, [state, availByInstr]);
 
   // program_id -> { ids:Set<instructor_id>, names:string[], subs:[{name,date,status}] } for live subs.
   // Powers the card sub indicator and lets the instructor filter surface a program a person only SUBs.
@@ -653,6 +693,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const pref = area ? (areaPrefByInstr.get(instructorId) || {})[area] : undefined;
     if (pref === "unavailable") warnings.push(`${first} marked ${area} as a place they can't go.`);
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
+    // Date-specific unavailability: a weekly class isn't blocked by a missed session,
+    // but flag which of this class's dates need a sub so it's not an invisible landmine.
+    const hits = unavailableConflicts(instructorId, program);
+    if (hits.length) warnings.push(`${first} is unavailable on ${listDates(hits)} — will need a sub ${hits.length === 1 ? "that day" : "those days"}.`);
     return { ok: true, reason: null, pref, warnings };
   }
 
@@ -810,13 +854,79 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
   }
 
+  // Default lead paragraph for the survey email — matches the edge fn's fallback,
+  // so the textarea shows exactly what instructors get if left unedited.
+  const builtinSurveyIntro = `We're planning the ${termDisplayName(term)} after-school schedule and want to know which days you can teach.`;
+  // The operator's saved default (Settings → Availability survey) wins; else the
+  // built-in copy. This is what the drawer pre-fills and what "Reset to default" restores.
+  const defaultSurveyIntro = orgSurveyIntro.trim() || builtinSurveyIntro;
+
+  // Open the survey drawer. Pre-select recipients: never sent → all active
+  // instructors; already open → only the non-responders (the straggler / new-hire
+  // nudge). Only instructors with an email on file are selectable — the send skips
+  // anyone without one, so they must not be silently counted as recipients.
+  // Seed the intro with the default copy so it's editable in place, and pre-fill
+  // the deadline from the open survey (don't silently push it out on a re-send).
+  function openSurvey() {
+    if (state.status !== "ready") return;
+    const submitted = new Set(state.availability.filter((a) => a.submitted_at).map((a) => a.instructor_id));
+    const alreadyOpen = !!state.survey?.opened_at;
+    const preselect = state.instructors
+      .filter((i) => !!i.email)
+      .filter((i) => (alreadyOpen ? !submitted.has(i.id) : true))
+      .map((i) => i.id);
+    setSurveySelectedIds(new Set(preselect));
+    setSurveyIntro(defaultSurveyIntro);
+    // Keep the survey's existing deadline on a re-send (blank stays blank if they
+    // opened it with no deadline); default to +10 business days on a first open.
+    // Normalize to YYYY-MM-DD for <input type="date"> in case the column ever
+    // carries a timestamp.
+    setSurveyDeadline(alreadyOpen ? (state.survey?.deadline ? String(state.survey.deadline).slice(0, 10) : "") : businessDaysFromToday(10));
+    setSurveyDialog({ mode: "choose", payload: null });
+  }
+
+  // Resolve the recipients: only selected instructors that actually have an email
+  // (the send skips the rest — never let a no-email id ride along and desync counts).
+  function surveyRecipientIds() {
+    if (state.status !== "ready" || !surveySelectedIds) return [];
+    const emailable = new Set(state.instructors.filter((i) => !!i.email).map((i) => i.id));
+    return Array.from(surveySelectedIds).filter((id) => emailable.has(id));
+  }
+
+  function surveyBody(mode) {
+    const ids = surveyRecipientIds();
+    // Send null only when the intro is still the built-in copy (operator never
+    // customized at any level) so the edge fn falls back to its own default. A
+    // saved org default or an in-drawer edit is a real customization → send it.
+    const intro = surveyIntro.trim() && surveyIntro.trim() !== builtinSurveyIntro ? surveyIntro.trim() : null;
+    return { organization_id: org.id, term, mode, deadline: surveyDeadline || null, instructor_ids: ids, intro, app_base_url: window.location.origin };
+  }
+
+  // In-app preview: renders the real survey email(s) without sending anything.
+  async function previewSurvey() {
+    const { data, error } = await supabase.functions.invoke("send-afterschool-survey", { body: surveyBody("preview") });
+    if (error) {
+      let msg = error.message ?? "function error";
+      try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+      throw new Error(msg);
+    }
+    if (data?.error) throw new Error(data.error);
+    return data.preview || [];
+  }
+
   async function runSurvey(mode) {
+    // Hard guard: never send/test with an empty recipient set. The buttons are
+    // disabled at zero, but the edge fn reads an empty list as "everyone", so a
+    // stray call here must not blast the whole roster.
+    if (surveyRecipientIds().length === 0) {
+      setSaveError("Pick at least one instructor with an email on file before sending.");
+      setTimeout(() => setSaveError(null), 6000);
+      return;
+    }
     setBusy("survey");
     setSaveError(null);
     try {
-      const { data, error } = await supabase.functions.invoke("send-afterschool-survey", {
-        body: { organization_id: org.id, term, mode, deadline: surveyDeadline || null },
-      });
+      const { data, error } = await supabase.functions.invoke("send-afterschool-survey", { body: surveyBody(mode) });
       if (error) {
         let msg = error.message ?? "function error";
         try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
@@ -991,7 +1101,21 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     setAssignSubFor({ program, lead, dates, defaultDate });
   }
 
+  // Refetch just the availability + area prefs (no full-board reload / loading
+  // flicker) so an instructor's just-submitted change shows in the picker. The
+  // board's realtime sub only watches assignments, so availability edits made
+  // while this board is open would otherwise stay stale.
+  async function refreshAvailabilityQuiet() {
+    if (!org?.id || !term) return;
+    const [availRes, areaPrefRes] = await Promise.all([
+      supabase.from("instructor_term_availability").select("instructor_id, weekday_availability, max_days, needs_confirmation, notes, submitted_at, unavailable_dates").eq("organization_id", org.id).eq("term", term),
+      supabase.from("instructor_term_area_preferences").select("instructor_id, area, preference").eq("organization_id", org.id).eq("term", term),
+    ]);
+    setState((s) => (s.status === "ready" ? { ...s, availability: availRes.data ?? s.availability, areaPrefs: areaPrefRes.data ?? s.areaPrefs } : s));
+  }
+
   function openRow(program) {
+    refreshAvailabilityQuiet(); // fire-and-forget; picker updates live when it lands
     const e = enriched.get(program.id);
     const lead = e?.lead ?? null;
     // Offer in flight (emailed, responded, or change requested) → review modal.
@@ -1053,7 +1177,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         survey={survey}
         submittedCount={submittedCount}
         busy={busy}
-        onOpenSurvey={() => setSurveyDialog({ mode: "choose", payload: null })}
+        onOpenSurvey={openSurvey}
         onMatch={handleMatch}
         onApprove={handleApprove}
         onSendOffers={openSendOffers}
@@ -1188,6 +1312,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         tint={colorMap.get(loc)}
                         status={e?.status}
                         lead={e?.lead}
+                        subNeeded={e?.subNeeded}
                         sub={subInfoByProgram.get(p.id)}
                         weekDate={weekDate}
                         weekSub={weekSub}
@@ -1239,11 +1364,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         <SurveyDialog
           dialog={surveyDialog}
           term={term}
-          instructorCount={counts.instructors}
+          instructors={state.status === "ready" ? state.instructors : []}
+          availability={state.status === "ready" ? state.availability : []}
+          alreadyOpen={!!survey?.opened_at}
+          selectedIds={surveySelectedIds}
+          setSelectedIds={setSurveySelectedIds}
+          intro={surveyIntro}
+          setIntro={setSurveyIntro}
+          defaultIntro={defaultSurveyIntro}
           deadline={surveyDeadline}
           setDeadline={setSurveyDeadline}
           busy={busy === "survey"}
           onRun={runSurvey}
+          onPreview={previewSurvey}
           onClose={() => setSurveyDialog(null)}
         />
       )}
@@ -1270,6 +1403,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           program={reviewFor.program}
           assignment={reviewFor.assignment}
           loc={locName.get(reviewFor.program.program_location_id) ?? "—"}
+          subNeeded={unavailableConflicts(reviewFor.assignment.instructor_id, reviewFor.program)}
           onReply={(msg) => submitReply(reviewFor.assignment, msg)}
           onReassign={() => { const p = reviewFor.program; setReviewFor(null); setPicker({ program: p }); }}
           onRemove={() => handleReviewRemove(reviewFor.program, reviewFor.assignment)}
@@ -1675,7 +1809,12 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                         <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>all term</div>
                       </td>
                       <td style={td}>{enr ? <><span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span></> : <span style={{ color: MUTED }}>—</span>}</td>
-                      <td style={td}>{who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>}</td>
+                      <td style={td}>
+                        {who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>}
+                        {e?.subNeeded?.length > 0 && (
+                          <div style={{ fontSize: 11, color: CORAL, fontWeight: 600 }}>⚠ out {listDates(e.subNeeded)} — needs a sub</div>
+                        )}
+                      </td>
                       <td style={td}><Pill status={e?.status} /></td>
                     </tr>
                   );
@@ -1731,9 +1870,11 @@ function WeekRail({ weeks, signals, effective, onSelect }) {
   );
 }
 
-function ProgramCard({ program, loc, tint, status, lead, sub, weekDate, weekSub, onClick, onSubClick }) {
+function ProgramCard({ program, loc, tint, status, lead, sub, subNeeded, weekDate, weekSub, onClick, onSubClick }) {
   const sc = statusColor(status);
   const who = lead ? (lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "") : null;
+  // In week mode, only flag if THIS week's session is one the lead can't make.
+  const conflictDates = weekDate ? (subNeeded ?? []).filter((d) => d === weekDate) : (subNeeded ?? []);
   // Week mode shows only THIS week's coverage; recurring mode summarizes all sub days.
   const subsForLine = weekDate ? (weekSub ? [weekSub] : []) : (sub?.subs ?? []);
   return (
@@ -1764,6 +1905,11 @@ function ProgramCard({ program, loc, tint, status, lead, sub, weekDate, weekSub,
           </span>
         </div>
         <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
+        {conflictDates.length > 0 && (
+          <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.3 }}>
+            ⚠ {who?.split(" ")[0] || "Lead"} out {listDates(conflictDates)} — needs a sub
+          </div>
+        )}
       </button>
       {lead && <SubLineAS subs={subsForLine} onClick={() => onSubClick && onSubClick(weekDate ?? null)} />}
     </div>
@@ -1831,13 +1977,19 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
             key={inst.id}
             onClick={() => onAssign(inst.id)}
             disabled={current?.instructor_id === inst.id}
-            style={{ width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 8, border: `1px solid ${RULE}`, background: current?.instructor_id === inst.id ? "#f3f1ea" : "#fff", cursor: current?.instructor_id === inst.id ? "default" : "pointer", marginBottom: 6, fontFamily: "inherit" }}
+            style={{ width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 8, border: `1px solid ${RULE}`, background: current?.instructor_id === inst.id ? "#f3f1ea" : "#fff", cursor: current?.instructor_id === inst.id ? "default" : "pointer", marginBottom: 6, fontFamily: "inherit" }}
           >
-            <span style={{ fontSize: 14, color: INK, fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
-            <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {(ev.pref === "preferred" || ev.pref === "highly_preferred") && <Tag color={OK_GREEN}>Prefers this area</Tag>}
-              {ev.warnings.length > 0 && <Tag color={CORAL}>⚠ {ev.warnings.length}</Tag>}
+            <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: 14, color: INK, fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
+              {ev.warnings.map((w, i) => (
+                <span key={i} style={{ fontSize: 12, color: CORAL, fontWeight: 500, lineHeight: 1.35 }}>⚠ {w}</span>
+              ))}
             </span>
+            {(ev.pref === "preferred" || ev.pref === "highly_preferred") && (
+              <span style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                <Tag color={OK_GREEN}>Prefers this area</Tag>
+              </span>
+            )}
           </button>
         ))}
         {ineligible.length > 0 && (
@@ -1863,21 +2015,44 @@ function Tag({ color, children }) {
   return <span style={{ fontSize: 11, fontWeight: 700, color, background: `${color}18`, padding: "2px 7px", borderRadius: 999 }}>{children}</span>;
 }
 
-function SurveyDialog({ dialog, term, instructorCount, deadline, setDeadline, busy, onRun, onClose }) {
+function SurveyDialog({ dialog, term, instructors, availability, alreadyOpen, selectedIds, setSelectedIds, intro, setIntro, defaultIntro, deadline, setDeadline, busy, onRun, onPreview, onClose }) {
+  const [previews, setPreviews] = useState(null);
+  const [pvIdx, setPvIdx] = useState(0);
+  const [pvBusy, setPvBusy] = useState(false);
+  const [pvErr, setPvErr] = useState(null);
+  const previewRef = useRef(null);
+  // Bring the rendered preview into view — it lands below the fold otherwise.
+  useEffect(() => {
+    if (previews && previews.length) previewRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [previews]);
+
   if (dialog.mode === "result") {
     const { mode, data } = dialog.payload;
+    const failed = Array.isArray(data?.failed) ? data.failed : [];
+    const sent = data?.sent ?? 0;
     return (
       <Overlay onClose={onClose}>
         <div style={{ padding: 24 }}>
           <h3 style={{ margin: "0 0 10px", color: INK }}>
-            {mode === "send" ? "Survey sent" : mode === "test" ? "Test sent to you" : "Preview ready"}
+            {mode === "send" ? "Survey sent" : "Test sent to you"}
           </h3>
-          <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px" }}>
-            {mode === "preview"
-              ? `${data?.preview?.length ?? 0} instructor email(s) rendered — no emails sent.`
-              : `Sent to ${data?.sent ?? 0} of ${data?.recipient_count ?? 0} instructor(s).`}
-            {Array.isArray(data?.failed) && data.failed.length > 0 && ` ${data.failed.length} failed.`}
+          <p style={{ color: MUTED, fontSize: 14, margin: "0 0 12px" }}>
+            {mode === "test"
+              ? "Sent one test to your inbox — instructors weren't contacted."
+              : <><strong style={{ color: INK }}>{sent}</strong> of {data?.recipient_count ?? 0} instructor email(s) delivered.</>}
+            {failed.length > 0 && ` ${failed.length} failed.`}
           </p>
+          {mode === "send" && sent > 0 && (
+            <div style={{ display: "inline-block", background: `${OK_GREEN}14`, border: `1px solid ${OK_GREEN}55`, color: "#1f6b40", borderRadius: 999, padding: "4px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 12 }}>
+              ⏱ Saved you ~{Math.max(5, sent * 2)} min vs. emailing and tracking each instructor by hand
+            </div>
+          )}
+          {failed.length > 0 && (
+            <div style={{ background: "#fdecea", border: "1px solid #f5c6cb", color: "#842029", borderRadius: 8, padding: "10px 12px", fontSize: 13, marginBottom: 12 }}>
+              {Object.entries(failed.reduce((m, f) => { const k = friendlyFailReason(f.reason); m[k] = (m[k] || 0) + 1; return m; }, {}))
+                .map(([reason, n], i) => <div key={i}>{reason}{n > 1 ? ` (${n} instructors)` : ""}</div>)}
+            </div>
+          )}
           <div style={{ textAlign: "right" }}>
             <button onClick={onClose} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>Done</button>
           </div>
@@ -1885,23 +2060,135 @@ function SurveyDialog({ dialog, term, instructorCount, deadline, setDeadline, bu
       </Overlay>
     );
   }
+
+  const submitted = new Set((availability ?? []).filter((a) => a.submitted_at).map((a) => a.instructor_id));
+  // Only instructors with an email can actually be sent to — the send skips the
+  // rest, so all counts and bulk-select actions operate over the emailable set.
+  const emailable = instructors.filter((i) => !!i.email);
+  const emailableCount = emailable.length;
+  const missingEmailCount = instructors.length - emailableCount;
+  // Count only selected instructors that can actually be sent to, so the label
+  // and the Send payload (which filters to emailable) never disagree.
+  const selCount = emailable.filter((i) => selectedIds?.has(i.id)).length;
+  const allSelected = emailableCount > 0 && selCount === emailableCount;
+  const nonResponderCount = emailable.filter((i) => !submitted.has(i.id)).length;
+  const hasPreview = previews && previews.length > 0;
+  const nameById = new Map(instructors.map((i) => [i.id, (i.preferred_name || i.first_name) + (i.last_name ? ` ${i.last_name}` : "")]));
+
+  function toggle(id) {
+    const next = new Set(selectedIds ?? []);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelectedIds(next);
+  }
+  function selectNonResponders() {
+    setSelectedIds(new Set(emailable.filter((i) => !submitted.has(i.id)).map((i) => i.id)));
+  }
+  async function doPreview() {
+    setPvBusy(true); setPvErr(null);
+    try {
+      const p = await onPreview();
+      setPreviews(p); setPvIdx(0);
+      if (!p.length) setPvErr("No one selected to preview — pick at least one instructor.");
+    } catch (e) {
+      setPvErr(e.message || "Couldn't build the preview.");
+    } finally { setPvBusy(false); }
+  }
+
   return (
-    <Overlay onClose={onClose}>
-      <div style={{ padding: 24, maxWidth: 460 }}>
-        <h3 style={{ margin: "0 0 6px", color: INK }}>Open the {termDisplayName(term)} availability survey</h3>
+    <Overlay onClose={onClose} maxWidth={hasPreview ? 720 : 540}>
+      <div style={{ padding: 24, overflowY: "auto" }}>
+        <h3 style={{ margin: "0 0 6px", color: INK }}>{alreadyOpen ? "Send" : "Open"} the {termDisplayName(term)} availability survey</h3>
         <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px" }}>
-          Emails every active instructor ({instructorCount}) a link to tell you which weekdays they can teach this term.
+          Emails instructors a link to tell you which weekdays they can teach this term.
+          {alreadyOpen && nonResponderCount > 0 && ` ${nonResponderCount} haven't responded yet — pre-selected below.`}
         </p>
-        <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 }}>Response deadline (optional)</label>
-        <input type="date" value={deadline ?? ""} onChange={(e) => setDeadline(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit", marginBottom: 20 }} />
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
-          <button onClick={() => onRun("test")} disabled={busy} style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}` }}>Send test to me</button>
-          <button onClick={() => onRun("send")} disabled={busy} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>
-            {busy ? "Sending…" : `Send to ${instructorCount} instructor${instructorCount === 1 ? "" : "s"}`}
-          </button>
+
+        <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 }}>Message to instructors</label>
+        <textarea
+          value={intro}
+          onChange={(e) => setIntro(e.target.value)}
+          rows={3}
+          placeholder={defaultIntro}
+          style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit", lineHeight: 1.5, resize: "vertical", marginBottom: 4 }}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <span style={{ fontSize: 12, color: MUTED }}>The rest of the email (button, link, signature) is added automatically.</span>
+          {intro.trim() !== defaultIntro && <button type="button" onClick={() => setIntro(defaultIntro)} style={linkBtn}>Reset to default</button>}
         </div>
-        <div style={{ textAlign: "right", marginTop: 12 }}>
+
+        <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 }}>Response deadline (optional)</label>
+        <input type="date" value={deadline ?? ""} onChange={(e) => setDeadline(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit", marginBottom: 16 }} />
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: INK }}>
+            {selCount === 0 ? "No instructors selected" : allSelected ? `Sending to all ${emailableCount} instructors` : `Sending to ${selCount} of ${emailableCount}`}
+          </label>
+          <div style={{ display: "flex", gap: 12 }}>
+            {alreadyOpen && nonResponderCount > 0 && <button type="button" onClick={selectNonResponders} style={linkBtn}>Non-responders</button>}
+            <button type="button" onClick={() => setSelectedIds(allSelected ? new Set() : new Set(emailable.map((i) => i.id)))} style={linkBtn}>
+              {allSelected ? "Clear all" : "Select all"}
+            </button>
+          </div>
+        </div>
+        <div style={{ maxHeight: 180, overflowY: "auto", marginBottom: missingEmailCount > 0 ? 6 : 16, border: `1px solid ${RULE}`, borderRadius: 8, padding: 8 }}>
+          {instructors.length === 0 && <div style={{ fontSize: 13, color: MUTED, padding: "4px 6px" }}>No active instructors for this term.</div>}
+          {instructors.map((i) => {
+            const noEmail = !i.email;
+            const checked = !noEmail && (selectedIds?.has(i.id) ?? false);
+            const hasSubmitted = submitted.has(i.id);
+            return (
+              <label key={i.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", fontSize: 13, cursor: noEmail ? "default" : "pointer", opacity: noEmail ? 0.55 : 1 }}>
+                <input type="checkbox" checked={checked} disabled={noEmail} onChange={() => toggle(i.id)} />
+                <span style={{ flex: 1 }}>{(i.preferred_name || i.first_name)}{i.last_name ? ` ${i.last_name}` : ""}</span>
+                {noEmail ? (
+                  <Tag color={CORAL}>no email</Tag>
+                ) : alreadyOpen ? (
+                  <Tag color={hasSubmitted ? OK_GREEN : MUTED}>{hasSubmitted ? "✓ submitted" : "○ waiting"}</Tag>
+                ) : null}
+              </label>
+            );
+          })}
+        </div>
+        {missingEmailCount > 0 && (
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 16 }}>
+            {missingEmailCount} instructor{missingEmailCount === 1 ? " has" : "s have"} no email on file and can't be sent the survey. Add an email on their profile to include {missingEmailCount === 1 ? "them" : "them"}.
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={doPreview}
+          disabled={pvBusy || selCount === 0}
+          style={{ ...btnStyle, width: "100%", background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, opacity: pvBusy || selCount === 0 ? 0.5 : 1, marginBottom: 10 }}
+        >
+          {pvBusy ? "Building preview…" : hasPreview ? "Refresh preview" : "Preview the email"}
+        </button>
+        {pvErr && <div style={{ color: "#b53737", fontSize: 13, marginBottom: 10 }}>{pvErr}</div>}
+        {hasPreview && (
+          <div ref={previewRef} style={{ marginBottom: 14, border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden", scrollMarginTop: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${RULE}`, background: CREAM }}>
+              <span style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>Previewing</span>
+              {previews.length > 1 ? (
+                <select value={pvIdx} onChange={(e) => setPvIdx(Number(e.target.value))} style={{ fontSize: 12, fontFamily: "inherit", border: `1px solid ${RULE}`, borderRadius: 6, padding: "3px 6px", maxWidth: 320 }}>
+                  {previews.map((p, i) => <option key={i} value={i}>{nameById.get(p.instructor_id) || p.to}</option>)}
+                </select>
+              ) : (
+                <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>{nameById.get(previews[0].instructor_id) || previews[0].to}</span>
+              )}
+              <span style={{ marginLeft: "auto", fontSize: 11, color: MUTED }}>No email sent</span>
+            </div>
+            <iframe title="Survey email preview" srcDoc={previews[pvIdx]?.html} style={{ width: "100%", height: 460, border: "none", background: "#fff", display: "block" }} />
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
           <button onClick={onClose} style={linkBtn}>Cancel</button>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button onClick={() => onRun("test")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, opacity: busy || selCount === 0 ? 0.6 : 1 }}>Send test to me</button>
+            <button onClick={() => onRun("send")} disabled={busy || selCount === 0} style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy || selCount === 0 ? 0.6 : 1 }}>
+              {busy ? "Sending…" : allSelected ? `Send to all ${emailableCount}` : `Send to ${selCount}`}
+            </button>
+          </div>
         </div>
       </div>
     </Overlay>
@@ -2146,7 +2433,7 @@ function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
   );
 }
 
-function OfferReviewModal({ program, assignment, loc, onReply, onReassign, onRemove, onClose }) {
+function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReassign, onRemove, onClose }) {
   const [thread, setThread] = useState(null);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
@@ -2203,6 +2490,11 @@ function OfferReviewModal({ program, assignment, loc, onReply, onReassign, onRem
         <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc} · {program.day_of_week}{program.start_time ? ` · ${fmtTimeRange(program.start_time, program.end_time)}` : ""}</div>
         <div style={{ fontSize: 13, color: INK, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 600 }}>{who}</span> <Pill status={pillStatus} /></div>
         {assignment.deadline && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Response due {fmtDeadline(assignment.deadline)}</div>}
+        {subNeeded?.length > 0 && (
+          <div style={{ marginTop: 8, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, color: INK, fontWeight: 500 }}>
+            ⚠ {who.split(" ")[0]} is unavailable on {listDates(subNeeded)} — line up a sub for {subNeeded.length === 1 ? "that date" : "those dates"}.
+          </div>
+        )}
       </div>
       <div style={{ maxHeight: "46vh", overflowY: "auto", padding: "14px 18px" }}>
         {isChange && assignment.change_request_message && (
