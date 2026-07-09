@@ -1084,7 +1084,21 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     setAssignSubFor({ program, lead, dates, defaultDate });
   }
 
+  // Refetch just the availability + area prefs (no full-board reload / loading
+  // flicker) so an instructor's just-submitted change shows in the picker. The
+  // board's realtime sub only watches assignments, so availability edits made
+  // while this board is open would otherwise stay stale.
+  async function refreshAvailabilityQuiet() {
+    if (!org?.id || !term) return;
+    const [availRes, areaPrefRes] = await Promise.all([
+      supabase.from("instructor_term_availability").select("instructor_id, weekday_availability, max_days, needs_confirmation, notes, submitted_at, unavailable_dates").eq("organization_id", org.id).eq("term", term),
+      supabase.from("instructor_term_area_preferences").select("instructor_id, area, preference").eq("organization_id", org.id).eq("term", term),
+    ]);
+    setState((s) => (s.status === "ready" ? { ...s, availability: availRes.data ?? s.availability, areaPrefs: areaPrefRes.data ?? s.areaPrefs } : s));
+  }
+
   function openRow(program) {
+    refreshAvailabilityQuiet(); // fire-and-forget; picker updates live when it lands
     const e = enriched.get(program.id);
     const lead = e?.lead ?? null;
     // Offer in flight (emailed, responded, or change requested) → review modal.

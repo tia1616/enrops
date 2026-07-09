@@ -2054,6 +2054,7 @@ export default function Schedule() {
         canRematch={cycle.status === "collecting"}
         canRunReminders={state.assignments.some((a) => a.status === "published" && !a.instructor_response_at)}
         onApprove={handleApprove}
+        onSurveyClick={() => setSurveyDialog({ mode: "choose", payload: null })}
         onSendClick={() => setOfferDialog({ mode: "choose", payload: null })}
         onPreviewClick={handlePreviewOffers}
         onRerunAgent={handleRerunAgent}
@@ -2453,7 +2454,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
+function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSurveyClick, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
   const otherCycles = (allCycles ?? []).filter((c) => c.id !== cycle.id);
   const hasOtherViews = otherCycles.length > 0 || (afterschoolTerms ?? []).length > 0;
   return (
@@ -2651,6 +2652,16 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
         )}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {onSurveyClick && (
+          <button
+            type="button"
+            onClick={onSurveyClick}
+            title={cycle.availability_survey_opened_at ? "Send the availability survey again (e.g. to instructors who haven't responded)" : "Send the availability survey to instructors"}
+            style={{ ...btn("transparent", BRIGHT, true), padding: "7px 12px", fontSize: 13 }}
+          >
+            {cycle.availability_survey_opened_at ? "Resend survey" : "Send survey"}
+          </button>
+        )}
         {lastOp && (
           <button
             type="button"
