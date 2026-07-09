@@ -61,6 +61,10 @@ const TOKENS_BY_TEMPLATE_KEY = {
   // a contact has no program, so {{program_name}} would render empty. The review
   // link itself is a plain URL the operator pastes into the body (not a token).
   review_request:         ["first_name", "child_first_name", "org_name", "sender_name"],
+  // no_school_day: program-centric (no child name — a parent may have several
+  // kids in one class). {{no_school_dates}} = the affected class day(s);
+  // {{no_school_reason}} = why (falls back to "a no-school day" if blank).
+  no_school_day:          ["first_name", "no_school_dates", "no_school_reason", "program_name", "location_name", "org_name", "sender_name"],
 };
 
 // HTML-pre-rendered tokens — preview passes their sample HTML through verbatim.
@@ -110,6 +114,8 @@ function sampleTokens(orgName, senderName, primaryColor, orgSlug) {
     location_name: "Beaverton STEAM Hub",
     age_turning: "8",
     abandoned_resume_url: "#",
+    no_school_dates: "Monday, September 7",
+    no_school_reason: "Labor Day",
     register_url: registerUrl,
     final_showcase_block:
       `<div style="background:#f5f4ee;border-left:3px solid ${color};padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;"><strong>On the final day:</strong> Campers host a Playtest Arcade where every kid loads their finished platformer onto a Chromebook and the whole group rotates through playing each other's games.</div>`,
@@ -228,16 +234,27 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
-  // Operator-editable send timing. Only templates whose default_timing carries a
-  // numeric days_after expose this control (review_request, check_in). The value
-  // writes automations.timing_override.days_after; equal-to-default clears the
-  // override. Held as a string so the input can be transiently empty while typing.
-  const hasDaysAfterTiming = typeof template?.default_timing?.days_after === "number";
-  const defaultDaysAfter = hasDaysAfterTiming ? template.default_timing.days_after : null;
-  const savedDaysAfter = automation?.timing_override?.days_after ?? defaultDaysAfter;
-  const [daysAfter, setDaysAfter] = useState(savedDaysAfter != null ? String(savedDaysAfter) : "");
-  // Label the timing by what the delay is measured from, per template.
-  const timingAnchorLabel = template.key === "review_request" ? "a family joins" : "the first session";
+  // Operator-editable send timing. EXPLICIT per-template allowlist — which
+  // templates expose the control, which key it writes, and what the delay is
+  // measured from. Explicit (not "any template with a numeric timing key") so
+  // generalizing the control never silently pulls another template into scope:
+  // welcome_camp/welcome_afterschool also carry default_timing.days_before, but
+  // their send-timing was never operator-editable and this PR keeps it that way.
+  // The value writes automations.timing_override[timingKey]; equal-to-default
+  // clears the override. Held as a string so the input can be transiently empty.
+  const TIMING_CONTROLS = {
+    check_in:       { key: "days_after",  anchor: "the first session" },
+    review_request: { key: "days_after",  anchor: "a family joins" },
+    no_school_day:  { key: "days_before", anchor: "the no-school day" },
+  };
+  const timingCfg = TIMING_CONTROLS[template.key] ?? null;
+  const timingKey = timingCfg?.key ?? null;
+  const hasTiming = !!timingCfg && typeof template?.default_timing?.[timingKey] === "number";
+  const timingIsBefore = timingKey === "days_before";
+  const defaultTiming = hasTiming ? template.default_timing[timingKey] : null;
+  const savedTiming = hasTiming ? (automation?.timing_override?.[timingKey] ?? defaultTiming) : null;
+  const [timingValue, setTimingValue] = useState(savedTiming != null ? String(savedTiming) : "");
+  const timingAnchorLabel = timingCfg?.anchor ?? "";
 
   // review_request: a dedicated "Your review link" field so the operator never
   // hand-edits HTML to set the link. It reads/writes the single <a> in the body.
@@ -264,6 +281,16 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState(null);
   const realSourceSelected = !!sourceType && !!selectedSource;
+
+  // no_school_day is a two-audience automation: the editable subject/body is the
+  // PARENT email; the instructor gets fixed tailored copy. This toggle previews +
+  // test-sends either variant. For no_school_day we always use the server preview
+  // (it renders sample data through the real pipeline, and knows the instructor
+  // copy) so the pane switches with the toggle. Other templates ignore audience.
+  const isTwoAudience = template.key === "no_school_day";
+  const [audience, setAudience] = useState("parent"); // "parent" | "instructor"
+  const audienceParam = audience === "instructor" ? "instructor" : undefined;
+  const wantsServerPreview = realSourceSelected || isTwoAudience;
 
   useEffect(() => {
     if (!sourceType || !orgId) return;
@@ -316,13 +343,13 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   // the system) so the pane shows true resolved content, not sample tokens.
   // Debounced so every keystroke in subject/body doesn't hammer the function.
   useEffect(() => {
-    if (!realSourceSelected) {
+    if (!wantsServerPreview) {
       setServerPreview(null);
       setPreviewError(null);
       setPreviewLoading(false);
       return;
     }
-    const [srcType, srcId] = selectedSource.split(":");
+    const [srcType, srcId] = (selectedSource || "").split(":");
     let cancelled = false;
     setPreviewLoading(true);
     setPreviewError(null);
@@ -339,6 +366,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               preview_body: body,
               test_camp_session_id: srcType === "camp" ? srcId : null,
               test_program_id: srcType === "program" ? srcId : null,
+              audience: audienceParam,
             },
           },
         );
@@ -355,7 +383,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       }
     }, 500);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [realSourceSelected, selectedSource, subject, body, orgId, template.key]);
+  }, [wantsServerPreview, realSourceSelected, selectedSource, subject, body, orgId, template.key, audienceParam]);
 
   function toggleBodyEdit() {
     if (editingBody) {
@@ -389,7 +417,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   // doc has no <base target="_blank">, so inject one — keeps in-iframe link
   // clicks opening a new tab instead of blanking the sandbox. Otherwise fall
   // back to the local sample render (also used while the server call is loading).
-  const showingServerPreview = realSourceSelected && !!serverPreview?.body_html;
+  const showingServerPreview = wantsServerPreview && !!serverPreview?.body_html;
   const displayedPreviewHtml = useMemo(() => {
     if (!showingServerPreview) return previewHtml;
     const html = serverPreview.body_html;
@@ -403,10 +431,10 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const subjectDirty = subject !== (automation?.subject_override ?? template.default_subject);
   const bodyDirty = body !== (automation?.body_override ?? template.default_body);
   // Clamp ≥1; empty/invalid falls back to the template default. Mirrors the cron.
-  const parsedDaysAfter = hasDaysAfterTiming
-    ? Math.max(1, parseInt(daysAfter, 10) || defaultDaysAfter || 1)
+  const parsedTiming = hasTiming
+    ? Math.max(1, parseInt(timingValue, 10) || defaultTiming || 1)
     : null;
-  const timingDirty = hasDaysAfterTiming && parsedDaysAfter !== savedDaysAfter;
+  const timingDirty = hasTiming && parsedTiming !== savedTiming;
   const dirty = subjectDirty || bodyDirty || timingDirty;
 
   async function handleSave() {
@@ -427,9 +455,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // Timing override: only for templates with the control, and only when it
       // differs from the default (equal-to-default clears it, like subject/body).
       const patch = { subject_override: subjectOverride, body_override: bodyOverride };
-      if (hasDaysAfterTiming) {
-        patch.timing_override = parsedDaysAfter !== defaultDaysAfter
-          ? { ...(automation?.timing_override ?? {}), days_after: parsedDaysAfter }
+      if (hasTiming) {
+        patch.timing_override = parsedTiming !== defaultTiming
+          ? { ...(automation?.timing_override ?? {}), [timingKey]: parsedTiming }
           : null;
       }
       // Capture prior values BEFORE the upsert so we can append edit history.
@@ -517,7 +545,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // No row to reset — just revert local editor state.
       setSubject(template.default_subject);
       setBody(template.default_body);
-      if (hasDaysAfterTiming) setDaysAfter(String(defaultDaysAfter));
+      if (hasTiming) setTimingValue(String(defaultTiming));
       if (isReviewLink) setReviewLink("");
       return;
     }
@@ -528,7 +556,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       const prevSubject = automation?.subject_override ?? null;
       const prevBody = automation?.body_override ?? null;
       const resetPatch = { subject_override: null, body_override: null };
-      if (hasDaysAfterTiming) resetPatch.timing_override = null;
+      if (hasTiming) resetPatch.timing_override = null;
       const { data, error: upErr } = await supabase
         .from("automations")
         .update(resetPatch)
@@ -538,7 +566,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       if (upErr) throw upErr;
       setSubject(template.default_subject);
       setBody(template.default_body);
-      if (hasDaysAfterTiming) setDaysAfter(String(defaultDaysAfter));
+      if (hasTiming) setTimingValue(String(defaultTiming));
       if (isReviewLink) setReviewLink("");
       // Reset is ALSO a voice signal — operator decided their custom version
       // wasn't right. Append rows for any field that had a non-null override.
@@ -586,6 +614,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             preview_body: body,
             test_camp_session_id: srcType === "camp" ? srcId : null,
             test_program_id: srcType === "program" ? srcId : null,
+            audience: audienceParam,
           },
         },
       );
@@ -593,7 +622,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       if (data?.ok === false) {
         throw new Error(data?.error ?? "Send failed");
       }
-      setSuccess(`Test sent to ${testEmail}. Check your inbox.`);
+      setSuccess(`Test sent to ${testEmail}${isTwoAudience ? ` (${audience === "instructor" ? "instructor" : "families"} version)` : ""}. Check your inbox.`);
     } catch (e) {
       setError(e?.message ?? "Test send failed — try again");
     } finally {
@@ -612,6 +641,37 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       {/* Body — inline expansion within the parent row. No drawer, no
           backdrop. The Edit button on the row owns the open/close toggle. */}
       <div style={{ padding: 0 }}>
+          {/* Two-audience toggle (no_school_day) — preview + test either the
+              family or the instructor version. Editable fields below are always
+              the family copy; the instructor copy is a fixed tailored template. */}
+          {isTwoAudience && (
+            <div style={{ marginBottom: 16 }}>
+              <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                Preview &amp; test as
+              </span>
+              <div style={{ display: "inline-flex", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+                {[["parent", "Families"], ["instructor", "Instructor"]].map(([val, label]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setAudience(val)}
+                    style={{
+                      padding: "8px 16px", fontSize: 13, fontWeight: 600, border: "none",
+                      cursor: "pointer", background: audience === val ? PURPLE : "#fff",
+                      color: audience === val ? "#fff" : MUTED,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
+                {audience === "instructor"
+                  ? "Instructors get a fixed, tailored heads-up (not editable here). The preview and test below show that version."
+                  : "The subject and message below are the family version. Instructors get a matching heads-up — flip the toggle to preview it."}
+              </p>
+            </div>
+          )}
           {/* Subject */}
           <div style={{ marginBottom: 16 }}>
             <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
@@ -627,12 +687,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                 borderRadius: 6, outline: "none", background: "#fff",
               }}
             />
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
-              <span>
-                Type em-dashes (—) and arrows (→) directly — HTML codes like <code style={{ fontFamily: "ui-monospace,monospace" }}>&amp;mdash;</code> render literally in subject lines.
-              </span>
-              <span style={{ flexShrink: 0, marginLeft: 8, color: (subject || "").length > 78 ? WARN : (subject || "").length > 60 ? "#b8770b" : MUTED, fontWeight: (subject || "").length > 60 ? 600 : 400 }}>
-                {(subject || "").length}{(subject || "").length > 78 ? " — most clients truncate at 78" : (subject || "").length > 60 ? " — Gmail truncates at ~60" : ""}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4, fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
+              <span style={{ flexShrink: 0, color: (subject || "").length > 78 ? WARN : (subject || "").length > 60 ? "#b8770b" : MUTED, fontWeight: (subject || "").length > 60 ? 600 : 400 }}>
+                {(subject || "").length}{(subject || "").length > 78 ? " characters, most clients truncate at 78" : (subject || "").length > 60 ? " characters, Gmail truncates at ~60" : " characters"}
               </span>
             </div>
           </div>
@@ -723,41 +780,47 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
               Available tokens
             </span>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {tokens.map((t) => (
-                <code
-                  key={t}
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData("text/plain", `{{${t}}}`);
-                    e.dataTransfer.effectAllowed = "copy";
-                  }}
-                  onClick={() => {
-                    // Click fallback: copy to clipboard so operators on touch
-                    // devices or who don't realize chips drag can still grab
-                    // the token.
-                    if (typeof navigator !== "undefined" && navigator.clipboard) {
-                      navigator.clipboard.writeText(`{{${t}}}`).catch(() => {});
-                    }
-                  }}
-                  style={{
-                    background: "#f5f4ee", color: PURPLE, padding: "3px 8px", borderRadius: 4,
-                    fontSize: 12, fontFamily: "monospace", cursor: "grab",
-                    userSelect: "none",
-                  }}
-                  title={`${PRE_RENDERED_HTML_TOKENS.has(t) ? "Pre-rendered HTML — drop into body where you want the block." : "Plain text — safe in body or attributes."} Drag into the body, or click to copy.`}
-                >
-                  {`{{${t}}}`}
-                </code>
-              ))}
-            </div>
-            <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED }}>
-              Drag any token into the body where you want it, or click to copy.
-            </p>
+            {tokens.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 13, color: MUTED }}>None for this message.</p>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {tokens.map((t) => (
+                    <code
+                      key={t}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("text/plain", `{{${t}}}`);
+                        e.dataTransfer.effectAllowed = "copy";
+                      }}
+                      onClick={() => {
+                        // Click fallback: copy to clipboard so operators on touch
+                        // devices or who don't realize chips drag can still grab
+                        // the token.
+                        if (typeof navigator !== "undefined" && navigator.clipboard) {
+                          navigator.clipboard.writeText(`{{${t}}}`).catch(() => {});
+                        }
+                      }}
+                      style={{
+                        background: "#f5f4ee", color: PURPLE, padding: "3px 8px", borderRadius: 4,
+                        fontSize: 12, fontFamily: "monospace", cursor: "grab",
+                        userSelect: "none",
+                      }}
+                      title={`${PRE_RENDERED_HTML_TOKENS.has(t) ? "Pre-rendered HTML — drop into body where you want the block." : "Plain text — safe in body or attributes."} Drag into the body, or click to copy.`}
+                    >
+                      {`{{${t}}}`}
+                    </code>
+                  ))}
+                </div>
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED }}>
+                  Drag any token into the body where you want it, or click to copy.
+                </p>
+              </>
+            )}
           </div>
 
-          {/* Timing — only for templates with an editable days_after offset */}
-          {hasDaysAfterTiming && (
+          {/* Timing — for templates with an editable days_after or days_before offset */}
+          {hasTiming && (
             <div style={{ marginBottom: 24 }}>
               <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
                 Timing
@@ -767,19 +830,21 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                 <input
                   type="number"
                   min={1}
-                  value={daysAfter}
-                  onChange={(e) => setDaysAfter(e.target.value)}
-                  onBlur={() => { if (daysAfter === "" || Number(daysAfter) < 1) setDaysAfter(String(defaultDaysAfter)); }}
+                  value={timingValue}
+                  onChange={(e) => setTimingValue(e.target.value)}
+                  onBlur={() => { if (timingValue === "" || Number(timingValue) < 1) setTimingValue(String(defaultTiming)); }}
                   style={{
                     width: 72, padding: "8px 10px", fontSize: 14, color: INK,
                     border: `1px solid ${RULE}`, borderRadius: 6, outline: "none",
                     background: "#fff", textAlign: "center",
                   }}
                 />
-                <span style={{ fontSize: 14, color: INK }}>days after {timingAnchorLabel}.</span>
+                <span style={{ fontSize: 14, color: INK }}>days {timingIsBefore ? "before" : "after"} {timingAnchorLabel}.</span>
               </div>
               <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED }}>
-                Default is {defaultDaysAfter} days. Pick the point where families have felt the value but it&apos;s still fresh.
+                {timingIsBefore
+                  ? <>Default is {defaultTiming} days. Enough notice for families to plan, without being so early they forget.</>
+                  : <>Default is {defaultTiming} days. Pick the point where families have felt the value but it&apos;s still fresh.</>}
               </p>
             </div>
           )}
