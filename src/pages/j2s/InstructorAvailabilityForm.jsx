@@ -94,6 +94,9 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
   const [locations, setLocations] = useState([]);
   const [categoryOptions, setCategoryOptions] = useState([]); // [{value,label}] from the org's curricula
   const [hasExisting, setHasExisting] = useState(false);
+  // Questions the operator turned off in Settings (org_survey_config, context
+  // 'camp'). Hidden here + skipped in validation. Empty = ask everything.
+  const [disabled, setDisabled] = useState(() => new Set());
 
   const cycleWeeks = useMemo(() => Array.isArray(cycle?.weeks) ? cycle.weeks : [], [cycle]);
 
@@ -102,7 +105,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
     if (!instructor?.instructor_id || !cycle?.id || !instructor?.organization_id) return;
     let alive = true;
     (async () => {
-      const [availRes, locPrefRes, curPrefRes, orgRes, campVenuesRes, currRes] = await Promise.all([
+      const [availRes, locPrefRes, curPrefRes, orgRes, campVenuesRes, currRes, cfgRes] = await Promise.all([
         supabase
           .from("instructor_availability")
           .select("session_types, available_weeks, role_preference, saturdays_ok, unavailable_dates, notes, submitted_at")
@@ -137,8 +140,16 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
           .select("category")
           .eq("organization_id", instructor.organization_id)
           .not("category", "is", null),
+        supabase
+          .from("org_survey_config")
+          .select("disabled_questions")
+          .eq("organization_id", instructor.organization_id)
+          .eq("context", "camp")
+          .maybeSingle(),
       ]);
       if (!alive) return;
+
+      setDisabled(new Set(Array.isArray(cfgRes.data?.disabled_questions) ? cfgRes.data.disabled_questions : []));
 
       // Pre-fill from existing availability row (if any).
       if (availRes.data) {
@@ -226,13 +237,15 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
     setError(null);
     if (availableWeeks.size === 0) { setError("Pick at least one week you're available."); return; }
     if (sessionTypes.size === 0) { setError("Pick at least one session type (Morning, Afternoon, or Full day)."); return; }
-    if (!rolePref) { setError("Pick a role preference."); return; }
+    if (!disabled.has("role") && !rolePref) { setError("Pick a role preference."); return; }
     // Areas are required (parity with the after-school form). Only enforce when the
     // admin has actually set up areas for this cycle — otherwise there's nothing to rate.
-    const unratedAreas = locations.filter((l) => !locPrefs[l.name]);
-    if (unratedAreas.length > 0) {
-      setError(`Please rate every area — still missing: ${unratedAreas.map((l) => l.name).join(", ")}.`);
-      return;
+    if (!disabled.has("areas")) {
+      const unratedAreas = locations.filter((l) => !locPrefs[l.name]);
+      if (unratedAreas.length > 0) {
+        setError(`Please rate every area — still missing: ${unratedAreas.map((l) => l.name).join(", ")}.`);
+        return;
+      }
     }
 
     setSaving(true);
@@ -391,6 +404,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         </div>
       </Card>
 
+      {!disabled.has("unavailable_dates") && (
       <Card title="Specific dates you can't work" subtitle="Picked a week but have a trip or appointment on one day? Add those dates. You'll still be assigned the camp — we just flag the dates so your admin can line up a sub.">
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <input type="date" value={dateToAdd} onChange={(e) => setDateToAdd(e.target.value)} style={{ ...inputStyle, width: 190 }} />
@@ -413,7 +427,9 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
           </div>
         )}
       </Card>
+      )}
 
+      {!disabled.has("areas") && (
       <Card title="Which areas do you want to work in?" subtitle="Rate every area: 'Love to' is where you'd most like to be, 'Happy to' means you're glad to work there, and 'Can't' means we won't schedule you there.">
         {locations.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
@@ -432,8 +448,9 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
           </div>
         )}
       </Card>
+      )}
 
-      {categoryOptions.length > 0 && (
+      {!disabled.has("subjects") && categoryOptions.length > 0 && (
         <Card title="What do you like to teach?" subtitle="Pick your preference for each subject. We'll match you to camps you'll enjoy.">
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {categoryOptions.map((c) => (
@@ -448,6 +465,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         </Card>
       )}
 
+      {!disabled.has("role") && (
       <Card title="Are you interested in:" subtitle="Lead means you run the camp. Developing means you support an experienced lead instructor.">
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {ROLE_OPTIONS.map((r) => {
@@ -474,14 +492,18 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
           })}
         </div>
       </Card>
+      )}
 
+      {!disabled.has("saturdays") && (
       <Card title="Saturday availability">
         <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: INK, cursor: "pointer" }}>
           <input type="checkbox" checked={saturdaysOk} onChange={(e) => setSaturdaysOk(e.target.checked)} />
           <span>Yes, I can work some Saturdays this {cycleTitle.split(" ")[0].toLowerCase()}.</span>
         </label>
       </Card>
+      )}
 
+      {!disabled.has("notes") && (
       <Card title="Anything else we should know?" subtitle="Optional — let your admin know about constraints, preferences, or anything that doesn't fit above.">
         <textarea
           value={notes}
@@ -491,6 +513,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
           style={textareaStyle}
         />
       </Card>
+      )}
 
       {error && (
         <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 12, borderRadius: 8, fontSize: 13 }}>

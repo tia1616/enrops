@@ -110,12 +110,15 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
   const [areas, setAreas] = useState([]);
   const [hasExisting, setHasExisting] = useState(false);
+  // Questions the operator turned off in Settings (org_survey_config). Hidden here
+  // and skipped in validation. Empty = ask everything (default).
+  const [disabled, setDisabled] = useState(() => new Set());
 
   useEffect(() => {
     if (!instructorId || !orgId || !term) return;
     let alive = true;
     (async () => {
-      const [availRes, locRes, areaPrefRes, currRes] = await Promise.all([
+      const [availRes, locRes, areaPrefRes, currRes, cfgRes] = await Promise.all([
         supabase
           .from("instructor_term_availability")
           .select("weekday_availability, min_days, max_days, notes, submitted_at, preferred_categories, unavailable_dates")
@@ -139,8 +142,16 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           .select("category")
           .eq("organization_id", orgId)
           .not("category", "is", null),
+        supabase
+          .from("org_survey_config")
+          .select("disabled_questions")
+          .eq("organization_id", orgId)
+          .eq("context", "afterschool")
+          .maybeSingle(),
       ]);
       if (!alive) return;
+
+      setDisabled(new Set(Array.isArray(cfgRes.data?.disabled_questions) ? cfgRes.data.disabled_questions : []));
 
       if (availRes.data) {
         setHasExisting(!!availRes.data.submitted_at);
@@ -225,9 +236,11 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         setError(`On ${d.label}, the 'until' time needs to be after the 'from' time.`); return;
       }
     }
-    if (!daysRange) { setError("Pick how many days a week you'd like to teach (choose 'No limit' if you have no cap)."); return; }
-    const unrated = areas.filter((a) => !areaPrefs[a]);
-    if (unrated.length > 0) { setError(`Please rate every area — still missing: ${unrated.join(", ")}.`); return; }
+    if (!disabled.has("days_per_week") && !daysRange) { setError("Pick how many days a week you'd like to teach (choose 'No limit' if you have no cap)."); return; }
+    if (!disabled.has("areas")) {
+      const unrated = areas.filter((a) => !areaPrefs[a]);
+      if (unrated.length > 0) { setError(`Please rate every area — still missing: ${unrated.join(", ")}.`); return; }
+    }
 
     setSaving(true);
     try {
@@ -345,6 +358,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         </div>
       </Card>
 
+      {!disabled.has("days_per_week") && (
       <Card title="How many days a week do you want?" subtitle="Your target — we'll try not to assign you more classes than the top of this range.">
         <select value={daysRange} onChange={(e) => setDaysRange(e.target.value)} style={{ ...inputStyle, width: 220 }}>
           <option value="" disabled>Select…</option>
@@ -353,7 +367,9 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           ))}
         </select>
       </Card>
+      )}
 
+      {!disabled.has("areas") && (
       <Card title="Which areas do you want to teach in?" subtitle="Rate every area: 'Love to' is where you'd most like to be, 'Happy to' means you're glad to teach there, and 'Can't' means we won't schedule you there.">
 
         {areas.length === 0 ? (
@@ -368,8 +384,9 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           </div>
         )}
       </Card>
+      )}
 
-      {categoryOptions.length > 0 && (
+      {!disabled.has("subjects") && categoryOptions.length > 0 && (
         <Card title="Which do you most enjoy teaching?" subtitle="Pick any that apply — we'll try to send you classes in the subjects you like. You can teach all of them; this just helps us match well.">
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {categoryOptions.map((opt) => {
@@ -394,6 +411,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         </Card>
       )}
 
+      {!disabled.has("unavailable_dates") && (
       <Card title="Any dates you already know you can't make?" subtitle="Optional. Add specific dates you'll be out this term (a holiday, an appointment). You'll still be assigned your weekly class — we just flag those dates so your admin can line up a sub.">
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <input type="date" value={dateToAdd} onChange={(e) => setDateToAdd(e.target.value)} style={{ ...inputStyle, width: 190 }} />
@@ -416,7 +434,9 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           </div>
         )}
       </Card>
+      )}
 
+      {!disabled.has("notes") && (
       <Card title="Anything else we should know?" subtitle="Optional — constraints or preferences that don't fit above.">
         <textarea
           value={notes}
@@ -426,6 +446,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           style={textareaStyle}
         />
       </Card>
+      )}
 
       {error && (
         <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 12, borderRadius: 8, fontSize: 13 }}>
