@@ -60,6 +60,13 @@ function fmtShort(date) {
   return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+// "2026-07-22" -> "Wed, Jul 22, 2026" (parsed at local noon so it never slips a day).
+function fmtDateLabel(d) {
+  const dt = new Date(`${String(d).slice(0, 10)}T12:00:00`);
+  if (isNaN(dt)) return String(d);
+  return dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+}
+
 function termTitle(cycle) {
   if (!cycle?.name) return "this cycle";
   const m = /^(SU|FA|WI|SP)(\d{2})$/.exec(cycle.name);
@@ -78,7 +85,8 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
   const [sessionTypes, setSessionTypes] = useState(new Set());
   const [rolePref, setRolePref] = useState("lead_or_developing");
   const [saturdaysOk, setSaturdaysOk] = useState(false);
-  const [unavailableNotes, setUnavailableNotes] = useState("");
+  const [unavailableDates, setUnavailableDates] = useState([]); // ["2026-07-22", ...]
+  const [dateToAdd, setDateToAdd] = useState("");
   const [notes, setNotes] = useState("");
   const [locPrefs, setLocPrefs] = useState({}); // location_name -> preference
   const [curPrefs, setCurPrefs] = useState({}); // category -> preference
@@ -97,7 +105,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
       const [availRes, locPrefRes, curPrefRes, venuesRes, currRes] = await Promise.all([
         supabase
           .from("instructor_availability")
-          .select("session_types, available_weeks, role_preference, saturdays_ok, unavailable_notes, notes, submitted_at")
+          .select("session_types, available_weeks, role_preference, saturdays_ok, unavailable_dates, notes, submitted_at")
           .eq("instructor_id", instructor.instructor_id)
           .eq("cycle_id", cycle.id)
           .maybeSingle(),
@@ -132,7 +140,11 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         setAvailableWeeks(new Set(availRes.data.available_weeks ?? []));
         setRolePref(availRes.data.role_preference ?? "lead_or_developing");
         setSaturdaysOk(!!availRes.data.saturdays_ok);
-        setUnavailableNotes(availRes.data.unavailable_notes ?? "");
+        setUnavailableDates(
+          Array.isArray(availRes.data.unavailable_dates)
+            ? [...availRes.data.unavailable_dates].map((d) => String(d).slice(0, 10)).sort()
+            : [],
+        );
         setNotes(availRes.data.notes ?? "");
       }
 
@@ -173,6 +185,16 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
     });
   }
 
+  function addUnavailableDate() {
+    if (!dateToAdd) return;
+    setUnavailableDates((prev) => (prev.includes(dateToAdd) ? prev : [...prev, dateToAdd].sort()));
+    setDateToAdd("");
+  }
+
+  function removeUnavailableDate(d) {
+    setUnavailableDates((prev) => prev.filter((x) => x !== d));
+  }
+
   function setLocPref(locationName, preference) {
     setLocPrefs((prev) => ({ ...prev, [locationName]: preference }));
   }
@@ -206,7 +228,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         available_weeks: Array.from(availableWeeks).sort((a, b) => a - b),
         role_preference: rolePref,
         saturdays_ok: saturdaysOk,
-        unavailable_notes: unavailableNotes.trim() || null,
+        unavailable_dates: unavailableDates.length ? unavailableDates : null,
         notes: notes.trim() || null,
         submitted_at: new Date().toISOString(),
         needs_confirmation: false,
@@ -351,14 +373,27 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         </div>
       </Card>
 
-      <Card title="Specific dates you can't work" subtitle="If you've already picked the week but have a doctor appointment / trip on one day, list it here. (e.g. 'Out June 22; back to work June 23')">
-        <textarea
-          value={unavailableNotes}
-          onChange={(e) => setUnavailableNotes(e.target.value)}
-          rows={3}
-          placeholder="Leave blank if you're available all of the weeks you picked above."
-          style={textareaStyle}
-        />
+      <Card title="Specific dates you can't work" subtitle="Picked a week but have a trip or appointment on one day? Add those dates. You'll still be assigned the camp — we just flag the dates so your admin can line up a sub.">
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input type="date" value={dateToAdd} onChange={(e) => setDateToAdd(e.target.value)} style={{ ...inputStyle, width: 190 }} />
+          <button type="button" onClick={addUnavailableDate} disabled={!dateToAdd}
+            style={{ padding: "9px 16px", borderRadius: 6, border: `1px solid ${BRIGHT}`, background: dateToAdd ? "#fff" : CREAM, color: BRIGHT, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: dateToAdd ? "pointer" : "default", opacity: dateToAdd ? 1 : 0.5 }}>
+            Add date
+          </button>
+        </div>
+        {unavailableDates.length > 0 && (
+          <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {unavailableDates.map((d) => (
+              <span key={d} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 8px 6px 12px", borderRadius: 999, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, color: INK, fontSize: 13, fontWeight: 600 }}>
+                {fmtDateLabel(d)}
+                <button type="button" onClick={() => removeUnavailableDate(d)} aria-label={`Remove ${fmtDateLabel(d)}`}
+                  style={{ border: "none", background: "transparent", color: CORAL, fontSize: 16, lineHeight: 1, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </Card>
 
       <Card title="Where do you want to work?" subtitle="Set your preference for each venue. We'll prioritize the ones you love and avoid the ones you can't do.">
@@ -517,6 +552,18 @@ function PrefRow({ label, value, onChange }) {
     </div>
   );
 }
+
+const inputStyle = {
+  padding: "9px 12px",
+  border: `1px solid ${RULE}`,
+  borderRadius: 6,
+  fontSize: 14,
+  fontFamily: "inherit",
+  background: "#fff",
+  color: INK,
+  outline: "none",
+  boxSizing: "border-box",
+};
 
 const textareaStyle = {
   width: "100%",

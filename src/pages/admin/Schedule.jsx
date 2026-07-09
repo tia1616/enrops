@@ -98,6 +98,35 @@ function fmtShort(dateStr) {
   return new Date(`${dateStr}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+// Human list of dates: up to 2 shown, then "+N more".
+function listDates(dates) {
+  const sorted = [...dates].sort();
+  if (sorted.length <= 2) return sorted.map(fmtShort).join(" and ");
+  return `${fmtShort(sorted[0])}, ${fmtShort(sorted[1])} +${sorted.length - 2} more`;
+}
+
+const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+// Which of an instructor's unavailable dates fall inside a camp's week span (on a
+// day the camp actually meets). Non-blocking — surfaced as "needs a sub".
+function campUnavailableConflicts(av, session) {
+  const blackout = Array.isArray(av?.unavailable_dates) ? av.unavailable_dates.map((d) => String(d).slice(0, 10)) : [];
+  if (!blackout.length || !session?.starts_on || !session?.ends_on) return [];
+  const s = String(session.starts_on).slice(0, 10);
+  const e = String(session.ends_on).slice(0, 10);
+  // Match the board's render default: a camp with no class_days meets Mon–Fri.
+  const classDays = (Array.isArray(session.class_days) && session.class_days.length)
+    ? session.class_days.map((x) => String(x).toLowerCase())
+    : ["monday", "tuesday", "wednesday", "thursday", "friday"];
+  return blackout
+    .filter((d) => {
+      if (d < s || d > e) return false;
+      const wd = WEEKDAY_NAMES[new Date(`${d}T12:00:00`).getDay()];
+      return classDays.includes(wd);
+    })
+    .sort();
+}
+
 function addDaysIso(isoDate, n) {
   if (!isoDate || typeof n !== "number" || n < 0) return null;
   const d = new Date(`${isoDate}T00:00:00`);
@@ -417,7 +446,7 @@ export default function Schedule() {
 
       const sessionsRes = await supabase
         .from("camp_sessions")
-        .select("id, location_name, week_num, session_type, curriculum_category, curriculum_name, start_time, end_time, current_enrollment, enrollment_synced_at, class_days, status")
+        .select("id, location_name, week_num, session_type, curriculum_category, curriculum_name, start_time, end_time, current_enrollment, enrollment_synced_at, class_days, status, starts_on, ends_on")
         .eq("cycle_id", cycle.id)
         .eq("status", "active")
         .order("location_name", { ascending: true });
@@ -440,7 +469,7 @@ export default function Schedule() {
           .order("first_name", { ascending: true }),
         supabase
           .from("instructor_availability")
-          .select("instructor_id, session_types, available_weeks, needs_confirmation, notes")
+          .select("instructor_id, session_types, available_weeks, needs_confirmation, notes, unavailable_dates")
           .eq("cycle_id", cycle.id),
         supabase
           .from("instructor_location_preferences")
@@ -662,7 +691,13 @@ export default function Schedule() {
       const own = assignments.filter((a) => a.camp_session_id === s.id).map(annotate);
       const ownActive = own.filter((a) => a.status !== "withdrawn");
       const lead = ownActive.find((a) => a.role === "lead") ?? ownActive[0] ?? null;
-      byId.set(s.id, { session: s, status, assignment: lead, allAssignments: own, activeAssignments: ownActive });
+      // Date-specific unavailability flagged by the assigned lead/developing that
+      // lands inside this camp's week — surfaced on the card as "needs a sub".
+      const leadA = ownActive.find((a) => a.role === "lead") ?? null;
+      const devA = ownActive.find((a) => a.role === "developing") ?? null;
+      const leadSubNeeded = leadA ? campUnavailableConflicts(availMap.get(leadA.instructor_id), s) : [];
+      const devSubNeeded = devA ? campUnavailableConflicts(availMap.get(devA.instructor_id), s) : [];
+      byId.set(s.id, { session: s, status, assignment: lead, allAssignments: own, activeAssignments: ownActive, leadSubNeeded, devSubNeeded });
     }
     return byId;
   }, [state]);
@@ -3136,7 +3171,7 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getVal
 }
 
 function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onSubClick, onChangeRequestClick }) {
-  const { session, status, assignment, allAssignments, activeAssignments } = item;
+  const { session, status, assignment, allAssignments, activeAssignments, leadSubNeeded = [], devSubNeeded = [] } = item;
   const [dropEffect, setDropEffect] = useState(null); // "ok" | "warn" | "block" | "self" | null
   const [hoverResult, setHoverResult] = useState(null); // full validation result during drag
   const isNeedsHire = status === "needs_hire";
@@ -3161,6 +3196,10 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
   // Only surface live subs (pending/confirmed/taught) — a declined sub leaves the lead covering.
   const leadSubActive = leadSub && SUB_SHOWN_STATUSES.has(leadSub.status) ? leadSub : null;
   const devSubActive = devSub && SUB_SHOWN_STATUSES.has(devSub.status) ? devSub : null;
+  // In the day-grid each card is one weekday; only flag the conflict on the day it
+  // actually falls (dayDate). In dateless views (no dayDate) show all conflict dates.
+  const leadDayConflicts = dayDate ? leadSubNeeded.filter((d) => d === dayDate) : leadSubNeeded;
+  const devDayConflicts = dayDate ? devSubNeeded.filter((d) => d === dayDate) : devSubNeeded;
   const wantsDeveloping = (session.current_enrollment ?? 0) >= DEVELOPING_THRESHOLD;
   const showDevelopingRow = wantsDeveloping || !!developing;
   const color = statusColor(status);
@@ -3300,6 +3339,11 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
       {leadSubActive && (
         <SubLine sub={leadSubActive} onClick={() => onSubClick && lead && onSubClick(session, lead)} />
       )}
+      {leadDayConflicts.length > 0 && (
+        <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.35, marginTop: 2 }}>
+          ⚠ out {listDates(leadDayConflicts)} — needs a sub
+        </div>
+      )}
       {showDevelopingRow && (
         <SlotRow
           label="Developing"
@@ -3312,6 +3356,11 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
       )}
       {showDevelopingRow && devSubActive && (
         <SubLine sub={devSubActive} onClick={() => onSubClick && developing && onSubClick(session, developing)} />
+      )}
+      {showDevelopingRow && devDayConflicts.length > 0 && (
+        <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.35, marginTop: 2 }}>
+          ⚠ out {listDates(devDayConflicts)} — needs a sub
+        </div>
       )}
       <div style={{
         fontSize: 11,
@@ -5404,6 +5453,8 @@ function CandidatePicker({
       if (session.enrollment_synced_at && session.current_enrollment != null && session.current_enrollment < MIN_ENROLLMENT) warningsForBanner.push(`Enrollment is ${session.current_enrollment} — below the ${MIN_ENROLLMENT}-student minimum.`);
       if (sessionTypes.includes("full_day") && (session.session_type === "morning" || session.session_type === "afternoon")) warningsForBanner.push(`${inst.first_name} is reserved for full-day work.`);
       if (avail.needs_confirmation) warningsForBanner.push(`${inst.first_name}'s availability is unconfirmed.`);
+      const dateConflicts = campUnavailableConflicts(avail, session);
+      if (dateConflicts.length) warningsForBanner.push(`${inst.first_name} is unavailable on ${listDates(dateConflicts)} — would need a sub.`);
 
       let score = 0;
       if (locPref === "preferred") score += 2;
