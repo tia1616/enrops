@@ -204,6 +204,19 @@ export default function AdminSettings() {
       </section>
 
       <section style={{ marginTop: 24 }}>
+        <h2 style={sectionTitle}>Pay rates</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>What you pay instructors</div>
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+              Set your per-session pay for lead and developing instructors. Enrops fills these amounts in automatically when a session is confirmed, so payroll adds up on its own.
+            </div>
+          </div>
+          <Link to="/admin/pay-rates" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
+        </div>
+      </section>
+
+      <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Connections</h2>
 
         <div style={connectionCard}>

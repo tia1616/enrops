@@ -20,6 +20,7 @@ import {
   resolveInstructor,
   adminClient,
 } from '../_shared/instructor.ts';
+import { resolvePayAmount } from '../_shared/payRates.ts';
 
 interface ConfirmDeliveryBody {
   confirmation_id?: string;
@@ -28,23 +29,10 @@ interface ConfirmDeliveryBody {
 type Role = 'lead' | 'developing';
 type SessionType = 'morning' | 'afternoon' | 'full_day' | 'after_school';
 
-// Pay table — cents. Per pay_schedule v3.0 (legal_documents.body_text):
-//   Camps: $80/$65 half-day, $160/$130 full-day. Flat per-day rate.
-//   After-school: $60 lead / $50 developing per session.
-const PAY: Record<Role, Record<SessionType, number>> = {
-  lead: {
-    morning: 8000,
-    afternoon: 8000,
-    full_day: 16000,
-    after_school: 6000,
-  },
-  developing: {
-    morning: 6500,
-    afternoon: 6500,
-    full_day: 13000,
-    after_school: 5000,
-  },
-};
+// Pay is resolved per-tenant from tenant_pay_rates via resolvePayAmount(),
+// keyed by role + session_type. When the tenant hasn't configured a rate we
+// record the confirmation with null pay and the admin sets the amount on
+// Payroll (previously this path 400'd on an unmapped rate).
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -162,12 +150,10 @@ serve(async (req: Request) => {
       return json({ error: 'unsupported_role', role }, 400);
     }
 
-    const payCents = PAY[role]?.[sessionType];
-    if (payCents === undefined) {
-      // session_type doesn't map (e.g. unknown enum value from a future migration).
-      console.warn('no pay mapping for session', { role, sessionType, confirmation_id: confirmationId });
-      return json({ error: 'no_pay_rate_for_session', role, session_type: sessionType }, 400);
-    }
+    // Per-tenant rate lookup. null when the tenant hasn't configured this cell
+    // — we still confirm delivery and let the admin set the amount on Payroll,
+    // rather than blocking the confirmation over missing pay config.
+    const payCents = await resolvePayAmount(supabase, row.organization_id, role, sessionType);
 
     // Update the confirmation row.
     const nowIso = new Date().toISOString();

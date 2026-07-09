@@ -3,18 +3,17 @@
 // Instructor Portal: closes the schedule loop by letting an instructor
 // mark a specific day of camp as "I taught this." Writes a row into
 // session_delivery_confirmations with confirmed_by='self', pay_status
-// 'pending', and pay_amount_cents computed from the FLAT per-day pay
-// table below (keyed by the assignment's role + the session_type).
+// 'pending', and pay_amount_cents resolved per-tenant from tenant_pay_rates
+// (keyed by the assignment's role + the session_type).
 //
-// Pay table is the single contractual rate card: camps are paid a flat
-// amount per day, NOT per hour. It is duplicated verbatim from
-// confirm-session-delivery and session-confirmation-cron so all three
-// pay-writing paths agree. If rates change, update all three. (Future:
-// pull from a tenant_pay_rates table — see those siblings' TODO.)
+// Pay rates are per-tenant: resolvePayAmount() reads the org's tenant_pay_rates
+// card. The same resolver is shared by confirm-session-delivery,
+// session-confirmation-cron, and confirm-sub-delivery so all pay-writing paths
+// agree (see _shared/payRates.ts).
 //
-// If the assignment has no usable role, or the session_type isn't a
-// camp day type, we leave pay_amount_cents null and let the admin set it
-// on the Payroll screen — the check-in is still recorded so the day is
+// If the assignment has no usable role, or the tenant hasn't configured a rate
+// for this session_type, we leave pay_amount_cents null and let the admin set
+// it on the Payroll screen — the check-in is still recorded so the day is
 // never silently lost.
 //
 // Body: { camp_assignment_id: string, session_date: 'YYYY-MM-DD' }
@@ -35,23 +34,17 @@ import {
   resolveInstructor,
   adminClient,
 } from '../_shared/instructor.ts';
+import { resolvePayAmount } from '../_shared/payRates.ts';
 
 interface RequestBody {
   camp_assignment_id?: string;
   session_date?: string;
 }
 
-// Flat per-day pay — cents. Per pay_schedule v3.0 (legal_documents.body_text):
-//   Camps: $80/$65 half-day (morning|afternoon), $160/$130 full-day.
-// Keyed by engagement role from camp_assignments, never instructor tier.
-// Duplicated from confirm-session-delivery + session-confirmation-cron.
-type Role = 'lead' | 'developing';
-type CampSessionType = 'morning' | 'afternoon' | 'full_day';
-
-const PAY: Record<Role, Record<CampSessionType, number>> = {
-  lead:       { morning: 8000, afternoon: 8000, full_day: 16000 },
-  developing: { morning: 6500, afternoon: 6500, full_day: 13000 },
-};
+// Pay is resolved per-tenant from the tenant_pay_rates table via
+// resolvePayAmount(), keyed by the assignment's role + the camp session_type.
+// When the tenant hasn't configured a rate, resolution returns null and we
+// record the check-in with null pay — the admin sets the amount on Payroll.
 
 const FORBIDDEN = json({ error: 'forbidden' }, 403);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -165,11 +158,17 @@ serve(async (req: Request) => {
       return json({ error: 'session_covered_by_substitute' }, 409);
     }
 
-    // Pay computation: flat per-day rate from the table, keyed by the
-    // assignment role + session_type. If the role is missing/unexpected or
-    // the session_type isn't a camp day type, leave pay null so the admin
-    // sets it manually on Payroll — the check-in is still recorded.
-    const payAmountCents = computePayAmount(assignment.role, session.session_type);
+    // Pay computation: per-tenant rate from tenant_pay_rates, keyed by the
+    // assignment role + session_type. If the role is missing/unexpected or the
+    // tenant hasn't configured a rate for this cell, resolvePayAmount returns
+    // null so the admin sets it manually on Payroll — the check-in is still
+    // recorded.
+    const payAmountCents = await resolvePayAmount(
+      supabase,
+      assignment.organization_id,
+      assignment.role,
+      session.session_type,
+    );
 
     // Insert the new confirmation. session_type mirrors the camp_session's
     // (full_day / morning / afternoon).
@@ -202,13 +201,3 @@ serve(async (req: Request) => {
     return json({ error: 'internal_error' }, 500);
   }
 });
-
-// Flat per-day pay lookup. Returns null when the role is missing/unknown
-// or the session_type isn't a camp day type, so the admin fills it in.
-function computePayAmount(role: unknown, sessionType: string): number | null {
-  if (role !== 'lead' && role !== 'developing') return null;
-  if (sessionType !== 'morning' && sessionType !== 'afternoon' && sessionType !== 'full_day') {
-    return null;
-  }
-  return PAY[role as Role][sessionType as CampSessionType];
-}
