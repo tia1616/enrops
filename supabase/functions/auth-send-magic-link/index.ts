@@ -22,6 +22,24 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Look a user up by email across ALL pages. auth.admin.listUsers() returns only
+// the first page (50, newest-first), so the earliest-registered accounts would
+// look non-existent once the user base grows past one page — which made old
+// instructors hit a bogus "already registered" error and old parents get a
+// silent no-op with no email. Paging to the end fixes both.
+async function findUserByEmail(supabase: any, email: string) {
+  const target = email.toLowerCase();
+  const perPage = 1000;
+  for (let page = 1; ; page++) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
+    if (error) throw new Error(`listUsers failed: ${error.message}`);
+    const users = data?.users ?? [];
+    const match = users.find((u: any) => u.email?.toLowerCase() === target);
+    if (match) return match;
+    if (users.length < perPage) return null; // reached the last page
+  }
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -37,11 +55,8 @@ serve(async (req: Request) => {
     // auto-create-on-first-sign-in behavior as instructor context.
     const needsInstructorLookup = isInstructor || isOnboarding;
 
-    // Verify the user exists in auth.users
-    const { data: userList } = await supabase.auth.admin.listUsers();
-    let user = userList?.users?.find(
-      (u) => u.email?.toLowerCase() === email.toLowerCase(),
-    );
+    // Verify the user exists in auth.users (paged lookup — see findUserByEmail).
+    let user = await findUserByEmail(supabase, email);
     if (!user) {
       if (needsInstructorLookup) {
         // For first-time instructor sign-in: if their email matches an active
