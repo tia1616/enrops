@@ -170,7 +170,8 @@ export default function App() {
         <Route path="calendars" element={<Navigate to="/admin/schools?tab=calendars" replace />} />
         <Route path="contacts" element={<Navigate to="/admin/schools" replace />} />
         <Route path="instructors" element={<InstructorsPage />} />
-        <Route path="survey-responses" element={<SurveyResponses />} />
+        <Route path="availability" element={<SurveyResponses />} />
+        <Route path="survey-responses" element={<Navigate to="/admin/availability" replace />} />
         <Route path="payroll" element={<Payroll />} />
         <Route path="rosters" element={<Rosters />} />
         <Route path="finances" element={<Finances />} />

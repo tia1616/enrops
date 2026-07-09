@@ -66,7 +66,7 @@ const NAV = [
     tabs: [
       { to: "/admin/schedule", label: "Schedule" },
       { to: "/admin/instructors", label: "Instructor Roster" },
-      { to: "/admin/survey-responses", label: "Responses" },
+      { to: "/admin/availability", label: "Availability" },
     ],
   },
   {
