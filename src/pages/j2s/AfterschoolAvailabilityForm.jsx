@@ -46,10 +46,13 @@ const DAYS_RANGES = [
   { value: "4-5", label: "4–5 days a week", min: 4, max: 5 },
 ];
 
+// Display labels only — the stored `preference` values stay preferred/available/
+// unavailable (what the matcher reads). "Willing" avoids colliding with the
+// weekday-availability question above.
 const PREF_OPTIONS = [
-  { value: "preferred", label: "Preferred", color: OK_GREEN },
-  { value: "available", label: "Available", color: "#6B7280" },
-  { value: "unavailable", label: "Unavailable", color: CORAL },
+  { value: "preferred", label: "Prefer", color: OK_GREEN },
+  { value: "available", label: "Willing", color: "#6B7280" },
+  { value: "unavailable", label: "Can't", color: CORAL },
 ];
 
 const CATEGORY_OPTIONS = [
@@ -74,12 +77,15 @@ function termTitle(term) {
   return `${names[m[1]]} 20${m[2]}`;
 }
 
+// Each day is explicitly Available (with a start time) or Unavailable — no more
+// "blank = not available" guessing. Default Unavailable; the instructor turns on
+// the days they can teach.
 const EMPTY_WEEK = () => ({
-  mon: { from: "", until: "" },
-  tue: { from: "", until: "" },
-  wed: { from: "", until: "" },
-  thu: { from: "", until: "" },
-  fri: { from: "", until: "" },
+  mon: { available: false, from: "", until: "" },
+  tue: { available: false, from: "", until: "" },
+  wed: { available: false, from: "", until: "" },
+  thu: { available: false, from: "", until: "" },
+  fri: { available: false, from: "", until: "" },
 });
 
 export default function AfterschoolAvailabilityForm({ instructor, term, onSaved, onCancel }) {
@@ -130,7 +136,8 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         const wd = availRes.data.weekday_availability ?? {};
         const next = EMPTY_WEEK();
         for (const d of DAYS) {
-          next[d.value] = { from: wd[d.value]?.from ?? "", until: wd[d.value]?.until ?? "" };
+          const from = wd[d.value]?.from ?? "";
+          next[d.value] = { available: !!from, from, until: wd[d.value]?.until ?? "" };
         }
         setWeek(next);
         const r = DAYS_RANGES.find(
@@ -164,6 +171,14 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
     setWeek((prev) => ({ ...prev, [day]: { ...prev[day], [field]: value } }));
   }
 
+  // Explicit per-day availability. Marking a day unavailable clears its times.
+  function setDayAvailable(day, available) {
+    setWeek((prev) => ({
+      ...prev,
+      [day]: available ? { ...prev[day], available: true } : { available: false, from: "", until: "" },
+    }));
+  }
+
   function setAreaPref(area, preference) {
     setAreaPrefs((prev) => ({ ...prev, [area]: preference }));
   }
@@ -184,11 +199,13 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
   async function save() {
     setError(null);
-    const anyDay = DAYS.some((d) => week[d.value]?.from);
-    if (!anyDay) { setError("Add a 'from' time for at least one weekday you can teach."); return; }
+    const anyDay = DAYS.some((d) => week[d.value]?.available);
+    if (!anyDay) { setError("Mark at least one weekday as available."); return; }
     for (const d of DAYS) {
       const w = week[d.value];
-      if (w.from && w.until && w.until <= w.from) {
+      if (!w.available) continue;
+      if (!w.from) { setError(`Set a start time for ${d.label}, or mark it unavailable.`); return; }
+      if (w.until && w.until <= w.from) {
         setError(`On ${d.label}, the 'until' time needs to be after the 'from' time.`); return;
       }
     }
@@ -196,11 +213,11 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
     setSaving(true);
     try {
       const range = DAYS_RANGES.find((x) => x.value === daysRange) ?? DAYS_RANGES[0];
-      // Only persist weekdays that have a 'from' time.
+      // Only persist weekdays explicitly marked available (with a start time).
       const weekday_availability = {};
       for (const d of DAYS) {
         const w = week[d.value];
-        if (w && w.from) weekday_availability[d.value] = w.until ? { from: w.from, until: w.until } : { from: w.from };
+        if (w && w.available && w.from) weekday_availability[d.value] = w.until ? { from: w.from, until: w.until } : { from: w.from };
       }
 
       const { error: availErr } = await supabase
@@ -276,24 +293,37 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         </p>
       </header>
 
-      <Card title="Which days and times can you teach?" subtitle="For each weekday you can work, set the earliest you can start. Add an 'until' time only if you have to leave by a certain point. Leave a day blank if you can't teach that day. We'll only assign a class you can reach in time (about 15 minutes before it starts).">
+      <Card title="Which days and times can you teach?" subtitle="Mark each weekday available or unavailable. For the days you're available, set the earliest you can start (add an 'until' time only if you have to leave by a certain point). We'll only assign a class you can reach in time (about 15 minutes before it starts).">
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {DAYS.map((d) => {
             const w = week[d.value];
             return (
-              <div key={d.value} style={{ display: "grid", gridTemplateColumns: "minmax(96px, 110px) 1fr", gap: 12, alignItems: "center" }}>
+              <div key={d.value} style={{ display: "grid", gridTemplateColumns: "minmax(90px, 96px) auto 1fr", gap: 12, alignItems: "center" }}>
                 <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{d.label}</div>
-                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: MUTED }}>
-                    From
-                    <input type="time" value={w.from} onChange={(e) => setDayTime(d.value, "from", e.target.value)} style={inputStyle} />
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: MUTED }}>
-                    Until <span style={{ fontSize: 11 }}>(optional)</span>
-                    <input type="time" value={w.until} onChange={(e) => setDayTime(d.value, "until", e.target.value)} style={inputStyle} disabled={!w.from} />
-                  </label>
-                  {!w.from && <span style={{ fontSize: 12, color: MUTED }}>Not available</span>}
+                <div style={{ display: "inline-flex", border: `1px solid ${RULE}`, borderRadius: 999, overflow: "hidden" }}>
+                  <button type="button" onClick={() => setDayAvailable(d.value, true)}
+                    style={{ padding: "6px 14px", fontSize: 13, fontWeight: 600, fontFamily: "inherit", border: "none", cursor: "pointer", background: w.available ? OK_GREEN : "#fff", color: w.available ? "#fff" : MUTED }}>
+                    Available
+                  </button>
+                  <button type="button" onClick={() => setDayAvailable(d.value, false)}
+                    style={{ padding: "6px 14px", fontSize: 13, fontWeight: 600, fontFamily: "inherit", border: "none", borderLeft: `1px solid ${RULE}`, cursor: "pointer", background: !w.available ? CORAL : "#fff", color: !w.available ? "#fff" : MUTED }}>
+                    Unavailable
+                  </button>
                 </div>
+                {w.available ? (
+                  <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: MUTED }}>
+                      From
+                      <input type="time" value={w.from} onChange={(e) => setDayTime(d.value, "from", e.target.value)} style={inputStyle} />
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: MUTED }}>
+                      Until <span style={{ fontSize: 11 }}>(optional)</span>
+                      <input type="time" value={w.until} onChange={(e) => setDayTime(d.value, "until", e.target.value)} style={inputStyle} />
+                    </label>
+                  </div>
+                ) : (
+                  <span style={{ fontSize: 12, color: MUTED, fontStyle: "italic" }}>Won't teach this day</span>
+                )}
               </div>
             );
           })}
@@ -308,7 +338,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         </select>
       </Card>
 
-      <Card title="Which areas do you want to teach in?" subtitle="For each area: 'Preferred' is where you'd most like to be, 'Available' means you're happy to teach there, and 'Unavailable' means we won't schedule you there. Leaving one blank counts as available.">
+      <Card title="Which areas do you want to teach in?" subtitle="For each area: 'Prefer' is where you'd most like to be, 'Willing' means you're happy to teach there, and 'Can't' means we won't schedule you there. Leaving one blank counts as willing.">
         {areas.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
             Your admin hasn't set up teaching areas yet.

@@ -1989,6 +1989,11 @@ function SurveyDialog({ dialog, term, instructors, availability, alreadyOpen, se
   const [pvIdx, setPvIdx] = useState(0);
   const [pvBusy, setPvBusy] = useState(false);
   const [pvErr, setPvErr] = useState(null);
+  const previewRef = useRef(null);
+  // Bring the rendered preview into view — it lands below the fold otherwise.
+  useEffect(() => {
+    if (previews && previews.length) previewRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [previews]);
 
   if (dialog.mode === "result") {
     const { mode, data } = dialog.payload;
@@ -2129,7 +2134,7 @@ function SurveyDialog({ dialog, term, instructors, availability, alreadyOpen, se
         </button>
         {pvErr && <div style={{ color: "#b53737", fontSize: 13, marginBottom: 10 }}>{pvErr}</div>}
         {hasPreview && (
-          <div style={{ marginBottom: 14, border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+          <div ref={previewRef} style={{ marginBottom: 14, border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden", scrollMarginTop: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${RULE}`, background: CREAM }}>
               <span style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>Previewing</span>
               {previews.length > 1 ? (
