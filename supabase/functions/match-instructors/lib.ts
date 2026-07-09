@@ -43,9 +43,12 @@ export const VENUE_REGION_MAP: Record<string, string> = {
 // Throws on unmapped venue — better to fail loudly than silently default everyone
 // to "preferred". index.ts runs a pre-flight check across all camp location_names
 // before matching to surface unmapped venues as a clear error.
-export function regionFor(locationName: string): string {
-  const region = VENUE_REGION_MAP[locationName];
-  if (!region) throw new Error(`Unmapped venue: "${locationName}". Add it to VENUE_REGION_MAP in lib.ts.`);
+// The venue->region map is the org's config (organizations.venue_region_map),
+// passed through the score context. Falls back to the built-in J2S constant when
+// not supplied (keeps existing tests + un-migrated orgs working unchanged).
+export function regionFor(locationName: string, map?: Record<string, string>): string {
+  const region = (map ?? VENUE_REGION_MAP)[locationName];
+  if (!region) throw new Error(`Unmapped venue: "${locationName}". Add it to the org's venue_region_map.`);
   return region;
 }
 export type RolePreference = 'lead_only' | 'developing_only' | 'lead_or_developing';
@@ -330,6 +333,7 @@ export function checkHardConstraints(
 export interface SoftScoreContext {
   locPrefByKey: Map<string, PreferenceLevel>;
   currPrefByKey: Map<string, PreferenceLevel>;
+  regionMap?: Record<string, string>; // org's venue->region map; falls back to the constant
 }
 
 export interface ScoreResult {
@@ -360,7 +364,7 @@ export function scoreCamp(
   ctx: SoftScoreContext,
   opts: { skipCurriculum?: boolean } = {},
 ): ScoreResult {
-  const locPref = ctx.locPrefByKey.get(`${instructorId}:${regionFor(camp.location_name)}`) ?? 'preferred';
+  const locPref = ctx.locPrefByKey.get(`${instructorId}:${regionFor(camp.location_name, ctx.regionMap)}`) ?? 'preferred';
   let score = LOC_SCORE[locPref];
   const flags: OutputFlag[] = [];
   if (locPref === 'unavailable') flags.push('location_override');
@@ -400,7 +404,7 @@ export function scoreComboLocation(
   instructorId: string,
   ctx: SoftScoreContext,
 ): number {
-  const locPref = ctx.locPrefByKey.get(`${instructorId}:${regionFor(locationName)}`) ?? 'preferred';
+  const locPref = ctx.locPrefByKey.get(`${instructorId}:${regionFor(locationName, ctx.regionMap)}`) ?? 'preferred';
   return LOC_SCORE[locPref];
 }
 
@@ -643,7 +647,7 @@ export function buildComboCandidates(
     // For combos, quota bonus uses the morning camp as a proxy (location identical).
     const bonus = quotaBonus(inst.id, morning, quotas, counts, fullDayCounts);
     // Combo location-pref flags: if location is unavailable or not_preferred, emit those flags.
-    const locPref = scoreCtx.locPrefByKey.get(`${inst.id}:${regionFor(morning.location_name)}`) ?? 'preferred';
+    const locPref = scoreCtx.locPrefByKey.get(`${inst.id}:${regionFor(morning.location_name, scoreCtx.regionMap)}`) ?? 'preferred';
     const flags: OutputFlag[] = [];
     if (locPref === 'unavailable') flags.push('location_override');
     else if (locPref === 'not_preferred') flags.push('location_low_pref');
@@ -1181,7 +1185,7 @@ export function generateRecommendations(opts: {
       for (const inst of pool) {
         if (inst.availability.available_weeks.includes(d.camp.week_num)) continue; // already had this week
         if (!inst.availability.session_types.includes(d.camp.session_type)) continue; // session_type mismatch
-        const region = regionFor(d.camp.location_name);
+        const region = regionFor(d.camp.location_name, scoreCtx.regionMap);
         const locPref = scoreCtx.locPrefByKey.get(`${inst.id}:${region}`) ?? 'preferred';
         if (locPref === 'unavailable') continue; // would still need hardship override
         const entry = impact.get(inst.id) ?? { id: inst.id, name: inst.first_name, weeks: new Set<number>(), campsCovered: 0 };
