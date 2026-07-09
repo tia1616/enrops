@@ -12,6 +12,9 @@
 //   - contact_added                (welcome_contact)
 //   - days_after_engagement        (review_request — dual anchor: N days after a
 //                                   first session OR after a contact was added)
+//   - days_before_no_school        (no_school_day — CALENDAR-anchored: N days
+//                                   before a district closure, to the affected
+//                                   afterschool families AND assigned instructor)
 //
 // Intentionally not fired here:
 //   - event_registration_confirmed (handled by stripe-webhook, not cron)
@@ -34,6 +37,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
+import { cleanNoSchoolDates, toClosurePeriods, termToSchoolYear, nsdWeekdayLower, periodFires, formatDateList } from "./noSchoolDates.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -141,7 +145,34 @@ interface AudienceEntry {
   register_url: string;         // org's base registration URL
   next_term_available: boolean; // true if org has programs/camps starting >14 days out — drives {{next_term_link_block}}
   program_time?: string;        // drives {{program_time}} — a comma-prefixed time clause (e.g. ", 9:00 AM – 12:00 PM") or "" when unknown. Set by the Welcome resolvers only.
+  // ── no_school_day only ──
+  // recipient_role distinguishes the two audiences of the SAME automation. When
+  // set to "instructor" the resolver also sets subject_template/body_template so
+  // sendOne renders the tailored instructor copy instead of the operator-editable
+  // parent copy. Parent entries leave these undefined → sendOne falls back to the
+  // operator's subject_override/body_override (the editable path). This keeps the
+  // engine generic: any resolver can override per-entry copy without sendOne
+  // knowing template specifics.
+  recipient_role?: "parent" | "instructor";
+  subject_template?: string;
+  body_template?: string;
+  no_school_dates_display?: string; // drives {{no_school_dates}} — the affected class day(s), formatted (e.g. "Monday, September 7")
+  no_school_reason?: string;        // drives {{no_school_reason}} — always readable; falls back to "a no-school day"
 }
+
+// Tailored instructor copy for no_school_day. Parents get the operator-editable
+// subject/body; instructors get this fixed-but-role-appropriate version. Both
+// are informational (no unsubscribe). {{first_name}} = the instructor's first
+// name. Kept as module constants (not seeded on the template) because the
+// automations row stores only ONE editable body; per-audience editable copy is
+// a scoped fast-follow once afterschool assignments (and thus instructor sends)
+// actually exist.
+const NO_SCHOOL_INSTRUCTOR_SUBJECT = "No class at {{location_name}} on {{no_school_dates}}";
+const NO_SCHOOL_INSTRUCTOR_BODY =
+  `<p style="margin:0 0 16px;">Hi {{first_name}},</p>
+<p style="margin:0 0 16px;">Heads up: {{location_name}} has no school on {{no_school_dates}}, so your {{program_name}} class will not meet then. You are off that day.</p>
+<p style="margin:0 0 16px;">Class picks back up as usual the following week.</p>
+<p style="margin:0;">Thanks,<br>{{sender_name}}</p>`;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Entry point
@@ -295,6 +326,9 @@ async function runAutomation(
     case "days_after_engagement":
       audience = await resolveReviewRequestAudience(supabase, a);
       break;
+    case "days_before_no_school":
+      audience = await resolveNoSchoolDayAudience(supabase, a);
+      break;
     case "event_registration_confirmed":
       // Handled by stripe-webhook (registration table → confirmation email).
       // Cron isn't the right trigger here — checkout completion is event-driven.
@@ -405,8 +439,13 @@ async function sendOne(
   entry: AudienceEntry,
 ): Promise<"sent" | "failed"> {
   const tokens = buildTokens(entry, brand);
-  const subject = renderTokens(a.subject_override ?? a.template.default_subject, tokens);
-  const innerBody = renderTokens(a.body_override ?? a.template.default_body, tokens);
+  // A resolver may attach per-entry copy (entry.subject_template/body_template)
+  // to tailor a message by recipient role — no_school_day uses this to send
+  // instructor-specific copy. When unset (every other automation, and the parent
+  // half of no_school_day) we fall back to the operator's editable override, then
+  // the template default. Generic: sendOne stays template-agnostic.
+  const subject = renderTokens(entry.subject_template ?? a.subject_override ?? a.template.default_subject, tokens);
+  const innerBody = renderTokens(entry.body_template ?? a.body_override ?? a.template.default_body, tokens);
   // Promotional templates (mailing_type='marketing', e.g. review_request) carry a
   // CAN-SPAM unsubscribe link keyed to this recipient; informational sends pass
   // "" so their HTML + text stay byte-for-byte unchanged.
@@ -578,6 +617,9 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     ],
     register_url: `${PUBLIC_SITE_URL}/${org.slug}/register`,
     next_term_available: true,
+    // no_school_day sample content so its preview reads naturally.
+    no_school_dates_display: "Monday, September 7",
+    no_school_reason: "Labor Day",
   };
 
   // True preview: when the operator picked a real camp/program, overwrite the
@@ -1707,6 +1749,230 @@ async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationR
 // Token rendering + HTML shell
 // ───────────────────────────────────────────────────────────────────────────
 
+// ─── No-school day heads-up (afterschool; parents + assigned instructor) ─────
+//
+// CALENDAR-anchored, unlike the other resolvers. Reads the org's
+// district_calendars, groups each district's no_school_dates into "closure
+// periods" (consecutive dates, bridging weekends so a whole winter break is one
+// period), and fires `days_before` a period's first day. For each firing period
+// it finds the afterschool programs that (a) sit in that district, (b) map to
+// that calendar's school_year via the program's term, and (c) actually meet on a
+// weekday inside the closure and within their run. Those programs' confirmed
+// families + confirmed instructor get the heads-up.
+//
+// FORWARD-ONLY (no on-enable back-catalog blast): a period fires only when its
+// natural send day (start − days_before) is on/after the automation's enabled_at
+// AND on/before today. So toggling the automation on can never retroactively
+// email families about a closure whose send window already opened — mirrors the
+// review_request enabled_at gate. Without enabled_at we send nothing.
+//
+// Idempotency + stability: context_key embeds the period's TRUE start (grouped
+// over the full calendar, NOT a today-truncated slice), so a multi-day break
+// keeps ONE stable key across the whole send window and is emailed exactly once —
+// never re-sent each day the break is in progress. The firing window stays open
+// from (start − days) through the period end, so a delayed/missed cron still
+// catches up (and dedup prevents a double-send).
+//
+// Dormant-safe: on any day with no closure in a send window, this returns []
+// after one cheap district_calendars read. Instructor sends stay silent until
+// program_assignments has confirmed rows (out of term it is empty).
+//
+// KNOWN LIMITATION (dormant today): programs are matched to a calendar by the
+// legacy free-text program_locations.district. The canonical matcher
+// (matching_district_calendars: structured district_id + calendar_key + free
+// text) is what derive_program_session_dates uses. district_id is unpopulated in
+// every environment today, so the two agree; when structured districts are
+// adopted this program-match must move onto the canonical matcher or a closure
+// could be subtracted from sessions yet miss this reminder. Tracked as follow-up.
+//
+// Pure date logic (junk-date guarding, weekend-bridging grouping, term mapping,
+// date formatting) lives in ./noSchoolDates.ts and is unit-tested there.
+
+const NSD_WEEKDAY_SET = new Set(["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]);
+
+async function resolveNoSchoolDayAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  const days = pickNumber(a.timing_override?.days_before, a.template.default_timing?.days_before, 7);
+  const today = new Date().toISOString().slice(0, 10);
+  // Forward-only gate: no enabled_at ⇒ never fire (prevents any send the instant
+  // the automation is first toggled on). enabled_at is stamped on OFF→ON.
+  const enabledDay = a.enabled_at ? a.enabled_at.slice(0, 10) : null;
+  if (!enabledDay) return [];
+
+  const { data: calendars, error: calErr } = await supabase
+    .from("district_calendars")
+    .select("id, district, school_year, no_school_dates")
+    .eq("organization_id", a.organization_id);
+  if (calErr) throw calErr;
+  if (!calendars || calendars.length === 0) return [];
+
+  const entries: AudienceEntry[] = [];
+
+  for (const cal of calendars as any[]) {
+    // Validate/de-junk/sort over the FULL calendar (floor 2000-01-01 guards the
+    // real "0027-01-12" prod typo but keeps past dates so an in-progress break
+    // still groups to its true start), then group bridging weekends. Both pure +
+    // unit-tested in noSchoolDates.ts.
+    const clean = cleanNoSchoolDates(cal.no_school_dates, "2000-01-01");
+    if (clean.length === 0) continue;
+    const periods = toClosurePeriods(clean);
+
+    // A period fires while today is in [start − days, end] AND its send day is on/
+    // after enabled_at (forward-only). Stable key + this window ⇒ exactly one send
+    // per closure, with catch-up if the cron was delayed. (periodFires is unit-tested.)
+    const firing = periods.filter((p) => periodFires(p.startIso, p.endIso, today, days, enabledDay));
+    if (firing.length === 0) continue;
+
+    // Afterschool programs in this district (the programs table is afterschool;
+    // camps live in camp_sessions and never follow the school calendar).
+    const { data: progs, error: progErr } = await supabase
+      .from("programs")
+      .select("id, curriculum, term, day_of_week, first_session_date, session_count, status, instructor_email, instructor_name, program_location_id, program_locations!inner ( name, district )")
+      .eq("organization_id", a.organization_id)
+      .eq("program_locations.district", cal.district);
+    if (progErr) throw progErr;
+
+    const DEAD_STATUSES = new Set(["draft", "cancelled", "canceled", "archived", "deleted"]);
+    const relevantProgs = (progs ?? []).filter((p: any) =>
+      termToSchoolYear(p.term) === cal.school_year &&
+      !DEAD_STATUSES.has((p.status ?? "").toLowerCase()) &&
+      p.first_session_date &&
+      NSD_WEEKDAY_SET.has(String(p.day_of_week ?? "").toLowerCase()),
+    );
+    if (relevantProgs.length === 0) continue;
+
+    // Run bounds (derive already skips closures) — computed ONCE per program, not
+    // per (period × program). A derive failure skips that program (fail-safe: we
+    // never email without knowing the run), consistent with resolveWelcomeAudience.
+    const sessionsByProg = new Map<string, string[]>();
+    for (const p of relevantProgs as any[]) {
+      try {
+        const { data: s } = await supabase.rpc("derive_program_session_dates", { p_program_id: p.id });
+        sessionsByProg.set(p.id, (s as string[] | null) ?? []);
+      } catch (e) {
+        console.error(`[lifecycle-automations-cron] derive_program_session_dates failed for program ${p.id}:`, e);
+        sessionsByProg.set(p.id, []);
+      }
+    }
+
+    for (const period of firing) {
+      for (const p of relevantProgs as any[]) {
+        const sessions = sessionsByProg.get(p.id) ?? [];
+        if (sessions.length === 0) continue;
+        const firstMeeting = sessions[0];
+        const lastMeeting = sessions[sessions.length - 1];
+        const dow = String(p.day_of_week).toLowerCase();
+
+        // The closure dates that would have been THIS program's class days — only
+        // ones still in the future (never list a day that has already passed) and
+        // inside the program's run.
+        const affected = period.dates.filter((d) =>
+          nsdWeekdayLower(d.iso) === dow && d.iso >= today && d.iso >= firstMeeting && d.iso <= lastMeeting,
+        );
+        if (affected.length === 0) continue;
+
+        const datesDisplay = formatDateList(affected.map((d) => d.iso));
+        const reasons = Array.from(new Set(affected.map((d) => d.reason).filter(Boolean)));
+        const reasonDisplay = reasons.length > 0 ? reasons.join(" / ") : undefined;
+        const programName = p.curriculum ?? "your program";
+        const locationName = p.program_locations?.name ?? "";
+
+        const base = {
+          program_name: programName,
+          program_start_date: "",
+          program_end_date: "",
+          location_name: locationName,
+          abandoned_resume_url: "",
+          age_turning: "",
+          final_showcase_raw: "",
+          mid_term_skills_raw: [] as string[],
+          final_recap_skills_raw: [] as string[],
+          arrival_instructions_raw: "",
+          dismissal_instructions_raw: "",
+          session_dates_raw: [] as string[],
+          register_url: "",
+          next_term_available: false,
+          no_school_dates_display: datesDisplay,
+          no_school_reason: reasonDisplay,
+        };
+
+        // Parents — confirmed registrations for this program. One heads-up per
+        // parent per program per closure (program-centric copy, no child name),
+        // so a parent with two kids in the same class isn't emailed twice.
+        const { data: regs, error: regErr } = await supabase
+          .from("registrations")
+          .select("parents!inner ( id, first_name, email )")
+          .eq("organization_id", a.organization_id)
+          .eq("program_id", p.id)
+          .eq("status", "confirmed");
+        if (regErr) throw regErr;
+        const seenParents = new Set<string>();
+        for (const r of (regs ?? []) as any[]) {
+          const par = r.parents;
+          if (!par?.email || seenParents.has(par.id)) continue;
+          seenParents.add(par.id);
+          entries.push({
+            ...base,
+            context_key: `noschool:${period.startIso}:program:${p.id}:parent:${par.id}`,
+            parent_id: par.id,
+            parent_email: par.email,
+            parent_first_name: par.first_name ?? null,
+            child_first_name: null,
+            recipient_role: "parent",
+          });
+        }
+
+        // Instructor(s) — assigned + locked in. program_assignments is the source
+        // of truth; fall back to a denormalized instructor_email on the program
+        // row if present (other tenants may set it). 'confirmed' = the instructor
+        // accepted the offer (respond-to-assignment sets it); a still-'published'
+        // offer might yet be declined, so we don't pre-notify those. Armed-but-
+        // silent for J2S until FA26 scheduling writes confirmed assignments.
+        const { data: assigns, error: asgErr } = await supabase
+          .from("program_assignments")
+          .select("instructor:instructors ( id, first_name, email )")
+          .eq("program_id", p.id)
+          .in("status", ["confirmed"]);
+        if (asgErr) throw asgErr;
+        const seenInstr = new Set<string>();
+        for (const asg of (assigns ?? []) as any[]) {
+          const ins = asg.instructor;
+          if (!ins?.email || seenInstr.has(ins.id)) continue;
+          seenInstr.add(ins.id);
+          entries.push({
+            ...base,
+            context_key: `noschool:${period.startIso}:program:${p.id}:instructor:${ins.id}`,
+            parent_id: null,
+            parent_email: ins.email,
+            parent_first_name: ins.first_name ?? null,
+            child_first_name: null,
+            recipient_role: "instructor",
+            subject_template: NO_SCHOOL_INSTRUCTOR_SUBJECT,
+            body_template: NO_SCHOOL_INSTRUCTOR_BODY,
+          });
+        }
+        if (seenInstr.size === 0 && p.instructor_email) {
+          entries.push({
+            ...base,
+            context_key: `noschool:${period.startIso}:program:${p.id}:instructor:row`,
+            parent_id: null,
+            parent_email: p.instructor_email,
+            parent_first_name: (p.instructor_name ?? "").split(" ")[0] || null,
+            child_first_name: null,
+            recipient_role: "instructor",
+            subject_template: NO_SCHOOL_INSTRUCTOR_SUBJECT,
+            body_template: NO_SCHOOL_INSTRUCTOR_BODY,
+          });
+        }
+      }
+    }
+  }
+
+  return entries;
+}
+
 function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, string> {
   return {
     first_name: (entry.parent_first_name?.trim() || "there"),
@@ -1733,6 +1999,10 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     session_dates_block: buildSessionDatesBlock(entry.session_dates_raw, brand),
     register_url: entry.register_url,
     next_term_link_block: buildNextTermLinkBlock(entry.next_term_available, entry.register_url, brand),
+    // no_school_day tokens — "" for every other template (they never set these),
+    // so including them here is harmless for existing automations.
+    no_school_dates: entry.no_school_dates_display ?? "",
+    no_school_reason: entry.no_school_reason?.trim() || "a no-school day",
   };
 }
 

@@ -61,6 +61,10 @@ const TOKENS_BY_TEMPLATE_KEY = {
   // a contact has no program, so {{program_name}} would render empty. The review
   // link itself is a plain URL the operator pastes into the body (not a token).
   review_request:         ["first_name", "child_first_name", "org_name", "sender_name"],
+  // no_school_day: program-centric (no child name — a parent may have several
+  // kids in one class). {{no_school_dates}} = the affected class day(s);
+  // {{no_school_reason}} = why (falls back to "a no-school day" if blank).
+  no_school_day:          ["first_name", "no_school_dates", "no_school_reason", "program_name", "location_name", "org_name", "sender_name"],
 };
 
 // HTML-pre-rendered tokens — preview passes their sample HTML through verbatim.
@@ -110,6 +114,8 @@ function sampleTokens(orgName, senderName, primaryColor, orgSlug) {
     location_name: "Beaverton STEAM Hub",
     age_turning: "8",
     abandoned_resume_url: "#",
+    no_school_dates: "Monday, September 7",
+    no_school_reason: "Labor Day",
     register_url: registerUrl,
     final_showcase_block:
       `<div style="background:#f5f4ee;border-left:3px solid ${color};padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;"><strong>On the final day:</strong> Campers host a Playtest Arcade where every kid loads their finished platformer onto a Chromebook and the whole group rotates through playing each other's games.</div>`,
@@ -228,16 +234,27 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
-  // Operator-editable send timing. Only templates whose default_timing carries a
-  // numeric days_after expose this control (review_request, check_in). The value
-  // writes automations.timing_override.days_after; equal-to-default clears the
-  // override. Held as a string so the input can be transiently empty while typing.
-  const hasDaysAfterTiming = typeof template?.default_timing?.days_after === "number";
-  const defaultDaysAfter = hasDaysAfterTiming ? template.default_timing.days_after : null;
-  const savedDaysAfter = automation?.timing_override?.days_after ?? defaultDaysAfter;
-  const [daysAfter, setDaysAfter] = useState(savedDaysAfter != null ? String(savedDaysAfter) : "");
+  // Operator-editable send timing. Templates whose default_timing carries a
+  // numeric days_after (review_request, check_in) OR days_before (no_school_day)
+  // expose this control. The value writes automations.timing_override[timingKey];
+  // equal-to-default clears the override. Held as a string so the input can be
+  // transiently empty while typing.
+  const timingKey = typeof template?.default_timing?.days_before === "number"
+    ? "days_before"
+    : typeof template?.default_timing?.days_after === "number"
+      ? "days_after"
+      : null;
+  const hasTiming = timingKey != null;
+  const timingIsBefore = timingKey === "days_before";
+  const defaultTiming = hasTiming ? template.default_timing[timingKey] : null;
+  const savedTiming = automation?.timing_override?.[timingKey] ?? defaultTiming;
+  const [timingValue, setTimingValue] = useState(savedTiming != null ? String(savedTiming) : "");
   // Label the timing by what the delay is measured from, per template.
-  const timingAnchorLabel = template.key === "review_request" ? "a family joins" : "the first session";
+  const timingAnchorLabel = template.key === "review_request"
+    ? "a family joins"
+    : timingIsBefore
+      ? "the no-school day"
+      : "the first session";
 
   // review_request: a dedicated "Your review link" field so the operator never
   // hand-edits HTML to set the link. It reads/writes the single <a> in the body.
@@ -403,10 +420,10 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const subjectDirty = subject !== (automation?.subject_override ?? template.default_subject);
   const bodyDirty = body !== (automation?.body_override ?? template.default_body);
   // Clamp ≥1; empty/invalid falls back to the template default. Mirrors the cron.
-  const parsedDaysAfter = hasDaysAfterTiming
-    ? Math.max(1, parseInt(daysAfter, 10) || defaultDaysAfter || 1)
+  const parsedTiming = hasTiming
+    ? Math.max(1, parseInt(timingValue, 10) || defaultTiming || 1)
     : null;
-  const timingDirty = hasDaysAfterTiming && parsedDaysAfter !== savedDaysAfter;
+  const timingDirty = hasTiming && parsedTiming !== savedTiming;
   const dirty = subjectDirty || bodyDirty || timingDirty;
 
   async function handleSave() {
@@ -427,9 +444,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // Timing override: only for templates with the control, and only when it
       // differs from the default (equal-to-default clears it, like subject/body).
       const patch = { subject_override: subjectOverride, body_override: bodyOverride };
-      if (hasDaysAfterTiming) {
-        patch.timing_override = parsedDaysAfter !== defaultDaysAfter
-          ? { ...(automation?.timing_override ?? {}), days_after: parsedDaysAfter }
+      if (hasTiming) {
+        patch.timing_override = parsedTiming !== defaultTiming
+          ? { ...(automation?.timing_override ?? {}), [timingKey]: parsedTiming }
           : null;
       }
       // Capture prior values BEFORE the upsert so we can append edit history.
@@ -517,7 +534,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // No row to reset — just revert local editor state.
       setSubject(template.default_subject);
       setBody(template.default_body);
-      if (hasDaysAfterTiming) setDaysAfter(String(defaultDaysAfter));
+      if (hasTiming) setTimingValue(String(defaultTiming));
       if (isReviewLink) setReviewLink("");
       return;
     }
@@ -528,7 +545,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       const prevSubject = automation?.subject_override ?? null;
       const prevBody = automation?.body_override ?? null;
       const resetPatch = { subject_override: null, body_override: null };
-      if (hasDaysAfterTiming) resetPatch.timing_override = null;
+      if (hasTiming) resetPatch.timing_override = null;
       const { data, error: upErr } = await supabase
         .from("automations")
         .update(resetPatch)
@@ -538,7 +555,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       if (upErr) throw upErr;
       setSubject(template.default_subject);
       setBody(template.default_body);
-      if (hasDaysAfterTiming) setDaysAfter(String(defaultDaysAfter));
+      if (hasTiming) setTimingValue(String(defaultTiming));
       if (isReviewLink) setReviewLink("");
       // Reset is ALSO a voice signal — operator decided their custom version
       // wasn't right. Append rows for any field that had a non-null override.
@@ -756,8 +773,8 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             </p>
           </div>
 
-          {/* Timing — only for templates with an editable days_after offset */}
-          {hasDaysAfterTiming && (
+          {/* Timing — for templates with an editable days_after or days_before offset */}
+          {hasTiming && (
             <div style={{ marginBottom: 24 }}>
               <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
                 Timing
@@ -767,19 +784,21 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                 <input
                   type="number"
                   min={1}
-                  value={daysAfter}
-                  onChange={(e) => setDaysAfter(e.target.value)}
-                  onBlur={() => { if (daysAfter === "" || Number(daysAfter) < 1) setDaysAfter(String(defaultDaysAfter)); }}
+                  value={timingValue}
+                  onChange={(e) => setTimingValue(e.target.value)}
+                  onBlur={() => { if (timingValue === "" || Number(timingValue) < 1) setTimingValue(String(defaultTiming)); }}
                   style={{
                     width: 72, padding: "8px 10px", fontSize: 14, color: INK,
                     border: `1px solid ${RULE}`, borderRadius: 6, outline: "none",
                     background: "#fff", textAlign: "center",
                   }}
                 />
-                <span style={{ fontSize: 14, color: INK }}>days after {timingAnchorLabel}.</span>
+                <span style={{ fontSize: 14, color: INK }}>days {timingIsBefore ? "before" : "after"} {timingAnchorLabel}.</span>
               </div>
               <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED }}>
-                Default is {defaultDaysAfter} days. Pick the point where families have felt the value but it&apos;s still fresh.
+                {timingIsBefore
+                  ? <>Default is {defaultTiming} days. Enough notice for families to plan, without being so early they forget.</>
+                  : <>Default is {defaultTiming} days. Pick the point where families have felt the value but it&apos;s still fresh.</>}
               </p>
             </div>
           )}
