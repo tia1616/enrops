@@ -227,6 +227,13 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
     if (availableWeeks.size === 0) { setError("Pick at least one week you're available."); return; }
     if (sessionTypes.size === 0) { setError("Pick at least one session type (Morning, Afternoon, or Full day)."); return; }
     if (!rolePref) { setError("Pick a role preference."); return; }
+    // Areas are required (parity with the after-school form). Only enforce when the
+    // admin has actually set up areas for this cycle — otherwise there's nothing to rate.
+    const unratedAreas = locations.filter((l) => !locPrefs[l.name]);
+    if (unratedAreas.length > 0) {
+      setError(`Please rate every area — still missing: ${unratedAreas.map((l) => l.name).join(", ")}.`);
+      return;
+    }
 
     setSaving(true);
     try {
@@ -407,7 +414,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         )}
       </Card>
 
-      <Card title="Where do you want to work?" subtitle="Set your preference for each venue. We'll prioritize the ones you love and avoid the ones you can't do.">
+      <Card title="Which areas do you want to work in?" subtitle="Rate every area: 'Love to' is where you'd most like to be, 'Happy to' means you're glad to work there, and 'Can't' means we won't schedule you there.">
         {locations.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
             Your admin hasn't set up areas for this cycle's camps yet.

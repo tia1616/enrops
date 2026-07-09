@@ -564,7 +564,7 @@ function CampCard({ row, weeks }) {
         {sessionTypes.length === 0 ? <span style={{ color: MUTED }}>—</span> :
           sessionTypes.map((s) => <Chip key={s} color={PURPLE}>{SESSION_TYPE_LABEL[s] || s}</Chip>)}
       </Field>
-      <Field label="Regions">
+      <Field label="Areas">
         <PrefChips prefs={regions} vocab={CAMP_PREF} nameKey="location_name" />
       </Field>
       <Field label="Subjects">
