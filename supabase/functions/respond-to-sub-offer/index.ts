@@ -20,6 +20,9 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, resolveInstructor, adminClient } from '../_shared/instructor.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so links in the decline-notification email point at staging, not prod. Defaults to prod.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 
 interface Body {
   substitution_id?: string;
@@ -176,7 +179,7 @@ serve(async (req: Request) => {
     const subFullName = [me.first_name, me.last_name].filter(Boolean).join(' ') || 'A sub';
     const friendlyDate = fmtDate(subRow.date);
     const senderFirstName = (branding?.email_from_name ?? org?.name ?? '').split(' ')[0] || 'the team';
-    const adminUrl = org?.slug ? `https://enrops.com/${org.slug}/admin/schedule` : 'https://enrops.com';
+    const adminUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/admin/schedule` : PUBLIC_SITE_URL;
     const recipient = org?.alert_email;
 
     if (recipient) {
@@ -309,7 +312,7 @@ async function sendCoordinationEmail(
   const regularFirst = regular.preferred_name || regular.first_name || 'the regular instructor';
   const friendlyDate = fmtDate(subRow.date);
   const senderFirstName = (branding?.email_from_name ?? org?.name ?? '').split(' ')[0] || 'the team';
-  const portalUrl = org?.slug ? `https://enrops.com/${org.slug}/instructor` : 'https://enrops.com';
+  const portalUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : PUBLIC_SITE_URL;
   const coordinationNotes = (org?.sub_coordination_notes || '').trim();
 
   const subject = `Coordinating ${friendlyDate.replace(/^[A-Za-z]+, /, '')} — ${curriculumName || 'sub day'}${locationName ? ` at ${locationName}` : ''}`;

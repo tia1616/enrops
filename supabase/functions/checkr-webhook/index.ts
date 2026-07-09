@@ -21,6 +21,10 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
 
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so the onboarding link points at staging, not prod. Defaults to prod.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
+
 interface CheckrEvent {
   id?: string;
   type?: string;
@@ -243,7 +247,7 @@ async function sendCheckrCompleteContractorEmail(
     ``,
     `Good news — your background check came back clear. You're one step closer to being fully onboarded with ${org.name ?? 'us'}.`,
     ``,
-    `Log back in to continue: https://enrops.com/${org.slug}/onboarding`,
+    `Log back in to continue: ${PUBLIC_SITE_URL}/${org.slug}/onboarding`,
   ].join('\n');
 
   try {

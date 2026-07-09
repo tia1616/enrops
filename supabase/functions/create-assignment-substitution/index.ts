@@ -28,6 +28,10 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so portal links in offer emails point at staging, not prod. Defaults to prod.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
+
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -253,7 +257,7 @@ serve(async (req: Request) => {
     // Tenant slug must come from org_branding/organizations. No hardcoded
     // fallback — a misconfigured org should surface as a missing link, not
     // a quiet route to the wrong tenant.
-    const portalUrl = org?.slug ? `https://enrops.com/${org.slug}/instructor` : 'https://enrops.com';
+    const portalUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : PUBLIC_SITE_URL;
 
     const detailRow = (label: string, value: string | null | undefined) => {
       if (!value) return '';

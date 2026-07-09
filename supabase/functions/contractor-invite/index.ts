@@ -17,6 +17,10 @@ import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
 
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so the onboarding link points at staging, not prod. Defaults to prod.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
+
 interface ContractorInviteBody {
   instructor_id?: string;
 }
@@ -195,7 +199,7 @@ serve(async (req: Request) => {
     // InstructorPortal detects unfinished onboarding and renders the wizard
     // inline. Old /:slug/onboarding URL still routes through OnboardingRouter
     // for backward compatibility with magic links generated before this change.
-    const redirectTo = `https://enrops.com/${org.slug}/instructor`;
+    const redirectTo = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
     const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({
       type: 'magiclink',
       email: instructorRow.email,
