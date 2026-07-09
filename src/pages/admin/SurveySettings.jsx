@@ -35,7 +35,7 @@ const QUESTIONS = {
     { key: "weekday_availability", label: "Which days & times they can work", hint: "The core scheduling question.", locked: true },
     { key: "days_per_week", label: "How many days per week they want" },
     { key: "areas", label: "Which areas they want to work in", source: { label: "Programs & Partners", to: "/admin/schools" } },
-    { key: "subjects", label: "What subjects they like to teach", source: { label: "Curricula (Offerings)", to: "/admin/curricula" } },
+    { key: "subjects", label: "What subjects they like to teach", source: { label: "Offerings", to: "/admin/curricula" } },
     { key: "unavailable_dates", label: "Specific dates they can't work" },
     { key: "notes", label: "Anything else (free-text note)" },
   ],
@@ -43,7 +43,7 @@ const QUESTIONS = {
     { key: "weeks", label: "Which weeks they can work", hint: "The core scheduling question.", locked: true },
     { key: "session_types", label: "Times of day (morning / afternoon / full day)", locked: true },
     { key: "areas", label: "Which areas they want to work in", source: { label: "Programs & Partners", to: "/admin/schools" } },
-    { key: "subjects", label: "What subjects they like to teach", source: { label: "Curricula (Offerings)", to: "/admin/curricula" } },
+    { key: "subjects", label: "What subjects they like to teach", source: { label: "Offerings", to: "/admin/curricula" } },
     { key: "role", label: "Lead or developing role preference" },
     { key: "saturdays", label: "Saturday availability" },
     { key: "unavailable_dates", label: "Specific dates they can't work" },
@@ -62,7 +62,9 @@ export default function SurveySettings() {
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [savingCtx, setSavingCtx] = useState(null);
-  const [toast, setToast] = useState(null);
+  const [savedCtx, setSavedCtx] = useState(null);   // context that just saved — button shows "Saved ✓" until next edit
+  const [saveError, setSaveError] = useState(null);  // { ctx, message } — shown inline next to that context's Save button
+  const [toast, setToast] = useState(null);          // load errors only (top of page)
 
   // Owner/admin can save; everyone else sees a read-only view.
   const canEdit = useMemo(() => ["owner", "admin"].includes(orgMember?.role), [orgMember]);
@@ -92,7 +94,15 @@ export default function SurveySettings() {
     return () => { cancelled = true; };
   }, [org?.id]);
 
+  // Any edit to a context clears its "Saved ✓" / error state so the button
+  // reflects that there are now unsaved changes again.
+  function clearSaveState(ctxKey) {
+    setSavedCtx((c) => (c === ctxKey ? null : c));
+    setSaveError((e) => (e?.ctx === ctxKey ? null : e));
+  }
+
   function toggle(ctxKey, qKey) {
+    clearSaveState(ctxKey);
     setConfig((prev) => {
       const cur = prev[ctxKey];
       const disabled = new Set(cur.disabled);
@@ -103,13 +113,15 @@ export default function SurveySettings() {
   }
 
   function setIntro(ctxKey, value) {
+    clearSaveState(ctxKey);
     setConfig((prev) => ({ ...prev, [ctxKey]: { ...prev[ctxKey], intro: value } }));
   }
 
   async function save(ctxKey) {
     if (!org?.id || !canEdit) return;
     setSavingCtx(ctxKey);
-    setToast(null);
+    setSaveError(null);
+    setSavedCtx(null);
     try {
       const cur = config[ctxKey];
       const { error } = await supabase
@@ -125,9 +137,9 @@ export default function SurveySettings() {
           { onConflict: "organization_id,context" },
         );
       if (error) throw error;
-      setToast({ kind: "success", message: `${CONTEXTS.find((c) => c.key === ctxKey).label} survey settings saved.` });
+      setSavedCtx(ctxKey);
     } catch (e) {
-      setToast({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      setSaveError({ ctx: ctxKey, message: e instanceof Error ? e.message : String(e) });
     } finally {
       setSavingCtx(null);
     }
@@ -142,7 +154,7 @@ export default function SurveySettings() {
       <p style={{ color: MUTED, fontSize: 14, margin: "6px 0 22px", lineHeight: 1.5, maxWidth: 620 }}>
         Choose which questions your availability survey asks and set a default intro. Turn off anything you don't need.
         The scheduling questions are always asked. Answer options for areas and subjects come from your Programs and
-        Curricula — manage those there.
+        Offerings — manage those there.
       </p>
 
       {toast && (
@@ -175,6 +187,8 @@ export default function SurveySettings() {
               state={config[ctx.key]}
               canEdit={canEdit}
               saving={savingCtx === ctx.key}
+              saved={savedCtx === ctx.key}
+              error={saveError?.ctx === ctx.key ? saveError.message : null}
               onToggle={(qKey) => toggle(ctx.key, qKey)}
               onIntro={(v) => setIntro(ctx.key, v)}
               onSave={() => save(ctx.key)}
@@ -186,7 +200,7 @@ export default function SurveySettings() {
   );
 }
 
-function ContextPanel({ ctx, state, canEdit, saving, onToggle, onIntro, onSave }) {
+function ContextPanel({ ctx, state, canEdit, saving, saved, error, onToggle, onIntro, onSave }) {
   const questions = QUESTIONS[ctx.key];
   return (
     <section style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "20px 22px" }}>
@@ -246,18 +260,21 @@ function ContextPanel({ ctx, state, canEdit, saving, onToggle, onIntro, onSave }
       </div>
 
       {canEdit && (
-        <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
+        <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12 }}>
+          {error && <span style={{ fontSize: 13, color: RED, fontWeight: 600 }}>{error}</span>}
           <button
             type="button"
             onClick={onSave}
-            disabled={saving}
+            disabled={saving || saved}
             style={{
-              padding: "9px 18px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 8,
-              fontSize: 14, fontWeight: 600, cursor: saving ? "default" : "pointer", fontFamily: "inherit",
-              opacity: saving ? 0.7 : 1,
+              padding: "9px 18px", border: "none", borderRadius: 8,
+              fontSize: 14, fontWeight: 600, fontFamily: "inherit",
+              cursor: saving || saved ? "default" : "pointer",
+              background: saved ? OK_GREEN : BRIGHT, color: "#fff",
+              opacity: saving ? 0.7 : 1, transition: "background 120ms",
             }}
           >
-            {saving ? "Saving…" : `Save ${ctx.label} settings`}
+            {saving ? "Saving…" : saved ? "Saved ✓" : `Save ${ctx.label} settings`}
           </button>
         </div>
       )}
