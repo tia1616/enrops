@@ -1764,6 +1764,13 @@ export default function Schedule() {
       .map((i) => i.id);
     setSurveySelectedIds(new Set(preselect));
     setSurveyIntro(orgSurveyIntro.trim() || builtinCampIntro());
+    // Restore the cycle's existing deadline on a re-send (blank stays blank);
+    // default to +10 business days only on a first open. Without this, reopening
+    // the drawer to nudge stragglers would silently reset the deadline to +10 and
+    // email the wrong date on send. Mirrors the after-school openSurvey.
+    setSurveyDeadline(alreadyOpen
+      ? (state.cycle.survey_deadline ? String(state.cycle.survey_deadline).slice(0, 10) : "")
+      : businessDaysFromToday(10));
     setSurveyDialog({ mode: "choose", payload: null });
   }
 
