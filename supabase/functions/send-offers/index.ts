@@ -17,6 +17,9 @@ import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so portal links in test emails point at staging, not prod. Defaults to prod.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 
 const TEST_INBOX = 'jessica@journeytosteam.com';
 const DEFAULT_PRIMARY = '#1C004F';
@@ -267,7 +270,7 @@ serve(async (req: Request) => {
       const cycleDisplay = cycleDisplayName(cycle.name);
       const subject = `Your ${cycleDisplay} schedule is ready — please review`;
       if (!org.slug) throw new Error(`send-offers: org ${org.id} has no slug; cannot build portal URL`);
-      const portalUrl = `https://enrops.com/${org.slug}/instructor`;
+      const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
       const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand) });
       const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById });
       const recipient = mode === 'send' ? instructor.email! : TEST_INBOX;

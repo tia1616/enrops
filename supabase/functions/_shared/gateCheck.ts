@@ -15,6 +15,10 @@
 import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { StepKey } from './onboardingStep.ts';
 
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so links in the gate-check admin email point at staging, not prod. Defaults to prod.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
+
 export const ALL_STEPS: StepKey[] = [
   'welcome',
   'checkr_submitted',
@@ -119,7 +123,7 @@ async function sendOnboardingCompleteEmails(
   const from = `${org.default_sender_name ?? org.name ?? 'enrops'} <${org.default_sender_email}>`;
   const fullName = `${instructor.first_name ?? ''} ${instructor.last_name ?? ''}`.trim();
   const greeting = instructor.preferred_name || instructor.first_name || 'there';
-  const portalUrl = `https://enrops.com/${org.slug}/instructor`;
+  const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
 
   // 1. Contractor — "you're cleared, here's how to access your portal"
   const contractorText = [
@@ -156,7 +160,7 @@ async function sendOnboardingCompleteEmails(
     ``,
     `Paperwork signed, background check cleared, Stripe Connect set up. They're ready to be assigned to camps or programs.`,
     ``,
-    `View their record: https://enrops.com/admin/instructors`, // was /admin/contacts (retired 2026-06-08)
+    `View their record: ${PUBLIC_SITE_URL}/admin/instructors`, // was /admin/contacts (retired 2026-06-08)
   ].join('\n');
 
   try {

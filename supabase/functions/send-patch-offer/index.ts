@@ -23,6 +23,9 @@ import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so portal links in test emails point at staging, not prod. Defaults to prod.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 
 const DEFAULT_PRIMARY = '#1C004F';
 const DEFAULT_PAGE_BG = '#FBFBFB';
@@ -248,7 +251,7 @@ serve(async (req: Request) => {
         ? `Another ${unitLabel(cycle.cycle_type, 1)} on your ${cycleDisplay} schedule`
         : `${camps.length} more ${unitLabel(cycle.cycle_type, camps.length)} on your ${cycleDisplay} schedule`;
       if (!org.slug) throw new Error(`send-patch-offer: org ${org.id} has no slug; cannot build portal URL`);
-      const portalUrl = `https://enrops.com/${org.slug}/instructor`;
+      const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
       const html = renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand) });
       const text = renderPatchText({ cycle, org, instructor, camps, portalUrl, deadline, locationById });
 

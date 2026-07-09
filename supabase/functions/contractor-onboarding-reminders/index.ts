@@ -23,6 +23,10 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so the onboarding link points at staging, not prod. Defaults to prod.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
+
 interface RemindersBody {
   type?: 'admin_summary' | 'admin_and_contractor';
   cron_job_name?: string;
@@ -144,7 +148,7 @@ serve(async (req: Request) => {
           const fresh = await supabase.auth.admin.generateLink({
             type: 'magiclink',
             email: row.instructors.email,
-            options: { redirectTo: `https://enrops.com/${org.slug}/onboarding` },
+            options: { redirectTo: `${PUBLIC_SITE_URL}/${org.slug}/onboarding` },
           });
           const link = fresh.data?.properties?.action_link;
           if (!link) {
