@@ -40,7 +40,7 @@ const DAYS = [
 ];
 
 const DAYS_RANGES = [
-  { value: "", label: "No limit", min: null, max: null },
+  { value: "no_limit", label: "No limit", min: null, max: null },
   { value: "1-2", label: "1–2 days a week", min: 1, max: 2 },
   { value: "3-4", label: "3–4 days a week", min: 3, max: 4 },
   { value: "4-5", label: "4–5 days a week", min: 4, max: 5 },
@@ -154,7 +154,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         const r = DAYS_RANGES.find(
           (x) => x.min === (availRes.data.min_days ?? null) && x.max === (availRes.data.max_days ?? null),
         );
-        setDaysRange(r ? r.value : "");
+        setDaysRange(r ? r.value : "no_limit");
         setNotes(availRes.data.notes ?? "");
         setCategories(Array.isArray(availRes.data.preferred_categories) ? availRes.data.preferred_categories : []);
         setUnavailableDates(
@@ -225,6 +225,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         setError(`On ${d.label}, the 'until' time needs to be after the 'from' time.`); return;
       }
     }
+    if (!daysRange) { setError("Pick how many days a week you'd like to teach (choose 'No limit' if you have no cap)."); return; }
 
     setSaving(true);
     try {
@@ -327,15 +328,11 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
                   </button>
                 </div>
                 {w.available ? (
-                  <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: MUTED }}>
-                      From
-                      <input type="time" value={w.from} onChange={(e) => setDayTime(d.value, "from", e.target.value)} style={inputStyle} />
-                    </label>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: MUTED }}>
-                      Until <span style={{ fontSize: 11 }}>(optional)</span>
-                      <input type="time" value={w.until} onChange={(e) => setDayTime(d.value, "until", e.target.value)} style={inputStyle} />
-                    </label>
+                  <div style={{ display: "grid", gridTemplateColumns: "auto minmax(120px, 150px)", gap: "8px 10px", alignItems: "center", justifyContent: "start" }}>
+                    <span style={{ fontSize: 13, color: MUTED }}>From</span>
+                    <input type="time" value={w.from} onChange={(e) => setDayTime(d.value, "from", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+                    <span style={{ fontSize: 13, color: MUTED }}>Until <span style={{ fontSize: 11 }}>(optional)</span></span>
+                    <input type="time" value={w.until} onChange={(e) => setDayTime(d.value, "until", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
                   </div>
                 ) : (
                   <span style={{ fontSize: 12, color: MUTED, fontStyle: "italic" }}>Won't teach this day</span>
@@ -348,6 +345,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
       <Card title="How many days a week do you want?" subtitle="Your target — we'll try not to assign you more classes than the top of this range.">
         <select value={daysRange} onChange={(e) => setDaysRange(e.target.value)} style={{ ...inputStyle, width: 220 }}>
+          <option value="" disabled>Select…</option>
           {DAYS_RANGES.map((r) => (
             <option key={r.value} value={r.value}>{r.label}</option>
           ))}
