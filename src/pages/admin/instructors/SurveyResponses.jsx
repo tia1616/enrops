@@ -298,7 +298,7 @@ export default function SurveyResponses() {
 // ---- Data loaders -------------------------------------------------------------
 
 async function loadAfterschool(orgId, term) {
-  const [instRes, availRes, areaRes] = await Promise.all([
+  const [instRes, availRes, areaRes, cfgRes] = await Promise.all([
     supabase
       .from("instructors")
       .select("id, first_name, last_name, preferred_name, email")
@@ -315,10 +315,18 @@ async function loadAfterschool(orgId, term) {
       .select("instructor_id, area, preference")
       .eq("organization_id", orgId)
       .eq("term", term),
+    supabase
+      .from("org_survey_config")
+      .select("disabled_questions")
+      .eq("organization_id", orgId)
+      .eq("context", "afterschool")
+      .maybeSingle(),
   ]);
   if (instRes.error) throw instRes.error;
   if (availRes.error) throw availRes.error;
   if (areaRes.error) throw areaRes.error;
+
+  const disabled = new Set(Array.isArray(cfgRes?.data?.disabled_questions) ? cfgRes.data.disabled_questions : []);
 
   const availByInst = new Map();
   for (const a of availRes.data ?? []) availByInst.set(a.instructor_id, a);
@@ -339,11 +347,11 @@ async function loadAfterschool(orgId, term) {
     }
   }
   responded.sort((a, b) => new Date(b.av.submitted_at) - new Date(a.av.submitted_at));
-  return { responded, nonResponders, activeCount: (instRes.data ?? []).length };
+  return { responded, nonResponders, activeCount: (instRes.data ?? []).length, disabled };
 }
 
 async function loadCamp(orgId, cycleId, cycle) {
-  const [instRes, availRes, locRes, curRes] = await Promise.all([
+  const [instRes, availRes, locRes, curRes, cfgRes] = await Promise.all([
     supabase
       .from("instructors")
       .select("id, first_name, last_name, preferred_name, email")
@@ -362,11 +370,19 @@ async function loadCamp(orgId, cycleId, cycle) {
       .from("instructor_curriculum_preferences")
       .select("instructor_id, curriculum_category, preference")
       .eq("cycle_id", cycleId),
+    supabase
+      .from("org_survey_config")
+      .select("disabled_questions")
+      .eq("organization_id", orgId)
+      .eq("context", "camp")
+      .maybeSingle(),
   ]);
   if (instRes.error) throw instRes.error;
   if (availRes.error) throw availRes.error;
   if (locRes.error) throw locRes.error;
   if (curRes.error) throw curRes.error;
+
+  const disabled = new Set(Array.isArray(cfgRes?.data?.disabled_questions) ? cfgRes.data.disabled_questions : []);
 
   const availByInst = new Map();
   for (const a of availRes.data ?? []) availByInst.set(a.instructor_id, a);
@@ -398,7 +414,7 @@ async function loadCamp(orgId, cycleId, cycle) {
     }
   }
   responded.sort((a, b) => new Date(b.av.submitted_at) - new Date(a.av.submitted_at));
-  return { responded, nonResponders, activeCount: (instRes.data ?? []).length, weeks };
+  return { responded, nonResponders, activeCount: (instRes.data ?? []).length, weeks, disabled };
 }
 
 // ---- Body / cards -------------------------------------------------------------
@@ -414,7 +430,7 @@ function Body({ state, mode, onNudge }) {
     return <Empty title="Pick a term" body="Choose a term or cycle above to see responses." />;
   }
 
-  const { responded = [], nonResponders = [], activeCount = 0, weeks = [] } = state;
+  const { responded = [], nonResponders = [], activeCount = 0, weeks = [], disabled = new Set() } = state;
   const respondedCount = responded.length;
 
   return (
@@ -433,8 +449,8 @@ function Body({ state, mode, onNudge }) {
         <div style={{ display: "grid", gap: 14 }}>
           {responded.map((r) =>
             mode === "afterschool"
-              ? <AfterschoolCard key={r.instructor.id} row={r} />
-              : <CampCard key={r.instructor.id} row={r} weeks={weeks} />
+              ? <AfterschoolCard key={r.instructor.id} row={r} disabled={disabled} />
+              : <CampCard key={r.instructor.id} row={r} weeks={weeks} disabled={disabled} />
           )}
         </div>
       )}
@@ -502,7 +518,7 @@ function PrefChips({ prefs, vocab, nameKey }) {
   );
 }
 
-function AfterschoolCard({ row }) {
+function AfterschoolCard({ row, disabled = new Set() }) {
   const { instructor, av, areas } = row;
   const wd = av.weekday_availability || {};
   const availDays = DAYS.filter((d) => wd[d.key] && wd[d.key].from);
@@ -522,25 +538,29 @@ function AfterschoolCard({ row }) {
           </div>
         )}
       </Field>
-      <Field label="Days per week">{daysPerWeekLabel(av.min_days, av.max_days)}</Field>
-      <Field label="Areas">
-        <PrefChips prefs={areas} vocab={AFTERSCHOOL_PREF} nameKey="area" />
-      </Field>
-      <Field label="Subjects">
-        {subjects.length === 0 ? <span style={{ color: MUTED }}>—</span> :
-          subjects.map((c) => <Chip key={c} color={BRIGHT}>{titleCaseCategory(c)}</Chip>)}
-      </Field>
-      {dates.length > 0 && (
+      {!disabled.has("days_per_week") && <Field label="Days per week">{daysPerWeekLabel(av.min_days, av.max_days)}</Field>}
+      {!disabled.has("areas") && (
+        <Field label="Areas">
+          <PrefChips prefs={areas} vocab={AFTERSCHOOL_PREF} nameKey="area" />
+        </Field>
+      )}
+      {!disabled.has("subjects") && (
+        <Field label="Subjects">
+          {subjects.length === 0 ? <span style={{ color: MUTED }}>—</span> :
+            subjects.map((c) => <Chip key={c} color={BRIGHT}>{titleCaseCategory(c)}</Chip>)}
+        </Field>
+      )}
+      {!disabled.has("unavailable_dates") && dates.length > 0 && (
         <Field label="Unavailable dates">
           {[...dates].sort().map((d) => <Chip key={d} color={CORAL}>{shortDate(d)}</Chip>)}
         </Field>
       )}
-      {av.notes && <Field label="Notes"><span style={{ whiteSpace: "pre-wrap" }}>{av.notes}</span></Field>}
+      {!disabled.has("notes") && av.notes && <Field label="Notes"><span style={{ whiteSpace: "pre-wrap" }}>{av.notes}</span></Field>}
     </ResponseCard>
   );
 }
 
-function CampCard({ row, weeks }) {
+function CampCard({ row, weeks, disabled = new Set() }) {
   const { instructor, av, regions, subjects } = row;
   const weekByNum = new Map((weeks ?? []).map((w) => [w.num, w]));
   const availWeeks = Array.isArray(av.available_weeks) ? av.available_weeks : [];
@@ -564,20 +584,24 @@ function CampCard({ row, weeks }) {
         {sessionTypes.length === 0 ? <span style={{ color: MUTED }}>—</span> :
           sessionTypes.map((s) => <Chip key={s} color={PURPLE}>{SESSION_TYPE_LABEL[s] || s}</Chip>)}
       </Field>
-      <Field label="Areas">
-        <PrefChips prefs={regions} vocab={CAMP_PREF} nameKey="location_name" />
-      </Field>
-      <Field label="Subjects">
-        <PrefChips prefs={subjects} vocab={CAMP_PREF} nameKey="curriculum_category" />
-      </Field>
-      <Field label="Role">{ROLE_LABEL[av.role_preference] || (av.role_preference ? titleCaseCategory(av.role_preference) : "—")}</Field>
-      <Field label="Saturdays">{av.saturdays_ok ? "Open to Saturdays" : "No Saturdays"}</Field>
-      {dates.length > 0 && (
+      {!disabled.has("areas") && (
+        <Field label="Areas">
+          <PrefChips prefs={regions} vocab={CAMP_PREF} nameKey="location_name" />
+        </Field>
+      )}
+      {!disabled.has("subjects") && (
+        <Field label="Subjects">
+          <PrefChips prefs={subjects} vocab={CAMP_PREF} nameKey="curriculum_category" />
+        </Field>
+      )}
+      {!disabled.has("role") && <Field label="Role">{ROLE_LABEL[av.role_preference] || (av.role_preference ? titleCaseCategory(av.role_preference) : "—")}</Field>}
+      {!disabled.has("saturdays") && <Field label="Saturdays">{av.saturdays_ok ? "Open to Saturdays" : "No Saturdays"}</Field>}
+      {!disabled.has("unavailable_dates") && dates.length > 0 && (
         <Field label="Unavailable dates">
           {[...dates].sort().map((d) => <Chip key={d} color={CORAL}>{shortDate(d)}</Chip>)}
         </Field>
       )}
-      {av.notes && <Field label="Notes"><span style={{ whiteSpace: "pre-wrap" }}>{av.notes}</span></Field>}
+      {!disabled.has("notes") && av.notes && <Field label="Notes"><span style={{ whiteSpace: "pre-wrap" }}>{av.notes}</span></Field>}
     </ResponseCard>
   );
 }
