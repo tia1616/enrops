@@ -29,6 +29,7 @@ import ProgramWizardNew from './pages/admin/programs/ProgramWizardNew.jsx';
 import ProgramRoster from './pages/admin/programs/ProgramRoster.jsx';
 import SchoolsLocations from './pages/admin/SchoolsLocations.jsx';
 import InstructorsPage from './pages/admin/instructors/InstructorsPage.jsx';
+import SurveyResponses from './pages/admin/instructors/SurveyResponses.jsx';
 import Payroll from './pages/admin/Payroll.jsx';
 import Rosters from './pages/admin/Rosters.jsx';
 import Finances from './pages/admin/Finances.jsx';
@@ -169,6 +170,7 @@ export default function App() {
         <Route path="calendars" element={<Navigate to="/admin/schools?tab=calendars" replace />} />
         <Route path="contacts" element={<Navigate to="/admin/schools" replace />} />
         <Route path="instructors" element={<InstructorsPage />} />
+        <Route path="survey-responses" element={<SurveyResponses />} />
         <Route path="payroll" element={<Payroll />} />
         <Route path="rosters" element={<Rosters />} />
         <Route path="finances" element={<Finances />} />
