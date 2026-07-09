@@ -24,11 +24,14 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const OK_GREEN = "#3a7c3a";
 
+// Display labels only — stored preference values stay highly_preferred/preferred/
+// not_preferred/unavailable (what match-instructors reads). Warm 4-level scale,
+// consistent with the after-school form's "Love to / Happy to / Can't".
 const PREF_OPTIONS = [
-  { value: "highly_preferred", label: "Highly preferred", color: OK_GREEN },
-  { value: "preferred", label: "Preferred", color: OK_GREEN },
-  { value: "not_preferred", label: "Not preferred", color: VIOLET },
-  { value: "unavailable", label: "Unavailable", color: CORAL },
+  { value: "highly_preferred", label: "Love to", color: OK_GREEN },
+  { value: "preferred", label: "Happy to", color: OK_GREEN },
+  { value: "not_preferred", label: "Rather not", color: VIOLET },
+  { value: "unavailable", label: "Can't", color: CORAL },
 ];
 
 const SESSION_TYPES = [
@@ -342,7 +345,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         />
       </Card>
 
-      <Card title="Where do you want to work?" subtitle="Set your preference for each venue. We'll prioritize highly preferred and avoid unavailable ones.">
+      <Card title="Where do you want to work?" subtitle="Set your preference for each venue. We'll prioritize the ones you love and avoid the ones you can't do.">
         {locations.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
             Your admin hasn't added any venues yet.
