@@ -137,7 +137,12 @@ serve(async (req: Request) => {
 
     const cycleDisplay = cycleDisplayName(cycle.name);
     if (!org.slug) throw new Error(`send-availability-survey: org ${org.id} has no slug; cannot build portal URL`);
-    const portalUrl = `https://enrops.com/${org.slug}/instructor`;
+    // Portal link points at the caller's app origin (staging on staging, prod on
+    // prod, tenant domain later) — falls back to prod if not supplied.
+    const appBase = typeof body.app_base_url === 'string' && /^https?:\/\//.test(body.app_base_url)
+      ? body.app_base_url.replace(/\/+$/, '')
+      : 'https://enrops.com';
+    const portalUrl = `${appBase}/${org.slug}/instructor`;
     const effectiveDeadline = deadline ?? cycle.survey_deadline ?? null;
     const deadlineLabel = fmtDeadline(effectiveDeadline);
 

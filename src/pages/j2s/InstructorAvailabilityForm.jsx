@@ -46,15 +46,25 @@ const ROLE_OPTIONS = [
   { value: "developing_only", label: "Developing only", hint: "I'd rather support a lead instructor for now." },
 ];
 
-const CURRICULUM_CATEGORIES = [
-  { value: "lego", label: "LEGO" },
-  { value: "coding", label: "Coding" },
-  { value: "robotics", label: "Robotics" },
-];
+// Subject categories come from the provider's curricula (loaded in the effect),
+// so they're never hardcoded per tenant. Title-case the stored value for display.
+function titleCaseCategory(value) {
+  return String(value)
+    .split(/[\s_-]+/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
 
 function fmtShort(date) {
   if (!date) return "";
   return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// "2026-07-22" -> "Wed, Jul 22, 2026" (parsed at local noon so it never slips a day).
+function fmtDateLabel(d) {
+  const dt = new Date(`${String(d).slice(0, 10)}T12:00:00`);
+  if (isNaN(dt)) return String(d);
+  return dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 }
 
 function termTitle(cycle) {
@@ -75,12 +85,14 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
   const [sessionTypes, setSessionTypes] = useState(new Set());
   const [rolePref, setRolePref] = useState("lead_or_developing");
   const [saturdaysOk, setSaturdaysOk] = useState(false);
-  const [unavailableNotes, setUnavailableNotes] = useState("");
+  const [unavailableDates, setUnavailableDates] = useState([]); // ["2026-07-22", ...]
+  const [dateToAdd, setDateToAdd] = useState("");
   const [notes, setNotes] = useState("");
   const [locPrefs, setLocPrefs] = useState({}); // location_name -> preference
   const [curPrefs, setCurPrefs] = useState({}); // category -> preference
 
   const [locations, setLocations] = useState([]);
+  const [categoryOptions, setCategoryOptions] = useState([]); // [{value,label}] from the org's curricula
   const [hasExisting, setHasExisting] = useState(false);
 
   const cycleWeeks = useMemo(() => Array.isArray(cycle?.weeks) ? cycle.weeks : [], [cycle]);
@@ -90,10 +102,10 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
     if (!instructor?.instructor_id || !cycle?.id || !instructor?.organization_id) return;
     let alive = true;
     (async () => {
-      const [availRes, locPrefRes, curPrefRes, venuesRes] = await Promise.all([
+      const [availRes, locPrefRes, curPrefRes, venuesRes, currRes] = await Promise.all([
         supabase
           .from("instructor_availability")
-          .select("session_types, available_weeks, role_preference, saturdays_ok, unavailable_notes, notes, submitted_at")
+          .select("session_types, available_weeks, role_preference, saturdays_ok, unavailable_dates, notes, submitted_at")
           .eq("instructor_id", instructor.instructor_id)
           .eq("cycle_id", cycle.id)
           .maybeSingle(),
@@ -112,6 +124,12 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
           .select("id, name")
           .eq("organization_id", instructor.organization_id)
           .order("name", { ascending: true }),
+        // Subject categories are the provider's own — from their curricula.
+        supabase
+          .from("curricula")
+          .select("category")
+          .eq("organization_id", instructor.organization_id)
+          .not("category", "is", null),
       ]);
       if (!alive) return;
 
@@ -122,7 +140,11 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         setAvailableWeeks(new Set(availRes.data.available_weeks ?? []));
         setRolePref(availRes.data.role_preference ?? "lead_or_developing");
         setSaturdaysOk(!!availRes.data.saturdays_ok);
-        setUnavailableNotes(availRes.data.unavailable_notes ?? "");
+        setUnavailableDates(
+          Array.isArray(availRes.data.unavailable_dates)
+            ? [...availRes.data.unavailable_dates].map((d) => String(d).slice(0, 10)).sort()
+            : [],
+        );
         setNotes(availRes.data.notes ?? "");
       }
 
@@ -136,6 +158,12 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
       setCurPrefs(curMap);
 
       setLocations(venuesRes.data ?? []);
+
+      const distinctCats = Array.from(
+        new Set((currRes.data ?? []).map((c) => c.category).filter(Boolean)),
+      ).sort((a, b) => a.localeCompare(b));
+      setCategoryOptions(distinctCats.map((c) => ({ value: c, label: titleCaseCategory(c) })));
+
       setLoaded(true);
     })();
     return () => { alive = false; };
@@ -155,6 +183,16 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
       if (next.has(value)) next.delete(value); else next.add(value);
       return next;
     });
+  }
+
+  function addUnavailableDate() {
+    if (!dateToAdd) return;
+    setUnavailableDates((prev) => (prev.includes(dateToAdd) ? prev : [...prev, dateToAdd].sort()));
+    setDateToAdd("");
+  }
+
+  function removeUnavailableDate(d) {
+    setUnavailableDates((prev) => prev.filter((x) => x !== d));
   }
 
   function setLocPref(locationName, preference) {
@@ -190,7 +228,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         available_weeks: Array.from(availableWeeks).sort((a, b) => a - b),
         role_preference: rolePref,
         saturdays_ok: saturdaysOk,
-        unavailable_notes: unavailableNotes.trim() || null,
+        unavailable_dates: unavailableDates.length ? unavailableDates : null,
         notes: notes.trim() || null,
         submitted_at: new Date().toISOString(),
         needs_confirmation: false,
@@ -335,14 +373,27 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         </div>
       </Card>
 
-      <Card title="Specific dates you can't work" subtitle="If you've already picked the week but have a doctor appointment / trip on one day, list it here. (e.g. 'Out June 22; back to work June 23')">
-        <textarea
-          value={unavailableNotes}
-          onChange={(e) => setUnavailableNotes(e.target.value)}
-          rows={3}
-          placeholder="Leave blank if you're available all of the weeks you picked above."
-          style={textareaStyle}
-        />
+      <Card title="Specific dates you can't work" subtitle="Picked a week but have a trip or appointment on one day? Add those dates. You'll still be assigned the camp — we just flag the dates so your admin can line up a sub.">
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input type="date" value={dateToAdd} onChange={(e) => setDateToAdd(e.target.value)} style={{ ...inputStyle, width: 190 }} />
+          <button type="button" onClick={addUnavailableDate} disabled={!dateToAdd}
+            style={{ padding: "9px 16px", borderRadius: 6, border: `1px solid ${BRIGHT}`, background: dateToAdd ? "#fff" : CREAM, color: BRIGHT, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: dateToAdd ? "pointer" : "default", opacity: dateToAdd ? 1 : 0.5 }}>
+            Add date
+          </button>
+        </div>
+        {unavailableDates.length > 0 && (
+          <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {unavailableDates.map((d) => (
+              <span key={d} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 8px 6px 12px", borderRadius: 999, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, color: INK, fontSize: 13, fontWeight: 600 }}>
+                {fmtDateLabel(d)}
+                <button type="button" onClick={() => removeUnavailableDate(d)} aria-label={`Remove ${fmtDateLabel(d)}`}
+                  style={{ border: "none", background: "transparent", color: CORAL, fontSize: 16, lineHeight: 1, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </Card>
 
       <Card title="Where do you want to work?" subtitle="Set your preference for each venue. We'll prioritize the ones you love and avoid the ones you can't do.">
@@ -364,18 +415,20 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
         )}
       </Card>
 
-      <Card title="What do you like to teach?" subtitle="Pick your preference for each subject area. We'll match you to camps you'll enjoy.">
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {CURRICULUM_CATEGORIES.map((c) => (
-            <PrefRow
-              key={c.value}
-              label={c.label}
-              value={curPrefs[c.value]}
-              onChange={(v) => setCurPref(c.value, v)}
-            />
-          ))}
-        </div>
-      </Card>
+      {categoryOptions.length > 0 && (
+        <Card title="What do you like to teach?" subtitle="Pick your preference for each subject. We'll match you to camps you'll enjoy.">
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {categoryOptions.map((c) => (
+              <PrefRow
+                key={c.value}
+                label={c.label}
+                value={curPrefs[c.value]}
+                onChange={(v) => setCurPref(c.value, v)}
+              />
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card title="Are you interested in:" subtitle="Lead means you run the camp. Developing means you support an experienced lead instructor.">
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -499,6 +552,18 @@ function PrefRow({ label, value, onChange }) {
     </div>
   );
 }
+
+const inputStyle = {
+  padding: "9px 12px",
+  border: `1px solid ${RULE}`,
+  borderRadius: 6,
+  fontSize: 14,
+  fontFamily: "inherit",
+  background: "#fff",
+  color: INK,
+  outline: "none",
+  boxSizing: "border-box",
+};
 
 const textareaStyle = {
   width: "100%",
