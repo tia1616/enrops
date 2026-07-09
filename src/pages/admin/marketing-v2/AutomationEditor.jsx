@@ -644,12 +644,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                 borderRadius: 6, outline: "none", background: "#fff",
               }}
             />
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
-              <span>
-                Type em-dashes (—) and arrows (→) directly — HTML codes like <code style={{ fontFamily: "ui-monospace,monospace" }}>&amp;mdash;</code> render literally in subject lines.
-              </span>
-              <span style={{ flexShrink: 0, marginLeft: 8, color: (subject || "").length > 78 ? WARN : (subject || "").length > 60 ? "#b8770b" : MUTED, fontWeight: (subject || "").length > 60 ? 600 : 400 }}>
-                {(subject || "").length}{(subject || "").length > 78 ? " — most clients truncate at 78" : (subject || "").length > 60 ? " — Gmail truncates at ~60" : ""}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4, fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
+              <span style={{ flexShrink: 0, color: (subject || "").length > 78 ? WARN : (subject || "").length > 60 ? "#b8770b" : MUTED, fontWeight: (subject || "").length > 60 ? 600 : 400 }}>
+                {(subject || "").length}{(subject || "").length > 78 ? " characters, most clients truncate at 78" : (subject || "").length > 60 ? " characters, Gmail truncates at ~60" : " characters"}
               </span>
             </div>
           </div>
@@ -740,37 +737,43 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
               Available tokens
             </span>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {tokens.map((t) => (
-                <code
-                  key={t}
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData("text/plain", `{{${t}}}`);
-                    e.dataTransfer.effectAllowed = "copy";
-                  }}
-                  onClick={() => {
-                    // Click fallback: copy to clipboard so operators on touch
-                    // devices or who don't realize chips drag can still grab
-                    // the token.
-                    if (typeof navigator !== "undefined" && navigator.clipboard) {
-                      navigator.clipboard.writeText(`{{${t}}}`).catch(() => {});
-                    }
-                  }}
-                  style={{
-                    background: "#f5f4ee", color: PURPLE, padding: "3px 8px", borderRadius: 4,
-                    fontSize: 12, fontFamily: "monospace", cursor: "grab",
-                    userSelect: "none",
-                  }}
-                  title={`${PRE_RENDERED_HTML_TOKENS.has(t) ? "Pre-rendered HTML — drop into body where you want the block." : "Plain text — safe in body or attributes."} Drag into the body, or click to copy.`}
-                >
-                  {`{{${t}}}`}
-                </code>
-              ))}
-            </div>
-            <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED }}>
-              Drag any token into the body where you want it, or click to copy.
-            </p>
+            {tokens.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 13, color: MUTED }}>None for this message.</p>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {tokens.map((t) => (
+                    <code
+                      key={t}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("text/plain", `{{${t}}}`);
+                        e.dataTransfer.effectAllowed = "copy";
+                      }}
+                      onClick={() => {
+                        // Click fallback: copy to clipboard so operators on touch
+                        // devices or who don't realize chips drag can still grab
+                        // the token.
+                        if (typeof navigator !== "undefined" && navigator.clipboard) {
+                          navigator.clipboard.writeText(`{{${t}}}`).catch(() => {});
+                        }
+                      }}
+                      style={{
+                        background: "#f5f4ee", color: PURPLE, padding: "3px 8px", borderRadius: 4,
+                        fontSize: 12, fontFamily: "monospace", cursor: "grab",
+                        userSelect: "none",
+                      }}
+                      title={`${PRE_RENDERED_HTML_TOKENS.has(t) ? "Pre-rendered HTML — drop into body where you want the block." : "Plain text — safe in body or attributes."} Drag into the body, or click to copy.`}
+                    >
+                      {`{{${t}}}`}
+                    </code>
+                  ))}
+                </div>
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED }}>
+                  Drag any token into the body where you want it, or click to copy.
+                </p>
+              </>
+            )}
           </div>
 
           {/* Timing — for templates with an editable days_after or days_before offset */}
