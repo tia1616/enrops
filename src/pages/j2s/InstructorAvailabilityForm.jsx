@@ -102,7 +102,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
     if (!instructor?.instructor_id || !cycle?.id || !instructor?.organization_id) return;
     let alive = true;
     (async () => {
-      const [availRes, locPrefRes, curPrefRes, venuesRes, currRes] = await Promise.all([
+      const [availRes, locPrefRes, curPrefRes, orgRes, campVenuesRes, currRes] = await Promise.all([
         supabase
           .from("instructor_availability")
           .select("session_types, available_weeks, role_preference, saturdays_ok, unavailable_dates, notes, submitted_at")
@@ -119,11 +119,18 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
           .select("curriculum_category, preference")
           .eq("instructor_id", instructor.instructor_id)
           .eq("cycle_id", cycle.id),
+        // Location prefs are by REGION, not individual venue — the same source the
+        // matcher scores by. Regions = the org's venue->region map applied to this
+        // cycle's camp venues.
         supabase
-          .from("program_locations")
-          .select("id, name")
-          .eq("organization_id", instructor.organization_id)
-          .order("name", { ascending: true }),
+          .from("organizations")
+          .select("venue_region_map")
+          .eq("id", instructor.organization_id)
+          .single(),
+        supabase
+          .from("camp_sessions")
+          .select("location_name")
+          .eq("cycle_id", cycle.id),
         // Subject categories are the provider's own — from their curricula.
         supabase
           .from("curricula")
@@ -157,7 +164,11 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
       for (const r of curPrefRes.data ?? []) curMap[r.curriculum_category] = r.preference;
       setCurPrefs(curMap);
 
-      setLocations(venuesRes.data ?? []);
+      // Distinct regions for this cycle's camps (venue -> region via the org map).
+      const regionMap = orgRes.data?.venue_region_map ?? {};
+      const campVenues = [...new Set((campVenuesRes.data ?? []).map((c) => c.location_name).filter(Boolean))];
+      const regions = [...new Set(campVenues.map((v) => regionMap[v]).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+      setLocations(regions.map((r) => ({ id: r, name: r })));
 
       const distinctCats = Array.from(
         new Set((currRes.data ?? []).map((c) => c.category).filter(Boolean)),
@@ -399,7 +410,7 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
       <Card title="Where do you want to work?" subtitle="Set your preference for each venue. We'll prioritize the ones you love and avoid the ones you can't do.">
         {locations.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
-            Your admin hasn't added any venues yet.
+            Your admin hasn't set up areas for this cycle's camps yet.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
