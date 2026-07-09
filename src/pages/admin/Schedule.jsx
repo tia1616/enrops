@@ -396,6 +396,7 @@ export default function Schedule() {
   // Open-survey dialog state. mode 'choose' shows the preview/test/send buttons +
   // optional deadline picker; mode 'result' shows the send outcome.
   const [surveyDialog, setSurveyDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
+  const [orgSurveyIntro, setOrgSurveyIntro] = useState(""); // operator's saved default camp intro (org_survey_config)
   const [surveyDeadline, setSurveyDeadline] = useState(() => businessDaysFromToday(10));
   // Term/cycle picker — list of all non-archived cycles for this org + the currently
   // viewed one. selectedCycleId=null means "use the latest one I find" (default).
@@ -454,7 +455,7 @@ export default function Schedule() {
       const sessions = sessionsRes.data ?? [];
       const sessionIds = sessions.map((s) => s.id);
 
-      const [assignmentsRes, instructorsRes, availabilityRes, locPrefRes, curPrefRes, declinesRes] = await Promise.all([
+      const [assignmentsRes, instructorsRes, availabilityRes, locPrefRes, curPrefRes, declinesRes, cfgRes] = await Promise.all([
         sessionIds.length
           ? supabase
               .from("camp_assignments")
@@ -483,6 +484,14 @@ export default function Schedule() {
           .from("session_declined_instructors")
           .select("camp_session_id, instructor_id, reason")
           .eq("cycle_id", cycle.id),
+        // Operator's saved survey config — the default camp intro used when the
+        // survey email goes out. Non-critical: a missing row = no saved default.
+        supabase
+          .from("org_survey_config")
+          .select("intro")
+          .eq("organization_id", org.id)
+          .eq("context", "camp")
+          .maybeSingle(),
       ]);
       if (assignmentsRes.error) throw assignmentsRes.error;
       if (instructorsRes.error) throw instructorsRes.error;
@@ -490,6 +499,7 @@ export default function Schedule() {
       if (locPrefRes.error) throw locPrefRes.error;
       if (curPrefRes.error) throw curPrefRes.error;
       if (declinesRes.error) throw declinesRes.error;
+      setOrgSurveyIntro(cfgRes?.data?.intro ?? "");
 
       // Load substitutions for all camp assignments so the grid can show sub indicators.
       const assignmentIds = (assignmentsRes.data ?? []).map((a) => a.id);
@@ -1747,6 +1757,9 @@ export default function Schedule() {
           mode,
           deadline: surveyDeadline || null,
           app_base_url: window.location.origin,
+          // Operator's saved default intro (Settings → Availability survey).
+          // Blank/omitted = the edge fn's built-in copy.
+          intro: orgSurveyIntro.trim() || null,
         },
       });
       if (error) {

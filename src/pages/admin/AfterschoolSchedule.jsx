@@ -235,6 +235,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [surveyDeadline, setSurveyDeadline] = useState(() => businessDaysFromToday(10));
   const [surveySelectedIds, setSurveySelectedIds] = useState(null); // Set<id> | null (=all)
   const [surveyIntro, setSurveyIntro] = useState(""); // editable lead paragraph
+  const [orgSurveyIntro, setOrgSurveyIntro] = useState(""); // operator's saved default intro (org_survey_config)
   const [matchResult, setMatchResult] = useState(null);
   const [view, setView] = useState("grid"); // 'list' | 'grid' — default to the week-at-a-glance grid
   // Week focus for the week-grid view. undefined = use the default (current/upcoming) week;
@@ -256,7 +257,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (!org?.id || !term) return;
     setState({ status: "loading" });
     try {
-      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes] = await Promise.all([
+      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes] = await Promise.all([
         supabase
           .from("programs")
           .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max")
@@ -302,6 +303,15 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .order("created_at", { ascending: true })
           .limit(1)
           .maybeSingle(),
+        // Operator's saved survey config — we only need the default intro here
+        // (the drawer pre-fills it). Non-critical: a missing row just means no
+        // saved default.
+        supabase
+          .from("org_survey_config")
+          .select("intro")
+          .eq("organization_id", org.id)
+          .eq("context", "afterschool")
+          .maybeSingle(),
       ]);
       if (progRes.error) throw progRes.error;
       if (locRes.error) throw locRes.error;
@@ -310,6 +320,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (surveyRes.error) throw surveyRes.error;
       if (areaPrefRes.error) throw areaPrefRes.error;
       if (cycleRes.error) throw cycleRes.error;
+      setOrgSurveyIntro(cfgRes.data?.intro ?? "");
 
       const programs = (progRes.data ?? []).filter((p) => DAY_TO_CODE[dayKey(p.day_of_week)]);
       const programIds = programs.map((p) => p.id);
@@ -845,7 +856,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   // Default lead paragraph for the survey email — matches the edge fn's fallback,
   // so the textarea shows exactly what instructors get if left unedited.
-  const defaultSurveyIntro = `We're planning the ${termDisplayName(term)} after-school schedule and want to know which days you can teach.`;
+  const builtinSurveyIntro = `We're planning the ${termDisplayName(term)} after-school schedule and want to know which days you can teach.`;
+  // The operator's saved default (Settings → Availability survey) wins; else the
+  // built-in copy. This is what the drawer pre-fills and what "Reset to default" restores.
+  const defaultSurveyIntro = orgSurveyIntro.trim() || builtinSurveyIntro;
 
   // Open the survey drawer. Pre-select recipients: never sent → all active
   // instructors; already open → only the non-responders (the straggler / new-hire
@@ -881,7 +895,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   function surveyBody(mode) {
     const ids = surveyRecipientIds();
-    const intro = surveyIntro.trim() && surveyIntro.trim() !== defaultSurveyIntro ? surveyIntro.trim() : null;
+    // Send null only when the intro is still the built-in copy (operator never
+    // customized at any level) so the edge fn falls back to its own default. A
+    // saved org default or an in-drawer edit is a real customization → send it.
+    const intro = surveyIntro.trim() && surveyIntro.trim() !== builtinSurveyIntro ? surveyIntro.trim() : null;
     return { organization_id: org.id, term, mode, deadline: surveyDeadline || null, instructor_ids: ids, intro, app_base_url: window.location.origin };
   }
 
