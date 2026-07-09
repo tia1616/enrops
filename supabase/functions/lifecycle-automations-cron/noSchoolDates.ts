@@ -65,7 +65,7 @@ export function cleanNoSchoolDates(
   onOrAfterIso: string,
 ): { iso: string; reason: string }[] {
   const arr = Array.isArray(raw) ? raw : [];
-  return arr
+  const sorted = arr
     .map((e: any) => ({
       iso: typeof e?.date === "string" ? e.date.trim() : "",
       reason: typeof e?.reason === "string" ? e.reason.trim() : "",
@@ -77,6 +77,10 @@ export function cleanNoSchoolDates(
       e.iso >= onOrAfterIso,
     )
     .sort((x, y) => (x.iso < y.iso ? -1 : x.iso > y.iso ? 1 : 0));
+  // Dedupe by date — merging several calendars for one location (structured +
+  // free-text both resolving) can repeat a date; keep the first occurrence's reason.
+  const seen = new Set<string>();
+  return sorted.filter((e) => (seen.has(e.iso) ? false : (seen.add(e.iso), true)));
 }
 
 // Collapse a sorted date list into closure periods, bridging weekends. Two dates

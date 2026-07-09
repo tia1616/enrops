@@ -24,6 +24,18 @@ Deno.test("cleanNoSchoolDates drops junk, past dates; sorts ascending", () => {
   assertEquals(clean[0].reason, "a"); // sorted, reason preserved
 });
 
+Deno.test("cleanNoSchoolDates dedupes repeated dates (merged calendars)", () => {
+  const raw = [
+    { date: "2026-07-20", reason: "Break" },
+    { date: "2026-07-13", reason: "Institute" },
+    { date: "2026-07-13", reason: "Institute (dup from a second matched calendar)" },
+    { date: "2026-07-20", reason: "Break" },
+  ];
+  const clean = cleanNoSchoolDates(raw, "2026-07-09");
+  assertEquals(clean.map((d) => d.iso), ["2026-07-13", "2026-07-20"]); // deduped + sorted
+  assertEquals(clean[0].reason, "Institute"); // first occurrence's reason kept
+});
+
 Deno.test("cleanNoSchoolDates handles non-array input", () => {
   assertEquals(cleanNoSchoolDates(null, "2026-07-09"), []);
   assertEquals(cleanNoSchoolDates(undefined, "2026-07-09"), []);
