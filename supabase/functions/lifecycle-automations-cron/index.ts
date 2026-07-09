@@ -1772,11 +1772,14 @@ async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationR
 // CALENDAR-anchored, unlike the other resolvers. Reads the org's
 // district_calendars, groups each district's no_school_dates into "closure
 // periods" (consecutive dates, bridging weekends so a whole winter break is one
-// period), and fires `days_before` a period's first day. For each firing period
-// it finds the afterschool programs that (a) sit in that district, (b) map to
-// that calendar's school_year via the program's term, and (c) actually meet on a
-// weekday inside the closure and within their run. Those programs' confirmed
-// families + confirmed instructor get the heads-up.
+// period), and fires `days_before` a period's first day. It iterates the org's
+// afterschool programs and, for each, resolves the applicable closures through
+// the SAME canonical matcher derive_program_session_dates uses —
+// matching_district_calendars (structured district_id + districts.calendar_key +
+// legacy free-text, unioned) — so a closure can never be subtracted from a
+// program's sessions yet miss this reminder. A program is in scope when its term
+// maps to a school_year, it meets on a real weekday, and it isn't draft/cancelled.
+// Its confirmed families + confirmed instructor get the heads-up.
 //
 // FORWARD-ONLY (no on-enable back-catalog blast): a period fires only when its
 // natural send day (start − days_before) is on/after the automation's enabled_at
@@ -1791,17 +1794,9 @@ async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationR
 // from (start − days) through the period end, so a delayed/missed cron still
 // catches up (and dedup prevents a double-send).
 //
-// Dormant-safe: on any day with no closure in a send window, this returns []
-// after one cheap district_calendars read. Instructor sends stay silent until
-// program_assignments has confirmed rows (out of term it is empty).
-//
-// KNOWN LIMITATION (dormant today): programs are matched to a calendar by the
-// legacy free-text program_locations.district. The canonical matcher
-// (matching_district_calendars: structured district_id + calendar_key + free
-// text) is what derive_program_session_dates uses. district_id is unpopulated in
-// every environment today, so the two agree; when structured districts are
-// adopted this program-match must move onto the canonical matcher or a closure
-// could be subtracted from sessions yet miss this reminder. Tracked as follow-up.
+// Dormant-safe: on a day with no closure in a send window, this returns [] after
+// cheap reads. Instructor sends stay silent until program_assignments has
+// confirmed rows (out of term it is empty).
 //
 // Pure date logic (junk-date guarding, weekend-bridging grouping, term mapping,
 // date formatting) lives in ./noSchoolDates.ts and is unit-tested there.
@@ -1819,53 +1814,68 @@ async function resolveNoSchoolDayAudience(
   const enabledDay = a.enabled_at ? a.enabled_at.slice(0, 10) : null;
   if (!enabledDay) return [];
 
-  const { data: calendars, error: calErr } = await supabase
-    .from("district_calendars")
-    .select("id, district, school_year, no_school_dates")
+  // All AFTERSCHOOL programs for the org (the programs table is afterschool; camps
+  // live in camp_sessions and never follow the school calendar).
+  const { data: progs, error: progErr } = await supabase
+    .from("programs")
+    .select("id, curriculum, term, day_of_week, first_session_date, program_location_id, status, program_locations!inner ( name )")
     .eq("organization_id", a.organization_id);
-  if (calErr) throw calErr;
-  if (!calendars || calendars.length === 0) return [];
+  if (progErr) throw progErr;
+
+  const DEAD_STATUSES = new Set(["draft", "cancelled", "canceled", "archived", "deleted"]);
+  const relevantProgs = (progs ?? []).filter((p: any) =>
+    termToSchoolYear(p.term) !== null &&
+    !DEAD_STATUSES.has((p.status ?? "").toLowerCase()) &&
+    p.first_session_date &&
+    NSD_WEEKDAY_SET.has(String(p.day_of_week ?? "").toLowerCase()),
+  );
+  if (relevantProgs.length === 0) return [];
 
   const entries: AudienceEntry[] = [];
 
-  for (const cal of calendars as any[]) {
-    // Validate/de-junk/sort over the FULL calendar (floor 2000-01-01 guards the
-    // real "0027-01-12" prod typo but keeps past dates so an in-progress break
-    // still groups to its true start), then group bridging weekends. Both pure +
-    // unit-tested in noSchoolDates.ts.
-    const clean = cleanNoSchoolDates(cal.no_school_dates, "2000-01-01");
+  // Closures per (location, term) via the canonical matcher, cached so N programs
+  // that share a school+term cost ONE RPC. Merges the no_school_dates of every
+  // calendar that applies (structured district_id + calendar_key + free-text,
+  // unioned — usually one), then validates/de-junks/sorts/dedupes. Floor
+  // 2000-01-01 keeps past dates so an in-progress break still groups to its TRUE
+  // start (guards the real "0027-01-12" prod typo). Pure bits unit-tested.
+  const closuresCache = new Map<string, { iso: string; reason: string }[]>();
+  async function closuresFor(locationId: string, term: string): Promise<{ iso: string; reason: string }[]> {
+    const key = `${locationId}|${term}`;
+    const cached = closuresCache.get(key);
+    if (cached) return cached;
+    const merged: unknown[] = [];
+    try {
+      const { data: cals } = await supabase.rpc("matching_district_calendars", {
+        p_org_id: a.organization_id, p_location_id: locationId, p_term: term,
+      });
+      for (const c of (cals ?? []) as any[]) {
+        if (Array.isArray(c.no_school_dates)) merged.push(...c.no_school_dates);
+      }
+    } catch (e) {
+      console.error(`[lifecycle-automations-cron] matching_district_calendars failed for location ${locationId} term ${term}:`, e);
+    }
+    const clean = cleanNoSchoolDates(merged, "2000-01-01");
+    closuresCache.set(key, clean);
+    return clean;
+  }
+
+  // Run bounds (derive already skips closures) computed once per program. A derive
+  // failure skips that program (fail-safe: never email without knowing the run).
+  const sessionsByProg = new Map<string, string[]>();
+
+  for (const p of relevantProgs as any[]) {
+    const clean = await closuresFor(p.program_location_id, p.term);
     if (clean.length === 0) continue;
     const periods = toClosurePeriods(clean);
 
     // A period fires while today is in [start − days, end] AND its send day is on/
     // after enabled_at (forward-only). Stable key + this window ⇒ exactly one send
     // per closure, with catch-up if the cron was delayed. (periodFires is unit-tested.)
-    const firing = periods.filter((p) => periodFires(p.startIso, p.endIso, today, days, enabledDay));
+    const firing = periods.filter((pd) => periodFires(pd.startIso, pd.endIso, today, days, enabledDay));
     if (firing.length === 0) continue;
 
-    // Afterschool programs in this district (the programs table is afterschool;
-    // camps live in camp_sessions and never follow the school calendar).
-    const { data: progs, error: progErr } = await supabase
-      .from("programs")
-      .select("id, curriculum, term, day_of_week, first_session_date, session_count, status, program_location_id, program_locations!inner ( name, district )")
-      .eq("organization_id", a.organization_id)
-      .eq("program_locations.district", cal.district);
-    if (progErr) throw progErr;
-
-    const DEAD_STATUSES = new Set(["draft", "cancelled", "canceled", "archived", "deleted"]);
-    const relevantProgs = (progs ?? []).filter((p: any) =>
-      termToSchoolYear(p.term) === cal.school_year &&
-      !DEAD_STATUSES.has((p.status ?? "").toLowerCase()) &&
-      p.first_session_date &&
-      NSD_WEEKDAY_SET.has(String(p.day_of_week ?? "").toLowerCase()),
-    );
-    if (relevantProgs.length === 0) continue;
-
-    // Run bounds (derive already skips closures) — computed ONCE per program, not
-    // per (period × program). A derive failure skips that program (fail-safe: we
-    // never email without knowing the run), consistent with resolveWelcomeAudience.
-    const sessionsByProg = new Map<string, string[]>();
-    for (const p of relevantProgs as any[]) {
+    if (!sessionsByProg.has(p.id)) {
       try {
         const { data: s } = await supabase.rpc("derive_program_session_dates", { p_program_id: p.id });
         sessionsByProg.set(p.id, (s as string[] | null) ?? []);
@@ -1874,24 +1884,22 @@ async function resolveNoSchoolDayAudience(
         sessionsByProg.set(p.id, []);
       }
     }
+    const sessions = sessionsByProg.get(p.id) ?? [];
+    if (sessions.length === 0) continue;
+    const lastMeeting = sessions[sessions.length - 1];
+    const dow = String(p.day_of_week).toLowerCase();
 
     for (const period of firing) {
-      for (const p of relevantProgs as any[]) {
-        const sessions = sessionsByProg.get(p.id) ?? [];
-        if (sessions.length === 0) continue;
-        const lastMeeting = sessions[sessions.length - 1];
-        const dow = String(p.day_of_week).toLowerCase();
-
-        // The closure dates that would have been THIS program's class days — only
-        // ones still in the future (never list a day that has already passed) and
-        // inside the program's run. Lower bound is the program's INTENDED start
-        // (first_session_date), not derive's first meeting: a closure landing on
-        // the very first session is skipped BY derive, so anchoring on derive[0]
-        // would drop exactly the case that matters most (a cancelled week-1 class).
-        const affected = period.dates.filter((d) =>
-          nsdWeekdayLower(d.iso) === dow && d.iso >= today && d.iso >= p.first_session_date && d.iso <= lastMeeting,
-        );
-        if (affected.length === 0) continue;
+      // The closure dates that would have been THIS program's class days — only
+      // ones still in the future (never list a day that has already passed) and
+      // inside the program's run. Lower bound is the program's INTENDED start
+      // (first_session_date), not derive's first meeting: a closure landing on the
+      // very first session is skipped BY derive, so anchoring on derive[0] would
+      // drop exactly the case that matters most (a cancelled week-1 class).
+      const affected = period.dates.filter((d) =>
+        nsdWeekdayLower(d.iso) === dow && d.iso >= today && d.iso >= p.first_session_date && d.iso <= lastMeeting,
+      );
+      if (affected.length === 0) continue;
 
         const datesDisplay = formatDateList(affected.map((d) => d.iso));
         const reasons = Array.from(new Set(affected.map((d) => d.reason).filter(Boolean)));
@@ -1977,7 +1985,6 @@ async function resolveNoSchoolDayAudience(
         }
       }
     }
-  }
 
   return entries;
 }
