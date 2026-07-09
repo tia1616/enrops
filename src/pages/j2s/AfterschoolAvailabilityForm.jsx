@@ -226,6 +226,8 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       }
     }
     if (!daysRange) { setError("Pick how many days a week you'd like to teach (choose 'No limit' if you have no cap)."); return; }
+    const unrated = areas.filter((a) => !areaPrefs[a]);
+    if (unrated.length > 0) { setError(`Please rate every area — still missing: ${unrated.join(", ")}.`); return; }
 
     setSaving(true);
     try {
@@ -352,7 +354,8 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         </select>
       </Card>
 
-      <Card title="Which areas do you want to teach in?" subtitle="For each area: 'Love to' is where you'd most like to be, 'Happy to' means you're glad to teach there, and 'Can't' means we won't schedule you there. Leaving one blank counts as happy to.">
+      <Card title="Which areas do you want to teach in?" subtitle="Rate every area: 'Love to' is where you'd most like to be, 'Happy to' means you're glad to teach there, and 'Can't' means we won't schedule you there.">
+
         {areas.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
             Your admin hasn't set up teaching areas yet.
