@@ -79,7 +79,7 @@ export default function CampaignDetail({ campaignId, org, onBack }) {
           .maybeSingle(),
         supabase
           .from("marketing_campaign_touchpoints")
-          .select("id, order_index, scheduled_at, status, payload, topics")
+          .select("id, order_index, scheduled_at, status, payload, topics, email_attachments")
           .eq("campaign_id", campaignId)
           .eq("organization_id", org.id)
           .order("order_index", { ascending: true }),

@@ -3,11 +3,10 @@
 // Files live in the PUBLIC `comms-attachments` bucket under {org.id}/attachments/,
 // each path carrying the row's random uuid so the public URL is unguessable
 // (matches how Mailchimp/HubSpot host download links). A comms_attachments row
-// holds the metadata. Two ways an email uses a file:
-//   - LINK:   drop the {{attachment:<id>}} token in the body -> Download button
-//             (rendered by the send edge fn via _shared/attachments.ts).
-//   - ATTACH: put the id in the row's attachment_ids[] -> the raw file rides in
-//             the email (base64). Opt-in; 15 MB cap for deliverability.
+// holds the metadata. An email row stores `email_attachments` = [{ id, attach }]:
+// every entry renders as a Download button at the bottom of the email, and
+// `attach: true` also rides the raw file along (automations only). Rendering
+// happens server-side in _shared/attachments.ts — the body carries no token.
 //
 // Writes go direct from the client (RLS: can_admin_org gates the table; the
 // {org.id}/ storage-folder policy gates the bucket), mirroring the curriculum-doc
@@ -23,11 +22,6 @@ export const COMMS_ATTACHMENTS_BUCKET = "comms-attachments";
 export const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 
 const SELECT_COLS = "id, file_name, storage_path, byte_size, content_type, title, created_at";
-
-/** The body marker that renders to a Download button for this file. */
-export function attachmentToken(id) {
-  return `{{attachment:${id}}}`;
-}
 
 /** Permanent public URL for a library file (public bucket). */
 export function attachmentPublicUrl(storagePath) {

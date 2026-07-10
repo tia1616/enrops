@@ -81,16 +81,9 @@ const isBlockTokenLine = (line) => {
 // next `>`, i.e. the token sits in text content not inside an attribute.
 export function highlightTokens(html) {
   if (!html) return "";
-  return html
-    // Attachment markers ({{attachment:<uuid>}}) render as a friendly "Download
-    // button" pill instead of exposing a raw uuid. Runs first; same
-    // in-text-only lookahead so it's skipped inside HTML attribute values.
-    .replace(/\{\{attachment:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}\}(?![^<]*>)/g, () =>
-      `<span style="display:inline-block;padding:0 8px;border-radius:4px;background:#e3ecf0;color:${PURPLE};font-size:0.9em;font-weight:600;font-family:ui-monospace,monospace;">&#11015; Download button</span>`,
-    )
-    .replace(/\{\{(\w+)\}\}(?![^<]*>)/g, (_, name) =>
-      `<span style="display:inline-block;padding:0 6px;border-radius:4px;background:#f0e3e8;color:${PURPLE};font-size:0.9em;font-weight:600;font-family:ui-monospace,monospace;">{{${name}}}</span>`,
-    );
+  return html.replace(/\{\{(\w+)\}\}(?![^<]*>)/g, (_, name) =>
+    `<span style="display:inline-block;padding:0 6px;border-radius:4px;background:#f0e3e8;color:${PURPLE};font-size:0.9em;font-weight:600;font-family:ui-monospace,monospace;">{{${name}}}</span>`,
+  );
 }
 
 // Convert stored HTML (what the engine renders, what's saved as

@@ -15,7 +15,7 @@
 //
 // Org comes from useOutletContext — never hardcoded. Copy is tenant-neutral.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
@@ -56,7 +56,7 @@ export default function TemplatesTab() {
       setLoadErr(null);
       const { data, error } = await supabase
         .from("saved_email_templates")
-        .select("id, name, subject, body_html, updated_at")
+        .select("id, name, subject, body_html, updated_at, email_attachments")
         .eq("organization_id", org.id)
         .order("updated_at", { ascending: false });
       if (cancelled) return;
@@ -72,6 +72,7 @@ export default function TemplatesTab() {
     name: t.name ?? "",
     subject: t.subject ?? "",
     editableText: htmlToEditable(t.body_html ?? ""),
+    email_attachments: Array.isArray(t.email_attachments) ? t.email_attachments : [],
   });
 
   return (
@@ -251,28 +252,11 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
   const [name, setName] = useState(value.name);
   const [subject, setSubject] = useState(value.subject);
   const [editableText, setEditableText] = useState(value.editableText);
+  const [emailAttachments, setEmailAttachments] = useState(
+    Array.isArray(value.email_attachments) ? value.email_attachments : [],
+  );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
-  const taRef = useRef(null);
-
-  // Insert an {{attachment:<id>}} Download-button marker at the cursor. Templates
-  // feed campaigns (link-only), so link mode is the universal choice here.
-  const insertToken = (token) => {
-    const ta = taRef.current;
-    if (!ta) {
-      setEditableText((t) => (t.trim() ? `${t}\n\n${token}` : token));
-      return;
-    }
-    const start = ta.selectionStart ?? editableText.length;
-    const end = ta.selectionEnd ?? start;
-    const next = editableText.slice(0, start) + token + editableText.slice(end);
-    setEditableText(next);
-    requestAnimationFrame(() => {
-      ta.focus();
-      const pos = start + token.length;
-      ta.setSelectionRange(pos, pos);
-    });
-  };
 
   const bodyHtml = editableToHtml(editableText);
   const canSave = name.trim().length > 0 && !saving;
@@ -288,6 +272,7 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
       subject: subject.trim() || null,
       body_html: bodyHtml || null,
       body_text: stripHtml(bodyHtml) || null,
+      email_attachments: emailAttachments ?? [],
     };
     let error;
     if (value.id) {
@@ -348,7 +333,6 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
       <div>
         <label style={labelStyle}>Email body</label>
         <textarea
-          ref={taRef}
           value={editableText}
           onChange={(e) => setEditableText(e.target.value)}
           rows={12}
@@ -367,8 +351,9 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
       <div>
         <AttachmentPicker
           orgId={org?.id}
-          onInsertToken={insertToken}
-          allowTrueAttach={false}
+          emailAttachments={emailAttachments}
+          onChange={setEmailAttachments}
+          allowAttach={false}
           primaryColor={BRIGHT}
         />
       </div>

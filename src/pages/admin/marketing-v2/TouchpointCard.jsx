@@ -2,7 +2,7 @@
 // Expandable. Shows summary collapsed; editor + preview when open.
 // Edits are local until "Save as draft" or "Approve & Schedule" (chunk 07 wires).
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import EditableField from "./EditableField.jsx";
 import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
 import AttachmentPicker from "./AttachmentPicker.jsx";
@@ -318,8 +318,19 @@ export default function TouchpointCard({
             value={tp.body_html ?? ""}
             onChange={(v) => onUpdate(tp.id, { body_html: v, body_text: stripHtml(v) })}
             onCommit={(v) => onCommit?.(tp.id, { body_html: v, body_text: stripHtml(v) })}
-            orgId={organizationId}
           />
+
+          {organizationId && (
+            <div style={{ marginTop: 10 }}>
+              <AttachmentPicker
+                orgId={organizationId}
+                emailAttachments={tp.email_attachments ?? []}
+                onChange={(next) => (onCommit ?? onUpdate)(tp.id, { email_attachments: next })}
+                allowAttach={false}
+                primaryColor={PURPLE}
+              />
+            </div>
+          )}
 
           {organizationId && (
             <TemplateControls
@@ -386,9 +397,8 @@ export default function TouchpointCard({
   );
 }
 
-function BodyEditor({ value, onChange, onCommit, orgId, primaryColor }) {
+function BodyEditor({ value, onChange, onCommit }) {
   const [editing, setEditing] = useState(false);
-  const taRef = useRef(null);
   // Plain-text working copy used only while the textarea is open. Seeded
   // from `value` (HTML) when Edit is clicked. Bubbled back up as HTML on
   // every keystroke via onChange(editableToHtml(...)), so the parent's
@@ -410,41 +420,6 @@ function BodyEditor({ value, onChange, onCommit, orgId, primaryColor }) {
   const handleTextChange = (newText) => {
     setEditableText(newText);
     onChange(editableToHtml(newText));
-  };
-
-  // Insert an {{attachment:<id>}} Download-button marker at the cursor (or append
-  // when the body isn't in edit mode). Campaigns are link-only — the file rides
-  // as a tracked Download button, never as a real attachment (Resend batch can't).
-  const insertToken = (token) => {
-    if (!editing) {
-      const base = htmlToEditable(value);
-      const next = base.trim() ? `${base}\n\n${token}` : token;
-      const html = editableToHtml(next);
-      setEditableText(next);
-      onChange(html);
-      // Commit immediately: inserting a link is a deliberate, terminal-feeling
-      // action, and the operator may Send-test or reload before clicking "Done
-      // editing". Without this the token would live only in local state and the
-      // download button would vanish from the test/committed send.
-      onCommit?.(html);
-      setEditing(true);
-      return;
-    }
-    const ta = taRef.current;
-    if (!ta) {
-      const next = editableText.trim() ? `${editableText}\n\n${token}` : token;
-      handleTextChange(next);
-      return;
-    }
-    const start = ta.selectionStart ?? editableText.length;
-    const end = ta.selectionEnd ?? start;
-    const next = editableText.slice(0, start) + token + editableText.slice(end);
-    handleTextChange(next);
-    requestAnimationFrame(() => {
-      ta.focus();
-      const pos = start + token.length;
-      ta.setSelectionRange(pos, pos);
-    });
   };
 
   return (
@@ -470,7 +445,6 @@ function BodyEditor({ value, onChange, onCommit, orgId, primaryColor }) {
       {editing ? (
         <>
           <textarea
-            ref={taRef}
             value={editableText}
             onChange={(e) => handleTextChange(e.target.value)}
             rows={12}
@@ -505,17 +479,6 @@ function BodyEditor({ value, onChange, onCommit, orgId, primaryColor }) {
           <p style={{ margin: "4px 0 0", color: OK, fontStyle: "italic" }}>
             ✨ Every edit teaches Ennie a phrase you prefer or drop. Future drafts will reflect your voice automatically — less editing each campaign.
           </p>
-        </div>
-      )}
-
-      {orgId && (
-        <div style={{ marginTop: 10 }}>
-          <AttachmentPicker
-            orgId={orgId}
-            onInsertToken={insertToken}
-            allowTrueAttach={false}
-            primaryColor={primaryColor || PURPLE}
-          />
         </div>
       )}
     </div>

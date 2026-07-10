@@ -38,9 +38,10 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
 import {
-  extractAttachmentIds,
+  parseEmailAttachments,
   loadCommsAttachments,
-  expandAttachmentTokens,
+  renderDownloadButtonsHtml,
+  renderDownloadButtonsText,
   buildResendAttachments,
   type CommsAttachment,
 } from "../_shared/attachments.ts";
@@ -91,7 +92,7 @@ interface AutomationRow {
   body_override: string | null;
   timing_override: Record<string, unknown> | null;
   enabled_at: string | null;
-  attachment_ids: string[] | null;
+  email_attachments: unknown; // jsonb: [{ id, attach }]
   template: TemplateRow;
   org: { id: string; slug: string; name: string };
 }
@@ -110,6 +111,7 @@ interface TestSendParams {
   // For no_school_day, which role variant to render/send. "instructor" swaps in
   // the tailored instructor copy; anything else = the parent (default) copy.
   audience?: "parent" | "instructor";
+  preview_attachments?: unknown; // DRAFT email_attachments jsonb, so the test send matches the editor
 }
 
 interface TestSendResult {
@@ -126,6 +128,7 @@ interface PreviewParams {
   test_camp_session_id: string | null;
   test_program_id: string | null;
   audience?: "parent" | "instructor";
+  preview_attachments?: unknown; // DRAFT email_attachments jsonb, so the preview matches the editor
 }
 
 interface PreviewResult {
@@ -221,6 +224,7 @@ serve(async (req) => {
           test_camp_session_id: typeof body.test_camp_session_id === "string" ? body.test_camp_session_id : null,
           test_program_id: typeof body.test_program_id === "string" ? body.test_program_id : null,
           audience: parsedAudience,
+          preview_attachments: body.preview_attachments,
         };
       } else if (body?.mode === "preview") {
         previewParams = {
@@ -231,6 +235,7 @@ serve(async (req) => {
           test_camp_session_id: typeof body.test_camp_session_id === "string" ? body.test_camp_session_id : null,
           test_program_id: typeof body.test_program_id === "string" ? body.test_program_id : null,
           audience: parsedAudience,
+          preview_attachments: body.preview_attachments,
         };
       } else if (typeof body?.registration_id === "string") {
         eventRegistrationId = body.registration_id;
@@ -270,7 +275,7 @@ serve(async (req) => {
   const { data: automations, error: loadErr } = await supabase
     .from("automations")
     .select(`
-      id, organization_id, template_id, enabled, subject_override, body_override, timing_override, enabled_at, attachment_ids,
+      id, organization_id, template_id, enabled, subject_override, body_override, timing_override, enabled_at, email_attachments,
       template:automation_templates!inner (
         id, key, display_name, trigger_type, applies_to_program_type, mailing_type,
         default_subject, default_body, default_timing, time_saved_minutes_per_send, is_v1_enabled
@@ -396,28 +401,25 @@ async function runAutomation(
   const toSend = audience.filter((e) => !alreadySentSet.has(e.context_key));
   skipped = audience.length - toSend.length;
 
-  // Resolve this automation's comms attachments ONCE (shared across all
-  // recipients this run). Link mode: {{attachment:<id>}} in the operator's
-  // body_override -> Download button. Attach mode: a.attachment_ids[] -> base64
-  // in the Resend payload. Org-scoped load; skipped-too-large files are logged.
-  // Scan the SAME body that sendOne renders (override, else template default) so
-  // a {{attachment:<id>}} marker living in the template default is still loaded.
-  const linkAttIds = extractAttachmentIds(a.body_override, a.template.default_body);
-  const attachFileIds = (a.attachment_ids ?? []).filter(Boolean);
-  const attachmentsById = await loadCommsAttachments(supabase, a.organization_id, [...linkAttIds, ...attachFileIds]);
-  const trueAttachRows = attachFileIds
-    .map((id) => attachmentsById.get(id.toLowerCase()))
-    .filter((x): x is CommsAttachment => !!x);
+  // Resolve this automation's comms attachments ONCE (shared across recipients).
+  // Every entry -> a Download button appended to the bottom of the email; entries
+  // flagged attach:true also ride the raw file along (base64). Org-scoped load.
+  const emailAtts = parseEmailAttachments(a.email_attachments);
+  const attachmentsById = await loadCommsAttachments(supabase, a.organization_id, emailAtts.map((e) => e.id));
+  const buttonRows = emailAtts.map((e) => attachmentsById.get(e.id)).filter((x): x is CommsAttachment => !!x);
+  const attachRows = emailAtts.filter((e) => e.attach).map((e) => attachmentsById.get(e.id)).filter((x): x is CommsAttachment => !!x);
   const { attachments: resendAttachments, skipped: skippedAttachments } =
-    await buildResendAttachments(supabase, trueAttachRows);
+    await buildResendAttachments(supabase, attachRows);
   if (skippedAttachments.length) {
     console.warn(`[lifecycle-automations-cron] attachments skipped (too large/unavailable): ${skippedAttachments.join(", ")}`);
   }
+  const downloadButtonsHtml = renderDownloadButtonsHtml(buttonRows, supabase, brand);
+  const downloadButtonsText = renderDownloadButtonsText(buttonRows, supabase);
 
   for (let i = 0; i < toSend.length; i += BATCH_SIZE) {
     const batch = toSend.slice(i, i + BATCH_SIZE);
     const results = await Promise.allSettled(batch.map((entry) =>
-      sendOne(supabase, a, brand, runRow.id, entry, attachmentsById, resendAttachments),
+      sendOne(supabase, a, brand, runRow.id, entry, downloadButtonsHtml, downloadButtonsText, resendAttachments),
     ));
     for (const r of results) {
       if (r.status === "fulfilled" && r.value === "sent") sent += 1;
@@ -470,7 +472,8 @@ async function sendOne(
   brand: OrgBrand,
   runId: string,
   entry: AudienceEntry,
-  attachmentsById: Map<string, CommsAttachment>,
+  downloadButtonsHtml: string,
+  downloadButtonsText: string,
   resendAttachments: { filename: string; content: string }[],
 ): Promise<"sent" | "failed"> {
   const tokens = buildTokens(entry, brand);
@@ -480,12 +483,11 @@ async function sendOne(
   // half of no_school_day) we fall back to the operator's editable override, then
   // the template default. Generic: sendOne stays template-agnostic.
   const subject = renderTokens(entry.subject_template ?? a.subject_override ?? a.template.default_subject, tokens);
-  // Expand {{attachment:<id>}} markers to Download buttons (html) / "Download
-  // name: url" lines (text) BEFORE token replacement, so the resulting markup
-  // is left untouched by renderTokens.
   const bodySrc = entry.body_template ?? a.body_override ?? a.template.default_body;
-  const innerBody = renderTokens(expandAttachmentTokens(bodySrc, attachmentsById, supabase, brand, { html: true }), tokens);
-  const innerBodyText = renderTokens(expandAttachmentTokens(bodySrc, attachmentsById, supabase, brand, { html: false }), tokens);
+  const renderedHtml = renderTokens(bodySrc, tokens);
+  // Download buttons are appended to the BOTTOM of the body (they land above the
+  // signature, which wrapInShell adds) — not placed inline by the operator.
+  const innerBody = renderedHtml + downloadButtonsHtml;
   // Promotional templates (mailing_type='marketing', e.g. review_request) carry a
   // CAN-SPAM unsubscribe link keyed to this recipient; informational sends pass
   // "" so their HTML + text stay byte-for-byte unchanged.
@@ -501,9 +503,10 @@ async function sendOne(
     return "failed";
   }
   const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl);
+  const plainBody = htmlToPlainText(renderedHtml) + downloadButtonsText;
   const plainText = unsubscribeUrl
-    ? `${htmlToPlainText(innerBodyText)}\n\nUnsubscribe: ${unsubscribeUrl}`
-    : htmlToPlainText(innerBodyText);
+    ? `${plainBody}\n\nUnsubscribe: ${unsubscribeUrl}`
+    : plainBody;
 
   let resendMessageId: string | null = null;
   let errorMessage: string | null = null;
@@ -589,6 +592,7 @@ interface RenderInput {
   test_program_id: string | null;
   to_email?: string; // only used to seed entry.parent_email for a test send
   audience?: "parent" | "instructor"; // no_school_day: which role variant to render
+  preview_attachments?: unknown; // the DRAFT email_attachments jsonb ([{id,attach}]) so the preview/test reflects unsaved changes
 }
 interface RenderOutput {
   ok: boolean;
@@ -598,6 +602,7 @@ interface RenderOutput {
   brand?: OrgBrand;
   template_key?: string;
   used_real_data?: boolean;
+  resend_attachments?: { filename: string; content: string }[]; // for test send only
 }
 
 async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput): Promise<RenderOutput> {
@@ -700,13 +705,15 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
   }
 
   const subject = renderTokens(subjectTpl, tokens);
-  // Expand {{attachment:<id>}} Download-button markers so the on-screen preview
-  // and the test send both show exactly what a real send will (link mode).
-  const attLinkIds = extractAttachmentIds(bodyTpl);
-  const attachmentsById = attLinkIds.length
-    ? await loadCommsAttachments(supabase, org.id, attLinkIds)
-    : new Map<string, CommsAttachment>();
-  const innerBody = renderTokens(expandAttachmentTokens(bodyTpl, attachmentsById, supabase, brand, { html: true }), tokens);
+  // Render the Download-buttons block from the DRAFT's attachment list so the
+  // preview + test send show exactly what a real send will — the buttons land at
+  // the bottom of the email, never as a token in the body.
+  const emailAtts = parseEmailAttachments(input.preview_attachments);
+  const attachmentsById = await loadCommsAttachments(supabase, org.id, emailAtts.map((e) => e.id));
+  const buttonRows = emailAtts.map((e) => attachmentsById.get(e.id)).filter((x): x is CommsAttachment => !!x);
+  const attachRows = emailAtts.filter((e) => e.attach).map((e) => attachmentsById.get(e.id)).filter((x): x is CommsAttachment => !!x);
+  const { attachments: resendAttachments } = await buildResendAttachments(supabase, attachRows);
+  const innerBody = renderTokens(bodyTpl, tokens) + renderDownloadButtonsHtml(buttonRows, supabase, brand);
   // Marketing templates show the unsubscribe footer in preview/test too. Real
   // link for a test send (to_email present); a visible "#" placeholder for the
   // on-screen preview so the operator sees the footer without minting a working
@@ -716,7 +723,7 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     : "";
   const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl);
 
-  return { ok: true, subject, html: fullHtml, brand, template_key: template.key, used_real_data: usedRealData };
+  return { ok: true, subject, html: fullHtml, brand, template_key: template.key, used_real_data: usedRealData, resend_attachments: resendAttachments };
 }
 
 async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Promise<TestSendResult> {
@@ -749,6 +756,7 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
     test_program_id: params.test_program_id,
     to_email: params.test_to_email,
     audience: params.audience,
+    preview_attachments: params.preview_attachments,
   });
   if (!rendered.ok) return { ok: false, error: rendered.error };
 
@@ -769,6 +777,7 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
           { name: "type", value: "lifecycle_test" },
           { name: "automation", value: rendered.template_key! },
         ],
+        ...(rendered.resend_attachments?.length ? { attachments: rendered.resend_attachments } : {}),
       }),
     });
     if (resp.ok) {
@@ -794,6 +803,7 @@ async function runPreview(supabase: SupabaseClient, params: PreviewParams): Prom
     test_camp_session_id: params.test_camp_session_id,
     test_program_id: params.test_program_id,
     audience: params.audience,
+    preview_attachments: params.preview_attachments,
   });
   if (!rendered.ok) return { ok: false, error: rendered.error };
   return { ok: true, subject: rendered.subject, body_html: rendered.html, used_real_data: rendered.used_real_data };
@@ -2094,7 +2104,7 @@ function senderNameForBody(senderName: string): string {
 // Tokens whose values are already valid HTML — must NOT be re-escaped during
 // substitution (otherwise <p> renders as &lt;p&gt; in the parent's email).
 // Mirrors the pattern in marketing-touchpoint-send/index.ts.
-const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "arrival_dismissal_block", "session_dates_block", "next_term_link_block"]);
+const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skills_block", "final_recap_skills_block", "arrival_dismissal_block", "session_dates_block", "next_term_link_block", "registration_summary_block"]);
 
 // Build the upcoming-session-dates block from derive_program_session_dates
 // output. Renders the program's session count + first/last dates as a tight
