@@ -12,7 +12,7 @@
 // "Half day" input that writes to BOTH morning + afternoon. The confirm
 // functions look pay up by the real session_type, so both rows must exist.
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { usePermissions } from "../../lib/permissions.js";
@@ -23,6 +23,7 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const PANEL = "#fff";
+const LAVENDER = "#F2F0FF";
 const GREEN_BG = "#f0fdf4";
 const GREEN_INK = "#166534";
 
@@ -31,14 +32,19 @@ const ROLES = [
   { key: "developing", label: "Developing" },
 ];
 
-// UI rows → DB session_types. "Half day" maps to both morning + afternoon
-// (same rate). Afterschool sits on top; camp rows follow under a Camp heading.
-const AFTERSCHOOL_ROW = { key: "after_school", label: "After-school", sub: "per session", dbTypes: ["after_school"] };
-const CAMP_ROWS = [
-  { key: "half_day", label: "Half day", dbTypes: ["morning", "afternoon"] },
-  { key: "full_day", label: "Full day", dbTypes: ["full_day"] },
+// Boxed groups. After-school on top, then Camps. "Half day" writes to both
+// morning + afternoon (same rate); the confirm functions look pay up by the
+// real session_type so both DB rows must exist.
+const GROUPS = [
+  { title: "After-school", rows: [
+    { key: "after_school", label: "Per session", dbTypes: ["after_school"] },
+  ] },
+  { title: "Camps", rows: [
+    { key: "half_day", label: "Half day", dbTypes: ["morning", "afternoon"] },
+    { key: "full_day", label: "Full day", dbTypes: ["full_day"] },
+  ] },
 ];
-const ALL_ROWS = [AFTERSCHOOL_ROW, ...CAMP_ROWS];
+const ALL_ROWS = GROUPS.flatMap((g) => g.rows);
 
 const cellKey = (role, rowKey) => `${role}|${rowKey}`;
 
@@ -229,21 +235,14 @@ export default function PayRatesSettings() {
             <div key={role.key} style={{ fontSize: 13, fontWeight: 700, color: PURPLE, textAlign: "left" }}>{role.label}</div>
           ))}
 
-          {/* After-school on top */}
-          <RateRow row={AFTERSCHOOL_ROW} bad={bad} values={values} setCell={setCell} />
-
-          {/* Camp heading spanning the full row */}
-          <div style={{ gridColumn: "1 / -1", marginTop: 10, paddingTop: 12, borderTop: `1px solid ${RULE}`, fontSize: 13, fontWeight: 700, color: PURPLE }}>
-            Camp
-          </div>
-
-          {CAMP_ROWS.map((row) => (
-            <RateRow key={row.key} row={row} bad={bad} values={values} setCell={setCell} />
+          {GROUPS.map((group) => (
+            <Fragment key={group.title}>
+              <div style={groupHeader}>{group.title}</div>
+              {group.rows.map((row) => (
+                <RateRow key={row.key} row={row} bad={bad} values={values} setCell={setCell} />
+              ))}
+            </Fragment>
           ))}
-        </div>
-
-        <div style={hint}>
-          Amounts are per instructor, per session.
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
@@ -286,6 +285,6 @@ function RateRow({ row, bad, values, setCell }) {
   );
 }
 
-const hint = { fontSize: 12.5, color: MUTED, marginTop: 14, lineHeight: 1.5 };
+const groupHeader = { gridColumn: "1 / -1", background: LAVENDER, color: PURPLE, fontSize: 13, fontWeight: 700, padding: "8px 12px", borderRadius: 8, marginTop: 6 };
 const input = { width: "100%", padding: "10px 12px", border: `1.5px solid ${RULE}`, borderRadius: 8, fontSize: 14, color: INK, background: "#fff", fontFamily: "inherit", boxSizing: "border-box" };
 function primaryBtn(disabled) { return { padding: "9px 18px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1 }; }
