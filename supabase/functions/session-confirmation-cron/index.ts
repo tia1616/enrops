@@ -253,7 +253,14 @@ serve(async (req: Request) => {
 
         let rates = rateCache.get(row.organization_id);
         if (!rates) {
-          rates = await loadOrgPayRates(supabase, row.organization_id);
+          try {
+            rates = await loadOrgPayRates(supabase, row.organization_id);
+          } catch (e) {
+            // Isolate a rate-load failure to this row — don't abort the whole
+            // run (matches the per-row error handling above).
+            summary.errors.push(`job_b_rates_${row.id}: ${(e as Error).message}`);
+            continue;
+          }
           rateCache.set(row.organization_id, rates);
         }
         const payCents = rateFromMap(rates, tier, sessionType);

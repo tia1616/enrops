@@ -153,13 +153,14 @@ export default function PayRatesSettings() {
           .eq("session_type", d.session_type);
         if (e) throw e;
       }
-      // Snapshot the exact values we just persisted.
+      // Snapshot the values we just persisted, normalized through the cents
+      // round-trip so the display cleans up (e.g. "80." -> "80").
       const nextSaved = {};
       for (const role of ROLES) {
         for (const st of SESSION_TYPES) {
           const k = cellKey(role.key, st.key);
           const val = (values[k] ?? "").trim();
-          if (val !== "") nextSaved[k] = val;
+          if (val !== "") nextSaved[k] = centsToDollars(Math.round(Number(val) * 100));
         }
       }
       setValues(nextSaved);

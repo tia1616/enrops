@@ -21,7 +21,7 @@
 //      (regular_instructor_id, target_id, date):
 //        - confirmed_by = 'sub'
 //        - pay_status   = 'approved'
-//        - pay_amount_cents = PAY[sub_tier][session_type]
+//        - pay_amount_cents = resolvePayAmount(org, sub_tier, session_type)
 //   7. Update assignment_substitutions.status = 'taught'.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
