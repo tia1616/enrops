@@ -23,8 +23,10 @@
 //   4. If we run out before consuming amount_cents, return 400 'amount_exceeds_eligible'.
 //
 // Stripe flags per refund call:
-//   refund_application_fee: false   // Enrops keeps its fee
-//   reverse_transfer: true          // pull money back from the connected account
+//   refund_application_fee: <dynamic>  // true when the provider bears Stripe's
+//     fee (stripe_fee_payer='tenant') so the provider is made whole; false for
+//     legacy own-platform orgs. See the refund-policy block below.
+//   reverse_transfer: true             // pull money back from the connected account
 // These have to be set explicitly — Stripe defaults are the opposite for
 // destination charges.
 //

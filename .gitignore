@@ -1,5 +1,9 @@
 .env
+.env.local
 .tmp/
 node_modules/
 dist/
 supabase/.temp/
+.netlify/
+# Session handoff / spec / audit notes are kept local (may contain secrets)
+docs/handoffs/
