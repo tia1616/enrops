@@ -43,7 +43,7 @@ export async function runGateCheck(
 ): Promise<GateResult | null> {
   const { data: row, error } = await supabase
     .from('contractor_onboarding_status')
-    .select('steps_completed, checkr_status, stripe_payouts_enabled, overall_status')
+    .select('steps_completed, checkr_status, stripe_payouts_enabled, overall_status, organization_id')
     .eq('instructor_id', instructorId)
     .maybeSingle();
   if (error || !row) {
@@ -51,9 +51,27 @@ export async function runGateCheck(
     return null;
   }
 
+  // Per-org toggle: when background checks are turned off for this org, the
+  // background-check step is dropped from the required set AND the "check must
+  // be clear" condition is treated as satisfied — otherwise onboarding could
+  // never reach 'complete'. Default enabled=true (config or column absent).
+  let bgcEnabled = true;
+  if (row.organization_id) {
+    const { data: org } = await supabase
+      .from('organizations')
+      .select('background_check_config')
+      .eq('id', row.organization_id)
+      .maybeSingle();
+    const cfg = (org?.background_check_config as { enabled?: boolean } | null) ?? null;
+    bgcEnabled = cfg?.enabled !== false;
+  }
+
   const steps = (row.steps_completed as Record<string, unknown>) ?? {};
-  const allStepsDone = ALL_STEPS.every((k) => steps[k]);
-  const checkrClear = row.checkr_status === 'clear';
+  const requiredSteps = bgcEnabled
+    ? ALL_STEPS
+    : ALL_STEPS.filter((k) => k !== 'checkr_submitted');
+  const allStepsDone = requiredSteps.every((k) => steps[k]);
+  const checkrClear = !bgcEnabled || row.checkr_status === 'clear';
   const stripeReady = row.stripe_payouts_enabled === true;
 
   let nextStatus = row.overall_status as string;
@@ -85,7 +103,7 @@ export async function runGateCheck(
 
     // Fire onboarding-complete emails once, on the transition into 'complete'.
     if (nextStatus === 'complete') {
-      await sendOnboardingCompleteEmails(supabase, instructorId).catch((err) => {
+      await sendOnboardingCompleteEmails(supabase, instructorId, bgcEnabled).catch((err) => {
         console.error('onboarding-complete emails failed:', err);
       });
     }
@@ -102,6 +120,7 @@ export async function runGateCheck(
 async function sendOnboardingCompleteEmails(
   supabase: SupabaseClient,
   instructorId: string,
+  bgcEnabled: boolean,
 ): Promise<void> {
   const resendKey = Deno.env.get('RESEND_API_KEY');
   if (!resendKey) return;
@@ -124,12 +143,14 @@ async function sendOnboardingCompleteEmails(
   const fullName = `${instructor.first_name ?? ''} ${instructor.last_name ?? ''}`.trim();
   const greeting = instructor.preferred_name || instructor.first_name || 'there';
   const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
+  // Only mention the background check when this org actually requires one.
+  const bgcPhrase = bgcEnabled ? 'background check cleared, ' : '';
 
   // 1. Contractor — "you're cleared, here's how to access your portal"
   const contractorText = [
     `Hi ${greeting},`,
     ``,
-    `You're fully onboarded with ${org.name ?? 'us'} — paperwork signed, background check cleared, payouts set up.`,
+    `You're fully onboarded with ${org.name ?? 'us'} — paperwork signed, ${bgcPhrase}payouts set up.`,
     ``,
     `Sign in to your portal any time to see your schedule, accept assignments, and view your pay:`,
     portalUrl,
@@ -158,7 +179,7 @@ async function sendOnboardingCompleteEmails(
   const adminText = [
     `${fullName || instructor.email} is fully onboarded.`,
     ``,
-    `Paperwork signed, background check cleared, Stripe Connect set up. They're ready to be assigned to camps or programs.`,
+    `Paperwork signed, ${bgcEnabled ? 'background check cleared, ' : ''}Stripe Connect set up. They're ready to be assigned to camps or programs.`,
     ``,
     `View their record: ${PUBLIC_SITE_URL}/admin/instructors`, // was /admin/contacts (retired 2026-06-08)
   ].join('\n');
