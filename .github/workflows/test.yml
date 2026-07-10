@@ -28,11 +28,13 @@ jobs:
 
       - name: Run unit tests
         # --allow-net is needed because some test files import from
-        # https://deno.land (std lib). No --allow-read/--allow-env so
-        # tests stay pure and can't reach real Supabase or Stripe by
-        # accident.
+        # https://deno.land (std lib). --allow-read is scoped to
+        # supabase/functions/ so the aiTenantScoping drift guard can walk
+        # the edge-function sources; it still can't read secrets elsewhere
+        # on disk, and --allow-env stays off so tests can't reach real
+        # Supabase or Stripe by accident.
         # --no-check matches Supabase Edge Runtime, which doesn't
         # type-check at deploy time either. Strict type-checking would
         # flag pre-existing warnings in non-test files and block CI on
         # unrelated noise.
-        run: deno test --allow-net --no-check supabase/functions/
+        run: deno test --allow-net --allow-read=supabase/functions --no-check supabase/functions/
