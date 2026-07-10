@@ -631,6 +631,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             // tests what they're looking at right now.
             preview_subject: subject,
             preview_body: body,
+            preview_attachments: emailAttachments,
             test_camp_session_id: srcType === "camp" ? srcId : null,
             test_program_id: srcType === "program" ? srcId : null,
             audience: audienceParam,
