@@ -77,6 +77,13 @@ export default function InstructorPortal() {
   const [error, setError] = useState("");
   const [instructor, setInstructor] = useState(null);
   const [onboarding, setOnboarding] = useState(null);
+  // Authoritative tenant slug for this instructor's org (from the public
+  // directory, keyed on their organization_id) — used for every portal URL so
+  // we never hardcode a tenant. Falls back to "j2s" only until it's resolved.
+  const [orgSlug, setOrgSlug] = useState("j2s");
+  // Instructor-facing background-check config for this org (enabled flag +
+  // provider name/link/instructions). Drives the wizard's background-check step.
+  const [backgroundCheck, setBackgroundCheck] = useState(null);
   const [assignments, setAssignments] = useState([]);
   const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role, email, phone }] } — camp co-teachers
   const [coInstructorsProgram, setCoInstructorsProgram] = useState({}); // { [program_id]: [...] } — after-school co-teachers
@@ -137,6 +144,16 @@ export default function InstructorPortal() {
             preferred_name: target.preferred_name,
           });
           setImpersonating({ asEmail: target.email, signedInEmail: session.user.email });
+          // Resolve the target org's real slug so portal URLs stay tenant-correct
+          // even when an admin impersonates via /j2s/instructor?as=…
+          if (target.organization_id) {
+            const { data: dir } = await supabase
+              .from("public_org_directory")
+              .select("slug")
+              .eq("id", target.organization_id)
+              .maybeSingle();
+            if (dir?.slug) setOrgSlug(dir.slug);
+          }
           const targetInst = {
             instructor_id: target.id,
             organization_id: target.organization_id,
@@ -180,6 +197,21 @@ export default function InstructorPortal() {
       const fullInstructor = { ...linkData, ...(full ?? {}) };
       setInstructor(fullInstructor);
 
+      // Resolve this org's real slug + instructor-facing background-check config
+      // from the public directory (keyed on the instructor's organization_id).
+      // The slug drives every portal URL below so we never hardcode a tenant.
+      let resolvedSlug = "j2s";
+      if (fullInstructor.organization_id) {
+        const { data: dir } = await supabase
+          .from("public_org_directory")
+          .select("slug, background_check_public")
+          .eq("id", fullInstructor.organization_id)
+          .maybeSingle();
+        if (dir?.slug) resolvedSlug = dir.slug;
+        setOrgSlug(resolvedSlug);
+        setBackgroundCheck(dir?.background_check_public ?? { enabled: true });
+      }
+
       // Check onboarding status. If they're an unfinished contractor invite,
       // render the wizard inline instead of the schedule view.
       const { data: onboardingRow } = await supabase
@@ -189,11 +221,11 @@ export default function InstructorPortal() {
         .maybeSingle();
 
       if (onboardingRow?.overall_status === "declined") {
-        navigate(`/j2s/onboarding/declined`, { replace: true });
+        navigate(`/${resolvedSlug}/onboarding/declined`, { replace: true });
         return;
       }
       if (onboardingRow?.overall_status === "abandoned") {
-        navigate(`/j2s/onboarding/abandoned`, { replace: true });
+        navigate(`/${resolvedSlug}/onboarding/abandoned`, { replace: true });
         return;
       }
 
@@ -862,11 +894,12 @@ export default function InstructorPortal() {
   // to the right screen (or the completion variant for pending_* statuses).
   if (phase === "onboarding") {
     return (
-      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+      <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <WizardHost
-          slug="j2s"
+          slug={orgSlug}
           instructor={{ ...instructor, id: instructor.id ?? instructor.instructor_id }}
           onboarding={onboarding}
+          backgroundCheck={backgroundCheck}
           onComplete={refetchOnboardingStatus}
           onDismiss={async () => {
             // Pending_* and payouts_disabled statuses won't flip to 'complete',
@@ -923,7 +956,7 @@ export default function InstructorPortal() {
   // While editing availability for a cycle, hide the assignment list entirely.
   if (editingCycle) {
     return (
-      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+      <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         {impersonating && (
           <div style={{
             background: `${VIOLET}1F`,
@@ -954,7 +987,7 @@ export default function InstructorPortal() {
   // While editing afterschool availability for a term, hide the assignment list.
   if (editingTerm) {
     return (
-      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+      <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         {impersonating && (
           <div style={{
             background: `${VIOLET}1F`,
@@ -984,7 +1017,7 @@ export default function InstructorPortal() {
 
   if (view === "profile") {
     return (
-      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+      <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <InstructorProfile
           instructor={{ ...instructor, id: instructor.id ?? instructor.instructor_id }}
           onBack={() => setView("schedule")}
@@ -996,7 +1029,7 @@ export default function InstructorPortal() {
 
   if (view === "documents") {
     return (
-      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+      <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <DocumentsView onBack={() => setView("schedule")} />
       </Shell>
     );
@@ -1004,7 +1037,7 @@ export default function InstructorPortal() {
 
   if (view === "pay") {
     return (
-      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+      <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <PayView
           instructorId={instructor.id ?? instructor.instructor_id}
           onBack={() => setView("schedule")}
@@ -1022,7 +1055,7 @@ export default function InstructorPortal() {
       return null;
     }
     return (
-      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+      <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <AssignmentDetailView
           assignment={selected}
           coInstructors={coInstructors[selected.camp_session_id] || []}
@@ -1041,7 +1074,7 @@ export default function InstructorPortal() {
       return null;
     }
     return (
-      <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+      <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <SubDetailView
           sub={selectedSub}
           coInstructors={subCoInstructors(selectedSub)}
@@ -1055,7 +1088,7 @@ export default function InstructorPortal() {
   }
 
   return (
-    <Shell instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+    <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
       {impersonating && (
         <div style={{
           background: `${VIOLET}1F`,
@@ -1509,8 +1542,12 @@ function AfterschoolSurveyBanner({ survey, onStart }) {
   );
 }
 
-function Shell({ children, instructorName, onSignOut }) {
-  const { slug = "j2s" } = useParams();
+function Shell({ children, instructorName, onSignOut, slug: slugProp }) {
+  // Prefer the caller-provided org slug (resolved from the instructor's org) so
+  // the portal switcher points at the right tenant even when the URL slug is a
+  // fallback like /j2s/instructor. Falls back to the URL param.
+  const { slug: paramSlug = "j2s" } = useParams();
+  const slug = slugProp || paramSlug;
   return (
     <div style={{
       minHeight: "100vh",
