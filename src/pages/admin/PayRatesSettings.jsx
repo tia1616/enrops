@@ -35,8 +35,8 @@ const ROLES = [
 // (same rate). Afterschool sits on top; camp rows follow under a Camp heading.
 const AFTERSCHOOL_ROW = { key: "after_school", label: "After-school", sub: "per session", dbTypes: ["after_school"] };
 const CAMP_ROWS = [
-  { key: "half_day", label: "Half day", sub: "morning or afternoon", dbTypes: ["morning", "afternoon"] },
-  { key: "full_day", label: "Full day", sub: "full camp day", dbTypes: ["full_day"] },
+  { key: "half_day", label: "Half day", dbTypes: ["morning", "afternoon"] },
+  { key: "full_day", label: "Full day", dbTypes: ["full_day"] },
 ];
 const ALL_ROWS = [AFTERSCHOOL_ROW, ...CAMP_ROWS];
 
@@ -243,8 +243,7 @@ export default function PayRatesSettings() {
         </div>
 
         <div style={hint}>
-          Amounts are per instructor, per session. After-school is one class session; Half day is a
-          morning or afternoon camp; Full day is a full camp day.
+          Amounts are per instructor, per session.
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
@@ -263,7 +262,7 @@ function RateRow({ row, bad, values, setCell }) {
     <>
       <div style={{ paddingBottom: 4 }}>
         <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{row.label}</div>
-        <div style={{ fontSize: 12, color: MUTED }}>{row.sub}</div>
+        {row.sub && <div style={{ fontSize: 12, color: MUTED }}>{row.sub}</div>}
       </div>
       {ROLES.map((role) => {
         const k = cellKey(role.key, row.key);
