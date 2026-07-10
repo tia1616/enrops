@@ -26,6 +26,12 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
+import {
+  extractAttachmentIds,
+  loadCommsAttachments,
+  expandAttachmentTokens,
+  type CommsAttachment,
+} from "../_shared/attachments.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -148,6 +154,10 @@ type Touchpoint = {
   status: string;
   type: string;
   payload: { label?: string; subject?: string | null; body_html?: string | null; body_text?: string | null } | null;
+  // Library files TRUE-attached to this touchpoint (ride in the Resend payload).
+  // Download-button LINKS are {{attachment:<id>}} markers in payload.body_html,
+  // resolved separately — a file can be linked, attached, or both.
+  attachment_ids?: string[] | null;
 };
 
 type Recipient = {
@@ -297,7 +307,7 @@ serve(async (req: Request) => {
 
   const { data: touchpoint, error: tErr } = await supabase
     .from("marketing_campaign_touchpoints")
-    .select("id, campaign_id, organization_id, status, type, payload")
+    .select("id, campaign_id, organization_id, status, type, payload, attachment_ids")
     .eq("id", body.touchpoint_id)
     .eq("campaign_id", body.campaign_id)
     .single<Touchpoint>();
@@ -328,13 +338,25 @@ serve(async (req: Request) => {
   // which blocked any tenant that hadn't set default_sender_*.)
   const brand = await loadOrgBrand(supabase, campaign.organization_id);
 
+  // ---- Resolve comms attachments (LINK mode only) ----
+  // Campaigns are a MASS send over Resend's /emails/batch endpoint, which does
+  // NOT support the `attachments` field — and duplicating a file's base64 across
+  // up to 100 batch messages would blow the request-size limit anyway. So a
+  // campaign only ever LINKS a file: {{attachment:<id>}} markers in the body
+  // render to a branded Download button (permanent public URL). True-attach
+  // (file rides in the email) is an automations-only capability (single-send
+  // endpoint) — see lifecycle-automations-cron. Bulk marketing with real
+  // attachments is a deliverability anti-pattern regardless.
+  const linkAttIds = extractAttachmentIds(touchpoint.payload?.body_html, touchpoint.payload?.body_text);
+  const attachmentsById = await loadCommsAttachments(supabase, campaign.organization_id, linkAttIds);
+
   // ---- Preview mode: render-only, no send ----
   // Builds a synthetic recipient at the requested location, runs the SAME
   // token resolution + body rendering as a real send, returns the result.
   // Reuses the real send code path so previews can never drift from what
   // parents actually receive.
   if (body.mode === "preview") {
-    return await renderPreview(supabase, campaign, touchpoint, org, brand, body.preview_location_id!);
+    return await renderPreview(supabase, campaign, touchpoint, org, brand, attachmentsById, body.preview_location_id!);
   }
 
   // ---- Load recipients ----
@@ -621,10 +643,16 @@ serve(async (req: Request) => {
       // - Mobile-friendly viewport meta
       // - CAN-SPAM unsubscribe link in every send (her draft may or may not
       //   include {{unsubscribe_url}}; the shell adds it unconditionally)
-      const innerHtml = postCleanCopy(replaceTokens(touchpoint.payload!.body_html!, tokens, { html: true }));
+      // Expand {{attachment:<id>}} markers to Download buttons BEFORE token
+      // replacement, so the resulting <a> (which has no {{}} of its own) is left
+      // untouched by replaceTokens.
+      const htmlWithAtt = expandAttachmentTokens(touchpoint.payload!.body_html!, attachmentsById, supabase, brand, { html: true });
+      const innerHtml = postCleanCopy(replaceTokens(htmlWithAtt, tokens, { html: true }));
       const bodyHtml = wrapInEmailShell(innerHtml, tokens);
       const bodyText = touchpoint.payload!.body_text
-        ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
+        ? postCleanCopy(replaceTokens(
+            expandAttachmentTokens(touchpoint.payload!.body_text, attachmentsById, supabase, brand, { html: false }),
+            tokens, { html: false }))
         : stripHtmlToText(innerHtml);
 
       return { r, subject, bodyHtml, bodyText };
@@ -1500,6 +1528,7 @@ async function renderPreview(
   touchpoint: Touchpoint,
   org: Org,
   brand: OrgBrand,
+  attachmentsById: Map<string, CommsAttachment>,
   locationId: string,
 ): Promise<Response> {
   // Load the picked programs (campaign-wide) so per-school token resolution
@@ -1621,10 +1650,13 @@ async function renderPreview(
   });
 
   const subject = postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }));
-  const innerHtml = postCleanCopy(replaceTokens(touchpoint.payload!.body_html!, tokens, { html: true }));
+  const htmlWithAtt = expandAttachmentTokens(touchpoint.payload!.body_html!, attachmentsById, supabase, brand, { html: true });
+  const innerHtml = postCleanCopy(replaceTokens(htmlWithAtt, tokens, { html: true }));
   const bodyHtml = wrapInEmailShell(innerHtml, tokens);
   const bodyText = touchpoint.payload!.body_text
-    ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
+    ? postCleanCopy(replaceTokens(
+        expandAttachmentTokens(touchpoint.payload!.body_text, attachmentsById, supabase, brand, { html: false }),
+        tokens, { html: false }))
     : stripHtmlToText(innerHtml);
 
   // Tell the operator whether the VIP block fired for this school so the

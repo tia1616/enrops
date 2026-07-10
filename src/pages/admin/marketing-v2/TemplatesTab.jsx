@@ -15,11 +15,12 @@
 //
 // Org comes from useOutletContext — never hardcoded. Copy is tenant-neutral.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
+import AttachmentPicker from "./AttachmentPicker.jsx";
 import { htmlToEditable, editableToHtml, highlightTokens, stripHtml } from "./bodyEditorUtils.js";
 
 const RED = "#b53737";
@@ -252,6 +253,26 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
   const [editableText, setEditableText] = useState(value.editableText);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
+  const taRef = useRef(null);
+
+  // Insert an {{attachment:<id>}} Download-button marker at the cursor. Templates
+  // feed campaigns (link-only), so link mode is the universal choice here.
+  const insertToken = (token) => {
+    const ta = taRef.current;
+    if (!ta) {
+      setEditableText((t) => (t.trim() ? `${t}\n\n${token}` : token));
+      return;
+    }
+    const start = ta.selectionStart ?? editableText.length;
+    const end = ta.selectionEnd ?? start;
+    const next = editableText.slice(0, start) + token + editableText.slice(end);
+    setEditableText(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + token.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  };
 
   const bodyHtml = editableToHtml(editableText);
   const canSave = name.trim().length > 0 && !saving;
@@ -327,6 +348,7 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
       <div>
         <label style={labelStyle}>Email body</label>
         <textarea
+          ref={taRef}
           value={editableText}
           onChange={(e) => setEditableText(e.target.value)}
           rows={12}
@@ -340,6 +362,15 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
           <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span>{" "}
           get filled in for each family when you send.
         </p>
+      </div>
+
+      <div>
+        <AttachmentPicker
+          orgId={org?.id}
+          onInsertToken={insertToken}
+          allowTrueAttach={false}
+          primaryColor={BRIGHT}
+        />
       </div>
 
       {bodyHtml && (

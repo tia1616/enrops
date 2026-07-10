@@ -15,10 +15,11 @@
 // server-injected <base target="_blank"> per guardrails section 6C — keeps
 // clicks safe AND opens links in a new tab instead of blanking the iframe.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import { editableToHtml, highlightTokens, htmlToEditable } from "./bodyEditorUtils.js";
+import AttachmentPicker from "./AttachmentPicker.jsx";
 import { buildRegUrl, PUBLIC_SITE } from "../../../lib/regLinks.js";
 
 // Decode the common HTML entities operators might type or paste into a
@@ -227,6 +228,10 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   // markdown-ish editable text. body stays canonical HTML throughout.
   const [editingBody, setEditingBody] = useState(false);
   const [editableText, setEditableText] = useState("");
+  // Files true-attached to this automation (ride in the email). Download-button
+  // LINKS live as {{attachment:<id>}} markers in the body, tracked separately.
+  const [attachmentIds, setAttachmentIds] = useState(automation?.attachment_ids ?? []);
+  const bodyTextareaRef = useRef(null);
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
@@ -400,6 +405,35 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     setBody(editableToHtml(newText));
   }
 
+  // Insert an {{attachment:<id>}} Download-button marker. If the body is in
+  // rendered (non-edit) mode, switch to edit mode and append; otherwise splice
+  // it in at the cursor and keep the caret after it.
+  function insertAttachmentToken(token) {
+    if (!editingBody) {
+      const base = htmlToEditable(body);
+      const next = base.trim() ? `${base}\n\n${token}` : token;
+      setEditableText(next);
+      setBody(editableToHtml(next));
+      setEditingBody(true);
+      return;
+    }
+    const ta = bodyTextareaRef.current;
+    if (!ta) {
+      const next = editableText.trim() ? `${editableText}\n\n${token}` : token;
+      handleEditableChange(next);
+      return;
+    }
+    const start = ta.selectionStart ?? editableText.length;
+    const end = ta.selectionEnd ?? start;
+    const next = editableText.slice(0, start) + token + editableText.slice(end);
+    handleEditableChange(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + token.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  }
+
   // Reset success/error after a few seconds
   useEffect(() => {
     if (!success && !error) return;
@@ -427,7 +461,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   }, [showingServerPreview, serverPreview, previewHtml]);
 
   const tokens = TOKENS_BY_TEMPLATE_KEY[template.key] ?? [];
-  const hasOverride = (automation?.subject_override != null) || (automation?.body_override != null) || (automation?.timing_override != null);
+  const hasOverride = (automation?.subject_override != null) || (automation?.body_override != null) || (automation?.timing_override != null) || ((automation?.attachment_ids?.length ?? 0) > 0);
   const subjectDirty = subject !== (automation?.subject_override ?? template.default_subject);
   const bodyDirty = body !== (automation?.body_override ?? template.default_body);
   // Clamp ≥1; empty/invalid falls back to the template default. Mirrors the cron.
@@ -435,7 +469,10 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     ? Math.max(1, parseInt(timingValue, 10) || defaultTiming || 1)
     : null;
   const timingDirty = hasTiming && parsedTiming !== savedTiming;
-  const dirty = subjectDirty || bodyDirty || timingDirty;
+  const attachmentsDirty =
+    JSON.stringify([...(attachmentIds ?? [])].sort()) !==
+    JSON.stringify([...(automation?.attachment_ids ?? [])].sort());
+  const dirty = subjectDirty || bodyDirty || timingDirty || attachmentsDirty;
 
   async function handleSave() {
     setSaving(true);
@@ -454,7 +491,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       const bodyOverride = cleanedBody !== template.default_body ? cleanedBody : null;
       // Timing override: only for templates with the control, and only when it
       // differs from the default (equal-to-default clears it, like subject/body).
-      const patch = { subject_override: subjectOverride, body_override: bodyOverride };
+      const patch = { subject_override: subjectOverride, body_override: bodyOverride, attachment_ids: attachmentIds ?? [] };
       if (hasTiming) {
         patch.timing_override = parsedTiming !== defaultTiming
           ? { ...(automation?.timing_override ?? {}), [timingKey]: parsedTiming }
@@ -545,6 +582,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // No row to reset — just revert local editor state.
       setSubject(template.default_subject);
       setBody(template.default_body);
+      setAttachmentIds([]);
       if (hasTiming) setTimingValue(String(defaultTiming));
       if (isReviewLink) setReviewLink("");
       return;
@@ -555,7 +593,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     try {
       const prevSubject = automation?.subject_override ?? null;
       const prevBody = automation?.body_override ?? null;
-      const resetPatch = { subject_override: null, body_override: null };
+      const resetPatch = { subject_override: null, body_override: null, attachment_ids: [] };
       if (hasTiming) resetPatch.timing_override = null;
       const { data, error: upErr } = await supabase
         .from("automations")
@@ -566,6 +604,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       if (upErr) throw upErr;
       setSubject(template.default_subject);
       setBody(template.default_body);
+      setAttachmentIds([]);
       if (hasTiming) setTimingValue(String(defaultTiming));
       if (isReviewLink) setReviewLink("");
       // Reset is ALSO a voice signal — operator decided their custom version
@@ -743,6 +782,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             {editingBody ? (
               <>
                 <textarea
+                  ref={bodyTextareaRef}
                   value={editableText}
                   onChange={(e) => handleEditableChange(e.target.value)}
                   rows={14}
@@ -773,6 +813,17 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                 dangerouslySetInnerHTML={{ __html: highlightTokens(body) }}
               />
             )}
+          </div>
+
+          {/* Attachments — upload/pick files, insert a Download button, or attach the file */}
+          <div style={{ marginBottom: 16 }}>
+            <AttachmentPicker
+              orgId={orgId}
+              attachmentIds={attachmentIds}
+              onChangeAttachmentIds={setAttachmentIds}
+              onInsertToken={insertAttachmentToken}
+              primaryColor={orgPrimaryColor || PURPLE}
+            />
           </div>
 
           {/* Available tokens */}

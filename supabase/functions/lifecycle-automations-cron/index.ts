@@ -37,6 +37,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
+import {
+  extractAttachmentIds,
+  loadCommsAttachments,
+  expandAttachmentTokens,
+  buildResendAttachments,
+  type CommsAttachment,
+} from "../_shared/attachments.ts";
 import { cleanNoSchoolDates, toClosurePeriods, termToSchoolYear, nsdWeekdayLower, periodFires, formatDateList } from "./noSchoolDates.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -84,6 +91,7 @@ interface AutomationRow {
   body_override: string | null;
   timing_override: Record<string, unknown> | null;
   enabled_at: string | null;
+  attachment_ids: string[] | null;
   template: TemplateRow;
   org: { id: string; slug: string; name: string };
 }
@@ -262,7 +270,7 @@ serve(async (req) => {
   const { data: automations, error: loadErr } = await supabase
     .from("automations")
     .select(`
-      id, organization_id, template_id, enabled, subject_override, body_override, timing_override, enabled_at,
+      id, organization_id, template_id, enabled, subject_override, body_override, timing_override, enabled_at, attachment_ids,
       template:automation_templates!inner (
         id, key, display_name, trigger_type, applies_to_program_type, mailing_type,
         default_subject, default_body, default_timing, time_saved_minutes_per_send, is_v1_enabled
@@ -388,10 +396,28 @@ async function runAutomation(
   const toSend = audience.filter((e) => !alreadySentSet.has(e.context_key));
   skipped = audience.length - toSend.length;
 
+  // Resolve this automation's comms attachments ONCE (shared across all
+  // recipients this run). Link mode: {{attachment:<id>}} in the operator's
+  // body_override -> Download button. Attach mode: a.attachment_ids[] -> base64
+  // in the Resend payload. Org-scoped load; skipped-too-large files are logged.
+  // Scan the SAME body that sendOne renders (override, else template default) so
+  // a {{attachment:<id>}} marker living in the template default is still loaded.
+  const linkAttIds = extractAttachmentIds(a.body_override, a.template.default_body);
+  const attachFileIds = (a.attachment_ids ?? []).filter(Boolean);
+  const attachmentsById = await loadCommsAttachments(supabase, a.organization_id, [...linkAttIds, ...attachFileIds]);
+  const trueAttachRows = attachFileIds
+    .map((id) => attachmentsById.get(id.toLowerCase()))
+    .filter((x): x is CommsAttachment => !!x);
+  const { attachments: resendAttachments, skipped: skippedAttachments } =
+    await buildResendAttachments(supabase, trueAttachRows);
+  if (skippedAttachments.length) {
+    console.warn(`[lifecycle-automations-cron] attachments skipped (too large/unavailable): ${skippedAttachments.join(", ")}`);
+  }
+
   for (let i = 0; i < toSend.length; i += BATCH_SIZE) {
     const batch = toSend.slice(i, i + BATCH_SIZE);
     const results = await Promise.allSettled(batch.map((entry) =>
-      sendOne(supabase, a, brand, runRow.id, entry),
+      sendOne(supabase, a, brand, runRow.id, entry, attachmentsById, resendAttachments),
     ));
     for (const r of results) {
       if (r.status === "fulfilled" && r.value === "sent") sent += 1;
@@ -444,6 +470,8 @@ async function sendOne(
   brand: OrgBrand,
   runId: string,
   entry: AudienceEntry,
+  attachmentsById: Map<string, CommsAttachment>,
+  resendAttachments: { filename: string; content: string }[],
 ): Promise<"sent" | "failed"> {
   const tokens = buildTokens(entry, brand);
   // A resolver may attach per-entry copy (entry.subject_template/body_template)
@@ -452,7 +480,12 @@ async function sendOne(
   // half of no_school_day) we fall back to the operator's editable override, then
   // the template default. Generic: sendOne stays template-agnostic.
   const subject = renderTokens(entry.subject_template ?? a.subject_override ?? a.template.default_subject, tokens);
-  const innerBody = renderTokens(entry.body_template ?? a.body_override ?? a.template.default_body, tokens);
+  // Expand {{attachment:<id>}} markers to Download buttons (html) / "Download
+  // name: url" lines (text) BEFORE token replacement, so the resulting markup
+  // is left untouched by renderTokens.
+  const bodySrc = entry.body_template ?? a.body_override ?? a.template.default_body;
+  const innerBody = renderTokens(expandAttachmentTokens(bodySrc, attachmentsById, supabase, brand, { html: true }), tokens);
+  const innerBodyText = renderTokens(expandAttachmentTokens(bodySrc, attachmentsById, supabase, brand, { html: false }), tokens);
   // Promotional templates (mailing_type='marketing', e.g. review_request) carry a
   // CAN-SPAM unsubscribe link keyed to this recipient; informational sends pass
   // "" so their HTML + text stay byte-for-byte unchanged.
@@ -469,8 +502,8 @@ async function sendOne(
   }
   const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl);
   const plainText = unsubscribeUrl
-    ? `${htmlToPlainText(innerBody)}\n\nUnsubscribe: ${unsubscribeUrl}`
-    : htmlToPlainText(innerBody);
+    ? `${htmlToPlainText(innerBodyText)}\n\nUnsubscribe: ${unsubscribeUrl}`
+    : htmlToPlainText(innerBodyText);
 
   let resendMessageId: string | null = null;
   let errorMessage: string | null = null;
@@ -493,6 +526,7 @@ async function sendOne(
           { name: "type", value: "lifecycle" },
           { name: "automation", value: a.template.key },
         ],
+        ...(resendAttachments.length ? { attachments: resendAttachments } : {}),
       }),
     });
     if (resp.ok) {
@@ -666,7 +700,13 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
   }
 
   const subject = renderTokens(subjectTpl, tokens);
-  const innerBody = renderTokens(bodyTpl, tokens);
+  // Expand {{attachment:<id>}} Download-button markers so the on-screen preview
+  // and the test send both show exactly what a real send will (link mode).
+  const attLinkIds = extractAttachmentIds(bodyTpl);
+  const attachmentsById = attLinkIds.length
+    ? await loadCommsAttachments(supabase, org.id, attLinkIds)
+    : new Map<string, CommsAttachment>();
+  const innerBody = renderTokens(expandAttachmentTokens(bodyTpl, attachmentsById, supabase, brand, { html: true }), tokens);
   // Marketing templates show the unsubscribe footer in preview/test too. Real
   // link for a test send (to_email present); a visible "#" placeholder for the
   // on-screen preview so the operator sees the footer without minting a working
