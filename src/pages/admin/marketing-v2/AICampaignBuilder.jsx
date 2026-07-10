@@ -387,6 +387,7 @@ export default function AICampaignBuilder() {
             reason: merged.reason ?? null,
           },
           topics: merged.topics ?? [],
+          email_attachments: merged.email_attachments ?? [],
         })
         .eq("id", id);
       if (error) console.error("[commitTouchpoint] PATCH failed:", error);
@@ -646,7 +647,7 @@ export default function AICampaignBuilder() {
           .maybeSingle(),
         supabase
           .from("marketing_campaign_touchpoints")
-          .select("id, order_index, scheduled_at, status, payload, topics")
+          .select("id, order_index, scheduled_at, status, payload, topics, email_attachments")
           .eq("campaign_id", campaignId)
           .eq("organization_id", org.id)
           .order("order_index", { ascending: true }),
@@ -669,6 +670,7 @@ export default function AICampaignBuilder() {
         body_text: tp.payload?.body_text ?? "",
         reason: tp.payload?.reason ?? "",
         topics: tp.topics ?? [],
+        email_attachments: Array.isArray(tp.email_attachments) ? tp.email_attachments : [],
         scheduled_at: tp.scheduled_at,
         status: tp.status,
       }));

@@ -20,6 +20,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
+import AttachmentPicker from "./AttachmentPicker.jsx";
 import { htmlToEditable, editableToHtml, highlightTokens, stripHtml } from "./bodyEditorUtils.js";
 
 const RED = "#b53737";
@@ -55,7 +56,7 @@ export default function TemplatesTab() {
       setLoadErr(null);
       const { data, error } = await supabase
         .from("saved_email_templates")
-        .select("id, name, subject, body_html, updated_at")
+        .select("id, name, subject, body_html, updated_at, email_attachments")
         .eq("organization_id", org.id)
         .order("updated_at", { ascending: false });
       if (cancelled) return;
@@ -71,6 +72,7 @@ export default function TemplatesTab() {
     name: t.name ?? "",
     subject: t.subject ?? "",
     editableText: htmlToEditable(t.body_html ?? ""),
+    email_attachments: Array.isArray(t.email_attachments) ? t.email_attachments : [],
   });
 
   return (
@@ -250,6 +252,9 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
   const [name, setName] = useState(value.name);
   const [subject, setSubject] = useState(value.subject);
   const [editableText, setEditableText] = useState(value.editableText);
+  const [emailAttachments, setEmailAttachments] = useState(
+    Array.isArray(value.email_attachments) ? value.email_attachments : [],
+  );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -267,6 +272,7 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
       subject: subject.trim() || null,
       body_html: bodyHtml || null,
       body_text: stripHtml(bodyHtml) || null,
+      email_attachments: emailAttachments ?? [],
     };
     let error;
     if (value.id) {
@@ -340,6 +346,16 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
           <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span>{" "}
           get filled in for each family when you send.
         </p>
+      </div>
+
+      <div>
+        <AttachmentPicker
+          orgId={org?.id}
+          emailAttachments={emailAttachments}
+          onChange={setEmailAttachments}
+          allowAttach={false}
+          primaryColor={BRIGHT}
+        />
       </div>
 
       {bodyHtml && (

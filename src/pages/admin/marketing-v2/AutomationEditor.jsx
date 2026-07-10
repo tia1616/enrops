@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import { editableToHtml, highlightTokens, htmlToEditable } from "./bodyEditorUtils.js";
+import AttachmentPicker from "./AttachmentPicker.jsx";
 import { buildRegUrl, PUBLIC_SITE } from "../../../lib/regLinks.js";
 
 // Decode the common HTML entities operators might type or paste into a
@@ -227,6 +228,11 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   // markdown-ish editable text. body stays canonical HTML throughout.
   const [editingBody, setEditingBody] = useState(false);
   const [editableText, setEditableText] = useState("");
+  // Files on this email: [{ id, attach }]. Each renders as a Download button at
+  // the bottom of the email; `attach` also rides the raw file along.
+  const [emailAttachments, setEmailAttachments] = useState(
+    Array.isArray(automation?.email_attachments) ? automation.email_attachments : [],
+  );
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
@@ -290,7 +296,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const isTwoAudience = template.key === "no_school_day";
   const [audience, setAudience] = useState("parent"); // "parent" | "instructor"
   const audienceParam = audience === "instructor" ? "instructor" : undefined;
-  const wantsServerPreview = realSourceSelected || isTwoAudience;
+  // Also render server-side (which draws the Download buttons) whenever the email
+  // has attachments, so the preview shows exactly where the button lands.
+  const wantsServerPreview = realSourceSelected || isTwoAudience || (emailAttachments?.length > 0);
 
   useEffect(() => {
     if (!sourceType || !orgId) return;
@@ -364,6 +372,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               template_key: template.key,
               preview_subject: subject,
               preview_body: body,
+              preview_attachments: emailAttachments,
               test_camp_session_id: srcType === "camp" ? srcId : null,
               test_program_id: srcType === "program" ? srcId : null,
               audience: audienceParam,
@@ -383,7 +392,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       }
     }, 500);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [wantsServerPreview, realSourceSelected, selectedSource, subject, body, orgId, template.key, audienceParam]);
+  }, [wantsServerPreview, realSourceSelected, selectedSource, subject, body, emailAttachments, orgId, template.key, audienceParam]);
 
   function toggleBodyEdit() {
     if (editingBody) {
@@ -399,6 +408,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     setEditableText(newText);
     setBody(editableToHtml(newText));
   }
+
 
   // Reset success/error after a few seconds
   useEffect(() => {
@@ -427,7 +437,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   }, [showingServerPreview, serverPreview, previewHtml]);
 
   const tokens = TOKENS_BY_TEMPLATE_KEY[template.key] ?? [];
-  const hasOverride = (automation?.subject_override != null) || (automation?.body_override != null) || (automation?.timing_override != null);
+  const hasOverride = (automation?.subject_override != null) || (automation?.body_override != null) || (automation?.timing_override != null) || ((Array.isArray(automation?.email_attachments) ? automation.email_attachments.length : 0) > 0);
   const subjectDirty = subject !== (automation?.subject_override ?? template.default_subject);
   const bodyDirty = body !== (automation?.body_override ?? template.default_body);
   // Clamp ≥1; empty/invalid falls back to the template default. Mirrors the cron.
@@ -435,7 +445,14 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     ? Math.max(1, parseInt(timingValue, 10) || defaultTiming || 1)
     : null;
   const timingDirty = hasTiming && parsedTiming !== savedTiming;
-  const dirty = subjectDirty || bodyDirty || timingDirty;
+  const normAtt = (arr) =>
+    JSON.stringify(
+      (Array.isArray(arr) ? arr : [])
+        .map((e) => ({ id: e.id, attach: !!e.attach }))
+        .sort((a, b) => String(a.id).localeCompare(String(b.id))),
+    );
+  const attachmentsDirty = normAtt(emailAttachments) !== normAtt(automation?.email_attachments);
+  const dirty = subjectDirty || bodyDirty || timingDirty || attachmentsDirty;
 
   async function handleSave() {
     setSaving(true);
@@ -454,7 +471,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       const bodyOverride = cleanedBody !== template.default_body ? cleanedBody : null;
       // Timing override: only for templates with the control, and only when it
       // differs from the default (equal-to-default clears it, like subject/body).
-      const patch = { subject_override: subjectOverride, body_override: bodyOverride };
+      const patch = { subject_override: subjectOverride, body_override: bodyOverride, email_attachments: emailAttachments ?? [] };
       if (hasTiming) {
         patch.timing_override = parsedTiming !== defaultTiming
           ? { ...(automation?.timing_override ?? {}), [timingKey]: parsedTiming }
@@ -545,6 +562,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // No row to reset — just revert local editor state.
       setSubject(template.default_subject);
       setBody(template.default_body);
+      setEmailAttachments([]);
       if (hasTiming) setTimingValue(String(defaultTiming));
       if (isReviewLink) setReviewLink("");
       return;
@@ -555,7 +573,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     try {
       const prevSubject = automation?.subject_override ?? null;
       const prevBody = automation?.body_override ?? null;
-      const resetPatch = { subject_override: null, body_override: null };
+      const resetPatch = { subject_override: null, body_override: null, email_attachments: [] };
       if (hasTiming) resetPatch.timing_override = null;
       const { data, error: upErr } = await supabase
         .from("automations")
@@ -566,6 +584,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       if (upErr) throw upErr;
       setSubject(template.default_subject);
       setBody(template.default_body);
+      setEmailAttachments([]);
       if (hasTiming) setTimingValue(String(defaultTiming));
       if (isReviewLink) setReviewLink("");
       // Reset is ALSO a voice signal — operator decided their custom version
@@ -612,6 +631,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             // tests what they're looking at right now.
             preview_subject: subject,
             preview_body: body,
+            preview_attachments: emailAttachments,
             test_camp_session_id: srcType === "camp" ? srcId : null,
             test_program_id: srcType === "program" ? srcId : null,
             audience: audienceParam,
@@ -773,6 +793,17 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                 dangerouslySetInnerHTML={{ __html: highlightTokens(body) }}
               />
             )}
+          </div>
+
+          {/* Attachments — add files that appear as a Download button at the email bottom */}
+          <div style={{ marginBottom: 16 }}>
+            <AttachmentPicker
+              orgId={orgId}
+              emailAttachments={emailAttachments}
+              onChange={setEmailAttachments}
+              allowAttach
+              primaryColor={orgPrimaryColor || PURPLE}
+            />
           </div>
 
           {/* Available tokens */}

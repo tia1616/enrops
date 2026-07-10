@@ -5,6 +5,7 @@
 import { useState } from "react";
 import EditableField from "./EditableField.jsx";
 import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
+import AttachmentPicker from "./AttachmentPicker.jsx";
 import Chevron from "../../../components/Chevron.jsx";
 import { supabase } from "../../../lib/supabase.js";
 import { INK, MUTED, PURPLE, BRIGHT, RULE, OK, INFO } from "../marketing/tokens.jsx";
@@ -318,6 +319,18 @@ export default function TouchpointCard({
             onChange={(v) => onUpdate(tp.id, { body_html: v, body_text: stripHtml(v) })}
             onCommit={(v) => onCommit?.(tp.id, { body_html: v, body_text: stripHtml(v) })}
           />
+
+          {organizationId && (
+            <div style={{ marginTop: 10 }}>
+              <AttachmentPicker
+                orgId={organizationId}
+                emailAttachments={tp.email_attachments ?? []}
+                onChange={(next) => (onCommit ?? onUpdate)(tp.id, { email_attachments: next })}
+                allowAttach={false}
+                primaryColor={PURPLE}
+              />
+            </div>
+          )}
 
           {organizationId && (
             <TemplateControls
