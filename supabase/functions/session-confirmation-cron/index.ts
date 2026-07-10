@@ -15,17 +15,13 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+import { loadOrgPayRates, rateFromMap, type PayRateMap } from '../_shared/payRates.ts';
 
-// Pay table — duplicated from confirm-session-delivery to keep the auto-pay
-// path independent. If pay rates change, update both. (Future: pull from a
-// tenant_pay_rates table.)
+// Auto-pay amounts come per-tenant from tenant_pay_rates (loaded once per org,
+// see rateCache below). null when the tenant hasn't configured a cell — the row
+// is still auto-confirmed with null pay and the admin sets the amount.
 type Role = 'lead' | 'developing';
 type SessionType = 'morning' | 'afternoon' | 'full_day';
-
-const AUTO_PAY: Record<Role, Record<SessionType, number>> = {
-  lead:       { morning: 8000,  afternoon: 8000,  full_day: 16000 },
-  developing: { morning: 6500,  afternoon: 6500,  full_day: 13000 },
-};
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -172,7 +168,7 @@ serve(async (req: Request) => {
     // ─────────────────────────────────────────────────────────────────────
     const { data: pending, error: pendingErr } = await supabase
       .from('session_delivery_confirmations')
-      .select('id, instructor_id, camp_session_id, session_type, session_date')
+      .select('id, instructor_id, organization_id, camp_session_id, session_type, session_date')
       .lt('session_date', today)
       .eq('confirmed_by', 'pending')
       .eq('admin_override', false)
@@ -186,6 +182,8 @@ serve(async (req: Request) => {
       // the sub if one covered) and compute pay. Done in JS for clarity; volume
       // is a handful of camp-days per run.
       const nowIso = new Date().toISOString();
+      // Cache each org's rate card so a multi-org batch queries once per org.
+      const rateCache = new Map<string, PayRateMap>();
 
       for (const row of pending) {
         const sessionType = row.session_type as SessionType;
@@ -253,7 +251,19 @@ serve(async (req: Request) => {
           continue;
         }
 
-        const payCents = AUTO_PAY[tier][sessionType];
+        let rates = rateCache.get(row.organization_id);
+        if (!rates) {
+          try {
+            rates = await loadOrgPayRates(supabase, row.organization_id);
+          } catch (e) {
+            // Isolate a rate-load failure to this row — don't abort the whole
+            // run (matches the per-row error handling above).
+            summary.errors.push(`job_b_rates_${row.id}: ${(e as Error).message}`);
+            continue;
+          }
+          rateCache.set(row.organization_id, rates);
+        }
+        const payCents = rateFromMap(rates, tier, sessionType);
 
         const { error: updErr } = await supabase
           .from('session_delivery_confirmations')

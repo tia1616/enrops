@@ -21,20 +21,22 @@
 //      (regular_instructor_id, target_id, date):
 //        - confirmed_by = 'sub'
 //        - pay_status   = 'approved'
-//        - pay_amount_cents = PAY[sub_tier][session_type]
+//        - pay_amount_cents = resolvePayAmount(org, sub_tier, session_type)
 //   7. Update assignment_substitutions.status = 'taught'.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, resolveInstructor, adminClient } from '../_shared/instructor.ts';
+import { resolvePayAmount } from '../_shared/payRates.ts';
 
 type Tier = 'lead' | 'developing';
 type SessionType = 'morning' | 'afternoon' | 'full_day' | 'after_school';
 
-// Mirrors confirm-session-delivery PAY table.
-const PAY: Record<Tier, Record<SessionType, number>> = {
-  lead:       { morning: 8000, afternoon: 8000, full_day: 16000, after_school: 6000 },
-  developing: { morning: 6500, afternoon: 6500, full_day: 13000, after_school: 5000 },
-};
+const VALID_SESSION_TYPES: readonly SessionType[] = ['morning', 'afternoon', 'full_day', 'after_school'];
+
+// Pay is resolved per-tenant from tenant_pay_rates via resolvePayAmount(),
+// keyed by the sub's tier + session_type. null when the tenant hasn't
+// configured this cell — the sub confirmation is still recorded and the admin
+// sets the amount on Payroll.
 
 interface Body {
   substitution_id?: string;
@@ -109,14 +111,15 @@ serve(async (req: Request) => {
       return json({ error: 'invalid_parent_assignment_type' }, 400);
     }
 
-    if (!sessionType || !(sessionType in PAY.lead)) {
+    if (!sessionType || !VALID_SESSION_TYPES.includes(sessionType)) {
       return json({ error: 'no_pay_rate_for_session', session_type: sessionType }, 400);
     }
     const subTier = subRow.sub_tier as Tier;
     if (subTier !== 'lead' && subTier !== 'developing') {
       return json({ error: 'invalid_sub_tier', sub_tier: subTier }, 400);
     }
-    const payCents = PAY[subTier][sessionType];
+    // Per-tenant rate; null when the tenant hasn't configured this cell.
+    const payCents = await resolvePayAmount(supabase, subRow.organization_id, subTier, sessionType);
 
     // Look up existing confirmation row.
     let existingQuery = supabase
