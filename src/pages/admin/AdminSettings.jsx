@@ -204,6 +204,19 @@ export default function AdminSettings() {
       </section>
 
       <section style={{ marginTop: 24 }}>
+        <h2 style={sectionTitle}>Background checks</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Instructor background checks</div>
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+              Choose whether a background check is required in onboarding, and tell instructors where to complete one. Turn it off if you don't need it.
+            </div>
+          </div>
+          <Link to="/admin/background-checks" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
+        </div>
+      </section>
+
+      <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Connections</h2>
 
         <div style={connectionCard}>

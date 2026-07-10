@@ -1,7 +1,8 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
-import { STEP_KEYS, STEP_ORDER, stepIndex } from '../../lib/onboardingSteps.js';
+import { STEP_KEYS, effectiveStepOrder, stepIndex } from '../../lib/onboardingSteps.js';
+import { OnboardingConfigContext } from './OnboardingConfigContext.jsx';
 import Screen1Welcome from './screens/Screen1Welcome.jsx';
 import Screen2BackgroundCheck from './screens/Screen2BackgroundCheck.jsx';
 import Screen3ORS from './screens/Screen3ORS.jsx';
@@ -34,25 +35,33 @@ const TERMINAL_STATUSES = new Set([
 // Screen 1 every time the page reloaded (notably after the Stripe redirect).
 // Resume rule: first step that isn't marked complete in steps_completed.
 // If everything's done, return the last step — the terminal-status guard
-// in render will route to CompletionScreen anyway.
-function resolveInitialStep(initialStep, onboarding) {
+// in render will route to CompletionScreen anyway. `order` is the effective
+// step order for this org (a disabled background check drops that step).
+function resolveInitialStep(initialStep, onboarding, order) {
   // 1. Explicit URL param wins (already a string).
-  if (typeof initialStep === 'string' && STEP_ORDER.includes(initialStep)) {
+  if (typeof initialStep === 'string' && order.includes(initialStep)) {
     return initialStep;
   }
   // 2. First step not present in steps_completed.
   const stepsCompleted = onboarding?.steps_completed || {};
-  const firstIncomplete = STEP_ORDER.find((key) => !stepsCompleted[key]);
+  const firstIncomplete = order.find((key) => !stepsCompleted[key]);
   if (firstIncomplete) return firstIncomplete;
   // 3. Everything done — fall through; render guard handles it.
-  return STEP_ORDER[STEP_ORDER.length - 1];
+  return order[order.length - 1];
 }
 
-export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, onDismiss }) {
+export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, backgroundCheck, onDismiss }) {
   const navigate = useNavigate();
   const [onboarding, setOnboarding] = useState(initialOnboarding);
+
+  // Effective step order for this org. When the org has background checks
+  // turned off, the background-check step is removed from navigation, progress,
+  // and (server-side, in gateCheck) the completion gate.
+  const bgcEnabled = backgroundCheck?.enabled !== false;
+  const stepOrder = useMemo(() => effectiveStepOrder({ bgcEnabled }), [bgcEnabled]);
+
   const [currentStep, setCurrentStep] = useState(() =>
-    resolveInitialStep(initialStep, onboarding)
+    resolveInitialStep(initialStep, onboarding, stepOrder)
   );
 
   // Local back-nav: just shows the prior screen without writing to the DB.
@@ -62,10 +71,10 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
   // completion (currentStep is null).
   const onBack = useCallback(() => {
     if (!currentStep) return;
-    const idx = stepIndex(currentStep);
+    const idx = stepIndex(currentStep, stepOrder);
     if (idx <= 0) return;
-    setCurrentStep(STEP_ORDER[idx - 1]);
-  }, [currentStep]);
+    setCurrentStep(stepOrder[idx - 1]);
+  }, [currentStep, stepOrder]);
 
   const onAdvance = useCallback(async () => {
     // After any screen submits, re-read the onboarding row so we pick up
@@ -95,51 +104,66 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
       return;
     }
 
-    if (fresh.current_step && STEP_ORDER.includes(fresh.current_step)) {
+    if (fresh.current_step && stepOrder.includes(fresh.current_step)) {
       setCurrentStep(fresh.current_step);
     } else {
-      const idx = stepIndex(currentStep);
-      const next = STEP_ORDER[idx + 1];
+      const idx = stepIndex(currentStep, stepOrder);
+      const next = stepOrder[idx + 1];
       if (next) setCurrentStep(next);
     }
-  }, [instructor.id, navigate, slug, currentStep]);
+  }, [instructor.id, navigate, slug, currentStep, stepOrder]);
+
+  const configValue = useMemo(
+    () => ({ stepOrder, bgcEnabled, backgroundCheck: backgroundCheck ?? { enabled: bgcEnabled } }),
+    [stepOrder, bgcEnabled, backgroundCheck],
+  );
 
   if (!currentStep || TERMINAL_STATUSES.has(onboarding?.overall_status)) {
     // onAdvance does the re-fetch + re-evaluation work the refresh button
     // needs, so we pass it as onRefresh. Pending variants of CompletionScreen
     // call onRefresh; the complete variant uses onDismiss / Link instead.
     return (
-      <CompletionScreen
-        slug={slug}
-        onboarding={onboarding}
-        onDismiss={onDismiss}
-        onRefresh={onAdvance}
-      />
+      <OnboardingConfigContext.Provider value={configValue}>
+        <CompletionScreen
+          slug={slug}
+          onboarding={onboarding}
+          onDismiss={onDismiss}
+          onRefresh={onAdvance}
+        />
+      </OnboardingConfigContext.Provider>
     );
   }
 
   // Only expose onBack when there's a prior step to go to.
-  const canGoBack = stepIndex(currentStep) > 0;
+  const canGoBack = stepIndex(currentStep, stepOrder) > 0;
   const common = { slug, instructor, onboarding, onAdvance, onBack: canGoBack ? onBack : undefined };
-  switch (currentStep) {
-    case STEP_KEYS.WELCOME:
-      return <Screen1Welcome {...common} />;
-    case STEP_KEYS.CHECKR_SUBMITTED:
-      return <Screen2BackgroundCheck {...common} />;
-    case STEP_KEYS.ORS_CERTIFICATION:
-      return <Screen3ORS {...common} />;
-    case STEP_KEYS.AGREEMENT_SIGNED:
-      return <Screen4Agreement {...common} />;
-    case STEP_KEYS.POLICIES_ACKNOWLEDGED:
-      return <Screen5Policies {...common} />;
-    case STEP_KEYS.ADDITIONAL_ACKS:
-      return <Screen6Additional {...common} />;
-    case STEP_KEYS.STRIPE_SUBMITTED:
-      return <Screen7Stripe {...common} />;
-    case STEP_KEYS.EMERGENCY_AND_PREFS:
-      return <Screen8EmergencyAndPrefs {...common} />;
-    default:
-      // Unknown step — fall back to the first screen.
-      return <Screen1Welcome {...common} />;
-  }
+  const screen = (() => {
+    switch (currentStep) {
+      case STEP_KEYS.WELCOME:
+        return <Screen1Welcome {...common} />;
+      case STEP_KEYS.CHECKR_SUBMITTED:
+        return <Screen2BackgroundCheck {...common} />;
+      case STEP_KEYS.ORS_CERTIFICATION:
+        return <Screen3ORS {...common} />;
+      case STEP_KEYS.AGREEMENT_SIGNED:
+        return <Screen4Agreement {...common} />;
+      case STEP_KEYS.POLICIES_ACKNOWLEDGED:
+        return <Screen5Policies {...common} />;
+      case STEP_KEYS.ADDITIONAL_ACKS:
+        return <Screen6Additional {...common} />;
+      case STEP_KEYS.STRIPE_SUBMITTED:
+        return <Screen7Stripe {...common} />;
+      case STEP_KEYS.EMERGENCY_AND_PREFS:
+        return <Screen8EmergencyAndPrefs {...common} />;
+      default:
+        // Unknown step — fall back to the first screen.
+        return <Screen1Welcome {...common} />;
+    }
+  })();
+
+  return (
+    <OnboardingConfigContext.Provider value={configValue}>
+      {screen}
+    </OnboardingConfigContext.Provider>
+  );
 }

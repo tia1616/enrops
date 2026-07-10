@@ -176,7 +176,7 @@ serve(async (req: Request) => {
     // 7. Look up org for tenant-derived values (NEVER hardcode J2S identity).
     const { data: org, error: orgErr } = await supabase
       .from('organizations')
-      .select('slug, name, default_sender_name, default_sender_email')
+      .select('slug, name, default_sender_name, default_sender_email, background_check_config')
       .eq('id', instructorRow.organization_id)
       .maybeSingle();
     if (orgErr) {
@@ -219,16 +219,41 @@ serve(async (req: Request) => {
     const firstName = instructorRow.first_name ?? 'there';
     const subject = `${org.name} — start your contractor onboarding in enrops`;
 
+    // Background-check invite: when the org requires a check AND has set a
+    // provider link, include it in the onboarding invite so the new hire can
+    // start it right away (checks take days — running it in parallel with the
+    // rest of onboarding saves time). No link set → nothing added here; the
+    // contractor sees the in-wizard background-check step instead.
+    const bgc =
+      (org.background_check_config as
+        | { enabled?: boolean; provider_name?: string; provider_url?: string; instructions?: string }
+        | null) ?? null;
+    const bgcEnabled = bgc?.enabled !== false;
+    const bgcUrl = (bgc?.provider_url ?? '').trim();
+    const bgcName = (bgc?.provider_name ?? '').trim();
+    const bgcInstructions = (bgc?.instructions ?? '').trim();
+    const includeBgc = bgcEnabled && bgcUrl.length > 0;
+
+    const bgcTextLines: string[] = [];
+    if (includeBgc) {
+      // Custom instructions replace the default line (mirrors the HTML block),
+      // so an org that wrote its own guidance doesn't get both.
+      bgcTextLines.push(
+        ``,
+        bgcInstructions || `Before you can be assigned, you'll need to complete a background check.`,
+        `Start your background check${bgcName ? ` with ${bgcName}` : ''}: ${bgcUrl}`,
+      );
+    }
+
     const text = [
       `Hi ${firstName},`,
       ``,
       `${org.name} is moving to enrops for all contractor paperwork, scheduling, and payments. Click below to start your onboarding — it takes about 15 minutes.`,
       ``,
       `Start onboarding: ${magicLink}`,
+      ...bgcTextLines,
       ``,
       `If you have questions, reach out to the admin.`,
-      ``,
-      `Please complete by Friday, June 12.`,
     ].join('\n');
 
     const html = buildEmailHtml({
@@ -236,6 +261,7 @@ serve(async (req: Request) => {
       orgName: org.name ?? 'enrops',
       magicLink,
       signatureBlock: renderSignatureBlock(brand),
+      backgroundCheck: includeBgc ? { url: bgcUrl, name: bgcName, instructions: bgcInstructions } : null,
     });
 
     const resp = await fetch('https://api.resend.com/emails', {
@@ -285,8 +311,32 @@ serve(async (req: Request) => {
   }
 });
 
-function buildEmailHtml(args: { firstName: string; orgName: string; magicLink: string; signatureBlock: string }): string {
-  const { firstName, orgName, magicLink, signatureBlock } = args;
+function buildEmailHtml(args: {
+  firstName: string;
+  orgName: string;
+  magicLink: string;
+  signatureBlock: string;
+  backgroundCheck?: { url: string; name: string; instructions: string } | null;
+}): string {
+  const { firstName, orgName, magicLink, signatureBlock, backgroundCheck } = args;
+
+  // Optional background-check block — only when the org requires a check and
+  // has configured a provider link (see the caller's includeBgc gate).
+  let bgcBlock = '';
+  if (backgroundCheck?.url) {
+    const label = backgroundCheck.name
+      ? `Start your check with ${escapeHtml(backgroundCheck.name)}`
+      : 'Start your background check';
+    const intro = backgroundCheck.instructions
+      ? escapeHtml(backgroundCheck.instructions)
+      : 'Before you can be assigned, you\'ll need to complete a background check.';
+    bgcBlock = `
+  <div style="margin:24px 0;padding:16px 18px;background:#f7f6fb;border:1px solid #e2dfd5;border-radius:8px;">
+    <p style="margin:0 0 12px 0;color:#1a1a1a;">${intro}</p>
+    <a href="${escapeHtml(backgroundCheck.url)}" style="display:inline-block;padding:10px 20px;background:#5847C9;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:600;">${label} →</a>
+  </div>`;
+  }
+
   return `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1a1a1a;max-width:560px;margin:0 auto;padding:24px;line-height:1.6;">
   <h2 style="font-size:20px;margin:0 0 16px 0;">Start your contractor onboarding</h2>
@@ -295,8 +345,7 @@ function buildEmailHtml(args: { firstName: string; orgName: string; magicLink: s
   <p style="margin:24px 0;">
     <a href="${magicLink}" style="display:inline-block;padding:12px 24px;background:#1a1a1a;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:600;">Start onboarding →</a>
   </p>
-  <p style="color:#666;font-size:14px;">If the button doesn't work, paste this link into your browser:<br/><span style="word-break:break-all;">${magicLink}</span></p>
-  <p>Please complete by Friday, June 12.</p>
+  <p style="color:#666;font-size:14px;">If the button doesn't work, paste this link into your browser:<br/><span style="word-break:break-all;">${magicLink}</span></p>${bgcBlock}
   ${signatureBlock}
 </div>`.trim();
 }

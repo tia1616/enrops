@@ -39,6 +39,7 @@ import AdminSettings from './pages/admin/AdminSettings.jsx';
 import SurveySettings from './pages/admin/SurveySettings.jsx';
 import WaiverManager from './pages/admin/WaiverManager.jsx';
 import EmailSenderSettings from './pages/admin/EmailSenderSettings.jsx';
+import BackgroundCheckSettings from './pages/admin/BackgroundCheckSettings.jsx';
 import BrandLogoSettings from './pages/admin/BrandLogoSettings.jsx';
 import TimeSavedPage from './pages/admin/TimeSavedPage.jsx';
 import InstructorPortal from './pages/j2s/InstructorPortal.jsx';
@@ -183,6 +184,7 @@ export default function App() {
         <Route path="survey-settings" element={<SurveySettings />} />
         <Route path="waivers" element={<WaiverManager />} />
         <Route path="email-sender" element={<EmailSenderSettings />} />
+        <Route path="background-checks" element={<BackgroundCheckSettings />} />
         <Route path="branding" element={<BrandLogoSettings />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />
       </Route>
