@@ -154,10 +154,6 @@ type Touchpoint = {
   status: string;
   type: string;
   payload: { label?: string; subject?: string | null; body_html?: string | null; body_text?: string | null } | null;
-  // Library files TRUE-attached to this touchpoint (ride in the Resend payload).
-  // Download-button LINKS are {{attachment:<id>}} markers in payload.body_html,
-  // resolved separately — a file can be linked, attached, or both.
-  attachment_ids?: string[] | null;
 };
 
 type Recipient = {
@@ -307,7 +303,7 @@ serve(async (req: Request) => {
 
   const { data: touchpoint, error: tErr } = await supabase
     .from("marketing_campaign_touchpoints")
-    .select("id, campaign_id, organization_id, status, type, payload, attachment_ids")
+    .select("id, campaign_id, organization_id, status, type, payload")
     .eq("id", body.touchpoint_id)
     .eq("campaign_id", body.campaign_id)
     .single<Touchpoint>();

@@ -100,7 +100,7 @@ function escapeHtml(s: string): string {
  * a clickable colored link — acceptable).
  */
 function downloadButtonHtml(att: CommsAttachment, url: string, brand: OrgBrand): string {
-  const bg = brand.primary_color || '#1C004F';
+  const bg = escapeHtml(brand.primary_color || '#1C004F');
   const label = escapeHtml((att.title?.trim() || att.file_name));
   return (
     `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" ` +
