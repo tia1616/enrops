@@ -123,8 +123,8 @@ export default function AttachmentPicker({
             return (
               <li key={e.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 10px", border: `1px solid ${primaryColor}`, borderRadius: 6, background: "#faf9fc" }}>
                 <span aria-hidden="true">📎</span>
-                <span style={{ flex: "1 1 160px", minWidth: 0, fontSize: 13, color: INK, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {f ? (f.title?.trim() || f.file_name) : "…"}
+                <span style={{ flex: "1 1 160px", minWidth: 0, fontSize: 13, color: f || loading ? INK : WARN, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {loading ? "…" : f ? (f.title?.trim() || f.file_name) : "This file was deleted — remove it"}
                   {f && <span style={{ color: MUTED, fontWeight: 400 }}> · {formatBytes(f.byte_size)}</span>}
                 </span>
                 {allowAttach && (
