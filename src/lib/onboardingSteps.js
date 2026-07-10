@@ -38,16 +38,26 @@ export const STEP_LABELS = {
   [STEP_KEYS.EMERGENCY_AND_PREFS]: 'Emergency contact and preferences',
 };
 
-export function stepIndex(stepKey) {
-  return STEP_ORDER.indexOf(stepKey);
+// Some steps are only present when a per-org toggle is on. Today the only
+// optional step is the background check (organizations.background_check_config
+// .enabled). effectiveStepOrder returns the canonical order with any disabled
+// steps removed, so navigation, progress, and the completion gate all agree on
+// the same list. Pass this order into stepIndex/stepNumber below.
+export function effectiveStepOrder({ bgcEnabled = true } = {}) {
+  return STEP_ORDER.filter((key) => {
+    if (key === STEP_KEYS.CHECKR_SUBMITTED) return bgcEnabled;
+    return true;
+  });
 }
 
-export function stepNumber(stepKey) {
-  const i = stepIndex(stepKey);
+export function stepIndex(stepKey, order = STEP_ORDER) {
+  return order.indexOf(stepKey);
+}
+
+export function stepNumber(stepKey, order = STEP_ORDER) {
+  const i = stepIndex(stepKey, order);
   return i < 0 ? null : i + 1;
 }
-
-export const TOTAL_STEPS = STEP_ORDER.length;
 
 // Current contractor agreement version. Matches the seeded row in
 // legal_documents. We send the version; the edge function looks up canonical

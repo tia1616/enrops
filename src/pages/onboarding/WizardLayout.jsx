@@ -1,5 +1,6 @@
 import React from 'react';
-import { STEP_ORDER, TOTAL_STEPS, stepNumber } from '../../lib/onboardingSteps.js';
+import { stepNumber } from '../../lib/onboardingSteps.js';
+import { useOnboardingConfig } from './OnboardingConfigContext.jsx';
 
 // Shared shell for every wizard screen: progress bar, step number/title, and
 // the body slot. Screens render their own primary submit button inside the
@@ -14,7 +15,8 @@ export default function WizardLayout({
   slug,
   onBack,
 }) {
-  const num = stepNumber(currentStep);
+  const { stepOrder } = useOnboardingConfig();
+  const num = stepNumber(currentStep, stepOrder);
 
   return (
     <div className="min-h-screen bg-neutral-50">
@@ -24,10 +26,10 @@ export default function WizardLayout({
             {slug ? `${slug} · onboarding` : 'onboarding'}
           </div>
           <div className="text-xs font-semibold text-neutral-500">
-            Step {num} of {TOTAL_STEPS}
+            Step {num} of {stepOrder.length}
           </div>
         </div>
-        <ProgressBar currentStep={currentStep} stepsCompleted={stepsCompleted} />
+        <ProgressBar currentStep={currentStep} stepsCompleted={stepsCompleted} stepOrder={stepOrder} />
         <div className="mt-6 rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
           {onBack && (
             <button
@@ -49,13 +51,13 @@ export default function WizardLayout({
   );
 }
 
-function ProgressBar({ currentStep, stepsCompleted }) {
+function ProgressBar({ currentStep, stepsCompleted, stepOrder }) {
   // Three visual states, with the current step ringed so it's distinct even
   // when the step has also been completed (a contractor revisiting via the
   // Back button is on a step that's both 'current' and 'done').
   return (
     <div className="flex gap-1" role="list" aria-label="Onboarding progress">
-      {STEP_ORDER.map((key, i) => {
+      {stepOrder.map((key, i) => {
         const done = Boolean(stepsCompleted?.[key]);
         const current = key === currentStep;
         const ariaLabel = `Step ${i + 1} ${done ? 'complete' : 'upcoming'}${current ? ' (current)' : ''}`;
