@@ -39,7 +39,7 @@ const GROUPS = [
   { title: "After-school", rows: [
     { key: "after_school", label: "Per session", dbTypes: ["after_school"] },
   ] },
-  { title: "Camps", rows: [
+  { title: "Camps", unit: "per day", rows: [
     { key: "half_day", label: "Half day", dbTypes: ["morning", "afternoon"] },
     { key: "full_day", label: "Full day", dbTypes: ["full_day"] },
   ] },
@@ -237,7 +237,10 @@ export default function PayRatesSettings() {
 
           {GROUPS.map((group) => (
             <Fragment key={group.title}>
-              <div style={groupHeader}>{group.title}</div>
+              <div style={groupHeader}>
+                {group.title}
+                {group.unit && <span style={{ fontWeight: 500, color: MUTED, marginLeft: 8, fontSize: 12 }}>· {group.unit}</span>}
+              </div>
               {group.rows.map((row) => (
                 <RateRow key={row.key} row={row} bad={bad} values={values} setCell={setCell} />
               ))}
