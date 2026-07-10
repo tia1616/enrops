@@ -6,6 +6,11 @@
 // read these amounts when an instructor's session is confirmed. A blank box =
 // no configured rate → the admin sets that amount by hand on Payroll. Money
 // surface: owner/admin only (RLS is admin-gated too).
+//
+// UI grouping vs DB shape: the DB stores camp session_types morning/afternoon
+// separately, but they pay the same half-day rate, so the UI shows a single
+// "Half day" input that writes to BOTH morning + afternoon. The confirm
+// functions look pay up by the real session_type, so both rows must exist.
 
 import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
@@ -25,14 +30,17 @@ const ROLES = [
   { key: "lead", label: "Lead" },
   { key: "developing", label: "Developing" },
 ];
-const SESSION_TYPES = [
-  { key: "morning", label: "Morning", sub: "half day" },
-  { key: "afternoon", label: "Afternoon", sub: "half day" },
-  { key: "full_day", label: "Full day", sub: "camp" },
-  { key: "after_school", label: "After-school", sub: "per session" },
-];
 
-const cellKey = (role, sessionType) => `${role}|${sessionType}`;
+// UI rows → DB session_types. "Half day" maps to both morning + afternoon
+// (same rate). Afterschool sits on top; camp rows follow under a Camp heading.
+const AFTERSCHOOL_ROW = { key: "after_school", label: "After-school", sub: "per session", dbTypes: ["after_school"] };
+const CAMP_ROWS = [
+  { key: "half_day", label: "Half day", sub: "morning or afternoon", dbTypes: ["morning", "afternoon"] },
+  { key: "full_day", label: "Full day", sub: "full camp day", dbTypes: ["full_day"] },
+];
+const ALL_ROWS = [AFTERSCHOOL_ROW, ...CAMP_ROWS];
+
+const cellKey = (role, rowKey) => `${role}|${rowKey}`;
 
 // cents (int) -> dollars string for display, e.g. 8000 -> "80", 8050 -> "80.50"
 function centsToDollars(cents) {
@@ -44,7 +52,7 @@ function centsToDollars(cents) {
 export default function PayRatesSettings() {
   const { org } = useOutletContext();
   const perm = usePermissions();
-  // values: { `${role}|${session_type}`: dollarString }
+  // values: { `${role}|${rowKey}`: dollarString } where rowKey is a UI row
   const [values, setValues] = useState({});
   const [saved, setSaved] = useState({});
   const [loading, setLoading] = useState(true);
@@ -70,9 +78,16 @@ export default function PayRatesSettings() {
         setLoading(false);
         return;
       }
+      // Index DB rows, then map each UI row to its first DB session_type
+      // (morning drives the Half day box; morning/afternoon are kept in sync).
+      const dbMap = {};
+      for (const r of data ?? []) dbMap[`${r.role}|${r.session_type}`] = centsToDollars(r.amount_cents);
       const next = {};
-      for (const r of data ?? []) {
-        next[cellKey(r.role, r.session_type)] = centsToDollars(r.amount_cents);
+      for (const role of ROLES) {
+        for (const row of ALL_ROWS) {
+          const v = dbMap[`${role.key}|${row.dbTypes[0]}`];
+          if (v != null && v !== "") next[cellKey(role.key, row.key)] = v;
+        }
       }
       setValues(next);
       setSaved(next);
@@ -81,29 +96,29 @@ export default function PayRatesSettings() {
     return () => { cancelled = true; };
   }, [org?.id]);
 
-  function setCell(role, sessionType, raw) {
+  function setCell(role, rowKey, raw) {
     // Allow only digits + a single decimal point (dollars-and-cents entry).
     const clean = raw.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1");
-    setValues((v) => ({ ...v, [cellKey(role, sessionType)]: clean }));
+    setValues((v) => ({ ...v, [cellKey(role, rowKey)]: clean }));
   }
 
   // A cell is invalid if it's non-empty but not a non-negative number.
   function invalidCells() {
     const bad = [];
     for (const role of ROLES) {
-      for (const st of SESSION_TYPES) {
-        const val = (values[cellKey(role.key, st.key)] ?? "").trim();
+      for (const row of ALL_ROWS) {
+        const val = (values[cellKey(role.key, row.key)] ?? "").trim();
         if (val === "") continue;
         const n = Number(val);
-        if (!Number.isFinite(n) || n < 0) bad.push(cellKey(role.key, st.key));
+        if (!Number.isFinite(n) || n < 0) bad.push(cellKey(role.key, row.key));
       }
     }
     return bad;
   }
 
   const dirty = ROLES.some((role) =>
-    SESSION_TYPES.some((st) => {
-      const k = cellKey(role.key, st.key);
+    ALL_ROWS.some((row) => {
+      const k = cellKey(role.key, row.key);
       return (values[k] ?? "") !== (saved[k] ?? "");
     })
   );
@@ -121,20 +136,22 @@ export default function PayRatesSettings() {
       const toDelete = []; // { role, session_type }
       const now = new Date().toISOString();
       for (const role of ROLES) {
-        for (const st of SESSION_TYPES) {
-          const k = cellKey(role.key, st.key);
+        for (const row of ALL_ROWS) {
+          const k = cellKey(role.key, row.key);
           const val = (values[k] ?? "").trim();
-          if (val === "") {
-            // Only bother deleting if it previously had a value.
-            if ((saved[k] ?? "") !== "") toDelete.push({ role: role.key, session_type: st.key });
-          } else {
-            toUpsert.push({
-              organization_id: org.id,
-              role: role.key,
-              session_type: st.key,
-              amount_cents: Math.round(Number(val) * 100),
-              updated_at: now,
-            });
+          // Expand each UI row to its DB session_types (Half day -> morning+afternoon).
+          for (const st of row.dbTypes) {
+            if (val === "") {
+              if ((saved[k] ?? "") !== "") toDelete.push({ role: role.key, session_type: st });
+            } else {
+              toUpsert.push({
+                organization_id: org.id,
+                role: role.key,
+                session_type: st,
+                amount_cents: Math.round(Number(val) * 100),
+                updated_at: now,
+              });
+            }
           }
         }
       }
@@ -157,8 +174,8 @@ export default function PayRatesSettings() {
       // round-trip so the display cleans up (e.g. "80." -> "80").
       const nextSaved = {};
       for (const role of ROLES) {
-        for (const st of SESSION_TYPES) {
-          const k = cellKey(role.key, st.key);
+        for (const row of ALL_ROWS) {
+          const k = cellKey(role.key, row.key);
           const val = (values[k] ?? "").trim();
           if (val !== "") nextSaved[k] = centsToDollars(Math.round(Number(val) * 100));
         }
@@ -197,9 +214,9 @@ export default function PayRatesSettings() {
       <Link to="/admin/settings" style={{ fontSize: 13, color: MUTED, textDecoration: "none" }}>← Settings</Link>
       <h1 style={{ margin: "8px 0 4px", color: PURPLE, fontSize: 24, fontWeight: 700 }}>Pay rates</h1>
       <p style={{ color: MUTED, fontSize: 14, marginTop: 0, lineHeight: 1.5, maxWidth: 560 }}>
-        What you pay instructors for each session. When an instructor's session is confirmed, Enrops
-        fills in the amount from here so payroll adds up automatically. Leave a box blank and you'll set
-        that amount by hand on the Payroll screen instead.
+        What you pay instructors, per session. When a session is confirmed, Enrops fills in the amount
+        from here so payroll adds up automatically. Leave a box blank and you'll set that amount by hand
+        on the Payroll screen instead.
       </p>
 
       {error && <div style={{ marginTop: 16, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
@@ -212,14 +229,22 @@ export default function PayRatesSettings() {
             <div key={role.key} style={{ fontSize: 13, fontWeight: 700, color: PURPLE, textAlign: "left" }}>{role.label}</div>
           ))}
 
-          {SESSION_TYPES.map((st) => (
-            <FragmentRow key={st.key} st={st} bad={bad} values={values} setCell={setCell} />
+          {/* After-school on top */}
+          <RateRow row={AFTERSCHOOL_ROW} bad={bad} values={values} setCell={setCell} />
+
+          {/* Camp heading spanning the full row */}
+          <div style={{ gridColumn: "1 / -1", marginTop: 10, paddingTop: 12, borderTop: `1px solid ${RULE}`, fontSize: 13, fontWeight: 700, color: PURPLE }}>
+            Camp
+          </div>
+
+          {CAMP_ROWS.map((row) => (
+            <RateRow key={row.key} row={row} bad={bad} values={values} setCell={setCell} />
           ))}
         </div>
 
         <div style={hint}>
-          Amounts are per instructor, per session. Morning and Afternoon are half-day camp sessions;
-          Full day is a full camp day; After-school is one after-school session.
+          Amounts are per instructor, per session. After-school is one class session; Half day is a
+          morning or afternoon camp; Full day is a full camp day.
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
@@ -232,16 +257,16 @@ export default function PayRatesSettings() {
   );
 }
 
-// One session-type row: label cell + a dollar input per role.
-function FragmentRow({ st, bad, values, setCell }) {
+// One rate row: label cell + a dollar input per role.
+function RateRow({ row, bad, values, setCell }) {
   return (
     <>
       <div style={{ paddingBottom: 4 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{st.label}</div>
-        <div style={{ fontSize: 12, color: MUTED }}>{st.sub}</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{row.label}</div>
+        <div style={{ fontSize: 12, color: MUTED }}>{row.sub}</div>
       </div>
       {ROLES.map((role) => {
-        const k = cellKey(role.key, st.key);
+        const k = cellKey(role.key, row.key);
         const isBad = bad.has(k);
         return (
           <div key={role.key} style={{ position: "relative" }}>
@@ -250,9 +275,9 @@ function FragmentRow({ st, bad, values, setCell }) {
               type="text"
               inputMode="decimal"
               value={values[k] ?? ""}
-              onChange={(e) => setCell(role.key, st.key, e.target.value)}
+              onChange={(e) => setCell(role.key, row.key, e.target.value)}
               placeholder="—"
-              aria-label={`${role.label} ${st.label} pay`}
+              aria-label={`${role.label} ${row.label} pay`}
               style={{ ...input, paddingLeft: 22, borderColor: isBad ? "#dc2626" : RULE }}
             />
           </div>
