@@ -147,7 +147,7 @@ export default function AdminLayout() {
         // Fetch org name + branding (display only — does not gate access)
         const { data: orgRow } = await supabase
           .from("organizations")
-          .select("id, name, slug, active_registration_term, uses_enrops_registration, venue_model")
+          .select("id, name, slug, active_registration_term, uses_enrops_registration, venue_model, background_check_config")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;

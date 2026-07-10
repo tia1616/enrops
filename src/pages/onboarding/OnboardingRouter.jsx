@@ -100,10 +100,14 @@ export default function OnboardingRouter() {
         return;
       }
 
-      // 5. Org slug — hard-fail on missing.
+      // 5. Org slug — hard-fail on missing. Also pull the instructor-facing
+      // background-check config (enabled flag + provider name/link/instructions)
+      // from the public directory view so the wizard can show the right step
+      // and copy. Instructors aren't org_members, so they can't read the
+      // organizations row directly — the view exposes only this safe subset.
       const { data: org } = await supabase
         .from('public_org_directory')
-        .select('slug')
+        .select('slug, background_check_public')
         .eq('id', instructor.organization_id)
         .single();
       if (!org?.slug) {
@@ -163,6 +167,7 @@ export default function OnboardingRouter() {
         slug: org.slug,
         instructor,
         onboarding,
+        backgroundCheck: org.background_check_public ?? { enabled: true },
         initialStep: searchParams.get('step') || onboarding.current_step,
       });
     }
@@ -197,6 +202,7 @@ export default function OnboardingRouter() {
       slug={state.slug}
       instructor={state.instructor}
       onboarding={state.onboarding}
+      backgroundCheck={state.backgroundCheck}
       initialStep={state.initialStep}
     />
   );

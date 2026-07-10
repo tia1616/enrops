@@ -70,6 +70,10 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 // cascades tenant -> Enrops -> hardcoded Enrops defaults. No more J2S-baked
 // global constant.
 const PLATFORM_ALERT_DEFAULT = 'alerts@enrops.com';
+// Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
+// site so the account-ready email's dashboard/login links point at staging, not prod.
+// Defaults to prod (this webhook fires on real payments).
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 
 interface PerLineEntry {
   installment_number: number;
@@ -481,7 +485,7 @@ async function autoCreateParentAccount(
       brand,
       to: alertEmail,
       subject: `Auto-create account failed for ${email}`,
-      body: `Could not create auth user for ${email} after successful payment. Error: ${createErr.message}. The parent can still create an account manually at enrops.com/${orgSlug}/login.`,
+      body: `Could not create auth user for ${email} after successful payment. Error: ${createErr.message}. The parent can still create an account manually at ${PUBLIC_SITE_URL}/${orgSlug}/login.`,
     });
     return;
   }
@@ -492,8 +496,9 @@ async function autoCreateParentAccount(
 
 async function sendAccountReadyEmail(admin: ReturnType<typeof createClient>, brand: OrgBrand, email: string, name: string, orgSlug: string, isNew: boolean) {
   const firstName = name ? name.split(' ')[0] : 'there';
-  const dashboardUrl = `https://enrops.com/${orgSlug}/dashboard`;
-  const loginUrl = `https://enrops.com/${orgSlug}/login`;
+  const dashboardUrl = `${PUBLIC_SITE_URL}/${orgSlug}/dashboard`;
+  const loginUrl = `${PUBLIC_SITE_URL}/${orgSlug}/login`;
+  const loginDisplay = loginUrl.replace(/^https?:\/\//, '');
 
   let signInUrl = loginUrl;
   try {
@@ -520,7 +525,7 @@ async function sendAccountReadyEmail(admin: ReturnType<typeof createClient>, bra
     ? `<img src="${brand.logo_url}" alt="${escapeHtml(brand.org_name)}" style="max-height:40px;display:block;margin:0 auto 12px;" />`
     : `<div style="color:${brand.accent_color};font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(brand.org_name)}</div>`;
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Your Account</title></head><body style="margin:0;padding:0;background:${brand.page_bg_color};font-family:'Nunito Sans',Arial,sans-serif;"><div style="max-width:600px;margin:0 auto;background:#fff;"><div style="background:linear-gradient(135deg,${brand.primary_color},${brand.secondary_color});padding:40px 30px;text-align:center;">${logoBlock}<h1 style="color:#fff;margin:12px 0 0;font-family:'Titan One',Georgia,serif;font-size:28px;">${isNew ? 'Your account is ready!' : 'View your programs'}</h1></div><div style="padding:32px 30px;"><p style="margin:0 0 16px;font-size:16px;color:#1A1530;">Hi ${escapeHtml(firstName)},</p><p style="margin:0 0 24px;font-size:16px;color:#1A1530;line-height:1.6;">${isNew ? 'We created a parent account for you automatically when you registered. Tap the button below to see your child\'s program schedule and arrival details.' : 'Tap the button below to view your children\'s program details and schedules.'}</p><div style="text-align:center;margin:32px 0;"><a href="${signInUrl}" style="display:inline-block;background:${brand.primary_color};color:#fff;text-decoration:none;padding:16px 40px;border-radius:8px;font-size:16px;font-weight:700;">View my dashboard</a></div><p style="margin:0 0 8px;font-size:14px;color:#6b6880;">This link expires in 24 hours. After that, you can always sign in at <a href="${loginUrl}" style="color:${brand.primary_color};">enrops.com/${orgSlug}/login</a> using the magic link option.</p><p style="margin:24px 0 0;font-size:14px;color:#6b6880;">Questions? Reach us at <a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p></div><div style="background:#1A1530;padding:20px 30px;text-align:center;color:#fff;opacity:0.6;font-size:12px;">${escapeHtml(brand.org_name)} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}</div></div></body></html>`;
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Your Account</title></head><body style="margin:0;padding:0;background:${brand.page_bg_color};font-family:'Nunito Sans',Arial,sans-serif;"><div style="max-width:600px;margin:0 auto;background:#fff;"><div style="background:linear-gradient(135deg,${brand.primary_color},${brand.secondary_color});padding:40px 30px;text-align:center;">${logoBlock}<h1 style="color:#fff;margin:12px 0 0;font-family:'Titan One',Georgia,serif;font-size:28px;">${isNew ? 'Your account is ready!' : 'View your programs'}</h1></div><div style="padding:32px 30px;"><p style="margin:0 0 16px;font-size:16px;color:#1A1530;">Hi ${escapeHtml(firstName)},</p><p style="margin:0 0 24px;font-size:16px;color:#1A1530;line-height:1.6;">${isNew ? 'We created a parent account for you automatically when you registered. Tap the button below to see your child\'s program schedule and arrival details.' : 'Tap the button below to view your children\'s program details and schedules.'}</p><div style="text-align:center;margin:32px 0;"><a href="${signInUrl}" style="display:inline-block;background:${brand.primary_color};color:#fff;text-decoration:none;padding:16px 40px;border-radius:8px;font-size:16px;font-weight:700;">View my dashboard</a></div><p style="margin:0 0 8px;font-size:14px;color:#6b6880;">This link expires in 24 hours. After that, you can always sign in at <a href="${loginUrl}" style="color:${brand.primary_color};">${loginDisplay}</a> using the magic link option.</p><p style="margin:24px 0 0;font-size:14px;color:#6b6880;">Questions? Reach us at <a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p></div><div style="background:#1A1530;padding:20px 30px;text-align:center;color:#fff;opacity:0.6;font-size:12px;">${escapeHtml(brand.org_name)} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}</div></div></body></html>`;
 
   try {
     const resp = await fetch('https://api.resend.com/emails', {
