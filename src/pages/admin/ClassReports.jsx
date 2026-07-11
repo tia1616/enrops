@@ -440,18 +440,19 @@ function ClassReportPanel({ org, kind, classId, title, campMeta }) {
         if (rec.released_at) {
           releasedCount += 1;
           const relName = (rec.released_to_name ?? "").toLowerCase().trim();
+          const by = instructorName(instructors[rec.released_by]);
           if (relName && dnrSet.has(relName)) {
-            dnr.push({ child: child.name, date: d, who: rec.released_to_name });
+            dnr.push({ child: child.name, date: d, who: rec.released_to_name, by });
           } else if (rec.dismissal_kind === "released_to_adult" && !rec.released_to_contact_id) {
-            nonAuth.push({ child: child.name, date: d, who: rec.released_to_name, reason: rec.notes });
+            nonAuth.push({ child: child.name, date: d, who: rec.released_to_name, reason: rec.notes, by });
           }
         } else if (rec.present === true) {
-          undismissed.push({ child: child.name, date: d });
+          undismissed.push({ child: child.name, date: d, by: instructorName(instructors[rec.checked_in_by]) });
         }
       }
     }
     return { dnr, nonAuth, undismissed, missing, presentCount, releasedCount };
-  }, [roster, dates, recByKey, today, datesWithRecord]);
+  }, [roster, dates, recByKey, today, datesWithRecord, instructors]);
 
   function exportCsv() {
     const header = ["Child", "Date", "Present", "Dismissal", "Released to", "Released at", "By", "Flag", "Notes"];
@@ -507,11 +508,11 @@ function ClassReportPanel({ org, kind, classId, title, campMeta }) {
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <FlagGroup color={RED} label="Do-not-release name used" items={compliance.dnr}
-            render={(x) => `${x.child} · ${fmtDay(x.date)} → ${x.who}`} />
+            render={(x) => `${x.child} · ${fmtDay(x.date)} → ${x.who}${x.by ? ` · by ${x.by}` : ""}`} />
           <FlagGroup color={RED} label="Released to someone not on the authorized list" items={compliance.nonAuth}
-            render={(x) => `${x.child} · ${fmtDay(x.date)} → ${x.who}${x.reason ? ` (${x.reason})` : ""}`} />
+            render={(x) => `${x.child} · ${fmtDay(x.date)} → ${x.who}${x.by ? ` · by ${x.by}` : ""}${x.reason ? ` (${x.reason})` : ""}`} />
           <FlagGroup color={AMBER} label="Present but not yet dismissed" items={compliance.undismissed}
-            render={(x) => `${x.child} · ${fmtDay(x.date)}`} />
+            render={(x) => `${x.child} · ${fmtDay(x.date)}${x.by ? ` · checked in by ${x.by}` : ""}`} />
           <FlagGroup color={AMBER} label="Missing check-in" items={compliance.missing}
             render={(x) => `${x.child} · ${fmtDay(x.date)}`} />
         </div>
