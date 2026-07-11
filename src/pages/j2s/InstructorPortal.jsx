@@ -3094,6 +3094,10 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
 
   useEffect(() => {
     if (!filterId) return;
+    // Clear the previous class's roster + contacts so a reused-in-place instance
+    // never briefly shows another class's campers/PII under the new header.
+    setRows(null);
+    setContactsByStudent({});
     let cancelled = false;
     (async () => {
       try {
@@ -3125,9 +3129,10 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
         }
         setRows(data ?? []);
 
-        // Pull the structured contacts (guardians / authorized pickup / etc.) for
-        // these students. do_not_release rows are gated by RLS to org editors, so
-        // instructors simply won't receive them — nothing to hide client-side.
+        // Pull the structured contacts (guardians / authorized pickup / do-not-
+        // release / etc.) for these students. Instructors DO receive do_not_release
+        // rows (Jessica 2026-07-11 — they enforce it at dismissal); the Chunk 3 RLS
+        // policy sends all roles for a class the instructor is confirmed on.
         const studentIds = [...new Set((data ?? []).map((r) => r.student?.id).filter(Boolean))];
         if (studentIds.length) {
           const { data: contacts, error: cErr } = await supabase
@@ -3349,8 +3354,8 @@ function CamperRow({ registration, contacts = [] }) {
         </div>
       ) : null}
 
-      {/* Do-not-release — sensitive. Instructors never receive these rows (RLS
-          gates them to org editors); this renders only where the query returns them. */}
+      {/* Do-not-release — sensitive custody info. Instructors DO see it (they
+          enforce dismissal); view-only admin users are gated out at the RLS layer. */}
       {doNotRelease.length > 0 && (
         <div style={{ marginTop: 6, padding: "6px 10px", background: `${CORAL}1F`, border: `1px solid ${CORAL}55`, borderRadius: 4, fontSize: 12, color: INK }}>
           <strong style={{ color: CORAL }}>Do NOT release to:</strong>{" "}
