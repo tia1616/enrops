@@ -142,10 +142,11 @@ serve(async (req: Request) => {
 
     // Substitution guard: if a sub was confirmed to cover THIS assignment on
     // THIS date, the assigned instructor must not self-confirm it — the sub is
-    // the payee, and the auto-confirm cron (Job B) records/pays the sub. Block
-    // with a clear 409 so we never create a duplicate payable row for the
-    // person who was covered. (Keyed to the camp_assignment + date, matching
-    // assignment_substitutions.)
+    // the payee (the pay-line view routes the day to the sub). The sub records
+    // their own pay via confirm-sub-delivery, or an admin settles it from
+    // Payroll ("Confirm & pay" → admin-confirm-session). Block with a clear 409
+    // so we never create a duplicate payable row for the person who was covered.
+    // (Keyed to the camp_assignment + date, matching assignment_substitutions.)
     const { data: cover } = await supabase
       .from('assignment_substitutions')
       .select('id')

@@ -155,9 +155,13 @@ serve(async (req: Request) => {
     // rather than blocking the confirmation over missing pay config.
     const payCents = await resolvePayAmount(supabase, row.organization_id, role, sessionType);
 
-    // Update the confirmation row.
+    // Update the confirmation row. Guard on confirmed_by='pending' so a race
+    // with an admin confirm-on-behalf (admin-confirm-session) or a sub confirm
+    // can't be clobbered: whoever writes first wins, and we return
+    // already_confirmed if this write lands on an already-settled row. (The
+    // read above catches the common case; this closes the read→write window.)
     const nowIso = new Date().toISOString();
-    const { error: updErr } = await supabase
+    const { data: updated, error: updErr } = await supabase
       .from('session_delivery_confirmations')
       .update({
         confirmed_by: 'self',
@@ -166,11 +170,17 @@ serve(async (req: Request) => {
         pay_amount_cents: payCents,
         updated_at: nowIso,
       })
-      .eq('id', confirmationId);
+      .eq('id', confirmationId)
+      .eq('confirmed_by', 'pending')
+      .select('id')
+      .maybeSingle();
 
     if (updErr) {
       console.error('confirmation update failed:', updErr);
       return json({ error: 'update_failed' }, 500);
+    }
+    if (!updated) {
+      return json({ error: 'already_confirmed' }, 400);
     }
 
     return json({
