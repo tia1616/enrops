@@ -165,12 +165,51 @@ serve(async (req) => {
           special_needs_accommodations: student.special_needs_accommodations || null,
           emergency_contact_name: student.emergency_contact_name || null,
           emergency_contact_phone: student.emergency_contact_phone || null,
+          // customizable-registration: how the child leaves (null when the org
+          // hasn't enabled that question)
+          dismissal_method: student.dismissal_method || null,
         })
         .select('id')
         .single();
       if (sErr) throw new Error(`student insert: ${sErr.message}`);
       const studentId = newStudent!.id;
       studentIdByChildIndex.set(child.child_index, studentId);
+
+      // --- Customizable registration: structured people → student_contacts ---
+      // Written BEFORE checkout, so a failure here fails the registration with no
+      // charge (never a paid enrollment missing its pickup/release data).
+      const contactRows: any[] = [];
+      const g2 = parent?.guardian2;
+      if (g2 && (g2.first_name || '').trim()) {
+        contactRows.push({
+          student_id: studentId, organization_id: orgId, role: 'guardian',
+          first_name: g2.first_name.trim(), last_name: (g2.last_name || '').trim() || null,
+          phone: (g2.phone || '').trim() || null, email: (g2.email || '').trim() || null,
+          sort_order: 0,
+        });
+      }
+      (child.authorized_pickup || []).forEach((p: any, i: number) => {
+        if ((p?.first_name || '').trim()) {
+          contactRows.push({
+            student_id: studentId, organization_id: orgId, role: 'authorized_pickup',
+            first_name: p.first_name.trim(), last_name: (p.last_name || '').trim() || null,
+            phone: (p.phone || '').trim() || null, sort_order: i,
+          });
+        }
+      });
+      (child.do_not_release || []).forEach((p: any, i: number) => {
+        if ((p?.first_name || '').trim()) {
+          contactRows.push({
+            student_id: studentId, organization_id: orgId, role: 'do_not_release',
+            first_name: p.first_name.trim(), last_name: (p.last_name || '').trim() || null,
+            sort_order: i,
+          });
+        }
+      });
+      if (contactRows.length) {
+        const { error: cErr } = await admin.from('student_contacts').insert(contactRows);
+        if (cErr) throw new Error(`student_contacts insert: ${cErr.message}`);
+      }
 
       // --- Registrations: one per line item for this child ---
       // For VIP: item has vipBundle with fall/winter/spring → create 3 registrations.
@@ -221,6 +260,9 @@ serve(async (req) => {
               how_heard: student.how_heard || null,
               referred_by:
                 student.how_heard === 'Other' ? student.how_heard_other : null,
+              // customizable-registration: answers to the org's custom questions
+              // (keyed by field_key; {} when none)
+              custom_field_values: child.custom_answers || {},
               // Photo release: TRUE if J2S waiver was agreed to (handled below after waivers check)
               photo_release_consent: false, // set below based on waiver
               photo_release_consent_at: null,

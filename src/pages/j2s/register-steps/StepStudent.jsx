@@ -1,4 +1,5 @@
 import React from 'react';
+import { PickupDismissalSection, CustomQuestionsSection, hasPickupSection } from './RegExtraFields.jsx';
 
 // Tenant-neutral referral options shared by every operator's registration flow.
 // (Replaced J2S-specific entries — "STEAM Night", "PDX Parent", "NW Kids",
@@ -25,7 +26,8 @@ const GRADE_OPTIONS = [
   { value: '6', label: '6th grade' },
 ];
 
-export default function StepStudent({ student, onUpdate, childIndex }) {
+export default function StepStudent({ student, onUpdate, childIndex, regFields = { std: {}, custom: [] }, child = {}, onUpdateChild = () => {} }) {
+  const { std = {}, custom = [] } = regFields;
   return (
     <div>
       <h1 className="font-titan text-3xl text-j2s-ink sm:text-4xl">
@@ -137,6 +139,33 @@ export default function StepStudent({ student, onUpdate, childIndex }) {
           />
         </div>
       </div>
+
+      {hasPickupSection(std) && (
+        <>
+          <h2 className="mt-10 font-titan text-xl text-j2s-ink">Pickup &amp; dismissal</h2>
+          <p className="mt-1 text-sm text-j2s-ink/60">Who we can release your child to.</p>
+          <PickupDismissalSection
+            std={std}
+            dismissalMethod={student.dismissal_method || ''}
+            onDismissalChange={(v) => onUpdate({ dismissal_method: v })}
+            pickup={child.authorized_pickup || []}
+            onPickupChange={(v) => onUpdateChild({ authorized_pickup: v })}
+            doNotRelease={child.do_not_release || []}
+            onDoNotReleaseChange={(v) => onUpdateChild({ do_not_release: v })}
+          />
+        </>
+      )}
+
+      {custom.length > 0 && (
+        <>
+          <h2 className="mt-10 font-titan text-xl text-j2s-ink">A few more questions</h2>
+          <CustomQuestionsSection
+            fields={custom}
+            answers={child.custom_answers || {}}
+            onAnswer={(key, val) => onUpdateChild({ custom_answers: { ...(child.custom_answers || {}), [key]: val } })}
+          />
+        </>
+      )}
 
       <h2 className="mt-10 font-titan text-xl text-j2s-ink">One last thing</h2>
       <div className="mt-4">

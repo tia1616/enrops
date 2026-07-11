@@ -26,7 +26,14 @@ function emptyChild(index) {
       emergency_contact_phone: '',
       how_heard: '',
       how_heard_other: '',
+      dismissal_method: '', // customizable-registration: released_to_authorized_adult | walks_or_bikes_home | bus | aftercare | other
     },
+    // customizable-registration (Chunk 2) — child-level structured people + answers.
+    // Written to student_contacts / custom_field_values by create-registration.
+    // Only collected when the org has enabled the matching standard/custom question.
+    authorized_pickup: [], // [{ first_name, last_name, phone }] — up to 4
+    do_not_release: [],    // [{ first_name, last_name }]
+    custom_answers: {},    // { [field_key]: value }
     waivers: {}, // { waiverId: { agreed: bool, comments: '' } }
   };
 }
@@ -40,6 +47,9 @@ function emptyCart() {
       email: '',
       phone: '',
       address: '',
+      // customizable-registration (Chunk 2) — optional second guardian (household-level).
+      // Written as a guardian student_contact for each child by create-registration.
+      guardian2: { first_name: '', last_name: '', email: '', phone: '' },
     },
     children: [emptyChild(0)],
     active_child_index: 0,

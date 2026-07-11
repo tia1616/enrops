@@ -9,6 +9,15 @@ import StepParent from './register-steps/StepParent.jsx';
 import StepWaivers from './register-steps/StepWaivers.jsx';
 import StepReview from './register-steps/StepReview.jsx';
 import StepPay from './register-steps/StepPay.jsx';
+import { parseRegFields } from './register-steps/RegExtraFields.jsx';
+
+// Has the parent answered a custom question? (by field type)
+function hasAnswer(value, type) {
+  if (type === 'multiselect') return Array.isArray(value) && value.length > 0;
+  if (type === 'checkbox') return value === true || value === 'true';
+  if (type === 'number') return value !== undefined && value !== null && String(value).trim() !== '';
+  return typeof value === 'string' ? value.trim() !== '' : value != null;
+}
 
 // Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
 // via Outlet context — see src/layouts/PublicLayout.jsx. No more hardcoded
@@ -26,6 +35,7 @@ export default function Register() {
     setActiveChildSchool,
     setActiveChildItem,
     updateActiveStudent,
+    updateActiveChild,
     updateParent,
     setActiveChildWaiver,
     setPromo,
@@ -39,6 +49,9 @@ export default function Register() {
   const [schools, setSchools] = useState([]);
   const [programs, setPrograms] = useState([]);
   const [waivers, setWaivers] = useState([]);
+  // customizable-registration: org's enabled standard + active custom questions.
+  // Empty {std:{},custom:[]} = today's behavior (no extra fields render).
+  const [regFields, setRegFields] = useState({ std: {}, custom: [] });
   const [feeConfig, setFeeConfig] = useState(null); // {fee_pass_through, platform_fee_card_pct, platform_fee_cap_cents}
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -222,7 +235,7 @@ export default function Register() {
   }, [programs, schools]);
 
   async function load() {
-    const [schoolsRes, programsRes, waiversRes, feeRes] = await Promise.all([
+    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes] = await Promise.all([
       supabase
         .from('program_locations')
         .select('id, name, district, address')
@@ -240,6 +253,9 @@ export default function Register() {
         .select('*')
         .eq('organization_id', ORG_ID)
         .eq('active', true),
+      // customizable-registration: the org's enabled standard + active custom
+      // questions (one-org reader; returns [] if nothing enabled → form unchanged).
+      supabase.rpc('get_active_registration_fields', { p_org_id: ORG_ID }),
       // Fee-display config via edge fn (RBAC-safe path — the anon org view
       // intentionally excludes fee columns). Used to show the pass-through
       // "Platform fee" line on StepPay before redirecting to Stripe.
@@ -249,6 +265,7 @@ export default function Register() {
     setSchools(schoolsRes.data || []);
     setPrograms(programsRes.data || []);
     setWaivers(waiversRes.data || []);
+    setRegFields(parseRegFields(regFieldsRes.data || []));
     setFeeConfig(feeRes?.data || { fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0 });
     setLoading(false);
   }
@@ -258,23 +275,45 @@ export default function Register() {
     switch (step) {
       case 0: {
         const s = activeChild.student;
-        return (
+        const base =
           !!s.first_name &&
           !!s.last_name &&
           s.grade !== '' &&
           !!s.birthdate &&
           !!s.homeroom_teacher &&
           !!s.emergency_contact_name &&
-          !!s.emergency_contact_phone
-        );
+          !!s.emergency_contact_phone;
+        if (!base) return false;
+        const std = regFields.std;
+        // dismissal method (if enabled + required)
+        if (std.dismissal_method?.required && !s.dismissal_method) return false;
+        // pickup list required when released to an adult — or always, if the org
+        // enabled pickup without the dismissal question (matches the form's render)
+        if (std.authorized_pickup?.required && (s.dismissal_method === 'released_to_authorized_adult' || !std.dismissal_method)) {
+          const named = (activeChild.authorized_pickup || []).filter(
+            (p) => (p.first_name || '').trim() && (p.last_name || '').trim(),
+          );
+          if (named.length === 0) return false;
+        }
+        // required custom questions
+        for (const f of regFields.custom) {
+          if (f.is_required && !hasAnswer(activeChild.custom_answers?.[f.field_key], f.field_type)) return false;
+        }
+        return true;
       }
-      case 1:
-        return (
+      case 1: {
+        const base =
           !!cart.parent.first_name &&
           !!cart.parent.last_name &&
           !!cart.parent.email &&
-          !!cart.parent.phone
-        );
+          !!cart.parent.phone;
+        if (!base) return false;
+        if (regFields.std.guardian_secondary?.required) {
+          const g = cart.parent.guardian2 || {};
+          if (!(g.first_name || '').trim() || !(g.last_name || '').trim()) return false;
+        }
+        return true;
+      }
       case 2: {
         const requiredWaivers = waivers.filter((w) => w.required);
         return requiredWaivers.every(
@@ -438,10 +477,17 @@ export default function Register() {
               student={activeChild.student}
               onUpdate={updateActiveStudent}
               childIndex={activeChild.child_index}
+              regFields={regFields}
+              child={activeChild}
+              onUpdateChild={updateActiveChild}
             />
           )}
           {step === 1 && (
-            <StepParent parent={cart.parent} onUpdate={updateParent} />
+            <StepParent
+              parent={cart.parent}
+              onUpdate={updateParent}
+              guardianConfig={regFields.std.guardian_secondary}
+            />
           )}
           {step === 2 && (
             <StepWaivers

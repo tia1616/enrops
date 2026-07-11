@@ -62,18 +62,17 @@ const STANDARD_FIELDS = [
     defaultRequired: false,
     sensitive: true,
   },
-  {
-    key: "emergency_contact",
-    label: "Emergency contact",
-    desc: "A name and phone number to reach in an emergency.",
-    defaultRequired: true,
-  },
-  {
-    key: "how_heard",
-    label: "How did you hear about us?",
-    desc: "A dropdown of sources you choose. Helps you see what's working.",
-    defaultRequired: false,
-  },
+];
+
+// Fields your registration form always asks (built in — not configurable here).
+// Shown read-only so the builder reflects the whole form, not just the extras.
+const ALWAYS_ON = [
+  "Child's name, grade, and birth date",
+  "Homeroom teacher",
+  "Allergies and medical notes",
+  "Emergency contact",
+  "Parent / guardian name, email, and phone",
+  "How did you hear about us?",
 ];
 
 const STD_KEYS = STANDARD_FIELDS.map((f) => f.key);
@@ -325,9 +324,20 @@ export default function RegistrationQuestions() {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 26, alignItems: "start" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 26, minWidth: 0 }}>
+            {/* Always on the form (read-only) */}
+            <section style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 20px" }}>
+              <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: INK }}>Always on your form</h2>
+              <p style={{ margin: "3px 0 10px", fontSize: 13, color: MUTED }}>These are built in and always asked.</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {ALWAYS_ON.map((f) => (
+                  <span key={f} style={{ fontSize: 12, color: INK, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 999, padding: "4px 11px" }}>{f}</span>
+                ))}
+              </div>
+            </section>
+
             {/* Standard questions */}
             <section style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "20px 22px" }}>
-              <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: INK }}>Standard questions</h2>
+              <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: INK }}>Optional standard questions</h2>
               <p style={{ margin: "3px 0 14px", fontSize: 13, color: MUTED }}>
                 The questions most programs ask. Safety questions are on by default.
               </p>
