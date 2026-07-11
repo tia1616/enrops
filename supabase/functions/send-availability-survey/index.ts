@@ -16,7 +16,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 import { introParagraphHtml } from '../_shared/surveyEmail.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -105,8 +105,6 @@ serve(async (req: Request) => {
       .eq('organization_id', cycle.organization_id)
       .maybeSingle();
     const primaryColor = brandingRow?.primary_color ?? DEFAULT_PRIMARY;
-    const fromName = brandingRow?.email_from_name ?? org.name;
-    const replyTo = brandingRow?.email_reply_to ?? null;
 
     // Tenant email signature — loaded once per org (outside the recipient loop).
     const brand = await loadOrgBrand(supabase, cycle.organization_id);
@@ -159,14 +157,16 @@ serve(async (req: Request) => {
       previews.push({ instructor_id: inst.id, to: inst.email!, subject, html, text });
     }
 
-    const fromDomain = 'updates.journeytosteam.com';
-    const fromEmail = `${fromName} <hello@${fromDomain}>`;
+    // Send as the tenant: their own verified domain, else the shared platform
+    // domain ({slug}@mail.enrops.com) — never J2S's domain, which this path used
+    // to hardcode (codex review tenant-leak). Reply-to routes to the tenant below.
+    const fromEmail = formatFromAddress(brand);
     async function sendOne(to: string, subj: string, html: string, text: string): Promise<{ ok: true } | { ok: false; reason: string }> {
       try {
         const r = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
-          body: JSON.stringify({ from: fromEmail, to, reply_to: replyTo ?? undefined, subject: subj, html, text }),
+          body: JSON.stringify({ from: fromEmail, to, reply_to: brand.reply_to, subject: subj, html, text }),
         });
         if (!r.ok) return { ok: false, reason: `resend ${r.status}: ${(await r.text()).slice(0, 200)}` };
         return { ok: true };
