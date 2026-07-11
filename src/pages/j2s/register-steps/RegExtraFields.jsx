@@ -135,7 +135,7 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
           <label className="label-field">
             {std.do_not_release.label || 'Anyone we should NOT release your child to?'}<Req on={std.do_not_release.required} />
           </label>
-          <p className="help-text">Optional. Only your staff see this, never other families.</p>
+          <p className="help-text">Optional. Shared with our staff and your child's instructors for safe dismissal, never with other families.</p>
           <div className="mt-2 grid gap-3">
             {dnr.map((row, i) => (
               <div key={i} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">

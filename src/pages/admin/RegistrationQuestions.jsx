@@ -58,7 +58,7 @@ const STANDARD_FIELDS = [
   {
     key: "do_not_release",
     label: "Anyone we should NOT release your child to?",
-    desc: "Optional, for custody or safety situations. Shown only to you and your staff — never to instructors unless you allow it.",
+    desc: "Optional, for custody or safety situations. Shown to you, your staff, and the child's instructors (for safe dismissal) — never to other families.",
     defaultRequired: false,
     sensitive: true,
   },
