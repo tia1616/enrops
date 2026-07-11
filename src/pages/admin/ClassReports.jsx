@@ -291,6 +291,7 @@ function ClassReportPanel({ org, kind, classId, title, campMeta }) {
   const [dates, setDates] = useState([]); // meeting dates (ISO)
   const [recByKey, setRecByKey] = useState({}); // `${student_id}|${date}` -> attendance row
   const [instructors, setInstructors] = useState({}); // id -> row
+  const [selected, setSelected] = useState(null); // clicked grid cell -> detail panel
 
   useEffect(() => {
     if (!org?.id || !classId) return;
@@ -524,17 +525,70 @@ function ClassReportPanel({ org, kind, classId, title, campMeta }) {
                 return (
                   <tr key={child.student_id}>
                     <td style={{ ...tdStyle, position: "sticky", left: 0, background: CREAM, fontWeight: 600, whiteSpace: "nowrap" }}>{child.name}</td>
-                    {dates.map((d) => (
-                      <td key={d} style={tdStyle}>
-                        <Cell rec={recByKey[`${child.student_id}|${d}`]} isPast={d <= today} dnrSet={dnrSet} instructors={instructors} />
-                      </td>
-                    ))}
+                    {dates.map((d) => {
+                      const rec = recByKey[`${child.student_id}|${d}`];
+                      const clickable = Boolean(rec);
+                      return (
+                        <td
+                          key={d}
+                          onClick={clickable ? () => setSelected({ childName: child.name, date: d, rec, dnrSet }) : undefined}
+                          style={{ ...tdStyle, cursor: clickable ? "pointer" : "default" }}
+                        >
+                          <Cell rec={rec} isPast={d <= today} dnrSet={dnrSet} />
+                        </td>
+                      );
+                    })}
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+      )}
+
+      {selected && (
+        <CellDetail selected={selected} instructors={instructors} onClose={() => setSelected(null)} />
+      )}
+    </div>
+  );
+}
+
+// Click-through detail for one attendance cell — the instructor attribution and
+// full release record are shown here, not buried in a hover tooltip.
+function CellDetail({ selected, instructors, onClose }) {
+  const { childName, date, rec, dnrSet } = selected;
+  const present = rec?.present == null ? "Not marked" : rec.present ? "Present" : "Absent";
+  const relName = (rec?.released_to_name ?? "").toLowerCase().trim();
+  const isDnr = rec?.released_at && relName && dnrSet.has(relName);
+  const isNonAuth = rec?.released_at && rec.dismissal_kind === "released_to_adult" && !rec.released_to_contact_id;
+  const checkedBy = instructorName(instructors[rec?.checked_in_by]);
+  const releasedBy = instructorName(instructors[rec?.released_by]);
+
+  const row = (label, value) => value ? (
+    <div style={{ display: "flex", gap: 8, fontSize: 12, marginTop: 4 }}>
+      <span style={{ color: MUTED, minWidth: 96 }}>{label}</span>
+      <span style={{ color: INK }}>{value}</span>
+    </div>
+  ) : null;
+
+  return (
+    <div style={{ marginTop: 12, padding: "12px 14px", background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>{childName} · {fmtDay(date)}</div>
+        <button type="button" onClick={onClose} style={{ background: "none", border: "none", color: MUTED, fontSize: 16, cursor: "pointer", lineHeight: 1, fontFamily: "inherit" }}>×</button>
+      </div>
+      {(isDnr || isNonAuth) && (
+        <div style={{ marginTop: 6, fontSize: 12, fontWeight: 700, color: RED }}>
+          ⚠ {isDnr ? "Released to a do-not-release name" : "Released to someone not on the authorized list"}
+        </div>
+      )}
+      {row("Attendance", present)}
+      {row("Checked in", rec?.checked_in_at ? `${fmtTime(rec.checked_in_at)}${checkedBy ? ` by ${checkedBy}` : ""}` : null)}
+      {row("Released to", rec?.released_to_name)}
+      {row("Released at", rec?.released_at ? `${fmtTime(rec.released_at)}${releasedBy ? ` by ${releasedBy}` : ""}` : null)}
+      {row("Notes", rec?.notes)}
+      {!rec?.released_at && rec?.present === true && (
+        <div style={{ marginTop: 6, fontSize: 12, color: AMBER }}>Present, not yet dismissed.</div>
       )}
     </div>
   );
@@ -562,7 +616,9 @@ function FlagGroup({ color, label, items, render }) {
   );
 }
 
-function Cell({ rec, isPast, dnrSet, instructors }) {
+// Compact cell visual only. Full detail (incl. which instructor) is one click
+// away in CellDetail, not a hover tooltip.
+function Cell({ rec, isPast, dnrSet }) {
   if (!rec || rec.present == null) {
     return <span style={{ color: isPast ? AMBER : "#c9c4b8" }}>{isPast ? "—" : ""}</span>;
   }
@@ -575,10 +631,8 @@ function Cell({ rec, isPast, dnrSet, instructors }) {
     const relName = (rec.released_to_name ?? "").toLowerCase().trim();
     const isDnr = relName && dnrSet.has(relName);
     const isNonAuth = rec.dismissal_kind === "released_to_adult" && !rec.released_to_contact_id;
-    const by = instructorName(instructors[rec.released_by]);
-    const title = `Released to ${rec.released_to_name || "?"} at ${fmtTime(rec.released_at)}${by ? ` by ${by}` : ""}${rec.notes ? ` — ${rec.notes}` : ""}`;
     return (
-      <span title={title} style={{ display: "inline-block", whiteSpace: "nowrap", color: isDnr || isNonAuth ? RED : OK, fontWeight: isDnr ? 700 : 500 }}>
+      <span style={{ display: "inline-block", whiteSpace: "nowrap", color: isDnr || isNonAuth ? RED : OK, fontWeight: isDnr ? 700 : 500, textDecoration: "underline dotted", textUnderlineOffset: 3 }}>
         {isDnr || isNonAuth ? "⚠ " : "✓ "}{rec.released_to_name || "released"}
       </span>
     );
@@ -586,7 +640,7 @@ function Cell({ rec, isPast, dnrSet, instructors }) {
 
   if (rec.present === false) return <span style={{ color: MUTED }}>abs</span>;
   // Present, not yet dismissed.
-  return <span title="Present, not yet dismissed" style={{ color: AMBER }}>• here</span>;
+  return <span style={{ color: AMBER }}>• here</span>;
 }
 
 const thStyleBase = {

@@ -3583,6 +3583,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, attRecord =
           pickups={pickups}
           doNotRelease={doNotRelease}
           dismissalMethod={s.dismissal_method}
+          parent={p}
           attRecord={attRecord}
           saving={saving}
           onSave={onSave}
@@ -3593,16 +3594,17 @@ function CamperRow({ registration, contacts = [], canRecord = false, attRecord =
 }
 
 // The instructor's attendance check-in + dismissal picker for one child, for the
-// currently-selected class day. Options come from the child's authorized-pickup
-// list (Chunk A data). A do-not-release person can never be a pickup (enforced at
-// registration), but we defensively drop any name that appears on both lists.
-// "Someone not on the list" is allowed but requires a typed name + reason, stored
-// as a snapshot + note so the safety report can flag it.
-function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, attRecord, saving, onSave }) {
+// currently-selected class day. Dismissal is a SELECTION only — the child's
+// authorized-pickup names (+ "walked/biked" when that's their method). There is
+// NO free-text release: an instructor can never release a child to a name they
+// type. A do-not-release person can never be a pickup (enforced at registration);
+// we defensively drop any name that appears on both lists. If someone who isn't on
+// the list shows up, the instructor does NOT release — they call the family and
+// the person is added to the authorized list (parent portal / admin roster editor)
+// before they become selectable. That keeps the authorized list the single source
+// of truth and makes the log trustworthy.
+function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, parent, attRecord, saving, onSave }) {
   const [pickValue, setPickValue] = useState(""); // controlled dismissal <select>
-  const [otherOpen, setOtherOpen] = useState(false);
-  const [otherName, setOtherName] = useState("");
-  const [otherReason, setOtherReason] = useState("");
 
   const dnrNames = new Set(
     doNotRelease.map((c) => contactName(c).toLowerCase()).filter(Boolean),
@@ -3625,33 +3627,16 @@ function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, 
 
   function pickDismissal(e) {
     const v = e.target.value;
-    // Keep the control an action menu: always snap back to the placeholder so the
-    // same option can be re-picked (e.g. reopening the "someone not listed" form).
-    setPickValue("");
+    setPickValue(""); // action menu — snap back to placeholder so a re-pick re-fires
     if (!v) return;
     if (v === "__walk__") {
       onSave({ dismissal_kind: "walked_or_biked", released_to_contact_id: null, released_to_name: "Walked / biked home", released_at: new Date().toISOString(), notes: null });
       return;
     }
-    if (v === "__other__") { setOtherOpen(true); return; }
     const c = pickOptions.find((x) => x.id === v);
     if (c) {
       onSave({ dismissal_kind: "released_to_adult", released_to_contact_id: c.id, released_to_name: contactName(c), released_at: new Date().toISOString(), notes: null });
     }
-  }
-
-  function saveOther() {
-    const name = otherName.trim();
-    const reason = otherReason.trim();
-    if (!name || !reason || saving) return;
-    onSave({
-      dismissal_kind: "released_to_adult",
-      released_to_contact_id: null,
-      released_to_name: name,
-      released_at: new Date().toISOString(),
-      notes: `Released to person not on the authorized list — reason: ${reason}`,
-    });
-    setOtherOpen(false); setOtherName(""); setOtherReason("");
   }
 
   const btn = (active, activeColor) => ({
@@ -3702,7 +3687,6 @@ function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, 
               <option key={c.id} value={c.id}>{contactName(c)}</option>
             ))}
             {canWalk && <option value="__walk__">Walked / biked home</option>}
-            <option value="__other__">Someone not on the list…</option>
           </select>
         )}
         {released && !saving && (
@@ -3716,43 +3700,20 @@ function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, 
         )}
       </div>
 
+      {/* Not-on-the-list guidance — never a text box. The instructor doesn't
+          release to an unlisted person; they call the family, and the person is
+          added to the pickup list (parent portal / admin) before pickup. */}
+      {!released && present !== false && (
+        <div style={{ marginTop: 6, fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
+          Not one of these? Don't release the child. Call the family
+          {parent?.phone && <> (<TelPhone phone={parent.phone} />)</>} and have them add the person to the pickup list first.
+        </div>
+      )}
+
       {/* Do-not-release reminder (custody-sensitive; instructors enforce it). */}
       {doNotRelease.length > 0 && (
         <div style={{ marginTop: 6, fontSize: 11, color: CORAL, fontWeight: 600 }}>
           Do NOT release to: {doNotRelease.map((c) => contactName(c)).filter(Boolean).join("; ")}
-        </div>
-      )}
-
-      {/* "Someone not on the list" — requires a name + reason, recorded for the report. */}
-      {otherOpen && !released && (
-        <div style={{ marginTop: 8, padding: "8px 10px", background: `${CORAL}10`, border: `1px solid ${CORAL}55`, borderRadius: 6 }}>
-          <div style={{ fontSize: 11, color: INK, marginBottom: 6 }}>
-            This person isn't on the authorized-pickup list. Record who and why — your admin will see it on the safety report.
-          </div>
-          <input
-            type="text"
-            value={otherName}
-            onChange={(e) => setOtherName(e.target.value)}
-            placeholder="Who did you release the child to?"
-            style={{ width: "100%", boxSizing: "border-box", fontSize: 12, fontFamily: "inherit", padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 6 }}
-          />
-          <input
-            type="text"
-            value={otherReason}
-            onChange={(e) => setOtherReason(e.target.value)}
-            placeholder="Reason (e.g. parent phoned ahead)"
-            style={{ width: "100%", boxSizing: "border-box", fontSize: 12, fontFamily: "inherit", padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 8 }}
-          />
-          <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" disabled={saving || !otherName.trim() || !otherReason.trim()} onClick={saveOther}
-              style={{ fontSize: 12, fontFamily: "inherit", fontWeight: 600, padding: "5px 12px", borderRadius: 6, border: "none", background: (otherName.trim() && otherReason.trim()) ? CORAL : RULE, color: "#fff", cursor: (otherName.trim() && otherReason.trim() && !saving) ? "pointer" : "default" }}>
-              Record release
-            </button>
-            <button type="button" onClick={() => { setOtherOpen(false); setOtherName(""); setOtherReason(""); }}
-              style={{ fontSize: 12, fontFamily: "inherit", background: "none", border: `1px solid ${RULE}`, borderRadius: 6, padding: "5px 12px", color: MUTED, cursor: "pointer" }}>
-              Cancel
-            </button>
-          </div>
         </div>
       )}
     </div>
