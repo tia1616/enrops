@@ -114,7 +114,7 @@ export default function EmailSenderSettings() {
       setLoading(true);
       const { data } = await supabase
         .from("org_branding")
-        .select("email_from_name, email_reply_to, email_signature, email_signature_image_url")
+        .select("email_from_name, email_reply_to, email_signature, email_signature_image_url, email_signature_image_mode")
         .eq("organization_id", org.id)
         .maybeSingle();
       // mailing_address lives on organizations (CAN-SPAM footer), not org_branding.
