@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { getTenant } from '../../lib/tenants.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import WaiverGate from './WaiverGate.jsx';
+import PickupInfoGate from './PickupInfoGate.jsx';
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -134,6 +135,7 @@ export default function Dashboard() {
   const [parent, setParent] = useState(null);
   const [enrollments, setEnrollments] = useState([]);
   const [unsignedWaivers, setUnsignedWaivers] = useState([]); // required waivers still needing signature
+  const [incompleteStudents, setIncompleteStudents] = useState([]); // after-school kids missing pickup/dismissal info
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -200,7 +202,7 @@ export default function Dashboard() {
       const { data: asRegs } = await supabase
         .from('registrations')
         .select(`id, status, registered_at, program_id,
-          students(first_name, last_name),
+          students(id, first_name, last_name, dismissal_method),
           programs(
             id, curriculum, curriculum_id, day_of_week, start_time, end_time,
             first_session_date, term, session_count,
@@ -250,6 +252,29 @@ export default function Dashboard() {
           .filter((w) => w.missingRegIds.length > 0);
       }
       setUnsignedWaivers(needsWaivers);
+
+      // Backfill gate: after-school kids who registered before the pickup/dismissal
+      // questions existed still need that info. Only gate when THIS org actually
+      // asks the dismissal question (else there's nothing to collect and we'd lock
+      // the parent out with an empty form). Summer camps are excluded (only asRegs).
+      let asksDismissal = false;
+      try {
+        const { data: fields } = await supabase.rpc('get_active_registration_fields', { p_org_id: org.id });
+        asksDismissal = (fields || []).some((f) => f.standard_key === 'dismissal_method' && f.is_active !== false);
+      } catch { asksDismissal = false; }
+
+      const incomplete = [];
+      if (asksDismissal) {
+        const seenStu = new Set();
+        for (const r of asRegs || []) {
+          const stu = r.students;
+          if (stu?.id && stu.dismissal_method == null && !seenStu.has(stu.id)) {
+            seenStu.add(stu.id);
+            incomplete.push({ student_id: stu.id, name: `${stu.first_name ?? ""} ${stu.last_name ?? ""}`.trim() });
+          }
+        }
+      }
+      setIncompleteStudents(incomplete);
 
       // 3. Normalize + cap sessions at program.session_count
       const merged = [];
@@ -414,6 +439,9 @@ export default function Dashboard() {
   // Blocking waiver gate — must sign required waivers before seeing details.
   if (unsignedWaivers.length > 0) {
     return <WaiverGate waivers={unsignedWaivers} parent={parent} orgId={org.id} onComplete={fetchData} />;
+  }
+  if (incompleteStudents.length > 0) {
+    return <PickupInfoGate students={incompleteStudents} parent={parent} orgId={org.id} onComplete={fetchData} />;
   }
 
   return (
