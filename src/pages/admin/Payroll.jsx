@@ -76,6 +76,27 @@ function thirtyDaysAgoISO() {
   return d.toISOString().slice(0, 10);
 }
 
+// Plain-English messages for admin-confirm-session error codes (no raw codes
+// in front of the operator).
+function confirmErrorMessage(code, status) {
+  switch (code) {
+    case 'assignment_not_active':
+      return 'This instructor was withdrawn or declined from this assignment, so this day can’t be paid. Leave it unconfirmed or fix the assignment.';
+    case 'no_assignment_for_session':
+      return 'No assignment found for this instructor on this session, so there’s no pay rate to apply.';
+    case 'future_session':
+      return 'This session hasn’t happened yet, so it can’t be confirmed.';
+    case 'already_paid':
+      return 'This day has already been paid out.';
+    case 'forbidden':
+      return 'You don’t have permission to confirm pay for this instructor.';
+    case 'invalid_confirmation_no_parent':
+      return 'This day isn’t linked to a camp or program, so it can’t be confirmed here.';
+    default:
+      return code ? `Could not confirm this day (${code}).` : `Could not confirm this day (${status}).`;
+  }
+}
+
 export default function Payroll() {
   const { org, orgMember } = useOutletContext() ?? {};
   const canManage = orgMember?.role === 'owner' || orgMember?.role === 'admin';
@@ -85,6 +106,7 @@ export default function Payroll() {
   const [savedToast, setSavedToast] = useState(null);
   const [sinceDate, setSinceDate] = useState(thirtyDaysAgoISO());
   const [showPaid, setShowPaid] = useState(false);
+  const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const [expanded, setExpanded] = useState(new Set());
   const [busy, setBusy] = useState(false);
@@ -258,6 +280,16 @@ export default function Payroll() {
             r.pay_amount_cents != null
           );
 
+          // Days the instructor hasn't confirmed yet (auto-confirm was removed
+          // 2026-07-11). These are NOT payable until an admin confirms them on
+          // the instructor's behalf ("Confirm & pay" → admin-confirm-session).
+          // A withheld day is excluded — the admin already decided not to pay it.
+          const unconfirmedRows = g.rows.filter((r) =>
+            r.confirmed_by === 'pending' &&
+            r.instructor_payout_id == null &&
+            r.pay_status !== 'withheld'
+          );
+
           // Counts per status for the aggregate display.
           const counts = g.rows.reduce((acc, r) => {
             acc[r.pay_status] = (acc[r.pay_status] || 0) + 1;
@@ -271,6 +303,7 @@ export default function Payroll() {
             distanceBonusPaid,
             groupStatus,
             eligibleRows,
+            unconfirmedRows,
             counts,
             // Total IF paid now (base + bonus when applicable)
             payableTotalNow: totalPayable + (g.source === 'regular' ? distanceBonusCents : 0),
@@ -278,9 +311,13 @@ export default function Payroll() {
         });
 
         // showPaid filter: hide groups whose ALL rows are paid (default).
-        const filtered = showPaid
+        // needsConfirmOnly filter: keep only groups with unconfirmed days.
+        let filtered = showPaid
           ? decorated
           : decorated.filter((g) => g.rows.some((r) => r.pay_status !== 'paid'));
+        if (needsConfirmOnly) {
+          filtered = filtered.filter((g) => g.unconfirmedRows.length > 0);
+        }
 
         // Sort: most-recent session desc, then instructor name. For camps
         // we sort by starts_on; for programs by first_session_date. Newest
@@ -302,7 +339,7 @@ export default function Payroll() {
       }
     })();
     return () => { cancelled = true; };
-  }, [org?.id, sinceDate, showPaid, refreshToken]);
+  }, [org?.id, sinceDate, showPaid, needsConfirmOnly, refreshToken]);
 
   const noPayConfig = useMemo(() => {
     if (!groups || groups.length === 0) return false;
@@ -325,6 +362,79 @@ export default function Payroll() {
 
   async function reapproveRow(confirmationId) {
     return approveRow(confirmationId);
+  }
+
+  // Confirm a day on the instructor's behalf (they didn't self-confirm).
+  // Goes through the admin-confirm-session edge function so the pay amount is
+  // computed from the tenant rate the SAME way a self-confirm would — never
+  // recomputed in the browser. Returns { ok, payNull } for the caller to toast.
+  async function confirmOne(confirmationId) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error('Not signed in.');
+    const resp = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-confirm-session`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ confirmation_id: confirmationId }),
+      },
+    );
+    const data = await resp.json().catch(() => ({}));
+    // already_confirmed (409) = someone confirmed it first (e.g. the instructor
+    // just did). Not an error from the admin's POV — the day is confirmed.
+    if (!resp.ok && data?.error !== 'already_confirmed') {
+      throw new Error(confirmErrorMessage(data?.error, resp.status));
+    }
+    return { payNull: data?.pay_amount_cents == null && data?.error !== 'already_confirmed' };
+  }
+
+  async function confirmAndPayRow(confirmationId) {
+    if (!canManage) return;
+    setBusy(true);
+    setError('');
+    try {
+      const { payNull } = await confirmOne(confirmationId);
+      toast(payNull ? 'Confirmed — set the amount below' : 'Confirmed & approved');
+    } catch (e) {
+      setError(e.message ?? 'Could not confirm this day.');
+    } finally {
+      setBusy(false);
+      bumpRefresh();
+    }
+  }
+
+  async function confirmAndPayGroup(group) {
+    if (!canManage) return;
+    const ids = group.unconfirmedRows.map((r) => r.confirmation_id);
+    if (ids.length === 0) return;
+    setBusy(true);
+    setError('');
+    let anyNull = false;
+    let failed = 0;
+    // Sequential so one bad row doesn't abort the rest, and we don't hammer
+    // the edge function with a burst. Volume per group is a handful of days.
+    for (const id of ids) {
+      try {
+        const { payNull } = await confirmOne(id);
+        if (payNull) anyNull = true;
+      } catch {
+        failed += 1;
+      }
+    }
+    setBusy(false);
+    bumpRefresh();
+    if (failed > 0) {
+      setError(`Confirmed ${ids.length - failed} of ${ids.length} day${ids.length === 1 ? '' : 's'}; ${failed} could not be confirmed.`);
+    } else {
+      toast(anyNull
+        ? `Confirmed ${ids.length} day${ids.length === 1 ? '' : 's'} — some need an amount set`
+        : `Confirmed ${ids.length} day${ids.length === 1 ? '' : 's'}`);
+    }
   }
 
   async function submitWithhold(confirmationIds, reason) {
@@ -403,8 +513,12 @@ export default function Payroll() {
 
   async function approveGroup(group) {
     if (!canManage) return;
+    // Only rows the instructor (or an admin) has already confirmed. An
+    // unconfirmed day (confirmed_by === 'pending') is NOT made payable by
+    // approving — it needs "Confirm & pay" first — so approving it here would
+    // be a no-op trap. Exclude those.
     const ids = group.rows
-      .filter((r) => r.pay_status === 'pending' || r.pay_status === 'adjusted')
+      .filter((r) => (r.pay_status === 'pending' || r.pay_status === 'adjusted') && r.confirmed_by !== 'pending')
       .map((r) => r.confirmation_id);
     if (ids.length === 0) return;
     setBusy(true);
@@ -427,6 +541,8 @@ export default function Payroll() {
         setSinceDate={setSinceDate}
         showPaid={showPaid}
         setShowPaid={setShowPaid}
+        needsConfirmOnly={needsConfirmOnly}
+        setNeedsConfirmOnly={setNeedsConfirmOnly}
       />
 
       {error && <Banner tone="err">{error}</Banner>}
@@ -452,10 +568,12 @@ export default function Payroll() {
               expanded={expanded.has(g.key)}
               onToggle={() => toggleExpand(g.key)}
               onApproveGroup={() => approveGroup(g)}
-              onWithholdGroup={() => setWithholdingRow({ groupKey: g.key, confirmation_ids: g.rows.filter((r) => r.pay_status !== 'paid').map((r) => r.confirmation_id), isGroup: true })}
+              onConfirmGroup={() => confirmAndPayGroup(g)}
+              onWithholdGroup={() => setWithholdingRow({ groupKey: g.key, confirmation_ids: g.rows.filter((r) => r.pay_status !== 'paid' && r.confirmed_by !== 'pending').map((r) => r.confirmation_id), isGroup: true })}
               onPay={() => setPayingGroup(g)}
               onMarkPaid={() => setMarkingGroup(g)}
               onApproveRow={approveRow}
+              onConfirmRow={confirmAndPayRow}
               onWithholdRow={(cid) => setWithholdingRow({ groupKey: g.key, confirmation_ids: [cid], isGroup: false })}
               onReapproveRow={reapproveRow}
               onAdjustRow={(r) => setAdjustTarget({
@@ -721,7 +839,7 @@ function PayRouteRow({ number, title, body, status, statusLabel, cta }) {
   );
 }
 
-function Toolbar({ sinceDate, setSinceDate, showPaid, setShowPaid }) {
+function Toolbar({ sinceDate, setSinceDate, showPaid, setShowPaid, needsConfirmOnly, setNeedsConfirmOnly }) {
   return (
     <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: MUTED }}>
@@ -732,6 +850,10 @@ function Toolbar({ sinceDate, setSinceDate, showPaid, setShowPaid }) {
           onChange={(e) => setSinceDate(e.target.value)}
           style={{ padding: '5px 8px', border: `1px solid ${RULE}`, borderRadius: 5, fontSize: 13, fontFamily: 'inherit' }}
         />
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: INK, cursor: 'pointer' }}>
+        <input type="checkbox" checked={needsConfirmOnly} onChange={(e) => setNeedsConfirmOnly(e.target.checked)} />
+        Awaiting confirmation only
       </label>
       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: INK, cursor: 'pointer' }}>
         <input type="checkbox" checked={showPaid} onChange={(e) => setShowPaid(e.target.checked)} />
@@ -770,8 +892,8 @@ function EmptyState({ showPaid, sinceDate }) {
 
 function GroupRow({
   group, expanded, onToggle,
-  onApproveGroup, onWithholdGroup, onPay, onMarkPaid,
-  onApproveRow, onWithholdRow, onReapproveRow,
+  onApproveGroup, onConfirmGroup, onWithholdGroup, onPay, onMarkPaid,
+  onApproveRow, onConfirmRow, onWithholdRow, onReapproveRow,
   onAdjustRow, onAddBonus,
   canStripePayout,
   canManage, busy,
@@ -780,6 +902,7 @@ function GroupRow({
   const sourceBadge = g.source === 'sub'
     ? <Badge color={VIOLET}>Sub</Badge>
     : null;
+  const unconfirmedCount = g.unconfirmedRows.length;
 
   const statusBadge = (
     <span style={{
@@ -792,7 +915,12 @@ function GroupRow({
   );
 
   const hasEligible = g.eligibleRows.length > 0;
-  const hasPending = g.counts.pending > 0 || g.counts.adjusted > 0;
+  // Approvable = already-confirmed rows still sitting at pending/adjusted.
+  // Unconfirmed days are NOT approvable — they go through "Confirm & pay".
+  const hasApprovable = g.rows.some((r) =>
+    (r.pay_status === 'pending' || r.pay_status === 'adjusted') && r.confirmed_by !== 'pending'
+  );
+  const hasUnconfirmed = unconfirmedCount > 0;
 
   return (
     <div style={{ background: '#fff', border: `1px solid ${RULE}`, borderRadius: 12, marginBottom: 12 }}>
@@ -840,13 +968,27 @@ function GroupRow({
               {g.distanceBonusPaid && ` · bonus paid`}
             </div>
           </div>
+          {unconfirmedCount > 0 && (
+            <span style={{
+              background: 'rgba(182,126,0,0.12)', color: AMBER,
+              border: `1px solid ${AMBER}`,
+              borderRadius: 12, padding: '2px 10px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, whiteSpace: 'nowrap',
+            }}>
+              {unconfirmedCount} awaiting confirmation
+            </span>
+          )}
           {statusBadge}
         </div>
       </div>
 
       {canManage && (
         <div style={{ borderTop: `1px solid ${RULE}`, padding: 10, display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', background: CREAM }}>
-          {hasPending && (
+          {hasUnconfirmed && (
+            <ActionButton onClick={onConfirmGroup} disabled={busy} tone="primary">
+              Confirm &amp; pay {unconfirmedCount} day{unconfirmedCount === 1 ? '' : 's'}
+            </ActionButton>
+          )}
+          {hasApprovable && (
             <ActionButton onClick={onApproveGroup} disabled={busy} tone="primary">Approve all</ActionButton>
           )}
           {hasEligible && canStripePayout && (
@@ -855,10 +997,10 @@ function GroupRow({
           {hasEligible && (
             <ActionButton onClick={onMarkPaid} disabled={busy} tone="secondary">Mark paid manually</ActionButton>
           )}
-          {(hasPending || hasEligible) && (
+          {(hasApprovable || hasEligible) && (
             <ActionButton onClick={onAddBonus} disabled={busy} tone="secondary">+ Add bonus</ActionButton>
           )}
-          {(hasPending || hasEligible) && (
+          {(hasApprovable || hasEligible) && (
             <ActionButton onClick={onWithholdGroup} disabled={busy} tone="danger">Withhold all</ActionButton>
           )}
         </div>
@@ -869,6 +1011,7 @@ function GroupRow({
           rows={g.rows}
           originalInstructor={g.originalInstructor}
           onApproveRow={onApproveRow}
+          onConfirmRow={onConfirmRow}
           onWithholdRow={onWithholdRow}
           onReapproveRow={onReapproveRow}
           onAdjustRow={onAdjustRow}
@@ -881,7 +1024,7 @@ function GroupRow({
   );
 }
 
-function DayBreakdown({ rows, originalInstructor, onApproveRow, onWithholdRow, onReapproveRow, onAdjustRow, canManage, busy, groupSource }) {
+function DayBreakdown({ rows, originalInstructor, onApproveRow, onConfirmRow, onWithholdRow, onReapproveRow, onAdjustRow, canManage, busy, groupSource }) {
   return (
     <div style={{ borderTop: `1px solid ${RULE}`, padding: 12, background: '#fafafa' }}>
       {rows.map((r) => {
@@ -890,6 +1033,15 @@ function DayBreakdown({ rows, originalInstructor, onApproveRow, onWithholdRow, o
         // (Today subs don't appear under regular's group because sub rows are
         //  routed to the sub's group. This branch is forward-looking for
         //  when the schema model evolves to show both.)
+        // neverConfirmed = no one (instructor/admin/auto) has confirmed this
+        // day, so it's not payable no matter its pay_status. unconfirmed is the
+        // active "awaiting" state (neverConfirmed and not withheld). For a
+        // never-confirmed day the ONLY thing that makes it payable is
+        // "Confirm & pay" (admin-confirm-session) — plain Approve/Re-approve
+        // would leave confirmed_by='pending' and never actually pay, so we
+        // suppress them and route to confirm instead.
+        const neverConfirmed = r.confirmed_by === 'pending' && r.instructor_payout_id == null;
+        const unconfirmed = neverConfirmed && r.pay_status !== 'withheld';
         return (
           <div key={r.confirmation_id} style={{
             display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0',
@@ -897,31 +1049,44 @@ function DayBreakdown({ rows, originalInstructor, onApproveRow, onWithholdRow, o
           }}>
             <div style={{ flex: '0 0 110px', color: INK }}>{fmtDate(r.session_date)}</div>
             <div style={{ flex: '0 0 90px', color: MUTED, textTransform: 'capitalize' }}>{r.session_type}</div>
-            <div style={{ flex: '1 1 auto', color: isCovered ? MUTED : INK, fontStyle: isCovered ? 'italic' : 'normal' }}>
+            <div style={{ flex: '1 1 auto', color: isCovered || unconfirmed ? MUTED : INK, fontStyle: isCovered || unconfirmed ? 'italic' : 'normal' }}>
               {isCovered
                 ? `Covered by sub — $0`
-                : dollars((r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0))}
+                : unconfirmed
+                  ? 'Not yet confirmed by instructor'
+                  : dollars((r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0))}
             </div>
             <div style={{ flex: '0 0 90px' }}>
-              <span style={{ color: STATUS_COLOR[r.pay_status] ?? AMBER, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>
-                {STATUS_LABEL[r.pay_status] ?? r.pay_status}
+              <span style={{ color: unconfirmed ? AMBER : (STATUS_COLOR[r.pay_status] ?? AMBER), fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                {unconfirmed ? 'Awaiting' : (STATUS_LABEL[r.pay_status] ?? r.pay_status)}
               </span>
             </div>
             {canManage && r.pay_status !== 'paid' && (
               <div style={{ display: 'flex', gap: 6 }}>
-                {onAdjustRow && !isCovered && (
-                  <MicroButton onClick={() => onAdjustRow(r)} disabled={busy} tone="adjust">
-                    {(r.pay_adjustment_cents ?? 0) !== 0 ? 'Edit $' : 'Adjust'}
-                  </MicroButton>
-                )}
-                {(r.pay_status === 'pending' || r.pay_status === 'adjusted') && (
-                  <MicroButton onClick={() => onApproveRow(r.confirmation_id)} disabled={busy}>Approve</MicroButton>
-                )}
-                {r.pay_status === 'approved' && r.instructor_payout_id == null && (
-                  <MicroButton onClick={() => onWithholdRow(r.confirmation_id)} disabled={busy} tone="danger">Withhold</MicroButton>
-                )}
-                {r.pay_status === 'withheld' && (
-                  <MicroButton onClick={() => onReapproveRow(r.confirmation_id)} disabled={busy}>Re-approve</MicroButton>
+                {unconfirmed ? (
+                  onConfirmRow && !isCovered && (
+                    <MicroButton onClick={() => onConfirmRow(r.confirmation_id)} disabled={busy}>Confirm &amp; pay</MicroButton>
+                  )
+                ) : (
+                  <>
+                    {onAdjustRow && !isCovered && !neverConfirmed && (
+                      <MicroButton onClick={() => onAdjustRow(r)} disabled={busy} tone="adjust">
+                        {(r.pay_adjustment_cents ?? 0) !== 0 ? 'Edit $' : 'Adjust'}
+                      </MicroButton>
+                    )}
+                    {(r.pay_status === 'pending' || r.pay_status === 'adjusted') && !neverConfirmed && (
+                      <MicroButton onClick={() => onApproveRow(r.confirmation_id)} disabled={busy}>Approve</MicroButton>
+                    )}
+                    {r.pay_status === 'approved' && r.instructor_payout_id == null && (
+                      <MicroButton onClick={() => onWithholdRow(r.confirmation_id)} disabled={busy} tone="danger">Withhold</MicroButton>
+                    )}
+                    {r.pay_status === 'withheld' && !isCovered && neverConfirmed && onConfirmRow && (
+                      <MicroButton onClick={() => onConfirmRow(r.confirmation_id)} disabled={busy}>Confirm &amp; pay</MicroButton>
+                    )}
+                    {r.pay_status === 'withheld' && !neverConfirmed && (
+                      <MicroButton onClick={() => onReapproveRow(r.confirmation_id)} disabled={busy}>Re-approve</MicroButton>
+                    )}
+                  </>
                 )}
               </div>
             )}

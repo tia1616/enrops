@@ -1,13 +1,19 @@
-// session-confirmation-cron — daily cron with two jobs in one function:
+// session-confirmation-cron — daily cron that seeds today's confirmation rows.
 //
 //   Job A: create today's confirmation rows from camp_assignments + camp_sessions
-//          (so instructors have something to confirm tomorrow).
-//   Job B: auto-confirm yesterday's still-pending rows with auto pay (so
-//          instructors who forget don't hold up payroll).
+//          (so instructors have something to confirm). Rows land pending; the
+//          instructor confirms via the portal ("Mark taught"), which is the
+//          ONLY path that marks a day taught + payable.
+//
+// Auto-confirm (formerly "Job B") was REMOVED 2026-07-11 (Jessica's decision):
+// a day is NEVER auto-marked taught. Days an instructor doesn't confirm stay
+// pending and surface on the admin Payroll screen, where an admin can confirm &
+// pay them on the instructor's behalf ("Confirm & pay" → admin-confirm-session).
+// Nothing here settles pay anymore.
 //
 // Auth: verify_jwt: false. pg_cron sends X-Cron-Secret header signed against
 // CRON_SECRET env var (vault entry: enrops_cron_secret). Without this check
-// anyone with the URL could trigger mass auto-confirmations and pay.
+// anyone with the URL could seed rows for arbitrary orgs.
 //
 // Scope: camps only for v1. Job A intentionally pulls only from
 // camp_assignments + camp_sessions. After-school confirmation rows need a
@@ -15,20 +21,13 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
-import { loadOrgPayRates, rateFromMap, type PayRateMap } from '../_shared/payRates.ts';
-
-// Auto-pay amounts come per-tenant from tenant_pay_rates (loaded once per org,
-// see rateCache below). null when the tenant hasn't configured a cell — the row
-// is still auto-confirmed with null pay and the admin sets the amount.
-type Role = 'lead' | 'developing';
-type SessionType = 'morning' | 'afternoon' | 'full_day';
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
 
   // CRITICAL: this MUST run before any other work. Without the secret check,
-  // anyone with the URL could trigger mass auto-pay across pending sessions.
+  // anyone with the URL could seed confirmation rows across orgs.
   const cronSecret = Deno.env.get('CRON_SECRET');
   const headerSecret = req.headers.get('X-Cron-Secret');
   if (!cronSecret) {
@@ -42,9 +41,6 @@ serve(async (req: Request) => {
   const supabase = adminClient();
   const summary = {
     job_a_rows_created: 0,
-    job_b_rows_auto_confirmed: 0,
-    job_b_rows_substituted: 0,
-    job_b_rows_flagged: 0,
     errors: [] as string[],
   };
 
@@ -153,135 +149,6 @@ serve(async (req: Request) => {
           }
           summary.job_a_rows_created++;
         }
-      }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // Job B: auto-confirm everything pending with session_date < today, and
-    // resolve substitutions so the SUB (not the originally-assigned instructor)
-    // is paid for any day a confirmed/taught substitute covered. Job B runs the
-    // day after the session, by which point a sub is already confirmed — so this
-    // is the right place to settle "who actually taught → who gets paid."
-    //
-    // Camps only — Job B does not touch program_id rows (after-school is
-    // deferred until program_assignments lands).
-    // ─────────────────────────────────────────────────────────────────────
-    const { data: pending, error: pendingErr } = await supabase
-      .from('session_delivery_confirmations')
-      .select('id, instructor_id, organization_id, camp_session_id, session_type, session_date')
-      .lt('session_date', today)
-      .eq('confirmed_by', 'pending')
-      .eq('admin_override', false)
-      .not('camp_session_id', 'is', null);
-
-    if (pendingErr) {
-      console.error('Job B pending query failed:', pendingErr);
-      summary.errors.push(`job_b_query: ${pendingErr.message}`);
-    } else if (pending && pending.length > 0) {
-      // For each pending row, resolve the payee + tier (assigned instructor, or
-      // the sub if one covered) and compute pay. Done in JS for clarity; volume
-      // is a handful of camp-days per run.
-      const nowIso = new Date().toISOString();
-      // Cache each org's rate card so a multi-org batch queries once per org.
-      const rateCache = new Map<string, PayRateMap>();
-
-      for (const row of pending) {
-        const sessionType = row.session_type as SessionType;
-
-        // Skip non-camp session types (after_school out of scope for v1).
-        if (sessionType !== 'morning' && sessionType !== 'afternoon' && sessionType !== 'full_day') {
-          continue;
-        }
-
-        // The assigned instructor's camp_assignment gives the default payee +
-        // role, and its id is how we look up a substitution for the day.
-        const { data: assignment, error: aErr } = await supabase
-          .from('camp_assignments')
-          .select('id, role')
-          .eq('camp_session_id', row.camp_session_id)
-          .eq('instructor_id', row.instructor_id)
-          .maybeSingle();
-
-        if (aErr) {
-          summary.errors.push(`job_b_assignment_${row.id}: ${aErr.message}`);
-          continue;
-        }
-
-        // Effective tier: the SUB's tier when a confirmed/taught sub covered
-        // THIS assignment on THIS date, else the assigned instructor's role.
-        // We do NOT reassign instructor_id — the payout resolver view
-        // (v_effective_pay_lines) already maps the row to the sub as the payee
-        // at read time via assignment_substitutions. We only need the stored
-        // pay_amount_cents to reflect the tier of whoever actually taught, so
-        // the amount payroll sums + displays matches the payee.
-        let tier = assignment?.role as Role | undefined;
-        let wasSub = false;
-
-        if (assignment?.id) {
-          const { data: sub, error: subErr } = await supabase
-            .from('assignment_substitutions')
-            .select('sub_tier')
-            .eq('parent_assignment_id', assignment.id)
-            .eq('parent_assignment_type', 'camp')
-            .eq('date', row.session_date)
-            .in('status', ['confirmed', 'taught'])
-            .maybeSingle();
-          if (subErr) {
-            summary.errors.push(`job_b_sub_${row.id}: ${subErr.message}`);
-            continue;
-          }
-          if (sub) {
-            tier = sub.sub_tier as Role;
-            wasSub = true;
-          }
-        }
-
-        if (tier !== 'lead' && tier !== 'developing') {
-          // No assignment and no sub, or an unexpected tier — flag for admin
-          // review, skip auto-pay.
-          await supabase
-            .from('session_delivery_confirmations')
-            .update({
-              pay_status: 'withheld',
-              pay_adjustment_reason: 'no_assignment_or_unknown_role',
-              updated_at: nowIso,
-            })
-            .eq('id', row.id);
-          summary.job_b_rows_flagged++;
-          continue;
-        }
-
-        let rates = rateCache.get(row.organization_id);
-        if (!rates) {
-          try {
-            rates = await loadOrgPayRates(supabase, row.organization_id);
-          } catch (e) {
-            // Isolate a rate-load failure to this row — don't abort the whole
-            // run (matches the per-row error handling above).
-            summary.errors.push(`job_b_rates_${row.id}: ${(e as Error).message}`);
-            continue;
-          }
-          rateCache.set(row.organization_id, rates);
-        }
-        const payCents = rateFromMap(rates, tier, sessionType);
-
-        const { error: updErr } = await supabase
-          .from('session_delivery_confirmations')
-          .update({
-            confirmed_by: 'auto',
-            confirmed_at: nowIso,
-            pay_status: 'approved',
-            pay_amount_cents: payCents,
-            updated_at: nowIso,
-          })
-          .eq('id', row.id);
-
-        if (updErr) {
-          summary.errors.push(`job_b_update_${row.id}: ${updErr.message}`);
-          continue;
-        }
-        summary.job_b_rows_auto_confirmed++;
-        if (wasSub) summary.job_b_rows_substituted++;
       }
     }
 
