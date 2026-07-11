@@ -192,15 +192,22 @@ export default function ProgramRoster() {
   }, [rows]);
 
   function downloadCsv() {
+    // Format a student's structured contacts of a role as "Name (phone); Name…"
+    const contactsFor = (sid, role) =>
+      (contactsByStudent[sid] || [])
+        .filter((c) => c.role === role)
+        .map((c) => contactFullName(c) + (c.phone ? ` (${c.phone})` : ""))
+        .join("; ");
     const headers = [
       "Student", "Grade", "Allergies", "EpiPen", "Medical conditions",
       "Medical notes", "Dietary", "Medications", "Accommodations",
-      "Parent", "Parent email", "Parent phone",
-      "Emergency contact", "Emergency phone", "Authorized pickup",
-      "Photo release", "Homeroom", "Payment",
+      "Parent", "Parent email", "Parent phone", "Second guardian",
+      "Emergency contact", "Emergency phone", "Dismissal", "Authorized pickup",
+      "Do not release", "Photo release", "Homeroom", "Payment",
     ];
     const lines = enrolled.map((r) => {
       const s = r.student ?? {};
+      const sid = s.id;
       return [
         studentName(s),
         gradeLabel(s.grade),
@@ -214,9 +221,12 @@ export default function ProgramRoster() {
         parentName(r.parent),
         r.parent?.email ?? "",
         r.parent?.phone ?? "",
+        contactsFor(sid, "guardian"),
         s.emergency_contact_name ?? "",
         s.emergency_contact_phone ?? "",
-        r.authorized_pickup_contacts ?? "",
+        s.dismissal_method ? (DISMISSAL_LABELS[s.dismissal_method] || s.dismissal_method) : "",
+        contactsFor(sid, "authorized_pickup") || (r.authorized_pickup_contacts ?? ""),
+        contactsFor(sid, "do_not_release"),
         r.photo_release_consent ? "OK" : "No",
         s.homeroom_teacher ?? "",
         paymentPhrase(r),

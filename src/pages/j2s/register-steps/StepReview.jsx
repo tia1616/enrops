@@ -1,6 +1,15 @@
 import React, { useState } from 'react';
 import { formatMoney, INSTALLMENT_MIN_CENTS } from '../../../lib/pricing.js';
 
+const DISMISSAL_LABELS = {
+  released_to_authorized_adult: 'Released to an authorized adult',
+  walks_or_bikes_home: 'Walks or bikes home',
+  bus: 'Bus',
+  aftercare: 'Aftercare',
+  other: 'Other',
+};
+const nm = (c) => `${c?.first_name ?? ''} ${c?.last_name ?? ''}`.trim();
+
 export default function StepReview({
   cart,
   pricing,
@@ -95,6 +104,50 @@ export default function StepReview({
           })}
         </div>
       </div>
+
+      {/* Pickup & release confirmation — only shown when the org collects these
+          questions and the parent entered something. Deduped per child. */}
+      {(() => {
+        const seen = new Set();
+        const kids = [];
+        for (const l of pricing.lines) {
+          if (!seen.has(l.child_index)) { seen.add(l.child_index); kids.push(cart.children[l.child_index]); }
+        }
+        const g2 = cart.parent.guardian2 || {};
+        const hasG2 = (g2.first_name || '').trim().length > 0;
+        const kidHasExtra = (c) =>
+          c?.student?.dismissal_method || (c?.authorized_pickup || []).length > 0 || (c?.do_not_release || []).length > 0;
+        if (!hasG2 && !kids.some(kidHasExtra)) return null;
+        return (
+          <div className="mt-6 rounded-2xl border border-j2s-purple/10 bg-white p-6 shadow-card">
+            <h2 className="font-titan text-lg text-j2s-ink">Pickup &amp; release</h2>
+            {hasG2 && (
+              <p className="mt-2 text-sm text-j2s-ink/80">
+                <span className="font-semibold">Second guardian:</span> {nm(g2)}
+                {g2.phone && ` · ${g2.phone}`}
+              </p>
+            )}
+            {kids.filter(kidHasExtra).map((c, i) => (
+              <div key={i} className="mt-3 border-t border-j2s-purple/10 pt-3 text-sm text-j2s-ink/80">
+                <p className="font-semibold text-j2s-ink">{nm(c.student) || `Child ${i + 1}`}</p>
+                {c.student?.dismissal_method && (
+                  <p className="mt-1">Dismissal: {DISMISSAL_LABELS[c.student.dismissal_method] || c.student.dismissal_method}</p>
+                )}
+                {(c.authorized_pickup || []).filter((p) => (p.first_name || '').trim()).length > 0 && (
+                  <p className="mt-1">
+                    Can be picked up by: {c.authorized_pickup.filter((p) => (p.first_name || '').trim()).map(nm).join('; ')}
+                  </p>
+                )}
+                {(c.do_not_release || []).filter((p) => (p.first_name || '').trim()).length > 0 && (
+                  <p className="mt-1 text-j2s-orange-dark">
+                    Do not release to: {c.do_not_release.filter((p) => (p.first_name || '').trim()).map(nm).join('; ')}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Add another child */}
       <button
