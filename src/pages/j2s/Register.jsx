@@ -9,7 +9,7 @@ import StepParent from './register-steps/StepParent.jsx';
 import StepWaivers from './register-steps/StepWaivers.jsx';
 import StepReview from './register-steps/StepReview.jsx';
 import StepPay from './register-steps/StepPay.jsx';
-import { parseRegFields } from './register-steps/RegExtraFields.jsx';
+import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFields.jsx';
 
 // Has the parent answered a custom question? (by field type)
 function hasAnswer(value, type) {
@@ -299,6 +299,9 @@ export default function Register() {
         for (const f of regFields.custom) {
           if (f.is_required && !hasAnswer(activeChild.custom_answers?.[f.field_key], f.field_type)) return false;
         }
+        // A person can't be on both the pickup and do-not-release lists (the DB
+        // enforces this too). Block until the parent resolves the overlap.
+        if (pickupDnrConflicts(activeChild.authorized_pickup, activeChild.do_not_release).length > 0) return false;
         return true;
       }
       case 1: {

@@ -11,6 +11,39 @@ import React from 'react';
 
 const MAX_PICKUP = 4;
 
+// Normalize a contact name the SAME way the DB trigger does (lower + trim on
+// first AND last). Returns null when there's nothing to match on. Keeping this
+// identical to student_contacts_no_pickup_dnr_overlap() means the inline
+// warning never disagrees with what the database will actually reject.
+export function normalizeContactName(c) {
+  const first = (c?.first_name || '').trim().toLowerCase();
+  const last = (c?.last_name || '').trim().toLowerCase();
+  if (!first && !last) return null;
+  return `${first} ${last}`;
+}
+
+// People who appear on BOTH the authorized-pickup and do-not-release lists for
+// one child. The same person can't be on both (Jessica: "that should be
+// impossible") — the DB enforces it; this drives the friendly warning + the
+// wizard's advance-block so the parent fixes it before checkout.
+export function pickupDnrConflicts(pickup, doNotRelease) {
+  const pickupKeys = new Map(); // normalized -> display name
+  for (const p of Array.isArray(pickup) ? pickup : []) {
+    const k = normalizeContactName(p);
+    if (k) pickupKeys.set(k, `${(p.first_name || '').trim()} ${(p.last_name || '').trim()}`.trim());
+  }
+  const seen = new Set();
+  const conflicts = [];
+  for (const d of Array.isArray(doNotRelease) ? doNotRelease : []) {
+    const k = normalizeContactName(d);
+    if (k && pickupKeys.has(k) && !seen.has(k)) {
+      seen.add(k);
+      conflicts.push(pickupKeys.get(k));
+    }
+  }
+  return conflicts;
+}
+
 // Turn the get_active_registration_fields() rows into a convenient shape.
 export function parseRegFields(rows) {
   const std = {};
@@ -43,6 +76,7 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
   const releasedToAdult = dismissalMethod === 'released_to_authorized_adult';
   const list = Array.isArray(pickup) ? pickup : [];
   const dnr = Array.isArray(doNotRelease) ? doNotRelease : [];
+  const conflicts = pickupDnrConflicts(list, dnr);
 
   function setPickupAt(i, patch) {
     // Use the same fallback base the render uses, so typing in the first
@@ -136,6 +170,12 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
             {std.do_not_release.label || 'Anyone we should NOT release your child to?'}<Req on={std.do_not_release.required} />
           </label>
           <p className="help-text">Optional. Shared with our staff and your child's instructors for safe dismissal, never with other families.</p>
+          {conflicts.length > 0 && (
+            <div className="mt-2 rounded-lg border-2 border-j2s-orange-dark/30 bg-j2s-orange-dark/5 px-4 py-3 text-sm text-j2s-orange-dark" role="alert">
+              <span className="font-semibold">{conflicts.join(', ')}</span>{' '}
+              {conflicts.length > 1 ? 'are' : 'is'} on the approved pickup list above. The same person can't be on both lists — remove {conflicts.length > 1 ? 'them' : 'that name'} from one.
+            </div>
+          )}
           <div className="mt-2 grid gap-3">
             {dnr.map((row, i) => (
               <div key={i} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
