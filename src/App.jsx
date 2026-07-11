@@ -37,6 +37,7 @@ import Payouts from './pages/admin/Payouts.jsx';
 import TeamPage from './pages/admin/team/TeamPage.jsx';
 import AdminSettings from './pages/admin/AdminSettings.jsx';
 import SurveySettings from './pages/admin/SurveySettings.jsx';
+import RegistrationQuestions from './pages/admin/RegistrationQuestions.jsx';
 import WaiverManager from './pages/admin/WaiverManager.jsx';
 import EmailSenderSettings from './pages/admin/EmailSenderSettings.jsx';
 import BackgroundCheckSettings from './pages/admin/BackgroundCheckSettings.jsx';
@@ -183,6 +184,7 @@ export default function App() {
         <Route path="time-saved" element={<TimeSavedPage />} />
         <Route path="settings" element={<AdminSettings />} />
         <Route path="survey-settings" element={<SurveySettings />} />
+        <Route path="registration-questions" element={<RegistrationQuestions />} />
         <Route path="waivers" element={<WaiverManager />} />
         <Route path="email-sender" element={<EmailSenderSettings />} />
         <Route path="pay-rates" element={<PayRatesSettings />} />

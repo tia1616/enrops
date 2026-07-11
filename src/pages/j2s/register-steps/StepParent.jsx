@@ -1,6 +1,7 @@
 import React from 'react';
+import { GuardianSecondarySection } from './RegExtraFields.jsx';
 
-export default function StepParent({ parent, onUpdate }) {
+export default function StepParent({ parent, onUpdate, guardianConfig }) {
   return (
     <div>
       <h1 className="font-titan text-3xl text-j2s-ink sm:text-4xl">
@@ -64,6 +65,12 @@ export default function StepParent({ parent, onUpdate }) {
           <p className="help-text">Optional, but helpful for future mailers.</p>
         </div>
       </div>
+
+      <GuardianSecondarySection
+        config={guardianConfig}
+        value={parent.guardian2}
+        onChange={(v) => onUpdate({ guardian2: v })}
+      />
     </div>
   );
 }

@@ -553,23 +553,27 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
 // camps show everything).
 function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled, canManage }) {
   const [campers, setCampers] = useState(null); // null = loading
+  const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts] }
   const [editingId, setEditingId] = useState(null);
   const [err, setErr] = useState("");
+  // Afterschool programs have "students"; camps have "campers".
+  const noun = target.column === "program_id" ? "student" : "camper";
 
   async function load() {
     setErr("");
     setCampers(null);
+    setContactsByStudent({});
     let q = supabase
       .from("registrations")
       .select(`
-        id, status, notes, authorized_pickup_contacts, photo_release_consent,
+        id, status, notes, authorized_pickup_contacts, photo_release_consent, custom_field_values,
         payment_status, amount_cents, stripe_payment_intent_id, organization_id, cancelled_at,
         student:students (
           id, first_name, last_name, grade, birthdate, pronouns,
           allergies, dietary_restrictions, medical_notes, medical_conditions,
           epipen_required, medications_at_program,
           emergency_contact_name, emergency_contact_phone,
-          special_needs_accommodations, homeroom_teacher
+          special_needs_accommodations, homeroom_teacher, dismissal_method
         ),
         parent:parents (
           id, first_name, last_name, email, phone
@@ -585,6 +589,20 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
       return;
     }
     setCampers(data ?? []);
+
+    // Structured contacts (guardians / pickup / do-not-release). do_not_release is
+    // RLS-gated to org editors, so view-only users just don't receive those rows.
+    const sids = [...new Set((data ?? []).map((r) => r.student?.id).filter(Boolean))];
+    if (sids.length) {
+      const { data: contacts } = await supabase
+        .from("student_contacts")
+        .select("id, student_id, role, first_name, last_name, phone, email, sort_order")
+        .in("student_id", sids)
+        .order("sort_order", { ascending: true });
+      const byStudent = {};
+      for (const c of contacts ?? []) (byStudent[c.student_id] ||= []).push(c);
+      setContactsByStudent(byStudent);
+    }
   }
 
   useEffect(() => {
@@ -606,7 +624,7 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
       )}
 
       {campers !== null && campers.length === 0 && (
-        <div style={{ color: MUTED, fontSize: 12 }}>No campers yet.</div>
+        <div style={{ color: MUTED, fontSize: 12 }}>No {noun}s yet.</div>
       )}
 
       {campers !== null && campers.length > 0 && (
@@ -615,6 +633,7 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
             <CamperEditableRow
               key={reg.id}
               registration={reg}
+              contacts={contactsByStudent[reg.student?.id] || []}
               isEditing={editingId === reg.id}
               onToggleEdit={() => setEditingId((cur) => (cur === reg.id ? null : reg.id))}
               orgId={orgId}
@@ -637,11 +656,27 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
   );
 }
 
-function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved }) {
+const DISMISSAL_LABELS = {
+  released_to_authorized_adult: "Released to an authorized adult",
+  walks_or_bikes_home: "Walks or bikes home",
+  bus: "Bus",
+  aftercare: "Aftercare",
+  other: "Other",
+};
+const cFullName = (c) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
+function TelLink({ phone }) {
+  if (!phone) return null;
+  return <a href={`tel:${phone.replace(/[^0-9+]/g, "")}`} style={{ color: PURPLE, textDecoration: "underline" }}>{phone}</a>;
+}
+
+function CamperEditableRow({ registration, contacts = [], isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved }) {
   const s = registration.student;
   const [confirming, setConfirming] = useState(false);
   const [refunding, setRefunding] = useState(false);
   if (!s) return null;
+  const guardians = contacts.filter((c) => c.role === "guardian");
+  const pickups = contacts.filter((c) => c.role === "authorized_pickup");
+  const doNotRelease = contacts.filter((c) => c.role === "do_not_release");
   const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed";
   const hasAllergies = (s.allergies ?? "").trim().length > 0;
   const flagged = hasAllergies || s.epipen_required;
@@ -693,10 +728,30 @@ function CamperEditableRow({ registration, isEditing, onToggleEdit, orgId, onSav
             <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
               {hasAllergies && <span style={{ color: RED, fontWeight: 600 }}>Allergies: {s.allergies}</span>}
               {!hasAllergies && (s.emergency_contact_name
-                ? <>EC: {s.emergency_contact_name}{s.emergency_contact_phone && ` · ${s.emergency_contact_phone}`}</>
+                ? <>EC: {s.emergency_contact_name}{s.emergency_contact_phone && <> · <TelLink phone={s.emergency_contact_phone} /></>}</>
                 : <em>no emergency contact</em>
               )}
             </div>
+            {(s.dismissal_method || guardians.length > 0 || pickups.length > 0 || doNotRelease.length > 0) && (
+              <div style={{ fontSize: 11, color: MUTED, marginTop: 3, lineHeight: 1.55 }}>
+                {s.dismissal_method && (
+                  <div><strong style={{ color: INK }}>Dismissal:</strong> {DISMISSAL_LABELS[s.dismissal_method] || s.dismissal_method}</div>
+                )}
+                {guardians.length > 0 && (
+                  <div><strong style={{ color: INK }}>{guardians.length > 1 ? "Guardians" : "2nd guardian"}:</strong>{" "}
+                    {guardians.map((g, i) => <span key={g.id}>{i ? "; " : ""}{cFullName(g)}{g.phone && <> · <TelLink phone={g.phone} /></>}</span>)}
+                  </div>
+                )}
+                {pickups.length > 0 && (
+                  <div><strong style={{ color: INK }}>Pickup:</strong>{" "}
+                    {pickups.map((c, i) => <span key={c.id}>{i ? "; " : ""}{cFullName(c)}{c.phone && <> · <TelLink phone={c.phone} /></>}</span>)}
+                  </div>
+                )}
+                {doNotRelease.length > 0 && (
+                  <div><strong style={{ color: RED }}>Do NOT release:</strong> {doNotRelease.map(cFullName).filter(Boolean).join("; ")}</div>
+                )}
+              </div>
+            )}
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <button
