@@ -47,6 +47,7 @@ export function getPermissions(role) {
       switch (action) {
         case "edit":
         case "send":
+        case "reports":          // Class Reports = safety/compliance surface (staff+)
           return canEdit;
         case "money":
         case "refund":
