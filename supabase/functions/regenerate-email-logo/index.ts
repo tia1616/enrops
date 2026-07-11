@@ -70,10 +70,39 @@ serve(async (req: Request) => {
     if (orgErr || !org) return json({ error: 'org not found', orgErr }, 404);
     if (!org.logo_url) return json({ error: 'org has no logo_url to source from' }, 400);
 
-    const srcRes = await fetch(org.logo_url);
-    if (!srcRes.ok) return json({ error: `source fetch ${srcRes.status}` }, 502);
-    const srcBytes = new Uint8Array(await srcRes.arrayBuffer());
-    const srcContentType = (srcRes.headers.get('content-type') ?? '').toLowerCase();
+    // SSRF hardening (codex review #1): logo_url is fetched server-side, so
+    // restrict it to the Supabase Storage public origin for the org-assets bucket
+    // (update-org-logo enforces this on write; re-validate here for legacy rows /
+    // other writers). Then fetch with no redirects, a short timeout, and a size
+    // cap so a hostile or oversized source can't reach internal hosts or exhaust
+    // memory. The origin allowlist is the primary defense; the rest is belt-and-braces.
+    const storagePrefix = `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/`;
+    if (!org.logo_url.startsWith(storagePrefix)) {
+      return json({ error: 'logo_url is not an allowed org-assets URL' }, 400);
+    }
+    const MAX_BYTES = 5 * 1024 * 1024; // 5 MB cap on the source image
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 10_000);
+    let srcBytes: Uint8Array;
+    let srcContentType: string;
+    try {
+      const srcRes = await fetch(org.logo_url, { redirect: 'manual', signal: ac.signal });
+      if (srcRes.type === 'opaqueredirect' || (srcRes.status >= 300 && srcRes.status < 400)) {
+        return json({ error: 'source redirect not allowed' }, 502);
+      }
+      if (!srcRes.ok) return json({ error: `source fetch ${srcRes.status}` }, 502);
+      const declared = Number(srcRes.headers.get('content-length') ?? '0');
+      if (declared > MAX_BYTES) return json({ error: 'source too large' }, 413);
+      const buf = await srcRes.arrayBuffer();
+      if (buf.byteLength > MAX_BYTES) return json({ error: 'source too large' }, 413);
+      srcBytes = new Uint8Array(buf);
+      srcContentType = (srcRes.headers.get('content-type') ?? '').toLowerCase();
+    } catch (err) {
+      const aborted = (err as Error).name === 'AbortError';
+      return json({ error: aborted ? 'source fetch timed out' : `source fetch failed: ${(err as Error).message}` }, 502);
+    } finally {
+      clearTimeout(timer);
+    }
 
     const sniff = new TextDecoder('utf-8', { fatal: false }).decode(srcBytes.slice(0, 200));
     const looksLikeSvg =
