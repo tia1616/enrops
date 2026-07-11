@@ -102,6 +102,7 @@ export default function InstructorPortal() {
   const [view, setView] = useState("schedule");
   const [showPast, setShowPast] = useState(false);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState(null);
+  const [selectedProgramAssignmentId, setSelectedProgramAssignmentId] = useState(null);
   const [selectedSubId, setSelectedSubId] = useState(null);
   const [weeklyClasses, setWeeklyClasses] = useState([]); // class_schedule rows assigned to me (outside-registration tenants)
 
@@ -1065,6 +1066,25 @@ export default function InstructorPortal() {
     );
   }
 
+  if (view === "afterschool-detail") {
+    const selected = programAssignments.find((a) => a.id === selectedProgramAssignmentId);
+    if (!selected) {
+      setView("schedule");
+      setSelectedProgramAssignmentId(null);
+      return null;
+    }
+    return (
+      <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+        <AfterschoolDetailView
+          assignment={selected}
+          coInstructors={coInstructorsProgram[selected.program_id] || []}
+          schedule={scheduleByProgram[selected.program_id] || []}
+          onBack={() => { setView("schedule"); setSelectedProgramAssignmentId(null); }}
+        />
+      </Shell>
+    );
+  }
+
   if (view === "sub-detail") {
     const selectedSub = subAssignments.find((s) => s.id === selectedSubId);
     if (!selectedSub) {
@@ -1291,7 +1311,7 @@ export default function InstructorPortal() {
             />
           ))}
           {acceptedAS.map((a) => (
-            <AfterschoolAssignmentCard key={a.id} assignment={a} coInstructors={coInstructorsProgram[a.program_id] || []} schedule={scheduleByProgram[a.program_id] || []} readOnly />
+            <AfterschoolAssignmentCard key={a.id} assignment={a} coInstructors={coInstructorsProgram[a.program_id] || []} schedule={scheduleByProgram[a.program_id] || []} readOnly onOpen={() => { setSelectedProgramAssignmentId(a.id); setView("afterschool-detail"); }} />
           ))}
           {subAssignments.filter((s) => s.status === "confirmed" || s.status === "taught").map((s) => (
             <SubOfferCard
@@ -1953,7 +1973,7 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
   );
 }
 
-function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = [], messages = [], busy, onAccept, onRequestChange, readOnly }) {
+function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = [], messages = [], busy, onAccept, onRequestChange, readOnly, onOpen }) {
   const p = assignment.programs;
   const [showDates, setShowDates] = useState(false);
   if (!p) return null;
@@ -2090,6 +2110,45 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
           </button>
         </div>
       )}
+
+      {readOnly && onOpen && (
+        <button
+          type="button"
+          onClick={onOpen}
+          style={{ marginTop: 8, padding: "8px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", alignSelf: "flex-start" }}
+        >
+          View roster &amp; class details →
+        </button>
+      )}
+    </div>
+  );
+}
+
+// After-school class detail — mirrors the camp AssignmentDetailView, but keyed
+// on program_id. Reuses RosterSection (parameterized) so instructors finally see
+// who's enrolled + pickup/release info for weekly classes (the surface that was
+// missing entirely).
+function AfterschoolDetailView({ assignment, coInstructors = [], schedule = [], onBack }) {
+  const p = assignment.programs;
+  const when = p ? [asDayName(p.day_of_week), [p.start_time, p.end_time].filter(Boolean).join("–")].filter(Boolean).join(" · ") : "";
+  const loc = p?.program_locations;
+  return (
+    <div>
+      <button type="button" onClick={onBack} style={{ background: "none", border: "none", color: PURPLE, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", padding: 0, marginBottom: 12 }}>
+        ← Back to schedule
+      </button>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: INK }}>
+          {p?.curriculum || "Class"} <span style={{ fontWeight: 400, color: PURPLE, fontSize: 13 }}>· after-school</span>
+        </div>
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 4 }}>
+          {when}{loc?.name ? ` · ${loc.name}` : ""}{loc?.room_number ? ` · Room ${loc.room_number}` : ""}
+        </div>
+      </div>
+      <CoInstructorLine coInstructors={coInstructors} />
+      <div style={{ marginTop: 16 }}>
+        <RosterSection programId={assignment.program_id} enrollment={null} startsOn={null} noun="student" />
+      </div>
     </div>
   );
 }
@@ -3023,12 +3082,18 @@ function humanizeConfirmError(code) {
 //   3. Nothing in registrations yet for this camp: fall back to the
 //      aggregate enrollment count + "your admin imports the roster
 //      before camp starts" copy.
-function RosterSection({ campSessionId, enrollment, startsOn }) {
+// Parameterized for camps (campSessionId) or after-school programs (programId).
+// `noun` labels the enrolled child ("camper" / "student").
+function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = "camper" }) {
   const [rows, setRows] = useState(null); // null = loading
+  const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts row] }
   const [err, setErr] = useState("");
 
+  const filterCol = campSessionId ? "camp_session_id" : "program_id";
+  const filterId = campSessionId || programId;
+
   useEffect(() => {
-    if (!campSessionId) return;
+    if (!filterId) return;
     let cancelled = false;
     (async () => {
       try {
@@ -3036,19 +3101,19 @@ function RosterSection({ campSessionId, enrollment, startsOn }) {
           .from("registrations")
           .select(`
             id, status, payment_status, registered_at, notes,
-            authorized_pickup_contacts, photo_release_consent,
+            authorized_pickup_contacts, photo_release_consent, custom_field_values,
             student:students (
               id, first_name, last_name, grade, birthdate, pronouns,
               allergies, dietary_restrictions, medical_notes, medical_conditions,
               epipen_required, medications_at_program,
               emergency_contact_name, emergency_contact_phone,
-              special_needs_accommodations
+              special_needs_accommodations, dismissal_method
             ),
             parent:parents (
               first_name, last_name, email, phone
             )
           `)
-          .eq("camp_session_id", campSessionId)
+          .eq(filterCol, filterId)
           .not("status", "in", "(cancelled,withdrawn)")
           .order("registered_at", { ascending: true });
         if (cancelled) return;
@@ -3059,6 +3124,23 @@ function RosterSection({ campSessionId, enrollment, startsOn }) {
           return;
         }
         setRows(data ?? []);
+
+        // Pull the structured contacts (guardians / authorized pickup / etc.) for
+        // these students. do_not_release rows are gated by RLS to org editors, so
+        // instructors simply won't receive them — nothing to hide client-side.
+        const studentIds = [...new Set((data ?? []).map((r) => r.student?.id).filter(Boolean))];
+        if (studentIds.length) {
+          const { data: contacts, error: cErr } = await supabase
+            .from("student_contacts")
+            .select("id, student_id, role, first_name, last_name, phone, email, relationship, sort_order")
+            .in("student_id", studentIds)
+            .order("sort_order", { ascending: true });
+          if (!cancelled && !cErr && contacts) {
+            const byStudent = {};
+            for (const c of contacts) (byStudent[c.student_id] ||= []).push(c);
+            setContactsByStudent(byStudent);
+          }
+        }
       } catch (e) {
         if (!cancelled) {
           console.error("[RosterSection] load failed", e);
@@ -3068,7 +3150,7 @@ function RosterSection({ campSessionId, enrollment, startsOn }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [campSessionId]);
+  }, [filterCol, filterId]);
 
   const aggregateCount = typeof enrollment === "number" ? enrollment : null;
   const startTxt = startsOn ? fmtShort(startsOn) : null;
@@ -3090,7 +3172,7 @@ function RosterSection({ campSessionId, enrollment, startsOn }) {
           <div style={{ color: INK, fontSize: 14, lineHeight: 1.5 }}>
             {aggregateCount !== null ? (
               <div>
-                <strong>{aggregateCount}</strong> camper{aggregateCount === 1 ? "" : "s"} registered so far.
+                <strong>{aggregateCount}</strong> {noun}{aggregateCount === 1 ? "" : "s"} registered so far.
               </div>
             ) : (
               <div>Enrollment count syncs from your registration platform before camp starts.</div>
@@ -3105,11 +3187,11 @@ function RosterSection({ campSessionId, enrollment, startsOn }) {
         {rows !== null && rows.length > 0 && (
           <>
             <div style={{ color: MUTED, fontSize: 12, marginBottom: 10 }}>
-              {rows.length} camper{rows.length === 1 ? "" : "s"} on the roster
+              {rows.length} {noun}{rows.length === 1 ? "" : "s"} on the roster
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {rows.map((r) => (
-                <CamperRow key={r.id} registration={r} />
+                <CamperRow key={r.id} registration={r} contacts={contactsByStudent[r.student?.id] || []} />
               ))}
             </div>
           </>
@@ -3119,7 +3201,24 @@ function RosterSection({ campSessionId, enrollment, startsOn }) {
   );
 }
 
-function CamperRow({ registration }) {
+// Click-to-call phone (reuses the tel: normalization used elsewhere in this file).
+function TelPhone({ phone }) {
+  if (!phone) return null;
+  const tel = phone.replace(/[^0-9+]/g, "");
+  return <a href={`tel:${tel}`} style={{ color: PURPLE, textDecoration: "underline" }}>{phone}</a>;
+}
+
+const DISMISSAL_LABELS = {
+  released_to_authorized_adult: "Released to an authorized adult",
+  walks_or_bikes_home: "Walks or bikes home",
+  bus: "Bus",
+  aftercare: "Aftercare",
+  other: "Other",
+};
+
+const contactName = (c) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
+
+function CamperRow({ registration, contacts = [] }) {
   const s = registration.student;
   if (!s) return null;
   const p = registration.parent;
@@ -3128,6 +3227,9 @@ function CamperRow({ registration }) {
   const hasAllergies = (s.allergies ?? "").trim().length > 0;
   const hasMedical = ((s.medical_notes ?? "") + (s.medical_conditions ?? "")).trim().length > 0 || s.epipen_required;
   const parentName = p ? `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() : "";
+  const guardians = contacts.filter((c) => c.role === "guardian");
+  const pickups = contacts.filter((c) => c.role === "authorized_pickup");
+  const doNotRelease = contacts.filter((c) => c.role === "do_not_release");
 
   return (
     <div
@@ -3163,8 +3265,19 @@ function CamperRow({ registration }) {
         <div style={{ marginTop: 8, padding: "6px 10px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 4, fontSize: 12, color: INK }}>
           <strong style={{ color: INK }}>Parent:</strong>{" "}
           {parentName || <em style={{ color: MUTED }}>name not on file</em>}
-          {p.phone && <> · {p.phone}</>}
+          {p.phone && <> · <TelPhone phone={p.phone} /></>}
           {p.email && <> · {p.email}</>}
+        </div>
+      )}
+
+      {guardians.length > 0 && (
+        <div style={{ marginTop: 6, fontSize: 12, color: INK }}>
+          <strong>{guardians.length > 1 ? "Guardians:" : "Second guardian:"}</strong>{" "}
+          {guardians.map((g, i) => (
+            <span key={g.id}>
+              {i > 0 ? "; " : ""}{contactName(g)}{g.phone && <> · <TelPhone phone={g.phone} /></>}
+            </span>
+          ))}
         </div>
       )}
 
@@ -3209,13 +3322,39 @@ function CamperRow({ registration }) {
         <div style={{ marginTop: 6, fontSize: 12, color: MUTED }}>
           <strong style={{ color: INK }}>Emergency contact:</strong>{" "}
           {s.emergency_contact_name}
-          {s.emergency_contact_phone && ` · ${s.emergency_contact_phone}`}
+          {s.emergency_contact_phone && <> · <TelPhone phone={s.emergency_contact_phone} /></>}
         </div>
       )}
 
-      {registration.authorized_pickup_contacts && (
+      {s.dismissal_method && (
+        <div style={{ marginTop: 6, fontSize: 12, color: INK }}>
+          <strong>Dismissal:</strong> {DISMISSAL_LABELS[s.dismissal_method] || s.dismissal_method}
+        </div>
+      )}
+
+      {/* Authorized pickup — structured student_contacts first; fall back to the
+          legacy free-text column for registrations loaded before this feature. */}
+      {pickups.length > 0 ? (
+        <div style={{ marginTop: 6, fontSize: 12, color: INK }}>
+          <strong>Authorized pickup:</strong>{" "}
+          {pickups.map((c, i) => (
+            <span key={c.id}>
+              {i > 0 ? "; " : ""}{contactName(c)}{c.phone && <> · <TelPhone phone={c.phone} /></>}
+            </span>
+          ))}
+        </div>
+      ) : registration.authorized_pickup_contacts ? (
         <div style={{ marginTop: 6, fontSize: 12, color: MUTED }}>
           <strong style={{ color: INK }}>Authorized pickup:</strong> {registration.authorized_pickup_contacts}
+        </div>
+      ) : null}
+
+      {/* Do-not-release — sensitive. Instructors never receive these rows (RLS
+          gates them to org editors); this renders only where the query returns them. */}
+      {doNotRelease.length > 0 && (
+        <div style={{ marginTop: 6, padding: "6px 10px", background: `${CORAL}1F`, border: `1px solid ${CORAL}55`, borderRadius: 4, fontSize: 12, color: INK }}>
+          <strong style={{ color: CORAL }}>Do NOT release to:</strong>{" "}
+          {doNotRelease.map((c) => contactName(c)).filter(Boolean).join("; ")}
         </div>
       )}
 
