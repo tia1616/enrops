@@ -14,6 +14,7 @@
 
 import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { StepKey } from './onboardingStep.ts';
+import { encodeDisplayName } from './orgBrand.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so links in the gate-check admin email point at staging, not prod. Defaults to prod.
@@ -139,7 +140,7 @@ async function sendOnboardingCompleteEmails(
     .maybeSingle();
   if (!org?.default_sender_email) return;
 
-  const from = `${org.default_sender_name ?? org.name ?? 'enrops'} <${org.default_sender_email}>`;
+  const from = `${encodeDisplayName(org.default_sender_name ?? org.name ?? 'enrops')} <${org.default_sender_email}>`;
   const fullName = `${instructor.first_name ?? ''} ${instructor.last_name ?? ''}`.trim();
   const greeting = instructor.preferred_name || instructor.first_name || 'there';
   const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;

@@ -12,6 +12,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+import { encodeDisplayName } from '../_shared/orgBrand.ts';
 
 interface ResendInviteBody {
   email?: string;
@@ -129,7 +130,7 @@ serve(async (req: Request) => {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${org.default_sender_name} <${org.default_sender_email}>`,
+        from: `${encodeDisplayName(org.default_sender_name)} <${org.default_sender_email}>`,
         to: instructor.email,
         subject: `Your new onboarding link for ${org.name ?? 'enrops'}`,
         text,

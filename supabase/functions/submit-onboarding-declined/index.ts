@@ -19,6 +19,7 @@ import {
   resolveInstructor,
   adminClient,
 } from '../_shared/instructor.ts';
+import { encodeDisplayName } from '../_shared/orgBrand.ts';
 
 interface SubmitDeclineBody {
   reason?: string;
@@ -129,7 +130,7 @@ async function sendAdminEmail(args: {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${args.fromName} <${args.fromEmail}>`,
+        from: `${encodeDisplayName(args.fromName)} <${args.fromEmail}>`,
         to: args.to,
         subject: `Contractor declined onboarding: ${args.instructorName}`,
         text,

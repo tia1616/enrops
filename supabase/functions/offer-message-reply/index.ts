@@ -9,6 +9,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { encodeDisplayName } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -141,7 +142,7 @@ serve(async (req: Request) => {
 
     const primary = brandingRow?.primary_color ?? DEFAULT_PRIMARY;
     const fromName = brandingRow?.email_from_name ?? org?.name ?? 'Enrops';
-    const fromEmail = `${fromName} <hello@updates.journeytosteam.com>`;
+    const fromEmail = `${encodeDisplayName(fromName)} <hello@updates.journeytosteam.com>`;
     const replyTo = brandingRow?.email_reply_to ?? undefined;
 
     const adminFirstName = userData.user.user_metadata?.full_name?.split(' ')[0] ?? 'your admin';
