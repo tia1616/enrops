@@ -2,7 +2,7 @@
 // Minimal instructor portal: magic-link sign-in, list of published assignments,
 // Accept or Request Change per camp. Class detail + My Availability are v2.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
@@ -1059,6 +1059,7 @@ export default function InstructorPortal() {
       <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <AssignmentDetailView
           assignment={selected}
+          instructor={instructor}
           coInstructors={coInstructors[selected.camp_session_id] || []}
           onBack={() => { setView("schedule"); setSelectedAssignmentId(null); }}
         />
@@ -1077,6 +1078,7 @@ export default function InstructorPortal() {
       <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <AfterschoolDetailView
           assignment={selected}
+          instructor={instructor}
           coInstructors={coInstructorsProgram[selected.program_id] || []}
           schedule={scheduleByProgram[selected.program_id] || []}
           onBack={() => { setView("schedule"); setSelectedProgramAssignmentId(null); }}
@@ -1097,6 +1099,7 @@ export default function InstructorPortal() {
       <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <SubDetailView
           sub={selectedSub}
+          instructor={instructor}
           coInstructors={subCoInstructors(selectedSub)}
           onBack={() => { setView("schedule"); setSelectedSubId(null); }}
           onMarkTaught={() => handleSubMarkTaught(selectedSub.id)}
@@ -2128,7 +2131,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
 // on program_id. Reuses RosterSection (parameterized) so instructors finally see
 // who's enrolled + pickup/release info for weekly classes (the surface that was
 // missing entirely).
-function AfterschoolDetailView({ assignment, coInstructors = [], schedule = [], onBack }) {
+function AfterschoolDetailView({ assignment, instructor, coInstructors = [], schedule = [], onBack }) {
   const p = assignment.programs;
   const when = p ? [asDayName(p.day_of_week), [p.start_time, p.end_time].filter(Boolean).join("–")].filter(Boolean).join(" · ") : "";
   const loc = p?.program_locations;
@@ -2147,7 +2150,15 @@ function AfterschoolDetailView({ assignment, coInstructors = [], schedule = [], 
       </div>
       <CoInstructorLine coInstructors={coInstructors} />
       <div style={{ marginTop: 16 }}>
-        <RosterSection programId={assignment.program_id} enrollment={null} startsOn={null} noun="student" />
+        <RosterSection
+          programId={assignment.program_id}
+          enrollment={null}
+          startsOn={null}
+          noun="student"
+          instructorId={instructor?.id ?? instructor?.instructor_id}
+          organizationId={instructor?.organization_id}
+          sessionDates={programSessionDates(schedule)}
+        />
       </div>
     </div>
   );
@@ -2516,7 +2527,7 @@ function StripeExpressDeepLink({ variant = "button", title, subtitle }) {
   );
 }
 
-function AssignmentDetailView({ assignment, coInstructors = [], onBack }) {
+function AssignmentDetailView({ assignment, instructor, coInstructors = [], onBack }) {
   const s = assignment.camp_sessions;
   const role = assignment.role === "developing" ? "Developing" : "Lead";
 
@@ -2580,7 +2591,14 @@ function AssignmentDetailView({ assignment, coInstructors = [], onBack }) {
         endsOn={s.ends_on}
         classDays={s.class_days}
       />
-      <RosterSection campSessionId={s.id} enrollment={s.current_enrollment} startsOn={s.starts_on} />
+      <RosterSection
+        campSessionId={s.id}
+        enrollment={s.current_enrollment}
+        startsOn={s.starts_on}
+        instructorId={instructor?.id ?? instructor?.instructor_id}
+        organizationId={instructor?.organization_id}
+        sessionDates={weekdayRange(s.starts_on, s.ends_on, s.class_days)}
+      />
       <LessonsSection curriculumId={s.curriculum_id} curriculumName={s.curriculum_name} />
     </div>
   );
@@ -2592,7 +2610,7 @@ function AssignmentDetailView({ assignment, coInstructors = [], onBack }) {
 // DailyCheckInSection — the card itself carries the one-tap "Mark this day as
 // taught". Roster + lessons only apply to camp subs (mirrors the card's prior
 // inline behavior); program subs show location only.
-function SubDetailView({ sub, onBack, onMarkTaught, markBusy, error, coInstructors = [] }) {
+function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error, coInstructors = [] }) {
   const isCamp = sub.parent_assignment_type === "camp";
   const sess = isCamp ? sub.camp_parent?.camp_sessions ?? null : null;
   const prog = !isCamp ? sub.program_parent?.programs ?? null : null;
@@ -2671,7 +2689,15 @@ function SubDetailView({ sub, onBack, onMarkTaught, markBusy, error, coInstructo
       <LocationSection location={loc} fallbackName={venueName} />
       <SubCheckInSection sub={sub} onMarkTaught={onMarkTaught} markBusy={markBusy} />
       {isCamp && sess?.id && (
-        <RosterSection campSessionId={sess.id} enrollment={sess.current_enrollment} startsOn={sess.starts_on} />
+        <RosterSection
+          campSessionId={sess.id}
+          enrollment={sess.current_enrollment}
+          startsOn={sess.starts_on}
+          instructorId={instructor?.id ?? instructor?.instructor_id}
+          organizationId={instructor?.organization_id}
+          sessionDates={sub.date ? [sub.date] : []}
+          lockedDate={sub.date ?? null}
+        />
       )}
       {isCamp && curriculumId && (
         <LessonsSection curriculumId={curriculumId} curriculumName={curriculumName} />
@@ -3091,13 +3117,152 @@ function humanizeConfirmError(code) {
 //      before camp starts" copy.
 // Parameterized for camps (campSessionId) or after-school programs (programId).
 // `noun` labels the enrolled child ("camper" / "student").
-function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = "camper" }) {
+// Meeting dates for an after-school program from its derived schedule
+// (session rows only — no_school closures are excluded).
+function programSessionDates(schedule) {
+  return (schedule || [])
+    .filter((e) => e && e.kind === "session" && e.date)
+    .map((e) => e.date);
+}
+
+// Which class day to show first: today if it's a meeting day, else the next
+// upcoming meeting, else the most recent past meeting, else today.
+function defaultSessionDate(dates, todayStr) {
+  if (!dates || dates.length === 0) return todayStr;
+  if (dates.includes(todayStr)) return todayStr;
+  const upcoming = dates.filter((d) => d >= todayStr).sort();
+  if (upcoming.length) return upcoming[0];
+  return [...dates].sort().slice(-1)[0];
+}
+
+const prettyDay = (dateStr) =>
+  dateStr
+    ? new Date(`${dateStr}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })
+    : "";
+
+function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = "camper", instructorId, organizationId, sessionDates = [], lockedDate = null }) {
   const [rows, setRows] = useState(null); // null = loading
   const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts row] }
   const [err, setErr] = useState("");
 
   const filterCol = campSessionId ? "camp_session_id" : "program_id";
   const filterId = campSessionId || programId;
+
+  // Attendance + dismissal (Class Reports) — recorded per class meeting-day.
+  const todayStr = todayLocalISO();
+  const [sessionDate, setSessionDate] = useState(() => lockedDate ?? defaultSessionDate(sessionDates, todayStr));
+  const [attByStudent, setAttByStudent] = useState({}); // { [student_id]: attendance_records row }
+  const [attErr, setAttErr] = useState("");
+  const [savingIds, setSavingIds] = useState(() => new Set()); // students with a save in flight
+  const canRecord = Boolean(instructorId && sessionDate);
+  const datesKey = (sessionDates || []).join(",");
+
+  // Track the currently-shown day so a save that resolves after the instructor
+  // switches days never writes its result into the new day's map.
+  const sessionDateRef = useRef(sessionDate);
+  useEffect(() => { sessionDateRef.current = sessionDate; }, [sessionDate]);
+
+  // If the meeting dates arrive/settle after mount and the current pick isn't one
+  // of them, snap to a sensible default (respecting a sub's locked day).
+  useEffect(() => {
+    if (lockedDate) { setSessionDate(lockedDate); return; }
+    if (sessionDates.length && !sessionDates.includes(sessionDate)) {
+      setSessionDate(defaultSessionDate(sessionDates, todayStr));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datesKey, lockedDate]);
+
+  // Load the attendance rows for this class + selected day.
+  useEffect(() => {
+    if (!filterId || !sessionDate) return;
+    let cancelled = false;
+    setAttByStudent({});
+    setAttErr("");
+    (async () => {
+      const { data, error } = await supabase
+        .from("attendance_records")
+        .select("id, student_id, present, checked_in_at, dismissal_kind, released_to_contact_id, released_to_name, released_at, notes")
+        .eq(filterCol, filterId)
+        .eq("session_date", sessionDate);
+      if (cancelled) return;
+      if (error) {
+        console.error("[RosterSection] attendance load failed", error);
+        setAttErr("Couldn't load attendance for this day.");
+        return;
+      }
+      const byStudent = {};
+      for (const r of data ?? []) byStudent[r.student_id] = r;
+      setAttByStudent(byStudent);
+    })();
+    return () => { cancelled = true; };
+  }, [filterCol, filterId, sessionDate]);
+
+  // Upsert an attendance/dismissal patch for one registration on the selected day.
+  // organization_id is authoritative from the class (a DB trigger re-derives it),
+  // so we pass the instructor's org purely to satisfy NOT NULL before the trigger.
+  async function saveAttendance(registration, rawPatch) {
+    const studentId = registration.student?.id;
+    if (!studentId || !canRecord || savingIds.has(studentId)) return;
+    // Stamp the acting instructor onto whichever action this patch performs, so
+    // the safety report can show who checked the child in / released them.
+    const patch = { ...rawPatch };
+    if ("present" in patch) patch.checked_in_by = instructorId;
+    if ("released_at" in patch) patch.released_by = patch.released_at ? instructorId : null;
+    const dateAtSave = sessionDate; // guard against a mid-flight day switch
+    setSavingIds((s) => new Set(s).add(studentId));
+    setAttErr("");
+    const cols = "id, student_id, present, checked_in_at, dismissal_kind, released_to_contact_id, released_to_name, released_at, notes";
+    const updateById = (id) =>
+      supabase.from("attendance_records").update(patch).eq("id", id).select(cols).single();
+    try {
+      const existing = attByStudent[studentId];
+      let saved;
+      if (existing?.id) {
+        const { data, error } = await updateById(existing.id);
+        if (error) throw error;
+        saved = data;
+      } else {
+        const insertRow = {
+          organization_id: organizationId,
+          registration_id: registration.id,
+          student_id: studentId,
+          session_date: sessionDate,
+          ...(campSessionId ? { camp_session_id: campSessionId } : { program_id: programId }),
+          ...patch,
+        };
+        const { data, error } = await supabase
+          .from("attendance_records").insert(insertRow).select(cols).single();
+        if (error) {
+          // A co-instructor already created this child's row for the day (unique
+          // student+class+date). Recover by loading that row and updating it.
+          if (error.code === "23505") {
+            const { data: found } = await supabase
+              .from("attendance_records").select("id").eq(filterCol, filterId)
+              .eq("student_id", studentId).eq("session_date", dateAtSave).single();
+            if (!found?.id) throw error;
+            const { data: upd, error: uErr } = await updateById(found.id);
+            if (uErr) throw uErr;
+            saved = upd;
+          } else {
+            throw error;
+          }
+        } else {
+          saved = data;
+        }
+      }
+      // Only reflect the save if we're still on the day it was made for.
+      if (sessionDateRef.current === dateAtSave) {
+        setAttByStudent((m) => ({ ...m, [studentId]: saved }));
+      }
+    } catch (e) {
+      console.error("[RosterSection] attendance save failed", e);
+      if (sessionDateRef.current === dateAtSave) {
+        setAttErr("Couldn't save. Check your connection and try again.");
+      }
+    } finally {
+      setSavingIds((s) => { const n = new Set(s); n.delete(studentId); return n; });
+    }
+  }
 
   useEffect(() => {
     if (!filterId) return;
@@ -3198,12 +3363,49 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
 
         {rows !== null && rows.length > 0 && (
           <>
-            <div style={{ color: MUTED, fontSize: 12, marginBottom: 10 }}>
-              {rows.length} {noun}{rows.length === 1 ? "" : "s"} on the roster
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+              <div style={{ color: MUTED, fontSize: 12 }}>
+                {rows.length} {noun}{rows.length === 1 ? "" : "s"} on the roster
+              </div>
+              {canRecord && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: INK }}>
+                  <span style={{ color: MUTED }}>Attendance for</span>
+                  {lockedDate ? (
+                    <strong>{prettyDay(sessionDate)}</strong>
+                  ) : sessionDates.length > 1 ? (
+                    <select
+                      value={sessionDate}
+                      onChange={(e) => setSessionDate(e.target.value)}
+                      style={{ fontSize: 12, fontFamily: "inherit", color: INK, border: `1px solid ${RULE}`, borderRadius: 6, padding: "3px 6px", background: "#fff" }}
+                    >
+                      {sessionDates.map((d) => (
+                        <option key={d} value={d}>{prettyDay(d)}{d === todayStr ? " · today" : ""}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <strong>{prettyDay(sessionDate)}{sessionDate === todayStr ? " · today" : ""}</strong>
+                  )}
+                </div>
+              )}
             </div>
+
+            {attErr && (
+              <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
+                {attErr}
+              </div>
+            )}
+
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {rows.map((r) => (
-                <CamperRow key={r.id} registration={r} contacts={contactsByStudent[r.student?.id] || []} />
+                <CamperRow
+                  key={r.id}
+                  registration={r}
+                  contacts={contactsByStudent[r.student?.id] || []}
+                  canRecord={canRecord}
+                  attRecord={attByStudent[r.student?.id] || null}
+                  saving={savingIds.has(r.student?.id)}
+                  onSave={(patch) => saveAttendance(r, patch)}
+                />
               ))}
             </div>
           </>
@@ -3230,7 +3432,7 @@ const DISMISSAL_LABELS = {
 
 const contactName = (c) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
 
-function CamperRow({ registration, contacts = [] }) {
+function CamperRow({ registration, contacts = [], canRecord = false, attRecord = null, saving = false, onSave }) {
   const s = registration.student;
   if (!s) return null;
   const p = registration.parent;
@@ -3373,6 +3575,184 @@ function CamperRow({ registration, contacts = [] }) {
       {registration.notes && (
         <div style={{ marginTop: 6, fontSize: 12, color: MUTED, fontStyle: "italic" }}>
           Note: {registration.notes}
+        </div>
+      )}
+
+      {canRecord && (
+        <AttendanceControls
+          pickups={pickups}
+          doNotRelease={doNotRelease}
+          dismissalMethod={s.dismissal_method}
+          attRecord={attRecord}
+          saving={saving}
+          onSave={onSave}
+        />
+      )}
+    </div>
+  );
+}
+
+// The instructor's attendance check-in + dismissal picker for one child, for the
+// currently-selected class day. Options come from the child's authorized-pickup
+// list (Chunk A data). A do-not-release person can never be a pickup (enforced at
+// registration), but we defensively drop any name that appears on both lists.
+// "Someone not on the list" is allowed but requires a typed name + reason, stored
+// as a snapshot + note so the safety report can flag it.
+function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, attRecord, saving, onSave }) {
+  const [pickValue, setPickValue] = useState(""); // controlled dismissal <select>
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [otherName, setOtherName] = useState("");
+  const [otherReason, setOtherReason] = useState("");
+
+  const dnrNames = new Set(
+    doNotRelease.map((c) => contactName(c).toLowerCase()).filter(Boolean),
+  );
+  // Defensive: a pickup that also matches a do-not-release name is dropped.
+  const pickOptions = pickups.filter((c) => !dnrNames.has(contactName(c).toLowerCase()));
+  const canWalk = dismissalMethod === "walks_or_bikes_home";
+
+  const present = attRecord?.present ?? null;
+  const released = Boolean(attRecord?.released_at);
+  const releasedTime = attRecord?.released_at
+    ? new Date(attRecord.released_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : null;
+
+  function markPresent(value) {
+    if (saving) return;
+    // checked_in_at is an arrival time — only meaningful when present.
+    onSave({ present: value, checked_in_at: value ? new Date().toISOString() : null });
+  }
+
+  function pickDismissal(e) {
+    const v = e.target.value;
+    // Keep the control an action menu: always snap back to the placeholder so the
+    // same option can be re-picked (e.g. reopening the "someone not listed" form).
+    setPickValue("");
+    if (!v) return;
+    if (v === "__walk__") {
+      onSave({ dismissal_kind: "walked_or_biked", released_to_contact_id: null, released_to_name: "Walked / biked home", released_at: new Date().toISOString(), notes: null });
+      return;
+    }
+    if (v === "__other__") { setOtherOpen(true); return; }
+    const c = pickOptions.find((x) => x.id === v);
+    if (c) {
+      onSave({ dismissal_kind: "released_to_adult", released_to_contact_id: c.id, released_to_name: contactName(c), released_at: new Date().toISOString(), notes: null });
+    }
+  }
+
+  function saveOther() {
+    const name = otherName.trim();
+    const reason = otherReason.trim();
+    if (!name || !reason || saving) return;
+    onSave({
+      dismissal_kind: "released_to_adult",
+      released_to_contact_id: null,
+      released_to_name: name,
+      released_at: new Date().toISOString(),
+      notes: `Released to person not on the authorized list — reason: ${reason}`,
+    });
+    setOtherOpen(false); setOtherName(""); setOtherReason("");
+  }
+
+  const btn = (active, activeColor) => ({
+    fontSize: 12,
+    fontFamily: "inherit",
+    fontWeight: 600,
+    padding: "5px 12px",
+    borderRadius: 6,
+    cursor: saving ? "default" : "pointer",
+    border: `1px solid ${active ? activeColor : RULE}`,
+    background: active ? `${activeColor}1A` : "#fff",
+    color: active ? activeColor : MUTED,
+  });
+
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${RULE}` }}>
+      {/* Attendance */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: INK, minWidth: 78 }}>Attendance</span>
+        <button type="button" disabled={saving} onClick={() => markPresent(true)} style={btn(present === true, OK_GREEN)}>Present</button>
+        <button type="button" disabled={saving} onClick={() => markPresent(false)} style={btn(present === false, CORAL)}>Absent</button>
+        {attRecord?.checked_in_at && present === true && (
+          <span style={{ fontSize: 11, color: MUTED }}>
+            ✓ checked in {new Date(attRecord.checked_in_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+          </span>
+        )}
+      </div>
+
+      {/* Dismissal */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: INK, minWidth: 78 }}>Dismissal</span>
+        {released ? (
+          <span style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600 }}>
+            ✓ Released to {attRecord.released_to_name}{releasedTime ? ` at ${releasedTime}` : ""}
+          </span>
+        ) : present === false ? (
+          // Marked absent — a dismissal record would contradict the attendance.
+          <span style={{ fontSize: 12, color: MUTED }}>Not needed — marked absent</span>
+        ) : (
+          <select
+            value={pickValue}
+            disabled={saving}
+            onChange={pickDismissal}
+            style={{ fontSize: 12, fontFamily: "inherit", color: INK, border: `1px solid ${RULE}`, borderRadius: 6, padding: "5px 6px", background: "#fff", maxWidth: 260 }}
+          >
+            <option value="" disabled>Released to…</option>
+            {pickOptions.map((c) => (
+              <option key={c.id} value={c.id}>{contactName(c)}</option>
+            ))}
+            {canWalk && <option value="__walk__">Walked / biked home</option>}
+            <option value="__other__">Someone not on the list…</option>
+          </select>
+        )}
+        {released && !saving && (
+          <button
+            type="button"
+            onClick={() => onSave({ dismissal_kind: null, released_to_contact_id: null, released_to_name: null, released_at: null, notes: null })}
+            style={{ fontSize: 11, fontFamily: "inherit", background: "none", border: "none", color: PURPLE, textDecoration: "underline", cursor: "pointer", padding: 0 }}
+          >
+            change
+          </button>
+        )}
+      </div>
+
+      {/* Do-not-release reminder (custody-sensitive; instructors enforce it). */}
+      {doNotRelease.length > 0 && (
+        <div style={{ marginTop: 6, fontSize: 11, color: CORAL, fontWeight: 600 }}>
+          Do NOT release to: {doNotRelease.map((c) => contactName(c)).filter(Boolean).join("; ")}
+        </div>
+      )}
+
+      {/* "Someone not on the list" — requires a name + reason, recorded for the report. */}
+      {otherOpen && !released && (
+        <div style={{ marginTop: 8, padding: "8px 10px", background: `${CORAL}10`, border: `1px solid ${CORAL}55`, borderRadius: 6 }}>
+          <div style={{ fontSize: 11, color: INK, marginBottom: 6 }}>
+            This person isn't on the authorized-pickup list. Record who and why — your admin will see it on the safety report.
+          </div>
+          <input
+            type="text"
+            value={otherName}
+            onChange={(e) => setOtherName(e.target.value)}
+            placeholder="Who did you release the child to?"
+            style={{ width: "100%", boxSizing: "border-box", fontSize: 12, fontFamily: "inherit", padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 6 }}
+          />
+          <input
+            type="text"
+            value={otherReason}
+            onChange={(e) => setOtherReason(e.target.value)}
+            placeholder="Reason (e.g. parent phoned ahead)"
+            style={{ width: "100%", boxSizing: "border-box", fontSize: 12, fontFamily: "inherit", padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 8 }}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" disabled={saving || !otherName.trim() || !otherReason.trim()} onClick={saveOther}
+              style={{ fontSize: 12, fontFamily: "inherit", fontWeight: 600, padding: "5px 12px", borderRadius: 6, border: "none", background: (otherName.trim() && otherReason.trim()) ? CORAL : RULE, color: "#fff", cursor: (otherName.trim() && otherReason.trim() && !saving) ? "pointer" : "default" }}>
+              Record release
+            </button>
+            <button type="button" onClick={() => { setOtherOpen(false); setOtherName(""); setOtherReason(""); }}
+              style={{ fontSize: 12, fontFamily: "inherit", background: "none", border: `1px solid ${RULE}`, borderRadius: 6, padding: "5px 12px", color: MUTED, cursor: "pointer" }}>
+              Cancel
+            </button>
+          </div>
         </div>
       )}
     </div>
