@@ -72,6 +72,21 @@ function parentName(p) {
   return n || "";
 }
 
+const DISMISSAL_LABELS = {
+  released_to_authorized_adult: "Released to an authorized adult",
+  walks_or_bikes_home: "Walks or bikes home",
+  bus: "Bus",
+  aftercare: "Aftercare",
+  other: "Other",
+};
+const contactFullName = (c) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
+
+// Click-to-call phone number.
+function Tel({ phone }) {
+  if (!phone) return null;
+  return <a href={`tel:${phone.replace(/[^0-9+]/g, "")}`} style={{ color: BRIGHT, textDecoration: "underline" }}>{phone}</a>;
+}
+
 export default function ProgramRoster() {
   const { org } = useOutletContext();
   const { programId } = useParams();
@@ -80,6 +95,7 @@ export default function ProgramRoster() {
   const [error, setError] = useState("");
   const [program, setProgram] = useState(null);
   const [rows, setRows] = useState([]); // all un-cancelled regs (enrolled + pending)
+  const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts] }
 
   useEffect(() => {
     if (!org?.id || !programId) return;
@@ -114,14 +130,14 @@ export default function ProgramRoster() {
         const { data: regRows, error: rErr } = await supabase
           .from("registrations")
           .select(`
-            id, status, payment_status, authorized_pickup_contacts,
+            id, status, payment_status, authorized_pickup_contacts, custom_field_values,
             photo_release_consent, photo_release_consent_at, registered_at,
             student:students (
               id, first_name, last_name, grade, pronouns, birthdate,
               allergies, dietary_restrictions, medical_notes, medical_conditions,
               epipen_required, medications_at_program,
               emergency_contact_name, emergency_contact_phone,
-              special_needs_accommodations, homeroom_teacher
+              special_needs_accommodations, homeroom_teacher, dismissal_method
             ),
             parent:parents ( first_name, last_name, email, phone )
           `)
@@ -130,9 +146,24 @@ export default function ProgramRoster() {
           .order("registered_at", { ascending: true });
         if (rErr) throw rErr;
 
+        // Structured contacts (guardians / authorized pickup / do-not-release).
+        // do_not_release rows are RLS-gated to org editors, so view-only users
+        // simply don't receive them — no client-side gate needed.
+        const contactMap = {};
+        const sids = [...new Set((regRows ?? []).map((r) => r.student?.id).filter(Boolean))];
+        if (sids.length) {
+          const { data: contacts } = await supabase
+            .from("student_contacts")
+            .select("id, student_id, role, first_name, last_name, phone, email, sort_order")
+            .in("student_id", sids)
+            .order("sort_order", { ascending: true });
+          for (const c of contacts ?? []) (contactMap[c.student_id] ||= []).push(c);
+        }
+
         if (mounted) {
           setProgram(prog);
           setRows(regRows ?? []);
+          setContactsByStudent(contactMap);
         }
       } catch (e) {
         if (mounted) setError(e.message ?? String(e));
@@ -286,7 +317,7 @@ export default function ProgramRoster() {
           <div style={emptyState}>No one's enrolled yet. As families register, they'll show up here.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {enrolled.map((r) => <StudentCard key={r.id} reg={r} />)}
+            {enrolled.map((r) => <StudentCard key={r.id} reg={r} contacts={contactsByStudent[r.student?.id] || []} />)}
           </div>
         )}
       </div>
@@ -320,8 +351,11 @@ export default function ProgramRoster() {
   );
 }
 
-function StudentCard({ reg }) {
+function StudentCard({ reg, contacts = [] }) {
   const s = reg.student ?? {};
+  const guardians = contacts.filter((c) => c.role === "guardian");
+  const pickups = contacts.filter((c) => c.role === "authorized_pickup");
+  const doNotRelease = contacts.filter((c) => c.role === "do_not_release");
   const hasAllergy = (s.allergies ?? "").trim().length > 0;
   const hasMedCond = (s.medical_conditions ?? "").trim().length > 0;
   const flagged = hasAllergy || s.epipen_required || hasMedCond;
@@ -388,20 +422,41 @@ function StudentCard({ reg }) {
         <Field label="Parent">
           {parentName(reg.parent) || <Muted>—</Muted>}
           {reg.parent?.email && <div style={{ color: MUTED }}>{reg.parent.email}</div>}
-          {reg.parent?.phone && <div style={{ color: MUTED }}>{reg.parent.phone}</div>}
+          {reg.parent?.phone && <div><Tel phone={reg.parent.phone} /></div>}
         </Field>
+        {guardians.length > 0 && (
+          <Field label={guardians.length > 1 ? "Guardians" : "Second guardian"}>
+            {guardians.map((g) => (
+              <div key={g.id}>{contactFullName(g)}{g.phone && <> · <Tel phone={g.phone} /></>}</div>
+            ))}
+          </Field>
+        )}
         <Field label="Emergency contact">
           {s.emergency_contact_name
-            ? <>{s.emergency_contact_name}{s.emergency_contact_phone ? <div style={{ color: MUTED }}>{s.emergency_contact_phone}</div> : null}</>
+            ? <>{s.emergency_contact_name}{s.emergency_contact_phone ? <div><Tel phone={s.emergency_contact_phone} /></div> : null}</>
             : <Muted>none on file</Muted>}
         </Field>
+        {s.dismissal_method && (
+          <Field label="Dismissal">{DISMISSAL_LABELS[s.dismissal_method] || s.dismissal_method}</Field>
+        )}
         <Field label="Authorized pickup">
-          {reg.authorized_pickup_contacts || <Muted>parent only</Muted>}
+          {pickups.length > 0
+            ? pickups.map((c) => (
+                <div key={c.id}>{contactFullName(c)}{c.phone && <> · <Tel phone={c.phone} /></>}</div>
+              ))
+            : reg.authorized_pickup_contacts || <Muted>parent only</Muted>}
         </Field>
         {s.homeroom_teacher && (
           <Field label="Homeroom">{s.homeroom_teacher}</Field>
         )}
       </div>
+
+      {doNotRelease.length > 0 && (
+        <div style={{ marginTop: 8, padding: "8px 12px", background: `${RED}10`, border: `1px solid ${RED}40`, borderRadius: 6, fontSize: 13, color: INK }}>
+          <strong style={{ color: RED }}>Do NOT release to:</strong>{" "}
+          {doNotRelease.map((c) => contactFullName(c)).filter(Boolean).join("; ")}
+        </div>
+      )}
     </div>
   );
 }
