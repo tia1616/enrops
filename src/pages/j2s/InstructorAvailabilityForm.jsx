@@ -124,12 +124,10 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
           .eq("cycle_id", cycle.id),
         // Location prefs are by REGION, not individual venue — the same source the
         // matcher scores by. Regions = the org's venue->region map applied to this
-        // cycle's camp venues.
-        supabase
-          .from("organizations")
-          .select("venue_region_map")
-          .eq("id", instructor.organization_id)
-          .single(),
+        // cycle's camp venues. Read via a self-scoping RPC: organizations RLS blocks
+        // instructors (not org members) from the row directly, so a direct select
+        // returned nothing and the map silently came back empty (codex review #5).
+        supabase.rpc("get_instructor_region_map", { p_org_id: instructor.organization_id }),
         supabase
           .from("camp_sessions")
           .select("location_name")
@@ -176,7 +174,14 @@ export default function InstructorAvailabilityForm({ instructor, cycle, onSaved,
       setCurPrefs(curMap);
 
       // Distinct regions for this cycle's camps (venue -> region via the org map).
-      const regionMap = orgRes.data?.venue_region_map ?? {};
+      // The RPC returns the map jsonb directly (or null if the org has no map).
+      // A genuine RPC error is NOT the same as "no regions" — surface it instead
+      // of silently coalescing to an empty map (which used to hide the RLS block).
+      if (orgRes.error) {
+        console.error("[availability] get_instructor_region_map failed", orgRes.error);
+        setError("We couldn't load location options right now. Please refresh, and if it keeps happening let your program admin know.");
+      }
+      const regionMap = orgRes.error ? {} : (orgRes.data ?? {});
       const campVenues = [...new Set((campVenuesRes.data ?? []).map((c) => c.location_name).filter(Boolean))];
       const regions = [...new Set(campVenues.map((v) => regionMap[v]).filter(Boolean))].sort((a, b) => a.localeCompare(b));
       setLocations(regions.map((r) => ({ id: r, name: r })));

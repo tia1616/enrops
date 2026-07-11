@@ -149,6 +149,25 @@ export function htmlToEditable(html) {
   return text.trim();
 }
 
+// Sanitize a markdown link destination before it goes into a double-quoted
+// href. The body is rendered via dangerouslySetInnerHTML in admin previews AND
+// stored/sent as outgoing email, so an unsanitized destination is a stored-XSS
+// vector (codex review #2): `[x](javascript:alert(1))` and a `"`-break like
+// `[x](https://a/" onmouseover=alert(1))` both injected before this.
+//
+// `href` here has already been through escapeText (& -> &amp;, < > escaped) but
+// NOT quotes — escapeText is deliberately narrow (see its comment). So we:
+//   1. strip control chars (block scheme-obfuscation / attribute breaks),
+//   2. allow ONLY http/https/mailto URLs or a whole {{token}} merge destination
+//      (the real form operators use, e.g. [text]({{register_url}})); anything
+//      else (javascript:, data:, relative junk) collapses to "#",
+//   3. escape the one attribute-breaking char escapeText left: `"`.
+function safeLinkHref(href) {
+  const cleaned = String(href).replace(/[\x00-\x1F\x7F]/g, "").trim();
+  const allowed = /^\{\{\w+\}\}$/.test(cleaned) || /^(?:https?:|mailto:)/i.test(cleaned);
+  return (allowed ? cleaned : "#").replace(/"/g, "&quot;");
+}
+
 // Reverse: convert markdown back to HTML, then wrap each blank-line-separated
 // block in <p>...</p>. Links FIRST so a paragraph that's just a link still
 // wraps in <p>. Then **bold** and _italic_. The underscore pattern requires
@@ -166,7 +185,7 @@ export function editableToHtml(text) {
   // destination now tolerates one level of balanced parens so a URL like
   // https://maps.google.com/?q=(1,2) isn't truncated at the first ")". (Deeper
   // nesting than one level is not supported — vanishingly rare in real URLs.)
-  html = html.replace(/\[([^\]]+)\]\(((?:[^()]|\([^()]*\))*)\)/g, (_, label, href) => `<a href="${href}">${label}</a>`);
+  html = html.replace(/\[([^\]]+)\]\(((?:[^()]|\([^()]*\))*)\)/g, (_, label, href) => `<a href="${safeLinkHref(href)}">${label}</a>`);
   html = html.replace(/\*\*([^*\n]+)\*\*/g, (_, inner) => `<strong>${inner}</strong>`);
   html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s.,;:!?)]|$)/g, (_m, pre, inner) => `${pre}<em>${inner}</em>`);
   // Build blocks line by line. A line that's ONLY a pre-rendered block token is

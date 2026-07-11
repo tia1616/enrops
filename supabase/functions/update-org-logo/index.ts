@@ -64,6 +64,18 @@ Deno.serve(async (req: Request) => {
     const auth = await verifyAdminOf(req.headers.get("Authorization"), orgId);
     if (!auth.ok) return jsonError(auth.reason, auth.status);
 
+    // SSRF guard (codex review #1): logo_url is fetched server-side later by
+    // regenerate-email-logo. Only accept a Supabase Storage public URL under THIS
+    // org's own org-assets folder — never an arbitrary URL, which could aim the
+    // edge runtime at internal/attacker hosts or an oversized body. Real uploads
+    // always land at {SUPABASE_URL}/storage/v1/object/public/org-assets/{orgId}/...
+    if (logoUrl) {
+      const allowedPrefix = `${SUPABASE_URL}/storage/v1/object/public/org-assets/${orgId}/`;
+      if (!logoUrl.startsWith(allowedPrefix)) {
+        return jsonError("logo_url must be an uploaded org-assets file for this organization", 400);
+      }
+    }
+
     const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
     // Set the source logo first.

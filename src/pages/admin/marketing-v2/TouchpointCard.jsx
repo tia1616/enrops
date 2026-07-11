@@ -337,6 +337,7 @@ export default function TouchpointCard({
               organizationId={organizationId}
               subject={tp.subject}
               bodyHtml={tp.body_html ?? ""}
+              emailAttachments={tp.email_attachments ?? []}
               onApply={(patch) => (onCommit ?? onUpdate)(tp.id, patch)}
             />
           )}
@@ -490,7 +491,7 @@ function BodyEditor({ value, onChange, onCommit }) {
 // drop a saved one into this touchpoint. Templates live in saved_email_templates
 // (org-scoped, RLS-gated). Reuse writes through onApply → the touchpoint's
 // onCommit/onUpdate so it persists exactly like a normal edit.
-function TemplateControls({ organizationId, subject, bodyHtml, onApply }) {
+function TemplateControls({ organizationId, subject, bodyHtml, emailAttachments, onApply }) {
   const [mode, setMode] = useState(null); // null | 'save' | 'use'
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -514,6 +515,9 @@ function TemplateControls({ organizationId, subject, bodyHtml, onApply }) {
       subject: subject && subject.trim() ? subject : null,
       body_html: bodyHtml || null,
       body_text: stripHtml(bodyHtml) || null,
+      // Persist the touchpoint's current attachments with the template, matching
+      // the Templates page (codex #7 — campaign-saved templates dropped these).
+      email_attachments: Array.isArray(emailAttachments) ? emailAttachments : [],
       created_by: userData?.user?.id ?? null,
     });
     setBusy(false);
@@ -532,7 +536,7 @@ function TemplateControls({ organizationId, subject, bodyHtml, onApply }) {
     setBusy(true);
     const { data, error } = await supabase
       .from("saved_email_templates")
-      .select("id, name, subject, body_html")
+      .select("id, name, subject, body_html, email_attachments")
       .eq("organization_id", organizationId)
       .order("updated_at", { ascending: false });
     setBusy(false);
@@ -556,6 +560,11 @@ function TemplateControls({ organizationId, subject, bodyHtml, onApply }) {
       patch.body_text = stripHtml(t.body_html);
     }
     if (t.subject && t.subject.trim()) patch.subject = t.subject;
+    // Same "only overwrite what the template HAS" rule as subject/body: a template
+    // with no attachments leaves the operator's current attachments untouched
+    // rather than clearing them (codex #7).
+    const atts = Array.isArray(t.email_attachments) ? t.email_attachments : [];
+    if (atts.length) patch.email_attachments = atts;
     if (patch.body_html == null && patch.subject == null) {
       showFlash("err", "That template is empty.");
       setPickId("");
