@@ -985,7 +985,7 @@ function GroupRow({
         <div style={{ borderTop: `1px solid ${RULE}`, padding: 10, display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', background: CREAM }}>
           {hasUnconfirmed && (
             <ActionButton onClick={onConfirmGroup} disabled={busy} tone="primary">
-              Confirm &amp; pay {unconfirmedCount} day{unconfirmedCount === 1 ? '' : 's'}
+              Confirm {unconfirmedCount} day{unconfirmedCount === 1 ? '' : 's'}
             </ActionButton>
           )}
           {hasApprovable && (
@@ -1065,7 +1065,7 @@ function DayBreakdown({ rows, originalInstructor, onApproveRow, onConfirmRow, on
               <div style={{ display: 'flex', gap: 6 }}>
                 {unconfirmed ? (
                   onConfirmRow && !isCovered && (
-                    <MicroButton onClick={() => onConfirmRow(r.confirmation_id)} disabled={busy}>Confirm &amp; pay</MicroButton>
+                    <MicroButton onClick={() => onConfirmRow(r.confirmation_id)} disabled={busy}>Confirm</MicroButton>
                   )
                 ) : (
                   <>
@@ -1081,7 +1081,7 @@ function DayBreakdown({ rows, originalInstructor, onApproveRow, onConfirmRow, on
                       <MicroButton onClick={() => onWithholdRow(r.confirmation_id)} disabled={busy} tone="danger">Withhold</MicroButton>
                     )}
                     {r.pay_status === 'withheld' && !isCovered && neverConfirmed && onConfirmRow && (
-                      <MicroButton onClick={() => onConfirmRow(r.confirmation_id)} disabled={busy}>Confirm &amp; pay</MicroButton>
+                      <MicroButton onClick={() => onConfirmRow(r.confirmation_id)} disabled={busy}>Confirm</MicroButton>
                     )}
                     {r.pay_status === 'withheld' && !neverConfirmed && (
                       <MicroButton onClick={() => onReapproveRow(r.confirmation_id)} disabled={busy}>Re-approve</MicroButton>
