@@ -28,6 +28,26 @@ const RED = "#b53737";
 
 const DOW = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
+// Term codes are <season><2-digit year>, e.g. FA26 = Fall 2026, WI27 = Winter
+// 2027 (winter falls in the calendar year AFTER fall). Sort CHRONOLOGICALLY, not
+// alphabetically (else WI27 sorts before FA26 and the report opens on the wrong
+// term). Key = the term's start month as YYYYMM.
+const TERM_START_MONTH = { WI: 1, SP: 4, SU: 7, FA: 9 };
+function termKey(t) {
+  const m = /^([A-Za-z]{2})(\d{2})$/.exec(t || "");
+  if (!m) return 0;
+  return (2000 + Number(m[2])) * 100 + (TERM_START_MONTH[m[1].toUpperCase()] ?? 0);
+}
+// Default to the term in progress or next up; if all terms are past, the latest.
+function currentTerm(terms) {
+  if (!terms || terms.length === 0) return null;
+  const now = new Date();
+  const todayKey = now.getFullYear() * 100 + (now.getMonth() + 1);
+  const upcoming = terms.filter((t) => termKey(t) >= todayKey).sort((a, b) => termKey(a) - termKey(b));
+  if (upcoming.length) return upcoming[0];
+  return [...terms].sort((a, b) => termKey(b) - termKey(a))[0];
+}
+
 function todayISO() {
   const d = new Date();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -127,7 +147,8 @@ function AfterschoolReports({ org }) {
   const [expandedId, setExpandedId] = useState(null);
   const [error, setError] = useState("");
 
-  // Terms present in the data (newest first). Archive = pick an older term.
+  // Terms present in the data, chronological (newest first). Default = the term
+  // in progress / next up. Archive = pick an older term.
   useEffect(() => {
     if (!org?.id) return;
     let cancelled = false;
@@ -136,9 +157,10 @@ function AfterschoolReports({ org }) {
         .from("programs").select("term").eq("organization_id", org.id).not("term", "is", null);
       if (cancelled) return;
       if (e) { setError("Couldn't load terms."); setTerms([]); return; }
-      const uniq = [...new Set((data ?? []).map((r) => r.term).filter(Boolean))].sort().reverse();
+      const uniq = [...new Set((data ?? []).map((r) => r.term).filter(Boolean))]
+        .sort((a, b) => termKey(b) - termKey(a));
       setTerms(uniq);
-      setTerm((cur) => cur ?? uniq[0] ?? null);
+      setTerm((cur) => cur ?? currentTerm(uniq));
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
