@@ -32,6 +32,7 @@ import InstructorsPage from './pages/admin/instructors/InstructorsPage.jsx';
 import SurveyResponses from './pages/admin/instructors/SurveyResponses.jsx';
 import Payroll from './pages/admin/Payroll.jsx';
 import Rosters from './pages/admin/Rosters.jsx';
+import ClassReports from './pages/admin/ClassReports.jsx';
 import Finances from './pages/admin/Finances.jsx';
 import Payouts from './pages/admin/Payouts.jsx';
 import TeamPage from './pages/admin/team/TeamPage.jsx';
@@ -178,6 +179,7 @@ export default function App() {
         <Route path="survey-responses" element={<Navigate to="/admin/availability" replace />} />
         <Route path="payroll" element={<Payroll />} />
         <Route path="rosters" element={<Rosters />} />
+        <Route path="class-reports" element={<ClassReports />} />
         <Route path="finances" element={<Finances />} />
         <Route path="payouts" element={<Payouts />} />
         <Route path="team" element={<TeamPage />} />

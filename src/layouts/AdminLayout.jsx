@@ -50,6 +50,7 @@ const NAV = [
       { to: "/admin/class-schedule", label: "Class schedule", outsideRegOnly: true,
         offReason: "You run registration through Enrops — your classes are under Scheduled programs." },
       { to: "/admin/rosters", label: "Class rosters" },
+      { to: "/admin/class-reports", label: "Class Reports" },
       { to: "/admin/curricula", label: "Offerings" },
     ],
   },
