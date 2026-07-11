@@ -2846,7 +2846,11 @@ function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, cl
 
   if (days.length === 0) return null;
 
-  const marked = confirmations ? confirmations.size : 0;
+  // A cron-seeded placeholder (confirmed_by='pending') is NOT a real check-in —
+  // don't count it as marked (the instructor still needs to click that day).
+  const marked = confirmations
+    ? [...confirmations.values()].filter((r) => r.confirmed_by !== "pending").length
+    : 0;
   const total = days.length;
 
   return (
@@ -2899,6 +2903,9 @@ function DayRow({ date, isToday, isFuture, existing, loading, busy, onMark }) {
   const confirmedAt = existing?.confirmed_at
     ? new Date(existing.confirmed_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
     : null;
+  // A cron-seeded placeholder (confirmed_by='pending') is NOT marked taught —
+  // it still needs the instructor's click, so treat it like an unmarked day.
+  const isMarked = existing && existing.confirmed_by !== "pending";
   const byAdmin = existing && existing.confirmed_by === "admin";
 
   return (
@@ -2908,8 +2915,8 @@ function DayRow({ date, isToday, isFuture, existing, loading, busy, onMark }) {
         alignItems: "center",
         gap: 12,
         padding: "8px 10px",
-        background: existing ? `${OK_GREEN}0F` : isFuture ? "#fafafa" : CREAM,
-        border: `1px solid ${existing ? `${OK_GREEN}55` : RULE}`,
+        background: isMarked ? `${OK_GREEN}0F` : isFuture ? "#fafafa" : CREAM,
+        border: `1px solid ${isMarked ? `${OK_GREEN}55` : RULE}`,
         borderRadius: 6,
         opacity: isFuture ? 0.55 : 1,
       }}
@@ -2917,13 +2924,13 @@ function DayRow({ date, isToday, isFuture, existing, loading, busy, onMark }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>
           {dayLabel}
-          {isToday && !existing && (
+          {isToday && !isMarked && (
             <span style={{ marginLeft: 8, fontSize: 10, color: PURPLE, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
               Today
             </span>
           )}
         </div>
-        {existing && (
+        {isMarked && (
           <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
             Marked taught{confirmedAt ? ` · ${confirmedAt}` : ""}
             {byAdmin && " · by admin"}
@@ -2931,7 +2938,7 @@ function DayRow({ date, isToday, isFuture, existing, loading, busy, onMark }) {
         )}
       </div>
 
-      {existing ? (
+      {isMarked ? (
         <span style={{ color: OK_GREEN, fontSize: 18, fontWeight: 700 }} title="Marked taught">✓</span>
       ) : isFuture ? (
         <span style={{ color: MUTED, fontSize: 11, fontStyle: "italic" }}>
@@ -3431,6 +3438,9 @@ function PayView({ instructorId, onBack }) {
           )
           .eq("instructor_id", instructorId)
           .not("camp_session_id", "is", null)
+          // Exclude cron-seeded placeholders — a day the instructor hasn't
+          // confirmed isn't earned pay yet (it shows in Daily check-in instead).
+          .neq("confirmed_by", "pending")
           .order("session_date", { ascending: false });
         if (confErr) throw confErr;
         if (cancelled) return;

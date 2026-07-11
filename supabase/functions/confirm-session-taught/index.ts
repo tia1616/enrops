@@ -1,10 +1,17 @@
 // confirm-session-taught — instructor day-of check-in endpoint.
 //
 // Instructor Portal: closes the schedule loop by letting an instructor
-// mark a specific day of camp as "I taught this." Writes a row into
-// session_delivery_confirmations with confirmed_by='self', pay_status
-// 'pending', and pay_amount_cents resolved per-tenant from tenant_pay_rates
-// (keyed by the assignment's role + the session_type).
+// mark a specific day of camp as "I taught this." Lands the day
+// confirmed_by='self', pay_status='approved' (immediately ready for payout —
+// the admin only has to act on days nobody confirmed), pay_amount_cents
+// resolved per-tenant from tenant_pay_rates (keyed by the assignment's role +
+// the session_type).
+//
+// The daily cron (session-confirmation-cron) pre-seeds a placeholder row
+// (confirmed_by='pending') for each camp day so unconfirmed days surface on the
+// admin Payroll screen. When one exists, this endpoint PROMOTES it in place
+// rather than treating it as already-confirmed — otherwise the instructor's
+// click would bounce off the placeholder and the day could never be self-marked.
 //
 // Pay rates are per-tenant: resolvePayAmount() reads the org's tenant_pay_rates
 // card. The same resolver is shared by confirm-session-delivery,
@@ -19,10 +26,9 @@
 // Body: { camp_assignment_id: string, session_date: 'YYYY-MM-DD' }
 //
 // Idempotent: a second call for the same (instructor, camp_session,
-// session_date) returns the existing row instead of duplicating. There's
-// no unique index on the table yet, so we check existence first inside
-// a single function call. If two clients race the check, we may briefly
-// produce two rows — acceptable for an MVP; the admin can clean up.
+// session_date) returns the existing row instead of duplicating. A unique
+// partial index (uq_session_delivery_confirmations_camp) backs this; the
+// promote/insert paths race-guard on confirmed_by='pending'.
 //
 // Anti-enumeration: missing row + wrong instructor both return identical
 // 403 with no detail.
@@ -133,7 +139,13 @@ serve(async (req: Request) => {
       console.error('confirmation lookup failed:', existsErr);
       return json({ error: 'lookup_failed' }, 500);
     }
-    if (existing) {
+    // A genuinely-confirmed row (self / admin / sub) is idempotent — return it.
+    // A cron-seeded PLACEHOLDER (confirmed_by='pending') is NOT a real check-in;
+    // it just exists so the day shows up for the admin. Fall through and PROMOTE
+    // it to a self-confirm below, so the instructor's click actually counts
+    // (before this, any existing row blocked the click and the day stayed
+    // pending forever once the daily cron had seeded it).
+    if (existing && existing.confirmed_by !== 'pending') {
       return json({
         confirmation: existing,
         already_confirmed: true,
@@ -171,8 +183,53 @@ serve(async (req: Request) => {
       session.session_type,
     );
 
-    // Insert the new confirmation. session_type mirrors the camp_session's
-    // (full_day / morning / afternoon).
+    const nowIso = new Date().toISOString();
+    const RETURN_COLS =
+      'id, confirmed_by, confirmed_at, pay_status, pay_amount_cents, pay_adjustment_cents';
+
+    // Promote a pending placeholder row to a self-confirm. Race-guarded on
+    // confirmed_by='pending' so a concurrent admin/sub confirm that landed
+    // between our read and write isn't clobbered — if we lose the race we
+    // return the current (already-confirmed) row rather than an error. The day
+    // lands confirmed_by='self' + pay_status='approved', so a day the instructor
+    // confirms is immediately ready for payout and the admin only has to act on
+    // the days nobody confirmed. ('approved' matches the sibling self/sub paths.)
+    const promotePlaceholder = async (rowId: string) => {
+      const { data: promoted, error: updErr } = await supabase
+        .from('session_delivery_confirmations')
+        .update({
+          confirmed_by: 'self',
+          confirmed_at: nowIso,
+          pay_status: 'approved',
+          pay_amount_cents: payAmountCents,
+          updated_at: nowIso,
+        })
+        .eq('id', rowId)
+        .eq('confirmed_by', 'pending')
+        .select(RETURN_COLS)
+        .maybeSingle();
+      if (updErr) throw updErr;
+      if (promoted) return { confirmation: promoted, already_confirmed: false };
+      const { data: current } = await supabase
+        .from('session_delivery_confirmations')
+        .select(RETURN_COLS)
+        .eq('id', rowId)
+        .maybeSingle();
+      return { confirmation: current, already_confirmed: true };
+    };
+
+    // Existing placeholder → promote it in place.
+    if (existing) {
+      try {
+        return json(await promotePlaceholder(existing.id));
+      } catch (e) {
+        console.error('confirmation promote failed:', e);
+        return json({ error: 'update_failed', detail: (e as Error).message }, 500);
+      }
+    }
+
+    // No row yet — insert a fresh self-confirm. session_type mirrors the
+    // camp_session's (full_day / morning / afternoon).
     const { data: inserted, error: insErr } = await supabase
       .from('session_delivery_confirmations')
       .insert({
@@ -182,13 +239,36 @@ serve(async (req: Request) => {
         session_date: sessionDate,
         session_type: session.session_type,
         confirmed_by: 'self',
-        confirmed_at: new Date().toISOString(),
-        pay_status: 'pending',
+        confirmed_at: nowIso,
+        pay_status: 'approved',
         pay_amount_cents: payAmountCents,
       })
-      .select('id, confirmed_by, confirmed_at, pay_status, pay_amount_cents, pay_adjustment_cents')
+      .select(RETURN_COLS)
       .single();
     if (insErr) {
+      // 23505 = unique_violation: the daily cron (or another client) seeded the
+      // row between our existence check above and this insert. Re-read and
+      // promote it instead of 500-ing on a legitimate first click.
+      if ((insErr as { code?: string }).code === '23505') {
+        const { data: raced } = await supabase
+          .from('session_delivery_confirmations')
+          .select(RETURN_COLS)
+          .eq('instructor_id', me.id)
+          .eq('camp_session_id', session.id)
+          .eq('session_date', sessionDate)
+          .maybeSingle();
+        if (raced && raced.confirmed_by !== 'pending') {
+          return json({ confirmation: raced, already_confirmed: true });
+        }
+        if (raced) {
+          try {
+            return json(await promotePlaceholder(raced.id));
+          } catch (e) {
+            console.error('confirmation promote-after-conflict failed:', e);
+            return json({ error: 'update_failed', detail: (e as Error).message }, 500);
+          }
+        }
+      }
       console.error('confirmation insert failed:', insErr);
       return json({ error: 'insert_failed', detail: insErr.message }, 500);
     }
