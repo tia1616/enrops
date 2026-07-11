@@ -44,8 +44,10 @@ export const VENUE_REGION_MAP: Record<string, string> = {
 // to "preferred". index.ts runs a pre-flight check across all camp location_names
 // before matching to surface unmapped venues as a clear error.
 // The venue->region map is the org's config (organizations.venue_region_map),
-// passed through the score context. Falls back to the built-in J2S constant when
-// not supplied (keeps existing tests + un-migrated orgs working unchanged).
+// passed through the score context. The runtime (index.ts) ALWAYS passes the org's
+// own map and fails closed when it's empty — it never falls back to the J2S constant.
+// The VENUE_REGION_MAP default here exists ONLY so the unit tests can call regionFor
+// without threading a map; it is never reached in production (codex review #4).
 export function regionFor(locationName: string, map?: Record<string, string>): string {
   const region = (map ?? VENUE_REGION_MAP)[locationName];
   if (!region) throw new Error(`Unmapped venue: "${locationName}". Add it to the org's venue_region_map.`);

@@ -39,7 +39,6 @@ import {
   SchedulingCycle,
   SessionType,
   SoftScoreContext,
-  VENUE_REGION_MAP,
 } from './lib.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 
@@ -105,15 +104,17 @@ serve(async (req) => {
     const cycle = cycleRow as SchedulingCycle;
     const orgId = cycle.organization_id;
 
-    // Venue->region map: the org's config is the single source (shared with the camp
-    // survey form). Falls back to the built-in constant when the org hasn't been seeded.
+    // Venue->region map: the org's OWN config is the single source (shared with the
+    // camp survey form). No cross-tenant fallback — an org that hasn't configured its
+    // map fails closed at the unmapped-venues pre-flight below with a clear, tenant-
+    // neutral "add these to Settings" error, rather than silently inheriting J2S's
+    // venues (codex review #4).
     const { data: orgRow } = await admin
       .from('organizations')
       .select('venue_region_map')
       .eq('id', orgId)
       .single();
-    const orgRegionMap = (orgRow?.venue_region_map ?? {}) as Record<string, string>;
-    const regionMap = Object.keys(orgRegionMap).length > 0 ? orgRegionMap : VENUE_REGION_MAP;
+    const regionMap = (orgRow?.venue_region_map ?? {}) as Record<string, string>;
 
     // ----- Camp sessions -----
     let campQuery = admin
