@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { usePermissions } from "../../lib/permissions";
 import Chevron from "../../components/Chevron.jsx";
 
 const PURPLE = "#1C004F";
@@ -99,7 +100,18 @@ const csvCell = (v) => {
 
 export default function ClassReports() {
   const { org } = useOutletContext() ?? {};
+  const perm = usePermissions();
   const [view, setView] = useState("afterschool"); // 'afterschool' | 'camps'
+
+  // Custody/safety log — owner/admin/staff only. Viewers are blocked here and at
+  // the RLS layer (they get no attendance rows regardless).
+  if (!perm.canEdit) {
+    return (
+      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 24, color: MUTED, fontSize: 14 }}>
+        Class Reports is available to owners, admins, and staff. Ask an admin if you need access to the dismissal and attendance records.
+      </div>
+    );
+  }
 
   return (
     <div>

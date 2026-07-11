@@ -50,7 +50,7 @@ const NAV = [
       { to: "/admin/class-schedule", label: "Class schedule", outsideRegOnly: true,
         offReason: "You run registration through Enrops — your classes are under Scheduled programs." },
       { to: "/admin/rosters", label: "Class rosters" },
-      { to: "/admin/class-reports", label: "Class Reports" },
+      { to: "/admin/class-reports", label: "Class Reports", gate: "reports" }, // owner/admin/staff — custody/safety log, hidden from viewer
       { to: "/admin/curricula", label: "Offerings" },
     ],
   },
@@ -419,7 +419,7 @@ export default function AdminLayout() {
           <>
           {showSectionTabs && (
             <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 22 }}>
-              {activeTabSection.tabs.map((t) => {
+              {activeTabSection.tabs.filter((t) => !t.gate || perm.can(t.gate)).map((t) => {
                 const tabActive =
                   location.pathname === t.to || location.pathname.startsWith(t.to + "/");
                 // Registration vs outside-registration tenant: disable (don't hide)
