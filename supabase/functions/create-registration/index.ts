@@ -305,7 +305,7 @@ serve(async (req) => {
       // --- Registrations: one per line item for this child ---
       // For VIP: item has vipBundle with fall/winter/spring → create 3 registrations.
       // For standard: one registration per item.
-      for (const item of child.items) {
+      for (const item of child.items || []) {
         const programsToRegister = item.isVip && item.vipBundle
           ? [item.vipBundle.fall, item.vipBundle.winter, item.vipBundle.spring]
           : [item.program];
@@ -327,8 +327,10 @@ serve(async (req) => {
               payment_method: payment_plan ? 'stripe_installments' : 'stripe',
               payment_status: 'unpaid',
               amount_cents: pl.amount_cents,       // NET, server-computed
+              // discount_type CHECK allows: sibling|legacy|vip_returning|vip_new|promo|null.
+              // 'vip' is NOT valid (would throw) — VIP carts use 'vip_new'.
               discount_type: item.isVip
-                ? 'vip'
+                ? 'vip_new'
                 : (validatedPromo && pl.promo_discount_cents > 0)
                 ? 'promo'
                 : child.child_index > 0

@@ -551,6 +551,7 @@ export default function Register() {
                 const { data } = await supabase
                   .from('promo_codes')
                   .select('*')
+                  .eq('organization_id', ORG_ID)
                   .eq('code', code.trim().toUpperCase())
                   .eq('active', true)
                   .maybeSingle();
