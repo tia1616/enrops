@@ -18,7 +18,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { loadOrgBrand, renderSignatureBlock, encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -260,15 +260,16 @@ serve(async (req: Request) => {
       if (mode === 'preview') continue;
 
       try {
-        const fromName = branding.email_from_name ?? org.name;
-        const fromEmail = `${encodeDisplayName(fromName)} <hello@updates.journeytosteam.com>`;
+        // Tenant-safe From: the org's canonical sender (verified own domain, else
+        // the shared platform domain), consistent with every other tenant email.
+        const fromEmail = formatFromAddress(brand);
         const r = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
           body: JSON.stringify({
             from: fromEmail,
             to: instructor.email,
-            reply_to: branding.email_reply_to ?? undefined,
+            reply_to: brand.reply_to,
             subject,
             html,
             text,

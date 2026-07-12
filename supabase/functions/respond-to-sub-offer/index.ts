@@ -18,7 +18,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, resolveInstructor, adminClient } from '../_shared/instructor.ts';
-import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
@@ -208,15 +208,15 @@ serve(async (req: Request) => {
       ].filter(Boolean).join('\n');
 
       try {
-        const fromName = branding?.email_from_name ?? org?.name ?? 'Enrops';
-        const fromEmail = `${encodeDisplayName(fromName)} <hello@updates.journeytosteam.com>`;
+        const brand = await loadOrgBrand(supabase, subRow.organization_id);
+        const fromEmail = formatFromAddress(brand);
         const r = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
           body: JSON.stringify({
             from: fromEmail,
             to: recipient,
-            reply_to: branding?.email_reply_to ?? undefined,
+            reply_to: brand.reply_to,
             subject,
             html,
             text,
@@ -380,9 +380,9 @@ async function sendCoordinationEmail(
     }
   }
 
-  const fromName = branding?.email_from_name ?? org?.name ?? 'Enrops';
-  const fromEmail = `${encodeDisplayName(fromName)} <hello@updates.journeytosteam.com>`;
-  const replyTo = branding?.email_reply_to ?? org?.alert_email ?? undefined;
+  const brand = await loadOrgBrand(supabase, subRow.organization_id);
+  const fromEmail = formatFromAddress(brand);
+  const replyTo = brand.reply_to;
   // Normalize for both sending and dedup — emails are effectively
   // case-insensitive and stored with inconsistent case across import paths, so
   // compare lowercased to avoid the same person landing on both To and Cc.

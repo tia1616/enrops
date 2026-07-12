@@ -70,6 +70,7 @@ export default function InstructorPortal() {
   //   ready        -> onboarded contractor; render schedule + profile
   //   error        -> unrecoverable load failure
   const navigate = useNavigate();
+  const { slug: routeSlug } = useParams();
   const [phase, setPhase] = useState("loading");
   const [email, setEmail] = useState("");
   const [sendBusy, setSendBusy] = useState(false);
@@ -79,8 +80,9 @@ export default function InstructorPortal() {
   const [onboarding, setOnboarding] = useState(null);
   // Authoritative tenant slug for this instructor's org (from the public
   // directory, keyed on their organization_id) — used for every portal URL so
-  // we never hardcode a tenant. Falls back to "j2s" only until it's resolved.
-  const [orgSlug, setOrgSlug] = useState("j2s");
+  // we never hardcode a tenant. Seeds from the route slug (/:slug/instructor)
+  // until the authoritative value resolves.
+  const [orgSlug, setOrgSlug] = useState(routeSlug || "");
   // Instructor-facing background-check config for this org (enabled flag +
   // provider name/link/instructions). Drives the wizard's background-check step.
   const [backgroundCheck, setBackgroundCheck] = useState(null);
@@ -201,7 +203,7 @@ export default function InstructorPortal() {
       // Resolve this org's real slug + instructor-facing background-check config
       // from the public directory (keyed on the instructor's organization_id).
       // The slug drives every portal URL below so we never hardcode a tenant.
-      let resolvedSlug = "j2s";
+      let resolvedSlug = routeSlug || "";
       if (fullInstructor.organization_id) {
         const { data: dir } = await supabase
           .from("public_org_directory")
@@ -1569,7 +1571,7 @@ function Shell({ children, instructorName, onSignOut, slug: slugProp }) {
   // Prefer the caller-provided org slug (resolved from the instructor's org) so
   // the portal switcher points at the right tenant even when the URL slug is a
   // fallback like /j2s/instructor. Falls back to the URL param.
-  const { slug: paramSlug = "j2s" } = useParams();
+  const { slug: paramSlug = "" } = useParams();
   const slug = slugProp || paramSlug;
   return (
     <div style={{
