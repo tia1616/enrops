@@ -3,7 +3,7 @@
 // Accept or Request Change per camp. Class detail + My Availability are v2.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
@@ -70,7 +70,14 @@ export default function InstructorPortal() {
   //   ready        -> onboarded contractor; render schedule + profile
   //   error        -> unrecoverable load failure
   const navigate = useNavigate();
+  // The slug can come from the route param (/:slug/instructor) OR be baked into a
+  // literal path (/j2s/instructor, the redirect target for /instructor). useParams
+  // is empty on the literal route, so fall back to the first path segment — always
+  // the tenant slug — rather than a hardcoded tenant. Used only until the
+  // authoritative org slug resolves from the instructor's organization_id.
   const { slug: routeSlug } = useParams();
+  const location = useLocation();
+  const pathSlug = routeSlug || location.pathname.split("/").filter(Boolean)[0] || "";
   const [phase, setPhase] = useState("loading");
   const [email, setEmail] = useState("");
   const [sendBusy, setSendBusy] = useState(false);
@@ -82,7 +89,7 @@ export default function InstructorPortal() {
   // directory, keyed on their organization_id) — used for every portal URL so
   // we never hardcode a tenant. Seeds from the route slug (/:slug/instructor)
   // until the authoritative value resolves.
-  const [orgSlug, setOrgSlug] = useState(routeSlug || "");
+  const [orgSlug, setOrgSlug] = useState(pathSlug);
   // Instructor-facing background-check config for this org (enabled flag +
   // provider name/link/instructions). Drives the wizard's background-check step.
   const [backgroundCheck, setBackgroundCheck] = useState(null);
@@ -203,7 +210,7 @@ export default function InstructorPortal() {
       // Resolve this org's real slug + instructor-facing background-check config
       // from the public directory (keyed on the instructor's organization_id).
       // The slug drives every portal URL below so we never hardcode a tenant.
-      let resolvedSlug = routeSlug || "";
+      let resolvedSlug = pathSlug;
       if (fullInstructor.organization_id) {
         const { data: dir } = await supabase
           .from("public_org_directory")

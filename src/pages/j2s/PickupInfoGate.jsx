@@ -5,8 +5,9 @@
 //
 // Reuses the exact registration fields (PickupDismissalSection /
 // GuardianSecondarySection) so the parent sees the same form they'd have filled at
-// checkout. Saves through replace_student_contacts (parent-authorized) + a direct
-// students.dismissal_method update (parents_manage_own_students RLS). onComplete
+// checkout. Saves through replace_student_pickup_dnr_guardian — one parent-authorized
+// RPC per child that replaces all contact roles + dismissal_method in a single
+// transaction (so a pickup<->do-not-release move can't race and half-save). onComplete
 // re-fetches the dashboard, which recomputes the gate (now empty) and lets them in.
 //
 // Scoped to after-school only (summer camps excluded upstream in Dashboard).
@@ -77,6 +78,11 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     if (std?.dismissal_method && !d.dismissal_method) return "Choose how this child leaves.";
     if (d.dismissal_method === "released_to_authorized_adult" && nonEmpty(d.pickup).length === 0) {
       return "Add at least one person who can pick them up.";
+    }
+    // Mirror Register's canAdvance: if the org marked do-not-release required, the
+    // backfill gate must enforce it too (the label shows Required in both flows).
+    if (std?.do_not_release?.required && nonEmpty(d.doNotRelease).length === 0) {
+      return "Add the name(s) we should not release this child to.";
     }
     if (pickupDnrConflicts(d.pickup, d.doNotRelease).length > 0) {
       return "A name is on both the pickup and do-not-release lists. Remove it from one.";
