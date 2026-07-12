@@ -3157,6 +3157,22 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
   const canRecord = Boolean(instructorId && sessionDate);
   const datesKey = (sessionDates || []).join(",");
 
+  // Dismissal is coupled to the org's registration setting: only show the
+  // dismissal check-off when this provider actually asks the dismissal question
+  // (else the picker would have no data to draw from). Attendance always shows.
+  const [orgAsksDismissal, setOrgAsksDismissal] = useState(false);
+  useEffect(() => {
+    if (!organizationId) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.rpc("get_active_registration_fields", { p_org_id: organizationId });
+      if (!cancelled) {
+        setOrgAsksDismissal((data || []).some((f) => f.standard_key === "dismissal_method" && f.is_active !== false));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
   // Track the currently-shown day so a save that resolves after the instructor
   // switches days never writes its result into the new day's map.
   const sessionDateRef = useRef(sessionDate);
@@ -3402,6 +3418,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
                   registration={r}
                   contacts={contactsByStudent[r.student?.id] || []}
                   canRecord={canRecord}
+                  orgAsksDismissal={orgAsksDismissal}
                   attRecord={attByStudent[r.student?.id] || null}
                   saving={savingIds.has(r.student?.id)}
                   onSave={(patch) => saveAttendance(r, patch)}
@@ -3432,7 +3449,7 @@ const DISMISSAL_LABELS = {
 
 const contactName = (c) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
 
-function CamperRow({ registration, contacts = [], canRecord = false, attRecord = null, saving = false, onSave }) {
+function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDismissal = false, attRecord = null, saving = false, onSave }) {
   const s = registration.student;
   if (!s) return null;
   const p = registration.parent;
@@ -3584,6 +3601,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, attRecord =
           doNotRelease={doNotRelease}
           dismissalMethod={s.dismissal_method}
           parent={p}
+          orgAsksDismissal={orgAsksDismissal}
           attRecord={attRecord}
           saving={saving}
           onSave={onSave}
@@ -3603,7 +3621,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, attRecord =
 // the person is added to the authorized list (parent portal / admin roster editor)
 // before they become selectable. That keeps the authorized list the single source
 // of truth and makes the log trustworthy.
-function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, parent, attRecord, saving, onSave }) {
+function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, parent, orgAsksDismissal = false, attRecord, saving, onSave }) {
   const [pickValue, setPickValue] = useState(""); // controlled dismissal <select>
 
   const dnrNames = new Set(
@@ -3665,7 +3683,11 @@ function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, 
         )}
       </div>
 
-      {/* Dismissal */}
+      {/* Dismissal — only when this provider asks the dismissal question at
+          registration. Off = attendance-only; the picker has no authorized-pickup
+          data to draw from, so it disappears entirely. */}
+      {orgAsksDismissal && (
+      <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: INK, minWidth: 78 }}>Dismissal</span>
         {released ? (
@@ -3709,8 +3731,13 @@ function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, 
           {parent?.phone && <> (<TelPhone phone={parent.phone} />)</>} and have them add the person to the pickup list first.
         </div>
       )}
+      </>
+      )}
 
-      {/* Do-not-release reminder (custody-sensitive; instructors enforce it). */}
+      {/* Do-not-release reminder (custody-sensitive; instructors enforce it).
+          Deliberately OUTSIDE the dismissal block: this is a pure safety warning
+          that must show whenever a child has a barred name, even for providers
+          running attendance-only (no in-app dismissal picker). */}
       {doNotRelease.length > 0 && (
         <div style={{ marginTop: 6, fontSize: 11, color: CORAL, fontWeight: 600 }}>
           Do NOT release to: {doNotRelease.map((c) => contactName(c)).filter(Boolean).join("; ")}
