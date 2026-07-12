@@ -141,7 +141,9 @@ export function priceCart(
   // Pass 1: base + sibling per line.
   const work = lines.map((l) => {
     const base = l.is_vip ? (l.vip_price_cents ?? 0) : basePriceForProgram(l.program, now);
-    const sibling = l.child_index > 0 && !l.is_vip ? Math.round(base * (sibPct / 100)) : 0;
+    // Sibling applies to every additional child (child_index > 0), VIP included —
+    // matches src/lib/pricing.js so the server total equals the review screen.
+    const sibling = l.child_index > 0 ? Math.round(base * (sibPct / 100)) : 0;
     return { l, base, sibling, afterSibling: base - sibling, promo: 0 };
   });
 

@@ -22,6 +22,7 @@
 // @deno-types="https://esm.sh/v135/@supabase/supabase-js@2.39.0/dist/module/index.d.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
+import { priceCart, validatePromo } from '../_shared/promoPricing.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -132,9 +133,99 @@ serve(async (req) => {
       });
     }
 
+    // --- Server-authoritative pricing (chunk 6) ---
+    // The browser's pricing_snapshot is display-only. Recompute the real price
+    // from the DB so the registration rows, the Stripe charge, and the platform
+    // fee all agree, and a tampered client total can never underpay. A promo that
+    // went invalid between display and submit fails the whole registration — we
+    // never silently charge full price.
+    const VIP_PER_TERM_CENTS = 24000;
+
+    // Flatten the cart into priced lines in the EXACT order registrations are
+    // inserted below (children -> items -> programs, skipping nulls).
+    type FlatLine = { child_index: number; program_id: string; is_vip: boolean };
+    const flat: FlatLine[] = [];
+    for (const child of children) {
+      for (const item of child.items || []) {
+        const progs = item.isVip && item.vipBundle
+          ? [item.vipBundle.fall, item.vipBundle.winter, item.vipBundle.spring]
+          : [item.program];
+        for (const prog of progs) {
+          if (!prog) continue;
+          flat.push({ child_index: child.child_index, program_id: prog.id, is_vip: !!item.isVip });
+        }
+      }
+    }
+    if (!flat.length) return json({ error: 'No programs to register' }, 400);
+
+    // Real prices for non-VIP programs, scoped to this org (reject a program that
+    // isn't in this org so a client can't inject a foreign/fake price).
+    const nonVipIds = [...new Set(flat.filter((f) => !f.is_vip).map((f) => f.program_id))];
+    const priceById = new Map<string, { id: string; price_cents: number; early_bird_price_cents: number | null; early_bird_deadline: string | null }>();
+    if (nonVipIds.length) {
+      const { data: progRows, error: progErr } = await admin
+        .from('programs')
+        .select('id, organization_id, price_cents, early_bird_price_cents, early_bird_deadline')
+        .in('id', nonVipIds);
+      if (progErr) throw new Error(`price lookup: ${progErr.message}`);
+      for (const pr of progRows || []) {
+        if (pr.organization_id !== orgId) return json({ error: 'A program in your cart is not available.' }, 400);
+        priceById.set(pr.id, pr);
+      }
+      for (const id of nonVipIds) {
+        if (!priceById.has(id)) return json({ error: 'A program in your cart could not be found.' }, 400);
+      }
+    }
+
+    const toLineInputs = () => flat.map((f) => ({
+      program: f.is_vip
+        ? { id: f.program_id, price_cents: VIP_PER_TERM_CENTS, early_bird_price_cents: null, early_bird_deadline: null }
+        : priceById.get(f.program_id)!,
+      child_index: f.child_index,
+      is_vip: f.is_vip,
+      vip_price_cents: f.is_vip ? VIP_PER_TERM_CENTS : undefined,
+    }));
+
+    // Org sibling-discount config (null = off).
+    const { data: orgCfg } = await admin
+      .from('organizations').select('sibling_discount_pct').eq('id', orgId).single();
+    const siblingPct = orgCfg?.sibling_discount_pct ?? null;
+
+    // Validate + load the promo (if one was entered).
+    let validatedPromo: Parameters<typeof priceCart>[1]['validatedPromo'] = null;
+    if (promo_code) {
+      const { data: codeRow } = await admin
+        .from('promo_codes').select('*')
+        .eq('organization_id', orgId)
+        .eq('code', String(promo_code).trim().toUpperCase())
+        .eq('active', true)
+        .maybeSingle();
+      const codeId = codeRow?.id ?? '00000000-0000-0000-0000-000000000000';
+      const [{ count: totalRedemptions }, { count: familyRedemptions }] = await Promise.all([
+        admin.from('promo_redemptions').select('*', { count: 'exact', head: true }).eq('promo_code_id', codeId),
+        admin.from('promo_redemptions').select('*', { count: 'exact', head: true }).eq('promo_code_id', codeId).eq('parent_id', parentId),
+      ]);
+      const preview = priceCart(toLineInputs(), { siblingPct, validatedPromo: null });
+      const v = validatePromo(codeRow, {
+        orgId,
+        lineProgramIds: flat.map((f) => f.program_id),
+        afterSiblingSubtotalCents: preview.subtotal_cents - preview.sibling_total_cents,
+        totalRedemptions: totalRedemptions ?? 0,
+        familyRedemptions: familyRedemptions ?? 0,
+      });
+      if (!v.valid) return json({ error: v.message || 'That promo code is not valid.', promo_error: true }, 400);
+      validatedPromo = codeRow;
+    }
+
+    const priced = priceCart(toLineInputs(), { siblingPct, validatedPromo });
+
     // --- For each child: upsert student, then one registration per cart item ---
     const registrationIds: string[] = [];
     const studentIdByChildIndex = new Map<number, string>();
+    // Authoritative per-line amounts, consumed in insert order; and the
+    // checkout-ready lines returned for create-checkout.
+    let priceIdx = 0;
+    const returnLines: Array<Record<string, unknown>> = [];
 
     for (const child of children) {
       const student = child.student;
@@ -219,23 +310,11 @@ serve(async (req) => {
           ? [item.vipBundle.fall, item.vipBundle.winter, item.vipBundle.spring]
           : [item.program];
 
-        // Find the matching pricing line for this child+program (first match).
-        const lineForFall = pricing_snapshot.lines.find(
-          (l: any) =>
-            l.child_index === child.child_index &&
-            l.program_id === item.program.id,
-        );
-        // For VIP: cart line is $720 (year total). Each of the 3 term registrations
-        // VIP creates 3 registrations (Fall, Winter, Spring), each at the locked
-        // $240 per-term VIP price. Cart line is now also $240 (per-term, not year total).
-        // Pinning to constant prevents a future cart bug from writing a wrong amount.
-        const VIP_PER_TERM_CENTS = 24000;
-        const perRegAmount = item.isVip
-          ? VIP_PER_TERM_CENTS
-          : lineForFall?.subtotal_cents;
-
         for (const prog of programsToRegister) {
           if (!prog) continue; // skip missing winter/spring if somehow null
+
+          // Authoritative amount for this line — same order as the pricing pass.
+          const pl = priced.lines[priceIdx++];
 
           const { data: reg, error: rErr } = await admin
             .from('registrations')
@@ -247,16 +326,16 @@ serve(async (req) => {
               status: 'pending',
               payment_method: payment_plan ? 'stripe_installments' : 'stripe',
               payment_status: 'unpaid',
-              amount_cents: perRegAmount,
+              amount_cents: pl.amount_cents,       // NET, server-computed
               discount_type: item.isVip
                 ? 'vip'
-                : promo_code
+                : (validatedPromo && pl.promo_discount_cents > 0)
                 ? 'promo'
                 : child.child_index > 0
                 ? 'sibling'
                 : null,
-              discount_cents: lineForFall?.sibling_discount_cents || 0,
-              promo_code_used: promo_code || null,
+              discount_cents: pl.discount_cents,   // sibling + promo on this line
+              promo_code_used: validatedPromo ? validatedPromo.code : null,
               how_heard: student.how_heard || null,
               referred_by:
                 student.how_heard === 'Other' ? student.how_heard_other : null,
@@ -273,6 +352,16 @@ serve(async (req) => {
             .single();
           if (rErr) throw new Error(`registration insert: ${rErr.message}`);
           registrationIds.push(reg!.id);
+          returnLines.push({
+            registration_id: reg!.id,
+            program_id: prog.id,
+            program_name: prog.curriculum,
+            school_name: prog.school_name || prog.program_locations?.name || '',
+            day_of_week: prog.day_of_week,
+            start_time: prog.start_time,
+            amount_cents: pl.amount_cents,
+            child_label: `Child ${child.child_index + 1}`,
+          });
         }
       }
 
@@ -358,7 +447,19 @@ serve(async (req) => {
       }
     }
 
-    return json({ registration_ids: registrationIds, parent_id: parentId });
+    return json({
+      registration_ids: registrationIds,
+      parent_id: parentId,
+      // Authoritative pricing — the client forwards this to create-checkout so the
+      // charge matches the DB rows (never the browser's numbers).
+      pricing: {
+        total_cents: priced.total_cents,
+        lines: returnLines,
+        promo: validatedPromo
+          ? { code: validatedPromo.code, discount_cents: priced.promo_discount_cents }
+          : null,
+      },
+    });
   } catch (err) {
     console.error('create-registration error:', err);
     return json(
