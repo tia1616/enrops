@@ -480,6 +480,11 @@ export default function Register() {
       if (!coResp.ok || coData.error) {
         throw new Error(coData.error || 'Could not start checkout.');
       }
+      if (coData.comp) {
+        // $0 scholarship — no payment. Go straight to the success page.
+        window.location.href = `/${ORG_SLUG}/register/success?comp=1`;
+        return;
+      }
       if (coData.url) {
         window.location.href = coData.url;
       } else {
