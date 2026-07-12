@@ -301,6 +301,15 @@ export default function Register() {
           );
           if (named.length === 0) return false;
         }
+        // do-not-release names required when the org marked that question required
+        // (the builder shows a * and canAdvance must enforce it — otherwise the
+        // form accepts an empty answer the label promised was required)
+        if (std.do_not_release?.required) {
+          const namedDnr = (activeChild.do_not_release || []).filter(
+            (p) => (p.first_name || '').trim() && (p.last_name || '').trim(),
+          );
+          if (namedDnr.length === 0) return false;
+        }
         // required custom questions
         for (const f of regFields.custom) {
           if (f.is_required && !hasAnswer(activeChild.custom_answers?.[f.field_key], f.field_type)) return false;

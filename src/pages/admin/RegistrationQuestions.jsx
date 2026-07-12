@@ -45,7 +45,7 @@ const STANDARD_FIELDS = [
   {
     key: "dismissal_method",
     label: "How does your child leave?",
-    desc: "Released to an authorized adult, or walks / bikes home on their own. If you offer bus or aftercare, those show as options too.",
+    desc: "Released to an authorized adult, or walks / bikes home on their own.",
     defaultRequired: true,
     alwaysRequired: true,
   },
@@ -141,7 +141,12 @@ export default function RegistrationQuestions() {
     for (const f of STANDARD_FIELDS) {
       const row = byStd[f.key];
       seeded[f.key] = {
-        enabled: !!row && row.is_active !== false,
+        // Existing rows keep their saved state (J2S and any org that already
+        // configured its form are untouched). For a brand-new org with no row,
+        // the safety-critical fields (alwaysRequired: dismissal + pickup) start
+        // ON so the builder shows them pre-selected; saving activates them. This
+        // is what the section copy promises.
+        enabled: row ? row.is_active !== false : !!f.alwaysRequired,
         required: f.alwaysRequired ? true : (row ? !!row.is_required : f.defaultRequired),
         label: row?.label ?? f.label,
       };
@@ -340,7 +345,7 @@ export default function RegistrationQuestions() {
             <section style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "20px 22px" }}>
               <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: INK }}>Optional standard questions</h2>
               <p style={{ margin: "3px 0 14px", fontSize: 13, color: MUTED }}>
-                The questions most programs ask. Safety questions are on by default.
+                The questions most programs ask. The safety questions (dismissal and pickup) start on — review them and Save to add them to your form.
               </p>
               <div style={{ display: "flex", flexDirection: "column" }}>
                 {STANDARD_FIELDS.map((f, i) => (
