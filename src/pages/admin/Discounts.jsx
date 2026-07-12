@@ -16,7 +16,7 @@
 // no-duplicate-active-code at the DB; we surface its error in plain language.
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, useOutletContext } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { usePermissions } from "../../lib/permissions.js";
 
@@ -40,6 +40,23 @@ const centsToDollars = (c) =>
   c == null ? "" : Number.isInteger(c / 100) ? String(c / 100) : (c / 100).toFixed(2);
 const fmtDate = (d) =>
   new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+
+// Term code -> friendly label. "FA26" -> "Fall 2026". Falls back to the raw code.
+const SEASONS = { FA: "Fall", WI: "Winter", SP: "Spring", SU: "Summer" };
+function prettyTerm(t) {
+  if (!t) return "Other";
+  const m = /^([A-Za-z]{2})(\d{2})$/.exec(t.trim());
+  if (!m || !SEASONS[m[1].toUpperCase()]) return t;
+  return `${SEASONS[m[1].toUpperCase()]} 20${m[2]}`;
+}
+
+// Compute a program's early-bird price from a term-wide discount, clamped to >= 0.
+function earlyPriceFor(priceCents, type, value) {
+  const v = Number(value);
+  if (!Number.isFinite(v) || v <= 0 || priceCents == null) return null;
+  const off = type === "percent" ? Math.round(priceCents * (v / 100)) : Math.round(v * 100);
+  return Math.max(0, priceCents - off);
+}
 
 // Derive the badge an operator sees from the raw row + today.
 function statusOf(c, now = new Date()) {
@@ -96,7 +113,7 @@ export default function Discounts() {
       setError("");
       const [{ data: codeRows, error: cErr }, { data: progRows }, { data: orgRow }] = await Promise.all([
         supabase.from("promo_codes").select("*").eq("organization_id", org.id).order("created_at", { ascending: false }),
-        supabase.from("programs").select("id, curriculum, term").eq("organization_id", org.id).order("term"),
+        supabase.from("programs").select("id, curriculum, term, price_cents, early_bird_price_cents, early_bird_deadline").eq("organization_id", org.id).order("term"),
         supabase.from("organizations").select("sibling_discount_pct").eq("id", org.id).single(),
       ]);
       if (cancelled) return;
@@ -131,6 +148,30 @@ export default function Discounts() {
     if (e) { setError(e.message ?? "Couldn't save the sibling discount."); return; }
     setSiblingSaved(raw);
     flash(n == null ? "Sibling discount turned off." : `Sibling discount set to ${n}%.`);
+  }
+
+  // Term-wide early-bird. discountType/value null => clear the term.
+  async function applyTermEarlyBird(term, discountType, value, deadline) {
+    setError("");
+    const clearing = value == null;
+    const { error: e } = await supabase.rpc("apply_term_early_bird", {
+      p_org: org.id,
+      p_term: term,
+      p_discount_type: clearing ? null : discountType,
+      p_discount_value: clearing ? null : Number(value),
+      p_deadline: clearing ? null : deadline,
+    });
+    if (e) { setError(e.message ?? "Couldn't apply early-bird pricing."); return false; }
+    // Sync local state to what the RPC just wrote (same math).
+    setPrograms((list) => list.map((p) => {
+      if (p.term !== term) return p;
+      return clearing
+        ? { ...p, early_bird_price_cents: null, early_bird_deadline: null }
+        : { ...p, early_bird_price_cents: earlyPriceFor(p.price_cents, discountType, value), early_bird_deadline: deadline };
+    }));
+    const n = programs.filter((p) => p.term === term).length;
+    flash(clearing ? `Early-bird turned off for ${prettyTerm(term)}.` : `Early-bird applied to ${n} ${prettyTerm(term)} program${n === 1 ? "" : "s"}.`);
+    return true;
   }
 
   async function saveDraft() {
@@ -255,31 +296,24 @@ export default function Discounts() {
       {toast && <div style={{ marginBottom: 16, padding: "10px 12px", background: GREEN_BG, border: "1px solid #bbf7d0", borderRadius: 8, color: GREEN_INK, fontSize: 13 }}>{toast}</div>}
 
       {/* Automatic discounts */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
-        <div style={card}>
-          <div style={cardTitle}>Sibling discount</div>
-          <p style={cardBody}>Automatic % off each additional child in the same order. Blank turns it off.</p>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ position: "relative", width: 100 }}>
-              <input type="text" inputMode="decimal" value={siblingPct}
-                onChange={(e) => setSiblingPct(e.target.value.replace(/[^0-9.]/g, ""))}
-                placeholder="Off" aria-label="Sibling discount percent"
-                style={{ ...input, paddingRight: 24 }} />
-              <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: MUTED, fontSize: 14, pointerEvents: "none" }}>%</span>
-            </div>
-            <button type="button" onClick={saveSibling} disabled={savingSibling || !siblingDirty} style={primaryBtn(savingSibling || !siblingDirty)}>
-              {savingSibling ? "Saving…" : siblingDirty ? "Save" : "Saved ✓"}
-            </button>
+      <div style={{ ...card, marginBottom: 16 }}>
+        <div style={cardTitle}>Sibling discount</div>
+        <p style={cardBody}>Automatic % off each additional child in the same order. Blank turns it off.</p>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ position: "relative", width: 100 }}>
+            <input type="text" inputMode="decimal" value={siblingPct}
+              onChange={(e) => setSiblingPct(e.target.value.replace(/[^0-9.]/g, ""))}
+              placeholder="Off" aria-label="Sibling discount percent"
+              style={{ ...input, paddingRight: 24 }} />
+            <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: MUTED, fontSize: 14, pointerEvents: "none" }}>%</span>
           </div>
-        </div>
-        <div style={card}>
-          <div style={cardTitle}>Early-bird pricing</div>
-          <p style={cardBody}>A lower price until a cutoff date, set on each program.</p>
-          <Link to="/admin/programs" style={{ fontSize: 13, color: BRIGHT, fontWeight: 600, textDecoration: "none" }}>
-            Set early-bird prices on Programs →
-          </Link>
+          <button type="button" onClick={saveSibling} disabled={savingSibling || !siblingDirty} style={primaryBtn(savingSibling || !siblingDirty)}>
+            {savingSibling ? "Saving…" : siblingDirty ? "Save" : "Saved ✓"}
+          </button>
         </div>
       </div>
+
+      <EarlyBirdSection programs={programs} onApply={applyTermEarlyBird} onError={setError} />
 
       {/* Promo codes */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -420,6 +454,141 @@ function DrawerForm({ draft, setDraft, programs, onCancel, onSave }) {
           <button type="button" onClick={onSave} style={primaryBtn(false)}>{draft.id ? "Save changes" : "Create code"}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Term-wide early-bird editor: one card per term. Each card sets a single
+// deadline + a single discount ($ or % off standard) applied to every program
+// in that term, with an expandable per-program price preview.
+function EarlyBirdSection({ programs, onApply, onError }) {
+  const terms = useMemo(() => {
+    const map = new Map();
+    for (const p of programs) {
+      if (!map.has(p.term)) map.set(p.term, []);
+      map.get(p.term).push(p);
+    }
+    // Sort by term code descending-ish so nearest terms surface; stable enough.
+    return Array.from(map.entries()).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  }, [programs]);
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ fontSize: 18, fontWeight: 700, color: PURPLE, marginBottom: 4 }}>Early-bird pricing</div>
+      <p style={{ fontSize: 13, color: MUTED, margin: "0 0 12px" }}>
+        A lower price until a cutoff date, applied across a whole term.
+      </p>
+      {terms.length === 0 ? (
+        <div style={{ padding: 20, background: PANEL, border: `1px dashed ${RULE}`, borderRadius: 12, color: MUTED, fontSize: 14 }}>
+          No programs yet — add programs and their early-bird pricing shows up here by term.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 12 }}>
+          {terms.map(([term, progs]) => (
+            <EarlyBirdTermCard key={term} term={term} progs={progs} onApply={onApply} onError={onError} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EarlyBirdTermCard({ term, progs, onApply, onError }) {
+  // Derive current state: the common deadline + a uniform $ off if one exists.
+  const derived = useMemo(() => {
+    const withEb = progs.filter((p) => p.early_bird_price_cents != null);
+    const deadline = withEb.find((p) => p.early_bird_deadline)?.early_bird_deadline || "";
+    const offs = withEb.map((p) => (p.price_cents ?? 0) - p.early_bird_price_cents);
+    const uniform = offs.length && offs.every((o) => o === offs[0]) ? offs[0] : null;
+    return { active: withEb.length > 0, deadline: toDateInput(deadline), uniformOffDollars: uniform != null ? centsToDollars(uniform) : "" };
+  }, [progs]);
+
+  const [deadline, setDeadline] = useState(derived.deadline);
+  const [type, setType] = useState("fixed");
+  const [value, setValue] = useState(derived.uniformOffDollars);
+  const [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function apply() {
+    if (!value || Number(value) <= 0) { onError("Enter a discount amount greater than zero."); return; }
+    if (type === "percent" && Number(value) > 100) { onError("A percentage can't be more than 100%."); return; }
+    if (!deadline) { onError("Pick an early-bird end date."); return; }
+    setBusy(true);
+    await onApply(term, type, value, deadline);
+    setBusy(false);
+  }
+  async function turnOff() {
+    setBusy(true);
+    const ok = await onApply(term, null, null, null);
+    if (ok) { setValue(""); }
+    setBusy(false);
+  }
+
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: PURPLE }}>
+          {prettyTerm(term)}
+          <span style={{ fontWeight: 500, color: MUTED, fontSize: 13 }}> · {progs.length} program{progs.length === 1 ? "" : "s"}</span>
+        </div>
+        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: derived.active ? GREEN_BG : "#f3f4f6", color: derived.active ? GREEN_INK : "#6b7280" }}>
+          {derived.active ? "Early-bird on" : "Off"}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, marginBottom: 5 }}>Ends</div>
+          <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} style={{ ...input, width: 160 }} />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, marginBottom: 5 }}>Discount off standard</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ display: "inline-flex", border: `1.5px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+              {["fixed", "percent"].map((t) => (
+                <button key={t} type="button" onClick={() => setType(t)}
+                  style={{ padding: "9px 12px", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit", background: type === t ? BRIGHT : "#fff", color: type === t ? "#fff" : MUTED }}>
+                  {t === "fixed" ? "$ off" : "% off"}
+                </button>
+              ))}
+            </div>
+            <div style={{ position: "relative", width: 110 }}>
+              {type === "fixed" && <span style={affixL}>$</span>}
+              <input type="text" inputMode="decimal" value={value}
+                onChange={(e) => setValue(e.target.value.replace(/[^0-9.]/g, ""))}
+                placeholder={type === "fixed" ? "10" : "5"}
+                style={{ ...input, paddingLeft: type === "fixed" ? 22 : 12, paddingRight: type === "percent" ? 24 : 12 }} />
+              {type === "percent" && <span style={affixR}>%</span>}
+            </div>
+          </div>
+        </div>
+        <button type="button" onClick={apply} disabled={busy} style={primaryBtn(busy)}>
+          {busy ? "Applying…" : `Apply to ${progs.length}`}
+        </button>
+        {derived.active && (
+          <button type="button" onClick={turnOff} disabled={busy} style={ghostBtn}>Turn off</button>
+        )}
+      </div>
+
+      <button type="button" onClick={() => setExpanded((x) => !x)} style={{ ...linkBtn, marginTop: 12 }}>
+        {expanded ? "Hide prices" : "Preview prices"}
+      </button>
+      {expanded && (
+        <div style={{ marginTop: 8, border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+          {progs.map((p, i) => {
+            const preview = value ? earlyPriceFor(p.price_cents, type, value) : p.early_bird_price_cents;
+            return (
+              <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, padding: "7px 12px", borderTop: i ? `1px solid ${RULE}` : "none", fontSize: 13 }}>
+                <span style={{ color: INK }}>{p.curriculum}</span>
+                <span style={{ color: MUTED }}>
+                  ${centsToDollars(p.price_cents)}
+                  {preview != null && <span style={{ color: GREEN_INK, fontWeight: 600 }}> → ${centsToDollars(preview)}</span>}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
