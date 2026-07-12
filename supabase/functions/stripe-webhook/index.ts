@@ -39,7 +39,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, OrgBrand } from '../_shared/orgBrand.ts';
 import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
@@ -485,7 +485,7 @@ serve(async (req) => {
 });
 
 async function autoCreateParentAccount(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   brand: OrgBrand,
   email: string,
   name: string,
@@ -529,7 +529,7 @@ async function autoCreateParentAccount(
   await sendAccountReadyEmail(admin, brand, email, name, orgSlug, true);
 }
 
-async function sendAccountReadyEmail(admin: ReturnType<typeof createClient>, brand: OrgBrand, email: string, name: string, orgSlug: string, isNew: boolean) {
+async function sendAccountReadyEmail(admin: SupabaseClient, brand: OrgBrand, email: string, name: string, orgSlug: string, isNew: boolean) {
   const firstName = name ? name.split(' ')[0] : 'there';
   const dashboardUrl = `${PUBLIC_SITE_URL}/${orgSlug}/dashboard`;
   const loginUrl = `${PUBLIC_SITE_URL}/${orgSlug}/login`;
@@ -602,7 +602,7 @@ async function sendOperatorAlert({ brand, to, subject, body }: { brand: OrgBrand
 async function sendConfirmationEmail({
   admin, brand, to, parentName, registrations, totalCents, sessionId, useInstallments, installmentInfo,
 }: {
-  admin: ReturnType<typeof createClient>;
+  admin: SupabaseClient;
   brand: OrgBrand;
   to: string; parentName: string; registrations: any[]; totalCents: number; sessionId: string; useInstallments: boolean;
   installmentInfo: { paidToday: number; installment2Amount: number; installment2Date: string; installment3Amount: number; installment3Date: string; } | null;
@@ -810,7 +810,7 @@ interface OrgConnectRow {
 }
 
 async function handleAccountUpdated(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   event: Stripe.Event,
 ): Promise<void> {
   const account = event.data.object as Stripe.Account;
@@ -898,7 +898,7 @@ async function handleAccountUpdated(
 }
 
 async function handleAccountDeauthorized(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   event: Stripe.Event,
 ): Promise<void> {
   // For account.application.deauthorized, the deauthorized account ID is on
@@ -977,7 +977,7 @@ async function handleAccountDeauthorized(
 // endpoint by mistake) can't accidentally rewrite the wrong row.
 
 async function handleInstructorAccountUpdated(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   event: Stripe.Event,
   account: Stripe.Account,
   accountId: string,
@@ -1055,7 +1055,7 @@ async function handleInstructorAccountUpdated(
 }
 
 async function sendInstructorRegressionAlert(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   instructorId: string,
   orgId: string,
 ): Promise<void> {
