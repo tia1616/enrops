@@ -167,14 +167,22 @@ serve(async (req: Request) => {
       tier = sub.sub_tier as Role;
     }
 
-    // Guard: don't confirm & pay a day whose regular assignment was withdrawn
-    // or declined — the instructor is no longer on it. A sub who covered the
-    // day is still paid (they taught it); the guard only applies when there's
-    // no sub, so the payee would be the off-assignment regular. This is the
-    // pay-safety check the old auto-confirm never had; the admin can fix the
-    // assignment or leave the day unconfirmed instead.
-    if (!sub && (assignmentStatus === 'withdrawn' || assignmentStatus === 'declined')) {
-      return json({ error: 'assignment_not_active', status: assignmentStatus }, 409);
+    // Guard: only confirm & pay a day whose regular assignment the instructor
+    // actually ACCEPTED. 'confirmed' is the accepted state (respond-to-assignment
+    // writes it on accept); 'accepted' is a legacy alias kept for compat. Every
+    // other status — 'published' (offer sent, awaiting response), 'proposed',
+    // 'change_requested', 'needs_hire', 'withdrawn', 'declined' — means the
+    // instructor has NOT committed, so an admin must not turn it into approved
+    // pay. Allow-list (fail-closed) rather than deny-list so a new status can't
+    // silently slip through. A confirmed/taught SUB who covered the day is still
+    // paid regardless of the regular's status (the sub taught it), so the guard
+    // only applies when there's no sub and the payee would be the regular.
+    // (Self-confirm intentionally has no such gate: an instructor marking "I
+    // taught this" is acceptance-by-performance; the risk is the ADMIN approving
+    // pay for work never accepted or taught.)
+    const COMMITTED_STATUSES = new Set(['confirmed', 'accepted']);
+    if (!sub && !COMMITTED_STATUSES.has(assignmentStatus ?? '')) {
+      return json({ error: 'assignment_not_confirmed', status: assignmentStatus }, 409);
     }
 
     // ── per-tenant pay ────────────────────────────────────────────────────

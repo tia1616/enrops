@@ -80,8 +80,8 @@ function thirtyDaysAgoISO() {
 // in front of the operator).
 function confirmErrorMessage(code, status) {
   switch (code) {
-    case 'assignment_not_active':
-      return 'This instructor was withdrawn or declined from this assignment, so this day can’t be paid. Leave it unconfirmed or fix the assignment.';
+    case 'assignment_not_confirmed':
+      return 'This instructor hasn’t accepted this assignment yet (or was withdrawn/declined), so this day can’t be paid. Have them accept it, or fix the assignment, first.';
     case 'no_assignment_for_session':
       return 'No assignment found for this instructor on this session, so there’s no pay rate to apply.';
     case 'future_session':

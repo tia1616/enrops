@@ -3155,6 +3155,12 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
   const [attErr, setAttErr] = useState("");
   const [savingIds, setSavingIds] = useState(() => new Set()); // students with a save in flight
   const canRecord = Boolean(instructorId && sessionDate);
+  // A custody record must reflect a day that has happened. When today isn't a
+  // meeting day the roster defaults to the next upcoming date (see
+  // defaultSessionDate), so the date picker still shows for navigation but the
+  // per-camper record controls stay closed until that day arrives. The DB
+  // trigger enforces the same rule for any raw-API path.
+  const isFutureSession = Boolean(sessionDate) && sessionDate > todayStr;
   const datesKey = (sessionDates || []).join(",");
 
   // Dismissal is coupled to the org's registration setting: only show the
@@ -3405,6 +3411,12 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
               )}
             </div>
 
+            {canRecord && isFutureSession && (
+              <div style={{ background: "#fff", border: `1px dashed ${RULE}`, color: MUTED, padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
+                This class hasn't met yet. Attendance and dismissal open on {prettyDay(sessionDate)}.
+              </div>
+            )}
+
             {attErr && (
               <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
                 {attErr}
@@ -3417,7 +3429,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
                   key={r.id}
                   registration={r}
                   contacts={contactsByStudent[r.student?.id] || []}
-                  canRecord={canRecord}
+                  canRecord={canRecord && !isFutureSession}
                   orgAsksDismissal={orgAsksDismissal}
                   attRecord={attByStudent[r.student?.id] || null}
                   saving={savingIds.has(r.student?.id)}
@@ -3675,7 +3687,18 @@ function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, 
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: INK, minWidth: 78 }}>Attendance</span>
         <button type="button" disabled={saving} onClick={() => markPresent(true)} style={btn(present === true, OK_GREEN)}>Present</button>
-        <button type="button" disabled={saving} onClick={() => markPresent(false)} style={btn(present === false, CORAL)}>Absent</button>
+        {/* A released child was present — can't flip to Absent without a
+            contradictory custody record. Undo the release ("change" below)
+            first. The DB trigger rejects the same combination. */}
+        <button
+          type="button"
+          disabled={saving || released}
+          onClick={() => markPresent(false)}
+          title={released ? "Undo the release first to mark absent" : undefined}
+          style={{ ...btn(present === false, CORAL), ...(released ? { opacity: 0.45, cursor: "default" } : {}) }}
+        >
+          Absent
+        </button>
         {attRecord?.checked_in_at && present === true && (
           <span style={{ fontSize: 11, color: MUTED }}>
             ✓ checked in {new Date(attRecord.checked_in_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
