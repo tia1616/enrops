@@ -42,6 +42,7 @@ export default function Register() {
     setPromoInput,
     setPromoError,
     togglePaymentPlan,
+    setSiblingPct,
     addAnotherChild,
   } = useCart();
 
@@ -267,6 +268,9 @@ export default function Register() {
     setWaivers(waiversRes.data || []);
     setRegFields(parseRegFields(regFieldsRes.data || []));
     setFeeConfig(feeRes?.data || { fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0 });
+    // Thread the org's sibling % onto the cart so the review screen matches the
+    // server charge. undefined (older org-fee-config) -> pricing.js keeps the 10% default.
+    setSiblingPct(feeRes?.data?.sibling_discount_pct);
     setLoading(false);
   }
 

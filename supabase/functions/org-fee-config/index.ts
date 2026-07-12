@@ -45,7 +45,7 @@ serve(async (req) => {
 
     const { data, error } = await admin
       .from('organizations')
-      .select('fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents')
+      .select('fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, sibling_discount_pct')
       .eq('slug', slug)
       .eq('status', 'active')
       .single();
@@ -63,6 +63,9 @@ serve(async (req) => {
       platform_fee_card_pct: Number(data.platform_fee_card_pct) || 0,
       platform_fee_ach_pct: Number(data.platform_fee_ach_pct) || 0,
       platform_fee_cap_cents: Number(data.platform_fee_cap_cents) || 0,
+      // Sibling discount % so the review screen matches the server-authoritative
+      // charge (create-registration reads the same org config). null = off.
+      sibling_discount_pct: data.sibling_discount_pct == null ? null : Number(data.sibling_discount_pct),
     });
   } catch (err) {
     console.error('org-fee-config error:', err);

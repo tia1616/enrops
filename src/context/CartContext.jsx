@@ -182,6 +182,12 @@ export function CartProvider({ children }) {
     setCart((c) => ({ ...c, payment_plan: !c.payment_plan }));
   }
 
+  // Org sibling-discount %, loaded from org-fee-config so the review screen
+  // matches the server-authoritative charge. null = off; undefined = not loaded.
+  function setSiblingPct(pct) {
+    setCart((c) => ({ ...c, sibling_discount_pct: pct }));
+  }
+
   function setActiveChildIndex(i) {
     setCart((c) => ({ ...c, active_child_index: i }));
   }
@@ -213,6 +219,7 @@ export function CartProvider({ children }) {
     setPromoInput,
     setPromoError,
     togglePaymentPlan,
+    setSiblingPct,
     setActiveChildIndex,
     clearCart,
   };
