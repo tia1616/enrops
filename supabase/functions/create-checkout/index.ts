@@ -96,6 +96,33 @@ serve(async (req) => {
       return json({ error: 'Missing registration_ids or line_items' }, 400);
     }
 
+    // --- Server-authoritative charge guard (chunk 6) ---
+    // create-registration wrote the true per-line amounts to the DB. Re-derive the
+    // total from those rows; the browser's numbers are only honored if they match.
+    // A tampered total (or a stale cart) is rejected, never charged.
+    const guardAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: regAmtRows, error: regAmtErr } = await guardAdmin
+      .from('registrations')
+      .select('amount_cents')
+      .in('id', registration_ids);
+    if (regAmtErr) return json({ error: 'Could not verify the order total. Please try again.' }, 500);
+    const serverSum = (regAmtRows || []).reduce((s, r) => s + (r.amount_cents || 0), 0);
+
+    if (serverSum <= 0) {
+      // A $0 comp/scholarship order has no Stripe charge. The full free-checkout
+      // path (mark paid + confirmation + count redemption) is the next build step.
+      return json({ error: 'This code makes the order free — free checkout is still being set up.' }, 400);
+    }
+    {
+      const clientTotal = Number(total_cents) || 0;
+      const lineSum = (line_items as Array<{ amount_cents?: number }>).reduce((s, l) => s + (l.amount_cents || 0), 0);
+      if (Math.abs(clientTotal - serverSum) > 1 || Math.abs(lineSum - serverSum) > 1) {
+        return json({ error: 'That price is out of date — please refresh your cart and try again.', price_mismatch: true }, 409);
+      }
+    }
+
     let aggregated: AggregatedEntry[] | null = null;
     let perLine: PerLineEntry[] | null = null;
 
