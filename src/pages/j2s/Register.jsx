@@ -423,28 +423,43 @@ export default function Register() {
         // Bug A fix (2026-05-01): per-line schedule with correct registration_id mapping.
         const dueDates = installmentSchedule.dueDates;
         const perLineEntries = [];
-        installmentSchedule.perLineSplits.forEach(({ line_index, splits }) => {
-          const regId = regData.registration_ids[line_index];
-          if (!regId) {
-            console.error(`Missing registration_id for line ${line_index}`);
-            return;
-          }
-          if (splits[0] > 0) {
-            perLineEntries.push({ installment_number: 1, registration_id: regId, amount_cents: splits[0], due_date: dueDates.charge1 });
-          }
-          if (splits[1] > 0) {
-            perLineEntries.push({ installment_number: 2, registration_id: regId, amount_cents: splits[1], due_date: dueDates.charge2 });
-          }
-          if (splits[2] > 0) {
-            perLineEntries.push({ installment_number: 3, registration_id: regId, amount_cents: splits[2], due_date: dueDates.charge3 });
-          }
-        });
+        // Prefer the SERVER-authoritative net amounts (promo applied) so the plan
+        // totals match the DB rows / the checkout guard. Fall back to the client
+        // schedule for VIP carts (term-to-charge mapping) or an older function.
+        const isVipCart = cart.children.some((c) => c.items?.some((it) => it.isVip));
+        const useServerNet =
+          serverPricing?.lines?.length === regData.registration_ids.length && !isVipCart;
+        if (useServerNet) {
+          serverPricing.lines.forEach((l) => {
+            const net = l.amount_cents;
+            const base = Math.floor(net / 3);
+            const splits = [base + (net - base * 3), base, base]; // remainder on charge 1
+            const regId = l.registration_id;
+            if (splits[0] > 0) perLineEntries.push({ installment_number: 1, registration_id: regId, amount_cents: splits[0], due_date: dueDates.charge1 });
+            if (splits[1] > 0) perLineEntries.push({ installment_number: 2, registration_id: regId, amount_cents: splits[1], due_date: dueDates.charge2 });
+            if (splits[2] > 0) perLineEntries.push({ installment_number: 3, registration_id: regId, amount_cents: splits[2], due_date: dueDates.charge3 });
+          });
+        } else {
+          installmentSchedule.perLineSplits.forEach(({ line_index, splits }) => {
+            const regId = regData.registration_ids[line_index];
+            if (!regId) {
+              console.error(`Missing registration_id for line ${line_index}`);
+              return;
+            }
+            if (splits[0] > 0) perLineEntries.push({ installment_number: 1, registration_id: regId, amount_cents: splits[0], due_date: dueDates.charge1 });
+            if (splits[1] > 0) perLineEntries.push({ installment_number: 2, registration_id: regId, amount_cents: splits[1], due_date: dueDates.charge2 });
+            if (splits[2] > 0) perLineEntries.push({ installment_number: 3, registration_id: regId, amount_cents: splits[2], due_date: dueDates.charge3 });
+          });
+        }
+        // Aggregate per-charge from the per-line entries so the totals always match
+        // whatever source (server net or client) was used above.
+        const sumCharge = (n) => perLineEntries.filter((e) => e.installment_number === n).reduce((s, e) => s + e.amount_cents, 0);
         checkoutPayload.installment_schedule = {
-          aggregated: installmentSchedule.display.map((i) => ({
-            installment_number: i.number,
-            amount_cents: i.amount_cents,
-            due_date: i.due_date,
-          })),
+          aggregated: [
+            { installment_number: 1, amount_cents: sumCharge(1), due_date: dueDates.charge1 },
+            { installment_number: 2, amount_cents: sumCharge(2), due_date: dueDates.charge2 },
+            { installment_number: 3, amount_cents: sumCharge(3), due_date: dueDates.charge3 },
+          ],
           per_line: perLineEntries,
         };
       }
