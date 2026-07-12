@@ -508,20 +508,26 @@ function EarlyBirdTermCard({ term, progs, onApply, onError }) {
   const [value, setValue] = useState(derived.uniformOffDollars);
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null); // { ok: bool, text } — inline feedback at the card
+
+  const canApply = !!value && Number(value) > 0 && !!deadline;
 
   async function apply() {
-    if (!value || Number(value) <= 0) { onError("Enter a discount amount greater than zero."); return; }
-    if (type === "percent" && Number(value) > 100) { onError("A percentage can't be more than 100%."); return; }
-    if (!deadline) { onError("Pick an early-bird end date."); return; }
-    setBusy(true);
-    await onApply(term, type, value, deadline);
+    if (!value || Number(value) <= 0) { setNote({ ok: false, text: "Enter a discount amount first." }); return; }
+    if (type === "percent" && Number(value) > 100) { setNote({ ok: false, text: "A percentage can't be more than 100%." }); return; }
+    if (!deadline) { setNote({ ok: false, text: "Pick an early-bird end date." }); return; }
+    setBusy(true); setNote(null);
+    const ok = await onApply(term, type, value, deadline);
     setBusy(false);
+    setNote(ok
+      ? { ok: true, text: `Applied to all ${progs.length} ${prettyTerm(term)} program${progs.length === 1 ? "" : "s"}.` }
+      : { ok: false, text: "Couldn't apply — see the message at the top." });
   }
   async function turnOff() {
-    setBusy(true);
+    setBusy(true); setNote(null);
     const ok = await onApply(term, null, null, null);
-    if (ok) { setValue(""); }
     setBusy(false);
+    if (ok) { setValue(""); setNote({ ok: true, text: `Early-bird turned off for ${prettyTerm(term)}.` }); }
   }
 
   return (
@@ -562,13 +568,24 @@ function EarlyBirdTermCard({ term, progs, onApply, onError }) {
             </div>
           </div>
         </div>
-        <button type="button" onClick={apply} disabled={busy} style={primaryBtn(busy)}>
+        <button type="button" onClick={apply} disabled={busy || !canApply} style={primaryBtn(busy || !canApply)}>
           {busy ? "Applying…" : `Apply to ${progs.length}`}
         </button>
         {derived.active && (
           <button type="button" onClick={turnOff} disabled={busy} style={ghostBtn}>Turn off</button>
         )}
       </div>
+
+      {note && (
+        <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: note.ok ? GREEN_INK : "#991b1b" }}>
+          {note.ok ? "✓ " : ""}{note.text}
+        </div>
+      )}
+      {!canApply && !note && (
+        <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
+          Enter a discount and an end date, then Apply.
+        </div>
+      )}
 
       <button type="button" onClick={() => setExpanded((x) => !x)} style={{ ...linkBtn, marginTop: 12 }}>
         {expanded ? "Hide prices" : "Preview prices"}
