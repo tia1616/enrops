@@ -16,6 +16,7 @@ import {
   resolveInstructor,
   adminClient,
 } from '../_shared/instructor.ts';
+import { encodeDisplayName } from '../_shared/orgBrand.ts';
 
 interface RequestResumeBody {
   note?: string;
@@ -110,7 +111,7 @@ serve(async (req: Request) => {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${org.default_sender_name ?? org.name ?? 'enrops'} <${org.default_sender_email}>`,
+        from: `${encodeDisplayName(org.default_sender_name ?? org.name ?? 'enrops')} <${org.default_sender_email}>`,
         to: org.alert_email,
         subject: `Resume request: ${instructorName}`,
         text,

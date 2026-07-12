@@ -20,6 +20,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { encodeDisplayName } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -115,7 +116,7 @@ serve(async (req: Request) => {
       return json({ error: 'org_sender_missing' }, 500);
     }
 
-    const from = `${org.default_sender_name ?? org.name ?? 'enrops'} <${org.default_sender_email}>`;
+    const from = `${encodeDisplayName(org.default_sender_name ?? org.name ?? 'enrops')} <${org.default_sender_email}>`;
 
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',

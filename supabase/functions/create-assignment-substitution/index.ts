@@ -27,6 +27,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { encodeDisplayName } from '../_shared/orgBrand.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so portal links in offer emails point at staging, not prod. Defaults to prod.
@@ -316,7 +317,7 @@ serve(async (req: Request) => {
     // ── Send via Resend ───────────────────────────────────────────────────
     const fromName = branding?.email_from_name ?? org?.name ?? 'Enrops';
     const fromDomain = 'updates.journeytosteam.com';
-    const fromEmail = `${fromName} <hello@${fromDomain}>`;
+    const fromEmail = `${encodeDisplayName(fromName)} <hello@${fromDomain}>`;
     const recipient = mode === 'test' ? TEST_INBOX : sub.email;
     const subjectOut = mode === 'test' ? `[TEST] ${subject}` : subject;
 

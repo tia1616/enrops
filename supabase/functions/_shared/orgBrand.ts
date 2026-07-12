@@ -240,11 +240,44 @@ export async function loadOrgBrand(
 }
 
 /**
- * Build the Resend "from" string: `Name <email>`.
- * Resend requires the email's domain to be verified.
+ * RFC 5322-encode an email display name for a From/Reply-To header.
+ *
+ * A tenant's sender name is free text (default_sender_name / email_from_name),
+ * so it can contain characters that are syntactically significant in a header:
+ * `<`, `>`, `"`, `,`, `:`, `;`, `@`, `\`, parentheses, brackets — or, worst of
+ * all, a newline (a header-injection vector). Emitting such a name raw yields a
+ * malformed `Name <email>` line that Resend may reject or mis-parse.
+ *
+ * Rules:
+ *  - Control chars (incl. CR/LF) are collapsed to a single space so a name can
+ *    never break out of the header line.
+ *  - If the cleaned name contains any RFC 5322 "special", it is wrapped in
+ *    double quotes as a quoted-string, with embedded `\` and `"` backslash-
+ *    escaped.
+ *  - A name with no specials is returned unchanged (only trimmed) — so the
+ *    common case (letters, spaces, periods, apostrophes, ampersands) is
+ *    byte-for-byte identical to before and delivery is unaffected.
+ *
+ * The period is intentionally NOT treated as a trigger: bare dots in display
+ * names are universally accepted, and excluding it keeps dotted org names
+ * ("Co. Ltd.", "St. Mary's") unquoted and unchanged.
+ */
+export function encodeDisplayName(name: string): string {
+  const cleaned = (name ?? '').replace(/[\x00-\x1F\x7F]+/g, ' ').trim();
+  if (!cleaned) return '';
+  const needsQuoting = /["(),:;<>@\[\]\\]/.test(cleaned);
+  if (!needsQuoting) return cleaned;
+  return `"${cleaned.replace(/[\\"]/g, '\\$&')}"`;
+}
+
+/**
+ * Build the Resend "from" string: `Name <email>` (display name RFC 5322-encoded).
+ * Resend requires the email's domain to be verified. When the name is empty
+ * after cleaning, the bare address is returned (a valid From with no display name).
  */
 export function formatFromAddress(brand: OrgBrand): string {
-  return `${brand.sender_name} <${brand.sender_email}>`;
+  const name = encodeDisplayName(brand.sender_name);
+  return name ? `${name} <${brand.sender_email}>` : brand.sender_email;
 }
 
 /** Escape a string for safe use inside a double-quoted HTML attribute. */

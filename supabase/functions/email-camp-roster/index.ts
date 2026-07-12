@@ -18,7 +18,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
-import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, encodeDisplayName } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -236,7 +236,7 @@ serve(async (req: Request) => {
     if (!senderEmail) {
       return json({ error: 'no_sender_configured', detail: 'Add a sending email or verified domain in Settings before emailing rosters.' }, 400);
     }
-    const fromEmail = `${fromName} <${senderEmail}>`;
+    const fromEmail = `${encodeDisplayName(fromName)} <${senderEmail}>`;
     const subjectPartner = partner?.partner_name ?? location?.name ?? camp.location_name;
     const subject = `Roster: ${camp.curriculum_name} — ${fmtDateRange(camp.starts_on, camp.ends_on)}${subjectPartner ? ` @ ${subjectPartner}` : ''}`;
 

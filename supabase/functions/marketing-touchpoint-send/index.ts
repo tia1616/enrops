@@ -25,7 +25,7 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
-import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
+import { loadOrgBrand, formatFromAddress, renderSignatureBlock, encodeDisplayName, type OrgBrand } from "../_shared/orgBrand.ts";
 import {
   parseEmailAttachments,
   loadCommsAttachments,
@@ -1396,7 +1396,7 @@ async function sendViaResend(opts: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: `${opts.fromName} <${opts.fromEmail}>`,
+      from: `${encodeDisplayName(opts.fromName)} <${opts.fromEmail}>`,
       reply_to: opts.fromEmail,
       to: [opts.toEmail],
       subject: opts.subject,

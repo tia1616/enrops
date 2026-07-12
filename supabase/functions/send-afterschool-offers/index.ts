@@ -15,7 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, encodeDisplayName } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -198,7 +198,7 @@ serve(async (req: Request) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
           body: JSON.stringify({
-            from: `${fromName} <hello@${FROM_DOMAIN}>`,
+            from: `${encodeDisplayName(fromName)} <hello@${FROM_DOMAIN}>`,
             to: recipient,
             reply_to: replyTo ?? undefined,
             subject: mode === 'test' ? `[TEST] ${subject}` : subject,

@@ -22,6 +22,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+import { encodeDisplayName } from '../_shared/orgBrand.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so the onboarding link points at staging, not prod. Defaults to prod.
@@ -263,7 +264,7 @@ async function sendEmail(args: {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${args.fromName} <${args.fromEmail}>`,
+        from: `${encodeDisplayName(args.fromName)} <${args.fromEmail}>`,
         to: args.to,
         subject: args.subject,
         text: args.text,

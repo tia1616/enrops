@@ -20,6 +20,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
+import { encodeDisplayName } from '../_shared/orgBrand.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so the onboarding link points at staging, not prod. Defaults to prod.
@@ -258,7 +259,7 @@ async function sendCheckrCompleteContractorEmail(
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${org.default_sender_name ?? org.name ?? 'enrops'} <${org.default_sender_email}>`,
+        from: `${encodeDisplayName(org.default_sender_name ?? org.name ?? 'enrops')} <${org.default_sender_email}>`,
         to: instructor.email,
         subject: `Your background check is complete`,
         text,
@@ -317,7 +318,7 @@ async function sendCheckrReviewAdminEmail(
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${org.default_sender_name ?? org.name ?? 'enrops'} <${org.default_sender_email}>`,
+        from: `${encodeDisplayName(org.default_sender_name ?? org.name ?? 'enrops')} <${org.default_sender_email}>`,
         to: org.alert_email,
         subject: `Background check needs review: ${instructorName}`,
         text,

@@ -15,7 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, encodeDisplayName } from '../_shared/orgBrand.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so the onboarding link points at staging, not prod. Defaults to prod.
@@ -275,7 +275,7 @@ serve(async (req: Request) => {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${org.default_sender_name} <${org.default_sender_email}>`,
+        from: `${encodeDisplayName(org.default_sender_name)} <${org.default_sender_email}>`,
         to: instructorRow.email,
         subject,
         text,
