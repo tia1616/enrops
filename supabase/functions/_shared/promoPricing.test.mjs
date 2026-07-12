@@ -98,4 +98,24 @@ const pc = (over) => ({
   check('in-scope passes', validatePromo(pc({ scope_program_ids: ['p1'] }), base).valid === true);
 }
 
+// 7) early-bird active -> uses early-bird price (matches client pricing.js)
+{
+  const p = { id: 'p1', price_cents: 28500, early_bird_price_cents: 25000, early_bird_deadline: '2099-12-31' };
+  const r = priceCart([{ program: p, child_index: 0 }], { siblingPct: 0, validatedPromo: null });
+  check('early-bird active uses eb price', r.total_cents === 25000, money(r.total_cents));
+}
+// 8) early-bird expired -> uses standard price
+{
+  const p = { id: 'p1', price_cents: 28500, early_bird_price_cents: 25000, early_bird_deadline: '2000-01-01' };
+  const r = priceCart([{ program: p, child_index: 0 }], { siblingPct: 0, validatedPromo: null });
+  check('early-bird expired uses standard', r.total_cents === 28500, money(r.total_cents));
+}
+// 9) early-bird + sibling stack (child 2 gets 10% off the eb price)
+{
+  const p = () => ({ id: 'p1', price_cents: 28500, early_bird_price_cents: 25000, early_bird_deadline: '2099-12-31' });
+  const r = priceCart([{ program: p(), child_index: 0 }, { program: p(), child_index: 1 }], { siblingPct: 10, validatedPromo: null });
+  // eb 25000 + (25000 - 2500) = 47500
+  check('early-bird + sibling', r.total_cents === 47500, money(r.total_cents));
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
