@@ -30,6 +30,11 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 }
 
+/** Escape a string for safe display in HTML text content. */
+function escHtml(s: string): string {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -78,8 +83,8 @@ serve(async (req) => {
           subject: `Test email from ${brand.org_name}`,
           html: `<div style="font-family:Arial,sans-serif;font-size:15px;color:#1a1a1a;line-height:1.6;max-width:600px;margin:0 auto;">
             ${brand.logo_url ? `<div style="text-align:center;padding:4px 0 18px;"><img src="${String(brand.logo_url).replace(/"/g, "&quot;")}" alt="${String(brand.org_name).replace(/[<>"]/g, "")}" style="max-height:56px;max-width:220px;height:auto;" /></div>` : ""}
-            <p>This is a test email from <strong>${brand.org_name}</strong>, sent through Enrops.</p>
-            <p>If it landed in your inbox, your sender is working. It was sent from <strong>${from}</strong>, and replies go to <strong>${brand.reply_to}</strong>.</p>
+            <p>This is a test email from <strong>${escHtml(brand.org_name)}</strong>, sent through Enrops.</p>
+            <p>If it landed in your inbox, your sender is working. It was sent from <strong>${escHtml(brand.sender_name)}</strong> (${escHtml(brand.sender_email)}), and replies go to <strong>${escHtml(brand.reply_to)}</strong>.</p>
             ${renderSignatureBlock(brand)}
           </div>`,
           tags: [{ name: 'type', value: 'sender_test' }],
