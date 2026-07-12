@@ -43,11 +43,20 @@ const fmtDate = (d) =>
 
 // Term code -> friendly label. "FA26" -> "Fall 2026". Falls back to the raw code.
 const SEASONS = { FA: "Fall", WI: "Winter", SP: "Spring", SU: "Summer" };
+// Calendar order within a year so terms sort chronologically across the school
+// year: Winter(Jan) < Spring(Mar) < Summer(Jun) < Fall(Sep). Combined with the
+// year, FA26 (2026) correctly precedes WI27/SP27 (2027).
+const SEASON_MONTH = { WI: 0, SP: 1, SU: 2, FA: 3 };
 function prettyTerm(t) {
   if (!t) return "Other";
   const m = /^([A-Za-z]{2})(\d{2})$/.exec(t.trim());
   if (!m || !SEASONS[m[1].toUpperCase()]) return t;
   return `${SEASONS[m[1].toUpperCase()]} 20${m[2]}`;
+}
+function termSortKey(t) {
+  const m = /^([A-Za-z]{2})(\d{2})$/.exec((t || "").trim());
+  if (!m || SEASON_MONTH[m[1].toUpperCase()] == null) return Number.MAX_SAFE_INTEGER; // unknown -> last
+  return Number(m[2]) * 100 + SEASON_MONTH[m[1].toUpperCase()];
 }
 
 // Compute a program's early-bird price from a term-wide discount, clamped to >= 0.
@@ -468,8 +477,8 @@ function EarlyBirdSection({ programs, onApply, onError }) {
       if (!map.has(p.term)) map.set(p.term, []);
       map.get(p.term).push(p);
     }
-    // Sort by term code descending-ish so nearest terms surface; stable enough.
-    return Array.from(map.entries()).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    // Chronological across the school year (Fall -> Winter -> Spring -> Summer).
+    return Array.from(map.entries()).sort((a, b) => termSortKey(a[0]) - termSortKey(b[0]));
   }, [programs]);
 
   return (
@@ -581,7 +590,12 @@ function EarlyBirdTermCard({ term, progs, onApply, onError }) {
           {note.ok ? "✓ " : ""}{note.text}
         </div>
       )}
-      {!canApply && !note && (
+      {!derived.active && (
+        <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
+          Early-bird is off for this term. Enter a discount and an end date, then Apply to turn it on.
+        </div>
+      )}
+      {derived.active && !canApply && !note && (
         <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
           Enter a discount and an end date, then Apply.
         </div>
