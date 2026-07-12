@@ -3731,14 +3731,17 @@ function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, 
           {parent?.phone && <> (<TelPhone phone={parent.phone} />)</>} and have them add the person to the pickup list first.
         </div>
       )}
+      </>
+      )}
 
-      {/* Do-not-release reminder (custody-sensitive; instructors enforce it). */}
+      {/* Do-not-release reminder (custody-sensitive; instructors enforce it).
+          Deliberately OUTSIDE the dismissal block: this is a pure safety warning
+          that must show whenever a child has a barred name, even for providers
+          running attendance-only (no in-app dismissal picker). */}
       {doNotRelease.length > 0 && (
         <div style={{ marginTop: 6, fontSize: 11, color: CORAL, fontWeight: 600 }}>
           Do NOT release to: {doNotRelease.map((c) => contactName(c)).filter(Boolean).join("; ")}
         </div>
-      )}
-      </>
       )}
     </div>
   );
