@@ -134,20 +134,22 @@ export default function Register() {
     // child + program). VIP lines map 1:1 to charges (Fall→c1, Winter→c2, Spring→c3).
     const perLineSplits = [];
 
+    // Split the NET per-line amount (amount_cents = after sibling AND promo) so the
+    // displayed installments sum to the discounted total, matching the actual charge.
     if (isVipOnlyCart) {
       const fallIdx = pricing.lines.findIndex((l) => l.term_label === 'Fall');
       const winterIdx = pricing.lines.findIndex((l) => l.term_label === 'Winter');
       const springIdx = pricing.lines.findIndex((l) => l.term_label === 'Spring');
       pricing.lines.forEach((l, idx) => {
-        if (idx === fallIdx) perLineSplits.push({ line_index: idx, splits: [l.subtotal_cents, 0, 0] });
-        else if (idx === winterIdx) perLineSplits.push({ line_index: idx, splits: [0, l.subtotal_cents, 0] });
-        else if (idx === springIdx) perLineSplits.push({ line_index: idx, splits: [0, 0, l.subtotal_cents] });
+        if (idx === fallIdx) perLineSplits.push({ line_index: idx, splits: [l.amount_cents, 0, 0] });
+        else if (idx === winterIdx) perLineSplits.push({ line_index: idx, splits: [0, l.amount_cents, 0] });
+        else if (idx === springIdx) perLineSplits.push({ line_index: idx, splits: [0, 0, l.amount_cents] });
       });
     } else {
       pricing.lines.forEach((l, idx) => {
-        const sub = l.subtotal_cents;
-        const base = Math.floor(sub / 3);
-        const remainder = sub - base * 3;
+        const net = l.amount_cents;
+        const base = Math.floor(net / 3);
+        const remainder = net - base * 3;
         perLineSplits.push({
           line_index: idx,
           splits: [base + remainder, base, base],
@@ -408,7 +410,7 @@ export default function Register() {
               school_name: l.school_name,
               day_of_week: l.day_of_week,
               start_time: l.start_time,
-              amount_cents: l.subtotal_cents,
+              amount_cents: l.amount_cents, // NET (after sibling + promo)
               child_label: `Child ${l.child_index + 1}`,
             }));
       const checkoutPayload = {
