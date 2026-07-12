@@ -54,6 +54,7 @@ const STANDARD_FIELDS = [
     label: "Who can pick up your child?",
     desc: "Up to 4 people (first and last name). Asked when the child is released to an adult.",
     defaultRequired: true,
+    alwaysRequired: true,
   },
   {
     key: "do_not_release",
@@ -409,6 +410,7 @@ function StandardRow({ field, state, canEdit, first, onChange }) {
       </div>
 
       {state.enabled && (
+        <>
         <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
           {/* mandatory / optional */}
           <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: field.alwaysRequired ? MUTED : INK }}>
@@ -434,6 +436,13 @@ function StandardRow({ field, state, canEdit, first, onChange }) {
             />
           </span>
         </div>
+        {/* Safety coupling: these questions feed the instructor dismissal tool. */}
+        {field.alwaysRequired && (
+          <div style={{ marginTop: 8, fontSize: 12, color: MUTED, lineHeight: 1.5, maxWidth: 460, fontStyle: "italic" }}>
+            Powers your instructors' dismissal check-off and Class Reports. Turn it off and families won't be asked at registration, and instructors won't see the dismissal step.
+          </div>
+        )}
+        </>
       )}
     </div>
   );
