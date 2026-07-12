@@ -3422,7 +3422,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
 
             {canRecord && isFutureSession && (
               <div style={{ background: "#fff", border: `1px dashed ${RULE}`, color: MUTED, padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
-                This class hasn't met yet. Attendance and dismissal open on {prettyDay(sessionDate)}.
+                This class day hasn't happened yet. You can record attendance and dismissal on {prettyDay(sessionDate)}.
               </div>
             )}
 
