@@ -275,6 +275,28 @@ export function calculateCart(cart) {
 
   const total_cents = Math.max(0, after_sibling - promo_discount_cents);
 
+  // Allocate the promo across lines (proportional to each line's after-sibling
+  // amount, remainder on the largest) so per-line NET amounts sum EXACTLY to
+  // total_cents. Mirrors the server engine (promoPricing.ts) so the installment
+  // breakdown on the review screen matches the discounted total and the charge.
+  if (promo_discount_cents > 0 && after_sibling > 0) {
+    let allocated = 0;
+    let largestIdx = 0;
+    lines.forEach((l, i) => {
+      const share = Math.round(promo_discount_cents * (l.subtotal_cents / after_sibling));
+      l.promo_discount_cents = share;
+      allocated += share;
+      if (l.subtotal_cents > lines[largestIdx].subtotal_cents) largestIdx = i;
+    });
+    const remainder = promo_discount_cents - allocated;
+    if (remainder !== 0 && lines[largestIdx]) lines[largestIdx].promo_discount_cents += remainder;
+    lines.forEach((l) => { if (l.promo_discount_cents > l.subtotal_cents) l.promo_discount_cents = l.subtotal_cents; });
+  }
+  lines.forEach((l) => {
+    l.promo_discount_cents = l.promo_discount_cents || 0;
+    l.amount_cents = l.subtotal_cents - l.promo_discount_cents; // NET after promo
+  });
+
   return {
     lines,
     subtotal_cents,
