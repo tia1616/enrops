@@ -88,11 +88,33 @@ export default function BackgroundCheckSettings() {
         provider_url: normalizeUrl(providerUrl) || null,
         instructions: instructions.trim() || null,
       };
+      const enabledChanged = enabled !== saved.enabled;
       const { error: e } = await supabase
         .from("organizations")
         .update({ background_check_config: config })
         .eq("id", org.id);
       if (e) throw e;
+      // Turning the flag on/off changes who the onboarding gate lets through, but
+      // the gate only re-runs from the wizard/webhooks — so contractors already
+      // waiting stay stuck until this reconcile fires. Non-fatal: the config is
+      // saved regardless; the next natural gate run would eventually reconcile.
+      if (enabledChanged) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token;
+          if (token) {
+            await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/reconcile-onboarding-gate`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+                apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+              },
+              body: JSON.stringify({ organization_id: org.id }),
+            });
+          }
+        } catch (_reconcileErr) { /* config already saved; gate reconciles on next run */ }
+      }
       setSaved({
         enabled,
         providerName: providerName.trim(),
