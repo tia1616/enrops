@@ -3,7 +3,7 @@
 // One home for the three ways an operator gives families a price break:
 //   1. Promo codes    — customer-entered codes (this table's main content)
 //   2. Sibling discount — automatic % off for additional children (org config)
-//   3. Early-bird      — date-based pricing, set per-program (link out to Programs)
+//   3. Early-bird      — term-wide date-based pricing, set inline here per term
 //
 // Mirrors the category norm (Squarespace/Shopify "Discounts"; Sawyer/Jackrabbit).
 // Money surface: owner/admin only (nav gates viewMoney; promo_codes + organizations
@@ -74,6 +74,13 @@ function statusOf(c, now = new Date()) {
   if (c.expires_at && now > new Date(c.expires_at)) return { label: "Expired", bg: "#f3f4f6", ink: "#6b7280" };
   if (c.max_uses != null && (c.used_count ?? 0) >= c.max_uses) return { label: "Used up", bg: "#fef2f2", ink: "#991b1b" };
   return { label: "Active", bg: GREEN_BG, ink: GREEN_INK };
+}
+
+// Early-bird term badge: honest about an expired deadline (not just "on").
+function ebBadge(d) {
+  if (!d.hasEb) return { text: "Off", background: "#f3f4f6", color: "#6b7280" };
+  if (d.ended) return { text: "Ended", background: "#fef3c7", color: "#92400e" };
+  return { text: "Early-bird on", background: GREEN_BG, color: GREEN_INK };
 }
 
 function describeValue(c) {
@@ -171,15 +178,14 @@ export default function Discounts() {
       p_deadline: clearing ? null : deadline,
     });
     if (e) { setError(e.message ?? "Couldn't apply early-bird pricing."); return false; }
-    // Sync local state to what the RPC just wrote (same math).
+    // Sync local state to what the RPC just wrote (same math). Feedback is shown
+    // inline at the term card (not a far-away top toast).
     setPrograms((list) => list.map((p) => {
       if (p.term !== term) return p;
       return clearing
         ? { ...p, early_bird_price_cents: null, early_bird_deadline: null }
         : { ...p, early_bird_price_cents: earlyPriceFor(p.price_cents, discountType, value), early_bird_deadline: deadline };
     }));
-    const n = programs.filter((p) => p.term === term).length;
-    flash(clearing ? `Early-bird turned off for ${prettyTerm(term)}.` : `Early-bird applied to ${n} ${prettyTerm(term)} program${n === 1 ? "" : "s"}.`);
     return true;
   }
 
@@ -322,7 +328,7 @@ export default function Discounts() {
         </div>
       </div>
 
-      <EarlyBirdSection programs={programs} onApply={applyTermEarlyBird} onError={setError} />
+      <EarlyBirdSection programs={programs} onApply={applyTermEarlyBird} />
 
       {/* Promo codes */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -373,7 +379,7 @@ export default function Discounts() {
 
       {draft && (
         <DrawerForm
-          draft={draft} setDraft={setDraft} programs={programs}
+          draft={draft} setDraft={setDraft} programs={programs} error={error}
           onCancel={() => { setError(""); setDraft(null); }} onSave={saveDraft}
         />
       )}
@@ -381,7 +387,7 @@ export default function Discounts() {
   );
 }
 
-function DrawerForm({ draft, setDraft, programs, onCancel, onSave }) {
+function DrawerForm({ draft, setDraft, programs, error, onCancel, onSave }) {
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const isFree = draft.discount_type === "percent" && Number(draft.discount_value) >= 100;
   return (
@@ -389,6 +395,7 @@ function DrawerForm({ draft, setDraft, programs, onCancel, onSave }) {
       <div style={drawer} onClick={(e) => e.stopPropagation()}>
         <div style={{ fontSize: 18, fontWeight: 700, color: PURPLE, marginBottom: 4 }}>{draft.id ? "Edit code" : "New promo code"}</div>
         <p style={{ fontSize: 13, color: MUTED, marginTop: 0, marginBottom: 18 }}>Families type this at checkout to get the discount.</p>
+        {error && <div style={{ marginBottom: 16, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
 
         <Field label="Code">
           <input type="text" value={draft.code} onChange={(e) => set({ code: e.target.value.toUpperCase() })}
@@ -470,7 +477,7 @@ function DrawerForm({ draft, setDraft, programs, onCancel, onSave }) {
 // Term-wide early-bird editor: one card per term. Each card sets a single
 // deadline + a single discount ($ or % off standard) applied to every program
 // in that term, with an expandable per-program price preview.
-function EarlyBirdSection({ programs, onApply, onError }) {
+function EarlyBirdSection({ programs, onApply }) {
   const terms = useMemo(() => {
     const map = new Map();
     for (const p of programs) {
@@ -494,7 +501,7 @@ function EarlyBirdSection({ programs, onApply, onError }) {
       ) : (
         <div style={{ display: "grid", gap: 12 }}>
           {terms.map(([term, progs]) => (
-            <EarlyBirdTermCard key={term} term={term} progs={progs} onApply={onApply} onError={onError} />
+            <EarlyBirdTermCard key={term} term={term} progs={progs} onApply={onApply} />
           ))}
         </div>
       )}
@@ -502,14 +509,18 @@ function EarlyBirdSection({ programs, onApply, onError }) {
   );
 }
 
-function EarlyBirdTermCard({ term, progs, onApply, onError }) {
-  // Derive current state: the common deadline + a uniform $ off if one exists.
+function EarlyBirdTermCard({ term, progs, onApply }) {
+  // Derive current state: whether early-bird is set, whether its deadline has
+  // already passed (so the badge tells the truth), the common deadline, and a
+  // uniform $ off if one exists (to prefill the discount box).
   const derived = useMemo(() => {
     const withEb = progs.filter((p) => p.early_bird_price_cents != null);
-    const deadline = withEb.find((p) => p.early_bird_deadline)?.early_bird_deadline || "";
+    const deadline = toDateInput(withEb.find((p) => p.early_bird_deadline)?.early_bird_deadline || "");
     const offs = withEb.map((p) => (p.price_cents ?? 0) - p.early_bird_price_cents);
     const uniform = offs.length && offs.every((o) => o === offs[0]) ? offs[0] : null;
-    return { active: withEb.length > 0, deadline: toDateInput(deadline), uniformOffDollars: uniform != null ? centsToDollars(uniform) : "" };
+    const todayISO = new Date().toISOString().slice(0, 10);
+    const ended = withEb.length > 0 && !!deadline && deadline < todayISO;
+    return { hasEb: withEb.length > 0, ended, deadline, uniformOffDollars: uniform != null ? centsToDollars(uniform) : "" };
   }, [progs]);
 
   const [deadline, setDeadline] = useState(derived.deadline);
@@ -546,8 +557,8 @@ function EarlyBirdTermCard({ term, progs, onApply, onError }) {
           {prettyTerm(term)}
           <span style={{ fontWeight: 500, color: MUTED, fontSize: 13 }}> · {progs.length} program{progs.length === 1 ? "" : "s"}</span>
         </div>
-        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: derived.active ? GREEN_BG : "#f3f4f6", color: derived.active ? GREEN_INK : "#6b7280" }}>
-          {derived.active ? "Early-bird on" : "Off"}
+        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 999, ...ebBadge(derived) }}>
+          {ebBadge(derived).text}
         </span>
       </div>
 
@@ -580,7 +591,7 @@ function EarlyBirdTermCard({ term, progs, onApply, onError }) {
         <button type="button" onClick={apply} disabled={busy || !canApply} style={primaryBtn(busy || !canApply)}>
           {busy ? "Applying…" : `Apply to ${progs.length}`}
         </button>
-        {derived.active && (
+        {derived.hasEb && (
           <button type="button" onClick={turnOff} disabled={busy} style={ghostBtn}>Turn off</button>
         )}
       </div>
@@ -590,12 +601,17 @@ function EarlyBirdTermCard({ term, progs, onApply, onError }) {
           {note.ok ? "✓ " : ""}{note.text}
         </div>
       )}
-      {!derived.active && (
+      {!derived.hasEb && (
         <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
           Early-bird is off for this term. Enter a discount and an end date, then Apply to turn it on.
         </div>
       )}
-      {derived.active && !canApply && !note && (
+      {derived.hasEb && derived.ended && !note && (
+        <div style={{ marginTop: 10, fontSize: 12, color: "#92400e" }}>
+          Early-bird ended {fmtDate(derived.deadline)}. Families are paying standard price now — set a later end date and Apply to run it again.
+        </div>
+      )}
+      {derived.hasEb && !derived.ended && !canApply && !note && (
         <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
           Enter a discount and an end date, then Apply.
         </div>
