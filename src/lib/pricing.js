@@ -190,6 +190,16 @@ export function calculateCart(cart) {
   let subtotal_cents = 0;
   let sibling_total_cents = 0;
 
+  // Sibling % from org config (threaded onto the cart once org-fee-config loads).
+  // undefined = not loaded yet -> fall back to the legacy 10% so the display is
+  // right for J2S from the first paint; null = org has it turned off (0%).
+  const sibPct =
+    cart.sibling_discount_pct === undefined
+      ? SIBLING_DISCOUNT_PCT
+      : cart.sibling_discount_pct == null
+      ? 0
+      : Number(cart.sibling_discount_pct);
+
   cart.children.forEach((child) => {
     child.items.forEach((item) => {
       const { base_cents, label, is_legacy, is_vip } = basePriceForItem({
@@ -198,7 +208,7 @@ export function calculateCart(cart) {
       });
       const sibling_cents =
         child.child_index > 0
-          ? Math.round(base_cents * (SIBLING_DISCOUNT_PCT / 100))
+          ? Math.round(base_cents * (sibPct / 100))
           : 0;
       const subtotal = base_cents - sibling_cents;
 

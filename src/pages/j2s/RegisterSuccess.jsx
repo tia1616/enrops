@@ -9,6 +9,7 @@ export default function RegisterSuccess() {
   const ORG_SLUG = org.slug;
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get('session_id');
+  const comp = searchParams.get('comp') === '1'; // $0 scholarship — no payment
   const { user, signInWithGoogle, signInWithMagicLink } = useAuth();
   const { clearCart, cart } = useCart();
 
@@ -74,8 +75,9 @@ export default function RegisterSuccess() {
           You're registered!
         </h1>
         <p className="mt-4 text-lg text-white/90">
-          Thanks for signing up. We just sent your receipt and class details to
-          your email.
+          {comp
+            ? 'Your spot is confirmed — no payment needed. Sign in below to see your schedule and class details.'
+            : 'Thanks for signing up. We just sent your receipt and class details to your email.'}
         </p>
         {sessionId && (
           <p className="mt-3 text-xs text-white/60">

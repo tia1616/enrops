@@ -42,6 +42,7 @@ export default function Register() {
     setPromoInput,
     setPromoError,
     togglePaymentPlan,
+    setSiblingPct,
     addAnotherChild,
   } = useCart();
 
@@ -267,6 +268,9 @@ export default function Register() {
     setWaivers(waiversRes.data || []);
     setRegFields(parseRegFields(regFieldsRes.data || []));
     setFeeConfig(feeRes?.data || { fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0 });
+    // Thread the org's sibling % onto the cart so the review screen matches the
+    // server charge. undefined (older org-fee-config) -> pricing.js keeps the 10% default.
+    setSiblingPct(feeRes?.data?.sibling_discount_pct);
     setLoading(false);
   }
 
@@ -380,22 +384,39 @@ export default function Register() {
         throw new Error(regData.error || 'Could not save registration.');
       }
 
-      // 2. Call create-checkout with registration IDs
+      // 2. Call create-checkout with registration IDs.
+      // Forward the SERVER-authoritative pricing create-registration returned
+      // (net line amounts, promo actually applied) so the charge matches the DB
+      // rows. Fall back to the client pricing if an older function is deployed
+      // (identical numbers when there's no promo).
+      const serverPricing = regData.pricing;
       const useInstallments = !!(cart.payment_plan && installmentSchedule);
+      const checkoutLineItems =
+        serverPricing?.lines?.length
+          ? serverPricing.lines.map((l) => ({
+              program_id: l.program_id,
+              program_name: l.program_name,
+              school_name: l.school_name,
+              day_of_week: l.day_of_week,
+              start_time: l.start_time,
+              amount_cents: l.amount_cents,
+              child_label: l.child_label,
+            }))
+          : pricing.lines.map((l) => ({
+              program_id: l.program_id,
+              program_name: l.program_name,
+              school_name: l.school_name,
+              day_of_week: l.day_of_week,
+              start_time: l.start_time,
+              amount_cents: l.subtotal_cents,
+              child_label: `Child ${l.child_index + 1}`,
+            }));
       const checkoutPayload = {
         registration_ids: regData.registration_ids,
         parent_email: cart.parent.email,
         parent_name: `${cart.parent.first_name} ${cart.parent.last_name}`,
-        line_items: pricing.lines.map((l) => ({
-          program_id: l.program_id,
-          program_name: l.program_name,
-          school_name: l.school_name,
-          day_of_week: l.day_of_week,
-          start_time: l.start_time,
-          amount_cents: l.subtotal_cents,
-          child_label: `Child ${l.child_index + 1}`,
-        })),
-        total_cents: pricing.total_cents,
+        line_items: checkoutLineItems,
+        total_cents: serverPricing?.total_cents ?? pricing.total_cents,
         origin: window.location.origin,
         success_path: `/${ORG_SLUG}/register/success`,
         cancel_path: `/${ORG_SLUG}/register`,
@@ -406,28 +427,43 @@ export default function Register() {
         // Bug A fix (2026-05-01): per-line schedule with correct registration_id mapping.
         const dueDates = installmentSchedule.dueDates;
         const perLineEntries = [];
-        installmentSchedule.perLineSplits.forEach(({ line_index, splits }) => {
-          const regId = regData.registration_ids[line_index];
-          if (!regId) {
-            console.error(`Missing registration_id for line ${line_index}`);
-            return;
-          }
-          if (splits[0] > 0) {
-            perLineEntries.push({ installment_number: 1, registration_id: regId, amount_cents: splits[0], due_date: dueDates.charge1 });
-          }
-          if (splits[1] > 0) {
-            perLineEntries.push({ installment_number: 2, registration_id: regId, amount_cents: splits[1], due_date: dueDates.charge2 });
-          }
-          if (splits[2] > 0) {
-            perLineEntries.push({ installment_number: 3, registration_id: regId, amount_cents: splits[2], due_date: dueDates.charge3 });
-          }
-        });
+        // Prefer the SERVER-authoritative net amounts (promo applied) so the plan
+        // totals match the DB rows / the checkout guard. Fall back to the client
+        // schedule for VIP carts (term-to-charge mapping) or an older function.
+        const isVipCart = cart.children.some((c) => c.items?.some((it) => it.isVip));
+        const useServerNet =
+          serverPricing?.lines?.length === regData.registration_ids.length && !isVipCart;
+        if (useServerNet) {
+          serverPricing.lines.forEach((l) => {
+            const net = l.amount_cents;
+            const base = Math.floor(net / 3);
+            const splits = [base + (net - base * 3), base, base]; // remainder on charge 1
+            const regId = l.registration_id;
+            if (splits[0] > 0) perLineEntries.push({ installment_number: 1, registration_id: regId, amount_cents: splits[0], due_date: dueDates.charge1 });
+            if (splits[1] > 0) perLineEntries.push({ installment_number: 2, registration_id: regId, amount_cents: splits[1], due_date: dueDates.charge2 });
+            if (splits[2] > 0) perLineEntries.push({ installment_number: 3, registration_id: regId, amount_cents: splits[2], due_date: dueDates.charge3 });
+          });
+        } else {
+          installmentSchedule.perLineSplits.forEach(({ line_index, splits }) => {
+            const regId = regData.registration_ids[line_index];
+            if (!regId) {
+              console.error(`Missing registration_id for line ${line_index}`);
+              return;
+            }
+            if (splits[0] > 0) perLineEntries.push({ installment_number: 1, registration_id: regId, amount_cents: splits[0], due_date: dueDates.charge1 });
+            if (splits[1] > 0) perLineEntries.push({ installment_number: 2, registration_id: regId, amount_cents: splits[1], due_date: dueDates.charge2 });
+            if (splits[2] > 0) perLineEntries.push({ installment_number: 3, registration_id: regId, amount_cents: splits[2], due_date: dueDates.charge3 });
+          });
+        }
+        // Aggregate per-charge from the per-line entries so the totals always match
+        // whatever source (server net or client) was used above.
+        const sumCharge = (n) => perLineEntries.filter((e) => e.installment_number === n).reduce((s, e) => s + e.amount_cents, 0);
         checkoutPayload.installment_schedule = {
-          aggregated: installmentSchedule.display.map((i) => ({
-            installment_number: i.number,
-            amount_cents: i.amount_cents,
-            due_date: i.due_date,
-          })),
+          aggregated: [
+            { installment_number: 1, amount_cents: sumCharge(1), due_date: dueDates.charge1 },
+            { installment_number: 2, amount_cents: sumCharge(2), due_date: dueDates.charge2 },
+            { installment_number: 3, amount_cents: sumCharge(3), due_date: dueDates.charge3 },
+          ],
           per_line: perLineEntries,
         };
       }
@@ -443,6 +479,11 @@ export default function Register() {
       const coData = await coResp.json();
       if (!coResp.ok || coData.error) {
         throw new Error(coData.error || 'Could not start checkout.');
+      }
+      if (coData.comp) {
+        // $0 scholarship — no payment. Go straight to the success page.
+        window.location.href = `/${ORG_SLUG}/register/success?comp=1`;
+        return;
       }
       if (coData.url) {
         window.location.href = coData.url;
@@ -510,6 +551,7 @@ export default function Register() {
                 const { data } = await supabase
                   .from('promo_codes')
                   .select('*')
+                  .eq('organization_id', ORG_ID)
                   .eq('code', code.trim().toUpperCase())
                   .eq('active', true)
                   .maybeSingle();

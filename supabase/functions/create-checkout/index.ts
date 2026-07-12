@@ -96,6 +96,82 @@ serve(async (req) => {
       return json({ error: 'Missing registration_ids or line_items' }, 400);
     }
 
+    // --- Server-authoritative charge guard (chunk 6) ---
+    // create-registration wrote the true per-line amounts to the DB. Re-derive the
+    // total from those rows; the browser's numbers are only honored if they match.
+    // A tampered total (or a stale cart) is rejected, never charged.
+    const guardAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: regAmtRows, error: regAmtErr } = await guardAdmin
+      .from('registrations')
+      .select('amount_cents')
+      .in('id', registration_ids);
+    if (regAmtErr) return json({ error: 'Could not verify the order total. Please try again.' }, 500);
+    const serverSum = (regAmtRows || []).reduce((s, r) => s + (r.amount_cents || 0), 0);
+
+    if (serverSum <= 0) {
+      // $0 comp / scholarship order — a 100%-off (or fully-covering) code. There is
+      // no Stripe charge: enroll the family, count the redemption, and send them to
+      // the success page where they get parent-portal access (magic link). We reuse
+      // registration_ids[0] as the idempotency key since there's no payment intent.
+      const { error: paidErr } = await guardAdmin
+        .from('registrations')
+        .update({ status: 'confirmed', payment_status: 'paid' })
+        .in('id', registration_ids);
+      if (paidErr) return json({ error: 'Could not confirm your free registration. Please try again.' }, 500);
+
+      const { data: compRegRows } = await guardAdmin
+        .from('registrations')
+        .select('promo_code_used, parent_id, organization_id')
+        .in('id', registration_ids);
+      const compOrgId = (compRegRows || [])[0]?.organization_id ?? null;
+
+      try {
+        const code = (compRegRows || []).find((r) => r.promo_code_used)?.promo_code_used;
+        if (code && compOrgId) {
+          const parentId = (compRegRows || []).find((r) => r.parent_id)?.parent_id ?? null;
+          const { data: codeRow } = await guardAdmin
+            .from('promo_codes').select('id')
+            .eq('organization_id', compOrgId).eq('code', code).maybeSingle();
+          if (codeRow) {
+            const { error: insErr } = await guardAdmin.from('promo_redemptions').insert({
+              organization_id: compOrgId,
+              promo_code_id: codeRow.id,
+              parent_id: parentId,
+              redemption_key: `comp:${registration_ids[0]}`,
+            });
+            if (!insErr) {
+              await guardAdmin.rpc('increment_promo_used_count', { p_code_id: codeRow.id });
+            } else if (!/duplicate key|unique/i.test(insErr.message || '')) {
+              console.warn('comp redemption insert failed:', insErr.message);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('comp redemption counting failed (non-fatal):', (e as Error).message);
+      }
+
+      // intelligence: log completion (fail-safe) so a $0 enrollment still shows up.
+      for (const regId of registration_ids) {
+        await logEnrollmentEvent(guardAdmin, {
+          actionType: ENROLLMENT_ACTIONS.PAYMENT_COMPLETED,
+          organizationId: compOrgId,
+          registrationId: regId,
+          metadata: { amount_total_cents: 0, comp: true },
+          dedupeKey: `payment_completed:comp:${regId}`,
+        });
+      }
+      return json({ comp: true, registration_ids });
+    }
+    {
+      const clientTotal = Number(total_cents) || 0;
+      const lineSum = (line_items as Array<{ amount_cents?: number }>).reduce((s, l) => s + (l.amount_cents || 0), 0);
+      if (Math.abs(clientTotal - serverSum) > 1 || Math.abs(lineSum - serverSum) > 1) {
+        return json({ error: 'That price is out of date — please refresh your cart and try again.', price_mismatch: true }, 409);
+      }
+    }
+
     let aggregated: AggregatedEntry[] | null = null;
     let perLine: PerLineEntry[] | null = null;
 

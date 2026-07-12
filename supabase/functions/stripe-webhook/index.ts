@@ -148,6 +148,41 @@ serve(async (req) => {
         stripe_payment_intent_id: session.payment_intent as string,
       }).in('id', regIds);
 
+      // Count a promo redemption once, when funds actually settle (chunk 6).
+      // The redemption ledger is the source of truth for usage limits; the
+      // unique (promo_code_id, redemption_key=payment_intent) makes a webhook
+      // retry a no-op, and used_count is bumped only when the ledger row is new.
+      if (isPaid) {
+        try {
+          const { data: regRows } = await admin
+            .from('registrations')
+            .select('promo_code_used, parent_id')
+            .in('id', regIds);
+          const code = (regRows || []).find((r) => r.promo_code_used)?.promo_code_used;
+          if (code && orgId) {
+            const parentId = (regRows || []).find((r) => r.parent_id)?.parent_id ?? null;
+            const { data: codeRow } = await admin
+              .from('promo_codes').select('id')
+              .eq('organization_id', orgId).eq('code', code).maybeSingle();
+            if (codeRow) {
+              const { error: insErr } = await admin.from('promo_redemptions').insert({
+                organization_id: orgId,
+                promo_code_id: codeRow.id,
+                parent_id: parentId,
+                redemption_key: session.payment_intent as string,
+              });
+              if (!insErr) {
+                await admin.rpc('increment_promo_used_count', { p_code_id: codeRow.id });
+              } else if (!/duplicate key|unique/i.test(insErr.message || '')) {
+                console.warn('promo_redemptions insert failed:', insErr.message);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('promo redemption counting failed (non-fatal):', (e as Error).message);
+        }
+      }
+
       // intelligence: log payment_completed (one per registration; fail-safe, never blocks).
       // dedupe on the Stripe event id so a webhook retry can't double-count.
       // Only when funds are actually in — ACH-pending logs this on async clear.

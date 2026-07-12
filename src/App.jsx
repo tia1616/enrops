@@ -35,6 +35,7 @@ import Rosters from './pages/admin/Rosters.jsx';
 import ClassReports from './pages/admin/ClassReports.jsx';
 import Finances from './pages/admin/Finances.jsx';
 import Payouts from './pages/admin/Payouts.jsx';
+import Discounts from './pages/admin/Discounts.jsx';
 import TeamPage from './pages/admin/team/TeamPage.jsx';
 import AdminSettings from './pages/admin/AdminSettings.jsx';
 import SurveySettings from './pages/admin/SurveySettings.jsx';
@@ -182,6 +183,7 @@ export default function App() {
         <Route path="class-reports" element={<ClassReports />} />
         <Route path="finances" element={<Finances />} />
         <Route path="payouts" element={<Payouts />} />
+        <Route path="discounts" element={<Discounts />} />
         <Route path="team" element={<TeamPage />} />
         <Route path="time-saved" element={<TimeSavedPage />} />
         <Route path="settings" element={<AdminSettings />} />

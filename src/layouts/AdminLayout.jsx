@@ -76,6 +76,7 @@ const NAV = [
     tabs: [
       { to: "/admin/finances", label: "Receivables" },
       { to: "/admin/payouts", label: "Payouts" },
+      { to: "/admin/discounts", label: "Discounts" },
     ],
   },
   {
