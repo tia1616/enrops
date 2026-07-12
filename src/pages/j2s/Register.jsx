@@ -380,22 +380,39 @@ export default function Register() {
         throw new Error(regData.error || 'Could not save registration.');
       }
 
-      // 2. Call create-checkout with registration IDs
+      // 2. Call create-checkout with registration IDs.
+      // Forward the SERVER-authoritative pricing create-registration returned
+      // (net line amounts, promo actually applied) so the charge matches the DB
+      // rows. Fall back to the client pricing if an older function is deployed
+      // (identical numbers when there's no promo).
+      const serverPricing = regData.pricing;
       const useInstallments = !!(cart.payment_plan && installmentSchedule);
+      const checkoutLineItems =
+        serverPricing?.lines?.length
+          ? serverPricing.lines.map((l) => ({
+              program_id: l.program_id,
+              program_name: l.program_name,
+              school_name: l.school_name,
+              day_of_week: l.day_of_week,
+              start_time: l.start_time,
+              amount_cents: l.amount_cents,
+              child_label: l.child_label,
+            }))
+          : pricing.lines.map((l) => ({
+              program_id: l.program_id,
+              program_name: l.program_name,
+              school_name: l.school_name,
+              day_of_week: l.day_of_week,
+              start_time: l.start_time,
+              amount_cents: l.subtotal_cents,
+              child_label: `Child ${l.child_index + 1}`,
+            }));
       const checkoutPayload = {
         registration_ids: regData.registration_ids,
         parent_email: cart.parent.email,
         parent_name: `${cart.parent.first_name} ${cart.parent.last_name}`,
-        line_items: pricing.lines.map((l) => ({
-          program_id: l.program_id,
-          program_name: l.program_name,
-          school_name: l.school_name,
-          day_of_week: l.day_of_week,
-          start_time: l.start_time,
-          amount_cents: l.subtotal_cents,
-          child_label: `Child ${l.child_index + 1}`,
-        })),
-        total_cents: pricing.total_cents,
+        line_items: checkoutLineItems,
+        total_cents: serverPricing?.total_cents ?? pricing.total_cents,
         origin: window.location.origin,
         success_path: `/${ORG_SLUG}/register/success`,
         cancel_path: `/${ORG_SLUG}/register`,
