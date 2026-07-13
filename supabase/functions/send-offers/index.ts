@@ -361,6 +361,9 @@ serve(async (req: Request) => {
       sent: sent.length,
       failed,
       preview: mode === 'preview' ? previews : undefined,
+      // Where test/preview sends were routed, so the UI can tell the operator
+      // truthfully (never a hardcoded inbox). Omitted for real sends.
+      test_recipient: mode === 'send' ? undefined : testInbox,
     });
   } catch (err: any) {
     console.error('send-offers fatal:', err);

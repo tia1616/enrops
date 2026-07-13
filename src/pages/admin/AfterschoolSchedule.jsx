@@ -11,6 +11,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
+import { useAuth } from "../../context/AuthContext.jsx";
 import NotifyRemovalModal from "./NotifyRemovalModal.jsx";
 import AssignSubModal from "./AssignSubModal";
 import HatGuide from "../../components/HatGuide";
@@ -223,6 +224,10 @@ function statusLabel(status) {
 }
 
 export default function AfterschoolSchedule({ org, term, campCycles = [], afterschoolTerms = [], onSwitchTerm, onSwitchToCamp }) {
+  const { user } = useAuth();
+  // Test/preview sends route to the logged-in admin's own inbox (the edge fn
+  // falls back to the tenant's alert_email if this is missing).
+  const testRecipient = user?.email;
   const [state, setState] = useState({ status: "loading" });
   const [searchText, setSearchText] = useState("");
   const [selectedLocations, setSelectedLocations] = useState(() => new Set());
@@ -996,7 +1001,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     try {
       const instructor_ids = selectedInstructorIds && selectedInstructorIds.size > 0 ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-afterschool-offers", {
-        body: { organization_id: org.id, term, mode, instructor_ids, deadline: offerDeadline || null },
+        body: { organization_id: org.id, term, mode, instructor_ids, deadline: offerDeadline || null, test_recipient: testRecipient },
       });
       if (error) {
         let msg = error.message ?? "function error";
@@ -1020,7 +1025,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   async function previewOffers() {
     const instructor_ids = selectedInstructorIds && selectedInstructorIds.size > 0 ? Array.from(selectedInstructorIds) : null;
     const { data, error } = await supabase.functions.invoke("send-afterschool-offers", {
-      body: { organization_id: org.id, term, mode: "preview", instructor_ids, deadline: offerDeadline || null },
+      body: { organization_id: org.id, term, mode: "preview", instructor_ids, deadline: offerDeadline || null, test_recipient: testRecipient },
     });
     if (error) {
       let msg = error.message ?? "function error";
@@ -2220,7 +2225,7 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
           </p>
           {mode === "test" && (
             <div style={{ background: `${VIOLET}14`, border: `1px solid ${VIOLET}55`, borderRadius: 8, padding: "10px 12px", fontSize: 13, color: INK, marginBottom: 12 }}>
-              All emails went to your inbox only — instructors weren't contacted.
+              All emails went to <strong>{data?.test_recipient || "your inbox"}</strong> only — instructors weren't contacted.
             </div>
           )}
           {failed.length > 0 && (
