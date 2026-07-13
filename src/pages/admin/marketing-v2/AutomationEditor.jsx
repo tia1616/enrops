@@ -49,11 +49,11 @@ function decodeCommonEntities(s) {
 // useful in sign-offs for a personal touch.
 const TOKENS_BY_TEMPLATE_KEY = {
   thank_you:              ["first_name", "child_first_name", "org_name", "sender_name", "registration_summary_block"],
-  welcome_camp:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "location_name", "arrival_dismissal_block", "final_showcase_block", "next_term_link_block", "register_url"],
-  welcome_afterschool:    ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "location_name", "arrival_dismissal_block", "session_dates_block", "next_term_link_block", "register_url"],
-  check_in:               ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "register_url"],
-  mid_recap:              ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "mid_term_skills_block", "register_url"],
-  final_recap:            ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_end_date", "final_showcase_block", "final_recap_skills_block", "next_term_link_block", "register_url"],
+  welcome_camp:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "program_time", "location_name", "arrival_dismissal_block", "final_showcase_block", "next_term_link_block", "register_url"],
+  welcome_afterschool:    ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "program_time", "location_name", "arrival_dismissal_block", "session_dates_block", "next_term_link_block", "register_url"],
+  check_in:               ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_time", "register_url"],
+  mid_recap:              ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_time", "mid_term_skills_block", "register_url"],
+  final_recap:            ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "program_time", "program_end_date", "final_showcase_block", "final_recap_skills_block", "next_term_link_block", "register_url"],
   birthday:               ["first_name", "child_first_name", "org_name", "sender_name", "age_turning"],
   abandoned_registration: ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "abandoned_resume_url"],
   survey_nudge:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name"],
@@ -111,6 +111,7 @@ function sampleTokens(orgName, senderName, primaryColor, orgSlug) {
     sender_name: (senderName?.split(" @ ")[0]?.trim()) || "You",
     program_name: "Mini Robotics",
     program_start_date: "Monday, June 17",
+    program_time: "9:00 AM – 12:00 PM",
     program_end_date: "Friday, June 21",
     location_name: "Beaverton STEAM Hub",
     age_turning: "8",
@@ -145,11 +146,15 @@ function escapeHtmlSafe(s) {
 }
 
 function renderTokens(template, tokens) {
-  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+  const filled = template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
     const v = tokens[key];
     if (v == null) return match;
     return PRE_RENDERED_HTML_TOKENS.has(key) ? v : escapeHtmlSafe(v);
   });
+  // Mirror the cron's renderTokens: an optional token wrapped for display —
+  // e.g. "starts {{program_start_date}} ({{program_time}})" — leaves a bare
+  // " ()" when empty. Strip it so the preview matches the real send.
+  return filled.replace(/ ?\(\s*\)/g, "");
 }
 
 function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryColor, orgSlug, isMarketing = false) {
