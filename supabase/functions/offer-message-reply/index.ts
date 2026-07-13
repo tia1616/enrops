@@ -9,7 +9,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -140,10 +140,12 @@ serve(async (req: Request) => {
       .eq('organization_id', assignment.organization_id)
       .maybeSingle();
 
+    // Tenant-safe From: the org's canonical sender (verified own domain, else the
+    // shared platform domain), consistent with every other tenant email.
+    const brand = await loadOrgBrand(supabase, assignment.organization_id);
     const primary = brandingRow?.primary_color ?? DEFAULT_PRIMARY;
-    const fromName = brandingRow?.email_from_name ?? org?.name ?? 'Enrops';
-    const fromEmail = `${encodeDisplayName(fromName)} <hello@updates.journeytosteam.com>`;
-    const replyTo = brandingRow?.email_reply_to ?? undefined;
+    const fromEmail = formatFromAddress(brand);
+    const replyTo = brand.reply_to;
 
     const adminFirstName = userData.user.user_metadata?.full_name?.split(' ')[0] ?? 'your admin';
     if (!org?.slug) throw new Error(`offer-message-reply: org ${org?.id ?? 'null'} has no slug; cannot build portal URL`);

@@ -3,7 +3,7 @@
 // Accept or Request Change per camp. Class detail + My Availability are v2.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
@@ -70,6 +70,14 @@ export default function InstructorPortal() {
   //   ready        -> onboarded contractor; render schedule + profile
   //   error        -> unrecoverable load failure
   const navigate = useNavigate();
+  // The slug can come from the route param (/:slug/instructor) OR be baked into a
+  // literal path (/j2s/instructor, the redirect target for /instructor). useParams
+  // is empty on the literal route, so fall back to the first path segment — always
+  // the tenant slug — rather than a hardcoded tenant. Used only until the
+  // authoritative org slug resolves from the instructor's organization_id.
+  const { slug: routeSlug } = useParams();
+  const location = useLocation();
+  const pathSlug = routeSlug || location.pathname.split("/").filter(Boolean)[0] || "";
   const [phase, setPhase] = useState("loading");
   const [email, setEmail] = useState("");
   const [sendBusy, setSendBusy] = useState(false);
@@ -79,8 +87,9 @@ export default function InstructorPortal() {
   const [onboarding, setOnboarding] = useState(null);
   // Authoritative tenant slug for this instructor's org (from the public
   // directory, keyed on their organization_id) — used for every portal URL so
-  // we never hardcode a tenant. Falls back to "j2s" only until it's resolved.
-  const [orgSlug, setOrgSlug] = useState("j2s");
+  // we never hardcode a tenant. Seeds from the route slug (/:slug/instructor)
+  // until the authoritative value resolves.
+  const [orgSlug, setOrgSlug] = useState(pathSlug);
   // Instructor-facing background-check config for this org (enabled flag +
   // provider name/link/instructions). Drives the wizard's background-check step.
   const [backgroundCheck, setBackgroundCheck] = useState(null);
@@ -88,6 +97,7 @@ export default function InstructorPortal() {
   const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role, email, phone }] } — camp co-teachers
   const [coInstructorsProgram, setCoInstructorsProgram] = useState({}); // { [program_id]: [...] } — after-school co-teachers
   const [programAssignments, setProgramAssignments] = useState([]); // after-school offers
+  const [activeTerm, setActiveTerm] = useState(null); // org's active_registration_term (past-class split)
   const [scheduleByProgram, setScheduleByProgram] = useState({}); // { [program_id]: [{date,kind,reason}] } — session dates + no-school days
   const [subAssignments, setSubAssignments] = useState([]); // assignment_substitutions where I'm the sub
   const [actingOn, setActingOn] = useState(null);
@@ -201,16 +211,17 @@ export default function InstructorPortal() {
       // Resolve this org's real slug + instructor-facing background-check config
       // from the public directory (keyed on the instructor's organization_id).
       // The slug drives every portal URL below so we never hardcode a tenant.
-      let resolvedSlug = "j2s";
+      let resolvedSlug = pathSlug;
       if (fullInstructor.organization_id) {
         const { data: dir } = await supabase
           .from("public_org_directory")
-          .select("slug, background_check_public")
+          .select("slug, background_check_public, active_registration_term")
           .eq("id", fullInstructor.organization_id)
           .maybeSingle();
         if (dir?.slug) resolvedSlug = dir.slug;
         setOrgSlug(resolvedSlug);
         setBackgroundCheck(dir?.background_check_public ?? { enabled: true });
+        setActiveTerm(dir?.active_registration_term ?? null);
       }
 
       // Check onboarding status. If they're an unfinished contractor invite,
@@ -363,7 +374,7 @@ export default function InstructorPortal() {
   async function loadAfterschoolAssignments(instructorId) {
     const { data, error: aErr } = await supabase
       .from("program_assignments")
-      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, curriculum, day_of_week, start_time, end_time, session_count, term, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, term, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
       .eq("instructor_id", instructorId)
       .not("published_at", "is", null)
       .in("status", ["published", "change_requested", "confirmed"]);
@@ -372,7 +383,25 @@ export default function InstructorPortal() {
       setProgramAssignments([]);
       return;
     }
-    setProgramAssignments((data ?? []).map((a) => ({ ...a, kind: "program" })));
+    // Sort by weekday then start time so multiple after-school classes render in a
+    // sensible order (the query returns them unsorted / in PK order otherwise).
+    const DAY_ORDER = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 7 };
+    const dayKey = (dow) => {
+      if (dow == null) return 9;
+      const n = Number(dow);
+      if (!Number.isNaN(n)) return n === 0 ? 7 : n; // numeric 0=Sun..6=Sat
+      return DAY_ORDER[String(dow).trim().toLowerCase()] ?? 9;
+    };
+    setProgramAssignments(
+      (data ?? [])
+        .map((a) => ({ ...a, kind: "program" }))
+        .sort((x, y) => {
+          const dx = dayKey(x.programs?.day_of_week);
+          const dy = dayKey(y.programs?.day_of_week);
+          if (dx !== dy) return dx - dy;
+          return String(x.programs?.start_time ?? "").localeCompare(String(y.programs?.start_time ?? ""));
+        }),
+    );
 
     // Per-program session schedule (meeting dates + skipped no-school days with
     // reasons) so the instructor sees the real dates their class meets, and why
@@ -926,11 +955,16 @@ export default function InstructorPortal() {
     (a) => a.status === "published" || a.status === "change_requested"
   );
   const accepted = currentAssignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
-  // After-school offers (no cycle archive concept yet — show all loaded).
-  const needsResponseAS = programAssignments.filter(
+  // After-school offers. A class whose term isn't the org's active term is "past"
+  // (after-school has no explicit cycle-archive like camps). Guard on both terms
+  // being present so a missing term never wrongly hides a live class.
+  const isPastProgram = (a) => !!activeTerm && !!a.programs?.term && a.programs.term !== activeTerm;
+  const currentPrograms = programAssignments.filter((a) => !isPastProgram(a));
+  const pastPrograms = programAssignments.filter(isPastProgram);
+  const needsResponseAS = currentPrograms.filter(
     (a) => a.status === "published" || a.status === "change_requested"
   );
-  const acceptedAS = programAssignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
+  const acceptedAS = currentPrograms.filter((a) => a.status === "confirmed" && a.instructor_response_at);
 
   // CPR cert expiry nudge: render a clickable pill if the cert is expired or
   // within 60 days of expiring. Tap → opens the profile screen where the
@@ -1357,7 +1391,7 @@ export default function InstructorPortal() {
         </div>
       )}
 
-      {pastAssignments.length > 0 && (
+      {(pastAssignments.length > 0 || pastPrograms.length > 0) && (
         <div style={{ marginTop: 24, paddingTop: 18, borderTop: `1px solid ${RULE}` }}>
           <button
             type="button"
@@ -1375,12 +1409,22 @@ export default function InstructorPortal() {
               padding: 0,
             }}
           >
-            <Chevron open={showPast} color={BRIGHT} style={{ marginRight: 5, verticalAlign: "middle" }} /> Past camps ({pastAssignments.length})
+            <Chevron open={showPast} color={BRIGHT} style={{ marginRight: 5, verticalAlign: "middle" }} /> Past camps &amp; classes ({pastAssignments.length + pastPrograms.length})
           </button>
           {showPast && (
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
               {pastAssignments.map((a) => (
                 <AssignmentCard key={a.id} assignment={a} readOnly />
+              ))}
+              {pastPrograms.map((a) => (
+                <AfterschoolAssignmentCard
+                  key={a.id}
+                  assignment={a}
+                  coInstructors={coInstructorsProgram[a.program_id] || []}
+                  schedule={scheduleByProgram[a.program_id] || []}
+                  readOnly
+                  onOpen={() => { setSelectedProgramAssignmentId(a.id); setView("afterschool-detail"); }}
+                />
               ))}
             </div>
           )}
@@ -1569,7 +1613,7 @@ function Shell({ children, instructorName, onSignOut, slug: slugProp }) {
   // Prefer the caller-provided org slug (resolved from the instructor's org) so
   // the portal switcher points at the right tenant even when the URL slug is a
   // fallback like /j2s/instructor. Falls back to the URL param.
-  const { slug: paramSlug = "j2s" } = useParams();
+  const { slug: paramSlug = "" } = useParams();
   const slug = slugProp || paramSlug;
   return (
     <div style={{
@@ -2016,6 +2060,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
             {p.curriculum || "Class"} <span style={{ fontWeight: 400, color: PURPLE, fontSize: 12, marginLeft: 4 }}>· after-school</span>
+            {assignment.role && <span style={{ fontWeight: 400, color: MUTED, fontSize: 12, marginLeft: 4 }}>· {titleCase(assignment.role)}</span>}
           </div>
           <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.4 }}>
             {when} · <strong style={{ color: PURPLE, fontWeight: 600 }}>all term</strong><br />
@@ -2068,7 +2113,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
 
       {assignment.distance_bonus_cents ? (
         <div style={{ fontSize: 13, color: PURPLE, fontWeight: 600 }}>
-          + {dollars(assignment.distance_bonus_cents)} bonus
+          + {dollars(assignment.distance_bonus_cents)} distance bonus
         </div>
       ) : null}
 
@@ -2115,13 +2160,16 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
       )}
 
       {readOnly && onOpen && (
-        <button
-          type="button"
-          onClick={onOpen}
-          style={{ marginTop: 8, padding: "8px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", alignSelf: "flex-start" }}
-        >
-          View roster &amp; class details →
-        </button>
+        <div style={{ marginTop: 4 }}>
+          {/* Match the camp card's text-link affordance + wording (was a bordered button). */}
+          <button
+            type="button"
+            onClick={onOpen}
+            style={{ background: "transparent", border: "none", color: PURPLE, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", padding: 0 }}
+          >
+            View details, roster, and materials →
+          </button>
+        </div>
       )}
     </div>
   );
@@ -2140,15 +2188,40 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
       <button type="button" onClick={onBack} style={{ background: "none", border: "none", color: PURPLE, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", padding: 0, marginBottom: 12 }}>
         ← Back to schedule
       </button>
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 20, fontWeight: 700, color: INK }}>
-          {p?.curriculum || "Class"} <span style={{ fontWeight: 400, color: PURPLE, fontSize: 13 }}>· after-school</span>
-        </div>
-        <div style={{ fontSize: 13, color: MUTED, marginTop: 4 }}>
-          {when}{loc?.name ? ` · ${loc.name}` : ""}{loc?.room_number ? ` · Room ${loc.room_number}` : ""}
-        </div>
-      </div>
+      {/* Status banner mirrors the camp detail so an after-school instructor gets
+          the same "this is locked in" reassurance + role. */}
+      {(() => {
+        const statusColor = assignment.status === "confirmed" ? OK_GREEN
+          : assignment.status === "change_requested" ? VIOLET : PURPLE;
+        const statusLabel = assignment.status === "confirmed" ? "Confirmed"
+          : assignment.status === "change_requested" ? "Change requested" : "Awaiting response";
+        return (
+          <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: `3px solid ${statusColor}`, borderRadius: 8, padding: "16px 18px", marginBottom: 18 }}>
+            <div style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{statusLabel}</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: INK, marginTop: 4 }}>
+              {p?.curriculum || "Class"} <span style={{ fontWeight: 400, color: PURPLE, fontSize: 13 }}>· after-school</span>
+            </div>
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
+              {when}{loc?.name ? ` · ${loc.name}` : ""}{loc?.room_number ? ` · Room ${loc.room_number}` : ""}
+              {assignment.role ? ` · ${titleCase(assignment.role)} instructor` : ""}
+            </div>
+          </div>
+        );
+      })()}
       <CoInstructorLine coInstructors={coInstructors} />
+      {/* Same sections a camp instructor sees — an after-school class is just
+          another program. Location, Daily check-in (mark each session taught ->
+          pay), Roster, and Lesson materials are the shared camp components fed the
+          program's own location / session dates / curriculum. */}
+      {p.program_locations && (
+        <LocationSection location={p.program_locations} fallbackName={p.program_locations?.name} />
+      )}
+      <DailyCheckInSection
+        assignmentId={assignment.id}
+        instructorId={instructor?.id ?? instructor?.instructor_id}
+        programId={assignment.program_id}
+        sessionDates={programSessionDates(schedule)}
+      />
       <div style={{ marginTop: 16 }}>
         <RosterSection
           programId={assignment.program_id}
@@ -2160,6 +2233,11 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
           sessionDates={programSessionDates(schedule)}
         />
       </div>
+      {p.curriculum_id && (
+        <div style={{ marginTop: 16 }}>
+          <LessonsSection curriculumId={p.curriculum_id} curriculumName={p.curriculum} />
+        </div>
+      )}
     </div>
   );
 }
@@ -2221,7 +2299,7 @@ function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onCl
           <textarea
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            placeholder="e.g., I can't do this week — my kids are at a different camp."
+            placeholder="e.g., I can't do this week — I have a scheduling conflict."
             rows={4}
             style={{
               width: "100%",
@@ -2237,7 +2315,7 @@ function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onCl
             }}
           />
           <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
-            Your admin will see your message and either reassign this camp or reply.
+            Your admin will see your message and either find coverage or reply.
           </div>
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -2586,6 +2664,7 @@ function AssignmentDetailView({ assignment, instructor, coInstructors = [], onBa
       <LocationSection location={s.program_locations} fallbackName={s.location_name} />
       <DailyCheckInSection
         assignmentId={assignment.id}
+        instructorId={instructor?.id ?? instructor?.instructor_id}
         campSessionId={s.id}
         startsOn={s.starts_on}
         endsOn={s.ends_on}
@@ -2608,8 +2687,8 @@ function AssignmentDetailView({ assignment, instructor, coInstructors = [], onBa
 // reached from the read-only SubOfferCard's "View details" link so the schedule
 // list stays compact. A sub is a single day (sub.date), so there's no multi-day
 // DailyCheckInSection — the card itself carries the one-tap "Mark this day as
-// taught". Roster + lessons only apply to camp subs (mirrors the card's prior
-// inline behavior); program subs show location only.
+// taught". Roster + lessons show for BOTH camp and program subs (program-sub
+// roster read is granted by subs_read_program_* RLS; the sub emails promise both).
 function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error, coInstructors = [] }) {
   const isCamp = sub.parent_assignment_type === "camp";
   const sess = isCamp ? sub.camp_parent?.camp_sessions ?? null : null;
@@ -2688,18 +2767,26 @@ function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error,
 
       <LocationSection location={loc} fallbackName={venueName} />
       <SubCheckInSection sub={sub} onMarkTaught={onMarkTaught} markBusy={markBusy} />
-      {isCamp && sess?.id && (
+      {/* Roster + lessons for BOTH camp and after-school subs — the sub offer
+          emails promise "the roster and lesson plan are in your portal", so a
+          program sub must see them too. Program-sub roster read is granted by
+          subs_read_program_rosters RLS; attendance write by instructor_attendance_
+          access (program-sub case); materials by get-instructor-curriculum-docs's
+          program-sub branch. The day is locked to the sub's single covered date. */}
+      {(isCamp ? sess?.id : prog?.id) && (
         <RosterSection
-          campSessionId={sess.id}
-          enrollment={sess.current_enrollment}
-          startsOn={sess.starts_on}
+          campSessionId={isCamp ? sess.id : undefined}
+          programId={isCamp ? undefined : prog.id}
+          enrollment={isCamp ? sess.current_enrollment : null}
+          startsOn={isCamp ? sess.starts_on : null}
+          noun={isCamp ? "camper" : "student"}
           instructorId={instructor?.id ?? instructor?.instructor_id}
           organizationId={instructor?.organization_id}
           sessionDates={sub.date ? [sub.date] : []}
           lockedDate={sub.date ?? null}
         />
       )}
-      {isCamp && curriculumId && (
+      {curriculumId && (
         <LessonsSection curriculumId={curriculumId} curriculumName={curriculumName} />
       )}
     </div>
@@ -2864,20 +2951,31 @@ function LocationSection({ location, fallbackName }) {
 // Assumes weekday-only camps (Mon-Fri). If a tenant ever runs Saturday/
 // Sunday camps, this will hide those days and we need a workdays setting.
 // Same shape as `session_type` on camp_sessions — a v2 enhancement.
-function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, classDays }) {
+function DailyCheckInSection({ assignmentId, instructorId, campSessionId, startsOn, endsOn, classDays, programId, sessionDates = [] }) {
+  // Dual-mode, mirroring RosterSection: camp (campSessionId + date range) or
+  // after-school program (programId + pre-derived sessionDates). Same confirmation
+  // rows, same edge fn (confirm-session-taught branches on which id it's given).
+  const filterCol = campSessionId ? "camp_session_id" : "program_id";
+  const filterVal = campSessionId || programId;
   const [confirmations, setConfirmations] = useState(null); // null = loading; Map by date string
   const [busyDate, setBusyDate] = useState(null);
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    if (!campSessionId) return;
+    if (!filterVal || !instructorId) return;
     let cancelled = false;
     (async () => {
       try {
+        // Scope to THIS instructor's own rows. A viewer who is both an instructor
+        // and an org member (e.g. an owner who also teaches) can read the whole
+        // org's confirmations via RLS, so without this filter a co-instructor's
+        // mark on a shared class day would show as this instructor's — hiding their
+        // own "Mark taught" button and never creating their pay line.
         const { data, error } = await supabase
           .from("session_delivery_confirmations")
           .select("id, session_date, confirmed_by, confirmed_at, pay_status")
-          .eq("camp_session_id", campSessionId);
+          .eq("instructor_id", instructorId)
+          .eq(filterCol, filterVal);
         if (cancelled) return;
         if (error) {
           console.error("[DailyCheckInSection] load failed", error);
@@ -2897,9 +2995,16 @@ function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, cl
       }
     })();
     return () => { cancelled = true; };
-  }, [campSessionId]);
+  }, [filterCol, filterVal, instructorId]);
 
-  const days = useMemo(() => weekdayRange(startsOn, endsOn, classDays), [startsOn, endsOn, classDays]);
+  // Camp days come from the contiguous date range; program days are the
+  // pre-derived session dates (closures already excluded upstream).
+  const datesKey = (sessionDates || []).join(",");
+  const days = useMemo(
+    () => (campSessionId ? weekdayRange(startsOn, endsOn, classDays) : (sessionDates || [])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [campSessionId, startsOn, endsOn, classDays, datesKey],
+  );
   const todayStr = todayLocalISO();
 
   async function markTaught(dateStr) {
@@ -2909,7 +3014,9 @@ function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, cl
     try {
       const { data, error: fnErr } = await supabase.functions.invoke(
         "confirm-session-taught",
-        { body: { camp_assignment_id: assignmentId, session_date: dateStr } },
+        { body: campSessionId
+            ? { camp_assignment_id: assignmentId, session_date: dateStr }
+            : { program_assignment_id: assignmentId, session_date: dateStr } },
       );
       if (fnErr || data?.error) {
         setErr(humanizeConfirmError(data?.error || fnErr?.message));
@@ -3096,9 +3203,9 @@ function todayLocalISO() {
 function humanizeConfirmError(code) {
   if (!code) return "Couldn't save your check-in. Try again.";
   if (code === "session_date_in_future") return "You can't mark a future day taught yet.";
-  if (code === "session_date_out_of_range") return "That date isn't within this camp's range.";
-  if (code === "assignment_not_confirmed") return "This camp isn't fully confirmed yet — talk to your admin.";
-  if (code === "forbidden") return "You're not assigned to this camp.";
+  if (code === "session_date_out_of_range") return "That date isn't within this class's range.";
+  if (code === "assignment_not_confirmed") return "This class isn't fully confirmed yet — talk to your admin.";
+  if (code === "forbidden") return "You're not assigned to this class.";
   if (code === "session_covered_by_substitute") return "A substitute is covering this day — they'll handle the check-in.";
   return "Couldn't save your check-in. Try again.";
 }
@@ -3155,6 +3262,12 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
   const [attErr, setAttErr] = useState("");
   const [savingIds, setSavingIds] = useState(() => new Set()); // students with a save in flight
   const canRecord = Boolean(instructorId && sessionDate);
+  // A custody record must reflect a day that has happened. When today isn't a
+  // meeting day the roster defaults to the next upcoming date (see
+  // defaultSessionDate), so the date picker still shows for navigation but the
+  // per-camper record controls stay closed until that day arrives. The DB
+  // trigger enforces the same rule for any raw-API path.
+  const isFutureSession = Boolean(sessionDate) && sessionDate > todayStr;
   const datesKey = (sessionDates || []).join(",");
 
   // Dismissal is coupled to the org's registration setting: only show the
@@ -3368,7 +3481,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
                 <strong>{aggregateCount}</strong> {noun}{aggregateCount === 1 ? "" : "s"} registered so far.
               </div>
             ) : (
-              <div>Enrollment count syncs from your registration platform before camp starts.</div>
+              <div>Enrollment count syncs from your registration platform before it starts.</div>
             )}
             <div style={{ color: MUTED, fontSize: 13, marginTop: 6 }}>
               The full roster (names, ages, allergies, emergency contacts) lands here
@@ -3405,6 +3518,12 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
               )}
             </div>
 
+            {canRecord && isFutureSession && (
+              <div style={{ background: "#fff", border: `1px dashed ${RULE}`, color: MUTED, padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
+                This class day hasn't happened yet. You can record attendance and dismissal on {prettyDay(sessionDate)}.
+              </div>
+            )}
+
             {attErr && (
               <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
                 {attErr}
@@ -3417,7 +3536,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
                   key={r.id}
                   registration={r}
                   contacts={contactsByStudent[r.student?.id] || []}
-                  canRecord={canRecord}
+                  canRecord={canRecord && !isFutureSession}
                   orgAsksDismissal={orgAsksDismissal}
                   attRecord={attByStudent[r.student?.id] || null}
                   saving={savingIds.has(r.student?.id)}
@@ -3453,7 +3572,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
   const s = registration.student;
   if (!s) return null;
   const p = registration.parent;
-  const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed camper";
+  const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed";
   const age = ageFromDob(s.birthdate);
   const hasAllergies = (s.allergies ?? "").trim().length > 0;
   const hasMedical = ((s.medical_notes ?? "") + (s.medical_conditions ?? "")).trim().length > 0 || s.epipen_required;
@@ -3675,7 +3794,18 @@ function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, 
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: INK, minWidth: 78 }}>Attendance</span>
         <button type="button" disabled={saving} onClick={() => markPresent(true)} style={btn(present === true, OK_GREEN)}>Present</button>
-        <button type="button" disabled={saving} onClick={() => markPresent(false)} style={btn(present === false, CORAL)}>Absent</button>
+        {/* A released child was present — can't flip to Absent without a
+            contradictory custody record. Undo the release ("change" below)
+            first. The DB trigger rejects the same combination. */}
+        <button
+          type="button"
+          disabled={saving || released}
+          onClick={() => markPresent(false)}
+          title={released ? "Undo the release first to mark absent" : undefined}
+          style={{ ...btn(present === false, CORAL), ...(released ? { opacity: 0.45, cursor: "default" } : {}) }}
+        >
+          Absent
+        </button>
         {attRecord?.checked_in_at && present === true && (
           <span style={{ fontSize: 11, color: MUTED }}>
             ✓ checked in {new Date(attRecord.checked_in_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
@@ -3777,7 +3907,7 @@ function LessonsSection({ curriculumId, curriculumName }) {
         if (cancelled) return;
         if (error || data?.error) {
           setErr(data?.error === "not_assigned_to_curriculum"
-            ? "We couldn't find materials for this camp yet."
+            ? "We couldn't find materials for this class yet."
             : "Couldn't load materials. Try again later.");
           setDocs([]);
           return;
@@ -3808,7 +3938,7 @@ function LessonsSection({ curriculumId, curriculumName }) {
           <div style={{ color: MUTED, fontSize: 13 }}>{err}</div>
         ) : docs.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
-            No materials uploaded yet for <strong style={{ color: INK }}>{curriculumName}</strong>. Your admin will add the instructor guide and materials list before camp starts.
+            No materials uploaded yet for <strong style={{ color: INK }}>{curriculumName}</strong>. Your admin will add the instructor guide and materials list before it starts.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -3944,12 +4074,12 @@ function PayView({ instructorId, onBack }) {
         const { data: confs, error: confErr } = await supabase
           .from("session_delivery_confirmations")
           .select(
-            `id, camp_session_id, session_date, session_type, confirmed_by,
+            `id, camp_session_id, program_id, session_date, session_type, confirmed_by,
              confirmed_at, pay_status, pay_amount_cents,
              pay_adjustment_cents, pay_adjustment_reason`
           )
           .eq("instructor_id", instructorId)
-          .not("camp_session_id", "is", null)
+          // Both camp days (camp_session_id) AND after-school sessions (program_id).
           // Exclude cron-seeded placeholders — a day the instructor hasn't
           // confirmed isn't earned pay yet (it shows in Daily check-in instead).
           .neq("confirmed_by", "pending")
@@ -3959,53 +4089,88 @@ function PayView({ instructorId, onBack }) {
 
         const rows = confs ?? [];
         if (rows.length === 0) {
-          setData({ camps: [], totals: emptyTotals() });
+          setData({ entries: [], totals: emptyTotals() });
           return;
         }
 
-        const sessionIds = [...new Set(rows.map((r) => r.camp_session_id))];
+        // Enrich camp rows from camp_sessions/camp_assignments and after-school
+        // rows from programs/program_assignments — each keyed by its own reference.
+        const campSessionIds = [...new Set(rows.filter((r) => r.camp_session_id).map((r) => r.camp_session_id))];
+        const programIds = [...new Set(rows.filter((r) => r.program_id).map((r) => r.program_id))];
+        const NONE = Promise.resolve({ data: [] });
 
-        const [{ data: sessions }, { data: assignments }] = await Promise.all([
-          supabase
-            .from("camp_sessions")
-            .select("id, curriculum_name, starts_on, ends_on, location_name, week_num, session_type")
-            .in("id", sessionIds),
-          supabase
-            .from("camp_assignments")
-            .select("camp_session_id, role, distance_bonus_cents")
-            .eq("instructor_id", instructorId)
-            .in("camp_session_id", sessionIds),
+        const [{ data: sessions }, { data: campAssns }, { data: programs }, { data: progAssns }] = await Promise.all([
+          campSessionIds.length
+            ? supabase.from("camp_sessions").select("id, curriculum_name, starts_on, ends_on, location_name, week_num").in("id", campSessionIds)
+            : NONE,
+          campSessionIds.length
+            ? supabase.from("camp_assignments").select("camp_session_id, role, distance_bonus_cents").eq("instructor_id", instructorId).in("camp_session_id", campSessionIds)
+            : NONE,
+          programIds.length
+            ? supabase.from("programs").select("id, curriculum, day_of_week, start_time, end_time, program_locations:program_location_id(name)").in("id", programIds)
+            : NONE,
+          programIds.length
+            ? supabase.from("program_assignments").select("program_id, role, distance_bonus_cents").eq("instructor_id", instructorId).in("program_id", programIds)
+            : NONE,
         ]);
 
         const sessionById = new Map((sessions ?? []).map((s) => [s.id, s]));
-        const assignmentBySession = new Map(
-          (assignments ?? []).map((a) => [a.camp_session_id, a])
-        );
+        const campAssnBySession = new Map((campAssns ?? []).map((a) => [a.camp_session_id, a]));
+        const programById = new Map((programs ?? []).map((p) => [p.id, p]));
+        const progAssnByProgram = new Map((progAssns ?? []).map((a) => [a.program_id, a]));
 
-        // Group by camp_session.
+        // Group by camp_session OR program into a normalized display entry.
         const grouped = new Map();
         for (const r of rows) {
-          if (!grouped.has(r.camp_session_id)) {
-            const sess = sessionById.get(r.camp_session_id);
-            const assn = assignmentBySession.get(r.camp_session_id);
-            grouped.set(r.camp_session_id, {
-              session: sess,
-              role: assn?.role ?? null,
-              distance_bonus_cents: assn?.distance_bonus_cents ?? 0,
-              confirmations: [],
-            });
+          const isCamp = !!r.camp_session_id;
+          const key = isCamp ? `c:${r.camp_session_id}` : `p:${r.program_id}`;
+          if (!grouped.has(key)) {
+            if (isCamp) {
+              const sess = sessionById.get(r.camp_session_id);
+              if (!sess) continue; // enrichment missing — skip the whole group
+              const assn = campAssnBySession.get(r.camp_session_id);
+              grouped.set(key, {
+                key, kind: "camp",
+                title: sess.curriculum_name,
+                weekNum: sess.week_num ?? null,
+                datesLabel: `${fmtShort(sess.starts_on)} – ${fmtShort(sess.ends_on)}`,
+                locationName: sess.location_name ?? null,
+                role: assn?.role ?? null,
+                distance_bonus_cents: assn?.distance_bonus_cents ?? 0,
+                confirmations: [],
+                sortDate: sess.starts_on ?? r.session_date,
+              });
+            } else {
+              const prog = programById.get(r.program_id);
+              if (!prog) continue;
+              const assn = progAssnByProgram.get(r.program_id);
+              const when = [
+                asDayName(prog.day_of_week),
+                [prog.start_time, prog.end_time].filter(Boolean).map(fmtTime).join("–"),
+              ].filter(Boolean).join(" · ");
+              grouped.set(key, {
+                key, kind: "program",
+                title: prog.curriculum || "Class",
+                weekNum: null,
+                datesLabel: when || "After-school",
+                locationName: prog.program_locations?.name ?? null,
+                role: assn?.role ?? null,
+                distance_bonus_cents: assn?.distance_bonus_cents ?? 0,
+                confirmations: [],
+                sortDate: r.session_date, // rows are date-desc, so first = most recent
+              });
+            }
           }
-          grouped.get(r.camp_session_id).confirmations.push(r);
+          const g = grouped.get(key);
+          if (g) g.confirmations.push(r);
         }
 
-        const camps = [...grouped.values()]
-          .filter((g) => g.session) // skip rows whose camp_session is missing
-          .sort((a, b) =>
-            (b.session.starts_on ?? "").localeCompare(a.session.starts_on ?? "")
-          );
+        const entries = [...grouped.values()].sort((a, b) =>
+          (b.sortDate ?? "").localeCompare(a.sortDate ?? "")
+        );
 
         // Totals across everything visible to this instructor.
-        const totals = camps.reduce(
+        const totals = entries.reduce(
           (acc, c) => {
             const base = c.confirmations.reduce((s, r) => s + (r.pay_amount_cents ?? 0), 0);
             const bonus = c.confirmations.reduce((s, r) => s + (r.pay_adjustment_cents ?? 0), 0);
@@ -4031,12 +4196,12 @@ function PayView({ instructorId, onBack }) {
           { base: 0, bonus: 0, distance: 0, grand: 0, byStage: { approved: 0, processing: 0, held: 0 } }
         );
 
-        if (!cancelled) setData({ camps, totals });
+        if (!cancelled) setData({ entries, totals });
       } catch (e) {
         console.error("[PayView] load failed", e);
         if (!cancelled) {
           setErr("Couldn't load your pay. Try again.");
-          setData({ camps: [], totals: emptyTotals() });
+          setData({ entries: [], totals: emptyTotals() });
         }
       }
     })();
@@ -4067,7 +4232,7 @@ function PayView({ instructorId, onBack }) {
         Your pay
       </h1>
       <p style={{ color: MUTED, margin: "0 0 18px", fontSize: 13, lineHeight: 1.5 }}>
-        Earned from camps you marked taught. Updates the moment you check in on the assignment detail.
+        Earned from camps and after-school classes you marked taught. Updates the moment you check in on the assignment detail.
       </p>
 
       {err && (
@@ -4080,18 +4245,18 @@ function PayView({ instructorId, onBack }) {
         <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>
       )}
 
-      {data !== null && data.camps.length === 0 && !err && (
+      {data !== null && data.entries.length === 0 && !err && (
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, color: MUTED, textAlign: "center", lineHeight: 1.5 }}>
-          You haven't marked any sessions taught yet. Open a confirmed camp, then use <strong>Daily check-in</strong> after each day to start tracking pay.
+          You haven't marked any sessions taught yet. Open a confirmed camp or class, then use <strong>Daily check-in</strong> after each session to start tracking pay.
         </div>
       )}
 
-      {data !== null && data.camps.length > 0 && (
+      {data !== null && data.entries.length > 0 && (
         <>
           <PayTotalsCard totals={data.totals} />
           <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 16 }}>
-            {data.camps.map((c) => (
-              <PayCampCard key={c.session.id} entry={c} />
+            {data.entries.map((c) => (
+              <PayEntryCard key={c.key} entry={c} />
             ))}
           </div>
         </>
@@ -4145,8 +4310,7 @@ function StageBlock({ label, amount }) {
   );
 }
 
-function PayCampCard({ entry }) {
-  const s = entry.session;
+function PayEntryCard({ entry }) {
   const confs = entry.confirmations.slice().sort((a, b) => (a.session_date ?? "").localeCompare(b.session_date ?? ""));
   const base = confs.reduce((acc, r) => acc + (r.pay_amount_cents ?? 0), 0);
   const bonus = confs.reduce((acc, r) => acc + (r.pay_adjustment_cents ?? 0), 0);
@@ -4160,16 +4324,19 @@ function PayCampCard({ entry }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 220px", minWidth: 200 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
-            {s.curriculum_name}
-            {s.week_num && (
+            {entry.title}
+            {entry.kind === "program" && (
+              <span style={{ color: PURPLE, marginLeft: 8, fontSize: 11, fontWeight: 400 }}>· after-school</span>
+            )}
+            {entry.weekNum && (
               <span style={{ color: MUTED, marginLeft: 8, fontSize: 12, fontWeight: 400 }}>
-                · Week {s.week_num}
+                · Week {entry.weekNum}
               </span>
             )}
           </div>
           <div style={{ fontSize: 12, color: MUTED, marginTop: 3, lineHeight: 1.5 }}>
-            {fmtShort(s.starts_on)} – {fmtShort(s.ends_on)}
-            {s.location_name && ` · ${s.location_name}`}
+            {entry.datesLabel}
+            {entry.locationName && ` · ${entry.locationName}`}
             {entry.role && ` · ${entry.role}`}
           </div>
         </div>

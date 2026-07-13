@@ -15,7 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock, encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -25,9 +25,6 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 
 const TEST_INBOX = 'jessica@journeytosteam.com';
-// TODO(B2 multi-tenant): drive the sender domain from org config, not a constant.
-// Mirrors the platform-wide hardcode already tracked on the backlog; not a new one.
-const FROM_DOMAIN = 'updates.journeytosteam.com';
 const DEFAULT_PRIMARY = '#1C004F';
 const PAGE_BG = '#FBFBFB';
 const TEXT = '#1a1a1a';
@@ -198,9 +195,9 @@ serve(async (req: Request) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
           body: JSON.stringify({
-            from: `${encodeDisplayName(fromName)} <hello@${FROM_DOMAIN}>`,
+            from: formatFromAddress(brand),
             to: recipient,
-            reply_to: replyTo ?? undefined,
+            reply_to: brand.reply_to,
             subject: mode === 'test' ? `[TEST] ${subject}` : subject,
             html, text,
           }),

@@ -15,9 +15,11 @@
 // CRON_SECRET env var (vault entry: enrops_cron_secret). Without this check
 // anyone with the URL could seed rows for arbitrary orgs.
 //
-// Scope: camps only for v1. Job A intentionally pulls only from
-// camp_assignments + camp_sessions. After-school confirmation rows need a
-// program_assignments table that doesn't exist yet.
+// Scope: Job A seeds CAMP days (camp_assignments + camp_sessions). Job C seeds
+// AFTER-SCHOOL program session days (program_assignments + the derived program
+// schedule) so a forgotten after-school session surfaces on Payroll as pending,
+// exactly like a camp day — the admin can then Confirm & pay it. Both jobs seed
+// ONLY accepted (confirmed) assignments and land rows confirmed_by='pending'.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
@@ -41,6 +43,7 @@ serve(async (req: Request) => {
   const supabase = adminClient();
   const summary = {
     job_a_rows_created: 0,
+    job_c_rows_created: 0,
     errors: [] as string[],
   };
 
@@ -53,9 +56,13 @@ serve(async (req: Request) => {
 
     // Pull all live camp assignments whose camp_session runs today (between
     // starts_on and ends_on, and class_days includes today's day-of-week).
-    // 'confirmed' is the canonical accepted state in camp_assignments today;
-    // 'accepted'/'published' are kept for forward/back compat. 'withdrawn'
-    // and 'declined' are intentionally excluded.
+    // Seed a payable day ONLY for assignments the instructor has ACCEPTED:
+    // 'confirmed' is the canonical accepted state (respond-to-assignment writes
+    // it on accept), 'accepted' is a legacy alias. 'published' (offer sent,
+    // never accepted), 'proposed', 'change_requested', 'withdrawn', 'declined'
+    // are excluded — an unaccepted offer must not surface a payable day on
+    // Payroll in the first place. This mirrors the committed-status allow-list
+    // in admin-confirm-session, so the two paths can't disagree.
     //
     // We do this as two queries instead of an INSERT...SELECT because the
     // class_days filter is awkward in PostgREST. Get the candidate rows in
@@ -74,7 +81,7 @@ serve(async (req: Request) => {
          ),
          status`,
       )
-      .in('status', ['accepted', 'published', 'confirmed']);
+      .in('status', ['accepted', 'confirmed']);
 
     if (candidateErr) {
       console.error('Job A candidate query failed:', candidateErr);
@@ -148,6 +155,107 @@ serve(async (req: Request) => {
             continue;
           }
           summary.job_a_rows_created++;
+        }
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Job C: create today's AFTER-SCHOOL program confirmation rows.
+    // Mirrors Job A for programs. A program "meets today" when its derived
+    // session schedule (weekly cadence minus location/district closures) has a
+    // 'session' entry for today. Seed ONLY accepted (confirmed) program
+    // assignments — same committed-status rule as camps + admin-confirm-session.
+    // session_type is always 'after_school' (programs carry none; matches
+    // confirm-session-taught + confirm-sub-delivery).
+    // ─────────────────────────────────────────────────────────────────────
+    // NOTE (optimization, safe to defer): this pulls every accepted assignment
+    // and asks the schedule RPC per unique program, so the RPC fan-out grows with
+    // historical program count (ended programs keep status='confirmed'). Fine at
+    // J2S scale; if it ever matters, pre-filter to in-term programs BEFORE the RPC
+    // loop — but conservatively (never exclude a program that could meet today, or
+    // its session silently won't surface on Payroll).
+    const { data: progCandidates, error: progErr } = await supabase
+      .from('program_assignments')
+      .select('instructor_id, organization_id, program_id, status')
+      .in('status', ['accepted', 'confirmed']);
+
+    if (progErr) {
+      console.error('Job C candidate query failed:', progErr);
+      summary.errors.push(`job_c_query: ${progErr.message}`);
+    } else if (progCandidates && progCandidates.length > 0) {
+      // Ask the schedule RPC once per UNIQUE program whether it meets today.
+      const uniqueProgramIds = [
+        ...new Set(
+          (progCandidates as Array<{ program_id: string | null }>)
+            .map((r) => r.program_id)
+            .filter((id): id is string => !!id),
+        ),
+      ];
+      const meetsToday = new Set<string>();
+      for (const pid of uniqueProgramIds) {
+        const { data: sched, error: schedErr } = await supabase.rpc(
+          'derive_program_session_schedule',
+          { p_program_id: pid },
+        );
+        if (schedErr) {
+          console.error('Job C schedule derive failed:', pid, schedErr);
+          summary.errors.push(`job_c_schedule:${pid}: ${schedErr.message}`);
+          continue;
+        }
+        const meets = (sched ?? []).some(
+          (e: { entry_date?: string; kind?: string }) =>
+            e.kind === 'session' && e.entry_date === today,
+        );
+        if (meets) meetsToday.add(pid);
+      }
+
+      const progRows = (progCandidates as Array<{
+        instructor_id: string;
+        organization_id: string;
+        program_id: string | null;
+      }>)
+        .filter((r) => r.program_id && meetsToday.has(r.program_id))
+        .map((r) => ({
+          instructor_id: r.instructor_id,
+          organization_id: r.organization_id,
+          program_id: r.program_id as string,
+          session_date: today,
+          session_type: 'after_school',
+        }));
+
+      if (progRows.length > 0) {
+        // De-dupe against rows already created today (self check-in or a prior
+        // cron run), then insert the rest. Same approach as Job A — the program
+        // uniqueness index is partial, so an existence check + per-row insert
+        // avoids the 42P10 an upsert would raise; a concurrent insert trips
+        // 23505, which we treat as already-created.
+        const { data: existingProg, error: existProgErr } = await supabase
+          .from('session_delivery_confirmations')
+          .select('instructor_id, program_id')
+          .eq('session_date', today)
+          .not('program_id', 'is', null);
+        if (existProgErr) {
+          console.error('Job C existing-lookup failed:', existProgErr);
+          summary.errors.push(`job_c_existing: ${existProgErr.message}`);
+        }
+        const haveProg = new Set(
+          (existingProg ?? []).map((r) => `${r.instructor_id}|${r.program_id}`),
+        );
+        const freshProg = progRows.filter(
+          (r) => !haveProg.has(`${r.instructor_id}|${r.program_id}`),
+        );
+
+        for (const r of freshProg) {
+          const { error: insErr } = await supabase
+            .from('session_delivery_confirmations')
+            .insert(r);
+          if (insErr) {
+            if ((insErr as { code?: string }).code === '23505') continue;
+            console.error('Job C insert failed:', insErr);
+            summary.errors.push(`job_c_insert: ${insErr.message}`);
+            continue;
+          }
+          summary.job_c_rows_created++;
         }
       }
     }

@@ -623,7 +623,7 @@ serve(async (req: Request) => {
         recipient: r,
         org,
         brand,
-        program,
+        program: program ?? null,
         recipientPrograms,
         pickedPrograms,
         recipientCamps,
@@ -682,7 +682,8 @@ serve(async (req: Request) => {
         recipient_id: row.r.id,
         email: row.r.email,
         status: ok ? "sent" : "failed",
-        resend_message_id: ok ? batchResp.ids[idx] : null,
+        // `ok` already implies batchResp.ok; repeat it inline so TS narrows the union.
+        resend_message_id: ok && batchResp.ok ? batchResp.ids[idx] : null,
         rendered_subject: row.subject,
         sent_at: ok ? new Date().toISOString() : null,
         school_name: row.r.school_name ?? null,

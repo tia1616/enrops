@@ -5,8 +5,9 @@
 //
 // Reuses the exact registration fields (PickupDismissalSection /
 // GuardianSecondarySection) so the parent sees the same form they'd have filled at
-// checkout. Saves through replace_student_contacts (parent-authorized) + a direct
-// students.dismissal_method update (parents_manage_own_students RLS). onComplete
+// checkout. Saves through replace_student_pickup_dnr_guardian — one parent-authorized
+// RPC per child that replaces all contact roles + dismissal_method in a single
+// transaction (so a pickup<->do-not-release move can't race and half-save). onComplete
 // re-fetches the dashboard, which recomputes the gate (now empty) and lets them in.
 //
 // Scoped to after-school only (summer camps excluded upstream in Dashboard).
@@ -78,6 +79,11 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     if (d.dismissal_method === "released_to_authorized_adult" && nonEmpty(d.pickup).length === 0) {
       return "Add at least one person who can pick them up.";
     }
+    // Mirror Register's canAdvance: if the org marked do-not-release required, the
+    // backfill gate must enforce it too (the label shows Required in both flows).
+    if (std?.do_not_release?.required && nonEmpty(d.doNotRelease).length === 0) {
+      return "Add the name(s) we should not release this child to.";
+    }
     if (pickupDnrConflicts(d.pickup, d.doNotRelease).length > 0) {
       return "A name is on both the pickup and do-not-release lists. Remove it from one.";
     }
@@ -91,17 +97,21 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     setSaving(true);
     setError("");
     try {
+      // One atomic RPC per student: all contact roles + dismissal method are
+      // replaced in a single transaction, so a pickup<->do-not-release move can't
+      // race the exclusion trigger and half-save (audit P2).
       for (const s of students) {
         const d = byStudent[s.student_id];
         const g2 = d.guardian2 || {};
-        const results = await Promise.all([
-          supabase.rpc("replace_student_contacts", { p_student_id: s.student_id, p_organization_id: orgId, p_role: "authorized_pickup", p_contacts: nonEmpty(d.pickup) }),
-          supabase.rpc("replace_student_contacts", { p_student_id: s.student_id, p_organization_id: orgId, p_role: "do_not_release", p_contacts: nonEmpty(d.doNotRelease) }),
-          supabase.rpc("replace_student_contacts", { p_student_id: s.student_id, p_organization_id: orgId, p_role: "guardian", p_contacts: (g2.first_name || "").trim() ? [g2] : [] }),
-          supabase.from("students").update({ dismissal_method: d.dismissal_method || null }).eq("id", s.student_id),
-        ]);
-        const failed = results.find((r) => r.error);
-        if (failed) throw failed.error;
+        const { error: saveErr } = await supabase.rpc("replace_student_pickup_dnr_guardian", {
+          p_student_id: s.student_id,
+          p_organization_id: orgId,
+          p_pickup: nonEmpty(d.pickup),
+          p_do_not_release: nonEmpty(d.doNotRelease),
+          p_guardian: (g2.first_name || "").trim() ? [g2] : [],
+          p_dismissal_method: d.dismissal_method || null,
+        });
+        if (saveErr) throw saveErr;
       }
       onComplete();
     } catch (e) {

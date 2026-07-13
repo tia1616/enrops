@@ -8,11 +8,12 @@
 // signed URLs for any upload-source rows so the portal can render Download
 // buttons without exposing the bucket to instructor JWTs.
 //
-// Gate: caller must be a confirmed instructor on an assignment whose
-// camp_session.curriculum_id matches the requested curriculum_id. We do not
-// trust the client-supplied curriculum_id alone — we re-derive ownership from
-// camp_assignments. Without this gate any instructor could read any org's
-// curriculum docs by guessing UUIDs.
+// Gate: caller must be a confirmed instructor (or a current sub) on an
+// assignment whose curriculum_id matches — via a camp_session OR an after-school
+// program. We do not trust the client-supplied curriculum_id alone; we re-derive
+// ownership from camp_assignments / program_assignments (+ their sub rows).
+// Without this gate any instructor could read any org's curriculum docs by
+// guessing UUIDs.
 //
 // Auth: verify_jwt: true. Instructor must be active.
 
@@ -117,8 +118,60 @@ serve(async (req: Request) => {
     }
 
     if (!allowed) {
+      // (c) After-school regular: a confirmed, published program_assignment whose
+      // program.curriculum_id matches. Same access a camp instructor gets — an
+      // after-school class is just another program teaching the same curriculum.
+      const { data: ownProgram, error: ownProgErr } = await supabase
+        .from('program_assignments')
+        .select('id, programs!inner(curriculum_id)')
+        .eq('instructor_id', me.id)
+        .eq('status', 'confirmed')
+        .eq('programs.curriculum_id', curriculumId)
+        .not('published_at', 'is', null)
+        .limit(1);
+      if (ownProgErr) {
+        console.error('program_assignments lookup error:', ownProgErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      allowed = !!(ownProgram && ownProgram.length > 0);
+    }
+
+    if (!allowed) {
+      // (d) After-school sub: same 2-day window as camp subs, parent is a
+      // program_assignment → program.curriculum_id.
+      const cutoff = new Date();
+      cutoff.setUTCDate(cutoff.getUTCDate() - 2);
+      const cutoffDate = cutoff.toISOString().slice(0, 10);
+      const { data: subRows, error: subErr } = await supabase
+        .from('assignment_substitutions')
+        .select('parent_assignment_id')
+        .eq('sub_instructor_id', me.id)
+        .eq('parent_assignment_type', 'program')
+        .in('status', ['confirmed', 'taught'])
+        .gte('date', cutoffDate);
+      if (subErr) {
+        console.error('program sub lookup error:', subErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      const parentIds = (subRows ?? []).map((r) => r.parent_assignment_id).filter(Boolean);
+      if (parentIds.length > 0) {
+        const { data: parentMatch, error: parentErr } = await supabase
+          .from('program_assignments')
+          .select('id, programs!inner(curriculum_id)')
+          .in('id', parentIds)
+          .eq('programs.curriculum_id', curriculumId)
+          .limit(1);
+        if (parentErr) {
+          console.error('parent program_assignments lookup error:', parentErr);
+          return json({ error: 'lookup_failed' }, 500);
+        }
+        allowed = !!(parentMatch && parentMatch.length > 0);
+      }
+    }
+
+    if (!allowed) {
       // 403 not 404 — the curriculum may exist, but this caller has no
-      // confirmed assignment or sub day that grants them access to it.
+      // confirmed assignment or sub day (camp or after-school) that grants access.
       return json({ error: 'not_assigned_to_curriculum' }, 403);
     }
 

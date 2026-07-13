@@ -1,37 +1,45 @@
 // confirm-session-taught — instructor day-of check-in endpoint.
 //
-// Instructor Portal: closes the schedule loop by letting an instructor
-// mark a specific day of camp as "I taught this." Lands the day
-// confirmed_by='self', pay_status='approved' (immediately ready for payout —
-// the admin only has to act on days nobody confirmed), pay_amount_cents
-// resolved per-tenant from tenant_pay_rates (keyed by the assignment's role +
-// the session_type).
+// Instructor Portal: closes the schedule loop by letting an instructor mark a
+// specific day of a CAMP or a session of an AFTER-SCHOOL program as "I taught
+// this." Lands the day confirmed_by='self', pay_status='approved' (immediately
+// ready for payout — the admin only has to act on days nobody confirmed),
+// pay_amount_cents resolved per-tenant from tenant_pay_rates (keyed by the
+// assignment's role + the session_type).
+//
+// Camp vs after-school (mirrors the branch in admin-confirm-session /
+// confirm-sub-delivery — the codebase pattern):
+//   - camp:    body { camp_assignment_id }    -> camp_assignments -> camp_sessions.
+//              session_type = camp_sessions.session_type (full_day/morning/afternoon).
+//              valid dates = camp_sessions.starts_on..ends_on.
+//   - program: body { program_assignment_id } -> program_assignments -> programs.
+//              session_type = 'after_school' (programs carry no session_type, same as
+//              confirm-sub-delivery). valid dates = the program's derived session
+//              schedule (derive_program_session_schedule), closures excluded.
 //
 // The daily cron (session-confirmation-cron) pre-seeds a placeholder row
-// (confirmed_by='pending') for each camp day so unconfirmed days surface on the
+// (confirmed_by='pending') for each CAMP day so unconfirmed days surface on the
 // admin Payroll screen. When one exists, this endpoint PROMOTES it in place
-// rather than treating it as already-confirmed — otherwise the instructor's
-// click would bounce off the placeholder and the day could never be self-marked.
+// rather than treating it as already-confirmed. (After-school days are not yet
+// seeded, so the program path always takes the fresh-insert branch — harmless.)
 //
 // Pay rates are per-tenant: resolvePayAmount() reads the org's tenant_pay_rates
-// card. The same resolver is shared by confirm-session-delivery,
-// session-confirmation-cron, and confirm-sub-delivery so all pay-writing paths
-// agree (see _shared/payRates.ts).
+// card. Shared by confirm-session-delivery, session-confirmation-cron, and
+// confirm-sub-delivery so all pay-writing paths agree (see _shared/payRates.ts).
+// after_school is already a first-class rate cell.
 //
 // If the assignment has no usable role, or the tenant hasn't configured a rate
-// for this session_type, we leave pay_amount_cents null and let the admin set
-// it on the Payroll screen — the check-in is still recorded so the day is
-// never silently lost.
+// for this session_type, we leave pay_amount_cents null and let the admin set it
+// on the Payroll screen — the check-in is still recorded so the day is never
+// silently lost.
 //
-// Body: { camp_assignment_id: string, session_date: 'YYYY-MM-DD' }
+// Body: { camp_assignment_id | program_assignment_id, session_date: 'YYYY-MM-DD' }
 //
-// Idempotent: a second call for the same (instructor, camp_session,
-// session_date) returns the existing row instead of duplicating. A unique
-// partial index (uq_session_delivery_confirmations_camp) backs this; the
-// promote/insert paths race-guard on confirmed_by='pending'.
+// Idempotent per (instructor, camp_session|program, session_date) — backed by the
+// partial unique indexes uq_session_delivery_confirmations_camp /
+// unique_program_delivery; the promote/insert paths race-guard on confirmed_by='pending'.
 //
-// Anti-enumeration: missing row + wrong instructor both return identical
-// 403 with no detail.
+// Anti-enumeration: missing row + wrong instructor both return identical 403.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import {
@@ -44,13 +52,9 @@ import { resolvePayAmount } from '../_shared/payRates.ts';
 
 interface RequestBody {
   camp_assignment_id?: string;
+  program_assignment_id?: string;
   session_date?: string;
 }
-
-// Pay is resolved per-tenant from the tenant_pay_rates table via
-// resolvePayAmount(), keyed by the assignment's role + the camp session_type.
-// When the tenant hasn't configured a rate, resolution returns null and we
-// record the check-in with null pay — the admin sets the amount on Payroll.
 
 const FORBIDDEN = json({ error: 'forbidden' }, 403);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -71,57 +75,112 @@ serve(async (req: Request) => {
       return json({ error: 'invalid_json' }, 400);
     }
 
-    const assignmentId = body.camp_assignment_id?.trim();
+    const campAssignmentId = body.camp_assignment_id?.trim();
+    const programAssignmentId = body.program_assignment_id?.trim();
     const sessionDate = body.session_date?.trim();
-    if (!assignmentId) return json({ error: 'camp_assignment_id_required' }, 400);
+
+    // Exactly one of camp / program assignment id.
+    if (!campAssignmentId && !programAssignmentId) {
+      return json({ error: 'assignment_id_required' }, 400);
+    }
+    if (campAssignmentId && programAssignmentId) {
+      return json({ error: 'ambiguous_assignment' }, 400);
+    }
     if (!sessionDate || !DATE_RE.test(sessionDate)) {
       return json({ error: 'session_date_invalid' }, 400);
     }
 
+    const kind: 'camp' | 'program' = campAssignmentId ? 'camp' : 'program';
+    const assignmentId = (campAssignmentId ?? programAssignmentId)!;
+
     const supabase = adminClient();
 
-    // Fetch the assignment + linked camp_session (service role bypasses RLS;
-    // we authorize via instructor.id comparison below). role drives pay.
-    const { data: assignment, error: fetchErr } = await supabase
-      .from('camp_assignments')
-      .select(
-        `id, instructor_id, organization_id, status, role, camp_session_id,
-         camp_sessions ( id, starts_on, ends_on, session_type )`
-      )
-      .eq('id', assignmentId)
-      .maybeSingle();
-    if (fetchErr) {
-      console.error('assignment lookup failed:', fetchErr);
-      return json({ error: 'lookup_failed' }, 500);
+    // Resolve the assignment into a common shape regardless of camp/program.
+    // Service role bypasses RLS; we authorize via instructor.id comparison.
+    let orgId: string;
+    let role: string | null;
+    let refCol: 'camp_session_id' | 'program_id';
+    let refVal: string;
+    let sessionType: string;
+
+    if (kind === 'camp') {
+      const { data: assignment, error: fetchErr } = await supabase
+        .from('camp_assignments')
+        .select(
+          `id, instructor_id, organization_id, status, role, camp_session_id,
+           camp_sessions ( id, starts_on, ends_on, session_type )`
+        )
+        .eq('id', assignmentId)
+        .maybeSingle();
+      if (fetchErr) {
+        console.error('camp assignment lookup failed:', fetchErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      if (!assignment) return FORBIDDEN;
+      if (assignment.instructor_id !== me.id) return FORBIDDEN;
+      if (assignment.status !== 'confirmed') {
+        return json({ error: 'assignment_not_confirmed', status: assignment.status }, 409);
+      }
+      const session = assignment.camp_sessions as
+        | { id: string; starts_on: string; ends_on: string; session_type: string }
+        | null;
+      if (!session) {
+        console.error('camp_session missing for assignment', assignmentId);
+        return json({ error: 'session_not_found' }, 500);
+      }
+      // session_date must be within the camp's date range.
+      if (sessionDate < session.starts_on || sessionDate > session.ends_on) {
+        return json({ error: 'session_date_out_of_range' }, 400);
+      }
+      orgId = assignment.organization_id;
+      role = assignment.role;
+      refCol = 'camp_session_id';
+      refVal = session.id;
+      sessionType = session.session_type;
+    } else {
+      const { data: assignment, error: fetchErr } = await supabase
+        .from('program_assignments')
+        .select('id, instructor_id, organization_id, status, role, program_id')
+        .eq('id', assignmentId)
+        .maybeSingle();
+      if (fetchErr) {
+        console.error('program assignment lookup failed:', fetchErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      if (!assignment) return FORBIDDEN;
+      if (assignment.instructor_id !== me.id) return FORBIDDEN;
+      if (assignment.status !== 'confirmed') {
+        return json({ error: 'assignment_not_confirmed', status: assignment.status }, 409);
+      }
+      // Programs have no starts_on/ends_on range — the valid set is the derived
+      // session schedule (weekly cadence minus closures). Validate the date is a
+      // real 'session' entry, so a raw-API caller can't confirm an arbitrary day.
+      const { data: schedule, error: schedErr } = await supabase.rpc(
+        'derive_program_session_schedule',
+        { p_program_id: assignment.program_id },
+      );
+      if (schedErr) {
+        console.error('program schedule derive failed:', schedErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      const isRealSession = (schedule ?? []).some(
+        (r: { entry_date?: string; kind?: string }) =>
+          r.kind === 'session' && r.entry_date === sessionDate,
+      );
+      if (!isRealSession) {
+        return json({ error: 'session_date_out_of_range' }, 400);
+      }
+      orgId = assignment.organization_id;
+      role = assignment.role;
+      refCol = 'program_id';
+      refVal = assignment.program_id;
+      // Programs don't carry a session_type; after-school is always after_school
+      // (mirrors confirm-sub-delivery). resolvePayAmount + the CHECK both accept it.
+      sessionType = 'after_school';
     }
 
-    // Anti-enumeration: missing row + wrong instructor both 403, same body.
-    if (!assignment) return FORBIDDEN;
-    if (assignment.instructor_id !== me.id) return FORBIDDEN;
-
-    // Must be confirmed to mark sessions taught. Other statuses (proposed,
-    // published, change_requested, withdrawn, declined) get a clear 409.
-    if (assignment.status !== 'confirmed') {
-      return json({ error: 'assignment_not_confirmed', status: assignment.status }, 409);
-    }
-
-    const session = assignment.camp_sessions as
-      | { id: string; starts_on: string; ends_on: string; session_type: string }
-      | null;
-    if (!session) {
-      console.error('camp_session missing for assignment', assignmentId);
-      return json({ error: 'session_not_found' }, 500);
-    }
-
-    // session_date must be within the camp's date range.
-    if (sessionDate < session.starts_on || sessionDate > session.ends_on) {
-      return json({ error: 'session_date_out_of_range' }, 400);
-    }
-
-    // session_date must be today or earlier (no marking future sessions
-    // taught). "Today" is UTC here; org-timezone awareness is a v2 nice-
-    // to-have. End-of-day edge cases on the West Coast may briefly block
-    // a same-evening mark, which is acceptable.
+    // session_date must be today or earlier (no marking future sessions taught).
+    // "Today" is UTC here; org-timezone awareness is a v2 nice-to-have.
     const today = new Date().toISOString().slice(0, 10);
     if (sessionDate > today) {
       return json({ error: 'session_date_in_future' }, 400);
@@ -132,7 +191,7 @@ serve(async (req: Request) => {
       .from('session_delivery_confirmations')
       .select('id, confirmed_by, confirmed_at, pay_status, pay_amount_cents, pay_adjustment_cents')
       .eq('instructor_id', me.id)
-      .eq('camp_session_id', session.id)
+      .eq(refCol, refVal)
       .eq('session_date', sessionDate)
       .maybeSingle();
     if (existsErr) {
@@ -141,10 +200,7 @@ serve(async (req: Request) => {
     }
     // A genuinely-confirmed row (self / admin / sub) is idempotent — return it.
     // A cron-seeded PLACEHOLDER (confirmed_by='pending') is NOT a real check-in;
-    // it just exists so the day shows up for the admin. Fall through and PROMOTE
-    // it to a self-confirm below, so the instructor's click actually counts
-    // (before this, any existing row blocked the click and the day stayed
-    // pending forever once the daily cron had seeded it).
+    // fall through and PROMOTE it to a self-confirm below.
     if (existing && existing.confirmed_by !== 'pending') {
       return json({
         confirmation: existing,
@@ -152,18 +208,14 @@ serve(async (req: Request) => {
       });
     }
 
-    // Substitution guard: if a sub was confirmed to cover THIS assignment on
-    // THIS date, the assigned instructor must not self-confirm it — the sub is
-    // the payee (the pay-line view routes the day to the sub). The sub records
-    // their own pay via confirm-sub-delivery, or an admin settles it from
-    // Payroll ("Confirm & pay" → admin-confirm-session). Block with a clear 409
-    // so we never create a duplicate payable row for the person who was covered.
-    // (Keyed to the camp_assignment + date, matching assignment_substitutions.)
+    // Substitution guard: if a sub was confirmed to cover THIS assignment on THIS
+    // date, the assigned instructor must not self-confirm it — the sub is the
+    // payee. Keyed to the assignment + date, matching assignment_substitutions.
     const { data: cover } = await supabase
       .from('assignment_substitutions')
       .select('id')
-      .eq('parent_assignment_id', assignment.id)
-      .eq('parent_assignment_type', 'camp')
+      .eq('parent_assignment_id', assignmentId)
+      .eq('parent_assignment_type', kind)
       .eq('date', sessionDate)
       .in('status', ['confirmed', 'taught'])
       .maybeSingle();
@@ -172,15 +224,13 @@ serve(async (req: Request) => {
     }
 
     // Pay computation: per-tenant rate from tenant_pay_rates, keyed by the
-    // assignment role + session_type. If the role is missing/unexpected or the
-    // tenant hasn't configured a rate for this cell, resolvePayAmount returns
-    // null so the admin sets it manually on Payroll — the check-in is still
-    // recorded.
+    // assignment role + session_type. Null when unconfigured — the admin sets it
+    // on Payroll; the check-in is still recorded.
     const payAmountCents = await resolvePayAmount(
       supabase,
-      assignment.organization_id,
-      assignment.role,
-      session.session_type,
+      orgId,
+      role,
+      sessionType,
     );
 
     const nowIso = new Date().toISOString();
@@ -188,12 +238,8 @@ serve(async (req: Request) => {
       'id, confirmed_by, confirmed_at, pay_status, pay_amount_cents, pay_adjustment_cents';
 
     // Promote a pending placeholder row to a self-confirm. Race-guarded on
-    // confirmed_by='pending' so a concurrent admin/sub confirm that landed
-    // between our read and write isn't clobbered — if we lose the race we
-    // return the current (already-confirmed) row rather than an error. The day
-    // lands confirmed_by='self' + pay_status='approved', so a day the instructor
-    // confirms is immediately ready for payout and the admin only has to act on
-    // the days nobody confirmed. ('approved' matches the sibling self/sub paths.)
+    // confirmed_by='pending' so a concurrent admin/sub confirm isn't clobbered —
+    // if we lose the race we return the current row rather than an error.
     const promotePlaceholder = async (rowId: string) => {
       const { data: promoted, error: updErr } = await supabase
         .from('session_delivery_confirmations')
@@ -228,33 +274,34 @@ serve(async (req: Request) => {
       }
     }
 
-    // No row yet — insert a fresh self-confirm. session_type mirrors the
-    // camp_session's (full_day / morning / afternoon).
+    // No row yet — insert a fresh self-confirm. Exactly one of camp_session_id /
+    // program_id is set (the CHECK one_session_reference enforces XOR).
+    const insertRow: Record<string, unknown> = {
+      instructor_id: me.id,
+      organization_id: orgId,
+      session_date: sessionDate,
+      session_type: sessionType,
+      confirmed_by: 'self',
+      confirmed_at: nowIso,
+      pay_status: 'approved',
+      pay_amount_cents: payAmountCents,
+    };
+    insertRow[refCol] = refVal;
+
     const { data: inserted, error: insErr } = await supabase
       .from('session_delivery_confirmations')
-      .insert({
-        instructor_id: me.id,
-        organization_id: assignment.organization_id,
-        camp_session_id: session.id,
-        session_date: sessionDate,
-        session_type: session.session_type,
-        confirmed_by: 'self',
-        confirmed_at: nowIso,
-        pay_status: 'approved',
-        pay_amount_cents: payAmountCents,
-      })
+      .insert(insertRow)
       .select(RETURN_COLS)
       .single();
     if (insErr) {
-      // 23505 = unique_violation: the daily cron (or another client) seeded the
-      // row between our existence check above and this insert. Re-read and
-      // promote it instead of 500-ing on a legitimate first click.
+      // 23505 = unique_violation: the row was seeded between our check and insert.
+      // Re-read and promote instead of 500-ing on a legitimate first click.
       if ((insErr as { code?: string }).code === '23505') {
         const { data: raced } = await supabase
           .from('session_delivery_confirmations')
           .select(RETURN_COLS)
           .eq('instructor_id', me.id)
-          .eq('camp_session_id', session.id)
+          .eq(refCol, refVal)
           .eq('session_date', sessionDate)
           .maybeSingle();
         if (raced && raced.confirmed_by !== 'pending') {

@@ -169,7 +169,7 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
           <label className="label-field">
             {std.do_not_release.label || 'Anyone we should NOT release your child to?'}<Req on={std.do_not_release.required} />
           </label>
-          <p className="help-text">Optional. Shared with our staff and your child's instructors for safe dismissal, never with other families.</p>
+          <p className="help-text">{std.do_not_release.required ? 'Required.' : 'Optional.'} Shared with our staff and your child's instructors for safe dismissal, never with other families.</p>
           {conflicts.length > 0 && (
             <div className="mt-2 rounded-lg border-2 border-j2s-orange-dark/30 bg-j2s-orange-dark/5 px-4 py-3 text-sm text-j2s-orange-dark" role="alert">
               <span className="font-semibold">{conflicts.join(', ')}</span>{' '}
