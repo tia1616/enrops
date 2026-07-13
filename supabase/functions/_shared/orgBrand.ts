@@ -270,6 +270,32 @@ export function encodeDisplayName(name: string): string {
   return `"${cleaned.replace(/[\\"]/g, '\\$&')}"`;
 }
 
+// Minimal email sanity check — enough to reject an obviously-bad string handed
+// in via the request body before we pass it to Resend as a 'to'. Not a full
+// RFC 5322 validator; Resend still gates actual delivery.
+function isPlausibleEmail(s: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
+/**
+ * Resolve where a TEST-mode send should land. Test sends never reach real
+ * families/instructors; they route to a single operator inbox so the operator
+ * can eyeball the rendered email. Priority:
+ *   1. An explicit recipient the caller passed (the admin UI can send the
+ *      current operator's own email) — used only if it looks like an address.
+ *   2. The tenant's operator inbox: brand.alert_email, which cascades
+ *      tenant org.alert_email -> Enrops -> alerts@enrops.com.
+ *
+ * Never a hardcoded tenant literal, so every tenant's test lands in THEIR inbox
+ * instead of the first tenant's. Callers already gate test-mode behind
+ * owner/admin auth, so an explicit recipient is operator-chosen, not arbitrary.
+ */
+export function resolveTestRecipient(brand: OrgBrand, explicit?: string | null): string {
+  const candidate = (explicit ?? '').trim();
+  if (candidate && isPlausibleEmail(candidate)) return candidate;
+  return brand.alert_email;
+}
+
 /**
  * Build the Resend "from" string: `Name <email>` (display name RFC 5322-encoded).
  * Resend requires the email's domain to be verified. When the name is empty

@@ -5,7 +5,7 @@
 //
 // Input: { organization_id, term, instructor_ids?: string[]|null, mode: 'preview'|'test'|'send', deadline?: 'YYYY-MM-DD' }
 //   preview: render HTML/text for everyone in scope, no writes/sends
-//   test:    send each to TEST_INBOX, no DB writes
+//   test:    send each to the tenant's test inbox (body.test_recipient, else tenant alert_email), no DB writes
 //   send:    send to real instructor.email, flip assignments confirmed -> published
 //
 // Lifecycle (mirrors camps): proposed -> [Approve] confirmed -> [Send] published
@@ -15,7 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -24,7 +24,6 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // site so portal links in test emails point at staging, not prod. Defaults to prod.
 const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 
-const TEST_INBOX = 'jessica@journeytosteam.com';
 const DEFAULT_PRIMARY = '#1C004F';
 const PAGE_BG = '#FBFBFB';
 const TEXT = '#1a1a1a';
@@ -94,6 +93,7 @@ serve(async (req: Request) => {
     const instructorIdsInput: string[] | null | undefined = body.instructor_ids;
     const mode: 'preview' | 'test' | 'send' = body.mode ?? 'preview';
     const deadline: string | null = body.deadline ?? null;
+    const testRecipient: string | undefined = body.test_recipient; // test-mode override; else tenant alert_email
 
     if (!organizationId) return json({ error: 'organization_id is required' }, 400);
     if (!term) return json({ error: 'term is required' }, 400);
@@ -123,6 +123,8 @@ serve(async (req: Request) => {
 
     // Tenant email signature — loaded once per org (outside the instructor loop).
     const brand = await loadOrgBrand(supabase, organizationId);
+    // Where test-mode sends land: caller-supplied recipient, else the tenant's inbox.
+    const testInbox = resolveTestRecipient(brand, testRecipient);
 
     // Programs for this term (open only).
     const { data: progs } = await supabase
@@ -186,7 +188,7 @@ serve(async (req: Request) => {
       const subject = `Your ${termDisplay} after-school schedule is ready — please review`;
       const html = renderHtml({ org, primary, firstName: inst.preferred_name ?? inst.first_name ?? 'there', termDisplay, classes, portalUrl, deadline, locById, signatureHtml: renderSignatureBlock(brand) });
       const text = renderText({ org, firstName: inst.preferred_name ?? inst.first_name ?? 'there', termDisplay, classes, portalUrl, deadline, locById });
-      const recipient = mode === 'send' ? inst.email : TEST_INBOX;
+      const recipient = mode === 'send' ? inst.email : testInbox;
       previews.push({ instructor_id: instructorId, to: recipient, subject, html, text });
       if (mode === 'preview') continue;
 
