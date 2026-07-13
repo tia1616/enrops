@@ -9,7 +9,8 @@
 //   sub_instructor_id: string,
 //   sub_tier: 'lead' | 'developing',
 //   notes?: string,
-//   mode?: 'send' | 'test'    // default 'send'; 'test' routes to TEST_INBOX
+//   mode?: 'send' | 'test'    // default 'send'; 'test' routes to test_recipient (else tenant alert_email)
+//   test_recipient?: string   // test-mode override inbox; defaults to the tenant's alert_email
 // }
 //
 // Behavior:
@@ -27,7 +28,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress, resolveTestRecipient } from '../_shared/orgBrand.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so portal links in offer emails point at staging, not prod. Defaults to prod.
@@ -37,7 +38,6 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-const TEST_INBOX = 'jessica@journeytosteam.com';
 const DEFAULT_PRIMARY = '#1C004F';
 const TEXT = '#1a1a1a';
 const MUTED = '#6b6b6b';
@@ -86,6 +86,7 @@ interface Body {
   sub_tier?: 'lead' | 'developing';
   notes?: string;
   mode?: 'send' | 'test';
+  test_recipient?: string;
 }
 
 serve(async (req: Request) => {
@@ -113,6 +114,7 @@ serve(async (req: Request) => {
     const subTier = body.sub_tier;
     const notes = (body.notes || '').toString().trim().slice(0, 1000);
     const mode = body.mode === 'test' ? 'test' : 'send';
+    const testRecipient = body.test_recipient; // test-mode override; else tenant alert_email
 
     if (!parentId) return json({ error: 'missing_parent_assignment_id' }, 400);
     if (parentType !== 'camp' && parentType !== 'program') return json({ error: 'invalid_parent_assignment_type' }, 400);
@@ -320,7 +322,7 @@ serve(async (req: Request) => {
 
     // ── Send via Resend ───────────────────────────────────────────────────
     const fromEmail = formatFromAddress(brand);
-    const recipient = mode === 'test' ? TEST_INBOX : sub.email;
+    const recipient = mode === 'test' ? resolveTestRecipient(brand, testRecipient) : sub.email;
     const subjectOut = mode === 'test' ? `[TEST] ${subject}` : subject;
 
     const resp = await fetch('https://api.resend.com/emails', {

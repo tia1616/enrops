@@ -3,7 +3,8 @@
 //
 // Input: { cycle_id: string, instructor_ids: string[] | null, mode: 'preview' | 'test' | 'send' }
 // - mode 'preview': returns rendered HTML + meta for every instructor in scope, no DB writes, no email sends
-// - mode 'test':    sends each rendered email to TEST_INBOX (overrides instructor.email), still flips DB
+// - mode 'test':    sends each rendered email to the tenant's test inbox (body.test_recipient,
+//                   else the tenant's alert_email), overriding instructor.email, still flips DB
 // - mode 'send':    sends to real instructor.email, flips DB
 //
 // Multi-tenant: queries scoped by organization (inferred from cycle.organization_id).
@@ -12,7 +13,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -21,7 +22,6 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // site so portal links in test emails point at staging, not prod. Defaults to prod.
 const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 
-const TEST_INBOX = 'jessica@journeytosteam.com';
 const DEFAULT_PRIMARY = '#1C004F';
 const DEFAULT_PAGE_BG = '#FBFBFB';
 const TEXT = '#1a1a1a';
@@ -139,6 +139,7 @@ serve(async (req: Request) => {
     const instructorIdsInput: string[] | null | undefined = body.instructor_ids;
     const mode: 'preview' | 'test' | 'send' = body.mode ?? 'preview';
     const deadline: string | null = body.deadline ?? null; // YYYY-MM-DD
+    const testRecipient: string | undefined = body.test_recipient; // test-mode override; else tenant alert_email
 
     if (!cycleId) return json({ error: 'cycle_id is required' }, 400);
     if (!['preview', 'test', 'send'].includes(mode)) return json({ error: `unknown mode "${mode}"` }, 400);
@@ -189,6 +190,8 @@ serve(async (req: Request) => {
 
     // Tenant email signature — loaded once per org (outside the instructor loop).
     const brand = await loadOrgBrand(supabase, cycle.organization_id);
+    // Where test-mode sends land: caller-supplied recipient, else the tenant's inbox.
+    const testInbox = resolveTestRecipient(brand, testRecipient);
 
     // Preview and Test include confirmed AND published — both are non-mutating, so
     // they let admins inspect and re-test without changing the send-state.
@@ -273,7 +276,7 @@ serve(async (req: Request) => {
       const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
       const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand) });
       const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById });
-      const recipient = mode === 'send' ? instructor.email! : TEST_INBOX;
+      const recipient = mode === 'send' ? instructor.email! : testInbox;
 
       previews.push({ instructor_id: instructorId, to: recipient, subject, html, text });
 
