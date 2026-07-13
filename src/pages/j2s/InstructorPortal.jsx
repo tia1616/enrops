@@ -2716,18 +2716,26 @@ function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error,
 
       <LocationSection location={loc} fallbackName={venueName} />
       <SubCheckInSection sub={sub} onMarkTaught={onMarkTaught} markBusy={markBusy} />
-      {isCamp && sess?.id && (
+      {/* Roster + lessons for BOTH camp and after-school subs — the sub offer
+          emails promise "the roster and lesson plan are in your portal", so a
+          program sub must see them too. Program-sub roster read is granted by
+          subs_read_program_rosters RLS; attendance write by instructor_attendance_
+          access (program-sub case); materials by get-instructor-curriculum-docs's
+          program-sub branch. The day is locked to the sub's single covered date. */}
+      {(isCamp ? sess?.id : prog?.id) && (
         <RosterSection
-          campSessionId={sess.id}
-          enrollment={sess.current_enrollment}
-          startsOn={sess.starts_on}
+          campSessionId={isCamp ? sess.id : undefined}
+          programId={isCamp ? undefined : prog.id}
+          enrollment={isCamp ? sess.current_enrollment : null}
+          startsOn={isCamp ? sess.starts_on : null}
+          noun={isCamp ? "camper" : "student"}
           instructorId={instructor?.id ?? instructor?.instructor_id}
           organizationId={instructor?.organization_id}
           sessionDates={sub.date ? [sub.date] : []}
           lockedDate={sub.date ?? null}
         />
       )}
-      {isCamp && curriculumId && (
+      {curriculumId && (
         <LessonsSection curriculumId={curriculumId} curriculumName={curriculumName} />
       )}
     </div>
