@@ -372,7 +372,7 @@ export default function InstructorPortal() {
   async function loadAfterschoolAssignments(instructorId) {
     const { data, error: aErr } = await supabase
       .from("program_assignments")
-      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, curriculum, day_of_week, start_time, end_time, session_count, term, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, term, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
       .eq("instructor_id", instructorId)
       .not("published_at", "is", null)
       .in("status", ["published", "change_requested", "confirmed"]);
@@ -2158,6 +2158,14 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
         </div>
       </div>
       <CoInstructorLine coInstructors={coInstructors} />
+      {/* Same sections a camp instructor sees — an after-school class is just
+          another program. Location (address/arrival/dismissal) and lesson
+          materials are shared components fed the program's own location +
+          curriculum. (No Daily check-in yet: confirm-session-taught is camp-only
+          on the backend — after-school per-session pay marking is a separate build.) */}
+      {p.program_locations && (
+        <LocationSection location={p.program_locations} fallbackName={p.program_locations?.name} />
+      )}
       <div style={{ marginTop: 16 }}>
         <RosterSection
           programId={assignment.program_id}
@@ -2169,6 +2177,11 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
           sessionDates={programSessionDates(schedule)}
         />
       </div>
+      {p.curriculum_id && (
+        <div style={{ marginTop: 16 }}>
+          <LessonsSection curriculumId={p.curriculum_id} curriculumName={p.curriculum} />
+        </div>
+      )}
     </div>
   );
 }

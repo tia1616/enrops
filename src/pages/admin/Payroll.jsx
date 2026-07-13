@@ -416,20 +416,25 @@ export default function Payroll() {
     setError('');
     let anyNull = false;
     let failed = 0;
+    const reasons = new Set();
     // Sequential so one bad row doesn't abort the rest, and we don't hammer
     // the edge function with a burst. Volume per group is a handful of days.
     for (const id of ids) {
       try {
         const { payNull } = await confirmOne(id);
         if (payNull) anyNull = true;
-      } catch {
+      } catch (e) {
         failed += 1;
+        if (e?.message) reasons.add(e.message);
       }
     }
     setBusy(false);
     bumpRefresh();
     if (failed > 0) {
-      setError(`Confirmed ${ids.length - failed} of ${ids.length} day${ids.length === 1 ? '' : 's'}; ${failed} could not be confirmed.`);
+      // Surface WHY, not just a count — a bare "1 could not be confirmed" reads as
+      // a silent failure. Distinct reasons only (usually all the same).
+      const why = reasons.size ? ` — ${Array.from(reasons).join('; ')}` : '';
+      setError(`Confirmed ${ids.length - failed} of ${ids.length} day${ids.length === 1 ? '' : 's'}; ${failed} could not be confirmed${why}.`);
     } else {
       toast(anyNull
         ? `Confirmed ${ids.length} day${ids.length === 1 ? '' : 's'} — some need an amount set`
@@ -545,8 +550,15 @@ export default function Payroll() {
         setNeedsConfirmOnly={setNeedsConfirmOnly}
       />
 
-      {error && <Banner tone="err">{error}</Banner>}
-      {savedToast && <Banner tone="ok">{savedToast}</Banner>}
+      {/* Sticky so a confirm/withhold result is visible even when the operator
+          clicked a row far down the list — feedback lands where they're looking,
+          not off-screen at the top. */}
+      {(error || savedToast) && (
+        <div style={{ position: 'sticky', top: 8, zIndex: 20 }}>
+          {error && <Banner tone="err">{error}</Banner>}
+          {savedToast && <Banner tone="ok">{savedToast}</Banner>}
+        </div>
+      )}
       {noPayConfig && (
         <Banner tone="warn">
           None of these days have a pay amount set. Check your organization's pay

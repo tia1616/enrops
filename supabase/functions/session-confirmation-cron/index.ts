@@ -53,9 +53,13 @@ serve(async (req: Request) => {
 
     // Pull all live camp assignments whose camp_session runs today (between
     // starts_on and ends_on, and class_days includes today's day-of-week).
-    // 'confirmed' is the canonical accepted state in camp_assignments today;
-    // 'accepted'/'published' are kept for forward/back compat. 'withdrawn'
-    // and 'declined' are intentionally excluded.
+    // Seed a payable day ONLY for assignments the instructor has ACCEPTED:
+    // 'confirmed' is the canonical accepted state (respond-to-assignment writes
+    // it on accept), 'accepted' is a legacy alias. 'published' (offer sent,
+    // never accepted), 'proposed', 'change_requested', 'withdrawn', 'declined'
+    // are excluded — an unaccepted offer must not surface a payable day on
+    // Payroll in the first place. This mirrors the committed-status allow-list
+    // in admin-confirm-session, so the two paths can't disagree.
     //
     // We do this as two queries instead of an INSERT...SELECT because the
     // class_days filter is awkward in PostgREST. Get the candidate rows in
@@ -74,7 +78,7 @@ serve(async (req: Request) => {
          ),
          status`,
       )
-      .in('status', ['accepted', 'published', 'confirmed']);
+      .in('status', ['accepted', 'confirmed']);
 
     if (candidateErr) {
       console.error('Job A candidate query failed:', candidateErr);
