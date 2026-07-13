@@ -2181,18 +2181,22 @@ async function hasFutureProgramsForOrg(supabase: SupabaseClient, orgId: string):
 // so <, >, " stay safe in body text + href attribute context. HTML-pre-rendered
 // tokens (e.g. {{final_showcase_block}}) are passed through verbatim.
 function renderTokens(template: string, tokens: Record<string, string>): string {
-  const filled = template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+  // First, collapse a token wrapped in parens for optional display — e.g. the
+  // welcome "starts {{program_start_date}} ({{program_time}})" — when that token
+  // is known-but-empty (a camp/program with no start/end time): drop the whole
+  // " (…)" group so the sentence reads cleanly. This is keyed to the {{token}}
+  // PLACEHOLDER in the template, so it never touches a literal "()" that a token
+  // VALUE might contain — e.g. a curriculum showcase mentioning setup()/loop().
+  // Unknown tokens (undefined) are left alone so they stay visible below.
+  const collapsed = template.replace(/ ?\(\s*\{\{(\w+)\}\}\s*\)/g, (whole, key) => {
+    return tokens[key] === "" ? "" : whole;
+  });
+  return collapsed.replace(/\{\{(\w+)\}\}/g, (match, key) => {
     const v = tokens[key];
     if (v == null) return match; // leave unknown tokens in place for visibility
     if (PRE_RENDERED_HTML_TOKENS.has(key)) return v;
     return htmlEscapeSafe(v);
   });
-  // Empty-token tidy: an optional token wrapped for display — e.g. the welcome
-  // "starts {{program_start_date}} ({{program_time}})" — leaves a bare " ()"
-  // when the value is empty (a camp/program with no start/end time). Strip the
-  // empty parens (and one leading space) so the sentence still reads cleanly.
-  // Email bodies never contain a literal "()", so this is safe.
-  return filled.replace(/ ?\(\s*\)/g, "");
 }
 
 // Build the optional "On the final day:" showcase block from curricula.final_showcase.

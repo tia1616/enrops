@@ -146,15 +146,18 @@ function escapeHtmlSafe(s) {
 }
 
 function renderTokens(template, tokens) {
-  const filled = template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+  // Mirror the cron's renderTokens: collapse a token wrapped in parens for
+  // optional display — "starts {{program_start_date}} ({{program_time}})" —
+  // only when that token is known-but-empty. Keyed to the {{token}} placeholder
+  // so it never strips a literal "()" inside a token value (e.g. setup()).
+  const collapsed = template.replace(/ ?\(\s*\{\{(\w+)\}\}\s*\)/g, (whole, key) => {
+    return tokens[key] === "" ? "" : whole;
+  });
+  return collapsed.replace(/\{\{(\w+)\}\}/g, (match, key) => {
     const v = tokens[key];
     if (v == null) return match;
     return PRE_RENDERED_HTML_TOKENS.has(key) ? v : escapeHtmlSafe(v);
   });
-  // Mirror the cron's renderTokens: an optional token wrapped for display —
-  // e.g. "starts {{program_start_date}} ({{program_time}})" — leaves a bare
-  // " ()" when empty. Strip it so the preview matches the real send.
-  return filled.replace(/ ?\(\s*\)/g, "");
 }
 
 function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryColor, orgSlug, isMarketing = false) {

@@ -8,52 +8,35 @@
 --   returns a CLEAN range ("9:00 AM - 12:00 PM"), so {{program_time}} can be
 --   dropped into any template. The welcome copy wraps it in parens:
 --   "...starts {{program_start_date}} ({{program_time}})." When the time is
---   unknown the token is "" and the cron's renderTokens strips the bare " ()".
+--   unknown the token is "" and the cron's renderTokens collapses the wrapper.
 --
 -- Ships in lockstep with the lifecycle-automations-cron change (clean timeClause
--- + empty-paren tidy). Apply this migration and deploy that function together,
--- or a body with " ({{program_time}})" would briefly render "(, 9:00 AM ...)".
+-- + wrapper collapse). Apply this migration and deploy that function together,
+-- or a body with the bare adjacency renders the date and time run together
+-- ("...June 179:00 AM...") once the comma is gone.
 --
--- Generic across tenants (pattern-matched, not org-scoped) and idempotent:
--- each UPDATE is LIKE-guarded on the pre-change substring, so re-running once
--- the parens are present is a no-op. Applied to staging + prod at ship time.
+-- Matched on the token ADJACENCY "{{program_start_date}}{{program_time}}" rather
+-- than on full fixed sentences, so it rewraps EVERY body that carries the pair
+-- regardless of a tenant's surrounding wording (the previous exact-sentence form
+-- would have missed a customized override and left it run-together). One REPLACE
+-- covers both the camp ("...{{program_time}}.") and afterschool
+-- ("...{{program_time}} at {{location_name}}.") shapes.
+--
+-- Idempotent: after the rewrite the pair reads "{{program_start_date}} ({{program_time}})",
+-- so the LIKE guard (which looks for the bare adjacency) no longer matches and a
+-- second run is a no-op. Generic across tenants. Applied to staging + prod at
+-- ship time.
 
--- Camp welcome (template default_body):
---   "starts {{program_start_date}}{{program_time}}." ->
---   "starts {{program_start_date}} ({{program_time}})."
+-- Template defaults (welcome_camp + welcome_afterschool default_body).
 UPDATE automation_templates
   SET default_body = REPLACE(default_body,
-        'starts {{program_start_date}}{{program_time}}.',
-        'starts {{program_start_date}} ({{program_time}}).')
-  WHERE key = 'welcome_camp'
-    AND default_body LIKE '%starts {{program_start_date}}{{program_time}}.%';
+        '{{program_start_date}}{{program_time}}',
+        '{{program_start_date}} ({{program_time}})')
+  WHERE default_body LIKE '%{{program_start_date}}{{program_time}}%';
 
--- Afterschool welcome (template default_body):
---   "starts {{program_start_date}}{{program_time}} at {{location_name}}." ->
---   "starts {{program_start_date}} ({{program_time}}) at {{location_name}}."
-UPDATE automation_templates
-  SET default_body = REPLACE(default_body,
-        'starts {{program_start_date}}{{program_time}} at {{location_name}}.',
-        'starts {{program_start_date}} ({{program_time}}) at {{location_name}}.')
-  WHERE key = 'welcome_afterschool'
-    AND default_body LIKE '%starts {{program_start_date}}{{program_time}} at {{location_name}}.%';
-
--- Any tenant camp-welcome body_override (e.g. J2S) gets the same rewrap.
-UPDATE automations a
-  SET body_override = REPLACE(a.body_override,
-        'starts {{program_start_date}}{{program_time}}.',
-        'starts {{program_start_date}} ({{program_time}}).')
-  FROM automation_templates t
-  WHERE a.template_id = t.id
-    AND t.key = 'welcome_camp'
-    AND a.body_override LIKE '%starts {{program_start_date}}{{program_time}}.%';
-
--- Any tenant afterschool-welcome body_override gets the same rewrap.
-UPDATE automations a
-  SET body_override = REPLACE(a.body_override,
-        'starts {{program_start_date}}{{program_time}} at {{location_name}}.',
-        'starts {{program_start_date}} ({{program_time}}) at {{location_name}}.')
-  FROM automation_templates t
-  WHERE a.template_id = t.id
-    AND t.key = 'welcome_afterschool'
-    AND a.body_override LIKE '%starts {{program_start_date}}{{program_time}} at {{location_name}}.%';
+-- Any tenant welcome body_override (e.g. J2S's customized camp welcome).
+UPDATE automations
+  SET body_override = REPLACE(body_override,
+        '{{program_start_date}}{{program_time}}',
+        '{{program_start_date}} ({{program_time}})')
+  WHERE body_override LIKE '%{{program_start_date}}{{program_time}}%';
