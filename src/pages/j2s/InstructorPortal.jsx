@@ -2670,8 +2670,8 @@ function AssignmentDetailView({ assignment, instructor, coInstructors = [], onBa
 // reached from the read-only SubOfferCard's "View details" link so the schedule
 // list stays compact. A sub is a single day (sub.date), so there's no multi-day
 // DailyCheckInSection — the card itself carries the one-tap "Mark this day as
-// taught". Roster + lessons only apply to camp subs (mirrors the card's prior
-// inline behavior); program subs show location only.
+// taught". Roster + lessons show for BOTH camp and program subs (program-sub
+// roster read is granted by subs_read_program_* RLS; the sub emails promise both).
 function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error, coInstructors = [] }) {
   const isCamp = sub.parent_assignment_type === "camp";
   const sess = isCamp ? sub.camp_parent?.camp_sessions ?? null : null;
@@ -4133,7 +4133,7 @@ function PayView({ instructorId, onBack }) {
               ].filter(Boolean).join(" · ");
               grouped.set(key, {
                 key, kind: "program",
-                title: prog.curriculum,
+                title: prog.curriculum || "Class",
                 weekNum: null,
                 datesLabel: when || "After-school",
                 locationName: prog.program_locations?.name ?? null,
