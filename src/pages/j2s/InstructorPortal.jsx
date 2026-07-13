@@ -2167,6 +2167,7 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
       )}
       <DailyCheckInSection
         assignmentId={assignment.id}
+        instructorId={instructor?.id ?? instructor?.instructor_id}
         programId={assignment.program_id}
         sessionDates={programSessionDates(schedule)}
       />
@@ -2612,6 +2613,7 @@ function AssignmentDetailView({ assignment, instructor, coInstructors = [], onBa
       <LocationSection location={s.program_locations} fallbackName={s.location_name} />
       <DailyCheckInSection
         assignmentId={assignment.id}
+        instructorId={instructor?.id ?? instructor?.instructor_id}
         campSessionId={s.id}
         startsOn={s.starts_on}
         endsOn={s.ends_on}
@@ -2890,7 +2892,7 @@ function LocationSection({ location, fallbackName }) {
 // Assumes weekday-only camps (Mon-Fri). If a tenant ever runs Saturday/
 // Sunday camps, this will hide those days and we need a workdays setting.
 // Same shape as `session_type` on camp_sessions — a v2 enhancement.
-function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, classDays, programId, sessionDates = [] }) {
+function DailyCheckInSection({ assignmentId, instructorId, campSessionId, startsOn, endsOn, classDays, programId, sessionDates = [] }) {
   // Dual-mode, mirroring RosterSection: camp (campSessionId + date range) or
   // after-school program (programId + pre-derived sessionDates). Same confirmation
   // rows, same edge fn (confirm-session-taught branches on which id it's given).
@@ -2901,13 +2903,19 @@ function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, cl
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    if (!filterVal) return;
+    if (!filterVal || !instructorId) return;
     let cancelled = false;
     (async () => {
       try {
+        // Scope to THIS instructor's own rows. A viewer who is both an instructor
+        // and an org member (e.g. an owner who also teaches) can read the whole
+        // org's confirmations via RLS, so without this filter a co-instructor's
+        // mark on a shared class day would show as this instructor's — hiding their
+        // own "Mark taught" button and never creating their pay line.
         const { data, error } = await supabase
           .from("session_delivery_confirmations")
           .select("id, session_date, confirmed_by, confirmed_at, pay_status")
+          .eq("instructor_id", instructorId)
           .eq(filterCol, filterVal);
         if (cancelled) return;
         if (error) {
@@ -2928,7 +2936,7 @@ function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, cl
       }
     })();
     return () => { cancelled = true; };
-  }, [filterCol, filterVal]);
+  }, [filterCol, filterVal, instructorId]);
 
   // Camp days come from the contiguous date range; program days are the
   // pre-derived session dates (closures already excluded upstream).
