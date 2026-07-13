@@ -3848,7 +3848,7 @@ function LessonsSection({ curriculumId, curriculumName }) {
         if (cancelled) return;
         if (error || data?.error) {
           setErr(data?.error === "not_assigned_to_curriculum"
-            ? "We couldn't find materials for this camp yet."
+            ? "We couldn't find materials for this class yet."
             : "Couldn't load materials. Try again later.");
           setDocs([]);
           return;
@@ -3879,7 +3879,7 @@ function LessonsSection({ curriculumId, curriculumName }) {
           <div style={{ color: MUTED, fontSize: 13 }}>{err}</div>
         ) : docs.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
-            No materials uploaded yet for <strong style={{ color: INK }}>{curriculumName}</strong>. Your admin will add the instructor guide and materials list before camp starts.
+            No materials uploaded yet for <strong style={{ color: INK }}>{curriculumName}</strong>. Your admin will add the instructor guide and materials list before it starts.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
