@@ -7,6 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { useAuth } from "../../context/AuthContext.jsx";
 import { defaultTenantSlug } from "../../lib/tenants.js";
 import { fetchOrgTerms } from "../../lib/terms.js";
 import HatGuide from "../../components/HatGuide";
@@ -358,6 +359,10 @@ function validateDrop({
 
 export default function Schedule() {
   const { org } = useOutletContext() ?? {};
+  const { user } = useAuth();
+  // Test/preview sends route to the logged-in admin's own inbox (the edge fn
+  // falls back to the tenant's alert_email if this is missing).
+  const testRecipient = user?.email;
   const [state, setState] = useState({ status: "loading" });
   const [focusedWeek, setFocusedWeek] = useState(null);
   const [searchText, setSearchText] = useState("");
@@ -1639,7 +1644,7 @@ export default function Schedule() {
       // edge function payload.
       const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode, instructor_ids: idsPayload, deadline: offerDeadline },
+        body: { cycle_id: state.cycle.id, mode, instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient },
       });
       if (error) {
         let realMsg = error.message ?? "function error";
@@ -1668,7 +1673,7 @@ export default function Schedule() {
     if (state.status !== "ready") return [];
     const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
     const { data, error } = await supabase.functions.invoke("send-offers", {
-      body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline },
+      body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient },
     });
     if (error) {
       let realMsg = error.message ?? "function error";
@@ -1843,7 +1848,7 @@ export default function Schedule() {
     try {
       const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline },
+        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient },
       });
       if (error) {
         // Read the actual response body so we can see the real error message.
@@ -4060,7 +4065,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           )}
           {p.mode === "test" && p.sent > 0 && (
             <div style={{ marginTop: 12, padding: 10, background: `${VIOLET}1A`, borderRadius: 6, fontSize: 12, color: INK }}>
-              All emails went to <strong>jessica@journeytosteam.com</strong> only — your instructors didn't receive anything. Check your inbox.
+              All emails went to <strong>{p.test_recipient || "your inbox"}</strong> only — your instructors didn't receive anything. Check your inbox.
             </div>
           )}
           {showRollback && (

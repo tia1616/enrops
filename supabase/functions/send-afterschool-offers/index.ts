@@ -236,7 +236,10 @@ serve(async (req: Request) => {
         metadata: { term, kind: 'afterschool', sent_count: sent.length, failed_count: failed.length },
       });
     }
-    return json({ mode, sent: sent.length, failed, preview: mode === 'preview' ? previews : undefined, recipient_count: byInstructor.size });
+    return json({ mode, sent: sent.length, failed, preview: mode === 'preview' ? previews : undefined, recipient_count: byInstructor.size,
+      // Where test/preview sends were routed, so the UI can tell the operator
+      // truthfully (never a hardcoded inbox). Omitted for real sends.
+      test_recipient: mode === 'send' ? undefined : testInbox });
   } catch (err: any) {
     console.error('send-afterschool-offers fatal:', err);
     return json({ error: err.message ?? String(err) }, 500);
