@@ -4015,12 +4015,12 @@ function PayView({ instructorId, onBack }) {
         const { data: confs, error: confErr } = await supabase
           .from("session_delivery_confirmations")
           .select(
-            `id, camp_session_id, session_date, session_type, confirmed_by,
+            `id, camp_session_id, program_id, session_date, session_type, confirmed_by,
              confirmed_at, pay_status, pay_amount_cents,
              pay_adjustment_cents, pay_adjustment_reason`
           )
           .eq("instructor_id", instructorId)
-          .not("camp_session_id", "is", null)
+          // Both camp days (camp_session_id) AND after-school sessions (program_id).
           // Exclude cron-seeded placeholders — a day the instructor hasn't
           // confirmed isn't earned pay yet (it shows in Daily check-in instead).
           .neq("confirmed_by", "pending")
@@ -4030,53 +4030,88 @@ function PayView({ instructorId, onBack }) {
 
         const rows = confs ?? [];
         if (rows.length === 0) {
-          setData({ camps: [], totals: emptyTotals() });
+          setData({ entries: [], totals: emptyTotals() });
           return;
         }
 
-        const sessionIds = [...new Set(rows.map((r) => r.camp_session_id))];
+        // Enrich camp rows from camp_sessions/camp_assignments and after-school
+        // rows from programs/program_assignments — each keyed by its own reference.
+        const campSessionIds = [...new Set(rows.filter((r) => r.camp_session_id).map((r) => r.camp_session_id))];
+        const programIds = [...new Set(rows.filter((r) => r.program_id).map((r) => r.program_id))];
+        const NONE = Promise.resolve({ data: [] });
 
-        const [{ data: sessions }, { data: assignments }] = await Promise.all([
-          supabase
-            .from("camp_sessions")
-            .select("id, curriculum_name, starts_on, ends_on, location_name, week_num, session_type")
-            .in("id", sessionIds),
-          supabase
-            .from("camp_assignments")
-            .select("camp_session_id, role, distance_bonus_cents")
-            .eq("instructor_id", instructorId)
-            .in("camp_session_id", sessionIds),
+        const [{ data: sessions }, { data: campAssns }, { data: programs }, { data: progAssns }] = await Promise.all([
+          campSessionIds.length
+            ? supabase.from("camp_sessions").select("id, curriculum_name, starts_on, ends_on, location_name, week_num").in("id", campSessionIds)
+            : NONE,
+          campSessionIds.length
+            ? supabase.from("camp_assignments").select("camp_session_id, role, distance_bonus_cents").eq("instructor_id", instructorId).in("camp_session_id", campSessionIds)
+            : NONE,
+          programIds.length
+            ? supabase.from("programs").select("id, curriculum, day_of_week, start_time, end_time, program_locations:program_location_id(name)").in("id", programIds)
+            : NONE,
+          programIds.length
+            ? supabase.from("program_assignments").select("program_id, role, distance_bonus_cents").eq("instructor_id", instructorId).in("program_id", programIds)
+            : NONE,
         ]);
 
         const sessionById = new Map((sessions ?? []).map((s) => [s.id, s]));
-        const assignmentBySession = new Map(
-          (assignments ?? []).map((a) => [a.camp_session_id, a])
-        );
+        const campAssnBySession = new Map((campAssns ?? []).map((a) => [a.camp_session_id, a]));
+        const programById = new Map((programs ?? []).map((p) => [p.id, p]));
+        const progAssnByProgram = new Map((progAssns ?? []).map((a) => [a.program_id, a]));
 
-        // Group by camp_session.
+        // Group by camp_session OR program into a normalized display entry.
         const grouped = new Map();
         for (const r of rows) {
-          if (!grouped.has(r.camp_session_id)) {
-            const sess = sessionById.get(r.camp_session_id);
-            const assn = assignmentBySession.get(r.camp_session_id);
-            grouped.set(r.camp_session_id, {
-              session: sess,
-              role: assn?.role ?? null,
-              distance_bonus_cents: assn?.distance_bonus_cents ?? 0,
-              confirmations: [],
-            });
+          const isCamp = !!r.camp_session_id;
+          const key = isCamp ? `c:${r.camp_session_id}` : `p:${r.program_id}`;
+          if (!grouped.has(key)) {
+            if (isCamp) {
+              const sess = sessionById.get(r.camp_session_id);
+              if (!sess) continue; // enrichment missing — skip the whole group
+              const assn = campAssnBySession.get(r.camp_session_id);
+              grouped.set(key, {
+                key, kind: "camp",
+                title: sess.curriculum_name,
+                weekNum: sess.week_num ?? null,
+                datesLabel: `${fmtShort(sess.starts_on)} – ${fmtShort(sess.ends_on)}`,
+                locationName: sess.location_name ?? null,
+                role: assn?.role ?? null,
+                distance_bonus_cents: assn?.distance_bonus_cents ?? 0,
+                confirmations: [],
+                sortDate: sess.starts_on ?? r.session_date,
+              });
+            } else {
+              const prog = programById.get(r.program_id);
+              if (!prog) continue;
+              const assn = progAssnByProgram.get(r.program_id);
+              const when = [
+                asDayName(prog.day_of_week),
+                [prog.start_time, prog.end_time].filter(Boolean).map(fmtTime).join("–"),
+              ].filter(Boolean).join(" · ");
+              grouped.set(key, {
+                key, kind: "program",
+                title: prog.curriculum,
+                weekNum: null,
+                datesLabel: when || "After-school",
+                locationName: prog.program_locations?.name ?? null,
+                role: assn?.role ?? null,
+                distance_bonus_cents: assn?.distance_bonus_cents ?? 0,
+                confirmations: [],
+                sortDate: r.session_date, // rows are date-desc, so first = most recent
+              });
+            }
           }
-          grouped.get(r.camp_session_id).confirmations.push(r);
+          const g = grouped.get(key);
+          if (g) g.confirmations.push(r);
         }
 
-        const camps = [...grouped.values()]
-          .filter((g) => g.session) // skip rows whose camp_session is missing
-          .sort((a, b) =>
-            (b.session.starts_on ?? "").localeCompare(a.session.starts_on ?? "")
-          );
+        const entries = [...grouped.values()].sort((a, b) =>
+          (b.sortDate ?? "").localeCompare(a.sortDate ?? "")
+        );
 
         // Totals across everything visible to this instructor.
-        const totals = camps.reduce(
+        const totals = entries.reduce(
           (acc, c) => {
             const base = c.confirmations.reduce((s, r) => s + (r.pay_amount_cents ?? 0), 0);
             const bonus = c.confirmations.reduce((s, r) => s + (r.pay_adjustment_cents ?? 0), 0);
@@ -4102,12 +4137,12 @@ function PayView({ instructorId, onBack }) {
           { base: 0, bonus: 0, distance: 0, grand: 0, byStage: { approved: 0, processing: 0, held: 0 } }
         );
 
-        if (!cancelled) setData({ camps, totals });
+        if (!cancelled) setData({ entries, totals });
       } catch (e) {
         console.error("[PayView] load failed", e);
         if (!cancelled) {
           setErr("Couldn't load your pay. Try again.");
-          setData({ camps: [], totals: emptyTotals() });
+          setData({ entries: [], totals: emptyTotals() });
         }
       }
     })();
@@ -4138,7 +4173,7 @@ function PayView({ instructorId, onBack }) {
         Your pay
       </h1>
       <p style={{ color: MUTED, margin: "0 0 18px", fontSize: 13, lineHeight: 1.5 }}>
-        Earned from camps you marked taught. Updates the moment you check in on the assignment detail.
+        Earned from camps and after-school classes you marked taught. Updates the moment you check in on the assignment detail.
       </p>
 
       {err && (
@@ -4151,18 +4186,18 @@ function PayView({ instructorId, onBack }) {
         <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>
       )}
 
-      {data !== null && data.camps.length === 0 && !err && (
+      {data !== null && data.entries.length === 0 && !err && (
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, color: MUTED, textAlign: "center", lineHeight: 1.5 }}>
-          You haven't marked any sessions taught yet. Open a confirmed camp, then use <strong>Daily check-in</strong> after each day to start tracking pay.
+          You haven't marked any sessions taught yet. Open a confirmed camp or class, then use <strong>Daily check-in</strong> after each session to start tracking pay.
         </div>
       )}
 
-      {data !== null && data.camps.length > 0 && (
+      {data !== null && data.entries.length > 0 && (
         <>
           <PayTotalsCard totals={data.totals} />
           <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 16 }}>
-            {data.camps.map((c) => (
-              <PayCampCard key={c.session.id} entry={c} />
+            {data.entries.map((c) => (
+              <PayEntryCard key={c.key} entry={c} />
             ))}
           </div>
         </>
@@ -4216,8 +4251,7 @@ function StageBlock({ label, amount }) {
   );
 }
 
-function PayCampCard({ entry }) {
-  const s = entry.session;
+function PayEntryCard({ entry }) {
   const confs = entry.confirmations.slice().sort((a, b) => (a.session_date ?? "").localeCompare(b.session_date ?? ""));
   const base = confs.reduce((acc, r) => acc + (r.pay_amount_cents ?? 0), 0);
   const bonus = confs.reduce((acc, r) => acc + (r.pay_adjustment_cents ?? 0), 0);
@@ -4231,16 +4265,19 @@ function PayCampCard({ entry }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 220px", minWidth: 200 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
-            {s.curriculum_name}
-            {s.week_num && (
+            {entry.title}
+            {entry.kind === "program" && (
+              <span style={{ color: PURPLE, marginLeft: 8, fontSize: 11, fontWeight: 400 }}>· after-school</span>
+            )}
+            {entry.weekNum && (
               <span style={{ color: MUTED, marginLeft: 8, fontSize: 12, fontWeight: 400 }}>
-                · Week {s.week_num}
+                · Week {entry.weekNum}
               </span>
             )}
           </div>
           <div style={{ fontSize: 12, color: MUTED, marginTop: 3, lineHeight: 1.5 }}>
-            {fmtShort(s.starts_on)} – {fmtShort(s.ends_on)}
-            {s.location_name && ` · ${s.location_name}`}
+            {entry.datesLabel}
+            {entry.locationName && ` · ${entry.locationName}`}
             {entry.role && ` · ${entry.role}`}
           </div>
         </div>
