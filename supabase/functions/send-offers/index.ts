@@ -12,7 +12,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock, encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -280,10 +280,6 @@ serve(async (req: Request) => {
       if (mode === 'preview') continue;
 
       try {
-        const fromName = branding.email_from_name ?? org.name;
-        const fromDomain = 'updates.journeytosteam.com';
-        const fromEmail = `${encodeDisplayName(fromName)} <hello@${fromDomain}>`;
-
         const r = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: {
@@ -291,9 +287,11 @@ serve(async (req: Request) => {
             Authorization: `Bearer ${RESEND_API_KEY}`,
           },
           body: JSON.stringify({
-            from: fromEmail,
+            // Send AS the tenant: FROM their verified/shared-platform sender, not
+            // the hardcoded J2S domain. Mirrors send-afterschool-offers (the twin).
+            from: formatFromAddress(brand),
             to: recipient,
-            reply_to: branding.email_reply_to ?? undefined,
+            reply_to: brand.reply_to,
             subject: mode === 'test' ? `[TEST] ${subject}` : subject,
             html,
             text,
