@@ -381,7 +381,25 @@ export default function InstructorPortal() {
       setProgramAssignments([]);
       return;
     }
-    setProgramAssignments((data ?? []).map((a) => ({ ...a, kind: "program" })));
+    // Sort by weekday then start time so multiple after-school classes render in a
+    // sensible order (the query returns them unsorted / in PK order otherwise).
+    const DAY_ORDER = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 7 };
+    const dayKey = (dow) => {
+      if (dow == null) return 9;
+      const n = Number(dow);
+      if (!Number.isNaN(n)) return n === 0 ? 7 : n; // numeric 0=Sun..6=Sat
+      return DAY_ORDER[String(dow).trim().toLowerCase()] ?? 9;
+    };
+    setProgramAssignments(
+      (data ?? [])
+        .map((a) => ({ ...a, kind: "program" }))
+        .sort((x, y) => {
+          const dx = dayKey(x.programs?.day_of_week);
+          const dy = dayKey(y.programs?.day_of_week);
+          if (dx !== dy) return dx - dy;
+          return String(x.programs?.start_time ?? "").localeCompare(String(y.programs?.start_time ?? ""));
+        }),
+    );
 
     // Per-program session schedule (meeting dates + skipped no-school days with
     // reasons) so the instructor sees the real dates their class meets, and why
@@ -2025,6 +2043,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
             {p.curriculum || "Class"} <span style={{ fontWeight: 400, color: PURPLE, fontSize: 12, marginLeft: 4 }}>· after-school</span>
+            {assignment.role && <span style={{ fontWeight: 400, color: MUTED, fontSize: 12, marginLeft: 4 }}>· {titleCase(assignment.role)}</span>}
           </div>
           <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.4 }}>
             {when} · <strong style={{ color: PURPLE, fontWeight: 600 }}>all term</strong><br />
@@ -2077,7 +2096,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
 
       {assignment.distance_bonus_cents ? (
         <div style={{ fontSize: 13, color: PURPLE, fontWeight: 600 }}>
-          + {dollars(assignment.distance_bonus_cents)} bonus
+          + {dollars(assignment.distance_bonus_cents)} distance bonus
         </div>
       ) : null}
 
@@ -2124,13 +2143,16 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
       )}
 
       {readOnly && onOpen && (
-        <button
-          type="button"
-          onClick={onOpen}
-          style={{ marginTop: 8, padding: "8px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", alignSelf: "flex-start" }}
-        >
-          View roster &amp; class details →
-        </button>
+        <div style={{ marginTop: 4 }}>
+          {/* Match the camp card's text-link affordance + wording (was a bordered button). */}
+          <button
+            type="button"
+            onClick={onOpen}
+            style={{ background: "transparent", border: "none", color: PURPLE, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", padding: 0 }}
+          >
+            View details, roster, and materials →
+          </button>
+        </div>
       )}
     </div>
   );
@@ -2149,14 +2171,26 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
       <button type="button" onClick={onBack} style={{ background: "none", border: "none", color: PURPLE, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", padding: 0, marginBottom: 12 }}>
         ← Back to schedule
       </button>
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 20, fontWeight: 700, color: INK }}>
-          {p?.curriculum || "Class"} <span style={{ fontWeight: 400, color: PURPLE, fontSize: 13 }}>· after-school</span>
-        </div>
-        <div style={{ fontSize: 13, color: MUTED, marginTop: 4 }}>
-          {when}{loc?.name ? ` · ${loc.name}` : ""}{loc?.room_number ? ` · Room ${loc.room_number}` : ""}
-        </div>
-      </div>
+      {/* Status banner mirrors the camp detail so an after-school instructor gets
+          the same "this is locked in" reassurance + role. */}
+      {(() => {
+        const statusColor = assignment.status === "confirmed" ? OK_GREEN
+          : assignment.status === "change_requested" ? VIOLET : PURPLE;
+        const statusLabel = assignment.status === "confirmed" ? "Confirmed"
+          : assignment.status === "change_requested" ? "Change requested" : "Awaiting response";
+        return (
+          <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: `3px solid ${statusColor}`, borderRadius: 8, padding: "16px 18px", marginBottom: 18 }}>
+            <div style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{statusLabel}</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: INK, marginTop: 4 }}>
+              {p?.curriculum || "Class"} <span style={{ fontWeight: 400, color: PURPLE, fontSize: 13 }}>· after-school</span>
+            </div>
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
+              {when}{loc?.name ? ` · ${loc.name}` : ""}{loc?.room_number ? ` · Room ${loc.room_number}` : ""}
+              {assignment.role ? ` · ${titleCase(assignment.role)} instructor` : ""}
+            </div>
+          </div>
+        );
+      })()}
       <CoInstructorLine coInstructors={coInstructors} />
       {/* Same sections a camp instructor sees — an after-school class is just
           another program. Location, Daily check-in (mark each session taught ->
@@ -2248,7 +2282,7 @@ function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onCl
           <textarea
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            placeholder="e.g., I can't do this week — my kids are at a different camp."
+            placeholder="e.g., I can't do this week — I have a scheduling conflict."
             rows={4}
             style={{
               width: "100%",
@@ -2264,7 +2298,7 @@ function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onCl
             }}
           />
           <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
-            Your admin will see your message and either reassign this camp or reply.
+            Your admin will see your message and either find coverage or reply.
           </div>
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -3152,9 +3186,9 @@ function todayLocalISO() {
 function humanizeConfirmError(code) {
   if (!code) return "Couldn't save your check-in. Try again.";
   if (code === "session_date_in_future") return "You can't mark a future day taught yet.";
-  if (code === "session_date_out_of_range") return "That date isn't within this camp's range.";
-  if (code === "assignment_not_confirmed") return "This camp isn't fully confirmed yet — talk to your admin.";
-  if (code === "forbidden") return "You're not assigned to this camp.";
+  if (code === "session_date_out_of_range") return "That date isn't within this class's range.";
+  if (code === "assignment_not_confirmed") return "This class isn't fully confirmed yet — talk to your admin.";
+  if (code === "forbidden") return "You're not assigned to this class.";
   if (code === "session_covered_by_substitute") return "A substitute is covering this day — they'll handle the check-in.";
   return "Couldn't save your check-in. Try again.";
 }
@@ -3430,7 +3464,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
                 <strong>{aggregateCount}</strong> {noun}{aggregateCount === 1 ? "" : "s"} registered so far.
               </div>
             ) : (
-              <div>Enrollment count syncs from your registration platform before camp starts.</div>
+              <div>Enrollment count syncs from your registration platform before it starts.</div>
             )}
             <div style={{ color: MUTED, fontSize: 13, marginTop: 6 }}>
               The full roster (names, ages, allergies, emergency contacts) lands here
@@ -3521,7 +3555,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
   const s = registration.student;
   if (!s) return null;
   const p = registration.parent;
-  const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed camper";
+  const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed";
   const age = ageFromDob(s.birthdate);
   const hasAllergies = (s.allergies ?? "").trim().length > 0;
   const hasMedical = ((s.medical_notes ?? "") + (s.medical_conditions ?? "")).trim().length > 0 || s.epipen_required;
