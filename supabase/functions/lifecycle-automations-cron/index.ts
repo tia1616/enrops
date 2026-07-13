@@ -159,7 +159,7 @@ interface AudienceEntry {
   session_dates_raw: string[];  // derive_program_session_dates output for afterschool — drives {{session_dates_block}}. Empty for camps.
   register_url: string;         // org's base registration URL
   next_term_available: boolean; // true if org has programs/camps starting >14 days out — drives {{next_term_link_block}}
-  program_time?: string;        // drives {{program_time}} — a comma-prefixed time clause (e.g. ", 9:00 AM – 12:00 PM") or "" when unknown. Set by the Welcome resolvers only.
+  program_time?: string;        // drives {{program_time}} — a clean time range (e.g. "9:00 AM – 12:00 PM") or "" when unknown. Set by the Welcome, check-in, and recap resolvers.
   // ── no_school_day only ──
   // recipient_role distinguishes the two audiences of the SAME automation. When
   // set to "instructor" the resolver also sets subject_template/body_template so
@@ -641,7 +641,7 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     program_name: "Mini Robotics",
     program_start_date: "Monday, June 17",
     program_end_date: "Friday, June 21",
-    program_time: ", 9:00 AM – 12:00 PM",
+    program_time: "9:00 AM – 12:00 PM",
     location_name: "Beaverton STEAM Hub",
     abandoned_resume_url: "#",
     age_turning: "8",
@@ -1083,7 +1083,7 @@ async function resolveCheckInAudience(
       id, parent_id,
       students!inner ( id, first_name ),
       parents!inner ( id, first_name, email ),
-      programs!inner ( id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+      programs!inner ( id, curriculum, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
     `)
     .eq("organization_id", a.organization_id)
     .eq("status", "confirmed")
@@ -1103,6 +1103,8 @@ async function resolveCheckInAudience(
       program_name: r.programs.curriculum ?? "your program",
       program_start_date: formatDate(r.programs.first_session_date),
       program_end_date: "",
+      // programs.start_time/end_time are already human text ("3:25 PM").
+      program_time: timeClause(r.programs.start_time, r.programs.end_time, true),
       location_name: r.programs.program_locations?.name ?? "",
       abandoned_resume_url: "",
       age_turning: "",
@@ -1179,7 +1181,7 @@ async function resolveRecapAudience(
   if (includeCamps) {
     const { data: camps, error: cErr } = await supabase
       .from("camp_sessions")
-      .select("id, cycle_id, starts_on, ends_on, curriculum_name, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills )")
+      .select("id, cycle_id, starts_on, ends_on, start_time, end_time, curriculum_name, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills )")
       .eq("organization_id", a.organization_id)
       .not("starts_on", "is", null)
       .not("ends_on", "is", null);
@@ -1235,6 +1237,8 @@ async function resolveRecapAudience(
           program_name: first.curriculum_name ?? "your camp",
           program_start_date: formatDate(runStart),
           program_end_date: formatDate(runEnd),
+          // Weekly sessions in a run share a daily time; the first week is the anchor.
+          program_time: timeClause(first.start_time, first.end_time, false),
           location_name: first.location_name ?? "",
           abandoned_resume_url: "",
           age_turning: "",
@@ -1255,7 +1259,7 @@ async function resolveRecapAudience(
   if (includeAfterschool) {
       const { data: programs, error: pErr } = await supabase
       .from("programs")
-      .select("id, curriculum, first_session_date, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
+      .select("id, curriculum, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
       .eq("organization_id", a.organization_id);
     if (pErr) throw pErr;
 
@@ -1271,6 +1275,7 @@ async function resolveRecapAudience(
       programMeta.set(p.id, {
         curriculum: p.curriculum,
         location_name: p.program_locations?.name ?? "",
+        program_time: timeClause(p.start_time, p.end_time, true),
         first_session_date: p.first_session_date,
         last_session_date: (sessions as string[])[sessions.length - 1] ?? null,
         final_showcase: p.curricula?.final_showcase ?? "",
@@ -1308,6 +1313,7 @@ async function resolveRecapAudience(
           program_name: meta.curriculum ?? "your program",
           program_start_date: meta.first_session_date ? formatDate(meta.first_session_date) : "",
           program_end_date: meta.last_session_date ? formatDate(meta.last_session_date) : "",
+          program_time: meta.program_time ?? "",
           location_name: meta.location_name,
           abandoned_resume_url: "",
           age_turning: "",
@@ -2051,9 +2057,9 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     program_name: entry.program_name,
     program_start_date: entry.program_start_date,
     program_end_date: entry.program_end_date,
-    // Comma-prefixed time clause so the template reads naturally with OR without
-    // a known time: "starts {{program_start_date}}{{program_time}}." →
-    // "…July 6, 9:00 AM – 12:00 PM." when set, or "…July 6." when "".
+    // Clean time range ("9:00 AM – 12:00 PM"), empty when unknown. The welcome
+    // copy wraps it — "starts {{program_start_date}} ({{program_time}})" — and
+    // renderTokens strips the bare " ()" left when it's empty.
     program_time: entry.program_time ?? "",
     location_name: entry.location_name,
     age_turning: entry.age_turning,
@@ -2175,7 +2181,17 @@ async function hasFutureProgramsForOrg(supabase: SupabaseClient, orgId: string):
 // so <, >, " stay safe in body text + href attribute context. HTML-pre-rendered
 // tokens (e.g. {{final_showcase_block}}) are passed through verbatim.
 function renderTokens(template: string, tokens: Record<string, string>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+  // First, collapse a token wrapped in parens for optional display — e.g. the
+  // welcome "starts {{program_start_date}} ({{program_time}})" — when that token
+  // is known-but-empty (a camp/program with no start/end time): drop the whole
+  // " (…)" group so the sentence reads cleanly. This is keyed to the {{token}}
+  // PLACEHOLDER in the template, so it never touches a literal "()" that a token
+  // VALUE might contain — e.g. a curriculum showcase mentioning setup()/loop().
+  // Unknown tokens (undefined) are left alone so they stay visible below.
+  const collapsed = template.replace(/ ?\(\s*\{\{(\w+)\}\}\s*\)/g, (whole, key) => {
+    return tokens[key] === "" ? "" : whole;
+  });
+  return collapsed.replace(/\{\{(\w+)\}\}/g, (match, key) => {
     const v = tokens[key];
     if (v == null) return match; // leave unknown tokens in place for visibility
     if (PRE_RENDERED_HTML_TOKENS.has(key)) return v;
@@ -2363,17 +2379,20 @@ function formatClockTime(t: string | null | undefined): string {
   return `${h}:${mm} ${ampm}`;
 }
 
-// Build the comma-prefixed {{program_time}} clause from a start/end pair.
+// Build the clean {{program_time}} range from a start/end pair, e.g.
+// "9:00 AM – 12:00 PM". No surrounding punctuation, so the token is safe to drop
+// standalone into any template AND to wrap in the welcome copy as
+// "starts {{program_start_date}} ({{program_time}})" — an empty value there
+// leaves a bare " ()" that renderTokens strips.
 // Renders only when BOTH ends are present, so we never show a half-open range.
 // `preformatted` = true for afterschool (programs.start_time/end_time are
 // already human text like "3:25 PM"); false for camps (Postgres time values
-// that need formatClockTime). Empty string when either end is missing — the
-// template then reads fine without any time. Uses an en dash (–).
+// that need formatClockTime). Empty string when either end is missing. En dash (–).
 function timeClause(start: string | null | undefined, end: string | null | undefined, preformatted: boolean): string {
   const s = preformatted ? (start ?? "").trim() : formatClockTime(start);
   const e = preformatted ? (end ?? "").trim() : formatClockTime(end);
   if (!s || !e) return "";
-  return `, ${s} – ${e}`;
+  return `${s} – ${e}`;
 }
 
 // Pull a first name from a contact's stored full name for {{first_name}}.
