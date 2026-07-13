@@ -97,6 +97,7 @@ export default function InstructorPortal() {
   const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role, email, phone }] } — camp co-teachers
   const [coInstructorsProgram, setCoInstructorsProgram] = useState({}); // { [program_id]: [...] } — after-school co-teachers
   const [programAssignments, setProgramAssignments] = useState([]); // after-school offers
+  const [activeTerm, setActiveTerm] = useState(null); // org's active_registration_term (past-class split)
   const [scheduleByProgram, setScheduleByProgram] = useState({}); // { [program_id]: [{date,kind,reason}] } — session dates + no-school days
   const [subAssignments, setSubAssignments] = useState([]); // assignment_substitutions where I'm the sub
   const [actingOn, setActingOn] = useState(null);
@@ -214,12 +215,13 @@ export default function InstructorPortal() {
       if (fullInstructor.organization_id) {
         const { data: dir } = await supabase
           .from("public_org_directory")
-          .select("slug, background_check_public")
+          .select("slug, background_check_public, active_registration_term")
           .eq("id", fullInstructor.organization_id)
           .maybeSingle();
         if (dir?.slug) resolvedSlug = dir.slug;
         setOrgSlug(resolvedSlug);
         setBackgroundCheck(dir?.background_check_public ?? { enabled: true });
+        setActiveTerm(dir?.active_registration_term ?? null);
       }
 
       // Check onboarding status. If they're an unfinished contractor invite,
@@ -953,11 +955,16 @@ export default function InstructorPortal() {
     (a) => a.status === "published" || a.status === "change_requested"
   );
   const accepted = currentAssignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
-  // After-school offers (no cycle archive concept yet — show all loaded).
-  const needsResponseAS = programAssignments.filter(
+  // After-school offers. A class whose term isn't the org's active term is "past"
+  // (after-school has no explicit cycle-archive like camps). Guard on both terms
+  // being present so a missing term never wrongly hides a live class.
+  const isPastProgram = (a) => !!activeTerm && !!a.programs?.term && a.programs.term !== activeTerm;
+  const currentPrograms = programAssignments.filter((a) => !isPastProgram(a));
+  const pastPrograms = programAssignments.filter(isPastProgram);
+  const needsResponseAS = currentPrograms.filter(
     (a) => a.status === "published" || a.status === "change_requested"
   );
-  const acceptedAS = programAssignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
+  const acceptedAS = currentPrograms.filter((a) => a.status === "confirmed" && a.instructor_response_at);
 
   // CPR cert expiry nudge: render a clickable pill if the cert is expired or
   // within 60 days of expiring. Tap → opens the profile screen where the
@@ -1384,7 +1391,7 @@ export default function InstructorPortal() {
         </div>
       )}
 
-      {pastAssignments.length > 0 && (
+      {(pastAssignments.length > 0 || pastPrograms.length > 0) && (
         <div style={{ marginTop: 24, paddingTop: 18, borderTop: `1px solid ${RULE}` }}>
           <button
             type="button"
@@ -1402,12 +1409,22 @@ export default function InstructorPortal() {
               padding: 0,
             }}
           >
-            <Chevron open={showPast} color={BRIGHT} style={{ marginRight: 5, verticalAlign: "middle" }} /> Past camps ({pastAssignments.length})
+            <Chevron open={showPast} color={BRIGHT} style={{ marginRight: 5, verticalAlign: "middle" }} /> Past camps &amp; classes ({pastAssignments.length + pastPrograms.length})
           </button>
           {showPast && (
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
               {pastAssignments.map((a) => (
                 <AssignmentCard key={a.id} assignment={a} readOnly />
+              ))}
+              {pastPrograms.map((a) => (
+                <AfterschoolAssignmentCard
+                  key={a.id}
+                  assignment={a}
+                  coInstructors={coInstructorsProgram[a.program_id] || []}
+                  schedule={scheduleByProgram[a.program_id] || []}
+                  readOnly
+                  onOpen={() => { setSelectedProgramAssignmentId(a.id); setView("afterschool-detail"); }}
+                />
               ))}
             </div>
           )}
