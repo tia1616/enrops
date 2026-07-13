@@ -2159,13 +2159,17 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
       </div>
       <CoInstructorLine coInstructors={coInstructors} />
       {/* Same sections a camp instructor sees — an after-school class is just
-          another program. Location (address/arrival/dismissal) and lesson
-          materials are shared components fed the program's own location +
-          curriculum. (No Daily check-in yet: confirm-session-taught is camp-only
-          on the backend — after-school per-session pay marking is a separate build.) */}
+          another program. Location, Daily check-in (mark each session taught ->
+          pay), Roster, and Lesson materials are the shared camp components fed the
+          program's own location / session dates / curriculum. */}
       {p.program_locations && (
         <LocationSection location={p.program_locations} fallbackName={p.program_locations?.name} />
       )}
+      <DailyCheckInSection
+        assignmentId={assignment.id}
+        programId={assignment.program_id}
+        sessionDates={programSessionDates(schedule)}
+      />
       <div style={{ marginTop: 16 }}>
         <RosterSection
           programId={assignment.program_id}
@@ -2886,20 +2890,25 @@ function LocationSection({ location, fallbackName }) {
 // Assumes weekday-only camps (Mon-Fri). If a tenant ever runs Saturday/
 // Sunday camps, this will hide those days and we need a workdays setting.
 // Same shape as `session_type` on camp_sessions — a v2 enhancement.
-function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, classDays }) {
+function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, classDays, programId, sessionDates = [] }) {
+  // Dual-mode, mirroring RosterSection: camp (campSessionId + date range) or
+  // after-school program (programId + pre-derived sessionDates). Same confirmation
+  // rows, same edge fn (confirm-session-taught branches on which id it's given).
+  const filterCol = campSessionId ? "camp_session_id" : "program_id";
+  const filterVal = campSessionId || programId;
   const [confirmations, setConfirmations] = useState(null); // null = loading; Map by date string
   const [busyDate, setBusyDate] = useState(null);
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    if (!campSessionId) return;
+    if (!filterVal) return;
     let cancelled = false;
     (async () => {
       try {
         const { data, error } = await supabase
           .from("session_delivery_confirmations")
           .select("id, session_date, confirmed_by, confirmed_at, pay_status")
-          .eq("camp_session_id", campSessionId);
+          .eq(filterCol, filterVal);
         if (cancelled) return;
         if (error) {
           console.error("[DailyCheckInSection] load failed", error);
@@ -2919,9 +2928,16 @@ function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, cl
       }
     })();
     return () => { cancelled = true; };
-  }, [campSessionId]);
+  }, [filterCol, filterVal]);
 
-  const days = useMemo(() => weekdayRange(startsOn, endsOn, classDays), [startsOn, endsOn, classDays]);
+  // Camp days come from the contiguous date range; program days are the
+  // pre-derived session dates (closures already excluded upstream).
+  const datesKey = (sessionDates || []).join(",");
+  const days = useMemo(
+    () => (campSessionId ? weekdayRange(startsOn, endsOn, classDays) : (sessionDates || [])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [campSessionId, startsOn, endsOn, classDays, datesKey],
+  );
   const todayStr = todayLocalISO();
 
   async function markTaught(dateStr) {
@@ -2931,7 +2947,9 @@ function DailyCheckInSection({ assignmentId, campSessionId, startsOn, endsOn, cl
     try {
       const { data, error: fnErr } = await supabase.functions.invoke(
         "confirm-session-taught",
-        { body: { camp_assignment_id: assignmentId, session_date: dateStr } },
+        { body: campSessionId
+            ? { camp_assignment_id: assignmentId, session_date: dateStr }
+            : { program_assignment_id: assignmentId, session_date: dateStr } },
       );
       if (fnErr || data?.error) {
         setErr(humanizeConfirmError(data?.error || fnErr?.message));
