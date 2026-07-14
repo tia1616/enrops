@@ -22,6 +22,7 @@ import { PURPLE, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/tokens.js
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import AutomationEditor from "./AutomationEditor.jsx";
 import SenderSetupNotice from "./SenderSetupNotice.jsx";
+import DeliveryIssuesPanel from "./DeliveryIssuesPanel.jsx";
 
 // Templates that require Stripe Connect to fire — UI locks the toggle until
 // the org connects. Kept here (not in DB) for v1 — a `requires_stripe_connect`
@@ -233,6 +234,8 @@ export default function AutomationsTab() {
           unsubscribed from marketing. They&apos;re service updates, not sales.
         </p>
       </header>
+
+      <DeliveryIssuesPanel org={org} />
 
       {error && (
         <div
