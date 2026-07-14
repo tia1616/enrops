@@ -44,6 +44,11 @@ function fmtSize(bytes) {
   const mb = bytes / (1024 * 1024);
   return mb >= 1000 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
 }
+function fmtDate(iso) {
+  if (!iso) return "";
+  try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); }
+  catch { return ""; }
+}
 
 // Read a video file's duration (seconds) from its metadata, client-side.
 function readDuration(file) {
@@ -82,6 +87,7 @@ export default function TrainingSettings() {
   const [savingToggle, setSavingToggle] = useState(false);
 
   const [videos, setVideos] = useState([]);
+  const [roster, setRoster] = useState(null); // { rows: [{id,name,complete,doneCount,total,latest}], requiredCount } | null
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
@@ -102,6 +108,51 @@ export default function TrainingSettings() {
       .order("created_at", { ascending: true });
     if (e) { setError(e.message); return; }
     setVideos(data ?? []);
+    await loadRoster();
+  }
+
+  // Who's completed training: per active instructor, how many of the currently
+  // required videos they've passed (watched + quiz_passed), and when they finished.
+  // Org-scoped; any org member can read completions + instructors via RLS.
+  async function loadRoster() {
+    const { data: reqVids } = await supabase
+      .from("instructor_training_videos")
+      .select("id").eq("organization_id", org.id).eq("active", true).eq("is_required", true);
+    const requiredIds = (reqVids ?? []).map((v) => v.id);
+
+    const { data: instrs } = await supabase
+      .from("instructors")
+      .select("id, first_name, last_name, preferred_name")
+      .eq("organization_id", org.id).eq("is_active", true)
+      .order("last_name", { ascending: true });
+
+    const { data: comps } = await supabase
+      .from("instructor_training_completions")
+      .select("instructor_id, training_video_id, watched_completed_at, quiz_passed")
+      .eq("organization_id", org.id);
+
+    const passedByInstr = new Map();
+    const latestByInstr = new Map();
+    for (const c of comps ?? []) {
+      if (!c.watched_completed_at || !c.quiz_passed) continue;
+      if (!passedByInstr.has(c.instructor_id)) passedByInstr.set(c.instructor_id, new Set());
+      passedByInstr.get(c.instructor_id).add(c.training_video_id);
+      const prev = latestByInstr.get(c.instructor_id);
+      if (!prev || c.watched_completed_at > prev) latestByInstr.set(c.instructor_id, c.watched_completed_at);
+    }
+
+    const rows = (instrs ?? []).map((i) => {
+      const passed = passedByInstr.get(i.id) ?? new Set();
+      const doneCount = requiredIds.filter((id) => passed.has(id)).length;
+      const complete = requiredIds.length > 0 && doneCount === requiredIds.length;
+      return {
+        id: i.id,
+        name: `${i.preferred_name || i.first_name || ""} ${i.last_name || ""}`.trim() || "(unnamed)",
+        complete, doneCount, total: requiredIds.length,
+        latest: complete ? latestByInstr.get(i.id) : null,
+      };
+    });
+    setRoster({ rows, requiredCount: requiredIds.length });
   }
 
   useEffect(() => {
@@ -421,6 +472,31 @@ export default function TrainingSettings() {
           </div>
         )}
       </div>
+
+      {/* Who's completed training — the provider's audit surface. Shown when there's
+          at least one required video (i.e. when the gate is actually live). */}
+      {canEdit && roster && roster.requiredCount > 0 && (
+        <div style={{ marginTop: 16, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 20 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5 }}>Who's completed training</div>
+          <div style={{ ...hint, marginTop: 4 }}>Across your {roster.requiredCount} required video{roster.requiredCount === 1 ? "" : "s"}. Instructors can't be assigned work until they're complete.</div>
+          {roster.rows.length === 0 ? (
+            <div style={{ ...hint, marginTop: 12 }}>No active instructors yet.</div>
+          ) : (
+            <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 6 }}>
+              {roster.rows.map((r) => (
+                <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 14px", border: `1px solid ${RULE}`, borderRadius: 10 }}>
+                  <span style={{ fontSize: 14, color: INK }}>{r.name}</span>
+                  {r.complete ? (
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: GREEN_INK, whiteSpace: "nowrap" }}>✓ Complete{r.latest ? ` · ${fmtDate(r.latest)}` : ""}</span>
+                  ) : (
+                    <span style={{ fontSize: 12.5, color: MUTED, whiteSpace: "nowrap" }}>{r.doneCount} of {r.total} done</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
