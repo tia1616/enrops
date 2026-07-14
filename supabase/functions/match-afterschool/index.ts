@@ -209,6 +209,26 @@ serve(async (req) => {
     const existing = existingRaw ?? [];
     const progById = new Map(programs.map((p: any) => [p.id, p]));
 
+    // ----- Recorded declines (per-program) -----
+    // An instructor who turned THIS class down (a change request the admin then
+    // reassigned/removed). Excluded from that program's candidates only — still
+    // matchable elsewhere. Mirrors the manual picker's "previously declined" filter,
+    // so a re-run of the matcher doesn't undo the admin's memory.
+    const declinedByProgram = new Map<string, Set<string>>();
+    if (programIds.length) {
+      const { data: declineRows, error: declineErr } = await admin
+        .from('session_declined_instructors')
+        .select('program_id, instructor_id')
+        .eq('organization_id', organizationId)
+        .in('program_id', programIds);
+      if (declineErr) console.warn(`[match-afterschool] decline load failed: ${declineErr.message}`);
+      for (const d of declineRows ?? []) {
+        if (!d.program_id) continue;
+        if (!declinedByProgram.has(d.program_id)) declinedByProgram.set(d.program_id, new Set());
+        declinedByProgram.get(d.program_id)!.add(d.instructor_id);
+      }
+    }
+
     // ----- Build the pool (instructors who submitted at least one weekday bucket) -----
     interface PoolInstr {
       id: string; name: string;
@@ -284,6 +304,7 @@ serve(async (req) => {
     function eligibleCore(inst: PoolInstr, prog: any): boolean {
       const dc = dayCode(prog.day_of_week);
       if (!dc) return false;
+      if (declinedByProgram.get(prog.id)?.has(inst.id)) return false;  // turned this class down
       const avail = inst.days[dc];
       if (!avail || !avail.from) return false;
       const from = parseHHMM(avail.from);

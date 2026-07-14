@@ -377,6 +377,20 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         else substitutions = subRows ?? [];
       }
 
+      // Recorded declines for these classes: an instructor who had a change request
+      // open and was then reassigned/removed. Per-program (mirrors camp's per-session).
+      // Powers the picker's "previously declined" filter so we don't re-suggest them.
+      let declines = [];
+      if (programIds.length) {
+        const { data: declineRows, error: declineErr } = await supabase
+          .from("session_declined_instructors")
+          .select("program_id, instructor_id")
+          .eq("organization_id", org.id)
+          .in("program_id", programIds);
+        if (declineErr) console.warn("[AfterschoolSchedule] decline load failed:", declineErr.message);
+        else declines = declineRows ?? [];
+      }
+
       // Each class's real session dates (per its school/district calendar, closures included)
       // — used to build the week rail and resolve per-week coverage. Canonical source only.
       // Fail-soft per class: one rejected RPC must not blank the whole board (or the
@@ -397,6 +411,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         programs,
         assignments,
         substitutions,
+        declines,
         programDates,
         instructors: instRes.data ?? [],
         availability: availRes.data ?? [],
@@ -501,6 +516,20 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
     return m;
   }, [state, availByInstr]);
+
+  // program_id -> Set<instructor_id> that previously declined this class (recorded when
+  // an admin reassigns/removes a change_requested instructor). Picker filters these out;
+  // "Re-suggest" clears it. Mirrors camp's declinedBySession.
+  const declinedByProgram = useMemo(() => {
+    const m = new Map();
+    if (state.status !== "ready") return m;
+    for (const d of state.declines ?? []) {
+      if (!d.program_id) continue;
+      if (!m.has(d.program_id)) m.set(d.program_id, new Set());
+      m.get(d.program_id).add(d.instructor_id);
+    }
+    return m;
+  }, [state]);
 
   // program_id -> { ids:Set<instructor_id>, names:string[], subs:[{name,date,status}] } for live subs.
   // Powers the card sub indicator and lets the instructor filter surface a program a person only SUBs.
@@ -759,11 +788,50 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return Array.from(set).sort();
   }, [state, locName]);
 
+  // Record a per-program decline (mirrors camp) so the picker stops re-suggesting an
+  // instructor who had a change request open and was then reassigned/removed.
+  // Idempotent on (program_id, instructor_id).
+  async function upsertProgramDecline(programId, instructorId) {
+    if (!programId || !instructorId) return;
+    const { error } = await supabase
+      .from("session_declined_instructors")
+      .upsert(
+        { organization_id: org.id, program_id: programId, instructor_id: instructorId, reason: "change_request" },
+        { onConflict: "program_id,instructor_id" },
+      );
+    if (error) console.warn("[AfterschoolSchedule] decline record failed:", error.message);
+  }
+
+  // Undo a recorded decline so the picker suggests this instructor again for this class.
+  async function handleUndecline(programId, instructorId) {
+    if (!programId || !instructorId) return;
+    try {
+      const { error } = await supabase
+        .from("session_declined_instructors")
+        .delete()
+        .eq("organization_id", org.id)
+        .eq("program_id", programId)
+        .eq("instructor_id", instructorId);
+      if (error) throw error;
+      await loadAll();
+    } catch (err) {
+      console.error("Undecline failed:", err);
+      setSaveError(`Couldn't re-suggest: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
+    }
+  }
+
   // Clears all offer state on reassign (mirrors camps) so the new instructor
   // starts fresh at 'proposed' and surfaces as needing a (re)send.
   async function performAssign(program, instructorId, current) {
     try {
       if (current) {
+        // If the outgoing instructor had a change request open, record the decline
+        // BEFORE we overwrite the row (else reassign silently drops it). Guard against
+        // self-decline when re-confirming the same person.
+        if (current.status === "change_requested" && current.instructor_id && current.instructor_id !== instructorId) {
+          await upsertProgramDecline(program.id, current.instructor_id);
+        }
         const { error } = await supabase
           .from("program_assignments")
           .update({
@@ -1056,11 +1124,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           email: assignment.instructor_email,
         },
         remaining: remainingActiveFor(assignment.instructor_id, assignment.id),
-        onProceed: async () => { await deleteAssignment(assignment.id); setNotifyRemoval(null); await loadAll(); },
+        onProceed: async () => { if (assignment.status === "change_requested") await upsertProgramDecline(program.id, assignment.instructor_id); await deleteAssignment(assignment.id); setNotifyRemoval(null); await loadAll(); },
       });
       return;
     }
     try {
+      if (assignment.status === "change_requested") await upsertProgramDecline(program.id, assignment.instructor_id);
       await deleteAssignment(assignment.id);
       setReviewFor(null);
       await loadAll();
@@ -1346,6 +1415,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           evaluate={(id) => evaluate(id, picker.program)}
           onAssign={(id) => handleAssign(picker.program, id)}
           onRemove={() => handleRemove(picker.program)}
+          declinedInstructorIds={declinedByProgram.get(picker.program.id) ?? new Set()}
+          onUndecline={(id) => handleUndecline(picker.program.id, id)}
           onClose={() => setPicker(null)}
         />
       )}
@@ -1958,14 +2029,18 @@ function SubLineAS({ subs, onClick }) {
   );
 }
 
-function PickerModal({ program, loc, current, instructors, evaluate, onAssign, onRemove, onClose }) {
+function PickerModal({ program, loc, current, instructors, evaluate, onAssign, onRemove, onClose, declinedInstructorIds = new Set(), onUndecline }) {
   const rows = instructors.map((i) => {
     const ev = evaluate(i.id);
     return { inst: i, ev };
   });
   const prefRank = { preferred: 0, highly_preferred: 0, available: 1, undefined: 1, not_preferred: 1, unavailable: 3 };
-  const eligible = rows.filter((r) => r.ev.ok).sort((a, b) => (prefRank[a.ev.pref] ?? 1) - (prefRank[b.ev.pref] ?? 1));
-  const ineligible = rows.filter((r) => !r.ev.ok);
+  // Instructors who previously declined this class are pulled out of the suggestion
+  // lists into their own section with a "Re-suggest" undo (mirrors camp).
+  const declined = rows.filter((r) => declinedInstructorIds.has(r.inst.id));
+  const notDeclined = rows.filter((r) => !declinedInstructorIds.has(r.inst.id));
+  const eligible = notDeclined.filter((r) => r.ev.ok).sort((a, b) => (prefRank[a.ev.pref] ?? 1) - (prefRank[b.ev.pref] ?? 1));
+  const ineligible = notDeclined.filter((r) => !r.ev.ok);
   return (
     <Overlay onClose={onClose}>
       <div style={{ padding: "20px 22px", borderBottom: `1px solid ${RULE}` }}>
@@ -2007,6 +2082,19 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
               <div key={inst.id} style={{ padding: "8px 12px", fontSize: 13, color: MUTED, display: "flex", flexDirection: "column" }}>
                 <span style={{ fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
                 <span style={{ fontSize: 12 }}>{ev.reason}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {declined.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700, padding: "4px 6px" }}>Previously declined this class</div>
+            {declined.map(({ inst }) => (
+              <div key={inst.id} style={{ padding: "8px 12px", fontSize: 13, color: MUTED, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <span style={{ fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
+                {onUndecline && (
+                  <button onClick={() => onUndecline(inst.id)} style={{ ...linkBtn, color: BRIGHT }}>Re-suggest</button>
+                )}
               </div>
             ))}
           </div>
