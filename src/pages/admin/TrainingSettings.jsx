@@ -276,6 +276,12 @@ export default function TrainingSettings() {
     setError("");
     if (!editor.title.trim()) { setError("Give the video a title."); return; }
     if (!editor.bucket_object_path && !editor.external_url) { setError("Upload a video file first."); return; }
+    // A required video must have a readable length — completion is measured against
+    // it. If the browser couldn't read the duration, don't let it gate onboarding.
+    if (editor.is_required && !editor.duration_seconds) {
+      setError("We couldn't read this video's length, so it can't be a required video yet. Re-export it as an MP4 and upload again, or mark it optional.");
+      return;
+    }
     // Trim quiz to complete questions; validate what remains.
     const quiz = (editor.quiz ?? []).filter((q) => q.q.trim() || q.options.some((o) => o.trim()));
     const quizErr = validateQuiz(quiz);

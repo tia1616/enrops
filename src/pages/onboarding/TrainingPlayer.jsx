@@ -32,6 +32,7 @@ export default function TrainingPlayer({ video, onPassed }) {
   const navigate = useNavigate();
   const videoRef = useRef(null);
   const maxWatchedRef = useRef(0);   // furthest point actually reached (seconds)
+  const resumeRef = useRef(0);       // server's furthest-watched, to seek to on load
   const lastSentRef = useRef(-999);  // last position we heartbeated
 
   const [src, setSrc] = useState(null);
@@ -56,7 +57,7 @@ export default function TrainingPlayer({ video, onPassed }) {
     setSrc(null); setLoadError(''); setWatched(false); setCoverage(0);
     setPlaying(false); setCurrent(0); setDuration(0);
     setAnswers({}); setQuizWrong(null); setQuizError('');
-    maxWatchedRef.current = 0; lastSentRef.current = -999;
+    maxWatchedRef.current = 0; resumeRef.current = 0; lastSentRef.current = -999;
     (async () => {
       try {
         const { data, error } = await invokeOnboardingFn(
@@ -69,6 +70,12 @@ export default function TrainingPlayer({ video, onPassed }) {
           setLoadError("This video couldn't be loaded. Please refresh, or contact your program if it keeps happening.");
           return;
         }
+        // Resume where they left off: seed the no-skip floor + seek target.
+        const resume = Number(data.video.resume_position_seconds) || 0;
+        maxWatchedRef.current = resume;
+        resumeRef.current = resume;
+        lastSentRef.current = resume; // don't re-send a position we already have
+        if (data.video.already_watched) { setWatched(true); setCoverage(1); }
         setSrc(data.video.url);
         setQuiz(Array.isArray(data.video.quiz) ? data.video.quiz : []);
       } catch (err) {
@@ -206,7 +213,16 @@ export default function TrainingPlayer({ video, onPassed }) {
           playsInline
           controlsList="nodownload noplaybackrate"
           disablePictureInPicture
-          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+          onLoadedMetadata={(e) => {
+            const el = e.currentTarget;
+            const dur = el.duration || 0;
+            setDuration(dur);
+            // Resume: jump to the furthest already-watched point (never past the end).
+            if (resumeRef.current > 0 && (!dur || resumeRef.current < dur)) {
+              el.currentTime = resumeRef.current;
+              setCurrent(resumeRef.current);
+            }
+          }}
           onTimeUpdate={onTimeUpdate}
           onSeeking={onSeeking}
           onRateChange={onRateChange}

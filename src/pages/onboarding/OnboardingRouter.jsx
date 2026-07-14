@@ -168,9 +168,12 @@ export default function OnboardingRouter() {
       // signed URL + answer-stripped quiz per video from get-training-video-url.
       let trainingVideos = [];
       if (org.training_enabled) {
+        // NB: never select the `quiz` column here — RLS is row-level, not
+        // column-level, so it would ship every correct_index to the browser.
+        // The player fetches an answer-stripped quiz from get-training-video-url.
         const { data: vids } = await supabase
           .from('instructor_training_videos')
-          .select('id, title, quiz, duration_seconds')
+          .select('id, title, duration_seconds')
           .eq('organization_id', instructor.organization_id)
           .eq('active', true)
           .eq('is_required', true)
@@ -179,7 +182,6 @@ export default function OnboardingRouter() {
         trainingVideos = (vids ?? []).map((v) => ({
           id: v.id,
           title: v.title,
-          has_quiz: Array.isArray(v.quiz) && v.quiz.length > 0,
           duration_seconds: v.duration_seconds,
         }));
       }
