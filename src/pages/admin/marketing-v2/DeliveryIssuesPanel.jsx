@@ -22,26 +22,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import { INK, MUTED, RULE, WARN, INFO } from "../marketing/tokens.jsx";
-
-// Mirrors MAX_SEND_ATTEMPTS in lifecycle-automations-cron. A failed row at/above
-// this has stopped auto-retrying and needs a human.
-const MAX_SEND_ATTEMPTS = 5;
-
-// Map a raw Resend/network error to a plain-English reason + whether it needs
-// the operator. Address problems are permanent (fix the address); an exhausted
-// transient failure needs a manual resend; anything still under the retry cap is
-// the cron's job, shown as in-progress.
-function classify(row) {
-  const err = (row.error_message || "").toLowerCase();
-  const badAddress = /422|invalid|not a valid|validation|no recipients|parse|domain/.test(err);
-  if (badAddress) {
-    return { needsYou: true, reason: "The email address on file looks invalid.", hint: "Check this family's email address." };
-  }
-  if ((row.attempts ?? 0) >= MAX_SEND_ATTEMPTS) {
-    return { needsYou: true, reason: "We couldn't reach their inbox after several tries.", hint: "Resend, or reach them another way." };
-  }
-  return { needsYou: false, reason: "Still sending — retrying automatically.", hint: null };
-}
+import { classifyFailure } from "../../../lib/deliveryIssues.js";
 
 // context_key shapes we can attribute a child/program to:
 //   camp:<camp_session_id>:parent:<parent_id>:student:<student_id>
@@ -139,7 +120,7 @@ export default function DeliveryIssuesPanel({ org }) {
         const childName = student?.first_name || null;
         const programName = camp?.curriculum_name || prog?.curriculum || null;
         const startDate = camp?.starts_on || prog?.first_session_date || null;
-        const { needsYou, reason, hint } = classify(r);
+        const { needsYou, reason, hint } = classifyFailure(r);
         return {
           id: r.id,
           familyLabel: childName ? `${childName}'s family` : parentName,

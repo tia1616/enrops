@@ -7,6 +7,7 @@ import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
 import { fetchOrgTerms } from "../../lib/terms.js";
 import Ennie from "../../components/Ennie";
+import { classifyFailure } from "../../lib/deliveryIssues.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -1025,7 +1026,7 @@ function daysUntil(dateStr) {
 // within a kind; acts always above fyis. Copy is plain and real — no invented stats
 // (automation_off uses the template's own description). Counts are aggregated so one
 // card stands for N items, keeping the list inside the cap.
-function buildImportant(sig, openHires, subSignals) {
+function buildImportant(sig, openHires, subSignals, deliverySignals) {
   const out = [];
   // ---- Acts ----
   if (sig?.finish_stripe) out.push({
@@ -1051,6 +1052,18 @@ function buildImportant(sig, openHires, subSignals) {
     title: subSignals.uncovered === 1 ? "A class day has no one to cover it" : `${subSignals.uncovered} class days have no one to cover them`,
     detail: "A sub said no and nobody's filling in yet — line up another sub, or have the lead take it.",
     cta: { to: "/admin/schedule", label: "Find a sub →" },
+  });
+  // A welcome/reminder couldn't reach a family (bad address, or exhausted retries).
+  // Silent-miss prevention: surface it where the admin lands, linking to the
+  // Automations "Didn't send" list. Only genuine "needs you" failures count —
+  // transient sends still auto-retrying are not shown here.
+  if (deliverySignals?.needsYou > 0) out.push({
+    key: "delivery_issues", kind: "act", prio: 3,
+    title: deliverySignals.needsYou === 1
+      ? "A family didn't get an email"
+      : `${deliverySignals.needsYou} families didn't get an email`,
+    detail: "A welcome or reminder couldn't reach them. See exactly who to follow up with.",
+    cta: { to: "/admin/family-comms/automations", label: "Review →" },
   });
   // Offer still out — calmer FYI, not an urgent act.
   if (subSignals?.awaiting > 0) out.push({
@@ -1109,13 +1122,14 @@ function ImportantToday({ org, user, openHires }) {
   const [sig, setSig] = useState(null);               // get_home_signals row
   const [dismissals, setDismissals] = useState(null); // Map signal_key -> row
   const [subSignals, setSubSignals] = useState(null); // { uncovered, awaiting }
+  const [deliverySignals, setDeliverySignals] = useState(null); // { needsYou }
   const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     if (!org?.id) return;
     let cancelled = false;
     (async () => {
-      const [sigRes, disRes, subsRes] = await Promise.all([
+      const [sigRes, disRes, subsRes, failRes] = await Promise.all([
         supabase.rpc("get_home_signals", { p_org: org.id }),
         supabase.from("homescreen_dismissals").select("signal_key, dismissed_until, permanent").eq("organization_id", org.id),
         // Sub-coverage via the shared get_sub_coverage RPC (single source of truth
@@ -1123,6 +1137,15 @@ function ImportantToday({ org, user, openHires }) {
         // into 'uncovered' (declined, no one coming) and 'awaiting' (offer still
         // out) — so cancelled/withdrawn/deleted classes can't inflate this card.
         supabase.rpc("get_sub_coverage", { p_org: org.id }),
+        // Failed lifecycle sends (RLS members_read_* scopes to this org; the
+        // partial index automation_run_recipients_failed_idx serves this). We
+        // classify client-side and count only "needs you" failures.
+        supabase
+          .from("automation_run_recipients")
+          .select("error_message, attempts")
+          .eq("organization_id", org.id)
+          .eq("status", "failed")
+          .limit(200),
       ]);
       if (cancelled) return;
       if (sigRes.error) { console.error("[admin/overview] signals load failed", sigRes.error); setSig({}); }
@@ -1135,6 +1158,9 @@ function ImportantToday({ org, user, openHires }) {
         else if (r.state === "awaiting") awaiting++;
       }
       setSubSignals({ uncovered, awaiting });
+
+      const needsYou = (failRes.data ?? []).filter((r) => classifyFailure(r).needsYou).length;
+      setDeliverySignals({ needsYou });
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
@@ -1152,7 +1178,7 @@ function ImportantToday({ org, user, openHires }) {
   if (sig === null || dismissals === null) return null; // quiet while loading
 
   const now = Date.now();
-  const all = buildImportant(sig, openHires, subSignals).filter((s) => {
+  const all = buildImportant(sig, openHires, subSignals, deliverySignals).filter((s) => {
     const d = dismissals.get(s.key);
     if (!d) return true;
     if (d.permanent) return false;
