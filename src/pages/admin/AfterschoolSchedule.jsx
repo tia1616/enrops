@@ -1205,6 +1205,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           {Array.isArray(matchResult.missing_surveys) && matchResult.missing_surveys.length > 0 && (
             <span style={{ color: MUTED }}>Waiting on availability from {matchResult.missing_surveys.length} instructor{matchResult.missing_surveys.length === 1 ? "" : "s"}.</span>
           )}
+          {Array.isArray(matchResult.missing_training) && matchResult.missing_training.length > 0 && (
+            <span style={{ color: MUTED }}> {matchResult.missing_training.length} instructor{matchResult.missing_training.length === 1 ? "" : "s"} still need to finish training before they can be assigned.</span>
+          )}
           <button onClick={() => setMatchResult(null)} style={linkBtn}>Dismiss</button>
         </div>
       )}
