@@ -41,6 +41,7 @@ import {
   SoftScoreContext,
 } from './lib.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { getUntrainedInstructorIds } from '../_shared/trainingGate.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -103,6 +104,27 @@ serve(async (req) => {
     if (cycleErr || !cycleRow) return json({ error: `Unknown cycle: ${cycle_id}` }, 400);
     const cycle = cycleRow as SchedulingCycle;
     const orgId = cycle.organization_id;
+
+    // ----- Auth: caller must be owner/admin of THIS cycle's org -----
+    // Tenant is derived from cycle_id, so without this check any authenticated
+    // user could pass another org's cycle_id and rewrite that org's proposed
+    // assignments. Mirrors match-afterschool's caller check. (verify_jwt is on,
+    // so a valid Supabase user token is guaranteed; we still must authorize the
+    // org membership ourselves — the JWT alone does not scope to this tenant.)
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) return json({ error: 'auth required' }, 401);
+    const token = authHeader.replace('Bearer ', '');
+    const { data: userData, error: userErr } = await admin.auth.getUser(token);
+    if (userErr || !userData?.user) return json({ error: 'invalid auth' }, 401);
+    const { data: memberRow } = await admin
+      .from('org_members')
+      .select('role')
+      .eq('auth_user_id', userData.user.id)
+      .eq('organization_id', orgId)
+      .maybeSingle();
+    if (!memberRow || !['owner', 'admin'].includes(memberRow.role)) {
+      return json({ error: 'forbidden' }, 403);
+    }
 
     // Venue->region map: the org's OWN config is the single source (shared with the
     // camp survey form). No cross-tenant fallback — an org that hasn't configured its
@@ -192,6 +214,10 @@ serve(async (req) => {
     const availByInstr = new Map<string, InstructorAvailability>();
     for (const a of avail) availByInstr.set(a.instructor_id, a);
 
+    // Training gate: instructors who haven't finished required training can't be
+    // assigned (empty set when training is off or the library has no required video).
+    const blockedTraining = await getUntrainedInstructorIds(admin, orgId, instructorIds);
+    const missingTraining: string[] = [];
     const missingSurveys: string[] = [];
     const instructorPool: MatchInstructor[] = [];
     for (const inst of instructors) {
@@ -202,6 +228,7 @@ serve(async (req) => {
       }
       // Skip instructors with no available_weeks (e.g., "not available this summer" responses).
       if (!av.available_weeks || av.available_weeks.length === 0) continue;
+      if (blockedTraining.has(inst.id)) { missingTraining.push(`${inst.first_name} ${inst.last_name}`); continue; }
       let klass;
       try {
         klass = classifyInstructor(av.session_types as SessionType[]);
@@ -304,6 +331,7 @@ serve(async (req) => {
       cycle_name: cycle.name ?? cycle.cycle_type,
       decisions,
       missing_surveys: missingSurveys,
+      missing_training: missingTraining,
       pool: matchingPool,
       counts,
       fullDayCounts,
