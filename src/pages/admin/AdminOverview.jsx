@@ -254,21 +254,9 @@ export default function AdminOverview() {
     return () => { cancelled = true; };
   }, [org?.id]);
 
-  // Display name: take the bit before the @ in the email and Title-Case it.
-  // Splits on dots/underscores too so "jessica.vorster" -> "Jessica Vorster".
-  // No DB lookup needed for v1; we can move to a stored display_name later if
-  // people want to override (e.g., "Jess" instead of "Jessica").
-  const displayName = (() => {
-    const raw = user?.email?.split("@")[0] ?? "";
-    if (!raw) return "";
-    return raw
-      .split(/[._-]+/)
-      .filter(Boolean)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-      .join(" ");
-  })();
-
   // Greeting + view state. Greeting picked once per session; Today is default.
+  // Greeting is intentionally name-free — operators sign in under all kinds of
+  // shared/role emails (info@, admin@), so a derived first name reads wrong.
   const [greeting] = useState(() => GREETINGS[Math.floor(Math.random() * GREETINGS.length)]);
   const [view, setView] = useState("today"); // "today" | "week"
   const dateLabel = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
@@ -277,7 +265,6 @@ export default function AdminOverview() {
     <div>
       <EnnieHero
         greeting={greeting}
-        displayName={displayName}
         dateLabel={dateLabel}
         view={view}
         onView={setView}
@@ -310,7 +297,7 @@ export default function AdminOverview() {
 
 // Ennie greeting hero — the ONE place the character lives (idle here; thinks while
 // the home loads; celebrates a joy-worthy win). Enrops-branded shell, not tenant.
-function EnnieHero({ greeting, displayName, dateLabel, view, onView, orgName, celebrate }) {
+function EnnieHero({ greeting, dateLabel, view, onView, orgName, celebrate }) {
   // Ennie idles by default; when a joy-worthy win lands she plays celebrate once,
   // then settles back to idle.
   const [ennieState, setEnnieState] = useState("idle");
@@ -326,7 +313,7 @@ function EnnieHero({ greeting, displayName, dateLabel, view, onView, orgName, ce
       <Ennie state={ennieState} framed={false} size={104} onComplete={() => setEnnieState("idle")} />
       <div style={{ flex: 1, minWidth: 180 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>
-          {greeting}{displayName ? `, ${displayName}` : ""}
+          {greeting}
         </h1>
         <p style={{ color: MUTED, marginTop: 4, fontSize: 14 }}>
           {dateLabel}{orgName ? ` · ${orgName}` : ""}
