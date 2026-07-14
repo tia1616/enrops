@@ -11,6 +11,7 @@ import Screen5Policies from './screens/Screen5Policies.jsx';
 import Screen6Additional from './screens/Screen6Additional.jsx';
 import Screen7Stripe from './screens/Screen7Stripe.jsx';
 import Screen8EmergencyAndPrefs from './screens/Screen8EmergencyAndPrefs.jsx';
+import ScreenTraining from './screens/ScreenTraining.jsx';
 import CompletionScreen from './CompletionScreen.jsx';
 
 // Dispatches to the right screen based on currentStep and re-fetches
@@ -50,15 +51,17 @@ function resolveInitialStep(initialStep, onboarding, order) {
   return order[order.length - 1];
 }
 
-export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, backgroundCheck, onDismiss }) {
+export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, backgroundCheck, trainingEnabled = false, trainingVideos = [], onDismiss }) {
   const navigate = useNavigate();
   const [onboarding, setOnboarding] = useState(initialOnboarding);
 
-  // Effective step order for this org. When the org has background checks
-  // turned off, the background-check step is removed from navigation, progress,
-  // and (server-side, in gateCheck) the completion gate.
+  // Effective step order for this org. Background checks and training videos are
+  // each optional per-org steps — when off (or, for training, enabled-but-empty),
+  // the step is removed from navigation, progress, and (server-side, in
+  // gateCheck) the completion gate. trainingEnabled already folds in the
+  // "has a required video" check (see OnboardingRouter).
   const bgcEnabled = backgroundCheck?.enabled !== false;
-  const stepOrder = useMemo(() => effectiveStepOrder({ bgcEnabled }), [bgcEnabled]);
+  const stepOrder = useMemo(() => effectiveStepOrder({ bgcEnabled, trainingEnabled }), [bgcEnabled, trainingEnabled]);
 
   const [currentStep, setCurrentStep] = useState(() =>
     resolveInitialStep(initialStep, onboarding, stepOrder)
@@ -114,8 +117,8 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
   }, [instructor.id, navigate, slug, currentStep, stepOrder]);
 
   const configValue = useMemo(
-    () => ({ stepOrder, bgcEnabled, backgroundCheck: backgroundCheck ?? { enabled: bgcEnabled } }),
-    [stepOrder, bgcEnabled, backgroundCheck],
+    () => ({ stepOrder, bgcEnabled, backgroundCheck: backgroundCheck ?? { enabled: bgcEnabled }, trainingEnabled, trainingVideos }),
+    [stepOrder, bgcEnabled, backgroundCheck, trainingEnabled, trainingVideos],
   );
 
   if (!currentStep || TERMINAL_STATUSES.has(onboarding?.overall_status)) {
@@ -151,6 +154,8 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
         return <Screen5Policies {...common} />;
       case STEP_KEYS.ADDITIONAL_ACKS:
         return <Screen6Additional {...common} />;
+      case STEP_KEYS.TRAINING_COMPLETED:
+        return <ScreenTraining {...common} />;
       case STEP_KEYS.STRIPE_SUBMITTED:
         return <Screen7Stripe {...common} />;
       case STEP_KEYS.EMERGENCY_AND_PREFS:

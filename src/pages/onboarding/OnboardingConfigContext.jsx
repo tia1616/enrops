@@ -11,6 +11,12 @@ const DEFAULTS = {
   // { enabled, provider_name, provider_url, instructions } — the instructor-
   // facing subset of organizations.background_check_config.
   backgroundCheck: { enabled: true },
+  // Whether the training step is live for this org (enabled AND at least one
+  // active required video). When false, the step is dropped everywhere.
+  trainingEnabled: false,
+  // The active required training videos the instructor must complete, in order:
+  // [{ id, title, has_quiz, duration_seconds }]. Empty when trainingEnabled is false.
+  trainingVideos: [],
 };
 
 export const OnboardingConfigContext = createContext(DEFAULTS);
