@@ -369,12 +369,25 @@ function emptyToNull(v: unknown): string | null {
 // Split a single full-name string ("Liam Fullerton", "Mary Anne Smith") into
 // first + last. Last whitespace-delimited token is the surname; everything
 // before it is the given name(s). Single-token names get an empty last name.
+const NAME_SUFFIXES = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'v', 'phd', 'md', 'do', 'dds', 'esq']);
+const normSuffix = (t: string) => t.toLowerCase().replace(/[^a-z]/g, '');
+
 function splitName(v: unknown): { first: string; last: string } {
   const s = String(v ?? '').trim().replace(/\s+/g, ' ');
   if (!s) return { first: '', last: '' };
-  const parts = s.split(' ');
-  if (parts.length === 1) return { first: parts[0], last: '' };
-  return { first: parts.slice(0, -1).join(' '), last: parts[parts.length - 1] };
+  // "Last, First" — exactly two comma parts, and the part after the comma is a
+  // given name, not a suffix ("Smith, Jr." must NOT swap). Mirrors the client
+  // (rosterParse.js splitName).
+  const commaParts = s.split(',').map((t) => t.trim()).filter(Boolean);
+  if (commaParts.length === 2 && !NAME_SUFFIXES.has(normSuffix(commaParts[1]))) {
+    return { first: commaParts[1], last: commaParts[0] };
+  }
+  const toks = s.replace(/,/g, ' ').replace(/\s+/g, ' ').trim().split(' ');
+  if (toks.length === 1) return { first: toks[0], last: '' };
+  if (toks.length >= 3 && NAME_SUFFIXES.has(normSuffix(toks[toks.length - 1]))) {
+    return { first: toks.slice(0, -2).join(' '), last: toks.slice(-2).join(' ') };
+  }
+  return { first: toks.slice(0, -1).join(' '), last: toks[toks.length - 1] };
 }
 
 function parseGrade(v: unknown): number | null {

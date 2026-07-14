@@ -16,6 +16,15 @@ import EmailRosterModal from "./EmailRosterModal";
 import InviteFamiliesModal from "./InviteFamiliesModal";
 import RefundDrawer from "../../components/RefundDrawer";
 import Chevron from "../../components/Chevron.jsx";
+import {
+  FIELD_DEFS,
+  autoMap,
+  buildRegistrants,
+  detectStructure,
+  excelCellToString,
+  filterDataRows,
+  parseCsvRows,
+} from "./rosterParse";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -32,69 +41,9 @@ function fmtDate(d) {
   return new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-// Column-name auto-mapping. Keys are normalized header (lowercase, no
-// non-alpha), values are the target field name. First match wins. Aliases
-// cover common Squarespace + Google Forms + spreadsheet header variants.
-const FIELD_DEFS = [
-  { key: "student_first_name", label: "Camper first name", required: true,
-    aliases: ["camperfirstname", "studentfirstname", "childfirstname", "firstname", "first"] },
-  { key: "student_last_name", label: "Camper last name", required: false,
-    aliases: ["camperlastname", "studentlastname", "childlastname", "lastname", "last", "surname"] },
-  // Single full-name column ("participant name", "camper name") — split into
-  // first/last at import time. Common in Squarespace / hand-built rosters.
-  { key: "student_full_name", label: "Camper full name", required: false,
-    aliases: ["participantname", "participant", "campername", "camper", "studentname", "studentfullname",
-      "childname", "childfullname", "kidname", "attendeename", "fullname"] },
-  { key: "grade", label: "Grade", required: false,
-    aliases: ["grade", "gradelevel", "currentgrade", "school grade"] },
-  { key: "birthdate", label: "Birthdate", required: false,
-    aliases: ["birthdate", "dob", "dateofbirth", "birthday"] },
-  { key: "pronouns", label: "Pronouns", required: false,
-    aliases: ["pronouns"] },
-  { key: "allergies", label: "Allergies", required: false,
-    aliases: ["allergies", "allergy", "foodallergies"] },
-  { key: "dietary_restrictions", label: "Dietary restrictions", required: false,
-    aliases: ["dietary", "dietaryrestrictions", "dietneeds", "foodrestrictions"] },
-  { key: "medical_notes", label: "Medical notes", required: false,
-    aliases: ["medicalnotes", "medicalinfo", "medicalconcerns", "healthnotes", "health"] },
-  { key: "medical_conditions", label: "Medical conditions", required: false,
-    aliases: ["medicalconditions"] },
-  { key: "epipen_required", label: "EpiPen required (Y/N)", required: false,
-    aliases: ["epipen", "epipenrequired", "carriesepipen"] },
-  { key: "medications_at_program", label: "Medications at program", required: false,
-    aliases: ["medications", "medicationsatprogram", "meds"] },
-  { key: "emergency_contact_name", label: "Emergency contact name", required: false, coalesce: true,
-    aliases: ["emergencycontactname", "emergencyname", "emergencycontact", "emergencycontact1", "emergencycontact2"] },
-  { key: "emergency_contact_phone", label: "Emergency contact phone", required: false, coalesce: true,
-    aliases: ["emergencycontactphone", "emergencyphone", "emergencycontact1phone", "emergencycontact2phone"] },
-  { key: "special_needs_accommodations", label: "Accommodations", required: false,
-    aliases: ["accommodations", "specialneeds", "specialneedsaccommodations"] },
-  { key: "homeroom_teacher", label: "Homeroom teacher", required: false,
-    aliases: ["homeroomteacher", "homeroom", "teacher", "classroomteacher", "homeroomname"] },
-  { key: "photo_release_consent", label: "Photo release (Y/N)", required: false,
-    aliases: ["photorelease", "photoconsent", "photoreleaseconsent"] },
-  { key: "authorized_pickup_contacts", label: "Authorized pickup", required: false,
-    aliases: ["authorizedpickup", "authorizedpickupcontacts", "pickupcontacts", "pickuplist"] },
-  { key: "notes", label: "Notes", required: false,
-    aliases: ["notes", "parentnotes", "comments"] },
-  { key: "parent_first_name", label: "Parent first name", required: false,
-    aliases: ["parentfirstname", "guardianfirstname", "parentfirst"] },
-  { key: "parent_last_name", label: "Parent last name", required: false,
-    aliases: ["parentlastname", "guardianlastname", "parentlast"] },
-  // "HOH 1 Name" = Head of Household 1, how rec-management exports (West Linn
-  // Parks & Rec, RecTrac, ActiveNet) label the guardian.
-  { key: "parent_full_name", label: "Parent full name", required: false, coalesce: true,
-    aliases: ["parentname", "guardianname", "parentfullname", "guardianfullname", "parentguardian", "guardian",
-      "hoh1name", "hoh2name", "headofhousehold", "headofhousehold1", "householdhead", "primaryguardian"] },
-  { key: "parent_email", label: "Parent email", required: false, coalesce: true,
-    aliases: ["parentemail", "guardianemail", "email", "emailaddress", "hoh1email", "hoh2email", "altemailaddress1"] },
-  // Rec exports scatter the number across Mobile/Home/HOH columns and fill a
-  // different one per family — coalesce picks the first non-empty per row.
-  { key: "parent_phone", label: "Parent phone", required: false, coalesce: true,
-    aliases: ["parentphone", "guardianphone", "mobilephone", "cellphone", "cellularphone", "homephone",
-      "hoh1cellphone", "hoh1homephone", "hoh2cellphone", "workphone", "phone", "phonenumber"] },
-];
-
+// Column auto-mapping, header detection, name-splitting, and file parsing all
+// live in ./rosterParse (pure + unit-tested against real vendor export files).
+//
 // Fields that get their own dedicated inputs at the top of each review card
 // (plus the full-name helpers, which are split into first/last before import).
 // Everything else in FIELD_DEFS is an "extra" — shown below whenever it has a
@@ -106,142 +55,6 @@ const DEDICATED_REVIEW_KEYS = new Set([
   "parent_email", "parent_phone",
 ]);
 const EXTRA_FIELD_DEFS = FIELD_DEFS.filter((d) => !DEDICATED_REVIEW_KEYS.has(d.key));
-
-function normalizeHeader(h) {
-  return (h || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function autoMap(headers) {
-  const map = {};
-  const normHeaders = headers.map(normalizeHeader);
-  for (const def of FIELD_DEFS) {
-    for (const alias of def.aliases) {
-      const idx = normHeaders.indexOf(normalizeHeader(alias));
-      if (idx !== -1) {
-        map[def.key] = headers[idx];
-        break;
-      }
-    }
-  }
-  return map;
-}
-
-// Split a single full-name string ("Liam Fullerton", "Mary Anne Smith") into
-// first + last. Last whitespace token is the surname; the rest is the given
-// name(s). Single-token names get an empty last name. Mirrors the server.
-function splitName(v) {
-  const s = (v ?? "").toString().trim().replace(/\s+/g, " ");
-  if (!s) return { first: "", last: "" };
-  const parts = s.split(" ");
-  if (parts.length === 1) return { first: parts[0], last: "" };
-  return { first: parts.slice(0, -1).join(" "), last: parts[parts.length - 1] };
-}
-
-// Turn parsed CSV rows into editable registrant objects using the column
-// mapping. Full-name columns are split into first/last here so the review
-// list shows real names; explicit first/last columns always win.
-//
-// For fields flagged `coalesce`, the value can live in any of several columns
-// (e.g. a parent phone scattered across Mobile / Home / HOH columns). We take
-// the operator-chosen primary first, then fall back through every other column
-// whose name matches one of the field's aliases, using the first non-empty
-// cell for that row. Non-coalesce fields read only their single mapped column.
-function buildRegistrants(rows, headers, mapping) {
-  const normHeaders = headers.map(normalizeHeader);
-  // Ordered list of column indices to try for a field, primary first.
-  function candidateIndices(def) {
-    const idxs = [];
-    const primary = mapping[def.key];
-    if (primary) {
-      const pi = headers.indexOf(primary);
-      if (pi !== -1) idxs.push(pi);
-    }
-    if (def.coalesce) {
-      for (const alias of def.aliases) {
-        const na = normalizeHeader(alias);
-        normHeaders.forEach((h, i) => {
-          if (h === na && !idxs.includes(i)) idxs.push(i);
-        });
-      }
-    }
-    return idxs;
-  }
-  return rows.map((row) => {
-    const out = {};
-    for (const def of FIELD_DEFS) {
-      for (const idx of candidateIndices(def)) {
-        const cell = (row[idx] ?? "").toString().trim();
-        if (cell) { out[def.key] = cell; break; }
-      }
-    }
-    if (out.student_full_name) {
-      const s = splitName(out.student_full_name);
-      if (!out.student_first_name) out.student_first_name = s.first;
-      if (!out.student_last_name) out.student_last_name = s.last;
-      delete out.student_full_name;
-    }
-    if (out.parent_full_name) {
-      const p = splitName(out.parent_full_name);
-      if (!out.parent_first_name) out.parent_first_name = p.first;
-      if (!out.parent_last_name) out.parent_last_name = p.last;
-      delete out.parent_full_name;
-    }
-    return out;
-  });
-}
-
-// Stringify one Excel cell for the review list. Date-typed cells (when the
-// workbook is read with { cellDates: true }) arrive as JS Date objects —
-// format those as YYYY-MM-DD using UTC parts so a birthdate stored as an
-// Excel serial (e.g. 43777) doesn't reach the importer as a raw number that
-// gets misread as the year 43777. Everything else stringifies normally.
-function excelCellToString(c) {
-  if (c == null) return "";
-  if (c instanceof Date && !Number.isNaN(c.getTime())) {
-    const y = String(c.getUTCFullYear()).padStart(4, "0");
-    const m = String(c.getUTCMonth() + 1).padStart(2, "0");
-    const d = String(c.getUTCDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-  return String(c);
-}
-
-// Tiny CSV parser. Handles quoted fields with embedded commas + escaped
-// quotes (""), CRLF/LF row endings. Plenty for Squarespace / Google
-// Sheets exports.
-function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let field = "";
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { field += '"'; i++; }
-        else inQuotes = false;
-      } else {
-        field += c;
-      }
-    } else {
-      if (c === '"') inQuotes = true;
-      else if (c === ",") { row.push(field); field = ""; }
-      else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
-      else if (c === "\r") { /* swallow */ }
-      else field += c;
-    }
-  }
-  // Tail row
-  if (field !== "" || row.length > 0) { row.push(field); rows.push(row); }
-  // Strip trailing empty row a final newline produces.
-  if (rows.length > 0 && rows[rows.length - 1].length === 1 && rows[rows.length - 1][0] === "") {
-    rows.pop();
-  }
-  if (rows.length === 0) return { headers: [], data: [] };
-  const headers = rows[0];
-  const data = rows.slice(1).filter((r) => r.some((c) => c !== ""));
-  return { headers, data };
-}
 
 export default function Rosters() {
   const { org, orgMember } = useOutletContext() ?? {};
@@ -1192,7 +1005,8 @@ function FullField({ label, children }) {
 function RosterUploadModal({ target, onClose, onImported }) {
   const [mode, setMode] = useState("csv"); // 'csv' or 'manual'
   const [csvHeaders, setCsvHeaders] = useState(null);
-  const [csvRows, setCsvRows] = useState(null);
+  const [csvRows, setCsvRows] = useState(null);     // RAW post-header rows; re-filtered on every (re)map
+  const [detectMulti, setDetectMulti] = useState(false);
   const [mapping, setMapping] = useState({});
   const [reviewRows, setReviewRows] = useState(null); // editable registrant list
   const [showMapping, setShowMapping] = useState(false); // detection escape hatch
@@ -1200,18 +1014,29 @@ function RosterUploadModal({ target, onClose, onImported }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
 
-  // Shared landing point once a file (CSV or Excel) is parsed into a header
-  // row + data rows. Auto-detects columns and builds the editable review list.
-  function ingest(headers, data) {
-    if (!headers || headers.length === 0) {
-      setParseError("That file doesn't have a header row we can read. Make sure the first row is column titles.");
+  // Shared landing point once a file (CSV or Excel) is parsed into a raw
+  // array-of-arrays (every row, header included). detectStructure finds the
+  // real header row(s) — which may be row 2+ under a report title, or several
+  // stacked/merged rows — collapses them into one header, and returns the rows
+  // below. filterDataRows then strips spacer/title/echoed-header/junk rows
+  // (grouped attendance reports repeat the header band per camp). What's left
+  // is auto-mapped and turned into the editable review list.
+  function ingest(aoa) {
+    const { headers, dataRows, multi } = detectStructure(aoa);
+    if (!headers || headers.length === 0 || headers.every((h) => !String(h ?? "").trim())) {
+      setParseError("That file doesn't have a header row we can read. Make sure a row has column titles like Name, Email, Phone.");
       return;
     }
     const autoMapped = autoMap(headers);
+    const cleaned = filterDataRows(dataRows, headers, autoMapped, multi);
+    if (cleaned.length === 0) {
+      setParseError("We read the columns but found no camper rows. Use “adjust columns” below to point us at the name column.");
+    }
     setCsvHeaders(headers);
-    setCsvRows(data);
+    setCsvRows(dataRows);       // keep raw so a re-map can re-run filterDataRows
+    setDetectMulti(multi);
     setMapping(autoMapped);
-    setReviewRows(buildRegistrants(data, headers, autoMapped));
+    setReviewRows(buildRegistrants(cleaned, headers, autoMapped));
   }
 
   function handleFile(e) {
@@ -1241,12 +1066,10 @@ function RosterUploadModal({ target, onClose, onImported }) {
             setParseError("That spreadsheet has no sheets we could read.");
             return;
           }
-          const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" });
-          const headers = (aoa[0] || []).map(excelCellToString);
-          const data = aoa.slice(1)
-            .map((row) => row.map(excelCellToString))
-            .filter((row) => row.some((c) => c.trim() !== ""));
-          ingest(headers, data);
+          const aoa = XLSX.utils
+            .sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" })
+            .map((row) => row.map(excelCellToString));
+          ingest(aoa);
         } catch (err) {
           console.error("[RosterUploadModal] excel parse failed", err);
           setParseError("Couldn't read that Excel file. Try saving it as a CSV and uploading that.");
@@ -1259,8 +1082,7 @@ function RosterUploadModal({ target, onClose, onImported }) {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const { headers, data } = parseCsv(String(reader.result));
-        ingest(headers, data);
+        ingest(parseCsvRows(String(reader.result)));
       } catch (err) {
         console.error("[RosterUploadModal] csv parse failed", err);
         setParseError("Couldn't read that file. Try saving it as a CSV.");
@@ -1274,7 +1096,11 @@ function RosterUploadModal({ target, onClose, onImported }) {
   function reDetect(nextMapping) {
     setMapping(nextMapping);
     if (csvRows && csvHeaders) {
-      setReviewRows(buildRegistrants(csvRows, csvHeaders, nextMapping));
+      // Re-filter from the raw rows with the corrected mapping so pointing us at
+      // the name column also strips title/junk rows (and mapping a real column
+      // can bring rows back that a wrong auto-map had excluded).
+      const cleaned = filterDataRows(csvRows, csvHeaders, nextMapping, detectMulti);
+      setReviewRows(buildRegistrants(cleaned, csvHeaders, nextMapping));
     }
   }
 
