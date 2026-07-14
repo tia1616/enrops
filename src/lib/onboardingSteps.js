@@ -12,6 +12,7 @@ export const STEP_KEYS = {
   AGREEMENT_SIGNED: 'agreement_signed',
   POLICIES_ACKNOWLEDGED: 'policies_acknowledged',
   ADDITIONAL_ACKS: 'additional_acks',
+  TRAINING_COMPLETED: 'training_completed',
   STRIPE_SUBMITTED: 'stripe_submitted',
   EMERGENCY_AND_PREFS: 'emergency_and_prefs',
 };
@@ -23,6 +24,7 @@ export const STEP_ORDER = [
   STEP_KEYS.AGREEMENT_SIGNED,
   STEP_KEYS.POLICIES_ACKNOWLEDGED,
   STEP_KEYS.ADDITIONAL_ACKS,
+  STEP_KEYS.TRAINING_COMPLETED,
   STEP_KEYS.STRIPE_SUBMITTED,
   STEP_KEYS.EMERGENCY_AND_PREFS,
 ];
@@ -34,18 +36,23 @@ export const STEP_LABELS = {
   [STEP_KEYS.AGREEMENT_SIGNED]: 'Contractor agreement',
   [STEP_KEYS.POLICIES_ACKNOWLEDGED]: 'Policies',
   [STEP_KEYS.ADDITIONAL_ACKS]: 'Additional acknowledgments',
+  [STEP_KEYS.TRAINING_COMPLETED]: 'Training',
   [STEP_KEYS.STRIPE_SUBMITTED]: 'Payment setup',
   [STEP_KEYS.EMERGENCY_AND_PREFS]: 'Emergency contact and preferences',
 };
 
-// Some steps are only present when a per-org toggle is on. Today the only
-// optional step is the background check (organizations.background_check_config
-// .enabled). effectiveStepOrder returns the canonical order with any disabled
-// steps removed, so navigation, progress, and the completion gate all agree on
-// the same list. Pass this order into stepIndex/stepNumber below.
-export function effectiveStepOrder({ bgcEnabled = true } = {}) {
+// Some steps are only present when a per-org toggle is on. The background check
+// (organizations.background_check_config.enabled) and training videos
+// (organizations.training_config.enabled AND at least one active required video)
+// are both optional. effectiveStepOrder returns the canonical order with any
+// disabled steps removed, so navigation, progress, and the completion gate all
+// agree on the same list. `trainingEnabled` must already fold in the "has a
+// required video" check (an enabled-but-empty library drops the step, matching
+// the server gate). Pass this order into stepIndex/stepNumber below.
+export function effectiveStepOrder({ bgcEnabled = true, trainingEnabled = false } = {}) {
   return STEP_ORDER.filter((key) => {
     if (key === STEP_KEYS.CHECKR_SUBMITTED) return bgcEnabled;
+    if (key === STEP_KEYS.TRAINING_COMPLETED) return trainingEnabled;
     return true;
   });
 }

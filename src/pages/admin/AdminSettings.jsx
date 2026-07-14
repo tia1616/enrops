@@ -243,6 +243,19 @@ export default function AdminSettings() {
       </section>
 
       <section style={{ marginTop: 24 }}>
+        <h2 style={sectionTitle}>Training videos</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Instructor training videos</div>
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+              Upload training videos new instructors must watch during onboarding — no skipping or speeding up — with optional comprehension questions. Turn it off if you don't need it.
+            </div>
+          </div>
+          <Link to="/admin/training" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
+        </div>
+      </section>
+
+      <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Connections</h2>
 
         <div style={connectionCard}>

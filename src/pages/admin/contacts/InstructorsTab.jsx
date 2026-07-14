@@ -100,8 +100,12 @@ export default function InstructorsTab({ org }) {
         let statusMap = {};
         let contactsByInstructor = {};
 
+        let trainingByInstructor = {};
+        let trainingActive = false;
+        let trainingTotal = 0;
+
         if (ids.length > 0) {
-          const [{ data: statusRows }, { data: contactRows }] = await Promise.all([
+          const [{ data: statusRows }, { data: contactRows }, { data: reqVids }, { data: comps }, { data: orgCfg }] = await Promise.all([
             supabase
               .from('contractor_onboarding_status')
               .select(
@@ -113,10 +117,46 @@ export default function InstructorsTab({ org }) {
               .select('instructor_id, contact_name, relationship, phone, is_primary')
               .in('instructor_id', ids)
               .order('is_primary', { ascending: false }),
+            supabase
+              .from('instructor_training_videos')
+              .select('id')
+              .eq('organization_id', org.id).eq('active', true).eq('is_required', true),
+            supabase
+              .from('instructor_training_completions')
+              .select('instructor_id, training_video_id, watched_completed_at, quiz_passed')
+              .in('instructor_id', ids),
+            supabase
+              .from('organizations')
+              .select('training_config')
+              .eq('id', org.id)
+              .maybeSingle(),
           ]);
           for (const r of statusRows ?? []) statusMap[r.instructor_id] = r;
           for (const c of contactRows ?? []) {
             (contactsByInstructor[c.instructor_id] ??= []).push(c);
+          }
+
+          // Training completion — only "live" when the org enabled training AND has
+          // at least one active required video (mirrors the onboarding gate).
+          const requiredIds = (reqVids ?? []).map((v) => v.id);
+          trainingTotal = requiredIds.length;
+          trainingActive = orgCfg?.training_config?.enabled === true && trainingTotal > 0;
+          if (trainingActive) {
+            const passedByInstr = {};
+            const latestByInstr = {};
+            for (const c of comps ?? []) {
+              if (!c.watched_completed_at || !c.quiz_passed) continue;
+              (passedByInstr[c.instructor_id] ??= new Set()).add(c.training_video_id);
+              if (!latestByInstr[c.instructor_id] || c.watched_completed_at > latestByInstr[c.instructor_id]) {
+                latestByInstr[c.instructor_id] = c.watched_completed_at;
+              }
+            }
+            for (const id of ids) {
+              const passed = passedByInstr[id] ?? new Set();
+              const done = requiredIds.filter((rid) => passed.has(rid)).length;
+              const complete = done === trainingTotal;
+              trainingByInstructor[id] = { total: trainingTotal, done, complete, latest: complete ? latestByInstr[id] : null };
+            }
           }
         }
 
@@ -126,6 +166,7 @@ export default function InstructorsTab({ org }) {
               ...i,
               status: statusMap[i.id] ?? null,
               emergency_contacts: contactsByInstructor[i.id] ?? [],
+              training: trainingActive ? (trainingByInstructor[i.id] ?? { total: trainingTotal, done: 0, complete: false, latest: null }) : null,
             }))
           );
         }
@@ -401,6 +442,13 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
   const hasPreferred = Boolean(row.preferred_name?.trim());
   const status = row.status?.overall_status ?? 'not_invited';
   const statusColor = STATUS_COLOR[status] ?? MUTED;
+  // Training-aware display: an instructor isn't truly done until required training
+  // is complete, so an otherwise-"complete" row reads "training pending" here. This
+  // is display only — the underlying `status` (used for the invite button etc.)
+  // is unchanged, and the matcher already blocks assignment for untrained instructors.
+  const trainingBlocking = Boolean(row.training && !row.training.complete);
+  const displayStatus = status === 'complete' && trainingBlocking ? 'training pending' : status.replace(/_/g, ' ');
+  const displayColor = status === 'complete' && trainingBlocking ? AMBER : statusColor;
   const age = ageFromDob(row.date_of_birth);
   const isMinor = age !== null && age < 18;
 
@@ -487,13 +535,13 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
           style={{
             fontSize: 10,
             fontWeight: 700,
-            color: statusColor,
+            color: displayColor,
             textTransform: 'uppercase',
             letterSpacing: 0.5,
             whiteSpace: 'nowrap',
           }}
         >
-          {status.replace(/_/g, ' ')}
+          {displayStatus}
         </span>
         <Chevron open={expanded} color={BRIGHT} size={14} />
       </button>
@@ -689,8 +737,22 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
         )}
       </DetailItem>
       <DetailItem label="Onboarding step">
-        {row.status?.current_step ? `Step ${row.status.current_step} of 8` : <Em>not started</Em>}
+        {row.status?.current_step ? `Step ${row.status.current_step}` : <Em>not started</Em>}
       </DetailItem>
+      {row.training && (
+        <DetailItem label="Training">
+          {row.training.complete ? (
+            <span style={{ color: OK, fontWeight: 600 }}>
+              ✓ Complete
+              {row.training.latest ? ` · ${new Date(row.training.latest).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+            </span>
+          ) : row.training.done > 0 ? (
+            <span style={{ color: AMBER }}>{row.training.done} of {row.training.total} done</span>
+          ) : (
+            <Em>not started</Em>
+          )}
+        </DetailItem>
+      )}
 
       {row.emergency_contacts.length > 0 && (
         <div style={{ gridColumn: '1 / -1', borderTop: `1px solid ${RULE}`, paddingTop: 10 }}>
