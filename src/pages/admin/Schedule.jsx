@@ -1276,6 +1276,23 @@ export default function Schedule() {
       if (currentAssignment) {
         const prevInstructorId = currentAssignment.instructor_id;
         const prevStatus = currentAssignment.status;
+        // If the outgoing instructor had flagged a change request, record the
+        // decline BEFORE we overwrite the row — otherwise reassigning silently
+        // discards it and the picker keeps re-suggesting them for this camp.
+        // Mirrors the same record in doRemoveAssignment (the Remove button); the
+        // `!== instructorId` guard means re-confirming the same person is not a
+        // self-decline.
+        if (prevStatus === "change_requested" && prevInstructorId && prevInstructorId !== instructorId) {
+          await supabase
+            .from("session_declined_instructors")
+            .upsert({
+              organization_id: org.id,
+              cycle_id: state.cycle.id,
+              camp_session_id: currentAssignment.camp_session_id,
+              instructor_id: prevInstructorId,
+              reason: "change_request",
+            }, { onConflict: "camp_session_id,instructor_id" });
+        }
         // Reassign — wipe the previous instructor's email/response trail so the
         // new instructor surfaces in the Hat's "needs an offer email" tip and
         // doesn't inherit the old deadline or acceptance.
