@@ -104,6 +104,27 @@ serve(async (req) => {
     const cycle = cycleRow as SchedulingCycle;
     const orgId = cycle.organization_id;
 
+    // ----- Auth: caller must be owner/admin of THIS cycle's org -----
+    // Tenant is derived from cycle_id, so without this check any authenticated
+    // user could pass another org's cycle_id and rewrite that org's proposed
+    // assignments. Mirrors match-afterschool's caller check. (verify_jwt is on,
+    // so a valid Supabase user token is guaranteed; we still must authorize the
+    // org membership ourselves — the JWT alone does not scope to this tenant.)
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) return json({ error: 'auth required' }, 401);
+    const token = authHeader.replace('Bearer ', '');
+    const { data: userData, error: userErr } = await admin.auth.getUser(token);
+    if (userErr || !userData?.user) return json({ error: 'invalid auth' }, 401);
+    const { data: memberRow } = await admin
+      .from('org_members')
+      .select('role')
+      .eq('auth_user_id', userData.user.id)
+      .eq('organization_id', orgId)
+      .maybeSingle();
+    if (!memberRow || !['owner', 'admin'].includes(memberRow.role)) {
+      return json({ error: 'forbidden' }, 403);
+    }
+
     // Venue->region map: the org's OWN config is the single source (shared with the
     // camp survey form). No cross-tenant fallback — an org that hasn't configured its
     // map fails closed at the unmapped-venues pre-flight below with a clear, tenant-
