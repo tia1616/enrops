@@ -46,7 +46,7 @@ export const FIELD_DEFS = [
   { key: "dietary_restrictions", label: "Dietary restrictions", required: false,
     aliases: ["dietary", "dietaryrestrictions", "dietneeds", "foodrestrictions"] },
   { key: "medical_notes", label: "Medical notes", required: false,
-    aliases: ["medicalnotes", "medicalinfo", "medicalconcerns", "healthnotes", "health"] },
+    aliases: ["medicalnotes", "medicalinfo", "medicalconcerns", "healthnotes", "health", "concerns"] },
   { key: "medical_conditions", label: "Medical conditions", required: false,
     aliases: ["medicalconditions"] },
   { key: "epipen_required", label: "EpiPen required (Y/N)", required: false,
@@ -67,7 +67,7 @@ export const FIELD_DEFS = [
   // Some reports fold emergency contacts + authorized pickup into one free-text
   // column ("Emergency Contacts / Authorized Pick Up") — keep it whole here.
   { key: "authorized_pickup_contacts", label: "Authorized pickup", required: false,
-    aliases: ["authorizedpickup", "authorizedpickupcontacts", "pickupcontacts", "pickuplist",
+    aliases: ["pickup", "authorizedpickup", "authorizedpickupcontacts", "pickupcontacts", "pickuplist",
       "emergencycontactsauthorizedpickup", "emergencycontactauthorizedpickup", "authorizedpickupemergencycontacts"] },
   { key: "notes", label: "Notes", required: false,
     aliases: ["notes", "parentnotes", "comments"] },
@@ -79,9 +79,9 @@ export const FIELD_DEFS = [
   // Parks & Rec, RecTrac, ActiveNet) label the guardian. "Parents"/"Parent" =
   // extended-day report / FGO roster report.
   { key: "parent_full_name", label: "Parent full name", required: false, coalesce: true,
-    aliases: ["parentname", "parents", "parent", "guardianname", "parentfullname", "guardianfullname",
-      "parentguardian", "guardian", "hoh1name", "hoh2name", "headofhousehold", "headofhousehold1",
-      "householdhead", "primaryguardian"] },
+    aliases: ["parentname", "parentsname", "parents", "parent", "guardianname", "guardiansname",
+      "parentfullname", "guardianfullname", "parentguardian", "guardian", "hoh1name", "hoh2name",
+      "headofhousehold", "headofhousehold1", "householdhead", "primaryguardian"] },
   { key: "parent_email", label: "Parent email", required: false, coalesce: true,
     aliases: ["parentemail", "parentsemail", "guardianemail", "email", "emailaddress",
       "p1email", "p2email", "hoh1email", "hoh2email", "altemailaddress1"] },

@@ -80,6 +80,25 @@ eq("splitName middle name", splitName("Mary Anne Smith"), { first: "Mary Anne", 
   eq("XD no title leaked", regs.some((r) => /roster|week|beehive|eagle/i.test(`${r.student_first_name} ${r.student_last_name}`)), false);
 }
 
+// ---- Header variants: "Parents Name", "Pick up", "Concerns", double "Phone" --
+{
+  const aoa = [
+    ["", "Last Name", "First Name", "Parents Name", "Phone", "Phone", "Email Address", "Age", "Concerns", "Pick up"],
+    ["1", "Bays", "Alec", "Michael", "503-206-2242", "", "mbays@example.com", "9", "", "parent"],
+    ["2", "Lee", "Mihir", "Chun Lee", "5035684654", "5035689507", "cs@example.com", "7", "nut allergy", "JWR"],
+  ];
+  const { headers, data, mapping } = parseSheet(aoa);
+  const regs = buildRegistrants(data, headers, mapping);
+  eq("MM parents-name mapped", mapping.parent_full_name, "Parents Name");
+  eq("MM pick-up mapped", mapping.authorized_pickup_contacts, "Pick up");
+  eq("MM concerns->medical mapped", mapping.medical_notes, "Concerns");
+  eq("MM every kid has a parent name", regs.every((r) => r.parent_first_name || r.parent_last_name), true);
+  eq("MM every kid has pickup", regs.every((r) => r.authorized_pickup_contacts), true);
+  eq("MM parent name split", [regs[1].parent_first_name, regs[1].parent_last_name], ["Chun", "Lee"]);
+  eq("MM first phone coalesced", regs[1].parent_phone, "5035684654");
+  eq("MM concern captured", regs[1].medical_notes, "nut allergy");
+}
+
 // ---- Regression: a data row valued "Parent" must NOT merge into the header ----
 {
   const aoa = [
