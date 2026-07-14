@@ -1193,7 +1193,7 @@ function RosterUploadModal({ target, onClose, onImported }) {
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 16 }}>
-          <TabBtn active={mode === "csv"} onClick={() => setMode("csv")} label="Upload CSV" />
+          <TabBtn active={mode === "csv"} onClick={() => setMode("csv")} label="Upload a file" />
           <TabBtn active={mode === "manual"} onClick={() => setMode("manual")} label="Add one by hand" />
         </div>
 
@@ -1766,7 +1766,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
     <div style={{ marginBottom: 28 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, color: MUTED }}>
-          Rosters fill in as families register. Add offline / partner kids by hand or by CSV.
+          Rosters fill in as families register. Add offline / partner kids by hand or upload a file.
         </div>
         <select value={term} onChange={(e) => { setTerm(e.target.value); setExpandedId(null); }} style={{ padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", fontSize: 13, background: "#fff", color: INK }}>
           <option value="FA26">Fall 2026 (FA26)</option>
