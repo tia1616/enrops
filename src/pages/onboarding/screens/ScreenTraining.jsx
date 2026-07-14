@@ -26,7 +26,6 @@ export default function ScreenTraining({ slug, instructor, onboarding, onAdvance
   const [passedIds, setPassedIds] = useState(null); // Set | null (loading)
   const [error, setError] = useState('');
   const [advancing, setAdvancing] = useState(false);
-  const [submitFailed, setSubmitFailed] = useState(false); // stops the auto-advance effect from looping on error
 
   // Load which required videos this instructor has already completed (resume).
   const loadPassed = useCallback(async () => {
@@ -53,29 +52,23 @@ export default function ScreenTraining({ slug, instructor, onboarding, onAdvance
     });
   }, []);
 
-  // When everything required is done, advance the onboarding step (server
-  // re-verifies every required video before marking the step complete).
-  useEffect(() => {
-    // Guard on submitFailed so a failed submit-training doesn't loop: flipping
-    // `advancing` back to false would otherwise immediately re-trigger this.
-    if (!passedIds || advancing || submitFailed) return;
-    const allDone = videos.length > 0 && videos.every((v) => passedIds.has(v.id));
-    if (!allDone) return;
-    let cancelled = false;
-    (async () => {
-      setAdvancing(true); setError('');
-      try {
-        const { error: e } = await invokeOnboardingFn('submit-training', {}, { navigate });
-        if (cancelled) return;
-        if (e) { setError(e.message || 'Something went wrong finishing training.'); setAdvancing(false); setSubmitFailed(true); return; }
-        onAdvance();
-      } catch (err) {
-        if (isHandledRedirect(err)) return;
-        setError('Something went wrong finishing training.'); setAdvancing(false); setSubmitFailed(true);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [passedIds, videos, advancing, submitFailed, navigate, onAdvance]);
+  // Finish the step — user-initiated (a "Continue" button), NOT an auto-advance.
+  // Auto-advancing on completion is fragile: if the wizard's re-read hiccups the
+  // screen hangs on "finishing up" with no recourse. A button is retryable and
+  // always visible. submit-training is idempotent (re-verifies server-side), so
+  // clicking again after a hiccup is safe.
+  async function finishTraining() {
+    if (advancing) return;
+    setAdvancing(true); setError('');
+    try {
+      const { error: e } = await invokeOnboardingFn('submit-training', {}, { navigate });
+      if (e) { setError(e.message || 'Something went wrong finishing training. Please try again.'); setAdvancing(false); return; }
+      onAdvance(); // moves to the next step; this screen unmounts on success
+    } catch (err) {
+      if (isHandledRedirect(err)) return;
+      setError('Something went wrong finishing training. Please try again.'); setAdvancing(false);
+    }
+  }
 
   const total = videos.length;
   const doneCount = passedIds ? videos.filter((v) => passedIds.has(v.id)).length : 0;
@@ -106,22 +99,19 @@ export default function ScreenTraining({ slug, instructor, onboarding, onAdvance
           <div className="mb-3 text-sm font-semibold text-neutral-900">{currentVideo.title}</div>
           <TrainingPlayer key={currentVideo.id} video={currentVideo} onPassed={onPassed} />
         </>
-      ) : submitFailed ? (
+      ) : (
         <div>
-          <div className="rounded-md bg-neutral-50 p-4 text-sm text-neutral-800">
-            You’ve finished all the videos. We couldn’t save that just now — tap to try again.
+          <div className="rounded-md bg-green-50 p-4 text-sm text-green-900">
+            Training complete ✓ — nice work.
           </div>
           <button
             type="button"
-            onClick={() => { setSubmitFailed(false); setError(''); }}
-            className="mt-4 w-full rounded-md bg-neutral-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-neutral-800"
+            onClick={finishTraining}
+            disabled={advancing}
+            className="mt-4 w-full rounded-md bg-neutral-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-neutral-800 disabled:opacity-50"
           >
-            Try again →
+            {advancing ? 'Finishing up…' : 'Continue →'}
           </button>
-        </div>
-      ) : (
-        <div className="rounded-md bg-green-50 p-4 text-sm text-green-900">
-          {advancing ? 'All done — finishing up…' : 'Training complete ✓'}
         </div>
       )}
 
