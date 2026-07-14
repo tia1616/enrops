@@ -41,6 +41,7 @@ import {
   SoftScoreContext,
 } from './lib.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { getUntrainedInstructorIds } from '../_shared/trainingGate.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -213,6 +214,10 @@ serve(async (req) => {
     const availByInstr = new Map<string, InstructorAvailability>();
     for (const a of avail) availByInstr.set(a.instructor_id, a);
 
+    // Training gate: instructors who haven't finished required training can't be
+    // assigned (empty set when training is off or the library has no required video).
+    const blockedTraining = await getUntrainedInstructorIds(admin, orgId, instructorIds);
+    const missingTraining: string[] = [];
     const missingSurveys: string[] = [];
     const instructorPool: MatchInstructor[] = [];
     for (const inst of instructors) {
@@ -223,6 +228,7 @@ serve(async (req) => {
       }
       // Skip instructors with no available_weeks (e.g., "not available this summer" responses).
       if (!av.available_weeks || av.available_weeks.length === 0) continue;
+      if (blockedTraining.has(inst.id)) { missingTraining.push(`${inst.first_name} ${inst.last_name}`); continue; }
       let klass;
       try {
         klass = classifyInstructor(av.session_types as SessionType[]);
@@ -325,6 +331,7 @@ serve(async (req) => {
       cycle_name: cycle.name ?? cycle.cycle_type,
       decisions,
       missing_surveys: missingSurveys,
+      missing_training: missingTraining,
       pool: matchingPool,
       counts,
       fullDayCounts,

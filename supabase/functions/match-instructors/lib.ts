@@ -983,6 +983,7 @@ export interface OutputJSON {
     flagged: number;
     needs_hire: number;
     missing_surveys: string[];
+    missing_training: string[];
     // v2: instructors with zero camps after all passes — admin notifications
     low_load_alerts: string[];
     // v2: instructors with promised quotas that the algorithm could not meet
@@ -1019,6 +1020,7 @@ export function buildOutputJSON(opts: {
   cycle_name?: string;
   decisions: CampDecision[];
   missing_surveys: string[];
+  missing_training?: string[];
   // v2 inputs for richer summary
   pool: MatchInstructor[];
   counts: AssignmentCounts;
@@ -1076,6 +1078,7 @@ export function buildOutputJSON(opts: {
       flagged,
       needs_hire,
       missing_surveys,
+      missing_training: opts.missing_training ?? [],
       low_load_alerts,
       unmet_quotas,
       developing_assignments,
