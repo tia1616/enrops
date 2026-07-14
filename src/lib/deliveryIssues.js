@@ -9,12 +9,22 @@
 
 export const MAX_SEND_ATTEMPTS = 5;
 
+// A permanent failure = the same signal lifecycle-automations-cron uses to STOP
+// retrying: a non-429 4xx from Resend (e.g. 422 invalid address). We read the
+// status code out of the recorded "Resend <code>: ..." message rather than
+// keyword-matching the body, so a transient 5xx whose text happens to contain
+// "invalid"/"validation" is NOT mis-shown as a bad address. 429 and 5xx stay
+// transient (the cron keeps retrying them).
+export function isPermanentFailure(errorMessage) {
+  const m = /resend (\d{3})/i.exec(errorMessage || "");
+  const code = m ? Number(m[1]) : null;
+  return code !== null && code >= 400 && code < 500 && code !== 429;
+}
+
 // row: { error_message, attempts }
 // -> { needsYou, reason, hint }
 export function classifyFailure(row) {
-  const err = (row?.error_message || "").toLowerCase();
-  const badAddress = /422|invalid|not a valid|validation|no recipients|parse|domain/.test(err);
-  if (badAddress) {
+  if (isPermanentFailure(row?.error_message)) {
     return {
       needsYou: true,
       reason: "The email address on file looks invalid.",

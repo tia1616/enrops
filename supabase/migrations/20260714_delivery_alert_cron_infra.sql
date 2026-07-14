@@ -14,12 +14,20 @@
 -- UTC), so the day's failures are already recorded. The edge fn dedupes on a 25h
 -- last_attempt_at window (no dedupe column), so a permanent miss alerts ~once.
 --
+-- SECURITY: the fn emails operators and (in test mode) takes a recipient address,
+-- so it is NOT openly callable — it requires the shared secret DELIVERY_ALERT_SECRET
+-- in an `x-cron-secret` header and fails closed if the secret is unset. Before
+-- scheduling on prod, set that secret on the prod edge-fn env:
+--   supabase secrets set DELIVERY_ALERT_SECRET=<random> --project-ref iuasfpztkmrtagivlhtj
+-- then use the SAME value in the cron header below.
+--
 --   select cron.schedule('delivery-alert-daily', '0 16 * * *', $job$
 --     SELECT net.http_post(
 --       url := 'https://iuasfpztkmrtagivlhtj.supabase.co/functions/v1/delivery-alert-cron',
 --       headers := jsonb_build_object(
 --         'Content-Type', 'application/json',
---         'Authorization', 'Bearer <PROD_ANON_KEY>'),   -- same anon bearer the other daily crons use
+--         'Authorization', 'Bearer <PROD_ANON_KEY>',    -- gateway apikey (fn is verify_jwt=false)
+--         'x-cron-secret', '<DELIVERY_ALERT_SECRET>'),   -- the caller gate
 --       body := '{}'::jsonb,
 --       timeout_milliseconds := 140000
 --     );

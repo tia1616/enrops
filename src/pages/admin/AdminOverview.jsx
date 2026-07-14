@@ -1145,6 +1145,7 @@ function ImportantToday({ org, user, openHires }) {
           .select("error_message, attempts")
           .eq("organization_id", org.id)
           .eq("status", "failed")
+          .is("resolved_at", null)
           .limit(200),
       ]);
       if (cancelled) return;

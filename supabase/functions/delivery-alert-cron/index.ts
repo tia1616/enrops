@@ -46,14 +46,19 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Mirror classifyFailure() in src/lib/deliveryIssues.js. A bad-address (permanent
-// 4xx) failure always needs the operator; a transient failure needs them only
-// once it has exhausted the retry cap. Transient-and-still-retrying is the cron's
-// job, so it's NOT alerted here.
+// Mirror classifyFailure() in src/lib/deliveryIssues.js. Permanent = the same
+// signal lifecycle-automations-cron uses to stop retrying: a non-429 4xx from
+// Resend (read the status code out of "Resend <code>: ...", not a keyword match,
+// so a transient 5xx with "invalid" in its body isn't mis-flagged). A transient
+// failure needs the operator only once it has exhausted the retry cap;
+// still-retrying is the cron's job and is NOT alerted here.
+function isPermanentFailure(errorMessage: string | null): boolean {
+  const m = /resend (\d{3})/i.exec(errorMessage || "");
+  const code = m ? Number(m[1]) : null;
+  return code !== null && code >= 400 && code < 500 && code !== 429;
+}
 function needsAttention(row: { error_message: string | null; attempts: number | null }): { needsYou: boolean; reason: string } {
-  const err = (row.error_message || "").toLowerCase();
-  const badAddress = /422|invalid|not a valid|validation|no recipients|parse|domain/.test(err);
-  if (badAddress) return { needsYou: true, reason: "the email address on file looks invalid" };
+  if (isPermanentFailure(row.error_message)) return { needsYou: true, reason: "the email address on file looks invalid" };
   if ((row.attempts ?? 0) >= MAX_SEND_ATTEMPTS) return { needsYou: true, reason: "we couldn't reach their inbox after several tries" };
   return { needsYou: false, reason: "" };
 }
@@ -78,6 +83,16 @@ function json(body: unknown, status: number): Response {
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
+  // Gate: this function emails operators and (in test mode) accepts a recipient
+  // address, so it must NOT be openly callable — an unauthenticated caller could
+  // otherwise blast every org's admins or exfiltrate a per-org digest (child
+  // names, parent emails) to an arbitrary test_to. Require the shared secret the
+  // pg_cron job sends. Fail closed if the secret isn't configured.
+  const CRON_SECRET = Deno.env.get("DELIVERY_ALERT_SECRET");
+  if (!CRON_SECRET || req.headers.get("x-cron-secret") !== CRON_SECRET) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
   const body = await req.json().catch(() => ({}));
   const onlyOrg = typeof body?.organization_id === "string" ? body.organization_id : null;
   const testTo = typeof body?.test_to === "string" && body.test_to.includes("@") ? body.test_to.trim() : null;
@@ -89,6 +104,7 @@ serve(async (req) => {
     .from("automation_run_recipients")
     .select("organization_id, context_key, parent_id, email, automation_id, error_message, attempts, last_attempt_at")
     .eq("status", "failed")
+    .is("resolved_at", null)
     .gte("last_attempt_at", sinceIso)
     .limit(1000);
   if (onlyOrg) q = q.eq("organization_id", onlyOrg);

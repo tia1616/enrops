@@ -5,11 +5,11 @@
 // error_message + attempts) instead of silently dropping it, this panel makes
 // those failures visible to the operator right on the Automations tab.
 //
-// Read-only for now: Resend / Fix-email / Mark-handled actions land in the next
-// chunk (they need the resend edge fn + a resolved_at column). This chunk is
-// deliberately isolated — new file, existing RLS (members_read_
-// automation_run_recipients scopes rows to the operator's org), no schema
-// change, no shared files.
+// Actions (delivery-issue-action edge fn, RBAC owner/admin/staff):
+//   - Resend: re-sends the email that failed (reuses lifecycle-cron event mode).
+//   - Mark handled: the operator dealt with it out of band; the row is stamped
+//     resolved_at and drops off every surface. Resolved rows are excluded here.
+// RLS members_read_automation_run_recipients scopes the read to the operator's org.
 //
 // Honest-state rules (matches the platform's no-silent-failure control audit):
 //   - Separates "Needs you" (bad address, or exhausted after retries) from
@@ -23,6 +23,11 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import { INK, MUTED, RULE, WARN, INFO } from "../marketing/tokens.jsx";
 import { classifyFailure } from "../../../lib/deliveryIssues.js";
+
+// Only welcome failures can be auto-resent (resend reuses the Welcome event mode).
+// Other lifecycle emails (recaps, birthday, no-school) still show here for
+// visibility, but offer Mark-handled only — not a dead Resend button.
+const RESENDABLE_KEYS = new Set(["welcome_camp", "welcome_afterschool"]);
 
 // context_key shapes we can attribute a child/program to:
 //   camp:<camp_session_id>:parent:<parent_id>:student:<student_id>
@@ -53,11 +58,51 @@ export default function DeliveryIssuesPanel({ org }) {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
   const [error, setError] = useState(null);
+  // Per-row action state: id -> { busy, msg }. A row that succeeds is removed
+  // from the list (the header count drops), which is the operator's feedback.
+  const [rowState, setRowState] = useState(new Map());
 
   useEffect(() => {
     if (org?.id) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id]);
+
+  async function doAction(id, action) {
+    setRowState((m) => new Map(m).set(id, { busy: true, msg: null }));
+    let data = null;
+    let err = null;
+    try {
+      const res = await supabase.functions.invoke("delivery-issue-action", { body: { action, recipient_id: id } });
+      data = res.data;
+      err = res.error;
+    } catch (e) {
+      err = e;
+    }
+    if (err || data?.ok === false) {
+      const reason = data?.reason;
+      const resendMsg = {
+        not_in_window: "That session already started, so this welcome no longer applies. Mark it handled instead.",
+        send_failed: "We tried again but it still couldn't reach them. Check the email address, or mark it handled.",
+        in_progress: "This one's already being resent.",
+        registration_not_found: "Couldn't find the registration to resend.",
+        unsupported_context: "This email can't be auto-resent. Mark it handled once you've followed up.",
+      };
+      const msg =
+        action === "resend"
+          ? resendMsg[reason] || "Couldn't resend. Please try again."
+          : "Couldn't update. Please try again.";
+      setRowState((m) => new Map(m).set(id, { busy: false, msg }));
+      return;
+    }
+    // Success: resend flipped the row to 'sent', or mark-handled stamped it.
+    // Either way it's no longer an open issue — drop it from the panel.
+    setRows((rs) => rs.filter((r) => r.id !== id));
+    setRowState((m) => {
+      const next = new Map(m);
+      next.delete(id);
+      return next;
+    });
+  }
 
   async function load() {
     setLoading(true);
@@ -70,6 +115,7 @@ export default function DeliveryIssuesPanel({ org }) {
         .select("id, context_key, parent_id, email, automation_id, error_message, attempts, last_attempt_at")
         .eq("organization_id", org.id)
         .eq("status", "failed")
+        .is("resolved_at", null)
         .order("last_attempt_at", { ascending: false })
         .limit(100);
       if (fErr) throw fErr;
@@ -99,10 +145,12 @@ export default function DeliveryIssuesPanel({ org }) {
       // automation_id -> template display_name (two hops: automations -> templates)
       const templateIds = [...new Set((autoRes.data ?? []).map((a) => a.template_id).filter(Boolean))];
       const tplRes = templateIds.length
-        ? await supabase.from("automation_templates").select("id, display_name").in("id", templateIds)
+        ? await supabase.from("automation_templates").select("id, display_name, key").in("id", templateIds)
         : { data: [] };
       const tplName = new Map((tplRes.data ?? []).map((t) => [t.id, t.display_name]));
+      const tplKey = new Map((tplRes.data ?? []).map((t) => [t.id, t.key]));
       const autoName = new Map((autoRes.data ?? []).map((a) => [a.id, tplName.get(a.template_id) || "An email"]));
+      const autoKey = new Map((autoRes.data ?? []).map((a) => [a.id, tplKey.get(a.template_id) || null]));
       const parentById = new Map((parentRes.data ?? []).map((p) => [p.id, p]));
       const studentById = new Map((studentRes.data ?? []).map((s) => [s.id, s]));
       const campById = new Map((campRes.data ?? []).map((c) => [c.id, c]));
@@ -131,6 +179,7 @@ export default function DeliveryIssuesPanel({ org }) {
           reason,
           hint,
           needsYou,
+          resendable: RESENDABLE_KEYS.has(autoKey.get(r.automation_id)),
           when: ago(r.last_attempt_at),
         };
       });
@@ -181,12 +230,12 @@ export default function DeliveryIssuesPanel({ org }) {
       </div>
       <p style={{ color: MUTED, fontSize: 13, margin: "0 0 12px", lineHeight: 1.5 }}>
         {needsYou.length > 0
-          ? "These sends couldn't reach the family and need a look. Resend and fix-email are coming next; for now, here's exactly who to follow up with."
+          ? "These sends couldn't reach the family. Resend it, or mark it handled once you've followed up another way."
           : "A few sends hit a temporary snag and are retrying automatically — nothing to do."}
       </p>
 
       {needsYou.map((r) => (
-        <IssueRow key={r.id} r={r} tone="needs" />
+        <IssueRow key={r.id} r={r} tone="needs" state={rowState.get(r.id)} onAction={doAction} />
       ))}
       {inProgress.map((r) => (
         <IssueRow key={r.id} r={r} tone="progress" />
@@ -195,8 +244,9 @@ export default function DeliveryIssuesPanel({ org }) {
   );
 }
 
-function IssueRow({ r, tone }) {
+function IssueRow({ r, tone, state, onAction }) {
   const accent = tone === "needs" ? WARN : INFO;
+  const busy = !!state?.busy;
   return (
     <div
       style={{
@@ -225,6 +275,19 @@ function IssueRow({ r, tone }) {
           {r.reason}
           {r.hint ? <span style={{ color: MUTED, fontWeight: 400 }}>{` ${r.hint}`}</span> : null}
         </div>
+        {tone === "needs" && onAction && (
+          <div style={{ marginTop: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            {r.resendable && (
+              <button type="button" disabled={busy} onClick={() => onAction(r.id, "resend")} style={actionBtn(busy)}>
+                {busy ? "Working…" : "Resend"}
+              </button>
+            )}
+            <button type="button" disabled={busy} onClick={() => onAction(r.id, "mark_handled")} style={linkBtn(busy)}>
+              Mark handled
+            </button>
+            {state?.msg && <span style={{ fontSize: 12.5, color: "#7c2d12" }}>{state.msg}</span>}
+          </div>
+        )}
       </div>
       <div style={{ color: MUTED, fontSize: 12, whiteSpace: "nowrap", flexShrink: 0 }}>
         {r.when}
@@ -232,6 +295,27 @@ function IssueRow({ r, tone }) {
     </div>
   );
 }
+
+const actionBtn = (busy) => ({
+  background: busy ? "#cbb8e6" : "#5847C9",
+  color: "#fff",
+  border: "none",
+  borderRadius: 8,
+  padding: "5px 12px",
+  fontSize: 12.5,
+  fontWeight: 600,
+  cursor: busy ? "default" : "pointer",
+});
+
+const linkBtn = (busy) => ({
+  background: "none",
+  border: "none",
+  color: MUTED,
+  fontSize: 12.5,
+  fontWeight: 600,
+  cursor: busy ? "default" : "pointer",
+  padding: 0,
+});
 
 const errBox = {
   background: "#fef2f2",
