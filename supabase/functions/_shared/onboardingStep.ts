@@ -14,6 +14,7 @@ export type StepKey =
   | 'agreement_signed'
   | 'policies_acknowledged'
   | 'additional_acks'
+  | 'training_completed'
   | 'stripe_submitted'
   | 'emergency_and_prefs';
 

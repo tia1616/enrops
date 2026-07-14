@@ -39,6 +39,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { getUntrainedInstructorIds } from '../_shared/trainingGate.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -217,6 +218,11 @@ serve(async (req) => {
       areaPrefs: Record<string, string>;
       preferredCategories: Set<string>;  // LEGO / coding / robotics families they enjoy
     }
+    // Training gate: instructors who haven't finished required training can't be
+    // assigned. Computed once for the whole pool (empty set when training is off
+    // or the library has no required video).
+    const blockedTraining = await getUntrainedInstructorIds(admin, organizationId, instructors.map((i) => i.id));
+    const missingTraining: string[] = [];
     const missingSurveys: string[] = [];
     const pool: PoolInstr[] = [];
     for (const inst of instructors) {
@@ -225,6 +231,7 @@ serve(async (req) => {
       const wd = (av?.weekday_availability ?? {}) as Record<string, { from?: string; until?: string }>;
       const hasAny = av && Object.values(wd).some((w) => w && w.from);
       if (!hasAny) { missingSurveys.push(name); continue; }
+      if (blockedTraining.has(inst.id)) { missingTraining.push(name); continue; }
       const cats = Array.isArray(av.preferred_categories) ? av.preferred_categories : [];
       pool.push({
         id: inst.id, name,
@@ -523,6 +530,7 @@ serve(async (req) => {
         needs_hire: decisions.filter((d) => d.status === 'needs_hire').length,
         instructors_in_pool: pool.length,
         missing_surveys: missingSurveys,
+        missing_training: missingTraining,
         curriculum_sets: { total: totalSets, max_per_instructor: maxSets, instructors_assigned: setsByInstr.size },
       },
       decisions,

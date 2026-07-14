@@ -14,7 +14,8 @@
 // The gate reads the org's CURRENT config each time and only writes when the
 // derived status actually changes, so this is idempotent and safe to call on
 // every enabled-flag save (it advances the newly-unblocked contractors and leaves
-// everyone else untouched).
+// everyone else untouched). Also reused by the training toggle (TrainingSettings),
+// which changes the same gate via organizations.training_config.
 //
 // Auth: caller must be owner/admin on the target org (org_members, accepted).
 
