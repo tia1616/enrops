@@ -16,6 +16,7 @@ import ShareProgram from "../../../components/ShareProgram.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
+import { getPermissions } from "../../../lib/permissions.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -49,7 +50,8 @@ const DAY_LABELS = {
 };
 
 export default function ProgramsCalendar() {
-  const { org } = useOutletContext();
+  const { org, orgMember } = useOutletContext();
+  const perm = getPermissions(orgMember?.role);
   // Term starts empty — we don't guess a hardcoded term. fetchOrgTerms picks
   // the org's default (in-progress today, else next starting, else most recent
   // past) once orgId is known.
@@ -164,6 +166,73 @@ export default function ProgramsCalendar() {
     });
     if (dupErr) throw dupErr;
     return newId;
+  }
+
+  // Which term parents can currently see/register for (org-wide, not per-view).
+  // Kept separate from `term` (the term this page is currently browsing) —
+  // an operator can browse Winter's programs while Fall is still the open one.
+  const [activeTerm, setActiveTerm] = useState(org?.active_registration_term ?? null);
+  const [activeTermOpenCount, setActiveTermOpenCount] = useState(null); // null = not loaded yet
+  const [switchingTerm, setSwitchingTerm] = useState(false);
+  const [switchResult, setSwitchResult] = useState(null); // { ok: bool, message }
+
+  useEffect(() => {
+    setActiveTerm(org?.active_registration_term ?? null);
+  }, [org?.active_registration_term]);
+
+  useEffect(() => {
+    if (!org?.id || !activeTerm) { setActiveTermOpenCount(null); return; }
+    let alive = true;
+    (async () => {
+      const { count } = await supabase
+        .from("programs")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", org.id)
+        .eq("term", activeTerm)
+        .eq("status", "open");
+      if (alive) setActiveTermOpenCount(count ?? 0);
+    })();
+    return () => { alive = false; };
+  }, [org?.id, activeTerm]);
+
+  // Open the currently-browsed term for registration — flips the org-wide
+  // active_registration_term. This is the one switch that actually controls
+  // what parents can see (Publish only controls a single program's status;
+  // it doesn't put it in front of anyone until its term is the active one).
+  // Blocked when this term has no published programs yet — switching to an
+  // empty term would show parents a blank catalog.
+  async function openTermForRegistration() {
+    if (!term || !org?.id || switchingTerm) return;
+    const viewedOpenCount = programs.filter((p) => p.status === "open").length;
+    if (viewedOpenCount === 0) {
+      setSwitchResult({ ok: false, message: `Publish at least one ${formatTermLabel(term)} program first — there's nothing open here yet.` });
+      return;
+    }
+    const fromLabel = activeTerm ? formatTermLabel(activeTerm) : "no term";
+    const confirmMsg = activeTerm && activeTerm !== term
+      ? `Open ${formatTermLabel(term)} for registration?\n\nParents will stop seeing ${fromLabel}'s ${activeTermOpenCount ?? 0} open program(s) and start seeing ${formatTermLabel(term)}'s ${viewedOpenCount} open program(s) instead. Families already enrolled in ${fromLabel} are not affected.`
+      : `Open ${formatTermLabel(term)} for registration? Parents will see its ${viewedOpenCount} open program(s).`;
+    if (!window.confirm(confirmMsg)) return;
+    setSwitchingTerm(true);
+    setSwitchResult(null);
+    try {
+      const { error: switchErr } = await supabase
+        .from("organizations")
+        .update({ active_registration_term: term })
+        .eq("id", org.id);
+      if (switchErr) throw switchErr;
+      setSwitchResult({ ok: true, message: `${formatTermLabel(term)} is now open for registration. Refreshing…` });
+      // Full reload, not just local state: `org` (and everything reading
+      // org.active_registration_term from it — the per-program Share-link
+      // gate, the catalog Share button) comes from AdminLayout's outlet
+      // context, not this component. Setting local state alone would make
+      // this banner say "open" while those still gate on the stale term.
+      setTimeout(() => window.location.reload(), 900);
+    } catch (err) {
+      setSwitchResult({ ok: false, message: err.message ?? String(err) });
+    } finally {
+      setSwitchingTerm(false);
+    }
   }
 
   // Load this org's terms once orgId is known: populate the dropdown and pick
@@ -420,6 +489,45 @@ export default function ProgramsCalendar() {
           </div>
         </div>
       </div>
+
+      {term && termsLoaded && (
+        activeTerm === term ? (
+          <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
+            ✓ {formatTermLabel(term)} is open for registration — this is what parents see.
+          </div>
+        ) : (
+          <div style={{ ...registrationBanner, background: "#fff8ec", borderColor: "#f0dfb8", color: AMBER }}>
+            <span>
+              {formatTermLabel(term)} is not open for registration.
+              {activeTerm && ` Parents currently see ${formatTermLabel(activeTerm)}.`}
+            </span>
+            {perm.canManageSettings ? (
+              <button
+                type="button"
+                onClick={openTermForRegistration}
+                disabled={switchingTerm}
+                style={{
+                  background: "transparent", color: AMBER, border: `1px solid ${AMBER}`, padding: "5px 12px",
+                  borderRadius: 6, fontSize: 12.5, fontWeight: 700, fontFamily: "inherit",
+                  cursor: switchingTerm ? "wait" : "pointer", whiteSpace: "nowrap",
+                }}
+              >{switchingTerm ? "Opening…" : `Open ${formatTermLabel(term)} for registration →`}</button>
+            ) : (
+              <span style={{ fontSize: 12.5, fontStyle: "italic" }}>Ask an owner or admin to open it.</span>
+            )}
+          </div>
+        )
+      )}
+      {switchResult && (
+        <div style={{
+          ...registrationBanner,
+          background: switchResult.ok ? "#f0f8f0" : "#fde7e7",
+          borderColor: switchResult.ok ? "#bfd9bf" : "#f0c4c4",
+          color: switchResult.ok ? OK_GREEN : "#b53737",
+        }}>
+          {switchResult.ok ? "✓ " : ""}{switchResult.message}
+        </div>
+      )}
 
       {!loading && !error && programs.length > 0 && (
         <div style={summaryBar}>
@@ -1771,6 +1879,20 @@ const cardStyle = {
   border: `1px solid ${RULE}`,
   borderRadius: 10,
   padding: 10,
+};
+
+const registrationBanner = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
+  padding: "10px 14px",
+  border: "1px solid",
+  borderRadius: 10,
+  marginBottom: 14,
+  fontSize: 13,
+  fontWeight: 600,
 };
 
 const errorBox = {
