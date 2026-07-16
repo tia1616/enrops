@@ -1,0 +1,39 @@
+-- 20260714_delivery_alert_cron_infra.sql
+--
+-- PROD-ONLY scheduling for the delivery-alert-cron edge fn (daily push email to
+-- operators about lifecycle emails that didn't reach a family). Staging has no
+-- pg_cron jobs (cron.job is empty there) and only synthetic data, so this is not
+-- a staging-parity concern — staging is exercised by manual/test invocation.
+--
+-- There is no re-runnable DB object here (no table/function/policy) — only a
+-- pg_cron schedule, which is environment-specific (the anon bearer differs per
+-- project). So, matching 20260703_backup_storage_objects_infra.sql, the schedule
+-- is documented here and applied DIRECTLY on prod, not auto-run by this file.
+--
+-- Runs at 16:00 UTC (~9am PT), one hour after lifecycle-automations-daily (15:00
+-- UTC), so the day's failures are already recorded. The edge fn dedupes on a 25h
+-- last_attempt_at window (no dedupe column), so a permanent miss alerts ~once.
+--
+-- SECURITY: the fn emails operators and (in test mode) takes a recipient address,
+-- so it is NOT openly callable — it requires the shared secret DELIVERY_ALERT_SECRET
+-- in an `x-cron-secret` header and fails closed if the secret is unset. Before
+-- scheduling on prod, set that secret on the prod edge-fn env:
+--   supabase secrets set DELIVERY_ALERT_SECRET=<random> --project-ref iuasfpztkmrtagivlhtj
+-- then use the SAME value in the cron header below.
+--
+--   select cron.schedule('delivery-alert-daily', '0 16 * * *', $job$
+--     SELECT net.http_post(
+--       url := 'https://iuasfpztkmrtagivlhtj.supabase.co/functions/v1/delivery-alert-cron',
+--       headers := jsonb_build_object(
+--         'Content-Type', 'application/json',
+--         'Authorization', 'Bearer <PROD_ANON_KEY>',    -- gateway apikey (fn is verify_jwt=false)
+--         'x-cron-secret', '<DELIVERY_ALERT_SECRET>'),   -- the caller gate
+--       body := '{}'::jsonb,
+--       timeout_milliseconds := 140000
+--     );
+--   $job$);
+--
+-- To pause: select cron.unschedule('delivery-alert-daily');
+
+-- (intentionally no-op DDL; see comment above — prod schedule applied out-of-band)
+select 1;

@@ -53,6 +53,11 @@ verify_jwt = false
 [functions.lifecycle-automations-cron]
 verify_jwt = false
 
+# Daily push alert to operators about lifecycle emails that didn't reach a family.
+# Cron-invoked (pg_cron net.http_post with the anon bearer), so no JWT required.
+[functions.delivery-alert-cron]
+verify_jwt = false
+
 [functions.marketing-resend-webhook]
 verify_jwt = false
 
