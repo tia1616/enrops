@@ -641,6 +641,11 @@ export default function ProgramsCalendar() {
 
       {editingProgram && (
         <EditProgramCurriculumModal
+          // Remount per program: the modal seeds match-mode defaults and the
+          // picked curriculum from props in useState initializers, which don't
+          // re-run on a prop change. Without this, reusing the instance for a
+          // different program would silently carry the previous one's state.
+          key={editingProgram.id}
           program={editingProgram}
           org={org}
           curricula={curricula}
