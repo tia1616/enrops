@@ -51,8 +51,8 @@ const STANDARD_FIELDS = [
   },
   {
     key: "authorized_pickup",
-    label: "Who can pick up your child?",
-    desc: "Up to 4 people (first and last name). Asked when the child is released to an adult.",
+    label: "Besides the parent(s) listed in registration, who else is allowed to pick up your child?",
+    desc: "Extra people besides the parent/guardians (first and last name). Parents and guardians can always pick up. Asked when the child is released to an adult.",
     defaultRequired: true,
     alwaysRequired: true,
   },

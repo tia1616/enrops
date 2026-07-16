@@ -137,9 +137,9 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
       {std.authorized_pickup && (releasedToAdult || !std.dismissal_method) && (
         <div>
           <label className="label-field">
-            {std.authorized_pickup.label || 'Who can pick up your child?'}<Req on={std.authorized_pickup.required} />
+            {std.authorized_pickup.label || 'Besides the parent(s) listed in registration, who else is allowed to pick up your child?'}<Req on={std.authorized_pickup.required} />
           </label>
-          <p className="help-text">Up to {MAX_PICKUP} people we're allowed to release your child to.</p>
+          <p className="help-text">You don't need to list yourself. Add up to {MAX_PICKUP} other people we're allowed to release your child to.</p>
           <div className="mt-2 grid gap-3">
             {(list.length ? list : [{ first_name: '', last_name: '', phone: '' }]).map((row, i) => (
               <div key={i} className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto]">

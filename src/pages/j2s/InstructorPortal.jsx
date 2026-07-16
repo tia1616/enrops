@@ -3717,6 +3717,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
       {canRecord && (
         <AttendanceControls
           pickups={pickups}
+          guardians={guardians}
           doNotRelease={doNotRelease}
           dismissalMethod={s.dismissal_method}
           parent={p}
@@ -3740,14 +3741,47 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
 // the person is added to the authorized list (parent portal / admin roster editor)
 // before they become selectable. That keeps the authorized list the single source
 // of truth and makes the log trustworthy.
-function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, parent, orgAsksDismissal = false, attRecord, saving, onSave }) {
+function AttendanceControls({ pickups = [], guardians = [], doNotRelease = [], dismissalMethod, parent, orgAsksDismissal = false, attRecord, saving, onSave }) {
   const [pickValue, setPickValue] = useState(""); // controlled dismissal <select>
 
+  // Canonical name match: lowercase, collapse all whitespace to one space,
+  // trim. IDENTICAL to private.norm_person_name() in the DB so the picker's
+  // do-not-release drop and the trigger's do-not-release backstop agree on
+  // messy-roster whitespace (a barred "John  Smith" can't slip through here and
+  // then get caught only server-side, and vice versa).
+  const normName = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
   const dnrNames = new Set(
-    doNotRelease.map((c) => contactName(c).toLowerCase()).filter(Boolean),
+    doNotRelease.map((c) => normName(contactName(c))).filter(Boolean),
   );
-  // Defensive: a pickup that also matches a do-not-release name is dropped.
-  const pickOptions = pickups.filter((c) => !dnrNames.has(contactName(c).toLowerCase()));
+
+  // The people this child can be released to, in one list. The account parent
+  // and any guardians are inherently authorized to collect their own child, so
+  // they lead the list (kind 'released_to_guardian'); the extra authorized
+  // pickups the family listed follow ('released_to_adult'). Precedence
+  // parent > guardian > pickup dedupes the same person appearing in two roles
+  // (e.g. a parent who also typed themselves on the pickup list). Anyone whose
+  // name is on the do-not-release list is dropped (the DB trigger enforces the
+  // same rule authoritatively).
+  const parentName = parent ? contactName(parent) : "";
+  const releaseOptions = [];
+  const seenNames = new Set();
+  const dnrHas = (nm) => dnrNames.has(normName(nm));
+  if (parentName && !dnrHas(parentName)) {
+    releaseOptions.push({ value: "__parent__", label: `${parentName} (parent)`, kind: "released_to_guardian", contactId: null, name: parentName });
+    seenNames.add(normName(parentName));
+  }
+  for (const g of guardians) {
+    const nm = contactName(g);
+    if (!nm || dnrHas(nm) || seenNames.has(normName(nm))) continue;
+    releaseOptions.push({ value: g.id, label: `${nm} (guardian)`, kind: "released_to_guardian", contactId: g.id, name: nm });
+    seenNames.add(normName(nm));
+  }
+  for (const c of pickups) {
+    const nm = contactName(c);
+    if (!nm || dnrHas(nm) || seenNames.has(normName(nm))) continue;
+    releaseOptions.push({ value: c.id, label: nm, kind: "released_to_adult", contactId: c.id, name: nm });
+    seenNames.add(normName(nm));
+  }
   const canWalk = dismissalMethod === "walks_or_bikes_home";
 
   const present = attRecord?.present ?? null;
@@ -3770,9 +3804,9 @@ function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, 
       onSave({ dismissal_kind: "walked_or_biked", released_to_contact_id: null, released_to_name: "Walked / biked home", released_at: new Date().toISOString(), notes: null });
       return;
     }
-    const c = pickOptions.find((x) => x.id === v);
-    if (c) {
-      onSave({ dismissal_kind: "released_to_adult", released_to_contact_id: c.id, released_to_name: contactName(c), released_at: new Date().toISOString(), notes: null });
+    const opt = releaseOptions.find((o) => o.value === v);
+    if (opt) {
+      onSave({ dismissal_kind: opt.kind, released_to_contact_id: opt.contactId, released_to_name: opt.name, released_at: new Date().toISOString(), notes: null });
     }
   }
 
@@ -3835,8 +3869,8 @@ function AttendanceControls({ pickups = [], doNotRelease = [], dismissalMethod, 
             style={{ fontSize: 12, fontFamily: "inherit", color: INK, border: `1px solid ${RULE}`, borderRadius: 6, padding: "5px 6px", background: "#fff", maxWidth: 260 }}
           >
             <option value="" disabled>Released to…</option>
-            {pickOptions.map((c) => (
-              <option key={c.id} value={c.id}>{contactName(c)}</option>
+            {releaseOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
             ))}
             {canWalk && <option value="__walk__">Walked / biked home</option>}
           </select>
