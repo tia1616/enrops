@@ -223,6 +223,11 @@ function statusColor(status) {
   return PURPLE;
 }
 
+// Display name for an assignment row in nudge/tip copy.
+function patchNudgeName(a) {
+  return a?.instructor_preferred || a?.instructor_first || "An instructor";
+}
+
 function statusLabel(status) {
   return ({
     needs_hire: "Needs instructor",
@@ -714,6 +719,23 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     c.instructors = state.instructors.length;
     return c;
   }, [state, enriched]);
+
+  // Have any offers for this term gone out? Once they have, the term is "mid-flight":
+  // bulk Approve + bulk Send are the wrong tools (they'd sweep up drafts), and a
+  // newly-assigned instructor needs their own patch offer instead.
+  const offersOut = useMemo(
+    () => state.status === "ready" && state.assignments.some((a) => a.email_sent_at),
+    [state],
+  );
+
+  // Mid-flight rows that are on the board but were never emailed — i.e. someone was
+  // dropped in after the batch went out and the nudge was dismissed with "Later".
+  // Without a surface for these they'd be stranded: Approve is hidden mid-flight, so
+  // nothing else would ever email them. This is the safety net for that.
+  const pendingPatchAssignments = useMemo(() => {
+    if (state.status !== "ready" || !offersOut) return [];
+    return state.assignments.filter((a) => a.status === "proposed" && !a.email_sent_at && a.instructor_id);
+  }, [state, offersOut]);
 
   // Instructors who actually have approved (confirmed, not-yet-emailed) classes —
   // the real recipients of a Send. The Send modal lists + pre-selects exactly these.
@@ -1257,7 +1279,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (preview.length === 0) {
         throw new Error(data?.note ?? "Nothing to send — this offer was already emailed, or the instructor has no email on file.");
       }
-      setPatchPreview({ assignmentIds, preview });
+      // A 'proposed' target has never been approved, and sending is what approves it.
+      // The preview has to say that out loud rather than call itself a plain send.
+      // (A resend targets a 'published' row — already approved, nothing to bundle.)
+      const fresh = stateRef.current;
+      const targets = fresh.status === "ready" ? fresh.assignments.filter((a) => assignmentIds.includes(a.id)) : [];
+      const needsApproval = targets.some((a) => a.status === "proposed");
+      setPatchPreview({ assignmentIds, preview, needsApproval });
       return { ok: true };
     } catch (err) {
       console.error("send-afterschool-patch-offer preview failed:", err);
@@ -1272,9 +1300,20 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
   }
 
-  async function handleConfirmPatchSend() {
-    const ids = patchPreview?.assignmentIds;
-    if (!ids || ids.length === 0) return;
+  async function handleConfirmPatchSend(excludedInstructorIds = new Set()) {
+    const all = patchPreview?.assignmentIds;
+    if (!all || all.length === 0) return;
+    // Drop anyone unticked in the preview. Resolve via the assignment rows so an
+    // excluded instructor can't ride along on a second assignment id.
+    const fresh = stateRef.current;
+    const byId = new Map((fresh.status === "ready" ? fresh.assignments : []).map((a) => [a.id, a.instructor_id]));
+    const ids = excludedInstructorIds.size === 0
+      ? all
+      : all.filter((id) => { const inst = byId.get(id); return inst && !excludedInstructorIds.has(inst); });
+    if (ids.length === 0) {
+      setPatchError("Nothing to send — every instructor was skipped.");
+      return;
+    }
     setBusy("patching");
     setSaveError(null);
     setPatchError(null);
@@ -1620,6 +1659,22 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         </div>
       )}
 
+      {pendingPatchAssignments.length > 0 && (
+        <HatGuide
+          character="instructor"
+          tip={{
+            key: `as-${term}-pendingpatch-${pendingPatchAssignments.length}`,
+            message: pendingPatchAssignments.length === 1
+              ? `${patchNudgeName(pendingPatchAssignments[0])} is on the schedule but hasn't been emailed — offers for this term already went out, so nothing will email them automatically.`
+              : `${pendingPatchAssignments.length} instructors are on the schedule but haven't been emailed — offers for this term already went out, so nothing will email them automatically.`,
+            primary: {
+              label: pendingPatchAssignments.length === 1 ? "Approve & send their offer" : `Approve & send ${pendingPatchAssignments.length} offers`,
+              onClick: () => handlePreviewPatchOffers(pendingPatchAssignments.map((a) => a.id)),
+            },
+          }}
+        />
+      )}
+
       {counts.changeRequested > 0 && changeReqLead && (
         <HatGuide
           character="instructor"
@@ -1653,6 +1708,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         hasPrograms={state.programs.length > 0}
         lastOp={lastOp}
         onUndo={handleUndo}
+        offersOut={offersOut}
       />
 
       {approveResult && (
@@ -1908,11 +1964,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       {offerNewPrompt && (
         <Overlay onClose={() => setOfferNewPrompt(null)} maxWidth={440}>
           <div style={{ padding: 24 }}>
-            <h3 style={{ margin: "0 0 8px", color: INK, fontSize: 17 }}>Email {offerNewPrompt.name} their offer?</h3>
+            <h3 style={{ margin: "0 0 8px", color: INK, fontSize: 17 }}>Approve and email {offerNewPrompt.name} their offer?</h3>
             <p style={{ color: MUTED, fontSize: 13.5, margin: "0 0 18px", lineHeight: 1.5 }}>
               {offerNewPrompt.name} is now on {offerNewPrompt.classLabel}. Offers for this term already
-              went out, so they won't be emailed automatically — send their offer now, or do it later
-              from the schedule.
+              went out, so nothing will email them automatically. You'll see the email first — sending
+              it approves this one class and asks them to accept.
+            </p>
+            <p style={{ color: MUTED, fontSize: 12.5, margin: "0 0 18px", lineHeight: 1.5 }}>
+              Not now? They'll stay on the schedule as a draft, and the Hat will remind you.
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
               <button
@@ -1928,7 +1987,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                 disabled={busy === "patching"}
                 style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy === "patching" ? 0.6 : 1 }}
               >
-                {busy === "patching" ? "Building preview…" : "Preview their offer"}
+                {busy === "patching" ? "Building preview…" : "Review the email"}
               </button>
             </div>
           </div>
@@ -1940,6 +1999,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           preview={patchPreview.preview}
           instructors={state.instructors}
           sending={busy === "patching"}
+          needsApproval={patchPreview.needsApproval}
           error={patchError}
           onSend={handleConfirmPatchSend}
           onClose={() => { setPatchPreview(null); setPatchError(null); }}
@@ -1965,7 +2025,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
 const linkBtn = { background: "transparent", border: "none", color: PURPLE, fontWeight: 600, cursor: "pointer", marginLeft: 10, fontSize: 13, textDecoration: "underline" };
 
-function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms, lastOp, onUndo }) {
+function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms, lastOp, onUndo, offersOut }) {
   // Unified term selector: afterschool terms (this view) + camp cycles (switches back to Schedule).
   const value = `as:${term}`;
   function onChange(e) {
@@ -2062,7 +2122,12 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             Undo: {lastOp.label}
           </button>
         )}
-        {counts.proposed > 0 && (
+        {/* Bulk Approve is a pre-send tool. Once offers are out it would sweep up
+            every draft on the board in one click, so it goes away (camp does the
+            same via cycle.status). Mid-flight, a newly assigned instructor is
+            approved + emailed one row at a time through the patch offer — the nudge,
+            or the Hat tip that catches the ones dismissed with "Later". */}
+        {counts.proposed > 0 && !offersOut && (
           <button
             type="button"
             onClick={onApprove}
@@ -3183,10 +3248,22 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
 
 // The real patch-offer email, rendered by the edge fn in 'preview' mode. Nothing has
 // been sent at this point — Send here is the only thing that touches an inbox.
-function PatchPreviewModal({ preview, instructors, sending, error, onSend, onClose }) {
+function PatchPreviewModal({ preview, instructors, sending, needsApproval, error, onSend, onClose }) {
   const [idx, setIdx] = useState(0);
+  // Instructors unticked in this preview. Only reachable when the preview covers
+  // more than one — a single-recipient preview has Cancel for that.
+  const [excluded, setExcluded] = useState(() => new Set());
   const nameById = new Map(instructors.map((i) => [i.id, (i.preferred_name || i.first_name) + (i.last_name ? ` ${i.last_name}` : "")]));
   const cur = preview[idx];
+  const multi = preview.length > 1;
+  const sendCount = preview.length - excluded.size;
+  function toggleExclude(instructorId) {
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(instructorId)) next.delete(instructorId); else next.add(instructorId);
+      return next;
+    });
+  }
   return (
     <Overlay onClose={sending ? () => {} : onClose} maxWidth={720}>
       <div style={{ padding: "18px 22px", borderBottom: `1px solid ${RULE}` }}>
@@ -3196,12 +3273,25 @@ function PatchPreviewModal({ preview, instructors, sending, error, onSend, onClo
         <div style={{ fontSize: 12.5, color: MUTED, marginTop: 4 }}>{cur?.subject} · to {cur?.to}</div>
       </div>
       <div style={{ padding: "12px 18px 0", overflowY: "auto" }}>
-        {preview.length > 1 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        {multi && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>Previewing</span>
             <select value={idx} onChange={(e) => setIdx(Number(e.target.value))} style={{ fontSize: 12, fontFamily: "inherit", border: `1px solid ${RULE}`, borderRadius: 6, padding: "3px 6px", maxWidth: 320 }}>
-              {preview.map((p, i) => <option key={i} value={i}>{nameById.get(p.instructor_id) || p.to}</option>)}
+              {preview.map((p, i) => (
+                <option key={i} value={i}>
+                  {(nameById.get(p.instructor_id) || p.to) + (excluded.has(p.instructor_id) ? " — skipped" : "")}
+                </option>
+              ))}
             </select>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: excluded.has(cur?.instructor_id) ? CORAL : INK, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={!excluded.has(cur?.instructor_id)}
+                onChange={() => toggleExclude(cur?.instructor_id)}
+                style={{ margin: 0 }}
+              />
+              {excluded.has(cur?.instructor_id) ? <strong>Skipped — won't email {cur?.to}</strong> : <span>Include in send</span>}
+            </label>
             <span style={{ marginLeft: "auto", fontSize: 11, color: MUTED }}>Nothing sent yet</span>
           </div>
         )}
@@ -3216,12 +3306,27 @@ function PatchPreviewModal({ preview, instructors, sending, error, onSend, onClo
       )}
       <div style={{ padding: "12px 18px", display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
         <span style={{ fontSize: 12, color: MUTED }}>
-          Sending marks {preview.length === 1 ? "this class" : "these classes"} as offered and asks for a response.
+          {sendCount === 0
+            ? "Every instructor is skipped — nothing will be emailed."
+            : needsApproval
+              ? `Sending approves ${sendCount === 1 ? "this class" : `${sendCount} classes`} and asks the instructor${sendCount === 1 ? "" : "s"} to accept.`
+              : `Sending marks ${sendCount === 1 ? "this class" : `${sendCount} classes`} as offered and asks for a response.`}
         </span>
         <div style={{ display: "flex", gap: 8 }}>
           <button type="button" onClick={onClose} disabled={sending} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}`, opacity: sending ? 0.6 : 1 }}>Cancel</button>
-          <button type="button" onClick={onSend} disabled={sending} style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: sending ? 0.6 : 1 }}>
-            {sending ? "Sending…" : preview.length === 1 ? "Send this offer" : `Send ${preview.length} offers`}
+          <button
+            type="button"
+            onClick={() => onSend(excluded)}
+            disabled={sending || sendCount === 0}
+            style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: sending || sendCount === 0 ? 0.6 : 1 }}
+          >
+            {sending
+              ? "Sending…"
+              : sendCount === 0
+                ? "Nothing to send"
+                : needsApproval
+                  ? (sendCount === 1 ? "Approve & send" : `Approve & send ${sendCount}`)
+                  : (sendCount === 1 ? "Send this offer" : `Send ${sendCount} offers`)}
           </button>
         </div>
       </div>
