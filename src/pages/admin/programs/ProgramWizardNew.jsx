@@ -101,6 +101,26 @@ function toDbTime12h(hhmm) {
   return `${h12}:${min} ${ampm}`;
 }
 
+// Minutes since midnight, from EITHER "15:30" (the 24-hour picker) or
+// "3:30 PM" (how the column stores it). null when unparseable.
+//
+// start_time/end_time are TEXT, so they cannot be compared with SQL <  / >:
+// "10:00 AM" sorts BEFORE "9:00 AM" lexically, and a 24-hour picker value
+// compared against 12-hour text ("15:30" vs "3:30 PM") is meaningless. Overlap
+// has to be computed numerically, in JS, after both sides are parsed.
+function timeToMinutes(t) {
+  if (typeof t !== "string" || !t.trim()) return null;
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i.exec(t.trim());
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
+  const ampm = m[3]?.toUpperCase();
+  if (ampm === "PM" && h !== 12) h += 12;
+  if (ampm === "AM" && h === 12) h = 0;
+  return h * 60 + min;
+}
+
 function dayLabel(dow) {
   const found = DAYS.find((d) => d.value === dow);
   return found ? found.label : "";
@@ -357,21 +377,37 @@ export default function ProgramWizardNew() {
     }
     let cancelled = false;
     (async () => {
+      // Fetch same location + term + day, then compute the time overlap in JS.
+      // The time bounds are deliberately NOT in the query: start_time/end_time
+      // are 12-hour TEXT, so SQL's lexical < / > gives arbitrary answers when
+      // compared against the picker's 24-hour value. See timeToMinutes().
       const { data, error: convErr } = await supabase
         .from("programs")
         .select("id, curriculum, start_time, end_time")
         .eq("organization_id", org.id)
         .eq("program_location_id", formData.program_location_id)
         .eq("term", formData.term)
-        .eq("day_of_week", formData.day_of_week)
-        .lt("start_time", formData.end_time)
-        .gt("end_time", formData.start_time);
+        .eq("day_of_week", formData.day_of_week);
       if (cancelled) return;
       if (convErr) {
         setConflicts([]);
         return;
       }
-      setConflicts(data ?? []);
+      const newStart = timeToMinutes(formData.start_time);
+      const newEnd = timeToMinutes(formData.end_time);
+      if (newStart == null || newEnd == null) {
+        setConflicts([]);
+        return;
+      }
+      // Half-open overlap: back-to-back programs (one ends exactly when the
+      // next starts) are not a conflict.
+      const overlapping = (data ?? []).filter((r) => {
+        const s = timeToMinutes(r.start_time);
+        const e = timeToMinutes(r.end_time);
+        if (s == null || e == null) return false; // unparseable/unset -> can't claim a clash
+        return s < newEnd && e > newStart;
+      });
+      setConflicts(overlapping);
     })();
     return () => { cancelled = true; };
   }, [
