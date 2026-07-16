@@ -26,11 +26,37 @@ export async function fetchOrgTerms(orgId) {
 
 const SEASON_LABELS = { FA: "Fall", WI: "Winter", SP: "Spring", SU: "Summer" };
 
+const TERM_RE = /^(FA|WI|SP|SU)(\d{2})$/;
+
 // formatTermLabel("FA26") -> "Fall 2026". Codes that don't match the
 // SEASON+2-digit-year pattern come back unchanged.
 export function formatTermLabel(term) {
   if (typeof term !== "string") return term;
-  const m = /^(FA|WI|SP|SU)(\d{2})$/.exec(term.trim());
+  const m = TERM_RE.exec(term.trim());
   if (!m) return term;
   return `${SEASON_LABELS[m[1]]} 20${m[2]}`;
+}
+
+// termSeasonName("WI27") -> "Winter". null when the code isn't a term code.
+// Use this instead of hardcoding a season word next to a term-driven value.
+export function termSeasonName(term) {
+  if (typeof term !== "string") return null;
+  const m = TERM_RE.exec(term.trim());
+  return m ? SEASON_LABELS[m[1]] : null;
+}
+
+// The Winter + Spring terms that complete the school year a given Fall term
+// opens: "FA26" -> { winter: "WI27", spring: "SP27" }.
+//
+// Returns null for any non-Fall term, which is the point: a full-school-year
+// bundle only exists relative to a Fall. Callers use null as "no bundle here"
+// rather than pairing a Winter term with itself. Mirrors the school-year rule
+// in term_to_school_year() (SQL) and termToSchoolYearJs() — FA{yy} spans
+// 20{yy}-20{yy+1}, so its Winter/Spring carry the following year's number.
+export function schoolYearTermsForFall(fallTerm) {
+  if (typeof fallTerm !== "string") return null;
+  const m = /^FA(\d{2})$/.exec(fallTerm.trim());
+  if (!m) return null;
+  const yy = String((Number(m[1]) + 1) % 100).padStart(2, "0");
+  return { winter: `WI${yy}`, spring: `SP${yy}` };
 }

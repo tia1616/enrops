@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase, API_BASE } from '../../lib/supabase.js';
 import { VIP_PRICE_PER_TERM_CENTS } from '../../lib/pricing.js';
+import { schoolYearTermsForFall } from '../../lib/terms.js';
 import { useCart } from '../../context/CartContext.jsx';
 import StepIndicator from '../../components/StepIndicator.jsx';
 import StepStudent from './register-steps/StepStudent.jsx';
@@ -212,7 +213,18 @@ export default function Register() {
       return;
     }
 
-    // VIP path needs Winter and Spring program rows for the bundle
+    // VIP path needs Winter and Spring program rows for the bundle.
+    //
+    // The legs are derived from THIS program's own term, and only when that
+    // term is a Fall (schoolYearTermsForFall returns null otherwise) — a
+    // full-school-year bundle only exists from its start. A ?vip=1 link
+    // pointing at a non-Fall program therefore falls through to the standard
+    // single-term path below rather than bundling the program with itself.
+    const bundleTerms = schoolYearTermsForFall(program.term);
+    if (!bundleTerms) {
+      setActiveChildItem({ program, isVip: false });
+      return;
+    }
     (async () => {
       const { data: matches } = await supabase
         .from('programs')
@@ -220,9 +232,9 @@ export default function Register() {
         .eq('program_location_id', program.program_location_id)
         .eq('day_of_week', program.day_of_week)
         .eq('runs_own_registration', false) // don't bundle partner-run programs into a paid VIP offer
-        .in('term', ['WI27', 'SP27']);
-      const winter = matches?.find((p) => p.term === 'WI27');
-      const spring = matches?.find((p) => p.term === 'SP27');
+        .in('term', [bundleTerms.winter, bundleTerms.spring]);
+      const winter = matches?.find((p) => p.term === bundleTerms.winter);
+      const spring = matches?.find((p) => p.term === bundleTerms.spring);
       if (winter && spring) {
         setActiveChildItem({
           program,

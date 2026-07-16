@@ -13,6 +13,7 @@ import {
   basePriceForItem,
   standardPriceFor,
 } from '../../lib/pricing.js';
+import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
 // provided by PublicLayout via Outlet context (from the public_org_directory
@@ -48,6 +49,14 @@ export default function J2SHome() {
   const [weeklyClasses, setWeeklyClasses] = useState([]); // recurring class_schedule (outside-registration tenants), safe public view
   const [loading, setLoading] = useState(true);
 
+  // Labels for the term the catalog is serving, derived from the org's own
+  // active term — never hardcoded to a season. termLabel: "Winter 2027";
+  // seasonName: "Winter". Both fall back to neutral wording if the org's term
+  // code is missing or malformed, so the page degrades to vague rather than
+  // to a confidently wrong season.
+  const termLabel = formatTermLabel(org?.active_registration_term) || '';
+  const seasonName = termSeasonName(org?.active_registration_term); // null when not a term code
+
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
     load();
@@ -75,11 +84,16 @@ export default function J2SHome() {
       .eq('organization_id', org.id)
       .order('name');
 
+    // The one term the catalog serves, per org. Every term-derived label on
+    // this page reads from this same value, so the page can't claim one season
+    // while listing another's programs.
+    const catalogTerm = org.active_registration_term;
+
     const { data: pg } = await supabase
       .from('programs')
       .select('*')
       .eq('organization_id', org.id)
-      .eq('term', org.active_registration_term)
+      .eq('term', catalogTerm)
       .eq('status', 'open')
       // Native programs (we run checkout) OR partner-run programs the operator
       // explicitly listed with a registration link (shown as a link-out, no checkout).
@@ -87,22 +101,31 @@ export default function J2SHome() {
       .order('day_of_week');
 
     // Look up Winter/Spring matches for each fall program to determine VIP eligibility.
-    // A fall program is VIP-eligible only if WI27 AND SP27 exist at the same school + day.
+    // A fall program is VIP-eligible only if that school year's Winter AND Spring
+    // exist at the same school + day.
+    //
+    // Gated on the open term being a FALL term (schoolYearTermsForFall returns
+    // null otherwise): VIP sells a whole school year, which only makes sense
+    // from its start. Without this gate, a Winter open term would match itself
+    // as its own "winter" leg and render a 3-term bundle listing the same class
+    // twice. Codes are derived from the open term, never hardcoded, so this
+    // keeps working when the school year rolls over.
+    const bundleTerms = schoolYearTermsForFall(catalogTerm);
     const bundles = {};
-    if (pg && pg.length) {
+    if (pg && pg.length && bundleTerms) {
       const { data: futureTerms } = await supabase
         .from('programs')
         .select('*')
         .eq('organization_id', org.id)
         .eq('runs_own_registration', false) // don't bundle partner-run programs into a paid VIP offer
-        .in('term', ['WI27', 'SP27']);
+        .in('term', [bundleTerms.winter, bundleTerms.spring]);
 
       pg.forEach((fall) => {
         const winter = futureTerms?.find(
-          (f) => f.term === 'WI27' && f.program_location_id === fall.program_location_id && f.day_of_week === fall.day_of_week,
+          (f) => f.term === bundleTerms.winter && f.program_location_id === fall.program_location_id && f.day_of_week === fall.day_of_week,
         );
         const spring = futureTerms?.find(
-          (f) => f.term === 'SP27' && f.program_location_id === fall.program_location_id && f.day_of_week === fall.day_of_week,
+          (f) => f.term === bundleTerms.spring && f.program_location_id === fall.program_location_id && f.day_of_week === fall.day_of_week,
         );
         if (winter && spring) {
           bundles[fall.id] = { winter, spring };
@@ -222,7 +245,7 @@ export default function J2SHome() {
         <div className="relative z-10 mx-auto max-w-6xl px-4 sm:px-6">
           <div className="max-w-3xl">
             <span className="inline-block rounded-full bg-white/15 px-4 py-1.5 text-xs font-bold uppercase tracking-widest text-white">
-              Fall 2026 registration is open
+              {termLabel ? `${termLabel} registration is open` : 'Registration is open'}
             </span>
             <h1 className="mt-6 font-titan text-5xl leading-[1.05] tracking-tight sm:text-7xl">
               Future-Ready Skills.
@@ -497,12 +520,16 @@ export default function J2SHome() {
                             </div>
                           )}
 
-                          {/* Fall Only column (RIGHT) */}
+                          {/* Single-term column (RIGHT) */}
                           <div className="p-5">
-                            {/* "Fall only" reads as a contrast to the VIP all-terms column;
-                                when Fall is the only option (no VIP bundle), drop the "only". */}
+                            {/* "<Season> only" reads as a contrast to the VIP all-terms
+                                column; when it's the only option (no VIP bundle), drop
+                                the "only". Season comes from the open term — when Winter
+                                is open this must read "Winter", not "Fall". */}
                             <p className="font-titan text-xs uppercase tracking-widest text-j2s-ink/50">
-                              {vipEligible ? 'Fall only' : 'Fall'}
+                              {seasonName
+                                ? (vipEligible ? `${seasonName} only` : seasonName)
+                                : (vipEligible ? 'This term only' : 'This term')}
                             </p>
                             <div className="mt-2">
                               {fallShowsEarlyBird ? (
@@ -520,7 +547,7 @@ export default function J2SHome() {
                                 </p>
                               )}
                             </div>
-                            <p className="mt-1 text-xs text-j2s-ink/60">Fall 2026</p>
+                            <p className="mt-1 text-xs text-j2s-ink/60">{termLabel}</p>
                             {/* #8: Early-bird on both cards */}
                             {fallShowsEarlyBird && fallEarlyBirdLabel && (
                               <p className="mt-2 text-xs font-semibold text-j2s-orange-dark">
@@ -532,7 +559,9 @@ export default function J2SHome() {
                               onClick={() => startRegistration(p.id, false)}
                               className="btn-j2s-secondary mt-4 w-full text-sm"
                             >
-                              {vipEligible ? 'Register for fall only' : 'Register for fall'}
+                              {seasonName
+                                ? (vipEligible ? `Register for ${seasonName.toLowerCase()} only` : `Register for ${seasonName.toLowerCase()}`)
+                                : (vipEligible ? 'Register for this term only' : 'Register')}
                             </button>
                           </div>
                         </div>
