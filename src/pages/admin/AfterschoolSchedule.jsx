@@ -92,8 +92,9 @@ const FILTER_STATUSES = [
   { key: "change_requested", label: "Change requested" },
   { key: "flagged", label: "Flagged" },
   { key: "accepted", label: "Accepted" },
-  { key: "confirmed", label: "Awaiting response" },
-  { key: "ok", label: "Not yet sent" },
+  { key: "awaiting", label: "Awaiting response" },
+  { key: "ready_to_send", label: "Ready to send" },
+  { key: "draft", label: "Needs approval" },
 ];
 
 function dayKey(dow) {
@@ -193,15 +194,23 @@ function deriveStatus(programId, assignments) {
   for (const a of own) {
     const rank = STATUS_RANK[a.status] ?? -1;
     if (!best || rank > best.rank) {
-      best = { status: a.status, rank, flags: a.flags ?? [], instructor_response_at: a.instructor_response_at ?? null, flagged_reason: a.flagged_reason ?? null };
+      best = { status: a.status, rank, flags: a.flags ?? [], instructor_response_at: a.instructor_response_at ?? null, flagged_reason: a.flagged_reason ?? null, email_sent_at: a.email_sent_at ?? null };
     }
   }
   if (best.status === "change_requested") return "change_requested";
   if (best.flagged_reason) return "flagged";
   if (Array.isArray(best.flags) && best.flags.length > 0) return "flagged";
   if (best.status === "confirmed" && best.instructor_response_at) return "accepted";
-  if (best.status === "confirmed" || best.status === "published") return "confirmed";
-  return "ok";
+  // Approved (or published) but never emailed: nobody has been asked anything yet,
+  // so this is NOT awaiting a response — it's sitting in the Send offers queue.
+  // 'published' lands here too while a resend is mid-flight (the send trail is
+  // cleared before the patch offer goes out).
+  if (best.status === "confirmed" || best.status === "published") {
+    return best.email_sent_at ? "awaiting" : "ready_to_send";
+  }
+  // 'proposed' — a matcher draft nobody has approved. Naming it by the send step
+  // implies Approve already happened and only the email is missing.
+  return "draft";
 }
 
 function statusColor(status) {
@@ -209,6 +218,8 @@ function statusColor(status) {
   if (status === "flagged") return VIOLET;
   if (status === "change_requested") return CHANGE_REQ;
   if (status === "accepted") return OK_GREEN;
+  if (status === "ready_to_send") return BRIGHT;
+  if (status === "draft") return MUTED; // a draft is not a commitment — don't shout it
   return PURPLE;
 }
 
@@ -218,8 +229,9 @@ function statusLabel(status) {
     flagged: "Flagged",
     change_requested: "Change requested",
     accepted: "Accepted",
-    confirmed: "Awaiting response",
-    ok: "Not yet sent",
+    awaiting: "Awaiting response",
+    ready_to_send: "Ready to send",
+    draft: "Needs approval",
   })[status] || status;
 }
 
@@ -2789,7 +2801,15 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
 
   const who = (assignment.instructor_preferred || assignment.instructor_first || "Instructor") + (assignment.instructor_last ? ` ${assignment.instructor_last}` : "");
   const isChange = assignment.status === "change_requested";
-  const pillStatus = isChange ? "change_requested" : (assignment.instructor_response_at ? "accepted" : "confirmed");
+  // Same rule as deriveStatus: never say "awaiting response" for someone who was
+  // never emailed.
+  const pillStatus = isChange
+    ? "change_requested"
+    : assignment.instructor_response_at
+      ? "accepted"
+      : assignment.email_sent_at
+        ? "awaiting"
+        : "ready_to_send";
 
   async function send() {
     if (!reply.trim() || busy) return;
