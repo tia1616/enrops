@@ -775,14 +775,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (from == null || start - ARRIVAL_BUFFER_MIN < from || (until != null && end > until)) {
       return { ok: false, reason: `${first}'s ${dayLabel} hours don't cover this class time (needs to arrive ${ARRIVAL_BUFFER_MIN} min early).`, warnings };
     }
-    // Double-booking: already holds a (different) program that same weekday.
-    // WARNING, not a block (Jessica, 2026-07-14). An instructor may have turned a class
-    // down over location rather than time, and back-to-back classes at two schools must
-    // stay assignable at the admin's discretion. Camp still hard-blocks via its DB
-    // trigger — this is a deliberate after-school divergence. (The auto-matcher still
-    // avoids double-booking when it picks for you; this only frees the manual picker.)
-    // Name the class, and be honest about status: a 'proposed' row is a matcher draft
-    // nobody has been offered yet, so it must never read as "already teaches".
+    // Double-booking: already holds a (different) program that same weekday. HARD BLOCK
+    // (Jessica, 2026-07-16 — reverses the 07-14 warning-only call; camp and after-school
+    // now enforce the SAME rule so an operator doesn't have to remember which board
+    // they're on).
+    //
+    // This mirrors camp's validateDrop, translated to after-school's weekday+time shape.
+    // Camp does NOT block every same-day pairing — it blocks a real conflict:
+    //   - the times overlap (physically impossible), OR
+    //   - it's a different location (can't be at two schools the same afternoon).
+    // Two back-to-back classes at the SAME school stay assignable, which is a real
+    // schedule people run. Camp also blocks against 'proposed' rows (it filters only
+    // withdrawn), so a matcher draft blocks here too — but the copy stays honest about
+    // it being a draft rather than claiming they "already teach" it.
     const committed = committedDays.get(instructorId);
     const sameDayOthers = (committed?.get(code) ?? []).filter((c) => c.program_id !== program.id);
     if (sameDayOthers.length) {
@@ -792,13 +797,29 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         const where = op?.program_location_id ? locName.get(op.program_location_id) : null;
         return where ? `${nm} at ${where}` : nm;
       };
+      const conflicts = sameDayOthers.filter((c) => {
+        const op = state.programs.find((p) => p.id === c.program_id);
+        if (!op) return true; // can't see the other class -> fail closed, don't guess
+        const oStart = parse12h(op.start_time);
+        const oEnd = parse12h(op.end_time);
+        const timesOverlap = oStart != null && oEnd != null && start < oEnd && oStart < end;
+        const elsewhere = (op.program_location_id ?? null) !== (program.program_location_id ?? null);
+        return timesOverlap || elsewhere;
+      });
+      if (conflicts.length) {
+        const list = conflicts.map(describe).join(", ");
+        const allDraft = conflicts.every((c) => c.status === "proposed");
+        return {
+          ok: false,
+          reason: allDraft
+            ? `${first} is already pencilled in for ${list} on ${dayLabel} — a draft, but they can't be in two places. Free that class first.`
+            : `${first} would be double-booked: already has ${list} on ${dayLabel}.`,
+          warnings,
+        };
+      }
+      // Same school, no overlap — a legitimate back-to-back. Allowed, but say it out loud.
       const list = sameDayOthers.map(describe).join(", ");
-      const allDraft = sameDayOthers.every((c) => c.status === "proposed");
-      warnings.push(
-        allDraft
-          ? `${first} is pencilled in for ${list} on ${dayLabel} — still a draft, not offered yet.`
-          : `${first} already has ${list} on ${dayLabel} — check they can make both.`,
-      );
+      warnings.push(`${first} also has ${list} on ${dayLabel}, back-to-back at the same school.`);
     }
     // Max-days cap (count excludes this program if they already hold it).
     if (av.max_days != null) {
