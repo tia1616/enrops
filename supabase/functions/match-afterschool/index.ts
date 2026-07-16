@@ -206,7 +206,7 @@ serve(async (req) => {
     const { data: existingRaw, error: existErr } = programIds.length
       ? await admin
           .from('program_assignments')
-          .select('id, program_id, instructor_id, status')
+          .select('id, program_id, instructor_id, status, assigned_by')
           .eq('organization_id', organizationId)
           .in('program_id', programIds)
       : { data: [], error: null };
@@ -271,19 +271,84 @@ serve(async (req) => {
     // Running state seeded from confirmed rows so a re-run never double-books.
     // assignedCurricula tracks which curricula each instructor already holds (incl.
     // confirmed ones) so continuity carries across re-runs.
-    const committedDays = new Map<string, Set<string>>();
+    //
+    // committedSlots holds every class an instructor already has on a weekday — not
+    // just the fact that they have one. It used to be Set<dayCode>, i.e. "one class per
+    // instructor per weekday, full stop", which is STRICTER than both the picker and the
+    // DB trigger and quietly wrong: OES runs LEGO Game Makers 2:00-3:25 and LEGO
+    // Architects 3:25-4:25 on the same Wednesday, and one instructor teaches both.
+    // The old rule could never produce that, so it had to be redone by hand every term.
+    // Same rule as evaluate() and check_program_assignment_conflict now: a conflict is
+    // a different location, or genuinely overlapping times.
+    type Slot = { dc: string; start: number | null; end: number | null; locationId: string | null };
+    const committedSlots = new Map<string, Slot[]>();
+
+    function addSlot(instructorId: string, prog: any) {
+      const dc = dayCode(prog.day_of_week);
+      if (!dc) return;
+      if (!committedSlots.has(instructorId)) committedSlots.set(instructorId, []);
+      committedSlots.get(instructorId)!.push({
+        dc,
+        start: parse12h(prog.start_time),
+        end: parse12h(prog.end_time),
+        locationId: prog.program_location_id ?? null,
+      });
+    }
+
+    // How many distinct WEEKDAYS this instructor is already committed to. max_days is a
+    // days-per-week cap, and loadCount counts ASSIGNMENTS — those were the same number
+    // only while one-class-per-weekday was enforced. Now that back-to-back at one school
+    // is legal, Zeke's two Wednesday classes are ONE day of work, not two, and must not
+    // burn two days of his cap.
+    function daysUsed(instructorId: string, extraDay?: string | null): number {
+      const days = new Set((committedSlots.get(instructorId) ?? []).map((s) => s.dc));
+      if (extraDay) days.add(extraDay);
+      return days.size;
+    }
+
+    // Would giving `prog` to this instructor clash with something they already hold?
+    // Mirrors the picker + the DB trigger exactly, including the touching-times case:
+    // 2:00-3:25 then 3:25-4:25 do NOT overlap (start < otherEnd is false when equal).
+    function wouldConflict(instructorId: string, prog: any): boolean {
+      const dc = dayCode(prog.day_of_week);
+      if (!dc) return false;
+      const slots = committedSlots.get(instructorId);
+      if (!slots?.length) return false;
+      const start = parse12h(prog.start_time);
+      const end = parse12h(prog.end_time);
+      const locationId = prog.program_location_id ?? null;
+      return slots.some((s) => {
+        if (s.dc !== dc) return false;
+        // Different school that afternoon: impossible travel.
+        if (s.locationId !== locationId) return true;
+        // Same school: only a real time overlap is a conflict. If either time is
+        // unreadable we can't prove an overlap — fail SAFE and treat it as one,
+        // since the matcher writes without a human looking.
+        if (s.start == null || s.end == null || start == null || end == null) return true;
+        return start < s.end && s.start < end;
+      });
+    }
     const loadCount = new Map<string, number>();
     const assignedCurricula = new Map<string, Set<string>>();
     const lockedProgram = new Map<string, { instructor_id: string }>();
+    // What the matcher is allowed to redo: ONLY its own untouched drafts (status
+    // 'proposed' with assigned_by NULL — it stamps that on every row it writes).
+    // Everything else is somebody's decision and gets locked:
+    //   - 'confirmed'  : approved by an admin, or accepted by the instructor
+    //   - 'published'  : the offer is already in their inbox
+    //   - 'change_requested' : the admin is mid-conversation about it
+    //   - 'proposed' WITH assigned_by : a human picked this by hand
+    // The hand-pick case is why this exists: Jessica has schools that always get the
+    // same instructor, and before this the next Match run deleted her choice (the
+    // delete below only ever filtered on status='proposed'). 'withdrawn'/'declined'
+    // are dead rows and don't lock anything.
     for (const e of existing) {
-      if (e.status !== 'confirmed') continue;
+      if (e.status === 'withdrawn' || e.status === 'declined') continue;
+      const isOwnDraft = e.status === 'proposed' && e.assigned_by == null;
+      if (isOwnDraft) continue;
       const p = progById.get(e.program_id);
-      const dc = p ? dayCode(p.day_of_week) : null;
       lockedProgram.set(e.program_id, { instructor_id: e.instructor_id });
-      if (dc) {
-        if (!committedDays.has(e.instructor_id)) committedDays.set(e.instructor_id, new Set());
-        committedDays.get(e.instructor_id)!.add(dc);
-      }
+      if (p) addSlot(e.instructor_id, p);
       const ck = p ? currKey(p) : null;
       if (ck) {
         if (!assignedCurricula.has(e.instructor_id)) assignedCurricula.set(e.instructor_id, new Set());
@@ -319,8 +384,10 @@ serve(async (req) => {
       if (start == null || end == null || from == null) return false;
       if (start - ARRIVAL_BUFFER_MIN < from) return false;   // can't arrive in time
       if (until != null && end > until) return false;         // class runs past when they must leave
-      if (committedDays.get(inst.id)?.has(dc)) return false;
-      if (inst.maxDays != null && (loadCount.get(inst.id) ?? 0) >= inst.maxDays) return false;
+      if (wouldConflict(inst.id, prog)) return false;
+      // Cap on DAYS, counting the day this class would add. A second class on a day
+      // they already work costs no extra day.
+      if (inst.maxDays != null && daysUsed(inst.id, dc) > inst.maxDays) return false;
       return true;
     }
     // Auto-match eligibility also excludes areas the instructor marked 'unavailable'.
@@ -380,7 +447,23 @@ serve(async (req) => {
       return pool.some((inst) => eligible(inst, prog) && holdsCurriculum(inst, prog));
     }
 
+    // Already teaching at THIS school on THIS weekday? Then this class is free for them
+    // to pick up: no travel, no extra day off their max_days cap, and they're already
+    // in the building. OES runs two back-to-back classes (2:00-3:25, 3:25-4:25) that one
+    // instructor teaches — but they're two independent program rows, so nothing here
+    // knew they were a pair. Allowing back-to-back only made it POSSIBLE; without this
+    // it never actually HAPPENED, because whoever got the first class had no edge on the
+    // second. This is what makes the pair land on one person instead of by luck.
+    function alreadyAtSchoolToday(inst: PoolInstr, prog: any): boolean {
+      const dc = dayCode(prog.day_of_week);
+      if (!dc) return false;
+      const locationId = prog.program_location_id ?? null;
+      if (!locationId) return false;
+      return (committedSlots.get(inst.id) ?? []).some((s) => s.dc === dc && s.locationId === locationId);
+    }
+
     // Assign one program to its best candidate. Winner order:
+    //   0. already at this school on this weekday (adjacent class — no travel, no day)
     //   1. already teaches this curriculum (continuity) — unless area = unavailable
     //   2. can cover the most OTHER classes of this curriculum (start a long chain)
     //   3. enjoys this curriculum family (LEGO / coding / robotics) — soft guide
@@ -393,6 +476,12 @@ serve(async (req) => {
       const reachOf = new Map<string, number>();
       for (const c of candidates) reachOf.set(c.id, curriculumReach(c, prog));
       candidates.sort((a, b) => {
+        // Being already on-site that day beats curriculum continuity: continuity saves
+        // prep, but this saves a trip AND a day, and it's the pattern operators actually
+        // run (same person covers the back-to-back pair at one school).
+        const aHere = alreadyAtSchoolToday(a, prog);
+        const bHere = alreadyAtSchoolToday(b, prog);
+        if (aHere !== bHere) return aHere ? -1 : 1;
         // candidates are all eligible(), so 'unavailable' areas are already excluded.
         const aSticky = holdsCurriculum(a, prog);
         const bSticky = holdsCurriculum(b, prog);
@@ -411,9 +500,9 @@ serve(async (req) => {
         return a.name.localeCompare(b.name);
       });
       const winner = candidates[0];
-      const dc = dayCode(prog.day_of_week)!;
-      if (!committedDays.has(winner.id)) committedDays.set(winner.id, new Set());
-      committedDays.get(winner.id)!.add(dc);
+      // Record the actual slot (day + times + school), not just "has a Wednesday", so
+      // a second class that same day is judged by the real rule rather than refused.
+      addSlot(winner.id, prog);
       loadCount.set(winner.id, (loadCount.get(winner.id) ?? 0) + 1);
       const ck = currKey(prog);
       if (ck) {
@@ -499,17 +588,34 @@ serve(async (req) => {
     const assignedDecisions = decisions.filter((d) => d.status === 'assigned');
     if (dryRun) {
       writeStats.skipped_dry_run = true;
-    } else if (assignedDecisions.length > 0) {
-      const writableIds = assignedDecisions.map((d) => d.program_id);
-      const { count: deletedCount, error: delErr } = await admin
-        .from('program_assignments')
-        .delete({ count: 'exact' })
-        .eq('organization_id', organizationId)
-        .eq('status', 'proposed')
-        .in('program_id', writableIds);
-      if (delErr) return json({ error: `Delete prior proposed rows: ${delErr.message}` }, 500);
-      writeStats.deleted = deletedCount ?? 0;
-
+    } else {
+      // Clear this matcher's OWN drafts for EVERY program it reconsidered — openPrograms
+      // is exactly that set — not just the ones it managed to refill.
+      //
+      // Only clearing refilled programs leaves a stale draft on any class it can no
+      // longer staff, and that row is INVISIBLE to this run (the seed loop skips
+      // own-drafts on purpose). The matcher would then put that instructor at another
+      // school the same day, the conflict trigger would reject the insert, and the whole
+      // run would 500. Clearing everything it reconsidered keeps the DB and the run's
+      // own view of the world identical, and a class it can't fill honestly reads
+      // "needs instructor" instead of showing a suggestion that no longer holds.
+      //
+      // A hand-picked row (assigned_by set) is never touched — that's the whole point
+      // of the signature — and locked programs aren't in openPrograms to begin with.
+      const reconsideredIds = openPrograms.map((p: any) => p.id);
+      if (reconsideredIds.length > 0) {
+        const { count: deletedCount, error: delErr } = await admin
+          .from('program_assignments')
+          .delete({ count: 'exact' })
+          .eq('organization_id', organizationId)
+          .eq('status', 'proposed')
+          .is('assigned_by', null)
+          .in('program_id', reconsideredIds);
+        if (delErr) return json({ error: `Delete prior proposed rows: ${delErr.message}` }, 500);
+        writeStats.deleted = deletedCount ?? 0;
+      }
+    }
+    if (!dryRun && assignedDecisions.length > 0) {
       const nowIso = new Date().toISOString();
       const toInsert = assignedDecisions.map((d) => ({
         organization_id: organizationId,
