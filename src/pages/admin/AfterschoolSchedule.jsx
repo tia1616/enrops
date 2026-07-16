@@ -276,9 +276,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // page-level saveError banner sits behind the overlay, so an error there reads
   // as "nothing happened" while the admin stares at an open dialog.
   const [patchError, setPatchError] = useState(null);
+  // Single-step undo for the last board mutation. { type, ... } — see handleUndo.
+  const [lastOp, setLastOp] = useState(null);
+  // When a reassign is started from the change-request modal, stash the request's
+  // assignment id so the picker's onAssign can advance the walk afterwards.
+  const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
 
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
+  // Change requests the admin skipped during THIS walk. Cleared when a walk starts,
+  // so a skipped request resurfaces next time instead of being lost.
+  const skippedThisWalkRef = useRef(new Set());
 
   async function loadAll() {
     if (!org?.id || !term) return;
@@ -849,9 +857,21 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       .from("session_declined_instructors")
       .upsert(
         { organization_id: org.id, program_id: programId, instructor_id: instructorId, reason: "change_request" },
-        { onConflict: "program_id,instructor_id" },
+        // ignoreDuplicates -> ON CONFLICT DO NOTHING. It must NOT be a DO UPDATE:
+        // Postgres requires an UPDATE policy for that path, this table only has
+        // INSERT/SELECT/DELETE, and so re-declining the same instructor for the same
+        // class died with 42501 while the client only console.warn'd it. There is
+        // nothing to update anyway — the row is (org, class, instructor, reason) and
+        // a repeat decline carries the identical values.
+        { onConflict: "program_id,instructor_id", ignoreDuplicates: true },
       );
-    if (error) console.warn("[AfterschoolSchedule] decline record failed:", error.message);
+    // Never swallow this: a lost decline means the picker keeps cheerfully
+    // re-suggesting someone who already said no to this class.
+    if (error) {
+      console.error("[AfterschoolSchedule] decline record failed:", error.message);
+      setSaveError(`Saved the change, but couldn't record the decline: ${error.message}. They may be suggested for this class again.`);
+      setTimeout(() => setSaveError(null), 9000);
+    }
   }
 
   // Undo a recorded decline so the picker suggests this instructor again for this class.
@@ -881,6 +901,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // their own patch offer — so nudge to email them right after the swap.
     const termMidFlight = state.status === "ready" && state.assignments.some((a) => a.email_sent_at);
     let newAssignmentId = null;
+    let declineRecorded = null;
     try {
       if (current) {
         // If the outgoing instructor had a change request open, record the decline
@@ -888,6 +909,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         // self-decline when re-confirming the same person.
         if (current.status === "change_requested" && current.instructor_id && current.instructor_id !== instructorId) {
           await upsertProgramDecline(program.id, current.instructor_id);
+          declineRecorded = { programId: program.id, instructorId: current.instructor_id };
         }
         const { error } = await supabase
           .from("program_assignments")
@@ -906,6 +928,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .eq("id", current.id);
         if (error) throw error;
         newAssignmentId = current.id;
+        // Snapshot the WHOLE prior row, not just instructor+status: the update above
+        // wipes the entire offer trail, and an undo that restores only the instructor
+        // would quietly leave them re-assigned with no deadline and no sent email.
+        setLastOp({
+          type: "reassign",
+          assignmentId: current.id,
+          declineRecorded,
+          prev: {
+            instructor_id: current.instructor_id,
+            status: current.status,
+            email_sent_at: current.email_sent_at ?? null,
+            instructor_response_at: current.instructor_response_at ?? null,
+            flagged_reason: current.flagged_reason ?? null,
+            change_request_message: current.change_request_message ?? null,
+            published_at: current.published_at ?? null,
+            deadline: current.deadline ?? null,
+            reminder_sent_at: current.reminder_sent_at ?? null,
+            flags: current.flags ?? [],
+          },
+          label: `Reassigned ${program.curriculum || "class"}`,
+        });
       } else {
         const { data: inserted, error } = await supabase
           .from("program_assignments")
@@ -920,6 +963,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .single();
         if (error) throw error;
         newAssignmentId = inserted.id;
+        setLastOp({ type: "assign", assignmentId: inserted.id, label: `Assigned ${program.curriculum || "class"}` });
       }
       setPicker(null);
       await loadAll();
@@ -927,13 +971,23 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // Offers for this term are already in flight, so nothing else will email
       // this instructor. Offer to send their patch offer now; "Later" leaves the
       // row sitting at 'proposed' where the board shows it still needs an offer.
-      if (termMidFlight && newAssignmentId) {
+      const needsNudge = termMidFlight && newAssignmentId;
+      if (needsNudge) {
         const inst = state.instructors.find((i) => i.id === instructorId);
         setOfferNewPrompt({
           assignmentId: newAssignmentId,
           name: inst ? (inst.preferred_name || inst.first_name || "this instructor") : "this instructor",
           classLabel: [program.curriculum, locName.get(program.program_location_id)].filter(Boolean).join(" at ") || "this class",
         });
+      }
+
+      // Started from a change-request review — keep walking the queue. The nudge
+      // wins if both want the screen: stacking two dialogs is worse than one extra
+      // click, and nothing is lost — the Hat tip still counts the requests left.
+      if (reassigningChangeRequestId) {
+        const handled = reassigningChangeRequestId;
+        setReassigningChangeRequestId(null);
+        if (!needsNudge) advanceOrCloseChangeRequest(handled);
       }
     } catch (err) {
       console.error("Assign failed:", err);
@@ -1244,6 +1298,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         return;
       }
       setPatchPreview(null);
+      // The email is out. "Undo: Assigned X" would now delete a row the instructor
+      // has already been told about — a quiet local undo is no longer honest, and
+      // Remove (which warns first) is the right door. Drop the undo.
+      setLastOp(null);
       await loadAll();
     } catch (err) {
       console.error("send-afterschool-patch-offer send failed:", err);
@@ -1297,13 +1355,145 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
   }
 
+  // Undo an acceptance the instructor gave (they accepted, then told you otherwise).
+  // Back to 'published' with no response: they were emailed, so the honest state is
+  // "waiting on them again" — not "never asked".
+  async function handleResetAcceptance(program, assignment) {
+    if (!assignment?.id) return;
+    try {
+      const { error } = await supabase
+        .from("program_assignments")
+        .update({ status: "published", instructor_response_at: null })
+        .eq("id", assignment.id);
+      if (error) throw error;
+      setLastOp({
+        type: "reset_acceptance",
+        assignmentId: assignment.id,
+        prev: { status: assignment.status, instructor_response_at: assignment.instructor_response_at ?? null },
+        label: `Reset acceptance on ${program.curriculum || "class"}`,
+      });
+      setReviewFor(null);
+      await loadAll();
+    } catch (err) {
+      console.error("Reset acceptance failed:", err);
+      setSaveError(`Couldn't reset: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
+    }
+  }
+
+  // After handling (or skipping) a change_requested row, queue the next one so the
+  // admin walks the whole list without going back to the Hat each time. Reads
+  // stateRef/skippedThisWalkRef, never the closure — loadAll has just replaced state.
+  function advanceOrCloseChangeRequest(justHandledAssignmentId) {
+    const fresh = stateRef.current;
+    if (fresh.status !== "ready") { setReviewFor(null); return; }
+    const skipped = skippedThisWalkRef.current;
+    const remaining = fresh.assignments.filter(
+      (a) => a.status === "change_requested"
+        && a.id !== justHandledAssignmentId
+        && !skipped.has(a.id),
+    );
+    if (remaining.length === 0) {
+      setReviewFor(null);
+      skippedThisWalkRef.current = new Set();
+      return;
+    }
+    const next = remaining[0];
+    const prog = fresh.programs.find((p) => p.id === next.program_id);
+    if (prog) setReviewFor({ program: prog, assignment: next });
+    else { setReviewFor(null); skippedThisWalkRef.current = new Set(); }
+  }
+
+  // Start a change-request walk from scratch (Hat tip / card click): anything skipped
+  // in a previous walk is fair game again.
+  function startChangeRequestWalk(program, assignment) {
+    skippedThisWalkRef.current = new Set();
+    setReviewFor({ program, assignment });
+  }
+
+  // Single-step undo. Every branch restores the FULL prior row, because the forward
+  // operations wipe more than they look like they do.
+  async function handleUndo() {
+    const op = lastOp;
+    if (!op) return;
+    setLastOp(null);
+    setSaveError(null);
+    try {
+      if (op.type === "assign") {
+        const { error } = await supabase.from("program_assignments").delete().eq("id", op.assignmentId);
+        if (error) throw error;
+      } else if (op.type === "reassign" || op.type === "reset_acceptance") {
+        const { error } = await supabase.from("program_assignments").update(op.prev).eq("id", op.assignmentId);
+        if (error) throw error;
+      } else if (op.type === "remove") {
+        const { error } = await supabase.from("program_assignments").insert(op.snapshot);
+        if (error) throw error;
+      }
+      // Reassign/remove may have recorded a decline for the outgoing instructor.
+      // Undoing without clearing it would leave them silently un-suggestable for
+      // this class forever — the board would look restored but the picker wouldn't.
+      if (op.declineRecorded) {
+        await supabase
+          .from("session_declined_instructors")
+          .delete()
+          .eq("organization_id", org.id)
+          .eq("program_id", op.declineRecorded.programId)
+          .eq("instructor_id", op.declineRecorded.instructorId);
+      }
+      await loadAll();
+    } catch (err) {
+      console.error("Undo failed:", err);
+      setSaveError(`Couldn't undo: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 8000);
+      setLastOp(op); // put it back so they can try again
+      await loadAll();
+    }
+  }
+
   async function deleteAssignment(assignmentId) {
     const { error } = await supabase.from("program_assignments").delete().eq("id", assignmentId);
     if (error) throw error;
   }
 
+  // The delete is a real DELETE, so undo has to re-insert the row from a snapshot —
+  // there's no 'withdrawn' tombstone to flip back. Records the decline first (same
+  // rule as reassign) and remembers it so undo can clear it.
+  async function doRemove(program, assignment) {
+    let declineRecorded = null;
+    if (assignment.status === "change_requested" && assignment.instructor_id) {
+      await upsertProgramDecline(program.id, assignment.instructor_id);
+      declineRecorded = { programId: program.id, instructorId: assignment.instructor_id };
+    }
+    const snapshot = {
+      id: assignment.id,
+      organization_id: org.id,
+      program_id: program.id,
+      instructor_id: assignment.instructor_id,
+      role: assignment.role ?? "lead",
+      status: assignment.status,
+      flags: assignment.flags ?? [],
+      distance_bonus_cents: assignment.distance_bonus_cents ?? null,
+      email_sent_at: assignment.email_sent_at ?? null,
+      reminder_sent_at: assignment.reminder_sent_at ?? null,
+      instructor_response_at: assignment.instructor_response_at ?? null,
+      change_request_message: assignment.change_request_message ?? null,
+      flagged_reason: assignment.flagged_reason ?? null,
+      deadline: assignment.deadline ?? null,
+      published_at: assignment.published_at ?? null,
+    };
+    await deleteAssignment(assignment.id);
+    setLastOp({
+      type: "remove",
+      assignmentId: assignment.id,
+      snapshot,
+      declineRecorded,
+      label: `Removed from ${program.curriculum || "class"}`,
+    });
+  }
+
   // Remove from the schedule. If the offer email already went out, warm-notify first.
   async function handleReviewRemove(program, assignment) {
+    const wasChangeRequest = assignment.status === "change_requested";
     if (assignment.email_sent_at) {
       setReviewFor(null);
       setNotifyRemoval({
@@ -1317,15 +1507,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           email: assignment.instructor_email,
         },
         remaining: remainingActiveFor(assignment.instructor_id, assignment.id),
-        onProceed: async () => { if (assignment.status === "change_requested") await upsertProgramDecline(program.id, assignment.instructor_id); await deleteAssignment(assignment.id); setNotifyRemoval(null); await loadAll(); },
+        onProceed: async () => {
+          try {
+            await doRemove(program, assignment);
+            setNotifyRemoval(null);
+            await loadAll();
+            if (wasChangeRequest) advanceOrCloseChangeRequest(assignment.id);
+          } catch (err) {
+            console.error("Remove failed:", err);
+            setNotifyRemoval(null);
+            setSaveError(`Couldn't remove: ${err.message ?? "unknown error"}`);
+            setTimeout(() => setSaveError(null), 6000);
+          }
+        },
       });
       return;
     }
     try {
-      if (assignment.status === "change_requested") await upsertProgramDecline(program.id, assignment.instructor_id);
-      await deleteAssignment(assignment.id);
+      await doRemove(program, assignment);
       setReviewFor(null);
       await loadAll();
+      if (wasChangeRequest) advanceOrCloseChangeRequest(assignment.id);
     } catch (err) {
       console.error("Remove failed:", err);
       setSaveError(`Couldn't remove: ${err.message ?? "unknown error"}`);
@@ -1428,7 +1630,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
               : `${counts.changeRequested} instructors asked to change their schedule. Want to review the requests?`,
             primary: {
               label: counts.changeRequested === 1 ? "Review change request" : `Review ${counts.changeRequested} change requests`,
-              onClick: () => setReviewFor({ program: changeReqProgram, assignment: changeReqLead }),
+              onClick: () => startChangeRequestWalk(changeReqProgram, changeReqLead),
             },
           }}
         />
@@ -1449,6 +1651,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         onApprove={handleApprove}
         onSendOffers={openSendOffers}
         hasPrograms={state.programs.length > 0}
+        lastOp={lastOp}
+        onUndo={handleUndo}
       />
 
       {approveResult && (
@@ -1677,10 +1881,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           loc={locName.get(reviewFor.program.program_location_id) ?? "—"}
           subNeeded={unavailableConflicts(reviewFor.assignment.instructor_id, reviewFor.program)}
           onReply={(msg) => submitReply(reviewFor.assignment, msg)}
-          onReassign={() => { const p = reviewFor.program; setReviewFor(null); setPicker({ program: p }); }}
+          onReassign={() => {
+            const p = reviewFor.program;
+            // Remember we came from a change request so the picker can advance the
+            // walk once the new instructor is chosen.
+            if (reviewFor.assignment.status === "change_requested") setReassigningChangeRequestId(reviewFor.assignment.id);
+            setReviewFor(null);
+            setPicker({ program: p });
+          }}
           onRemove={() => handleReviewRemove(reviewFor.program, reviewFor.assignment)}
           onResendOffer={() => handleResendOffer(reviewFor.assignment)}
-          onClose={() => setReviewFor(null)}
+          onResetAcceptance={() => handleResetAcceptance(reviewFor.program, reviewFor.assignment)}
+          remainingChangeRequests={
+            reviewFor.assignment.status === "change_requested"
+              ? state.assignments.filter((a) => a.status === "change_requested" && a.id !== reviewFor.assignment.id && !skippedThisWalkRef.current.has(a.id)).length
+              : 0
+          }
+          onSkip={() => {
+            skippedThisWalkRef.current.add(reviewFor.assignment.id);
+            advanceOrCloseChangeRequest(reviewFor.assignment.id);
+          }}
+          onClose={() => { skippedThisWalkRef.current = new Set(); setReviewFor(null); }}
         />
       )}
 
@@ -1744,7 +1965,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
 const linkBtn = { background: "transparent", border: "none", color: PURPLE, fontWeight: 600, cursor: "pointer", marginLeft: 10, fontSize: 13, textDecoration: "underline" };
 
-function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms }) {
+function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms, lastOp, onUndo }) {
   // Unified term selector: afterschool terms (this view) + camp cycles (switches back to Schedule).
   const value = `as:${term}`;
   function onChange(e) {
@@ -1831,6 +2052,16 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             </button>
           );
         })()}
+        {lastOp && onUndo && (
+          <button
+            type="button"
+            onClick={onUndo}
+            title={`${lastOp.label} — undo it`}
+            style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}
+          >
+            Undo: {lastOp.label}
+          </button>
+        )}
         {counts.proposed > 0 && (
           <button
             type="button"
@@ -2764,7 +2995,7 @@ function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
   );
 }
 
-function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReassign, onRemove, onResendOffer, onClose }) {
+function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReassign, onRemove, onResendOffer, onResetAcceptance, remainingChangeRequests = 0, onSkip, onClose }) {
   const [thread, setThread] = useState(null);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
@@ -2782,6 +3013,10 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
     && !!assignment.email_sent_at
     && assignment.status === "published"
     && !assignment.instructor_response_at;
+  // Only meaningful once they've actually accepted — there's nothing to reset otherwise.
+  const canResetAcceptance = !!onResetAcceptance
+    && assignment.status === "confirmed"
+    && !!assignment.instructor_response_at;
 
   async function loadThread() {
     const { data } = await supabase
@@ -2916,9 +3151,27 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
                 Resend offer
               </button>
             )}
+            {canResetAcceptance && (
+              <button
+                onClick={onResetAcceptance}
+                title={`${who.split(" ")[0]} accepted, but told you otherwise — put this back to waiting on their response`}
+                style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1px solid ${RULE}` }}
+              >
+                Reset acceptance
+              </button>
+            )}
             <button onClick={onRemove} style={{ ...btnStyle, background: "#fff", color: CORAL, border: `1px solid ${RULE}` }}>Remove</button>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {isChange && onSkip && remainingChangeRequests > 0 && (
+              <button
+                onClick={onSkip}
+                title="Leave this one for later and look at the next request"
+                style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}
+              >
+                Skip ({remainingChangeRequests} left)
+              </button>
+            )}
             <button onClick={onClose} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}>Close</button>
             <button onClick={send} disabled={busy || !reply.trim()} style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy || !reply.trim() ? 0.6 : 1 }}>{busy ? "Sending…" : "Send reply"}</button>
           </div>
