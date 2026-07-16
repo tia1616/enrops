@@ -368,7 +368,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const assignRes = programIds.length
         ? await supabase
             .from("program_assignments")
-            .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, reminder_sent_at, change_request_message, flagged_reason, deadline, published_at, instructor:instructors(id, first_name, last_name, preferred_name, email)")
+            .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, reminder_sent_at, change_request_message, flagged_reason, deadline, published_at, assigned_by, instructor:instructors(id, first_name, last_name, preferred_name, email)")
             .in("program_id", programIds)
         : { data: [], error: null };
       if (assignRes.error) throw assignRes.error;
@@ -397,6 +397,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         flagged_reason: a.flagged_reason ?? null,
         deadline: a.deadline ?? null,
         published_at: a.published_at ?? null,
+        // Who chose this: NULL = the matcher's own draft (it stamps null and redoes
+        // those on every run), set = a person picked it and the matcher must leave it
+        // alone. Undo has to be able to put this back exactly as it was, so it has to
+        // be read, not just written.
+        assigned_by: a.assigned_by ?? null,
         instructor_first: a.instructor?.first_name ?? null,
         instructor_last: a.instructor?.last_name ?? null,
         instructor_preferred: a.instructor?.preferred_name ?? null,
@@ -1041,6 +1046,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             deadline: current.deadline ?? null,
             reminder_sent_at: current.reminder_sent_at ?? null,
             flags: current.flags ?? [],
+            // Restore WHO chose it too. The reassign above stamps assigned_by with the
+            // admin; without putting the old value back, undoing a reassign of a matcher
+            // draft would leave the row looking hand-picked forever, and the matcher
+            // would stop redoing a class it actually owns.
+            assigned_by: current.assigned_by ?? null,
           },
           label: `Reassigned ${program.curriculum || "class"}`,
         });
@@ -1662,6 +1672,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       role: assignment.role ?? "lead",
       status: assignment.status,
       flags: assignment.flags ?? [],
+      // Preserve who chose it, so undoing a Remove restores a hand-pick as a hand-pick
+      // (and a matcher draft as a draft) rather than silently changing its origin.
+      assigned_by: assignment.assigned_by ?? null,
       distance_bonus_cents: assignment.distance_bonus_cents ?? null,
       email_sent_at: assignment.email_sent_at ?? null,
       reminder_sent_at: assignment.reminder_sent_at ?? null,

@@ -447,7 +447,23 @@ serve(async (req) => {
       return pool.some((inst) => eligible(inst, prog) && holdsCurriculum(inst, prog));
     }
 
+    // Already teaching at THIS school on THIS weekday? Then this class is free for them
+    // to pick up: no travel, no extra day off their max_days cap, and they're already
+    // in the building. OES runs two back-to-back classes (2:00-3:25, 3:25-4:25) that one
+    // instructor teaches — but they're two independent program rows, so nothing here
+    // knew they were a pair. Allowing back-to-back only made it POSSIBLE; without this
+    // it never actually HAPPENED, because whoever got the first class had no edge on the
+    // second. This is what makes the pair land on one person instead of by luck.
+    function alreadyAtSchoolToday(inst: PoolInstr, prog: any): boolean {
+      const dc = dayCode(prog.day_of_week);
+      if (!dc) return false;
+      const locationId = prog.program_location_id ?? null;
+      if (!locationId) return false;
+      return (committedSlots.get(inst.id) ?? []).some((s) => s.dc === dc && s.locationId === locationId);
+    }
+
     // Assign one program to its best candidate. Winner order:
+    //   0. already at this school on this weekday (adjacent class — no travel, no day)
     //   1. already teaches this curriculum (continuity) — unless area = unavailable
     //   2. can cover the most OTHER classes of this curriculum (start a long chain)
     //   3. enjoys this curriculum family (LEGO / coding / robotics) — soft guide
@@ -460,6 +476,12 @@ serve(async (req) => {
       const reachOf = new Map<string, number>();
       for (const c of candidates) reachOf.set(c.id, curriculumReach(c, prog));
       candidates.sort((a, b) => {
+        // Being already on-site that day beats curriculum continuity: continuity saves
+        // prep, but this saves a trip AND a day, and it's the pattern operators actually
+        // run (same person covers the back-to-back pair at one school).
+        const aHere = alreadyAtSchoolToday(a, prog);
+        const bHere = alreadyAtSchoolToday(b, prog);
+        if (aHere !== bHere) return aHere ? -1 : 1;
         // candidates are all eligible(), so 'unavailable' areas are already excluded.
         const aSticky = holdsCurriculum(a, prog);
         const bSticky = holdsCurriculum(b, prog);
@@ -566,22 +588,34 @@ serve(async (req) => {
     const assignedDecisions = decisions.filter((d) => d.status === 'assigned');
     if (dryRun) {
       writeStats.skipped_dry_run = true;
-    } else if (assignedDecisions.length > 0) {
-      const writableIds = assignedDecisions.map((d) => d.program_id);
-      const { count: deletedCount, error: delErr } = await admin
-        .from('program_assignments')
-        .delete({ count: 'exact' })
-        .eq('organization_id', organizationId)
-        .eq('status', 'proposed')
-        // Only ever clear the matcher's OWN drafts. A hand-picked row (assigned_by set)
-        // must survive a re-run. Locked programs are already excluded from writableIds;
-        // this is the belt-and-braces so a future change up there can't quietly start
-        // deleting somebody's choice again.
-        .is('assigned_by', null)
-        .in('program_id', writableIds);
-      if (delErr) return json({ error: `Delete prior proposed rows: ${delErr.message}` }, 500);
-      writeStats.deleted = deletedCount ?? 0;
-
+    } else {
+      // Clear this matcher's OWN drafts for EVERY program it reconsidered — openPrograms
+      // is exactly that set — not just the ones it managed to refill.
+      //
+      // Only clearing refilled programs leaves a stale draft on any class it can no
+      // longer staff, and that row is INVISIBLE to this run (the seed loop skips
+      // own-drafts on purpose). The matcher would then put that instructor at another
+      // school the same day, the conflict trigger would reject the insert, and the whole
+      // run would 500. Clearing everything it reconsidered keeps the DB and the run's
+      // own view of the world identical, and a class it can't fill honestly reads
+      // "needs instructor" instead of showing a suggestion that no longer holds.
+      //
+      // A hand-picked row (assigned_by set) is never touched — that's the whole point
+      // of the signature — and locked programs aren't in openPrograms to begin with.
+      const reconsideredIds = openPrograms.map((p: any) => p.id);
+      if (reconsideredIds.length > 0) {
+        const { count: deletedCount, error: delErr } = await admin
+          .from('program_assignments')
+          .delete({ count: 'exact' })
+          .eq('organization_id', organizationId)
+          .eq('status', 'proposed')
+          .is('assigned_by', null)
+          .in('program_id', reconsideredIds);
+        if (delErr) return json({ error: `Delete prior proposed rows: ${delErr.message}` }, 500);
+        writeStats.deleted = deletedCount ?? 0;
+      }
+    }
+    if (!dryRun && assignedDecisions.length > 0) {
       const nowIso = new Date().toISOString();
       const toInsert = assignedDecisions.map((d) => ({
         organization_id: organizationId,
