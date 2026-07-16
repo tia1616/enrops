@@ -254,6 +254,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [notifyRemoval, setNotifyRemoval] = useState(null); // { mode, program, assignment, instructor, remaining, onProceed }
   const [assignSubFor, setAssignSubFor] = useState(null); // { program, lead, dates } — day-of sub assignment modal
   const [approveResult, setApproveResult] = useState(null);
+  // Nudge to email an instructor who landed on the board AFTER offers went out —
+  // a future bulk send won't pick them up. { assignmentId, name, classLabel }.
+  const [offerNewPrompt, setOfferNewPrompt] = useState(null);
+  // Patch-offer preview: { assignmentIds, preview: [...] } from send-afterschool-patch-offer
+  // mode 'preview'. Send goes out only from this modal — never straight from a click.
+  const [patchPreview, setPatchPreview] = useState(null);
+  // Send failures for the patch preview. They must render INSIDE that modal: the
+  // page-level saveError banner sits behind the overlay, so an error there reads
+  // as "nothing happened" while the admin stares at an open dialog.
+  const [patchError, setPatchError] = useState(null);
 
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
@@ -333,7 +343,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const assignRes = programIds.length
         ? await supabase
             .from("program_assignments")
-            .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, change_request_message, flagged_reason, deadline, published_at, instructor:instructors(id, first_name, last_name, preferred_name, email)")
+            .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, reminder_sent_at, change_request_message, flagged_reason, deadline, published_at, instructor:instructors(id, first_name, last_name, preferred_name, email)")
             .in("program_id", programIds)
         : { data: [], error: null };
       if (assignRes.error) throw assignRes.error;
@@ -354,6 +364,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         distance_bonus_cents: a.distance_bonus_cents ?? null,
         instructor_response_at: a.instructor_response_at ?? null,
         email_sent_at: a.email_sent_at ?? null,
+        // Read by the Reminders forecast. It was neither selected nor mapped, so
+        // `!a.reminder_sent_at` was always true and the forecast counted rows
+        // that had already been reminded.
+        reminder_sent_at: a.reminder_sent_at ?? null,
         change_request_message: a.change_request_message ?? null,
         flagged_reason: a.flagged_reason ?? null,
         deadline: a.deadline ?? null,
@@ -850,6 +864,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // Clears all offer state on reassign (mirrors camps) so the new instructor
   // starts fresh at 'proposed' and surfaces as needing a (re)send.
   async function performAssign(program, instructorId, current) {
+    // Capture BEFORE the write: have any offers for this term already gone out?
+    // If so, this instructor won't be swept up by a future bulk send and needs
+    // their own patch offer — so nudge to email them right after the swap.
+    const termMidFlight = state.status === "ready" && state.assignments.some((a) => a.email_sent_at);
+    let newAssignmentId = null;
     try {
       if (current) {
         // If the outgoing instructor had a change request open, record the decline
@@ -874,8 +893,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           })
           .eq("id", current.id);
         if (error) throw error;
+        newAssignmentId = current.id;
       } else {
-        const { error } = await supabase
+        const { data: inserted, error } = await supabase
           .from("program_assignments")
           .insert({
             organization_id: org.id,
@@ -883,11 +903,26 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             instructor_id: instructorId,
             role: "lead",
             status: "proposed",
-          });
+          })
+          .select("id")
+          .single();
         if (error) throw error;
+        newAssignmentId = inserted.id;
       }
       setPicker(null);
       await loadAll();
+
+      // Offers for this term are already in flight, so nothing else will email
+      // this instructor. Offer to send their patch offer now; "Later" leaves the
+      // row sitting at 'proposed' where the board shows it still needs an offer.
+      if (termMidFlight && newAssignmentId) {
+        const inst = state.instructors.find((i) => i.id === instructorId);
+        setOfferNewPrompt({
+          assignmentId: newAssignmentId,
+          name: inst ? (inst.preferred_name || inst.first_name || "this instructor") : "this instructor",
+          classLabel: [program.curriculum, locName.get(program.program_location_id)].filter(Boolean).join(" at ") || "this class",
+        });
+      }
     } catch (err) {
       console.error("Assign failed:", err);
       setSaveError(`Couldn't save: ${err.message ?? "unknown error"}`);
@@ -1128,6 +1163,126 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
     if (data?.error) throw new Error(data.error);
     return data.preview || [];
+  }
+
+  // Patch offers: the "added after the batch went out" path. send-afterschool-patch-offer
+  // emails ONE instructor the classes they picked up late, instead of re-blasting the
+  // whole term. Always preview first — the send is the only thing that touches an inbox.
+  // Returns { ok } / { ok:false, error } so a caller that owns a modal can show the
+  // failure inline instead of behind a banner the admin may have scrolled past.
+  // Callers with no modal of their own pass surfaceError to get the page banner.
+  async function handlePreviewPatchOffers(assignmentIds, { surfaceError = true } = {}) {
+    if (!assignmentIds || assignmentIds.length === 0) return { ok: false, error: "Nothing to preview." };
+    setBusy("patching");
+    setSaveError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-afterschool-patch-offer", {
+        body: { assignment_ids: assignmentIds, mode: "preview" },
+      });
+      if (error) {
+        let msg = error.message ?? "preview failed";
+        try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+        throw new Error(msg);
+      }
+      if (data?.error) throw new Error(data.error);
+      const preview = data?.preview ?? [];
+      // The fn skips rows it won't send (already emailed / no instructor / no email
+      // on file) and returns a note. Say so instead of opening an empty previewer.
+      if (preview.length === 0) {
+        throw new Error(data?.note ?? "Nothing to send — this offer was already emailed, or the instructor has no email on file.");
+      }
+      setPatchPreview({ assignmentIds, preview });
+      return { ok: true };
+    } catch (err) {
+      console.error("send-afterschool-patch-offer preview failed:", err);
+      const msg = `Couldn't load preview: ${err.message ?? "unknown error"}`;
+      if (surfaceError) {
+        setSaveError(msg);
+        setTimeout(() => setSaveError(null), 9000);
+      }
+      return { ok: false, error: msg };
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleConfirmPatchSend() {
+    const ids = patchPreview?.assignmentIds;
+    if (!ids || ids.length === 0) return;
+    setBusy("patching");
+    setSaveError(null);
+    setPatchError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-afterschool-patch-offer", {
+        body: { assignment_ids: ids, mode: "send" },
+      });
+      if (error) {
+        let msg = error.message ?? "send failed";
+        try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+        throw new Error(msg);
+      }
+      if (data?.error) throw new Error(data.error);
+      const failed = Array.isArray(data?.failed) ? data.failed : [];
+      // A 200 with sent:0 is a failure the operator must see — never close on it
+      // silently and let the board imply the email went out. Keep the modal open
+      // and say so there.
+      if ((data?.sent ?? 0) === 0) {
+        setPatchError(failed.length ? `Couldn't send: ${friendlyFailReason(failed[0].reason)}` : (data?.note ?? "Nothing was sent."));
+        await loadAll();
+        return;
+      }
+      setPatchPreview(null);
+      await loadAll();
+    } catch (err) {
+      console.error("send-afterschool-patch-offer send failed:", err);
+      setPatchError(`Couldn't send: ${err.message ?? "unknown error"}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Resend an offer that already went out (the instructor says it never arrived).
+  // The edge fn skips any row with email_sent_at, so clear the send trail first,
+  // then preview. Only offered for a published offer still awaiting a response —
+  // see the Resend gate in OfferReviewModal.
+  async function handleResendOffer(assignment) {
+    if (!assignment?.id) return { ok: false, error: "No offer to resend." };
+    setSaveError(null);
+    try {
+      const { error } = await supabase
+        .from("program_assignments")
+        .update({ email_sent_at: null, reminder_sent_at: null, deadline: null })
+        .eq("id", assignment.id);
+      if (error) throw error;
+      // The preview owns the error message here (surfaceError:false) so it lands in
+      // the review modal the admin is looking at.
+      const res = await handlePreviewPatchOffers([assignment.id], { surfaceError: false });
+      if (!res.ok) {
+        // Put the send trail back. Otherwise a failed preview leaves the row reading
+        // "never emailed" when the instructor already has the offer in their inbox.
+        const { error: rbErr } = await supabase
+          .from("program_assignments")
+          .update({
+            email_sent_at: assignment.email_sent_at,
+            reminder_sent_at: assignment.reminder_sent_at ?? null,
+            deadline: assignment.deadline ?? null,
+          })
+          .eq("id", assignment.id);
+        await loadAll();
+        // A failed rollback is worse than the failed preview: the row now claims the
+        // offer was never sent. Don't bury that under the preview's error message.
+        if (rbErr) {
+          return { ok: false, error: `${res.error} We also couldn't restore this offer's sent status, so it now reads as never emailed — reload and check before resending.` };
+        }
+        return res;
+      }
+      setReviewFor(null);
+      await loadAll();
+      return { ok: true };
+    } catch (err) {
+      console.error("Resend offer failed:", err);
+      return { ok: false, error: `Couldn't prepare resend: ${err.message ?? "unknown error"}` };
+    }
   }
 
   async function deleteAssignment(assignmentId) {
@@ -1512,7 +1667,49 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           onReply={(msg) => submitReply(reviewFor.assignment, msg)}
           onReassign={() => { const p = reviewFor.program; setReviewFor(null); setPicker({ program: p }); }}
           onRemove={() => handleReviewRemove(reviewFor.program, reviewFor.assignment)}
+          onResendOffer={() => handleResendOffer(reviewFor.assignment)}
           onClose={() => setReviewFor(null)}
+        />
+      )}
+
+      {offerNewPrompt && (
+        <Overlay onClose={() => setOfferNewPrompt(null)} maxWidth={440}>
+          <div style={{ padding: 24 }}>
+            <h3 style={{ margin: "0 0 8px", color: INK, fontSize: 17 }}>Email {offerNewPrompt.name} their offer?</h3>
+            <p style={{ color: MUTED, fontSize: 13.5, margin: "0 0 18px", lineHeight: 1.5 }}>
+              {offerNewPrompt.name} is now on {offerNewPrompt.classLabel}. Offers for this term already
+              went out, so they won't be emailed automatically — send their offer now, or do it later
+              from the schedule.
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setOfferNewPrompt(null)}
+                style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                onClick={() => { const id = offerNewPrompt.assignmentId; setOfferNewPrompt(null); handlePreviewPatchOffers([id]); }}
+                disabled={busy === "patching"}
+                style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy === "patching" ? 0.6 : 1 }}
+              >
+                {busy === "patching" ? "Building preview…" : "Preview their offer"}
+              </button>
+            </div>
+          </div>
+        </Overlay>
+      )}
+
+      {patchPreview && (
+        <PatchPreviewModal
+          preview={patchPreview.preview}
+          instructors={state.instructors}
+          sending={busy === "patching"}
+          error={patchError}
+          onSend={handleConfirmPatchSend}
+          onClose={() => { setPatchPreview(null); setPatchError(null); }}
         />
       )}
 
@@ -2555,12 +2752,24 @@ function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
   );
 }
 
-function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReassign, onRemove, onClose }) {
+function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReassign, onRemove, onResendOffer, onClose }) {
   const [thread, setThread] = useState(null);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [sent, setSent] = useState(false);
+  const [resendArmed, setResendArmed] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
+  // Resend is for one case only: the offer went out and they say it never arrived.
+  // Once they've responded (accepted -> 'confirmed', or asked for a change), a resend
+  // would overwrite that response with a fresh 'published' and silently discard it —
+  // so the button is not offered. Camp gates on emailed-only; this is a deliberate
+  // divergence because after-school routes change requests through THIS modal, which
+  // would put "Resend" right next to the request it would erase.
+  const canResend = !!onResendOffer
+    && !!assignment.email_sent_at
+    && assignment.status === "published"
+    && !assignment.instructor_response_at;
 
   async function loadThread() {
     const { data } = await supabase
@@ -2638,16 +2847,109 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
       <div style={{ padding: "12px 18px", borderTop: `1px solid ${RULE}` }}>
         {sent && <div style={{ color: OK_GREEN, fontSize: 13, marginBottom: 8 }}>✓ Sent.</div>}
         {err && <div style={{ color: "#b53737", fontSize: 13, marginBottom: 8 }}>{err}</div>}
+        {resendArmed && (
+          <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+            <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginBottom: 4 }}>Resend the offer to {who.split(" ")[0]}?</div>
+            <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
+              You'll see the email before it goes. Their response deadline resets to 5 business days from today.
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  setResendBusy(true);
+                  setErr(null);
+                  try {
+                    const res = await onResendOffer();
+                    // On success the parent closes this modal and opens the preview.
+                    // On failure stay put and say so right here.
+                    if (res && !res.ok) { setErr(res.error); setResendArmed(false); }
+                  } finally { setResendBusy(false); }
+                }}
+                disabled={resendBusy}
+                style={{ ...btnStyle, background: BRIGHT, color: "#fff", padding: "6px 12px", fontSize: 12, opacity: resendBusy ? 0.6 : 1 }}
+              >
+                {resendBusy ? "Preparing preview…" : "Yes, resend"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setResendArmed(false)}
+                disabled={resendBusy}
+                style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}`, padding: "6px 12px", fontSize: 12 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         <textarea value={reply} onChange={(e) => { setReply(e.target.value); setSent(false); }} rows={3} placeholder={isChange ? `Reply to ${who}…` : `Message ${who}…`} style={{ width: "100%", padding: "9px 11px", border: `1px solid ${RULE}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }} />
         <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={onReassign} style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1px solid ${RULE}` }}>Reassign</button>
+            {canResend && (
+              <button
+                onClick={() => setResendArmed(true)}
+                disabled={resendArmed || resendBusy}
+                title={`Resend the offer email to ${who.split(" ")[0]} — shows you the email first`}
+                style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, opacity: resendArmed || resendBusy ? 0.6 : 1 }}
+              >
+                Resend offer
+              </button>
+            )}
             <button onClick={onRemove} style={{ ...btnStyle, background: "#fff", color: CORAL, border: `1px solid ${RULE}` }}>Remove</button>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={onClose} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}>Close</button>
             <button onClick={send} disabled={busy || !reply.trim()} style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy || !reply.trim() ? 0.6 : 1 }}>{busy ? "Sending…" : "Send reply"}</button>
           </div>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+// The real patch-offer email, rendered by the edge fn in 'preview' mode. Nothing has
+// been sent at this point — Send here is the only thing that touches an inbox.
+function PatchPreviewModal({ preview, instructors, sending, error, onSend, onClose }) {
+  const [idx, setIdx] = useState(0);
+  const nameById = new Map(instructors.map((i) => [i.id, (i.preferred_name || i.first_name) + (i.last_name ? ` ${i.last_name}` : "")]));
+  const cur = preview[idx];
+  return (
+    <Overlay onClose={sending ? () => {} : onClose} maxWidth={720}>
+      <div style={{ padding: "18px 22px", borderBottom: `1px solid ${RULE}` }}>
+        <h3 style={{ margin: 0, color: INK, fontSize: 16 }}>
+          {preview.length === 1 ? `Offer email for ${nameById.get(cur?.instructor_id) || cur?.to}` : `${preview.length} offer emails`}
+        </h3>
+        <div style={{ fontSize: 12.5, color: MUTED, marginTop: 4 }}>{cur?.subject} · to {cur?.to}</div>
+      </div>
+      <div style={{ padding: "12px 18px 0", overflowY: "auto" }}>
+        {preview.length > 1 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <span style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>Previewing</span>
+            <select value={idx} onChange={(e) => setIdx(Number(e.target.value))} style={{ fontSize: 12, fontFamily: "inherit", border: `1px solid ${RULE}`, borderRadius: 6, padding: "3px 6px", maxWidth: 320 }}>
+              {preview.map((p, i) => <option key={i} value={i}>{nameById.get(p.instructor_id) || p.to}</option>)}
+            </select>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: MUTED }}>Nothing sent yet</span>
+          </div>
+        )}
+        <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+          <iframe title="Patch offer email preview" srcDoc={cur?.html} style={{ width: "100%", height: 460, border: "none", background: "#fff", display: "block" }} />
+        </div>
+      </div>
+      {error && (
+        <div style={{ margin: "10px 18px 0", background: "#fdecea", border: "1px solid #f5c6cb", color: "#842029", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+      <div style={{ padding: "12px 18px", display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: MUTED }}>
+          Sending marks {preview.length === 1 ? "this class" : "these classes"} as offered and asks for a response.
+        </span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" onClick={onClose} disabled={sending} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}`, opacity: sending ? 0.6 : 1 }}>Cancel</button>
+          <button type="button" onClick={onSend} disabled={sending} style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: sending ? 0.6 : 1 }}>
+            {sending ? "Sending…" : preview.length === 1 ? "Send this offer" : `Send ${preview.length} offers`}
+          </button>
         </div>
       </div>
     </Overlay>
