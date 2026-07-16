@@ -16,6 +16,7 @@ import ShareProgram from "../../../components/ShareProgram.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
+import { getPermissions } from "../../../lib/permissions.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -48,8 +49,19 @@ const DAY_LABELS = {
   thursday: "Thursday", friday: "Friday", saturday: "Saturday", sunday: "Sunday",
 };
 
+// programs.day_of_week is stored Title-Case ("Wednesday") — the public catalog
+// echoes the column directly and the VIP bundle matches fall<->winter/spring on
+// `=`, so case matters. Normalize on read (older rows and the pre-fix wizard
+// wrote lowercase, which made the day picker below render blank because no
+// option matched) and always write Title-Case back.
+function titleDay(d) {
+  if (typeof d !== "string" || !d) return "";
+  return d.charAt(0).toUpperCase() + d.slice(1).toLowerCase();
+}
+
 export default function ProgramsCalendar() {
-  const { org } = useOutletContext();
+  const { org, orgMember } = useOutletContext();
+  const perm = getPermissions(orgMember?.role);
   // Term starts empty — we don't guess a hardcoded term. fetchOrgTerms picks
   // the org's default (in-progress today, else next starting, else most recent
   // past) once orgId is known.
@@ -150,6 +162,106 @@ export default function ProgramsCalendar() {
       .eq("id", programId);
     if (updErr) throw updErr;
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, ...patch } : p)));
+  }
+
+  // Copy a program into another term — same location/day/time/curriculum/price,
+  // just a different term/class. Server-side RPC so it copies every column on
+  // the row, not just the subset this view happens to select. New row always
+  // lands as status='draft' with no first-session-date, so it never appears
+  // live before the operator reviews it and picks real dates.
+  async function duplicateProgram(programId, targetTerm) {
+    const { data: newId, error: dupErr } = await supabase.rpc("duplicate_program", {
+      p_program_id: programId,
+      p_target_term: targetTerm,
+    });
+    if (dupErr) throw dupErr;
+    return newId;
+  }
+
+  // Which term parents can currently see/register for (org-wide, not per-view).
+  // Kept separate from `term` (the term this page is currently browsing) —
+  // an operator can browse Winter's programs while Fall is still the open one.
+  const [activeTerm, setActiveTerm] = useState(org?.active_registration_term ?? null);
+  const [activeTermOpenCount, setActiveTermOpenCount] = useState(null); // null = not loaded yet
+  const [switchingTerm, setSwitchingTerm] = useState(false);
+  const [switchResult, setSwitchResult] = useState(null); // { ok: bool, message }
+
+  useEffect(() => {
+    setActiveTerm(org?.active_registration_term ?? null);
+  }, [org?.active_registration_term]);
+
+  useEffect(() => {
+    if (!org?.id || !activeTerm) { setActiveTermOpenCount(null); return; }
+    let alive = true;
+    (async () => {
+      const { count } = await supabase
+        .from("programs")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", org.id)
+        .eq("term", activeTerm)
+        .eq("status", "open");
+      if (alive) setActiveTermOpenCount(count ?? 0);
+    })();
+    return () => { alive = false; };
+  }, [org?.id, activeTerm]);
+
+  // Open the currently-browsed term for registration — flips the org-wide
+  // active_registration_term. This is the one switch that actually controls
+  // what parents can see (Publish only controls a single program's status;
+  // it doesn't put it in front of anyone until its term is the active one).
+  // Blocked when this term has no published programs yet — switching to an
+  // empty term would show parents a blank catalog.
+  async function openTermForRegistration() {
+    if (!term || !org?.id || switchingTerm) return;
+    const targetTerm = term; // snapshot — the dropdown could change under us during the awaits below
+    setSwitchingTerm(true);
+    setSwitchResult(null);
+    try {
+      // Count fresh from the DB rather than trusting local `programs` state:
+      // that state can still hold the PREVIOUS term's rows while a term
+      // switch's own fetch is still in flight, which would let a fast
+      // double-click bypass the zero-count guard below. Also re-read the
+      // org's current active term fresh (not the possibly-stale `activeTerm`
+      // state) so the confirm text reflects reality if another admin session
+      // just changed it.
+      const [{ count: targetOpenCount }, { data: freshOrg }] = await Promise.all([
+        supabase.from("programs").select("id", { count: "exact", head: true })
+          .eq("organization_id", org.id).eq("term", targetTerm).eq("status", "open"),
+        supabase.from("organizations").select("active_registration_term").eq("id", org.id).single(),
+      ]);
+      const currentActiveTerm = freshOrg?.active_registration_term ?? null;
+      if (!targetOpenCount) {
+        setSwitchResult({ ok: false, message: `Publish at least one ${formatTermLabel(targetTerm)} program first — there's nothing open here yet.` });
+        return;
+      }
+      let fromOpenCount = 0;
+      if (currentActiveTerm && currentActiveTerm !== targetTerm) {
+        const { count } = await supabase.from("programs").select("id", { count: "exact", head: true })
+          .eq("organization_id", org.id).eq("term", currentActiveTerm).eq("status", "open");
+        fromOpenCount = count ?? 0;
+      }
+      const fromLabel = currentActiveTerm ? formatTermLabel(currentActiveTerm) : "no term";
+      const confirmMsg = currentActiveTerm && currentActiveTerm !== targetTerm
+        ? `Open ${formatTermLabel(targetTerm)} for registration?\n\nParents will stop seeing ${fromLabel}'s ${fromOpenCount} open program(s) and start seeing ${formatTermLabel(targetTerm)}'s ${targetOpenCount} open program(s) instead. Families already enrolled in ${fromLabel} are not affected.`
+        : `Open ${formatTermLabel(targetTerm)} for registration? Parents will see its ${targetOpenCount} open program(s).`;
+      if (!window.confirm(confirmMsg)) return;
+      const { error: switchErr } = await supabase
+        .from("organizations")
+        .update({ active_registration_term: targetTerm })
+        .eq("id", org.id);
+      if (switchErr) throw switchErr;
+      setSwitchResult({ ok: true, message: `${formatTermLabel(targetTerm)} is now open for registration. Refreshing…` });
+      // Full reload, not just local state: `org` (and everything reading
+      // org.active_registration_term from it — the per-program Share-link
+      // gate, the catalog Share button) comes from AdminLayout's outlet
+      // context, not this component. Setting local state alone would make
+      // this banner say "open" while those still gate on the stale term.
+      setTimeout(() => window.location.reload(), 900);
+    } catch (err) {
+      setSwitchResult({ ok: false, message: err.message ?? String(err) });
+    } finally {
+      setSwitchingTerm(false);
+    }
   }
 
   // Load this org's terms once orgId is known: populate the dropdown and pick
@@ -407,6 +519,45 @@ export default function ProgramsCalendar() {
         </div>
       </div>
 
+      {term && termsLoaded && (
+        activeTerm === term ? (
+          <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
+            ✓ {formatTermLabel(term)} is open for registration — this is what parents see.
+          </div>
+        ) : (
+          <div style={{ ...registrationBanner, background: "#fff8ec", borderColor: "#f0dfb8", color: AMBER }}>
+            <span>
+              {formatTermLabel(term)} is not open for registration.
+              {activeTerm && ` Parents currently see ${formatTermLabel(activeTerm)}.`}
+            </span>
+            {perm.canManageSettings ? (
+              <button
+                type="button"
+                onClick={openTermForRegistration}
+                disabled={switchingTerm}
+                style={{
+                  background: "transparent", color: AMBER, border: `1px solid ${AMBER}`, padding: "5px 12px",
+                  borderRadius: 6, fontSize: 12.5, fontWeight: 700, fontFamily: "inherit",
+                  cursor: switchingTerm ? "wait" : "pointer", whiteSpace: "nowrap",
+                }}
+              >{switchingTerm ? "Opening…" : `Open ${formatTermLabel(term)} for registration →`}</button>
+            ) : (
+              <span style={{ fontSize: 12.5, fontStyle: "italic" }}>Ask an owner or admin to open it.</span>
+            )}
+          </div>
+        )
+      )}
+      {switchResult && (
+        <div style={{
+          ...registrationBanner,
+          background: switchResult.ok ? "#f0f8f0" : "#fde7e7",
+          borderColor: switchResult.ok ? "#bfd9bf" : "#f0c4c4",
+          color: switchResult.ok ? OK_GREEN : "#b53737",
+        }}>
+          {switchResult.ok ? "✓ " : ""}{switchResult.message}
+        </div>
+      )}
+
       {!loading && !error && programs.length > 0 && (
         <div style={summaryBar}>
           <div><strong>{totals.programCount}</strong> programs</div>
@@ -449,6 +600,8 @@ export default function ProgramsCalendar() {
               onUnpublish={unpublishProgram}
               onDelete={deleteProgram}
               onUpdate={updateProgramFields}
+              onDuplicate={duplicateProgram}
+              termOptions={termOptions}
               locations={locationsForPicker}
               orgSlug={org?.slug}
               orgActiveTerm={org?.active_registration_term}
@@ -467,6 +620,8 @@ export default function ProgramsCalendar() {
               onUnpublish={unpublishProgram}
               onDelete={deleteProgram}
               onUpdate={updateProgramFields}
+              onDuplicate={duplicateProgram}
+              termOptions={termOptions}
               locations={locationsForPicker}
               orgSlug={org?.slug}
               orgActiveTerm={org?.active_registration_term}
@@ -507,7 +662,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, orgActiveTerm }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -554,6 +709,8 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
               onUnpublish={onUnpublish}
               onDelete={onDelete}
               onUpdate={onUpdate}
+              onDuplicate={onDuplicate}
+              termOptions={termOptions}
               locations={locations}
               orgSlug={orgSlug}
               orgActiveTerm={orgActiveTerm}
@@ -565,7 +722,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, orgActiveTerm }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -672,6 +829,8 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCov
                 onUnpublish={onUnpublish}
                 onDelete={onDelete}
                 onUpdate={onUpdate}
+                onDuplicate={onDuplicate}
+                termOptions={termOptions}
                 locations={locations}
                 orgSlug={orgSlug}
                 orgActiveTerm={orgActiveTerm}
@@ -727,7 +886,7 @@ function districtHasCal(program, calendarCoverage) {
   return entry.hasCalendar;
 }
 
-function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, orgActiveTerm, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -909,6 +1068,8 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
         onPublish={onPublish}
         onUnpublish={onUnpublish}
         onDelete={onDelete}
+        onDuplicate={onDuplicate}
+        termOptions={termOptions}
         locations={locations}
         orgSlug={orgSlug}
         orgActiveTerm={orgActiveTerm}
@@ -922,11 +1083,13 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
 // bottom, an editable form for day/time/dates/capacity/price/location at
 // the top, and the unpublish + delete actions on a footer row. The panel
 // only renders when the operator clicks "Expand" on a program row.
-function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, locations, orgSlug, orgActiveTerm }) {
+function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   // Local draft so the operator can edit several fields and save in one go
   // (avoid round-tripping the DB on every keystroke).
   const [draft, setDraft] = useState({
-    day_of_week: program.day_of_week ?? "",
+    // Normalized so a legacy lowercase row still selects its real day instead
+    // of showing an empty picker (which looked like "no day set").
+    day_of_week: titleDay(program.day_of_week),
     // Stored as 12-hour text ("2:45 PM"); <input type="time"> needs 24-hour.
     start_time: to24h(program.start_time),
     end_time: to24h(program.end_time),
@@ -944,9 +1107,37 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   const [saveError, setSaveError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
 
+  // Copy-to-term: pick any other term this org has (or type a new one), create
+  // a draft copy there. copyResult holds the outcome message shown inline.
+  const [copyTerm, setCopyTerm] = useState("");
+  const [copying, setCopying] = useState(false);
+  const [copyResult, setCopyResult] = useState(null); // { ok: bool, message }
+
   function set(field, value) {
     setDraft((d) => ({ ...d, [field]: value }));
     setSaveError(null);
+  }
+
+  async function handleDuplicate() {
+    // programs.term has a DB CHECK requiring this exact shape (season code +
+    // 2-digit year); validate here so a typo gets a plain-English message
+    // instead of a raw Postgres constraint-violation string.
+    const target = copyTerm.trim().toUpperCase();
+    if (!target) return;
+    if (!/^(FA|WI|SP|SU)\d{2}$/.test(target)) {
+      setCopyResult({ ok: false, message: `"${copyTerm.trim()}" isn't a term code — use a season + 2-digit year, like WI27 or SP27.` });
+      return;
+    }
+    setCopying(true);
+    setCopyResult(null);
+    try {
+      await onDuplicate(program.id, target);
+      setCopyResult({ ok: true, message: `Copied as a draft in ${formatTermLabel(target)}. Switch the term picker above to find and edit it.` });
+    } catch (err) {
+      setCopyResult({ ok: false, message: err.message ?? String(err) });
+    } finally {
+      setCopying(false);
+    }
   }
 
   async function handleSave() {
@@ -954,7 +1145,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
     setSaveError(null);
     try {
       const patch = {
-        day_of_week: draft.day_of_week || null,
+        day_of_week: draft.day_of_week ? titleDay(draft.day_of_week) : null,
         // Convert the 24-hour input values back to the stored 12-hour text format.
         start_time: draft.start_time ? to12hText(draft.start_time) : null,
         end_time: draft.end_time ? to12hText(draft.end_time) : null,
@@ -1003,10 +1194,13 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         marginBottom: 12,
       }}>
         <ExpandField label="Day of week">
-          <select value={draft.day_of_week ?? ""} onChange={(e) => set("day_of_week", e.target.value)} style={expandInputStyle}>
+          {/* Option values are Title-Case to match how the column is stored —
+              a lowercase value here would save a day that breaks the VIP
+              bundle match and renders lowercase on the public catalog. */}
+          <select value={titleDay(draft.day_of_week)} onChange={(e) => set("day_of_week", e.target.value)} style={expandInputStyle}>
             <option value="">—</option>
             {DAYS_OF_WEEK.map((d) => (
-              <option key={d} value={d}>{DAY_LABELS[d]}</option>
+              <option key={d} value={DAY_LABELS[d]}>{DAY_LABELS[d]}</option>
             ))}
           </select>
         </ExpandField>
@@ -1153,6 +1347,50 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
           }}
           title="Delete this program permanently (blocked if registrations exist)"
         >Delete</button>
+      </div>
+
+      {/* Copy to term — same location/day/time/curriculum/price, into another
+          term, as a draft. Pick an existing term or type a new one (e.g. a
+          term this org has never scheduled before). */}
+      <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${RULE}` }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+          Copy to another term
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            list="copy-term-options"
+            type="text"
+            value={copyTerm}
+            onChange={(e) => { setCopyTerm(e.target.value); setCopyResult(null); }}
+            placeholder="e.g. WI27"
+            style={{ ...expandInputStyle, width: 140 }}
+          />
+          <datalist id="copy-term-options">
+            {(termOptions ?? [])
+              .filter((opt) => opt.value !== program.term)
+              .map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+          </datalist>
+          <button
+            type="button"
+            onClick={handleDuplicate}
+            disabled={copying || !copyTerm.trim()}
+            style={{
+              background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, padding: "7px 14px",
+              borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
+              cursor: copying || !copyTerm.trim() ? "default" : "pointer",
+              opacity: copying || !copyTerm.trim() ? 0.6 : 1,
+            }}
+            title="Create a draft copy of this program in the chosen term"
+          >{copying ? "Copying…" : "Copy →"}</button>
+        </div>
+        {copyResult && (
+          <div style={{
+            marginTop: 8, fontSize: 12.5,
+            color: copyResult.ok ? OK_GREEN : "#b53737",
+          }}>
+            {copyResult.ok ? "✓ " : ""}{copyResult.message}
+          </div>
+        )}
       </div>
 
       {/* Session dates view (existing) */}
@@ -1675,6 +1913,20 @@ const cardStyle = {
   border: `1px solid ${RULE}`,
   borderRadius: 10,
   padding: 10,
+};
+
+const registrationBanner = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
+  padding: "10px 14px",
+  border: "1px solid",
+  borderRadius: 10,
+  marginBottom: 14,
+  fontSize: 13,
+  fontWeight: 600,
 };
 
 const errorBox = {
