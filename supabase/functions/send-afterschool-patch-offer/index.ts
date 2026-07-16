@@ -46,7 +46,25 @@ function fmt(date: string | null) {
 
 function fmtTime(t: string | null) {
   if (!t) return '';
-  const [h, m] = t.split(':').map(Number);
+  const raw = t.trim();
+  let h: number;
+  let m: number;
+  // Programs store 12-hour TEXT ("3:30 PM"); camps store 24-hour time ("12:30:00").
+  // This function renders PROGRAM times, so the 24h-only parser this used to have
+  // produced "3:NaNpm" on every after-school offer email. Parse both.
+  const m12 = raw.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
+  if (m12) {
+    h = parseInt(m12[1], 10);
+    m = parseInt(m12[2], 10);
+    const pm = m12[3].toLowerCase() === 'pm';
+    if (h === 12) h = pm ? 12 : 0;
+    else if (pm) h += 12;
+  } else {
+    const parts = raw.split(':').map(Number);
+    h = parts[0];
+    m = parts[1];
+  }
+  if (h == null || m == null || Number.isNaN(h) || Number.isNaN(m)) return raw; // show raw, never "NaN"
   const hr12 = ((h + 11) % 12) + 1;
   const ampm = h >= 12 ? 'pm' : 'am';
   return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, '0')}${ampm}`;
