@@ -45,7 +45,7 @@ import {
   buildResendAttachments,
   type CommsAttachment,
 } from "../_shared/attachments.ts";
-import { cleanNoSchoolDates, toClosurePeriods, termToSchoolYear, nsdWeekdayLower, periodFires, formatDateList } from "./noSchoolDates.ts";
+import { cleanNoSchoolDates, toClosurePeriods, termToSchoolYear, nsdWeekdayLower, nsdDate, periodFires, formatDateList } from "./noSchoolDates.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -1981,31 +1981,58 @@ async function resolveNoSchoolDayAudience(
 
   const entries: AudienceEntry[] = [];
 
-  // Closures per (location, term) via the canonical matcher, cached so N programs
-  // that share a school+term cost ONE RPC. Merges the no_school_dates of every
-  // calendar that applies (structured district_id + calendar_key + free-text,
-  // unioned — usually one), then validates/de-junks/sorts/dedupes. Floor
-  // 2000-01-01 keeps past dates so an in-progress break still groups to its TRUE
-  // start (guards the real "0027-01-12" prod typo). Pure bits unit-tested.
-  const closuresCache = new Map<string, { iso: string; reason: string }[]>();
-  async function closuresFor(locationId: string, term: string): Promise<{ iso: string; reason: string }[]> {
+  // Calendars per (location, term) via the canonical matcher, cached so N
+  // programs that share a school+term cost ONE RPC (structured district_id +
+  // calendar_key + free-text, unioned — usually one calendar). Cached as the
+  // RAW rows (not pre-merged dates) because early-release exceptions are
+  // weekday-specific per program, so that filtering happens per-program below
+  // while the RPC itself still only runs once per location+term.
+  const calendarsCache = new Map<string, any[]>();
+  async function calendarsFor(locationId: string, term: string): Promise<any[]> {
     const key = `${locationId}|${term}`;
-    const cached = closuresCache.get(key);
+    const cached = calendarsCache.get(key);
     if (cached) return cached;
-    const merged: unknown[] = [];
+    let rows: any[] = [];
     try {
       const { data: cals } = await supabase.rpc("matching_district_calendars", {
         p_org_id: a.organization_id, p_location_id: locationId, p_term: term,
       });
-      for (const c of (cals ?? []) as any[]) {
-        if (Array.isArray(c.no_school_dates)) merged.push(...c.no_school_dates);
-      }
+      rows = (cals ?? []) as any[];
     } catch (e) {
       console.error(`[lifecycle-automations-cron] matching_district_calendars failed for location ${locationId} term ${term}:`, e);
     }
-    const clean = cleanNoSchoolDates(merged, "2000-01-01");
-    closuresCache.set(key, clean);
-    return clean;
+    calendarsCache.set(key, rows);
+    return rows;
+  }
+
+  // Merges no_school_dates (unconditional) + early-release EXCEPTIONS for this
+  // program's weekday (skipping any weekday that's consistently early-release
+  // all year for a calendar — district_calendars.consistent_early_release_weekdays,
+  // the same cached classification derive_program_session_dates reads via
+  // resolve_district_early_release_exceptions — that's the location's normal
+  // schedule, not a closure). Keeps this reminder from disagreeing with what
+  // derive actually skipped. Then validates/de-junks/sorts/dedupes as before.
+  // Floor 2000-01-01 keeps past dates so an in-progress break still groups to
+  // its TRUE start (guards the real "0027-01-12" prod typo).
+  function closuresForProgram(calendars: any[], firstSessionDate: string): { iso: string; reason: string }[] {
+    const weekday = nsdWeekdayLower(firstSessionDate); // programs meet on one fixed weekday
+    const weekdayNum = nsdDate(firstSessionDate).getUTCDay();
+    const merged: unknown[] = [];
+    for (const c of calendars) {
+      if (Array.isArray(c.no_school_dates)) merged.push(...c.no_school_dates);
+      const consistentWeekdays: number[] = Array.isArray(c.consistent_early_release_weekdays)
+        ? c.consistent_early_release_weekdays
+        : [];
+      if (consistentWeekdays.includes(weekdayNum)) continue; // normal schedule here, not a closure
+      if (Array.isArray(c.early_release_dates)) {
+        for (const er of c.early_release_dates) {
+          if (typeof er?.date === "string" && nsdWeekdayLower(er.date) === weekday) {
+            merged.push({ date: er.date, reason: (typeof er?.reason === "string" && er.reason.trim()) || "Early release" });
+          }
+        }
+      }
+    }
+    return cleanNoSchoolDates(merged, "2000-01-01");
   }
 
   // Run bounds (derive already skips closures) computed once per program. A derive
@@ -2013,7 +2040,8 @@ async function resolveNoSchoolDayAudience(
   const sessionsByProg = new Map<string, string[]>();
 
   for (const p of relevantProgs as any[]) {
-    const clean = await closuresFor(p.program_location_id, p.term);
+    const calendars = await calendarsFor(p.program_location_id, p.term);
+    const clean = closuresForProgram(calendars, p.first_session_date);
     if (clean.length === 0) continue;
     const periods = toClosurePeriods(clean);
 
