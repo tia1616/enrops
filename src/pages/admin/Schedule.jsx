@@ -363,6 +363,26 @@ export default function Schedule() {
   // Test/preview sends route to the logged-in admin's own inbox (the edge fn
   // falls back to the tenant's alert_email if this is missing).
   const testRecipient = user?.email;
+
+  // Time-saved receipt (fire-and-forget, never blocks the action). Same helper and
+  // estimates as the after-school board, so the two can't drift into claiming
+  // different savings for the same job. Deliberately conservative — an inflated
+  // number is a lie the operator can't check.
+  function logTimeSaved({ actionType, label, hours, entityType = null, entityId = null }) {
+    if (!org?.id || !hours) return;
+    supabase
+      .from("time_saved_events")
+      .insert({
+        organization_id: org.id,
+        action_type: actionType,
+        action_label: label,
+        hours_saved: hours,
+        related_entity_type: entityType,
+        related_entity_id: entityId,
+        created_by: user?.id ?? null,
+      })
+      .then(({ error }) => { if (error) console.warn("[Schedule] time-saved receipt failed:", error.message); });
+  }
   const [state, setState] = useState({ status: "loading" });
   const [focusedWeek, setFocusedWeek] = useState(null);
   const [searchText, setSearchText] = useState("");
@@ -1525,6 +1545,16 @@ export default function Schedule() {
         throw new Error(realMsg);
       }
       if (data?.error) throw new Error(data.error);
+      // ~6 min per camp to place by hand: availability, region preference,
+      // double-booking and week caps across the whole roster.
+      const placed = Number(data?.summary?.assigned ?? data?.assigned ?? 0);
+      if (placed > 0) {
+        logTimeSaved({
+          actionType: "camp_matched",
+          label: `Matched ${placed} camp${placed === 1 ? "" : "s"} for ${cycleDisplayName(state.cycle.name)}`,
+          hours: Math.round(placed * 0.1 * 100) / 100,
+        });
+      }
       await loadAll();
     } catch (err) {
       console.error("Re-run agent failed:", err);
@@ -1619,6 +1649,14 @@ export default function Schedule() {
         .select("id");
       if (updErr) throw updErr;
       const flippedIds = (data ?? []).map((r) => r.id);
+      // ~1 min per camp to sign off one by one.
+      if (flippedIds.length > 0) {
+        logTimeSaved({
+          actionType: "camp_matches_approved",
+          label: `Approved ${flippedIds.length} camp ${flippedIds.length === 1 ? "match" : "matches"} for ${cycleDisplayName(state.cycle.name)}`,
+          hours: Math.round(flippedIds.length * 0.017 * 100) / 100,
+        });
+      }
       const prevCycleStatus = state.cycle.status;
       if (prevCycleStatus === "collecting") {
         await supabase
@@ -1672,6 +1710,19 @@ export default function Schedule() {
         throw new Error(realMsg);
       }
       if (data?.error) throw new Error(data.error);
+      // ~8 min per instructor to write and send their camp schedule by hand. Only a
+      // real send that reached someone counts — a preview or test saves nothing, and a
+      // 0-sent run saved nothing either.
+      if (mode === "send") {
+        const sentCount = Number(data?.sent ?? 0);
+        if (sentCount > 0) {
+          logTimeSaved({
+            actionType: "camp_offers_sent",
+            label: `Emailed ${sentCount} instructor${sentCount === 1 ? "" : "s"} their ${cycleDisplayName(state.cycle.name)} camp offer`,
+            hours: Math.round(sentCount * 0.133 * 100) / 100,
+          });
+        }
+      }
       await loadAll();
       setOfferDialog({ mode: "result", payload: { kind: "send", mode, ...data } });
     } catch (err) {
