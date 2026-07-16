@@ -152,6 +152,20 @@ export default function ProgramsCalendar() {
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, ...patch } : p)));
   }
 
+  // Copy a program into another term — same location/day/time/curriculum/price,
+  // just a different term/class. Server-side RPC so it copies every column on
+  // the row, not just the subset this view happens to select. New row always
+  // lands as status='draft' with no first-session-date, so it never appears
+  // live before the operator reviews it and picks real dates.
+  async function duplicateProgram(programId, targetTerm) {
+    const { data: newId, error: dupErr } = await supabase.rpc("duplicate_program", {
+      p_program_id: programId,
+      p_target_term: targetTerm,
+    });
+    if (dupErr) throw dupErr;
+    return newId;
+  }
+
   // Load this org's terms once orgId is known: populate the dropdown and pick
   // the default (current/next) term. Re-resolves if the org ever changes.
   useEffect(() => {
@@ -449,6 +463,8 @@ export default function ProgramsCalendar() {
               onUnpublish={unpublishProgram}
               onDelete={deleteProgram}
               onUpdate={updateProgramFields}
+              onDuplicate={duplicateProgram}
+              termOptions={termOptions}
               locations={locationsForPicker}
               orgSlug={org?.slug}
               orgActiveTerm={org?.active_registration_term}
@@ -467,6 +483,8 @@ export default function ProgramsCalendar() {
               onUnpublish={unpublishProgram}
               onDelete={deleteProgram}
               onUpdate={updateProgramFields}
+              onDuplicate={duplicateProgram}
+              termOptions={termOptions}
               locations={locationsForPicker}
               orgSlug={org?.slug}
               orgActiveTerm={org?.active_registration_term}
@@ -507,7 +525,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, orgActiveTerm }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -554,6 +572,8 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
               onUnpublish={onUnpublish}
               onDelete={onDelete}
               onUpdate={onUpdate}
+              onDuplicate={onDuplicate}
+              termOptions={termOptions}
               locations={locations}
               orgSlug={orgSlug}
               orgActiveTerm={orgActiveTerm}
@@ -565,7 +585,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, orgActiveTerm }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -672,6 +692,8 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCov
                 onUnpublish={onUnpublish}
                 onDelete={onDelete}
                 onUpdate={onUpdate}
+                onDuplicate={onDuplicate}
+                termOptions={termOptions}
                 locations={locations}
                 orgSlug={orgSlug}
                 orgActiveTerm={orgActiveTerm}
@@ -727,7 +749,7 @@ function districtHasCal(program, calendarCoverage) {
   return entry.hasCalendar;
 }
 
-function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, locations, orgSlug, orgActiveTerm, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -909,6 +931,8 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
         onPublish={onPublish}
         onUnpublish={onUnpublish}
         onDelete={onDelete}
+        onDuplicate={onDuplicate}
+        termOptions={termOptions}
         locations={locations}
         orgSlug={orgSlug}
         orgActiveTerm={orgActiveTerm}
@@ -922,7 +946,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
 // bottom, an editable form for day/time/dates/capacity/price/location at
 // the top, and the unpublish + delete actions on a footer row. The panel
 // only renders when the operator clicks "Expand" on a program row.
-function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, locations, orgSlug, orgActiveTerm }) {
+function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   // Local draft so the operator can edit several fields and save in one go
   // (avoid round-tripping the DB on every keystroke).
   const [draft, setDraft] = useState({
@@ -944,9 +968,30 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   const [saveError, setSaveError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
 
+  // Copy-to-term: pick any other term this org has (or type a new one), create
+  // a draft copy there. copyResult holds the outcome message shown inline.
+  const [copyTerm, setCopyTerm] = useState("");
+  const [copying, setCopying] = useState(false);
+  const [copyResult, setCopyResult] = useState(null); // { ok: bool, message }
+
   function set(field, value) {
     setDraft((d) => ({ ...d, [field]: value }));
     setSaveError(null);
+  }
+
+  async function handleDuplicate() {
+    const target = copyTerm.trim();
+    if (!target) return;
+    setCopying(true);
+    setCopyResult(null);
+    try {
+      await onDuplicate(program.id, target);
+      setCopyResult({ ok: true, message: `Copied as a draft in ${formatTermLabel(target)}. Switch the term picker above to find and edit it.` });
+    } catch (err) {
+      setCopyResult({ ok: false, message: err.message ?? String(err) });
+    } finally {
+      setCopying(false);
+    }
   }
 
   async function handleSave() {
@@ -1153,6 +1198,50 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
           }}
           title="Delete this program permanently (blocked if registrations exist)"
         >Delete</button>
+      </div>
+
+      {/* Copy to term — same location/day/time/curriculum/price, into another
+          term, as a draft. Pick an existing term or type a new one (e.g. a
+          term this org has never scheduled before). */}
+      <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${RULE}` }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+          Copy to another term
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            list="copy-term-options"
+            type="text"
+            value={copyTerm}
+            onChange={(e) => { setCopyTerm(e.target.value); setCopyResult(null); }}
+            placeholder="e.g. WI27"
+            style={{ ...expandInputStyle, width: 140 }}
+          />
+          <datalist id="copy-term-options">
+            {(termOptions ?? [])
+              .filter((opt) => opt.value !== program.term)
+              .map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+          </datalist>
+          <button
+            type="button"
+            onClick={handleDuplicate}
+            disabled={copying || !copyTerm.trim()}
+            style={{
+              background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, padding: "7px 14px",
+              borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
+              cursor: copying || !copyTerm.trim() ? "default" : "pointer",
+              opacity: copying || !copyTerm.trim() ? 0.6 : 1,
+            }}
+            title="Create a draft copy of this program in the chosen term"
+          >{copying ? "Copying…" : "Copy →"}</button>
+        </div>
+        {copyResult && (
+          <div style={{
+            marginTop: 8, fontSize: 12.5,
+            color: copyResult.ok ? OK_GREEN : "#b53737",
+          }}>
+            {copyResult.ok ? "✓ " : ""}{copyResult.message}
+          </div>
+        )}
       </div>
 
       {/* Session dates view (existing) */}
