@@ -876,9 +876,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // Record a per-program decline (mirrors camp) so the picker stops re-suggesting an
   // instructor who had a change request open and was then reassigned/removed.
   // Idempotent on (program_id, instructor_id).
+  // Returns true ONLY when this call actually created the decline row. Undo relies on
+  // that: a decline that already existed (they refused this class before) is history
+  // this operation didn't make, and undoing must not erase it.
   async function upsertProgramDecline(programId, instructorId) {
-    if (!programId || !instructorId) return;
-    const { error } = await supabase
+    if (!programId || !instructorId) return false;
+    const { data, error } = await supabase
       .from("session_declined_instructors")
       .upsert(
         { organization_id: org.id, program_id: programId, instructor_id: instructorId, reason: "change_request" },
@@ -889,14 +892,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         // nothing to update anyway — the row is (org, class, instructor, reason) and
         // a repeat decline carries the identical values.
         { onConflict: "program_id,instructor_id", ignoreDuplicates: true },
-      );
+      )
+      // DO NOTHING returns the row on a real insert and nothing on a conflict, which
+      // is exactly the signal undo needs.
+      .select("id");
     // Never swallow this: a lost decline means the picker keeps cheerfully
     // re-suggesting someone who already said no to this class.
     if (error) {
       console.error("[AfterschoolSchedule] decline record failed:", error.message);
       setSaveError(`Saved the change, but couldn't record the decline: ${error.message}. They may be suggested for this class again.`);
       setTimeout(() => setSaveError(null), 9000);
+      return false;
     }
+    return (data ?? []).length > 0;
   }
 
   // Undo a recorded decline so the picker suggests this instructor again for this class.
@@ -933,8 +941,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         // BEFORE we overwrite the row (else reassign silently drops it). Guard against
         // self-decline when re-confirming the same person.
         if (current.status === "change_requested" && current.instructor_id && current.instructor_id !== instructorId) {
-          await upsertProgramDecline(program.id, current.instructor_id);
-          declineRecorded = { programId: program.id, instructorId: current.instructor_id };
+          // Only hand undo a decline THIS reassign created. If they'd already declined
+          // this class before, that row is older history — undoing must not wipe it.
+          const created = await upsertProgramDecline(program.id, current.instructor_id);
+          if (created) declineRecorded = { programId: program.id, instructorId: current.instructor_id };
         }
         const { error } = await supabase
           .from("program_assignments")
@@ -1525,8 +1535,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   async function doRemove(program, assignment) {
     let declineRecorded = null;
     if (assignment.status === "change_requested" && assignment.instructor_id) {
-      await upsertProgramDecline(program.id, assignment.instructor_id);
-      declineRecorded = { programId: program.id, instructorId: assignment.instructor_id };
+      // Same rule as reassign: undo may only clear a decline this remove created.
+      const created = await upsertProgramDecline(program.id, assignment.instructor_id);
+      if (created) declineRecorded = { programId: program.id, instructorId: assignment.instructor_id };
     }
     const snapshot = {
       id: assignment.id,
