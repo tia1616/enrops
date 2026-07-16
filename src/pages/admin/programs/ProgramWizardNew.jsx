@@ -32,14 +32,22 @@ const SOFT_AMBER_BG = "#fff7ed";
 const SOFT_AMBER_BORDER = "#fed7aa";
 const SOFT_AMBER_INK = "#9a3412";
 
+// value MUST match how programs.day_of_week is stored (Title-Case, e.g.
+// "Wednesday") — it's written straight to the column and compared with `=`
+// elsewhere. This list used to carry lowercase values, which silently:
+//   - rendered "wednesdays" on the public catalog (raw column echo),
+//   - broke the VIP bundle match (fall "wednesday" != winter "Wednesday"),
+//     so an eligible school quietly offered no bundle at all,
+//   - and killed the conflict check below (day never matched).
+// Keep these Title-Case.
 const DAYS = [
-  { value: "monday", label: "Monday" },
-  { value: "tuesday", label: "Tuesday" },
-  { value: "wednesday", label: "Wednesday" },
-  { value: "thursday", label: "Thursday" },
-  { value: "friday", label: "Friday" },
-  { value: "saturday", label: "Saturday" },
-  { value: "sunday", label: "Sunday" },
+  { value: "Monday", label: "Monday" },
+  { value: "Tuesday", label: "Tuesday" },
+  { value: "Wednesday", label: "Wednesday" },
+  { value: "Thursday", label: "Thursday" },
+  { value: "Friday", label: "Friday" },
+  { value: "Saturday", label: "Saturday" },
+  { value: "Sunday", label: "Sunday" },
 ];
 
 // Mirror of term_to_school_year() — used to decide which district_calendars

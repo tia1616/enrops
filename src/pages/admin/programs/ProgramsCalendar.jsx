@@ -49,6 +49,16 @@ const DAY_LABELS = {
   thursday: "Thursday", friday: "Friday", saturday: "Saturday", sunday: "Sunday",
 };
 
+// programs.day_of_week is stored Title-Case ("Wednesday") — the public catalog
+// echoes the column directly and the VIP bundle matches fall<->winter/spring on
+// `=`, so case matters. Normalize on read (older rows and the pre-fix wizard
+// wrote lowercase, which made the day picker below render blank because no
+// option matched) and always write Title-Case back.
+function titleDay(d) {
+  if (typeof d !== "string" || !d) return "";
+  return d.charAt(0).toUpperCase() + d.slice(1).toLowerCase();
+}
+
 export default function ProgramsCalendar() {
   const { org, orgMember } = useOutletContext();
   const perm = getPermissions(orgMember?.role);
@@ -1077,7 +1087,9 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   // Local draft so the operator can edit several fields and save in one go
   // (avoid round-tripping the DB on every keystroke).
   const [draft, setDraft] = useState({
-    day_of_week: program.day_of_week ?? "",
+    // Normalized so a legacy lowercase row still selects its real day instead
+    // of showing an empty picker (which looked like "no day set").
+    day_of_week: titleDay(program.day_of_week),
     // Stored as 12-hour text ("2:45 PM"); <input type="time"> needs 24-hour.
     start_time: to24h(program.start_time),
     end_time: to24h(program.end_time),
@@ -1133,7 +1145,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
     setSaveError(null);
     try {
       const patch = {
-        day_of_week: draft.day_of_week || null,
+        day_of_week: draft.day_of_week ? titleDay(draft.day_of_week) : null,
         // Convert the 24-hour input values back to the stored 12-hour text format.
         start_time: draft.start_time ? to12hText(draft.start_time) : null,
         end_time: draft.end_time ? to12hText(draft.end_time) : null,
@@ -1182,10 +1194,13 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         marginBottom: 12,
       }}>
         <ExpandField label="Day of week">
-          <select value={draft.day_of_week ?? ""} onChange={(e) => set("day_of_week", e.target.value)} style={expandInputStyle}>
+          {/* Option values are Title-Case to match how the column is stored —
+              a lowercase value here would save a day that breaks the VIP
+              bundle match and renders lowercase on the public catalog. */}
+          <select value={titleDay(draft.day_of_week)} onChange={(e) => set("day_of_week", e.target.value)} style={expandInputStyle}>
             <option value="">—</option>
             {DAYS_OF_WEEK.map((d) => (
-              <option key={d} value={d}>{DAY_LABELS[d]}</option>
+              <option key={d} value={DAY_LABELS[d]}>{DAY_LABELS[d]}</option>
             ))}
           </select>
         </ExpandField>
