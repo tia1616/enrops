@@ -630,7 +630,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return m;
   }, [state, weeks, enriched, locName]);
 
-  // instructor_id -> Set<dayCode> currently committed (active assignments), for double-book checks.
+  // instructor_id -> Map<dayCode, Array<{ program_id, status }>> of active assignments,
+  // for double-book signals. An instructor CAN hold more than one class on a weekday, so
+  // this has to be a list: the old shape stored a single program per day and silently
+  // overwrote the rest, which made the double-book check (and the max-days count)
+  // arbitrary for anyone with two same-day classes. Status is kept so the UI can tell a
+  // real commitment from a matcher draft ('proposed') instead of claiming "already teaches".
   const committedDays = useMemo(() => {
     const m = new Map();
     if (state.status !== "ready") return m;
@@ -641,8 +646,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const code = p ? DAY_TO_CODE[dayKey(p.day_of_week)] : null;
       if (!code) continue;
       if (!m.has(a.instructor_id)) m.set(a.instructor_id, new Map());
-      // store dayCode -> program_id so we can exclude the program being edited
-      m.get(a.instructor_id).set(code, a.program_id);
+      const byDay = m.get(a.instructor_id);
+      if (!byDay.has(code)) byDay.set(code, []);
+      byDay.get(code).push({ program_id: a.program_id, status: a.status });
     }
     return m;
   }, [state]);
@@ -716,13 +722,28 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // stay assignable at the admin's discretion. Camp still hard-blocks via its DB
     // trigger — this is a deliberate after-school divergence. (The auto-matcher still
     // avoids double-booking when it picks for you; this only frees the manual picker.)
+    // Name the class, and be honest about status: a 'proposed' row is a matcher draft
+    // nobody has been offered yet, so it must never read as "already teaches".
     const committed = committedDays.get(instructorId);
-    if (committed && committed.has(code) && committed.get(code) !== program.id) {
-      warnings.push(`${first} already teaches another class on ${dayLabel} — check they can make both.`);
+    const sameDayOthers = (committed?.get(code) ?? []).filter((c) => c.program_id !== program.id);
+    if (sameDayOthers.length) {
+      const describe = (c) => {
+        const op = state.programs.find((p) => p.id === c.program_id);
+        const nm = op?.curriculum || "another class";
+        const where = op?.program_location_id ? locName.get(op.program_location_id) : null;
+        return where ? `${nm} at ${where}` : nm;
+      };
+      const list = sameDayOthers.map(describe).join(", ");
+      const allDraft = sameDayOthers.every((c) => c.status === "proposed");
+      warnings.push(
+        allDraft
+          ? `${first} is pencilled in for ${list} on ${dayLabel} — still a draft, not offered yet.`
+          : `${first} already has ${list} on ${dayLabel} — check they can make both.`,
+      );
     }
     // Max-days cap (count excludes this program if they already hold it).
     if (av.max_days != null) {
-      const holdsThis = committed && committed.get(code) === program.id;
+      const holdsThis = (committed?.get(code) ?? []).some((c) => c.program_id === program.id);
       const current = (loadCount.get(instructorId) ?? 0) - (holdsThis ? 1 : 0);
       if (current >= av.max_days) {
         return { ok: false, reason: `${first} is at their ${av.max_days}-day limit.`, warnings };
