@@ -95,6 +95,17 @@ serve(async (req) => {
 
     if (!cycle_id) return json({ error: 'cycle_id required' }, 400);
 
+    // ----- Auth, part 1: prove who is calling BEFORE touching any data -----
+    // This used to sit below the cycle load, which let an unauthenticated caller
+    // probe cycle ids: a real one got past the load and only then hit 401, a bogus
+    // one got "Unknown cycle" — different answers for the same unauthorized request.
+    // Identity is independent of the cycle, so it is established first.
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) return json({ error: 'auth required' }, 401);
+    const token = authHeader.replace('Bearer ', '');
+    const { data: userData, error: userErr } = await admin.auth.getUser(token);
+    if (userErr || !userData?.user) return json({ error: 'invalid auth' }, 401);
+
     // ----- Cycle + tenant -----
     const { data: cycleRow, error: cycleErr } = await admin
       .from('scheduling_cycles')
@@ -105,25 +116,24 @@ serve(async (req) => {
     const cycle = cycleRow as SchedulingCycle;
     const orgId = cycle.organization_id;
 
-    // ----- Auth: caller must be owner/admin of THIS cycle's org -----
-    // Tenant is derived from cycle_id, so without this check any authenticated
-    // user could pass another org's cycle_id and rewrite that org's proposed
-    // assignments. Mirrors match-afterschool's caller check. (verify_jwt is on,
-    // so a valid Supabase user token is guaranteed; we still must authorize the
-    // org membership ourselves — the JWT alone does not scope to this tenant.)
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return json({ error: 'auth required' }, 401);
-    const token = authHeader.replace('Bearer ', '');
-    const { data: userData, error: userErr } = await admin.auth.getUser(token);
-    if (userErr || !userData?.user) return json({ error: 'invalid auth' }, 401);
+    // ----- Auth, part 2: caller must be owner/admin of THIS cycle's org -----
+    // Tenant is derived from cycle_id, so without this check any authenticated user
+    // could pass another org's cycle_id and rewrite that org's proposed assignments.
+    // accepted_at: an unaccepted invite is not yet a member and must not be able to
+    // rewrite the schedule. Mirrors create-assignment-substitution.
     const { data: memberRow } = await admin
       .from('org_members')
       .select('role')
       .eq('auth_user_id', userData.user.id)
       .eq('organization_id', orgId)
+      .in('role', ['owner', 'admin'])
+      .not('accepted_at', 'is', null)
       .maybeSingle();
-    if (!memberRow || !['owner', 'admin'].includes(memberRow.role)) {
-      return json({ error: 'forbidden' }, 403);
+    if (!memberRow) {
+      // Deliberately identical to the unknown-cycle response above. A non-member who
+      // could tell "forbidden" from "Unknown cycle" would have an oracle for which
+      // cycle ids exist in other orgs; to an outsider both now mean the same thing.
+      return json({ error: `Unknown cycle: ${cycle_id}` }, 400);
     }
 
     // Venue->region map: the org's OWN config is the single source (shared with the

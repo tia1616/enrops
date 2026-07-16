@@ -92,8 +92,9 @@ const FILTER_STATUSES = [
   { key: "change_requested", label: "Change requested" },
   { key: "flagged", label: "Flagged" },
   { key: "accepted", label: "Accepted" },
-  { key: "confirmed", label: "Awaiting response" },
-  { key: "ok", label: "Not yet sent" },
+  { key: "awaiting", label: "Awaiting response" },
+  { key: "ready_to_send", label: "Ready to send" },
+  { key: "draft", label: "Needs approval" },
 ];
 
 function dayKey(dow) {
@@ -193,15 +194,23 @@ function deriveStatus(programId, assignments) {
   for (const a of own) {
     const rank = STATUS_RANK[a.status] ?? -1;
     if (!best || rank > best.rank) {
-      best = { status: a.status, rank, flags: a.flags ?? [], instructor_response_at: a.instructor_response_at ?? null, flagged_reason: a.flagged_reason ?? null };
+      best = { status: a.status, rank, flags: a.flags ?? [], instructor_response_at: a.instructor_response_at ?? null, flagged_reason: a.flagged_reason ?? null, email_sent_at: a.email_sent_at ?? null };
     }
   }
   if (best.status === "change_requested") return "change_requested";
   if (best.flagged_reason) return "flagged";
   if (Array.isArray(best.flags) && best.flags.length > 0) return "flagged";
   if (best.status === "confirmed" && best.instructor_response_at) return "accepted";
-  if (best.status === "confirmed" || best.status === "published") return "confirmed";
-  return "ok";
+  // Approved (or published) but never emailed: nobody has been asked anything yet,
+  // so this is NOT awaiting a response — it's sitting in the Send offers queue.
+  // 'published' lands here too while a resend is mid-flight (the send trail is
+  // cleared before the patch offer goes out).
+  if (best.status === "confirmed" || best.status === "published") {
+    return best.email_sent_at ? "awaiting" : "ready_to_send";
+  }
+  // 'proposed' — a matcher draft nobody has approved. Naming it by the send step
+  // implies Approve already happened and only the email is missing.
+  return "draft";
 }
 
 function statusColor(status) {
@@ -209,7 +218,14 @@ function statusColor(status) {
   if (status === "flagged") return VIOLET;
   if (status === "change_requested") return CHANGE_REQ;
   if (status === "accepted") return OK_GREEN;
+  if (status === "ready_to_send") return BRIGHT;
+  if (status === "draft") return MUTED; // a draft is not a commitment — don't shout it
   return PURPLE;
+}
+
+// Display name for an assignment row in nudge/tip copy.
+function patchNudgeName(a) {
+  return a?.instructor_preferred || a?.instructor_first || "An instructor";
 }
 
 function statusLabel(status) {
@@ -218,8 +234,9 @@ function statusLabel(status) {
     flagged: "Flagged",
     change_requested: "Change requested",
     accepted: "Accepted",
-    confirmed: "Awaiting response",
-    ok: "Not yet sent",
+    awaiting: "Awaiting response",
+    ready_to_send: "Ready to send",
+    draft: "Needs approval",
   })[status] || status;
 }
 
@@ -254,9 +271,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [notifyRemoval, setNotifyRemoval] = useState(null); // { mode, program, assignment, instructor, remaining, onProceed }
   const [assignSubFor, setAssignSubFor] = useState(null); // { program, lead, dates } — day-of sub assignment modal
   const [approveResult, setApproveResult] = useState(null);
+  // Nudge to email an instructor who landed on the board AFTER offers went out —
+  // a future bulk send won't pick them up. { assignmentId, name, classLabel }.
+  const [offerNewPrompt, setOfferNewPrompt] = useState(null);
+  // Patch-offer preview: { assignmentIds, preview: [...] } from send-afterschool-patch-offer
+  // mode 'preview'. Send goes out only from this modal — never straight from a click.
+  const [patchPreview, setPatchPreview] = useState(null);
+  // Send failures for the patch preview. They must render INSIDE that modal: the
+  // page-level saveError banner sits behind the overlay, so an error there reads
+  // as "nothing happened" while the admin stares at an open dialog.
+  const [patchError, setPatchError] = useState(null);
+  // Single-step undo for the last board mutation. { type, ... } — see handleUndo.
+  const [lastOp, setLastOp] = useState(null);
+  // When a reassign is started from the change-request modal, stash the request's
+  // assignment id so the picker's onAssign can advance the walk afterwards.
+  const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
 
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
+  // Change requests the admin skipped during THIS walk. Cleared when a walk starts,
+  // so a skipped request resurfaces next time instead of being lost.
+  const skippedThisWalkRef = useRef(new Set());
 
   async function loadAll() {
     if (!org?.id || !term) return;
@@ -333,7 +368,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const assignRes = programIds.length
         ? await supabase
             .from("program_assignments")
-            .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, change_request_message, flagged_reason, deadline, published_at, instructor:instructors(id, first_name, last_name, preferred_name, email)")
+            .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, reminder_sent_at, change_request_message, flagged_reason, deadline, published_at, instructor:instructors(id, first_name, last_name, preferred_name, email)")
             .in("program_id", programIds)
         : { data: [], error: null };
       if (assignRes.error) throw assignRes.error;
@@ -354,6 +389,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         distance_bonus_cents: a.distance_bonus_cents ?? null,
         instructor_response_at: a.instructor_response_at ?? null,
         email_sent_at: a.email_sent_at ?? null,
+        // Read by the Reminders forecast. It was neither selected nor mapped, so
+        // `!a.reminder_sent_at` was always true and the forecast counted rows
+        // that had already been reminded.
+        reminder_sent_at: a.reminder_sent_at ?? null,
         change_request_message: a.change_request_message ?? null,
         flagged_reason: a.flagged_reason ?? null,
         deadline: a.deadline ?? null,
@@ -377,6 +416,20 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         else substitutions = subRows ?? [];
       }
 
+      // Recorded declines for these classes: an instructor who had a change request
+      // open and was then reassigned/removed. Per-program (mirrors camp's per-session).
+      // Powers the picker's "previously declined" filter so we don't re-suggest them.
+      let declines = [];
+      if (programIds.length) {
+        const { data: declineRows, error: declineErr } = await supabase
+          .from("session_declined_instructors")
+          .select("program_id, instructor_id")
+          .eq("organization_id", org.id)
+          .in("program_id", programIds);
+        if (declineErr) console.warn("[AfterschoolSchedule] decline load failed:", declineErr.message);
+        else declines = declineRows ?? [];
+      }
+
       // Each class's real session dates (per its school/district calendar, closures included)
       // — used to build the week rail and resolve per-week coverage. Canonical source only.
       // Fail-soft per class: one rejected RPC must not blank the whole board (or the
@@ -397,6 +450,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         programs,
         assignments,
         substitutions,
+        declines,
         programDates,
         instructors: instRes.data ?? [],
         availability: availRes.data ?? [],
@@ -502,6 +556,20 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return m;
   }, [state, availByInstr]);
 
+  // program_id -> Set<instructor_id> that previously declined this class (recorded when
+  // an admin reassigns/removes a change_requested instructor). Picker filters these out;
+  // "Re-suggest" clears it. Mirrors camp's declinedBySession.
+  const declinedByProgram = useMemo(() => {
+    const m = new Map();
+    if (state.status !== "ready") return m;
+    for (const d of state.declines ?? []) {
+      if (!d.program_id) continue;
+      if (!m.has(d.program_id)) m.set(d.program_id, new Set());
+      m.get(d.program_id).add(d.instructor_id);
+    }
+    return m;
+  }, [state]);
+
   // program_id -> { ids:Set<instructor_id>, names:string[], subs:[{name,date,status}] } for live subs.
   // Powers the card sub indicator and lets the instructor filter surface a program a person only SUBs.
   const subInfoByProgram = useMemo(() => {
@@ -601,7 +669,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return m;
   }, [state, weeks, enriched, locName]);
 
-  // instructor_id -> Set<dayCode> currently committed (active assignments), for double-book checks.
+  // instructor_id -> Map<dayCode, Array<{ program_id, status }>> of active assignments,
+  // for double-book signals. An instructor CAN hold more than one class on a weekday, so
+  // this has to be a list: the old shape stored a single program per day and silently
+  // overwrote the rest, which made the double-book check (and the max-days count)
+  // arbitrary for anyone with two same-day classes. Status is kept so the UI can tell a
+  // real commitment from a matcher draft ('proposed') instead of claiming "already teaches".
   const committedDays = useMemo(() => {
     const m = new Map();
     if (state.status !== "ready") return m;
@@ -612,8 +685,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const code = p ? DAY_TO_CODE[dayKey(p.day_of_week)] : null;
       if (!code) continue;
       if (!m.has(a.instructor_id)) m.set(a.instructor_id, new Map());
-      // store dayCode -> program_id so we can exclude the program being edited
-      m.get(a.instructor_id).set(code, a.program_id);
+      const byDay = m.get(a.instructor_id);
+      if (!byDay.has(code)) byDay.set(code, []);
+      byDay.get(code).push({ program_id: a.program_id, status: a.status });
     }
     return m;
   }, [state]);
@@ -629,13 +703,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   }, [state]);
 
   const counts = useMemo(() => {
-    const c = { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, instructors: 0, proposed: 0, sendable: 0 };
+    const c = { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, instructors: 0, proposed: 0, sendable: 0, draft: 0 };
     if (state.status !== "ready") return c;
     for (const e of enriched.values()) {
       if (e.status === "needs_hire") c.needsHire++;
       else if (e.status === "change_requested") c.changeRequested++;
       else if (e.status === "flagged") c.flagged++;
       else if (e.status === "accepted") c.accepted++;
+      // A draft is a suggestion nobody has approved. Counting it as "assigned"
+      // reads as staffed and hides how much of the term is still undecided.
+      else if (e.status === "draft") c.draft++;
       else c.assigned++;
     }
     for (const a of state.assignments) {
@@ -645,6 +722,23 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     c.instructors = state.instructors.length;
     return c;
   }, [state, enriched]);
+
+  // Have any offers for this term gone out? Once they have, the term is "mid-flight":
+  // bulk Approve + bulk Send are the wrong tools (they'd sweep up drafts), and a
+  // newly-assigned instructor needs their own patch offer instead.
+  const offersOut = useMemo(
+    () => state.status === "ready" && state.assignments.some((a) => a.email_sent_at),
+    [state],
+  );
+
+  // Mid-flight rows that are on the board but were never emailed — i.e. someone was
+  // dropped in after the batch went out and the nudge was dismissed with "Later".
+  // Without a surface for these they'd be stranded: Approve is hidden mid-flight, so
+  // nothing else would ever email them. This is the safety net for that.
+  const pendingPatchAssignments = useMemo(() => {
+    if (state.status !== "ready" || !offersOut) return [];
+    return state.assignments.filter((a) => a.status === "proposed" && !a.email_sent_at && a.instructor_id);
+  }, [state, offersOut]);
 
   // Instructors who actually have approved (confirmed, not-yet-emailed) classes —
   // the real recipients of a Send. The Send modal lists + pre-selects exactly these.
@@ -682,13 +776,33 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       return { ok: false, reason: `${first}'s ${dayLabel} hours don't cover this class time (needs to arrive ${ARRIVAL_BUFFER_MIN} min early).`, warnings };
     }
     // Double-booking: already holds a (different) program that same weekday.
+    // WARNING, not a block (Jessica, 2026-07-14). An instructor may have turned a class
+    // down over location rather than time, and back-to-back classes at two schools must
+    // stay assignable at the admin's discretion. Camp still hard-blocks via its DB
+    // trigger — this is a deliberate after-school divergence. (The auto-matcher still
+    // avoids double-booking when it picks for you; this only frees the manual picker.)
+    // Name the class, and be honest about status: a 'proposed' row is a matcher draft
+    // nobody has been offered yet, so it must never read as "already teaches".
     const committed = committedDays.get(instructorId);
-    if (committed && committed.has(code) && committed.get(code) !== program.id) {
-      return { ok: false, reason: `${first} already teaches another class on ${dayLabel} — can't be at two schools that afternoon.`, warnings };
+    const sameDayOthers = (committed?.get(code) ?? []).filter((c) => c.program_id !== program.id);
+    if (sameDayOthers.length) {
+      const describe = (c) => {
+        const op = state.programs.find((p) => p.id === c.program_id);
+        const nm = op?.curriculum || "another class";
+        const where = op?.program_location_id ? locName.get(op.program_location_id) : null;
+        return where ? `${nm} at ${where}` : nm;
+      };
+      const list = sameDayOthers.map(describe).join(", ");
+      const allDraft = sameDayOthers.every((c) => c.status === "proposed");
+      warnings.push(
+        allDraft
+          ? `${first} is pencilled in for ${list} on ${dayLabel} — still a draft, not offered yet.`
+          : `${first} already has ${list} on ${dayLabel} — check they can make both.`,
+      );
     }
     // Max-days cap (count excludes this program if they already hold it).
     if (av.max_days != null) {
-      const holdsThis = committed && committed.get(code) === program.id;
+      const holdsThis = (committed?.get(code) ?? []).some((c) => c.program_id === program.id);
       const current = (loadCount.get(instructorId) ?? 0) - (holdsThis ? 1 : 0);
       if (current >= av.max_days) {
         return { ok: false, reason: `${first} is at their ${av.max_days}-day limit.`, warnings };
@@ -759,11 +873,79 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return Array.from(set).sort();
   }, [state, locName]);
 
+  // Record a per-program decline (mirrors camp) so the picker stops re-suggesting an
+  // instructor who had a change request open and was then reassigned/removed.
+  // Idempotent on (program_id, instructor_id).
+  // Returns true ONLY when this call actually created the decline row. Undo relies on
+  // that: a decline that already existed (they refused this class before) is history
+  // this operation didn't make, and undoing must not erase it.
+  async function upsertProgramDecline(programId, instructorId) {
+    if (!programId || !instructorId) return false;
+    const { data, error } = await supabase
+      .from("session_declined_instructors")
+      .upsert(
+        { organization_id: org.id, program_id: programId, instructor_id: instructorId, reason: "change_request" },
+        // ignoreDuplicates -> ON CONFLICT DO NOTHING. It must NOT be a DO UPDATE:
+        // Postgres requires an UPDATE policy for that path, this table only has
+        // INSERT/SELECT/DELETE, and so re-declining the same instructor for the same
+        // class died with 42501 while the client only console.warn'd it. There is
+        // nothing to update anyway — the row is (org, class, instructor, reason) and
+        // a repeat decline carries the identical values.
+        { onConflict: "program_id,instructor_id", ignoreDuplicates: true },
+      )
+      // DO NOTHING returns the row on a real insert and nothing on a conflict, which
+      // is exactly the signal undo needs.
+      .select("id");
+    // Never swallow this: a lost decline means the picker keeps cheerfully
+    // re-suggesting someone who already said no to this class.
+    if (error) {
+      console.error("[AfterschoolSchedule] decline record failed:", error.message);
+      setSaveError(`Saved the change, but couldn't record the decline: ${error.message}. They may be suggested for this class again.`);
+      setTimeout(() => setSaveError(null), 9000);
+      return false;
+    }
+    return (data ?? []).length > 0;
+  }
+
+  // Undo a recorded decline so the picker suggests this instructor again for this class.
+  async function handleUndecline(programId, instructorId) {
+    if (!programId || !instructorId) return;
+    try {
+      const { error } = await supabase
+        .from("session_declined_instructors")
+        .delete()
+        .eq("organization_id", org.id)
+        .eq("program_id", programId)
+        .eq("instructor_id", instructorId);
+      if (error) throw error;
+      await loadAll();
+    } catch (err) {
+      console.error("Undecline failed:", err);
+      setSaveError(`Couldn't re-suggest: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
+    }
+  }
+
   // Clears all offer state on reassign (mirrors camps) so the new instructor
   // starts fresh at 'proposed' and surfaces as needing a (re)send.
   async function performAssign(program, instructorId, current) {
+    // Capture BEFORE the write: have any offers for this term already gone out?
+    // If so, this instructor won't be swept up by a future bulk send and needs
+    // their own patch offer — so nudge to email them right after the swap.
+    const termMidFlight = state.status === "ready" && state.assignments.some((a) => a.email_sent_at);
+    let newAssignmentId = null;
+    let declineRecorded = null;
     try {
       if (current) {
+        // If the outgoing instructor had a change request open, record the decline
+        // BEFORE we overwrite the row (else reassign silently drops it). Guard against
+        // self-decline when re-confirming the same person.
+        if (current.status === "change_requested" && current.instructor_id && current.instructor_id !== instructorId) {
+          // Only hand undo a decline THIS reassign created. If they'd already declined
+          // this class before, that row is older history — undoing must not wipe it.
+          const created = await upsertProgramDecline(program.id, current.instructor_id);
+          if (created) declineRecorded = { programId: program.id, instructorId: current.instructor_id };
+        }
         const { error } = await supabase
           .from("program_assignments")
           .update({
@@ -780,8 +962,30 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           })
           .eq("id", current.id);
         if (error) throw error;
+        newAssignmentId = current.id;
+        // Snapshot the WHOLE prior row, not just instructor+status: the update above
+        // wipes the entire offer trail, and an undo that restores only the instructor
+        // would quietly leave them re-assigned with no deadline and no sent email.
+        setLastOp({
+          type: "reassign",
+          assignmentId: current.id,
+          declineRecorded,
+          prev: {
+            instructor_id: current.instructor_id,
+            status: current.status,
+            email_sent_at: current.email_sent_at ?? null,
+            instructor_response_at: current.instructor_response_at ?? null,
+            flagged_reason: current.flagged_reason ?? null,
+            change_request_message: current.change_request_message ?? null,
+            published_at: current.published_at ?? null,
+            deadline: current.deadline ?? null,
+            reminder_sent_at: current.reminder_sent_at ?? null,
+            flags: current.flags ?? [],
+          },
+          label: `Reassigned ${program.curriculum || "class"}`,
+        });
       } else {
-        const { error } = await supabase
+        const { data: inserted, error } = await supabase
           .from("program_assignments")
           .insert({
             organization_id: org.id,
@@ -789,11 +993,37 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             instructor_id: instructorId,
             role: "lead",
             status: "proposed",
-          });
+          })
+          .select("id")
+          .single();
         if (error) throw error;
+        newAssignmentId = inserted.id;
+        setLastOp({ type: "assign", assignmentId: inserted.id, label: `Assigned ${program.curriculum || "class"}` });
       }
       setPicker(null);
       await loadAll();
+
+      // Offers for this term are already in flight, so nothing else will email
+      // this instructor. Offer to send their patch offer now; "Later" leaves the
+      // row sitting at 'proposed' where the board shows it still needs an offer.
+      const needsNudge = termMidFlight && newAssignmentId;
+      if (needsNudge) {
+        const inst = state.instructors.find((i) => i.id === instructorId);
+        setOfferNewPrompt({
+          assignmentId: newAssignmentId,
+          name: inst ? (inst.preferred_name || inst.first_name || "this instructor") : "this instructor",
+          classLabel: [program.curriculum, locName.get(program.program_location_id)].filter(Boolean).join(" at ") || "this class",
+        });
+      }
+
+      // Started from a change-request review — keep walking the queue. The nudge
+      // wins if both want the screen: stacking two dialogs is worse than one extra
+      // click, and nothing is lost — the Hat tip still counts the requests left.
+      if (reassigningChangeRequestId) {
+        const handled = reassigningChangeRequestId;
+        setReassigningChangeRequestId(null);
+        if (!needsNudge) advanceOrCloseChangeRequest(handled);
+      }
     } catch (err) {
       console.error("Assign failed:", err);
       setSaveError(`Couldn't save: ${err.message ?? "unknown error"}`);
@@ -815,7 +1045,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         assignment: displaced,
         instructor: { id: displaced.instructor_id, first_name: displaced.instructor_first, preferred_name: displaced.instructor_preferred, email: displaced.instructor_email },
         remaining: remainingActiveFor(displaced.instructor_id, displaced.id),
-        onProceed: async () => { await performAssign(program, instructorId, displaced); setNotifyRemoval(null); },
+        onProceed: async ({ emailSent } = {}) => {
+          await performAssign(program, instructorId, displaced);
+          // Same rule as remove: once the displaced instructor has been told they're
+          // off, undoing the reassign in one click would put them back silently.
+          if (emailSent) setLastOp(null);
+          setNotifyRemoval(null);
+        },
       });
       return;
     }
@@ -1036,13 +1272,303 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return data.preview || [];
   }
 
+  // Patch offers: the "added after the batch went out" path. send-afterschool-patch-offer
+  // emails ONE instructor the classes they picked up late, instead of re-blasting the
+  // whole term. Always preview first — the send is the only thing that touches an inbox.
+  // Returns { ok } / { ok:false, error } so a caller that owns a modal can show the
+  // failure inline instead of behind a banner the admin may have scrolled past.
+  // Callers with no modal of their own pass surfaceError to get the page banner.
+  async function handlePreviewPatchOffers(assignmentIds, { surfaceError = true } = {}) {
+    if (!assignmentIds || assignmentIds.length === 0) return { ok: false, error: "Nothing to preview." };
+    setBusy("patching");
+    setSaveError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-afterschool-patch-offer", {
+        body: { assignment_ids: assignmentIds, mode: "preview" },
+      });
+      if (error) {
+        let msg = error.message ?? "preview failed";
+        try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+        throw new Error(msg);
+      }
+      if (data?.error) throw new Error(data.error);
+      const preview = data?.preview ?? [];
+      // The fn skips rows it won't send (already emailed / no instructor / no email
+      // on file) and returns a note. Say so instead of opening an empty previewer.
+      if (preview.length === 0) {
+        throw new Error(data?.note ?? "Nothing to send — this offer was already emailed, or the instructor has no email on file.");
+      }
+      // A 'proposed' target has never been approved, and sending is what approves it.
+      // The preview has to say that out loud rather than call itself a plain send.
+      // (A resend targets a 'published' row — already approved, nothing to bundle.)
+      const fresh = stateRef.current;
+      const targets = fresh.status === "ready" ? fresh.assignments.filter((a) => assignmentIds.includes(a.id)) : [];
+      const needsApproval = targets.some((a) => a.status === "proposed");
+      setPatchPreview({ assignmentIds, preview, needsApproval });
+      return { ok: true };
+    } catch (err) {
+      console.error("send-afterschool-patch-offer preview failed:", err);
+      const msg = `Couldn't load preview: ${err.message ?? "unknown error"}`;
+      if (surfaceError) {
+        setSaveError(msg);
+        setTimeout(() => setSaveError(null), 9000);
+      }
+      return { ok: false, error: msg };
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleConfirmPatchSend(excludedInstructorIds = new Set()) {
+    const all = patchPreview?.assignmentIds;
+    if (!all || all.length === 0) return;
+    // Drop anyone unticked in the preview. Resolve via the assignment rows so an
+    // excluded instructor can't ride along on a second assignment id.
+    const fresh = stateRef.current;
+    const byId = new Map((fresh.status === "ready" ? fresh.assignments : []).map((a) => [a.id, a.instructor_id]));
+    const ids = excludedInstructorIds.size === 0
+      ? all
+      : all.filter((id) => { const inst = byId.get(id); return inst && !excludedInstructorIds.has(inst); });
+    if (ids.length === 0) {
+      setPatchError("Nothing to send — every instructor was skipped.");
+      return;
+    }
+    setBusy("patching");
+    setSaveError(null);
+    setPatchError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-afterschool-patch-offer", {
+        body: { assignment_ids: ids, mode: "send" },
+      });
+      if (error) {
+        let msg = error.message ?? "send failed";
+        try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+        throw new Error(msg);
+      }
+      if (data?.error) throw new Error(data.error);
+      const failed = Array.isArray(data?.failed) ? data.failed : [];
+      const sent = data?.sent ?? 0;
+      // A 200 with sent:0 is a failure the operator must see — never close on it
+      // silently and let the board imply the email went out. Keep the modal open
+      // and say so there; nothing was sent, so Send is still a valid retry.
+      if (sent === 0) {
+        setPatchError(failed.length ? `Couldn't send: ${friendlyFailReason(failed[0].reason)}` : (data?.note ?? "Nothing was sent."));
+        await loadAll();
+        return;
+      }
+      // PARTIAL: some went, some didn't. Closing here would report success for a send
+      // that half-failed. Name who missed out and stop offering Send — the ones that
+      // landed are already emailed, so re-sending would just skip them.
+      if (failed.length > 0) {
+        const nameOf = (id) => {
+          const inst = (fresh.status === "ready" ? fresh.instructors : []).find((i) => i.id === id);
+          return inst ? (inst.preferred_name || inst.first_name || "one instructor") : "one instructor";
+        };
+        const who = failed.map((f) => nameOf(f.instructor_id)).join(", ");
+        setPatchError(`Emailed ${sent} of ${sent + failed.length}. Couldn't reach ${who}: ${friendlyFailReason(failed[0].reason)} They're still on the schedule and haven't been emailed — the Hat will keep reminding you.`);
+        setPatchPreview((prev) => (prev ? { ...prev, finished: true } : prev));
+        setLastOp(null);
+        await loadAll();
+        return;
+      }
+      setPatchPreview(null);
+      // The email is out. "Undo: Assigned X" would now delete a row the instructor
+      // has already been told about — a quiet local undo is no longer honest, and
+      // Remove (which warns first) is the right door. Drop the undo.
+      setLastOp(null);
+      await loadAll();
+    } catch (err) {
+      console.error("send-afterschool-patch-offer send failed:", err);
+      setPatchError(`Couldn't send: ${err.message ?? "unknown error"}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Resend an offer that already went out (the instructor says it never arrived).
+  // The edge fn skips any row with email_sent_at, so clear the send trail first,
+  // then preview. Only offered for a published offer still awaiting a response —
+  // see the Resend gate in OfferReviewModal.
+  async function handleResendOffer(assignment) {
+    if (!assignment?.id) return { ok: false, error: "No offer to resend." };
+    setSaveError(null);
+    try {
+      const { error } = await supabase
+        .from("program_assignments")
+        .update({ email_sent_at: null, reminder_sent_at: null, deadline: null })
+        .eq("id", assignment.id);
+      if (error) throw error;
+      // The preview owns the error message here (surfaceError:false) so it lands in
+      // the review modal the admin is looking at.
+      const res = await handlePreviewPatchOffers([assignment.id], { surfaceError: false });
+      if (!res.ok) {
+        // Put the send trail back. Otherwise a failed preview leaves the row reading
+        // "never emailed" when the instructor already has the offer in their inbox.
+        const { error: rbErr } = await supabase
+          .from("program_assignments")
+          .update({
+            email_sent_at: assignment.email_sent_at,
+            reminder_sent_at: assignment.reminder_sent_at ?? null,
+            deadline: assignment.deadline ?? null,
+          })
+          .eq("id", assignment.id);
+        await loadAll();
+        // A failed rollback is worse than the failed preview: the row now claims the
+        // offer was never sent. Don't bury that under the preview's error message.
+        if (rbErr) {
+          return { ok: false, error: `${res.error} We also couldn't restore this offer's sent status, so it now reads as never emailed — reload and check before resending.` };
+        }
+        return res;
+      }
+      setReviewFor(null);
+      await loadAll();
+      return { ok: true };
+    } catch (err) {
+      console.error("Resend offer failed:", err);
+      return { ok: false, error: `Couldn't prepare resend: ${err.message ?? "unknown error"}` };
+    }
+  }
+
+  // Undo an acceptance the instructor gave (they accepted, then told you otherwise).
+  // Back to 'published' with no response: they were emailed, so the honest state is
+  // "waiting on them again" — not "never asked".
+  async function handleResetAcceptance(program, assignment) {
+    if (!assignment?.id) return;
+    try {
+      const { error } = await supabase
+        .from("program_assignments")
+        .update({ status: "published", instructor_response_at: null })
+        .eq("id", assignment.id);
+      if (error) throw error;
+      setLastOp({
+        type: "reset_acceptance",
+        assignmentId: assignment.id,
+        prev: { status: assignment.status, instructor_response_at: assignment.instructor_response_at ?? null },
+        label: `Reset acceptance on ${program.curriculum || "class"}`,
+      });
+      setReviewFor(null);
+      await loadAll();
+    } catch (err) {
+      console.error("Reset acceptance failed:", err);
+      setSaveError(`Couldn't reset: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 6000);
+    }
+  }
+
+  // After handling (or skipping) a change_requested row, queue the next one so the
+  // admin walks the whole list without going back to the Hat each time. Reads
+  // stateRef/skippedThisWalkRef, never the closure — loadAll has just replaced state.
+  function advanceOrCloseChangeRequest(justHandledAssignmentId) {
+    const fresh = stateRef.current;
+    if (fresh.status !== "ready") { setReviewFor(null); return; }
+    const skipped = skippedThisWalkRef.current;
+    const remaining = fresh.assignments.filter(
+      (a) => a.status === "change_requested"
+        && a.id !== justHandledAssignmentId
+        && !skipped.has(a.id),
+    );
+    if (remaining.length === 0) {
+      setReviewFor(null);
+      skippedThisWalkRef.current = new Set();
+      return;
+    }
+    const next = remaining[0];
+    const prog = fresh.programs.find((p) => p.id === next.program_id);
+    if (prog) setReviewFor({ program: prog, assignment: next });
+    else { setReviewFor(null); skippedThisWalkRef.current = new Set(); }
+  }
+
+  // Start a change-request walk from scratch (Hat tip / card click): anything skipped
+  // in a previous walk is fair game again.
+  function startChangeRequestWalk(program, assignment) {
+    skippedThisWalkRef.current = new Set();
+    setReviewFor({ program, assignment });
+  }
+
+  // Single-step undo. Every branch restores the FULL prior row, because the forward
+  // operations wipe more than they look like they do.
+  async function handleUndo() {
+    const op = lastOp;
+    if (!op) return;
+    setLastOp(null);
+    setSaveError(null);
+    try {
+      if (op.type === "assign") {
+        const { error } = await supabase.from("program_assignments").delete().eq("id", op.assignmentId);
+        if (error) throw error;
+      } else if (op.type === "reassign" || op.type === "reset_acceptance") {
+        const { error } = await supabase.from("program_assignments").update(op.prev).eq("id", op.assignmentId);
+        if (error) throw error;
+      } else if (op.type === "remove") {
+        const { error } = await supabase.from("program_assignments").insert(op.snapshot);
+        if (error) throw error;
+      }
+      // Reassign/remove may have recorded a decline for the outgoing instructor.
+      // Undoing without clearing it would leave them silently un-suggestable for
+      // this class forever — the board would look restored but the picker wouldn't.
+      if (op.declineRecorded) {
+        await supabase
+          .from("session_declined_instructors")
+          .delete()
+          .eq("organization_id", org.id)
+          .eq("program_id", op.declineRecorded.programId)
+          .eq("instructor_id", op.declineRecorded.instructorId);
+      }
+      await loadAll();
+    } catch (err) {
+      console.error("Undo failed:", err);
+      setSaveError(`Couldn't undo: ${err.message ?? "unknown error"}`);
+      setTimeout(() => setSaveError(null), 8000);
+      setLastOp(op); // put it back so they can try again
+      await loadAll();
+    }
+  }
+
   async function deleteAssignment(assignmentId) {
     const { error } = await supabase.from("program_assignments").delete().eq("id", assignmentId);
     if (error) throw error;
   }
 
+  // The delete is a real DELETE, so undo has to re-insert the row from a snapshot —
+  // there's no 'withdrawn' tombstone to flip back. Records the decline first (same
+  // rule as reassign) and remembers it so undo can clear it.
+  async function doRemove(program, assignment) {
+    let declineRecorded = null;
+    if (assignment.status === "change_requested" && assignment.instructor_id) {
+      // Same rule as reassign: undo may only clear a decline this remove created.
+      const created = await upsertProgramDecline(program.id, assignment.instructor_id);
+      if (created) declineRecorded = { programId: program.id, instructorId: assignment.instructor_id };
+    }
+    const snapshot = {
+      id: assignment.id,
+      organization_id: org.id,
+      program_id: program.id,
+      instructor_id: assignment.instructor_id,
+      role: assignment.role ?? "lead",
+      status: assignment.status,
+      flags: assignment.flags ?? [],
+      distance_bonus_cents: assignment.distance_bonus_cents ?? null,
+      email_sent_at: assignment.email_sent_at ?? null,
+      reminder_sent_at: assignment.reminder_sent_at ?? null,
+      instructor_response_at: assignment.instructor_response_at ?? null,
+      change_request_message: assignment.change_request_message ?? null,
+      flagged_reason: assignment.flagged_reason ?? null,
+      deadline: assignment.deadline ?? null,
+      published_at: assignment.published_at ?? null,
+    };
+    await deleteAssignment(assignment.id);
+    setLastOp({
+      type: "remove",
+      assignmentId: assignment.id,
+      snapshot,
+      declineRecorded,
+      label: `Removed from ${program.curriculum || "class"}`,
+    });
+  }
+
   // Remove from the schedule. If the offer email already went out, warm-notify first.
   async function handleReviewRemove(program, assignment) {
+    const wasChangeRequest = assignment.status === "change_requested";
     if (assignment.email_sent_at) {
       setReviewFor(null);
       setNotifyRemoval({
@@ -1056,14 +1582,32 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           email: assignment.instructor_email,
         },
         remaining: remainingActiveFor(assignment.instructor_id, assignment.id),
-        onProceed: async () => { await deleteAssignment(assignment.id); setNotifyRemoval(null); await loadAll(); },
+        onProceed: async ({ emailSent } = {}) => {
+          try {
+            await doRemove(program, assignment);
+            // They've been emailed "you're off this class". A one-click Undo would
+            // put them back with no word to them at all — the board would agree with
+            // itself while the instructor is working off a stale email. Re-add them
+            // deliberately instead.
+            if (emailSent) setLastOp(null);
+            setNotifyRemoval(null);
+            await loadAll();
+            if (wasChangeRequest) advanceOrCloseChangeRequest(assignment.id);
+          } catch (err) {
+            console.error("Remove failed:", err);
+            setNotifyRemoval(null);
+            setSaveError(`Couldn't remove: ${err.message ?? "unknown error"}`);
+            setTimeout(() => setSaveError(null), 6000);
+          }
+        },
       });
       return;
     }
     try {
-      await deleteAssignment(assignment.id);
+      await doRemove(program, assignment);
       setReviewFor(null);
       await loadAll();
+      if (wasChangeRequest) advanceOrCloseChangeRequest(assignment.id);
     } catch (err) {
       console.error("Remove failed:", err);
       setSaveError(`Couldn't remove: ${err.message ?? "unknown error"}`);
@@ -1156,6 +1700,22 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         </div>
       )}
 
+      {pendingPatchAssignments.length > 0 && (
+        <HatGuide
+          character="instructor"
+          tip={{
+            key: `as-${term}-pendingpatch-${pendingPatchAssignments.length}`,
+            message: pendingPatchAssignments.length === 1
+              ? `${patchNudgeName(pendingPatchAssignments[0])} is on the schedule but hasn't been emailed — offers for this term already went out, so nothing will email them automatically.`
+              : `${pendingPatchAssignments.length} instructors are on the schedule but haven't been emailed — offers for this term already went out, so nothing will email them automatically.`,
+            primary: {
+              label: pendingPatchAssignments.length === 1 ? "Approve & send their offer" : `Approve & send ${pendingPatchAssignments.length} offers`,
+              onClick: () => handlePreviewPatchOffers(pendingPatchAssignments.map((a) => a.id)),
+            },
+          }}
+        />
+      )}
+
       {counts.changeRequested > 0 && changeReqLead && (
         <HatGuide
           character="instructor"
@@ -1166,7 +1726,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
               : `${counts.changeRequested} instructors asked to change their schedule. Want to review the requests?`,
             primary: {
               label: counts.changeRequested === 1 ? "Review change request" : `Review ${counts.changeRequested} change requests`,
-              onClick: () => setReviewFor({ program: changeReqProgram, assignment: changeReqLead }),
+              onClick: () => startChangeRequestWalk(changeReqProgram, changeReqLead),
             },
           }}
         />
@@ -1187,6 +1747,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         onApprove={handleApprove}
         onSendOffers={openSendOffers}
         hasPrograms={state.programs.length > 0}
+        lastOp={lastOp}
+        onUndo={handleUndo}
+        offersOut={offersOut}
       />
 
       {approveResult && (
@@ -1346,6 +1909,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           evaluate={(id) => evaluate(id, picker.program)}
           onAssign={(id) => handleAssign(picker.program, id)}
           onRemove={() => handleRemove(picker.program)}
+          declinedInstructorIds={declinedByProgram.get(picker.program.id) ?? new Set()}
+          onUndecline={(id) => handleUndecline(picker.program.id, id)}
           onClose={() => setPicker(null)}
         />
       )}
@@ -1413,9 +1978,73 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           loc={locName.get(reviewFor.program.program_location_id) ?? "—"}
           subNeeded={unavailableConflicts(reviewFor.assignment.instructor_id, reviewFor.program)}
           onReply={(msg) => submitReply(reviewFor.assignment, msg)}
-          onReassign={() => { const p = reviewFor.program; setReviewFor(null); setPicker({ program: p }); }}
+          onReassign={() => {
+            const p = reviewFor.program;
+            // Remember we came from a change request so the picker can advance the
+            // walk once the new instructor is chosen.
+            if (reviewFor.assignment.status === "change_requested") setReassigningChangeRequestId(reviewFor.assignment.id);
+            setReviewFor(null);
+            setPicker({ program: p });
+          }}
           onRemove={() => handleReviewRemove(reviewFor.program, reviewFor.assignment)}
-          onClose={() => setReviewFor(null)}
+          onResendOffer={() => handleResendOffer(reviewFor.assignment)}
+          onResetAcceptance={() => handleResetAcceptance(reviewFor.program, reviewFor.assignment)}
+          remainingChangeRequests={
+            reviewFor.assignment.status === "change_requested"
+              ? state.assignments.filter((a) => a.status === "change_requested" && a.id !== reviewFor.assignment.id && !skippedThisWalkRef.current.has(a.id)).length
+              : 0
+          }
+          onSkip={() => {
+            skippedThisWalkRef.current.add(reviewFor.assignment.id);
+            advanceOrCloseChangeRequest(reviewFor.assignment.id);
+          }}
+          onClose={() => { skippedThisWalkRef.current = new Set(); setReviewFor(null); }}
+        />
+      )}
+
+      {offerNewPrompt && (
+        <Overlay onClose={() => setOfferNewPrompt(null)} maxWidth={440}>
+          <div style={{ padding: 24 }}>
+            <h3 style={{ margin: "0 0 8px", color: INK, fontSize: 17 }}>Approve and email {offerNewPrompt.name} their offer?</h3>
+            <p style={{ color: MUTED, fontSize: 13.5, margin: "0 0 18px", lineHeight: 1.5 }}>
+              {offerNewPrompt.name} is now on {offerNewPrompt.classLabel}. Offers for this term already
+              went out, so nothing will email them automatically. You'll see the email first — sending
+              it approves this one class and asks them to accept.
+            </p>
+            <p style={{ color: MUTED, fontSize: 12.5, margin: "0 0 18px", lineHeight: 1.5 }}>
+              Not now? They'll stay on the schedule as a draft, and the Hat will remind you.
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setOfferNewPrompt(null)}
+                style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                onClick={() => { const id = offerNewPrompt.assignmentId; setOfferNewPrompt(null); handlePreviewPatchOffers([id]); }}
+                disabled={busy === "patching"}
+                style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy === "patching" ? 0.6 : 1 }}
+              >
+                {busy === "patching" ? "Building preview…" : "Review the email"}
+              </button>
+            </div>
+          </div>
+        </Overlay>
+      )}
+
+      {patchPreview && (
+        <PatchPreviewModal
+          preview={patchPreview.preview}
+          instructors={state.instructors}
+          sending={busy === "patching"}
+          needsApproval={patchPreview.needsApproval}
+          finished={patchPreview.finished}
+          error={patchError}
+          onSend={handleConfirmPatchSend}
+          onClose={() => { setPatchPreview(null); setPatchError(null); }}
         />
       )}
 
@@ -1438,7 +2067,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
 const linkBtn = { background: "transparent", border: "none", color: PURPLE, fontWeight: 600, cursor: "pointer", marginLeft: 10, fontSize: 13, textDecoration: "underline" };
 
-function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms }) {
+function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms, lastOp, onUndo, offersOut }) {
   // Unified term selector: afterschool terms (this view) + camp cycles (switches back to Schedule).
   const value = `as:${term}`;
   function onChange(e) {
@@ -1479,6 +2108,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
         </div>
         <div style={{ marginTop: 8, fontSize: 13, color: MUTED, display: "flex", gap: 14, flexWrap: "wrap" }}>
           <span><strong style={{ color: INK }}>{counts.assigned + counts.accepted}</strong> assigned</span>
+          {counts.draft > 0 && <span><strong style={{ color: INK }}>{counts.draft}</strong> need approval</span>}
           <span><strong style={{ color: counts.needsHire ? CORAL : INK }}>{counts.needsHire}</strong> need an instructor</span>
           {counts.changeRequested > 0 && <span><strong style={{ color: CHANGE_REQ }}>{counts.changeRequested}</strong> change requested</span>}
           <span><strong style={{ color: INK }}>{counts.instructors}</strong> active instructors</span>
@@ -1525,7 +2155,22 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             </button>
           );
         })()}
-        {counts.proposed > 0 && (
+        {lastOp && onUndo && (
+          <button
+            type="button"
+            onClick={onUndo}
+            title={`${lastOp.label} — undo it`}
+            style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}
+          >
+            Undo: {lastOp.label}
+          </button>
+        )}
+        {/* Bulk Approve is a pre-send tool. Once offers are out it would sweep up
+            every draft on the board in one click, so it goes away (camp does the
+            same via cycle.status). Mid-flight, a newly assigned instructor is
+            approved + emailed one row at a time through the patch offer — the nudge,
+            or the Hat tip that catches the ones dismissed with "Later". */}
+        {counts.proposed > 0 && !offersOut && (
           <button
             type="button"
             onClick={onApprove}
@@ -1958,14 +2603,18 @@ function SubLineAS({ subs, onClick }) {
   );
 }
 
-function PickerModal({ program, loc, current, instructors, evaluate, onAssign, onRemove, onClose }) {
+function PickerModal({ program, loc, current, instructors, evaluate, onAssign, onRemove, onClose, declinedInstructorIds = new Set(), onUndecline }) {
   const rows = instructors.map((i) => {
     const ev = evaluate(i.id);
     return { inst: i, ev };
   });
   const prefRank = { preferred: 0, highly_preferred: 0, available: 1, undefined: 1, not_preferred: 1, unavailable: 3 };
-  const eligible = rows.filter((r) => r.ev.ok).sort((a, b) => (prefRank[a.ev.pref] ?? 1) - (prefRank[b.ev.pref] ?? 1));
-  const ineligible = rows.filter((r) => !r.ev.ok);
+  // Instructors who previously declined this class are pulled out of the suggestion
+  // lists into their own section with a "Re-suggest" undo (mirrors camp).
+  const declined = rows.filter((r) => declinedInstructorIds.has(r.inst.id));
+  const notDeclined = rows.filter((r) => !declinedInstructorIds.has(r.inst.id));
+  const eligible = notDeclined.filter((r) => r.ev.ok).sort((a, b) => (prefRank[a.ev.pref] ?? 1) - (prefRank[b.ev.pref] ?? 1));
+  const ineligible = notDeclined.filter((r) => !r.ev.ok);
   return (
     <Overlay onClose={onClose}>
       <div style={{ padding: "20px 22px", borderBottom: `1px solid ${RULE}` }}>
@@ -2007,6 +2656,19 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
               <div key={inst.id} style={{ padding: "8px 12px", fontSize: 13, color: MUTED, display: "flex", flexDirection: "column" }}>
                 <span style={{ fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
                 <span style={{ fontSize: 12 }}>{ev.reason}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {declined.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700, padding: "4px 6px" }}>Previously declined this class</div>
+            {declined.map(({ inst }) => (
+              <div key={inst.id} style={{ padding: "8px 12px", fontSize: 13, color: MUTED, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <span style={{ fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
+                {onUndecline && (
+                  <button onClick={() => onUndecline(inst.id)} style={{ ...linkBtn, color: BRIGHT }}>Re-suggest</button>
+                )}
               </div>
             ))}
           </div>
@@ -2441,12 +3103,28 @@ function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
   );
 }
 
-function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReassign, onRemove, onClose }) {
+function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReassign, onRemove, onResendOffer, onResetAcceptance, remainingChangeRequests = 0, onSkip, onClose }) {
   const [thread, setThread] = useState(null);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [sent, setSent] = useState(false);
+  const [resendArmed, setResendArmed] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
+  // Resend is for one case only: the offer went out and they say it never arrived.
+  // Once they've responded (accepted -> 'confirmed', or asked for a change), a resend
+  // would overwrite that response with a fresh 'published' and silently discard it —
+  // so the button is not offered. Camp gates on emailed-only; this is a deliberate
+  // divergence because after-school routes change requests through THIS modal, which
+  // would put "Resend" right next to the request it would erase.
+  const canResend = !!onResendOffer
+    && !!assignment.email_sent_at
+    && assignment.status === "published"
+    && !assignment.instructor_response_at;
+  // Only meaningful once they've actually accepted — there's nothing to reset otherwise.
+  const canResetAcceptance = !!onResetAcceptance
+    && assignment.status === "confirmed"
+    && !!assignment.instructor_response_at;
 
   async function loadThread() {
     const { data } = await supabase
@@ -2466,7 +3144,15 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
 
   const who = (assignment.instructor_preferred || assignment.instructor_first || "Instructor") + (assignment.instructor_last ? ` ${assignment.instructor_last}` : "");
   const isChange = assignment.status === "change_requested";
-  const pillStatus = isChange ? "change_requested" : (assignment.instructor_response_at ? "accepted" : "confirmed");
+  // Same rule as deriveStatus: never say "awaiting response" for someone who was
+  // never emailed.
+  const pillStatus = isChange
+    ? "change_requested"
+    : assignment.instructor_response_at
+      ? "accepted"
+      : assignment.email_sent_at
+        ? "awaiting"
+        : "ready_to_send";
 
   async function send() {
     if (!reply.trim() || busy) return;
@@ -2524,16 +3210,178 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
       <div style={{ padding: "12px 18px", borderTop: `1px solid ${RULE}` }}>
         {sent && <div style={{ color: OK_GREEN, fontSize: 13, marginBottom: 8 }}>✓ Sent.</div>}
         {err && <div style={{ color: "#b53737", fontSize: 13, marginBottom: 8 }}>{err}</div>}
+        {resendArmed && (
+          <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+            <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginBottom: 4 }}>Resend the offer to {who.split(" ")[0]}?</div>
+            <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
+              You'll see the email before it goes. Their response deadline resets to 5 business days from today.
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  setResendBusy(true);
+                  setErr(null);
+                  try {
+                    const res = await onResendOffer();
+                    // On success the parent closes this modal and opens the preview.
+                    // On failure stay put and say so right here.
+                    if (res && !res.ok) { setErr(res.error); setResendArmed(false); }
+                  } finally { setResendBusy(false); }
+                }}
+                disabled={resendBusy}
+                style={{ ...btnStyle, background: BRIGHT, color: "#fff", padding: "6px 12px", fontSize: 12, opacity: resendBusy ? 0.6 : 1 }}
+              >
+                {resendBusy ? "Preparing preview…" : "Yes, resend"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setResendArmed(false)}
+                disabled={resendBusy}
+                style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}`, padding: "6px 12px", fontSize: 12 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         <textarea value={reply} onChange={(e) => { setReply(e.target.value); setSent(false); }} rows={3} placeholder={isChange ? `Reply to ${who}…` : `Message ${who}…`} style={{ width: "100%", padding: "9px 11px", border: `1px solid ${RULE}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }} />
         <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={onReassign} style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1px solid ${RULE}` }}>Reassign</button>
+            {canResend && (
+              <button
+                onClick={() => setResendArmed(true)}
+                disabled={resendArmed || resendBusy}
+                title={`Resend the offer email to ${who.split(" ")[0]} — shows you the email first`}
+                style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, opacity: resendArmed || resendBusy ? 0.6 : 1 }}
+              >
+                Resend offer
+              </button>
+            )}
+            {canResetAcceptance && (
+              <button
+                onClick={onResetAcceptance}
+                title={`${who.split(" ")[0]} accepted, but told you otherwise — put this back to waiting on their response`}
+                style={{ ...btnStyle, background: "#fff", color: PURPLE, border: `1px solid ${RULE}` }}
+              >
+                Reset acceptance
+              </button>
+            )}
             <button onClick={onRemove} style={{ ...btnStyle, background: "#fff", color: CORAL, border: `1px solid ${RULE}` }}>Remove</button>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {isChange && onSkip && remainingChangeRequests > 0 && (
+              <button
+                onClick={onSkip}
+                title="Leave this one for later and look at the next request"
+                style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}
+              >
+                Skip ({remainingChangeRequests} left)
+              </button>
+            )}
             <button onClick={onClose} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}>Close</button>
             <button onClick={send} disabled={busy || !reply.trim()} style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy || !reply.trim() ? 0.6 : 1 }}>{busy ? "Sending…" : "Send reply"}</button>
           </div>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+// The real patch-offer email, rendered by the edge fn in 'preview' mode. Nothing has
+// been sent at this point — Send here is the only thing that touches an inbox.
+function PatchPreviewModal({ preview, instructors, sending, needsApproval, finished, error, onSend, onClose }) {
+  const [idx, setIdx] = useState(0);
+  // Instructors unticked in this preview. Only reachable when the preview covers
+  // more than one — a single-recipient preview has Cancel for that.
+  const [excluded, setExcluded] = useState(() => new Set());
+  const nameById = new Map(instructors.map((i) => [i.id, (i.preferred_name || i.first_name) + (i.last_name ? ` ${i.last_name}` : "")]));
+  const cur = preview[idx];
+  const multi = preview.length > 1;
+  const sendCount = preview.length - excluded.size;
+  function toggleExclude(instructorId) {
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(instructorId)) next.delete(instructorId); else next.add(instructorId);
+      return next;
+    });
+  }
+  return (
+    <Overlay onClose={sending ? () => {} : onClose} maxWidth={720}>
+      <div style={{ padding: "18px 22px", borderBottom: `1px solid ${RULE}` }}>
+        <h3 style={{ margin: 0, color: INK, fontSize: 16 }}>
+          {preview.length === 1 ? `Offer email for ${nameById.get(cur?.instructor_id) || cur?.to}` : `${preview.length} offer emails`}
+        </h3>
+        <div style={{ fontSize: 12.5, color: MUTED, marginTop: 4 }}>{cur?.subject} · to {cur?.to}</div>
+      </div>
+      <div style={{ padding: "12px 18px 0", overflowY: "auto" }}>
+        {multi && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>Previewing</span>
+            <select value={idx} onChange={(e) => setIdx(Number(e.target.value))} style={{ fontSize: 12, fontFamily: "inherit", border: `1px solid ${RULE}`, borderRadius: 6, padding: "3px 6px", maxWidth: 320 }}>
+              {preview.map((p, i) => (
+                <option key={i} value={i}>
+                  {(nameById.get(p.instructor_id) || p.to) + (excluded.has(p.instructor_id) ? " — skipped" : "")}
+                </option>
+              ))}
+            </select>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: excluded.has(cur?.instructor_id) ? CORAL : INK, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={!excluded.has(cur?.instructor_id)}
+                onChange={() => toggleExclude(cur?.instructor_id)}
+                style={{ margin: 0 }}
+              />
+              {excluded.has(cur?.instructor_id) ? <strong>Skipped — won't email {cur?.to}</strong> : <span>Include in send</span>}
+            </label>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: MUTED }}>Nothing sent yet</span>
+          </div>
+        )}
+        <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+          <iframe title="Patch offer email preview" srcDoc={cur?.html} style={{ width: "100%", height: 460, border: "none", background: "#fff", display: "block" }} />
+        </div>
+      </div>
+      {error && (
+        <div style={{ margin: "10px 18px 0", background: "#fdecea", border: "1px solid #f5c6cb", color: "#842029", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+      <div style={{ padding: "12px 18px", display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: MUTED }}>
+          {finished
+            ? "Some of these already went out — close and use the Hat tip for the rest."
+            : sendCount === 0
+              ? "Every instructor is skipped — nothing will be emailed."
+              : needsApproval
+                ? `Sending approves ${sendCount === 1 ? "this class" : `${sendCount} classes`} and asks the instructor${sendCount === 1 ? "" : "s"} to accept.`
+                : `Sending marks ${sendCount === 1 ? "this class" : `${sendCount} classes`} as offered and asks for a response.`}
+        </span>
+        <div style={{ display: "flex", gap: 8 }}>
+          {/* After a partial send the emails that landed cannot be unsent, so Send
+              stops being offered — re-sending would only skip them and read as a
+              second failure. Close is the only honest move left. */}
+          {finished ? (
+            <button type="button" onClick={onClose} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>Done</button>
+          ) : (
+            <>
+              <button type="button" onClick={onClose} disabled={sending} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}`, opacity: sending ? 0.6 : 1 }}>Cancel</button>
+              <button
+                type="button"
+                onClick={() => onSend(excluded)}
+                disabled={sending || sendCount === 0}
+                style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: sending || sendCount === 0 ? 0.6 : 1 }}
+              >
+                {sending
+                  ? "Sending…"
+                  : sendCount === 0
+                    ? "Nothing to send"
+                    : needsApproval
+                      ? (sendCount === 1 ? "Approve & send" : `Approve & send ${sendCount}`)
+                      : (sendCount === 1 ? "Send this offer" : `Send ${sendCount} offers`)}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </Overlay>

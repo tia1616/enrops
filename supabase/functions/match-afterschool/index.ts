@@ -39,6 +39,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { getUntrainedInstructorIds } from '../_shared/trainingGate.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -126,13 +127,18 @@ serve(async (req) => {
     const token = authHeader.replace('Bearer ', '');
     const { data: userData, error: userErr } = await admin.auth.getUser(token);
     if (userErr || !userData?.user) return json({ error: 'invalid auth' }, 401);
+    // accepted_at is the difference between "was invited" and "is a member". Without
+    // it, someone with an unaccepted invite can already run the matcher and rewrite
+    // the org's schedule. Mirrors create-assignment-substitution.
     const { data: memberRow } = await admin
       .from('org_members')
       .select('role')
       .eq('auth_user_id', userData.user.id)
       .eq('organization_id', organizationId)
+      .in('role', ['owner', 'admin'])
+      .not('accepted_at', 'is', null)
       .maybeSingle();
-    if (!memberRow || !['owner', 'admin'].includes(memberRow.role)) {
+    if (!memberRow) {
       return json({ error: 'forbidden' }, 403);
     }
 
@@ -208,6 +214,26 @@ serve(async (req) => {
     const existing = existingRaw ?? [];
     const progById = new Map(programs.map((p: any) => [p.id, p]));
 
+    // ----- Recorded declines (per-program) -----
+    // An instructor who turned THIS class down (a change request the admin then
+    // reassigned/removed). Excluded from that program's candidates only — still
+    // matchable elsewhere. Mirrors the manual picker's "previously declined" filter,
+    // so a re-run of the matcher doesn't undo the admin's memory.
+    const declinedByProgram = new Map<string, Set<string>>();
+    if (programIds.length) {
+      const { data: declineRows, error: declineErr } = await admin
+        .from('session_declined_instructors')
+        .select('program_id, instructor_id')
+        .eq('organization_id', organizationId)
+        .in('program_id', programIds);
+      if (declineErr) console.warn(`[match-afterschool] decline load failed: ${declineErr.message}`);
+      for (const d of declineRows ?? []) {
+        if (!d.program_id) continue;
+        if (!declinedByProgram.has(d.program_id)) declinedByProgram.set(d.program_id, new Set());
+        declinedByProgram.get(d.program_id)!.add(d.instructor_id);
+      }
+    }
+
     // ----- Build the pool (instructors who submitted at least one weekday bucket) -----
     interface PoolInstr {
       id: string; name: string;
@@ -217,6 +243,11 @@ serve(async (req) => {
       areaPrefs: Record<string, string>;
       preferredCategories: Set<string>;  // LEGO / coding / robotics families they enjoy
     }
+    // Training gate: instructors who haven't finished required training can't be
+    // assigned. Computed once for the whole pool (empty set when training is off
+    // or the library has no required video).
+    const blockedTraining = await getUntrainedInstructorIds(admin, organizationId, instructors.map((i) => i.id));
+    const missingTraining: string[] = [];
     const missingSurveys: string[] = [];
     const pool: PoolInstr[] = [];
     for (const inst of instructors) {
@@ -225,6 +256,7 @@ serve(async (req) => {
       const wd = (av?.weekday_availability ?? {}) as Record<string, { from?: string; until?: string }>;
       const hasAny = av && Object.values(wd).some((w) => w && w.from);
       if (!hasAny) { missingSurveys.push(name); continue; }
+      if (blockedTraining.has(inst.id)) { missingTraining.push(name); continue; }
       const cats = Array.isArray(av.preferred_categories) ? av.preferred_categories : [];
       pool.push({
         id: inst.id, name,
@@ -277,6 +309,7 @@ serve(async (req) => {
     function eligibleCore(inst: PoolInstr, prog: any): boolean {
       const dc = dayCode(prog.day_of_week);
       if (!dc) return false;
+      if (declinedByProgram.get(prog.id)?.has(inst.id)) return false;  // turned this class down
       const avail = inst.days[dc];
       if (!avail || !avail.from) return false;
       const from = parseHHMM(avail.from);
@@ -523,6 +556,7 @@ serve(async (req) => {
         needs_hire: decisions.filter((d) => d.status === 'needs_hire').length,
         instructors_in_pool: pool.length,
         missing_surveys: missingSurveys,
+        missing_training: missingTraining,
         curriculum_sets: { total: totalSets, max_per_instructor: maxSets, instructors_assigned: setsByInstr.size },
       },
       decisions,
