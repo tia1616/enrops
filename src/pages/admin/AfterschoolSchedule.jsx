@@ -703,13 +703,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   }, [state]);
 
   const counts = useMemo(() => {
-    const c = { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, instructors: 0, proposed: 0, sendable: 0 };
+    const c = { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, instructors: 0, proposed: 0, sendable: 0, draft: 0 };
     if (state.status !== "ready") return c;
     for (const e of enriched.values()) {
       if (e.status === "needs_hire") c.needsHire++;
       else if (e.status === "change_requested") c.changeRequested++;
       else if (e.status === "flagged") c.flagged++;
       else if (e.status === "accepted") c.accepted++;
+      // A draft is a suggestion nobody has approved. Counting it as "assigned"
+      // reads as staffed and hides how much of the term is still undecided.
+      else if (e.status === "draft") c.draft++;
       else c.assigned++;
     }
     for (const a of state.assignments) {
@@ -2094,6 +2097,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
         </div>
         <div style={{ marginTop: 8, fontSize: 13, color: MUTED, display: "flex", gap: 14, flexWrap: "wrap" }}>
           <span><strong style={{ color: INK }}>{counts.assigned + counts.accepted}</strong> assigned</span>
+          {counts.draft > 0 && <span><strong style={{ color: INK }}>{counts.draft}</strong> need approval</span>}
           <span><strong style={{ color: counts.needsHire ? CORAL : INK }}>{counts.needsHire}</strong> need an instructor</span>
           {counts.changeRequested > 0 && <span><strong style={{ color: CHANGE_REQ }}>{counts.changeRequested}</strong> change requested</span>}
           <span><strong style={{ color: INK }}>{counts.instructors}</strong> active instructors</span>
