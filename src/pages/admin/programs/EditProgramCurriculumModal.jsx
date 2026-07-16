@@ -118,6 +118,7 @@ function defaultInstructorBody() {
 export default function EditProgramCurriculumModal({
   program,
   org,
+  user,
   curricula,
   enrollment,
   onSaved,
@@ -361,6 +362,24 @@ export default function EditProgramCurriculumModal({
         setError(data?.error || fnErr?.message || "Couldn't save the change.");
         setBusy(false);
         return;
+      }
+      // Time-saved receipt, mirroring the Offerings bulk matcher
+      // (CurriculumReview's LinkExistingModal): flat 0.5 hr, action_type
+      // "curriculum_linked", only when a NEW link happened. A swap isn't a
+      // new link, so the change path stays silent — same rule as the sibling.
+      // Non-fatal: a missing receipt must never fail the save.
+      if (isMatch) {
+        supabase.from("time_saved_events").insert({
+          organization_id: org.id,
+          action_type: "curriculum_linked",
+          action_label: `Linked 1 row to "${pickedCurriculum.name}"`,
+          hours_saved: 0.5,
+          related_entity_type: "curriculum",
+          related_entity_id: pickedCurriculum.id,
+          created_by: user?.id ?? null,
+        }).then(({ error: tsErr }) => {
+          if (tsErr) console.warn("time_saved_events insert failed (non-fatal):", tsErr.message);
+        });
       }
       // Show the confirmation step before closing — admin needs to see
       // what actually happened (DB write + which channels fired + counts).
@@ -1084,8 +1103,12 @@ function Step3({ isMatch, result, toCurriculumName, eligibleInstructor }) {
               )}
             </>
           )}
+          {/* Says "logged", not "visible in your change history" — the audit
+              row is real but nothing in the app reads it back yet, and copy
+              that promises a screen we haven't built costs trust when the
+              operator goes looking for it. */}
           <li style={{ color: MUTED, fontSize: 12 }}>
-            Logged for the record — visible later in this program's change history.
+            Logged for the record.
           </li>
         </ul>
       </div>

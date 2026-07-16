@@ -60,7 +60,7 @@ function titleDay(d) {
 }
 
 export default function ProgramsCalendar() {
-  const { org, orgMember } = useOutletContext();
+  const { user, org, orgMember } = useOutletContext();
   const perm = getPermissions(orgMember?.role);
   // Term starts empty — we don't guess a hardcoded term. fetchOrgTerms picks
   // the org's default (in-progress today, else next starting, else most recent
@@ -648,6 +648,7 @@ export default function ProgramsCalendar() {
           key={editingProgram.id}
           program={editingProgram}
           org={org}
+          user={user}
           curricula={curricula}
           enrollment={enrollmentByProgram[editingProgram.id]}
           onCancel={() => setEditingProgram(null)}
