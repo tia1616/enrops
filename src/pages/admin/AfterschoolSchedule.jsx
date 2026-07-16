@@ -1032,7 +1032,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         assignment: displaced,
         instructor: { id: displaced.instructor_id, first_name: displaced.instructor_first, preferred_name: displaced.instructor_preferred, email: displaced.instructor_email },
         remaining: remainingActiveFor(displaced.instructor_id, displaced.id),
-        onProceed: async () => { await performAssign(program, instructorId, displaced); setNotifyRemoval(null); },
+        onProceed: async ({ emailSent } = {}) => {
+          await performAssign(program, instructorId, displaced);
+          // Same rule as remove: once the displaced instructor has been told they're
+          // off, undoing the reassign in one click would put them back silently.
+          if (emailSent) setLastOp(null);
+          setNotifyRemoval(null);
+        },
       });
       return;
     }
@@ -1328,11 +1334,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       }
       if (data?.error) throw new Error(data.error);
       const failed = Array.isArray(data?.failed) ? data.failed : [];
+      const sent = data?.sent ?? 0;
       // A 200 with sent:0 is a failure the operator must see — never close on it
       // silently and let the board imply the email went out. Keep the modal open
-      // and say so there.
-      if ((data?.sent ?? 0) === 0) {
+      // and say so there; nothing was sent, so Send is still a valid retry.
+      if (sent === 0) {
         setPatchError(failed.length ? `Couldn't send: ${friendlyFailReason(failed[0].reason)}` : (data?.note ?? "Nothing was sent."));
+        await loadAll();
+        return;
+      }
+      // PARTIAL: some went, some didn't. Closing here would report success for a send
+      // that half-failed. Name who missed out and stop offering Send — the ones that
+      // landed are already emailed, so re-sending would just skip them.
+      if (failed.length > 0) {
+        const nameOf = (id) => {
+          const inst = (fresh.status === "ready" ? fresh.instructors : []).find((i) => i.id === id);
+          return inst ? (inst.preferred_name || inst.first_name || "one instructor") : "one instructor";
+        };
+        const who = failed.map((f) => nameOf(f.instructor_id)).join(", ");
+        setPatchError(`Emailed ${sent} of ${sent + failed.length}. Couldn't reach ${who}: ${friendlyFailReason(failed[0].reason)} They're still on the schedule and haven't been emailed — the Hat will keep reminding you.`);
+        setPatchPreview((prev) => (prev ? { ...prev, finished: true } : prev));
+        setLastOp(null);
         await loadAll();
         return;
       }
@@ -1546,9 +1568,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           email: assignment.instructor_email,
         },
         remaining: remainingActiveFor(assignment.instructor_id, assignment.id),
-        onProceed: async () => {
+        onProceed: async ({ emailSent } = {}) => {
           try {
             await doRemove(program, assignment);
+            // They've been emailed "you're off this class". A one-click Undo would
+            // put them back with no word to them at all — the board would agree with
+            // itself while the instructor is working off a stale email. Re-add them
+            // deliberately instead.
+            if (emailSent) setLastOp(null);
             setNotifyRemoval(null);
             await loadAll();
             if (wasChangeRequest) advanceOrCloseChangeRequest(assignment.id);
@@ -2000,6 +2027,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           instructors={state.instructors}
           sending={busy === "patching"}
           needsApproval={patchPreview.needsApproval}
+          finished={patchPreview.finished}
           error={patchError}
           onSend={handleConfirmPatchSend}
           onClose={() => { setPatchPreview(null); setPatchError(null); }}
@@ -3248,7 +3276,7 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
 
 // The real patch-offer email, rendered by the edge fn in 'preview' mode. Nothing has
 // been sent at this point — Send here is the only thing that touches an inbox.
-function PatchPreviewModal({ preview, instructors, sending, needsApproval, error, onSend, onClose }) {
+function PatchPreviewModal({ preview, instructors, sending, needsApproval, finished, error, onSend, onClose }) {
   const [idx, setIdx] = useState(0);
   // Instructors unticked in this preview. Only reachable when the preview covers
   // more than one — a single-recipient preview has Cancel for that.
@@ -3306,28 +3334,39 @@ function PatchPreviewModal({ preview, instructors, sending, needsApproval, error
       )}
       <div style={{ padding: "12px 18px", display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
         <span style={{ fontSize: 12, color: MUTED }}>
-          {sendCount === 0
-            ? "Every instructor is skipped — nothing will be emailed."
-            : needsApproval
-              ? `Sending approves ${sendCount === 1 ? "this class" : `${sendCount} classes`} and asks the instructor${sendCount === 1 ? "" : "s"} to accept.`
-              : `Sending marks ${sendCount === 1 ? "this class" : `${sendCount} classes`} as offered and asks for a response.`}
+          {finished
+            ? "Some of these already went out — close and use the Hat tip for the rest."
+            : sendCount === 0
+              ? "Every instructor is skipped — nothing will be emailed."
+              : needsApproval
+                ? `Sending approves ${sendCount === 1 ? "this class" : `${sendCount} classes`} and asks the instructor${sendCount === 1 ? "" : "s"} to accept.`
+                : `Sending marks ${sendCount === 1 ? "this class" : `${sendCount} classes`} as offered and asks for a response.`}
         </span>
         <div style={{ display: "flex", gap: 8 }}>
-          <button type="button" onClick={onClose} disabled={sending} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}`, opacity: sending ? 0.6 : 1 }}>Cancel</button>
-          <button
-            type="button"
-            onClick={() => onSend(excluded)}
-            disabled={sending || sendCount === 0}
-            style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: sending || sendCount === 0 ? 0.6 : 1 }}
-          >
-            {sending
-              ? "Sending…"
-              : sendCount === 0
-                ? "Nothing to send"
-                : needsApproval
-                  ? (sendCount === 1 ? "Approve & send" : `Approve & send ${sendCount}`)
-                  : (sendCount === 1 ? "Send this offer" : `Send ${sendCount} offers`)}
-          </button>
+          {/* After a partial send the emails that landed cannot be unsent, so Send
+              stops being offered — re-sending would only skip them and read as a
+              second failure. Close is the only honest move left. */}
+          {finished ? (
+            <button type="button" onClick={onClose} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>Done</button>
+          ) : (
+            <>
+              <button type="button" onClick={onClose} disabled={sending} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}`, opacity: sending ? 0.6 : 1 }}>Cancel</button>
+              <button
+                type="button"
+                onClick={() => onSend(excluded)}
+                disabled={sending || sendCount === 0}
+                style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: sending || sendCount === 0 ? 0.6 : 1 }}
+              >
+                {sending
+                  ? "Sending…"
+                  : sendCount === 0
+                    ? "Nothing to send"
+                    : needsApproval
+                      ? (sendCount === 1 ? "Approve & send" : `Approve & send ${sendCount}`)
+                      : (sendCount === 1 ? "Send this offer" : `Send ${sendCount} offers`)}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </Overlay>
