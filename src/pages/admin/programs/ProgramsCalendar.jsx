@@ -980,8 +980,15 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   }
 
   async function handleDuplicate() {
-    const target = copyTerm.trim();
+    // programs.term has a DB CHECK requiring this exact shape (season code +
+    // 2-digit year); validate here so a typo gets a plain-English message
+    // instead of a raw Postgres constraint-violation string.
+    const target = copyTerm.trim().toUpperCase();
     if (!target) return;
+    if (!/^(FA|WI|SP|SU)\d{2}$/.test(target)) {
+      setCopyResult({ ok: false, message: `"${copyTerm.trim()}" isn't a term code — use a season + 2-digit year, like WI27 or SP27.` });
+      return;
+    }
     setCopying(true);
     setCopyResult(null);
     try {
