@@ -271,9 +271,6 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [notifyRemoval, setNotifyRemoval] = useState(null); // { mode, program, assignment, instructor, remaining, onProceed }
   const [assignSubFor, setAssignSubFor] = useState(null); // { program, lead, dates } — day-of sub assignment modal
   const [approveResult, setApproveResult] = useState(null);
-  // Nudge to email an instructor who landed on the board AFTER offers went out —
-  // a future bulk send won't pick them up. { assignmentId, name, classLabel }.
-  const [offerNewPrompt, setOfferNewPrompt] = useState(null);
   // Patch-offer preview: { assignmentIds, preview: [...] } from send-afterschool-patch-offer
   // mode 'preview'. Send goes out only from this modal — never straight from a click.
   const [patchPreview, setPatchPreview] = useState(null);
@@ -281,8 +278,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // page-level saveError banner sits behind the overlay, so an error there reads
   // as "nothing happened" while the admin stares at an open dialog.
   const [patchError, setPatchError] = useState(null);
-  // Single-step undo for the last board mutation. { type, ... } — see handleUndo.
+  // Single-step undo for the last board mutation. { type, ..., contradictsEmailTo? }.
   const [lastOp, setLastOp] = useState(null);
+  // Set when Undo would contradict an email an instructor already got. Holds the op
+  // pending confirmation rather than silently dropping the Undo.
+  const [undoWarn, setUndoWarn] = useState(null);
   // When a reassign is started from the change-request modal, stash the request's
   // assignment id so the picker's onAssign can advance the walk afterwards.
   const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
@@ -723,6 +723,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return c;
   }, [state, enriched]);
 
+  // Time-saved receipt (fire-and-forget, never blocks the action). Mirrors the
+  // Discounts.jsx pattern. Estimates are what the SAME job costs by hand: building a
+  // term's schedule in a spreadsheet, or writing an offer email per instructor.
+  // Deliberately conservative — an inflated number here is a lie the operator can't
+  // check, and the point is that the figure holds up.
+  function logTimeSaved({ actionType, label, hours, entityType = null, entityId = null }) {
+    if (!org?.id || !hours) return;
+    supabase
+      .from("time_saved_events")
+      .insert({
+        organization_id: org.id,
+        action_type: actionType,
+        action_label: label,
+        hours_saved: hours,
+        related_entity_type: entityType,
+        related_entity_id: entityId,
+        created_by: user?.id ?? null,
+      })
+      .then(({ error }) => { if (error) console.warn("[AfterschoolSchedule] time-saved receipt failed:", error.message); });
+  }
+
   // Have any offers for this term gone out? Once they have, the term is "mid-flight":
   // bulk Approve + bulk Send are the wrong tools (they'd sweep up drafts), and a
   // newly-assigned instructor needs their own patch offer instead.
@@ -775,14 +796,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (from == null || start - ARRIVAL_BUFFER_MIN < from || (until != null && end > until)) {
       return { ok: false, reason: `${first}'s ${dayLabel} hours don't cover this class time (needs to arrive ${ARRIVAL_BUFFER_MIN} min early).`, warnings };
     }
-    // Double-booking: already holds a (different) program that same weekday.
-    // WARNING, not a block (Jessica, 2026-07-14). An instructor may have turned a class
-    // down over location rather than time, and back-to-back classes at two schools must
-    // stay assignable at the admin's discretion. Camp still hard-blocks via its DB
-    // trigger — this is a deliberate after-school divergence. (The auto-matcher still
-    // avoids double-booking when it picks for you; this only frees the manual picker.)
-    // Name the class, and be honest about status: a 'proposed' row is a matcher draft
-    // nobody has been offered yet, so it must never read as "already teaches".
+    // Double-booking: already holds a (different) program that same weekday. HARD BLOCK
+    // (Jessica, 2026-07-16 — reverses the 07-14 warning-only call; camp and after-school
+    // now enforce the SAME rule so an operator doesn't have to remember which board
+    // they're on).
+    //
+    // This mirrors camp's validateDrop, translated to after-school's weekday+time shape.
+    // Camp does NOT block every same-day pairing — it blocks a real conflict:
+    //   - the times overlap (physically impossible), OR
+    //   - it's a different location (can't be at two schools the same afternoon).
+    // Two back-to-back classes at the SAME school stay assignable, which is a real
+    // schedule people run. Camp also blocks against 'proposed' rows (it filters only
+    // withdrawn), so a matcher draft blocks here too — but the copy stays honest about
+    // it being a draft rather than claiming they "already teach" it.
     const committed = committedDays.get(instructorId);
     const sameDayOthers = (committed?.get(code) ?? []).filter((c) => c.program_id !== program.id);
     if (sameDayOthers.length) {
@@ -792,13 +818,29 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         const where = op?.program_location_id ? locName.get(op.program_location_id) : null;
         return where ? `${nm} at ${where}` : nm;
       };
+      const conflicts = sameDayOthers.filter((c) => {
+        const op = state.programs.find((p) => p.id === c.program_id);
+        if (!op) return true; // can't see the other class -> fail closed, don't guess
+        const oStart = parse12h(op.start_time);
+        const oEnd = parse12h(op.end_time);
+        const timesOverlap = oStart != null && oEnd != null && start < oEnd && oStart < end;
+        const elsewhere = (op.program_location_id ?? null) !== (program.program_location_id ?? null);
+        return timesOverlap || elsewhere;
+      });
+      if (conflicts.length) {
+        const list = conflicts.map(describe).join(", ");
+        const allDraft = conflicts.every((c) => c.status === "proposed");
+        return {
+          ok: false,
+          reason: allDraft
+            ? `${first} is already pencilled in for ${list} on ${dayLabel} — a draft, but they can't be in two places. Free that class first.`
+            : `${first} would be double-booked: already has ${list} on ${dayLabel}.`,
+          warnings,
+        };
+      }
+      // Same school, no overlap — a legitimate back-to-back. Allowed, but say it out loud.
       const list = sameDayOthers.map(describe).join(", ");
-      const allDraft = sameDayOthers.every((c) => c.status === "proposed");
-      warnings.push(
-        allDraft
-          ? `${first} is pencilled in for ${list} on ${dayLabel} — still a draft, not offered yet.`
-          : `${first} already has ${list} on ${dayLabel} — check they can make both.`,
-      );
+      warnings.push(`${first} also has ${list} on ${dayLabel}, back-to-back at the same school.`);
     }
     // Max-days cap (count excludes this program if they already hold it).
     if (av.max_days != null) {
@@ -929,11 +971,6 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // Clears all offer state on reassign (mirrors camps) so the new instructor
   // starts fresh at 'proposed' and surfaces as needing a (re)send.
   async function performAssign(program, instructorId, current) {
-    // Capture BEFORE the write: have any offers for this term already gone out?
-    // If so, this instructor won't be swept up by a future bulk send and needs
-    // their own patch offer — so nudge to email them right after the swap.
-    const termMidFlight = state.status === "ready" && state.assignments.some((a) => a.email_sent_at);
-    let newAssignmentId = null;
     let declineRecorded = null;
     try {
       if (current) {
@@ -962,7 +999,6 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           })
           .eq("id", current.id);
         if (error) throw error;
-        newAssignmentId = current.id;
         // Snapshot the WHOLE prior row, not just instructor+status: the update above
         // wipes the entire offer trail, and an undo that restores only the instructor
         // would quietly leave them re-assigned with no deadline and no sent email.
@@ -997,32 +1033,23 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .select("id")
           .single();
         if (error) throw error;
-        newAssignmentId = inserted.id;
         setLastOp({ type: "assign", assignmentId: inserted.id, label: `Assigned ${program.curriculum || "class"}` });
       }
       setPicker(null);
       await loadAll();
 
-      // Offers for this term are already in flight, so nothing else will email
-      // this instructor. Offer to send their patch offer now; "Later" leaves the
-      // row sitting at 'proposed' where the board shows it still needs an offer.
-      const needsNudge = termMidFlight && newAssignmentId;
-      if (needsNudge) {
-        const inst = state.instructors.find((i) => i.id === instructorId);
-        setOfferNewPrompt({
-          assignmentId: newAssignmentId,
-          name: inst ? (inst.preferred_name || inst.first_name || "this instructor") : "this instructor",
-          classLabel: [program.curriculum, locName.get(program.program_location_id)].filter(Boolean).join(" at ") || "this class",
-        });
-      }
+      // No mid-flight nudge here (removed 2026-07-16). It and the Hat tip did the same
+      // job — get an offer to someone who landed after the batch — which forced a
+      // precedence rule so the two dialogs didn't stack. Needing arbitration between
+      // two features was the tell that one was redundant. The Hat tip catches every
+      // case including the ones the nudge missed ("Later"), and never interrupts a
+      // click. One door.
 
-      // Started from a change-request review — keep walking the queue. The nudge
-      // wins if both want the screen: stacking two dialogs is worse than one extra
-      // click, and nothing is lost — the Hat tip still counts the requests left.
+      // Started from a change-request review — keep walking the queue.
       if (reassigningChangeRequestId) {
         const handled = reassigningChangeRequestId;
         setReassigningChangeRequestId(null);
-        if (!needsNudge) advanceOrCloseChangeRequest(handled);
+        advanceOrCloseChangeRequest(handled);
       }
     } catch (err) {
       console.error("Assign failed:", err);
@@ -1047,9 +1074,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         remaining: remainingActiveFor(displaced.instructor_id, displaced.id),
         onProceed: async ({ emailSent } = {}) => {
           await performAssign(program, instructorId, displaced);
-          // Same rule as remove: once the displaced instructor has been told they're
-          // off, undoing the reassign in one click would put them back silently.
-          if (emailSent) setLastOp(null);
+          // They've been told they're off. Undo stays available — it just has to warn
+          // that putting them back contradicts that email.
+          if (emailSent) {
+            const who = displaced.instructor_preferred || displaced.instructor_first || "That instructor";
+            setLastOp((prev) => (prev ? { ...prev, contradictsEmailTo: who } : prev));
+          }
           setNotifyRemoval(null);
         },
       });
@@ -1085,6 +1115,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       }
       if (data?.error) throw new Error(data.error);
       setMatchResult(data?.summary ?? null);
+      // ~6 min per class to place by hand: check availability, area preference,
+      // double-booking and day caps across the whole roster.
+      const placed = Number(data?.summary?.assigned ?? 0);
+      if (placed > 0) {
+        logTimeSaved({
+          actionType: "afterschool_matched",
+          label: `Matched ${placed} after-school ${placed === 1 ? "class" : "classes"} for ${termDisplayName(term)}`,
+          hours: Math.round(placed * 0.1 * 100) / 100,
+        });
+      }
       await loadAll();
     } catch (err) {
       console.error("Match failed:", err);
@@ -1220,7 +1260,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         .in("program_id", programIds)
         .select("id");
       if (error) throw error;
-      setApproveResult({ count: (data ?? []).length });
+      const approved = (data ?? []).length;
+      setApproveResult({ count: approved });
+      // ~1 min per class to sign off one by one.
+      if (approved > 0) {
+        logTimeSaved({
+          actionType: "afterschool_matches_approved",
+          label: `Approved ${approved} after-school ${approved === 1 ? "match" : "matches"} for ${termDisplayName(term)}`,
+          hours: Math.round(approved * 0.017 * 100) / 100,
+        });
+      }
       await loadAll();
     } catch (err) {
       console.error("Approve failed:", err);
@@ -1246,7 +1295,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       }
       if (data?.error) throw new Error(data.error);
       setOfferDialog({ mode: "result", payload: { mode, data } });
-      if (mode === "send") await loadAll();
+      // ~8 min per instructor to write and send their schedule by hand. Only counts a
+      // real send that actually reached someone — a preview or a 0-sent run saves nothing.
+      if (mode === "send") {
+        const sentCount = Number(data?.sent ?? 0);
+        if (sentCount > 0) {
+          logTimeSaved({
+            actionType: "afterschool_offers_sent",
+            label: `Emailed ${sentCount} instructor${sentCount === 1 ? "" : "s"} their ${termDisplayName(term)} offer`,
+            hours: Math.round(sentCount * 0.133 * 100) / 100,
+          });
+        }
+        await loadAll();
+      }
     } catch (err) {
       console.error("Send offers failed:", err);
       setSaveError(`Couldn't send offers: ${err.message ?? "unknown error"}`);
@@ -1372,10 +1433,23 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         return;
       }
       setPatchPreview(null);
-      // The email is out. "Undo: Assigned X" would now delete a row the instructor
-      // has already been told about — a quiet local undo is no longer honest, and
-      // Remove (which warns first) is the right door. Drop the undo.
-      setLastOp(null);
+      // The email is out, so "Undo: Assigned X" would now delete a class the instructor
+      // has been told they have. Undo stays available and warns about exactly that,
+      // rather than disappearing and leaving no way back.
+      // ~8 min to write this one-off "you picked up another class" email by hand.
+      logTimeSaved({
+        actionType: "afterschool_patch_offer_sent",
+        label: `Emailed ${sent} instructor${sent === 1 ? "" : "s"} a mid-term ${termDisplayName(term)} offer`,
+        hours: Math.round(sent * 0.133 * 100) / 100,
+      });
+      // Everything in `ids` went out on this path (the partial-failure case returns
+      // above), so resolve who was told, straight from the ids we actually sent.
+      const sentInstructorIds = new Set(ids.map((id) => byId.get(id)).filter(Boolean));
+      const emailedName = (fresh.status === "ready" ? fresh.instructors : [])
+        .filter((i) => sentInstructorIds.has(i.id))
+        .map((i) => i.preferred_name || i.first_name)
+        .filter(Boolean)[0];
+      setLastOp((prev) => (prev ? { ...prev, contradictsEmailTo: emailedName ?? "That instructor" } : prev));
       await loadAll();
     } catch (err) {
       console.error("send-afterschool-patch-offer send failed:", err);
@@ -1487,9 +1561,21 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   // Single-step undo. Every branch restores the FULL prior row, because the forward
   // operations wipe more than they look like they do.
-  async function handleUndo() {
+  //
+  // Undo used to DISAPPEAR once an email had gone out about the thing it would undo.
+  // That was defensible per-case and wrong overall: an Undo that is sometimes there
+  // teaches you not to trust it, so you stop reaching for it at all. It is always
+  // there now. When undoing would contradict something an instructor was already
+  // told, it says so and asks first (see undoWarn) instead of quietly vanishing —
+  // the operator keeps the capability and the consequence stays honest.
+  async function handleUndo({ confirmed = false } = {}) {
     const op = lastOp;
     if (!op) return;
+    if (op.contradictsEmailTo && !confirmed) {
+      setUndoWarn(op);
+      return;
+    }
+    setUndoWarn(null);
     setLastOp(null);
     setSaveError(null);
     try {
@@ -1585,11 +1671,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         onProceed: async ({ emailSent } = {}) => {
           try {
             await doRemove(program, assignment);
-            // They've been emailed "you're off this class". A one-click Undo would
-            // put them back with no word to them at all — the board would agree with
-            // itself while the instructor is working off a stale email. Re-add them
-            // deliberately instead.
-            if (emailSent) setLastOp(null);
+            // They've been emailed "you're off this class". Undo stays available — it
+            // warns that putting them back contradicts what they were told.
+            if (emailSent) {
+              const who = assignment.instructor_preferred || assignment.instructor_first || "That instructor";
+              setLastOp((prev) => (prev ? { ...prev, contradictsEmailTo: who } : prev));
+            }
             setNotifyRemoval(null);
             await loadAll();
             if (wasChangeRequest) advanceOrCloseChangeRequest(assignment.id);
@@ -2002,33 +2089,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         />
       )}
 
-      {offerNewPrompt && (
-        <Overlay onClose={() => setOfferNewPrompt(null)} maxWidth={440}>
+      {undoWarn && (
+        <Overlay onClose={() => setUndoWarn(null)} maxWidth={460}>
           <div style={{ padding: 24 }}>
-            <h3 style={{ margin: "0 0 8px", color: INK, fontSize: 17 }}>Approve and email {offerNewPrompt.name} their offer?</h3>
-            <p style={{ color: MUTED, fontSize: 13.5, margin: "0 0 18px", lineHeight: 1.5 }}>
-              {offerNewPrompt.name} is now on {offerNewPrompt.classLabel}. Offers for this term already
-              went out, so nothing will email them automatically. You'll see the email first — sending
-              it approves this one class and asks them to accept.
+            <h3 style={{ margin: "0 0 8px", color: INK, fontSize: 17 }}>
+              {undoWarn.contradictsEmailTo} was already emailed about this
+            </h3>
+            <p style={{ color: MUTED, fontSize: 13.5, margin: "0 0 12px", lineHeight: 1.5 }}>
+              {undoWarn.type === "assign"
+                ? `${undoWarn.contradictsEmailTo} got an email saying they have this class. Undoing takes it back off their schedule, and nothing tells them that.`
+                : `${undoWarn.contradictsEmailTo} got an email saying they're off this class. Undoing puts them back on it, and nothing tells them that.`}
             </p>
             <p style={{ color: MUTED, fontSize: 12.5, margin: "0 0 18px", lineHeight: 1.5 }}>
-              Not now? They'll stay on the schedule as a draft, and the Hat will remind you.
+              You can still undo — just message them afterwards so the schedule and their
+              inbox agree.
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={() => setOfferNewPrompt(null)}
-                style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}
-              >
-                Later
+              <button type="button" onClick={() => setUndoWarn(null)} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}>
+                Leave it as is
               </button>
-              <button
-                type="button"
-                onClick={() => { const id = offerNewPrompt.assignmentId; setOfferNewPrompt(null); handlePreviewPatchOffers([id]); }}
-                disabled={busy === "patching"}
-                style={{ ...btnStyle, background: BRIGHT, color: "#fff", opacity: busy === "patching" ? 0.6 : 1 }}
-              >
-                {busy === "patching" ? "Building preview…" : "Review the email"}
+              <button type="button" onClick={() => handleUndo({ confirmed: true })} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>
+                Undo anyway
               </button>
             </div>
           </div>
