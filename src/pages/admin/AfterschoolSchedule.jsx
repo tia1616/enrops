@@ -702,6 +702,26 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return m;
   }, [state]);
 
+  // instructor_id -> number of distinct WEEKDAYS they're committed to. max_days is a
+  // days-per-week cap; loadCount counts ASSIGNMENTS. Those were the same number only
+  // while one-class-per-weekday was enforced. Back-to-back at one school is legal now
+  // (OES runs 2:00-3:25 then 3:25-4:25 on a Wednesday and one instructor teaches both),
+  // so two classes on a day they already work must cost ONE day, not two.
+  const daysUsed = useMemo(() => {
+    const m = new Map();
+    if (state.status !== "ready") return m;
+    const progById = new Map(state.programs.map((p) => [p.id, p]));
+    for (const a of state.assignments) {
+      if (a.status === "withdrawn" || a.status === "declined" || !a.instructor_id) continue;
+      const p = progById.get(a.program_id);
+      const code = p ? DAY_TO_CODE[dayKey(p.day_of_week)] : null;
+      if (!code) continue;
+      if (!m.has(a.instructor_id)) m.set(a.instructor_id, new Set());
+      m.get(a.instructor_id).add(code);
+    }
+    return m;
+  }, [state]);
+
   const counts = useMemo(() => {
     const c = { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, instructors: 0, proposed: 0, sendable: 0, draft: 0 };
     if (state.status !== "ready") return c;
@@ -842,11 +862,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const list = sameDayOthers.map(describe).join(", ");
       warnings.push(`${first} also has ${list} on ${dayLabel}, back-to-back at the same school.`);
     }
-    // Max-days cap (count excludes this program if they already hold it).
+    // Max-days cap. Counts DISTINCT WEEKDAYS including the day this class would add —
+    // not assignments. A second class on a day they already work costs no extra day,
+    // which is the whole point of allowing back-to-back at one school.
     if (av.max_days != null) {
-      const holdsThis = (committed?.get(code) ?? []).some((c) => c.program_id === program.id);
-      const current = (loadCount.get(instructorId) ?? 0) - (holdsThis ? 1 : 0);
-      if (current >= av.max_days) {
+      const days = new Set(daysUsed.get(instructorId) ?? []);
+      days.add(code);
+      if (days.size > av.max_days) {
         return { ok: false, reason: `${first} is at their ${av.max_days}-day limit.`, warnings };
       }
     }
@@ -996,6 +1018,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             deadline: null,
             reminder_sent_at: null,
             flags: [],
+            // A reassign is a human pick too — sign it so the next Match can't undo it.
+            assigned_by: user?.id ?? null,
           })
           .eq("id", current.id);
         if (error) throw error;
@@ -1029,6 +1053,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             instructor_id: instructorId,
             role: "lead",
             status: "proposed",
+            // Sign it. The matcher stamps assigned_by NULL on its own drafts and wipes
+            // them on every re-run; without this a hand-pick looked identical to a
+            // guess and got deleted the next time Match ran. Stamped = a person chose
+            // this = the matcher leaves it alone.
+            assigned_by: user?.id ?? null,
           })
           .select("id")
           .single();
@@ -1098,7 +1127,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   async function handleMatch() {
     const ok = window.confirm(
-      "Match instructors for this term? This fills empty classes with proposed assignments from instructor availability. It never changes classes an instructor has already accepted."
+      "Match instructors for this term? This fills empty classes from instructor availability, and re-does its own earlier suggestions. It never touches a class you picked yourself, approved, or already emailed."
     );
     if (!ok) return;
     setBusy("matching");
