@@ -127,13 +127,18 @@ serve(async (req) => {
     const token = authHeader.replace('Bearer ', '');
     const { data: userData, error: userErr } = await admin.auth.getUser(token);
     if (userErr || !userData?.user) return json({ error: 'invalid auth' }, 401);
+    // accepted_at is the difference between "was invited" and "is a member". Without
+    // it, someone with an unaccepted invite can already run the matcher and rewrite
+    // the org's schedule. Mirrors create-assignment-substitution.
     const { data: memberRow } = await admin
       .from('org_members')
       .select('role')
       .eq('auth_user_id', userData.user.id)
       .eq('organization_id', organizationId)
+      .in('role', ['owner', 'admin'])
+      .not('accepted_at', 'is', null)
       .maybeSingle();
-    if (!memberRow || !['owner', 'admin'].includes(memberRow.role)) {
+    if (!memberRow) {
       return json({ error: 'forbidden' }, 403);
     }
 
