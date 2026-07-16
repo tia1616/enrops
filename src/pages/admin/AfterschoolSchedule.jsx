@@ -711,9 +711,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       return { ok: false, reason: `${first}'s ${dayLabel} hours don't cover this class time (needs to arrive ${ARRIVAL_BUFFER_MIN} min early).`, warnings };
     }
     // Double-booking: already holds a (different) program that same weekday.
+    // WARNING, not a block (Jessica, 2026-07-14). An instructor may have turned a class
+    // down over location rather than time, and back-to-back classes at two schools must
+    // stay assignable at the admin's discretion. Camp still hard-blocks via its DB
+    // trigger — this is a deliberate after-school divergence. (The auto-matcher still
+    // avoids double-booking when it picks for you; this only frees the manual picker.)
     const committed = committedDays.get(instructorId);
     if (committed && committed.has(code) && committed.get(code) !== program.id) {
-      return { ok: false, reason: `${first} already teaches another class on ${dayLabel} — can't be at two schools that afternoon.`, warnings };
+      warnings.push(`${first} already teaches another class on ${dayLabel} — check they can make both.`);
     }
     // Max-days cap (count excludes this program if they already hold it).
     if (av.max_days != null) {
