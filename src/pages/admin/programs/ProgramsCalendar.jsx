@@ -203,25 +203,44 @@ export default function ProgramsCalendar() {
   // empty term would show parents a blank catalog.
   async function openTermForRegistration() {
     if (!term || !org?.id || switchingTerm) return;
-    const viewedOpenCount = programs.filter((p) => p.status === "open").length;
-    if (viewedOpenCount === 0) {
-      setSwitchResult({ ok: false, message: `Publish at least one ${formatTermLabel(term)} program first — there's nothing open here yet.` });
-      return;
-    }
-    const fromLabel = activeTerm ? formatTermLabel(activeTerm) : "no term";
-    const confirmMsg = activeTerm && activeTerm !== term
-      ? `Open ${formatTermLabel(term)} for registration?\n\nParents will stop seeing ${fromLabel}'s ${activeTermOpenCount ?? 0} open program(s) and start seeing ${formatTermLabel(term)}'s ${viewedOpenCount} open program(s) instead. Families already enrolled in ${fromLabel} are not affected.`
-      : `Open ${formatTermLabel(term)} for registration? Parents will see its ${viewedOpenCount} open program(s).`;
-    if (!window.confirm(confirmMsg)) return;
+    const targetTerm = term; // snapshot — the dropdown could change under us during the awaits below
     setSwitchingTerm(true);
     setSwitchResult(null);
     try {
+      // Count fresh from the DB rather than trusting local `programs` state:
+      // that state can still hold the PREVIOUS term's rows while a term
+      // switch's own fetch is still in flight, which would let a fast
+      // double-click bypass the zero-count guard below. Also re-read the
+      // org's current active term fresh (not the possibly-stale `activeTerm`
+      // state) so the confirm text reflects reality if another admin session
+      // just changed it.
+      const [{ count: targetOpenCount }, { data: freshOrg }] = await Promise.all([
+        supabase.from("programs").select("id", { count: "exact", head: true })
+          .eq("organization_id", org.id).eq("term", targetTerm).eq("status", "open"),
+        supabase.from("organizations").select("active_registration_term").eq("id", org.id).single(),
+      ]);
+      const currentActiveTerm = freshOrg?.active_registration_term ?? null;
+      if (!targetOpenCount) {
+        setSwitchResult({ ok: false, message: `Publish at least one ${formatTermLabel(targetTerm)} program first — there's nothing open here yet.` });
+        return;
+      }
+      let fromOpenCount = 0;
+      if (currentActiveTerm && currentActiveTerm !== targetTerm) {
+        const { count } = await supabase.from("programs").select("id", { count: "exact", head: true })
+          .eq("organization_id", org.id).eq("term", currentActiveTerm).eq("status", "open");
+        fromOpenCount = count ?? 0;
+      }
+      const fromLabel = currentActiveTerm ? formatTermLabel(currentActiveTerm) : "no term";
+      const confirmMsg = currentActiveTerm && currentActiveTerm !== targetTerm
+        ? `Open ${formatTermLabel(targetTerm)} for registration?\n\nParents will stop seeing ${fromLabel}'s ${fromOpenCount} open program(s) and start seeing ${formatTermLabel(targetTerm)}'s ${targetOpenCount} open program(s) instead. Families already enrolled in ${fromLabel} are not affected.`
+        : `Open ${formatTermLabel(targetTerm)} for registration? Parents will see its ${targetOpenCount} open program(s).`;
+      if (!window.confirm(confirmMsg)) return;
       const { error: switchErr } = await supabase
         .from("organizations")
-        .update({ active_registration_term: term })
+        .update({ active_registration_term: targetTerm })
         .eq("id", org.id);
       if (switchErr) throw switchErr;
-      setSwitchResult({ ok: true, message: `${formatTermLabel(term)} is now open for registration. Refreshing…` });
+      setSwitchResult({ ok: true, message: `${formatTermLabel(targetTerm)} is now open for registration. Refreshing…` });
       // Full reload, not just local state: `org` (and everything reading
       // org.active_registration_term from it — the per-program Share-link
       // gate, the catalog Share button) comes from AdminLayout's outlet
