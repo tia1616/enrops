@@ -60,7 +60,7 @@ function titleDay(d) {
 }
 
 export default function ProgramsCalendar() {
-  const { org, orgMember } = useOutletContext();
+  const { user, org, orgMember } = useOutletContext();
   const perm = getPermissions(orgMember?.role);
   // Term starts empty — we don't guess a hardcoded term. fetchOrgTerms picks
   // the org's default (in-progress today, else next starting, else most recent
@@ -641,8 +641,14 @@ export default function ProgramsCalendar() {
 
       {editingProgram && (
         <EditProgramCurriculumModal
+          // Remount per program: the modal seeds match-mode defaults and the
+          // picked curriculum from props in useState initializers, which don't
+          // re-run on a prop change. Without this, reusing the instance for a
+          // different program would silently carry the previous one's state.
+          key={editingProgram.id}
           program={editingProgram}
           org={org}
+          user={user}
           curricula={curricula}
           enrollment={enrollmentByProgram[editingProgram.id]}
           onCancel={() => setEditingProgram(null)}
@@ -940,6 +946,29 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
       <div style={{ minWidth: 0 }}>
         <div style={{ fontWeight: 600, color: INK, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>{p.curriculum ?? "Untitled"}</span>
+          {/* A program can carry a typed-in class NAME with no link to the
+              Offerings library — that's the common case, not "Untitled".
+              The name looks fine on the page while parent emails silently
+              lose the skills/projects blocks, so the row has to say it. */}
+          {!p.curriculum_id && (
+            <span
+              title="This program names a class but isn't linked to your Offerings library, so parent emails can't include its skills or projects"
+              style={{
+                fontSize: 10,
+                color: MUTED,
+                background: "#f0eee5",
+                border: `1px solid ${RULE}`,
+                padding: "2px 8px",
+                borderRadius: 999,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+                flexShrink: 0,
+              }}
+            >
+              Not linked
+            </span>
+          )}
           {isDraft && (
             <>
               <span style={{
@@ -1052,9 +1081,11 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
             type="button"
             onClick={() => onEdit(p)}
             style={editLinkStyle}
-            title="Change the class for this program"
+            title={p.curriculum_id
+              ? "Change the class for this program"
+              : "Match this program to a class from your Offerings library"}
           >
-            Change class
+            {p.curriculum_id ? "Change class" : "Match class"}
           </button>
         )}
       </div>

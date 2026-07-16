@@ -5,6 +5,13 @@
 //          confirmed instructor (if any). Per-channel toggles. Admin can
 //          send + save, or skip the notes and just save.
 //
+// MATCH MODE (program.curriculum_id is null): the program has never had a
+// curriculum, so nothing is "changing" and there is nothing to tell anyone.
+// Step 2 is skipped entirely and the save goes out with both channels off —
+// otherwise a first-time match would email families a change notice offering
+// a refund for a class that never changed. The edge fn enforces the same rule
+// server-side (a null from_curriculum_id can never send).
+//
 // Atomicity: the DB write to programs.curriculum_id/curriculum AND the
 // email sends AND the program_curriculum_changes audit row all happen
 // together inside the notify-program-curriculum-change edge function.
@@ -111,12 +118,16 @@ function defaultInstructorBody() {
 export default function EditProgramCurriculumModal({
   program,
   org,
+  user,
   curricula,
   enrollment,
   onSaved,
   onCancel,
 }) {
   const currentId = program.curriculum_id ?? "";
+  // First-time match rather than a swap. Drives copy, skips step 2, and
+  // forces both notify channels off.
+  const isMatch = !currentId;
   const [step, setStep] = useState(1);
   const [pickedId, setPickedId] = useState(currentId);
   const [impact, setImpact] = useState({ loading: true, assignments: 0, deliveries: 0 });
@@ -135,15 +146,50 @@ export default function EditProgramCurriculumModal({
   const [eligibleInstructor, setEligibleInstructor] = useState(null);
   // { id, first_name, name, email } | null
 
-  const [familyNotify, setFamilyNotify] = useState(true);
+  const [familyNotify, setFamilyNotify] = useState(!isMatch);
   const [familySubject, setFamilySubject] = useState(defaultFamilySubject());
   const [familyBody, setFamilyBody] = useState("");
 
-  const [instructorNotify, setInstructorNotify] = useState(true);
+  const [instructorNotify, setInstructorNotify] = useState(!isMatch);
   const [instructorSubject, setInstructorSubject] = useState(defaultInstructorSubject());
   const [instructorBody, setInstructorBody] = useState(defaultInstructorBody());
 
   const [replyToEmail, setReplyToEmail] = useState("");
+
+  // The picker only offers PUBLISHED curricula (a draft's skills are
+  // half-written and would land in parent emails). But the overwhelmingly
+  // common unmatched program names a class that IS in the library and simply
+  // isn't published yet — leaving the admin to scan a list of 20 unrelated
+  // names for one that can never appear. Look for that case so we can say so.
+  const [unpublishedTwin, setUnpublishedTwin] = useState(null);
+  useEffect(() => {
+    const name = program.curriculum?.trim();
+    if (!isMatch || !name) return;
+    // If a PUBLISHED curriculum already carries this name it's sitting in the
+    // picker right now — claiming it "isn't in the list" would be false, and
+    // the lookup would be wasted.
+    const alreadyOffered = curricula.some(
+      (c) => c.name?.trim().toLowerCase() === name.toLowerCase(),
+    );
+    if (alreadyOffered) { setUnpublishedTwin(null); return; }
+    let mounted = true;
+    (async () => {
+      // limit(1), not maybeSingle() — two drafts sharing a name is a data
+      // state we don't control, and maybeSingle() would throw on it. Any one
+      // of them is enough to explain why the class isn't in the list.
+      const { data } = await supabase
+        .from("curricula")
+        .select("id, name, status")
+        .eq("organization_id", org.id)
+        .neq("status", "published")
+        .ilike("name", name)
+        .limit(1);
+      if (mounted && data?.[0]) setUnpublishedTwin(data[0]);
+    })();
+    return () => { mounted = false; };
+    // curricula is a dep: it loads async on the parent, so a modal opened
+    // before it arrives must re-evaluate once the picker is populated.
+  }, [isMatch, program.curriculum, org.id, curricula]);
 
   useEffect(() => {
     let mounted = true;
@@ -317,6 +363,24 @@ export default function EditProgramCurriculumModal({
         setBusy(false);
         return;
       }
+      // Time-saved receipt, mirroring the Offerings bulk matcher
+      // (CurriculumReview's LinkExistingModal): flat 0.5 hr, action_type
+      // "curriculum_linked", only when a NEW link happened. A swap isn't a
+      // new link, so the change path stays silent — same rule as the sibling.
+      // Non-fatal: a missing receipt must never fail the save.
+      if (isMatch) {
+        supabase.from("time_saved_events").insert({
+          organization_id: org.id,
+          action_type: "curriculum_linked",
+          action_label: `Linked 1 row to "${pickedCurriculum.name}"`,
+          hours_saved: 0.5,
+          related_entity_type: "curriculum",
+          related_entity_id: pickedCurriculum.id,
+          created_by: user?.id ?? null,
+        }).then(({ error: tsErr }) => {
+          if (tsErr) console.warn("time_saved_events insert failed (non-fatal):", tsErr.message);
+        });
+      }
       // Show the confirmation step before closing — admin needs to see
       // what actually happened (DB write + which channels fired + counts).
       setResult(data ?? {});
@@ -403,16 +467,22 @@ export default function EditProgramCurriculumModal({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: INK, margin: 0 }}>
-              {step === 1 && "Change the class"}
+              {step === 1 && (isMatch ? "Match a class" : "Change the class")}
               {step === 2 && "Send the news"}
               {step === 3 && (
-                <span style={{ color: SOFT_GREEN_INK }}>✓ Change saved</span>
+                <span style={{ color: SOFT_GREEN_INK }}>
+                  {isMatch ? "✓ Class matched" : "✓ Change saved"}
+                </span>
               )}
             </h2>
             <p style={{ color: MUTED, fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
               {step === 1 && (describeProgram(program) || "this program")}
               {step === 2 && `${describeProgram(program) || "this program"} · ${program.curriculum ?? "(none)"} → ${pickedCurriculum?.name ?? ""}`}
-              {step === 3 && `${describeProgram(program) || "this program"} · ${result?.from_curriculum_name ?? program.curriculum ?? "(none)"} → ${pickedCurriculum?.name ?? ""}`}
+              {step === 3 && (
+                isMatch
+                  ? `${describeProgram(program) || "this program"} · ${pickedCurriculum?.name ?? ""}`
+                  : `${describeProgram(program) || "this program"} · ${result?.from_curriculum_name ?? program.curriculum ?? "(none)"} → ${pickedCurriculum?.name ?? ""}`
+              )}
             </p>
           </div>
           <button
@@ -436,6 +506,8 @@ export default function EditProgramCurriculumModal({
 
         {step === 1 && (
           <Step1
+            isMatch={isMatch}
+            unpublishedTwin={unpublishedTwin}
             curricula={curricula}
             currentId={currentId}
             currentName={currentName}
@@ -476,6 +548,7 @@ export default function EditProgramCurriculumModal({
 
         {step === 3 && (
           <Step3
+            isMatch={isMatch}
             result={result}
             toCurriculumName={pickedCurriculum?.name ?? ""}
             eligibleInstructor={eligibleInstructor}
@@ -499,11 +572,17 @@ export default function EditProgramCurriculumModal({
             </button>
             <button
               type="button"
-              onClick={goToStep2}
+              onClick={
+                isMatch
+                  // Nothing changed for anyone — save straight through with
+                  // both channels off, no note-writing step.
+                  ? () => submit({ sendFamily: false, sendInstructor: false })
+                  : goToStep2
+              }
               disabled={busy || !changed}
               style={primaryBtnStyle({ busy, disabled: !changed })}
             >
-              Next: review notes
+              {isMatch ? (busy ? "Saving…" : "Match class") : "Next: review notes"}
             </button>
           </div>
         )}
@@ -576,18 +655,40 @@ export default function EditProgramCurriculumModal({
 // ───────────────────────────────────────────────────────────────────────
 
 function Step1({
-  curricula, currentId, currentName, pickedId, setPickedId,
-  pickedCurriculum, changed, impact, enrolled, busy,
+  isMatch, unpublishedTwin, curricula, currentId, currentName,
+  pickedId, setPickedId, pickedCurriculum, changed, impact, enrolled, busy,
 }) {
   return (
     <>
-      <div style={{ marginBottom: 16 }}>
-        <label style={labelStyle}>Currently</label>
-        <div style={{ ...readOnlyValue, color: INK }}>{currentName}</div>
-      </div>
+      {isMatch && unpublishedTwin && (
+        <div
+          style={{
+            background: SOFT_AMBER_BG,
+            border: `1px solid ${SOFT_AMBER_BORDER}`,
+            color: SOFT_AMBER_INK,
+            borderRadius: 6,
+            padding: "10px 12px",
+            fontSize: 13,
+            lineHeight: 1.5,
+            marginBottom: 16,
+          }}
+        >
+          <strong>{unpublishedTwin.name}</strong> is already in your library, but it's
+          still a {unpublishedTwin.status === "extracted" ? "draft being reviewed" : "draft"} — so
+          it isn't in the list below yet. Publish it in Offerings and it'll show up here.
+        </div>
+      )}
+
+      {/* No "Currently" row in match mode — there is no current class to show. */}
+      {!isMatch && (
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelStyle}>Currently</label>
+          <div style={{ ...readOnlyValue, color: INK }}>{currentName}</div>
+        </div>
+      )}
 
       <div style={{ marginBottom: 16 }}>
-        <label style={labelStyle}>Change to</label>
+        <label style={labelStyle}>{isMatch ? "Match to" : "Change to"}</label>
         <select
           value={pickedId}
           onChange={(e) => setPickedId(e.target.value)}
@@ -643,7 +744,25 @@ function Step1({
         )}
       </div>
 
-      {changed && pickedCurriculum && enrolled > 0 && (
+      {isMatch && changed && pickedCurriculum && (
+        <div
+          style={{
+            background: SOFT_GREEN_BG,
+            border: `1px solid ${SOFT_GREEN_BORDER}`,
+            color: SOFT_GREEN_INK,
+            borderRadius: 6,
+            padding: "10px 12px",
+            fontSize: 13,
+            lineHeight: 1.5,
+            marginBottom: 12,
+          }}
+        >
+          Nobody gets emailed. This program had no class yet, so there's no change to
+          tell anyone about — saving just fills in the class{enrolled > 0 ? " everyone already sees" : ""}.
+        </div>
+      )}
+
+      {!isMatch && changed && pickedCurriculum && enrolled > 0 && (
         <div
           style={{
             background: SOFT_AMBER_BG,
@@ -895,7 +1014,7 @@ function ChannelBlock({
 // any), and which were skipped. Removes the "did anything happen?"
 // ambiguity that prompted this build.
 
-function Step3({ result, toCurriculumName, eligibleInstructor }) {
+function Step3({ isMatch, result, toCurriculumName, eligibleInstructor }) {
   const fam = result?.family ?? {};
   const ins = result?.instructor ?? {};
 
@@ -937,7 +1056,9 @@ function Step3({ result, toCurriculumName, eligibleInstructor }) {
           marginBottom: 18,
         }}
       >
-        The class is now <strong>{toCurriculumName}</strong>. Everything below is updated and live.
+        {isMatch
+          ? <>This program is now matched to <strong>{toCurriculumName}</strong>. Everything below is updated and live.</>
+          : <>The class is now <strong>{toCurriculumName}</strong>. Everything below is updated and live.</>}
       </div>
 
       <div style={{ marginBottom: 18 }}>
@@ -964,15 +1085,30 @@ function Step3({ result, toCurriculumName, eligibleInstructor }) {
       <div style={{ marginBottom: 4 }}>
         <label style={labelStyle}>Notes</label>
         <ul style={listStyle}>
-          <li><strong>Families:</strong> {familyLine()}</li>
-          <li><strong>Instructor:</strong> {instructorLine()}</li>
-          {ins.extra_eligible_not_notified > 0 && (
-            <li style={{ color: SOFT_AMBER_INK }}>
-              <strong>Heads up:</strong> {ins.extra_eligible_not_notified} other eligible instructor{ins.extra_eligible_not_notified === 1 ? " was" : "s were"} not notified.
+          {isMatch ? (
+            // Match mode never offers to send, so "you skipped it" would be a
+            // lie — say plainly that nothing went out and why.
+            <li>
+              <strong>Nobody was emailed.</strong> This program had no class before
+              now, so there was no change to announce.
             </li>
+          ) : (
+            <>
+              <li><strong>Families:</strong> {familyLine()}</li>
+              <li><strong>Instructor:</strong> {instructorLine()}</li>
+              {ins.extra_eligible_not_notified > 0 && (
+                <li style={{ color: SOFT_AMBER_INK }}>
+                  <strong>Heads up:</strong> {ins.extra_eligible_not_notified} other eligible instructor{ins.extra_eligible_not_notified === 1 ? " was" : "s were"} not notified.
+                </li>
+              )}
+            </>
           )}
+          {/* Says "logged", not "visible in your change history" — the audit
+              row is real but nothing in the app reads it back yet, and copy
+              that promises a screen we haven't built costs trust when the
+              operator goes looking for it. */}
           <li style={{ color: MUTED, fontSize: 12 }}>
-            Logged for the record — visible later in this program's change history.
+            Logged for the record.
           </li>
         </ul>
       </div>

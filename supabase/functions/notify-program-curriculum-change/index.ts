@@ -22,8 +22,8 @@
 //   organization_id: uuid,
 //   to_curriculum_id: uuid,
 //   to_curriculum_name: string,        // snapshot for both programs.curriculum AND audit
-//   from_curriculum_id?: uuid|null,    // for audit only
-//   from_curriculum_name?: string|null,// for audit only
+//   from_curriculum_id?: uuid|null,    // IGNORED — read from the program row
+//   from_curriculum_name?: string|null,// IGNORED — read from the program row
 //   family: {
 //     send: boolean,
 //     subject: string,                 // supports {parent_first_name}, {student_first_name}, {from_curriculum}, {to_curriculum}, {program_summary}, {org_name}
@@ -133,8 +133,9 @@ serve(async (req: Request) => {
     const orgId = body.organization_id?.trim();
     const toCurriculumId = body.to_curriculum_id?.trim();
     const toCurriculumName = body.to_curriculum_name?.trim();
-    const fromCurriculumId = body.from_curriculum_id?.trim() || null;
-    const fromCurriculumName = body.from_curriculum_name?.trim() || null;
+    // NOTE: body.from_curriculum_id / from_curriculum_name are accepted for
+    // backwards compatibility but deliberately IGNORED — the from-state is
+    // read off the program row below, which is the only trustworthy source.
     const family = {
       send: !!body.family?.send,
       subject: body.family?.subject?.trim() ?? '',
@@ -196,6 +197,24 @@ serve(async (req: Request) => {
       .maybeSingle();
     if (curErr || !targetCurriculum) return json({ error: 'curriculum_not_found' }, 404);
     if (targetCurriculum.organization_id !== orgId) return FORBIDDEN;
+
+    // ── First-time match can never notify. ───────────────────────────────
+    // If the program has no curriculum yet, nothing is changing for anyone:
+    // the notes are all worded as a change ("changing from X to Y") and the
+    // family note offers a refund. Sending that for a class that never
+    // changed would be false and would invite needless refund requests.
+    // Guard on the DB's curriculum_id, NOT the caller's from_curriculum_id —
+    // a stale tab could claim a previous class that isn't there.
+    const isFirstMatch = !program.curriculum_id;
+    if (isFirstMatch) {
+      family.send = false;
+      instructor.send = false;
+    }
+
+    // The single source of truth for "what was this before" — used for both
+    // the email templates and the audit row.
+    const fromCurriculumId: string | null = program.curriculum_id ?? null;
+    const fromCurriculumName: string | null = program.curriculum ?? null;
 
     // ── Load brand context for sender identity. ──────────────────────────
     const brand = await loadOrgBrand(supabase, orgId);
@@ -292,14 +311,22 @@ serve(async (req: Request) => {
     }
 
     // ── Resolve per-channel notify choice for the audit row. ─────────────
+    // On a first match we short-circuited the sends, so the recipient lists
+    // were never loaded — an empty list here does NOT mean there was nobody
+    // to tell. Record 'skipped' (we chose not to send) rather than
+    // 'no_recipients', which would be a false claim about enrollment.
     const familyChoice: 'sent' | 'skipped' | 'no_recipients' =
-      !family.send
-        ? (familyRecipients.length === 0 ? 'no_recipients' : 'skipped')
-        : (familyRecipients.length === 0 ? 'no_recipients' : 'sent');
+      isFirstMatch
+        ? 'skipped'
+        : !family.send
+          ? (familyRecipients.length === 0 ? 'no_recipients' : 'skipped')
+          : (familyRecipients.length === 0 ? 'no_recipients' : 'sent');
     const instructorChoice: 'sent' | 'skipped' | 'no_recipient' =
-      !instructor.send
-        ? (instructorRecipient ? 'skipped' : 'no_recipient')
-        : (instructorRecipient ? 'sent' : 'no_recipient');
+      isFirstMatch
+        ? 'skipped'
+        : !instructor.send
+          ? (instructorRecipient ? 'skipped' : 'no_recipient')
+          : (instructorRecipient ? 'sent' : 'no_recipient');
 
     // ── Commit the DB write FIRST. Emails go out only against a real
     //    updated record so families/instructors reading at the same time
