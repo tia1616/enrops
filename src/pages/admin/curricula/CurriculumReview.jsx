@@ -209,6 +209,10 @@ export default function CurriculumReview() {
   // celebration screen totals so they reflect truth instead of only new links.
   const [preLinkedProgramCount, setPreLinkedProgramCount] = useState(0);
   const [preLinkedCampSessionCount, setPreLinkedCampSessionCount] = useState(0);
+  // The actual already-linked rows (not just their count) so step 2 can LIST
+  // which programs/camps this offering is attached to instead of only a tally.
+  const [preLinkedPrograms, setPreLinkedPrograms] = useState([]);
+  const [preLinkedCampSessions, setPreLinkedCampSessions] = useState([]);
 
   // Polish with Ennie: when set, the modal opens for this field
   const [polishConfig, setPolishConfig] = useState(null);
@@ -569,8 +573,8 @@ export default function CurriculumReview() {
     const [
       { data: progRows },
       { data: campRows },
-      { count: alreadyProgCount },
-      { count: alreadyCampCount },
+      { data: alreadyProgRows },
+      { data: alreadyCampRows },
     ] = await Promise.all([
       supabase
         .from("programs")
@@ -582,19 +586,26 @@ export default function CurriculumReview() {
         .select("id, curriculum_name, session_type")
         .eq("organization_id", org.id)
         .is("curriculum_id", null),
+      // Fetch the ROWS (not just a count) so step 2 can list exactly which
+      // program runs this offering is already linked to.
       supabase
         .from("programs")
-        .select("id", { count: "exact", head: true })
+        .select("id, term, day_of_week, first_session_date, status, program_locations ( name )")
         .eq("organization_id", org.id)
-        .eq("curriculum_id", curriculum.id),
+        .eq("curriculum_id", curriculum.id)
+        .order("term", { ascending: true })
+        .order("first_session_date", { ascending: true, nullsFirst: false }),
       supabase
         .from("camp_sessions")
-        .select("id", { count: "exact", head: true })
+        .select("id, location_name, week_num, session_type, starts_on")
         .eq("organization_id", org.id)
-        .eq("curriculum_id", curriculum.id),
+        .eq("curriculum_id", curriculum.id)
+        .order("starts_on", { ascending: true, nullsFirst: false }),
     ]);
-    setPreLinkedProgramCount(alreadyProgCount ?? 0);
-    setPreLinkedCampSessionCount(alreadyCampCount ?? 0);
+    setPreLinkedProgramCount(alreadyProgRows?.length ?? 0);
+    setPreLinkedCampSessionCount(alreadyCampRows?.length ?? 0);
+    setPreLinkedPrograms(alreadyProgRows ?? []);
+    setPreLinkedCampSessions(alreadyCampRows ?? []);
 
     // Group by name within each source so the operator picks a clean "this match"
     // rather than dozens of individual rows.
@@ -1014,6 +1025,8 @@ export default function CurriculumReview() {
           linkedCampSessionCount={linkedCampSessionCount}
           preLinkedProgramCount={preLinkedProgramCount}
           preLinkedCampSessionCount={preLinkedCampSessionCount}
+          preLinkedPrograms={preLinkedPrograms}
+          preLinkedCampSessions={preLinkedCampSessions}
           capabilities={capabilities}
           recommendation={ennieRecommendation}
           onDone={() => navigate("/admin/curricula")}
@@ -2231,6 +2244,7 @@ function PublishModal({
   publishing, error, onCancel, onContinue, onPublish,
   curriculum, sessionCount, linkedProgramCount, linkedCampSessionCount,
   preLinkedProgramCount = 0, preLinkedCampSessionCount = 0,
+  preLinkedPrograms = [], preLinkedCampSessions = [],
   capabilities = [], recommendation = null, onDone, onRecommendationCta, onLinkExisting,
   onCapabilityClick, manual = false,
 }) {
@@ -2243,6 +2257,27 @@ function PublishModal({
   }
   const hasMatches = programMatches.length > 0;
   const totalPreLinked = (preLinkedProgramCount || 0) + (preLinkedCampSessionCount || 0);
+  // The already-linked list is expanded by default so the operator can see at a
+  // glance WHICH runs an edit will flow to, not just a count.
+  const [linkedListOpen, setLinkedListOpen] = useState(true);
+  const hasPreLinkedRows = preLinkedPrograms.length > 0 || preLinkedCampSessions.length > 0;
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function fmtLinkedDate(s) {
+    if (!s) return null;
+    const [y, m, d] = String(s).slice(0, 10).split("-").map(Number);
+    if (!y || !m || !d) return null;
+    return `${MONTHS[m - 1]} ${d}, ${y}`;
+  }
+  function programLinkMeta(p) {
+    const date = fmtLinkedDate(p.first_session_date);
+    return [p.term, p.day_of_week, date && `starts ${date}`, p.status && p.status !== "open" ? p.status : null]
+      .filter(Boolean).join(" · ");
+  }
+  function campLinkMeta(c) {
+    const date = fmtLinkedDate(c.starts_on);
+    return [c.session_type, c.week_num ? `Week ${c.week_num}` : null, date && `starts ${date}`]
+      .filter(Boolean).join(" · ");
+  }
   function preLinkedSummary() {
     const parts = [];
     if (preLinkedCampSessionCount > 0) parts.push(`${preLinkedCampSessionCount} camp session${preLinkedCampSessionCount === 1 ? "" : "s"}`);
@@ -2454,7 +2489,40 @@ function PublishModal({
             </p>
             {totalPreLinked > 0 && (
               <div style={{ background: GOLD_SOFT, border: `1px solid ${GOLD_BORDER}`, borderRadius: 6, padding: "10px 12px", marginBottom: 14, fontSize: 13, color: INK }}>
-                <strong style={{ color: "#7a5a00" }}>Already linked:</strong> {preLinkedSummary()}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <div><strong style={{ color: "#7a5a00" }}>Already linked:</strong> {preLinkedSummary()}</div>
+                  {hasPreLinkedRows && (
+                    <button
+                      type="button"
+                      onClick={() => setLinkedListOpen((o) => !o)}
+                      style={{ background: "none", border: "none", color: PURPLE, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 0 }}
+                    >
+                      {linkedListOpen ? "Hide" : "Show"}
+                    </button>
+                  )}
+                </div>
+                {hasPreLinkedRows && linkedListOpen && (
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${GOLD_BORDER}`, maxHeight: 200, overflowY: "auto" }}>
+                    {preLinkedCampSessions.length > 0 && (
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Summer camps</div>
+                    )}
+                    {preLinkedCampSessions.map((c) => (
+                      <div key={c.id} style={{ padding: "3px 0", lineHeight: 1.35 }}>
+                        <strong>{c.location_name || "Unspecified location"}</strong>
+                        {campLinkMeta(c) && <span style={{ color: MUTED, marginLeft: 6 }}>· {campLinkMeta(c)}</span>}
+                      </div>
+                    ))}
+                    {preLinkedPrograms.length > 0 && (
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.5, margin: `${preLinkedCampSessions.length > 0 ? 8 : 0}px 0 4px` }}>Afterschool programs</div>
+                    )}
+                    {preLinkedPrograms.map((p) => (
+                      <div key={p.id} style={{ padding: "3px 0", lineHeight: 1.35 }}>
+                        <strong>{p.program_locations?.name || "Unspecified location"}</strong>
+                        {programLinkMeta(p) && <span style={{ color: MUTED, marginLeft: 6 }}>· {programLinkMeta(p)}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             {hasMatches && (() => {
