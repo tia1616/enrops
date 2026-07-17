@@ -170,6 +170,15 @@ export default function ProgramsCalendar() {
     // actually changed, to avoid a needless round-trip on price/room/capacity edits.
     const SCHEDULE_KEYS = ["first_session_date", "session_count", "end_date", "schedule_mode", "program_location_id", "day_of_week"];
     if (SCHEDULE_KEYS.some((k) => k in patch)) {
+      // A schedule save re-materializes session_count from the CURRENT calendars,
+      // so this program is drift-free by construction now — clear any stale flag
+      // (chunk 4) so the "Schedule out of date" badge disappears immediately.
+      setDriftByProgram((prev) => {
+        if (!(programId in prev)) return prev;
+        const next = { ...prev };
+        delete next[programId];
+        return next;
+      });
       try {
         const { data: sched, error: schErr } = await supabase.rpc(
           "derive_program_session_schedule",
@@ -320,6 +329,11 @@ export default function ProgramsCalendar() {
     return () => { alive = false; };
   }, [org?.id]);
   const [sessionDatesByProgram, setSessionDatesByProgram] = useState({});
+  // Range programs whose materialized session_count went STALE after a school
+  // calendar changed (chunk 4). Keyed by program_id -> { stored, derived }; only
+  // drifted programs are present. Re-derived from the CURRENT calendars server-side,
+  // so a new/removed no-school day in the window surfaces as a flag on the row.
+  const [driftByProgram, setDriftByProgram] = useState({});
   const [expandedDates, setExpandedDates] = useState(() => new Set());
   // Per-location calendar coverage for this term, keyed by program_location_id:
   //   Map<location_id, { hasDistrict, hasCalendar }> while a school year applies,
@@ -437,6 +451,32 @@ export default function ProgramsCalendar() {
           console.warn("Couldn't load derived session dates:", e?.message ?? e);
         }
 
+        // Range-schedule drift (chunk 4): for every RANGE program in this term,
+        // compare the materialized session_count to the count re-derived from the
+        // CURRENT calendars. A difference means a school added/removed a no-school
+        // day inside the window after the program was saved, so its stored dates
+        // are stale. Flag it on the row; never silently shift the saved schedule.
+        // Keep only the drifted rows so the map is empty in the common (no-drift) case.
+        let driftMap = {};
+        try {
+          const { data: driftRows, error: driftErr } = await supabase.rpc(
+            "range_programs_schedule_drift",
+            { p_organization_id: org.id, p_term: term },
+          );
+          if (driftErr) throw driftErr;
+          for (const r of driftRows ?? []) {
+            if (
+              r.stored_count != null &&
+              r.derived_count != null &&
+              r.derived_count !== r.stored_count
+            ) {
+              driftMap[r.program_id] = { stored: r.stored_count, derived: r.derived_count };
+            }
+          }
+        } catch (e) {
+          console.warn("Couldn't check range schedule drift:", e?.message ?? e);
+        }
+
         // Per-location calendar coverage for this term. Structure-aware via
         // program_locations_calendar_coverage(), which matches a school's
         // calendar by the structured district_id link OR the legacy free-text
@@ -467,6 +507,7 @@ export default function ProgramsCalendar() {
           setPrograms(progRows ?? []);
           setEnrollmentByProgram(enrollment);
           setSessionDatesByProgram(datesByProgram);
+          setDriftByProgram(driftMap);
           setCalendarCoverage(coverageByLocation);
           setExpandedDates(new Set()); // collapse all when term changes
         }
@@ -612,6 +653,7 @@ export default function ProgramsCalendar() {
               programs={programs}
               enrollment={enrollmentByProgram}
               sessionDatesByProgram={sessionDatesByProgram}
+              driftByProgram={driftByProgram}
               calendarCoverage={calendarCoverage}
               expandedDates={expandedDates}
               onToggleDates={toggleDatesExpanded}
@@ -631,6 +673,7 @@ export default function ProgramsCalendar() {
               programs={programs}
               enrollment={enrollmentByProgram}
               sessionDatesByProgram={sessionDatesByProgram}
+              driftByProgram={driftByProgram}
               calendarCoverage={calendarCoverage}
               expandedDates={expandedDates}
               onToggleDates={toggleDatesExpanded}
@@ -689,7 +732,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -727,6 +770,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
               program={p}
               e={enrollment[p.id]}
               sessionDates={sessionDatesByProgram?.[p.id]}
+              drift={driftByProgram?.[p.id]}
               districtHasCalendar={districtHasCal(p, calendarCoverage)}
               isDatesExpanded={expandedDates?.has(p.id)}
               onToggleDates={onToggleDates}
@@ -749,7 +793,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -847,6 +891,7 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCov
                 program={p}
                 e={enrollment[p.id]}
                 sessionDates={sessionDatesByProgram?.[p.id]}
+                drift={driftByProgram?.[p.id]}
                 districtHasCalendar={districtHasCal(p, calendarCoverage)}
                 isDatesExpanded={expandedDates?.has(p.id)}
                 onToggleDates={onToggleDates}
@@ -913,7 +958,7 @@ function districtHasCal(program, calendarCoverage) {
   return entry.hasCalendar;
 }
 
-function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -1030,6 +1075,29 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
               )}
             </>
           )}
+          {/* Chunk 4: this range program's saved session count no longer matches
+              what its date window yields under the CURRENT school calendar (a
+              no-school day was added or removed after it was saved). Flag it here
+              so the operator sees it without expanding; the fix lives in the panel. */}
+          {drift && (
+            <span
+              title={`A school-calendar change moved this program's class days. Its saved schedule has ${drift.stored} session${drift.stored === 1 ? "" : "s"}, but the dates now yield ${drift.derived}. Expand to review and update.`}
+              style={{
+                fontSize: 10,
+                color: AMBER,
+                background: `${AMBER}1F`,
+                border: `1px solid ${AMBER}66`,
+                padding: "2px 8px",
+                borderRadius: 999,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+                flexShrink: 0,
+              }}
+            >
+              Schedule out of date
+            </span>
+          )}
           <button
             type="button"
             onClick={() => onToggleDates?.(p.id)}
@@ -1115,6 +1183,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
       <ExpandedProgramPanel
         program={p}
         dates={scheduleArr}
+        drift={drift}
         districtHasCalendar={districtHasCalendar}
         onUpdate={onUpdate}
         onPublish={onPublish}
@@ -1135,7 +1204,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
 // bottom, an editable form for day/time/dates/capacity/price/location at
 // the top, and the unpublish + delete actions on a footer row. The panel
 // only renders when the operator clicks "Expand" on a program row.
-function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   // Local draft so the operator can edit several fields and save in one go
   // (avoid round-tripping the DB on every keystroke).
   const [draft, setDraft] = useState({
@@ -1375,6 +1444,25 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
     schedNorm(draft.program_location_id) !== schedNorm(program.program_location_id) ||
     (draft.schedule_mode !== "range" && Number(draft.session_count) !== Number(program.session_count));
 
+  // Chunk 4 drift notice: this range program's materialized session_count went
+  // stale because a school calendar changed after it was saved. Show the count the
+  // window yields NOW (live from the preview once it loads; the drift snapshot until
+  // then) and offer a one-click fix that just re-runs the normal Save -- which
+  // re-materializes session_count against the current calendars and fires the same
+  // live-program confirm if families are enrolled. No second write path. Hidden once
+  // the operator starts editing (the unsaved-changes banner + live count cover that),
+  // and hidden the moment the numbers agree again (honest state).
+  const driftDerived = drift && draft.schedule_mode === "range"
+    ? (rangePreview && !rangePreview.error && !rangeLoading
+        ? Number(rangePreview.count)
+        : (drift.derived ?? null))
+    : null;
+  const showDriftNotice = !!drift
+    && draft.schedule_mode === "range"
+    && !schedulePendingSave
+    && driftDerived != null
+    && driftDerived !== Number(program.session_count);
+
   return (
     <div style={{
       padding: "14px 16px 16px 16px",
@@ -1382,6 +1470,61 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
       borderBottom: `1px solid ${RULE}`,
       fontSize: 13,
     }}>
+      {showDriftNotice && (
+        <div style={{
+          display: "flex",
+          gap: 12,
+          alignItems: "center",
+          flexWrap: "wrap",
+          justifyContent: "space-between",
+          padding: "10px 12px",
+          marginBottom: 12,
+          background: `${AMBER}14`,
+          border: `1px solid ${AMBER}66`,
+          borderRadius: 8,
+          color: INK,
+          fontSize: 12.5,
+          lineHeight: 1.4,
+        }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <strong style={{ color: "#8a5a00" }}>Schedule out of date.</strong>{" "}
+            {driftDerived === 0
+              ? `A calendar change means no class days fall in this window anymore. Its saved schedule still has ${program.session_count} session${Number(program.session_count) === 1 ? "" : "s"} — extend the end date below, then Save.`
+              : `A school-calendar change means this program's dates now yield ${driftDerived} session${driftDerived === 1 ? "" : "s"}, but its saved schedule still has ${program.session_count}. Update to move families onto the corrected dates.`}
+          </div>
+          {driftDerived > 0 && (
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || rangeLoading || !rangePreview}
+              style={{
+                flexShrink: 0,
+                padding: "7px 14px",
+                background: BRIGHT,
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                fontSize: 12.5,
+                fontWeight: 700,
+                fontFamily: "inherit",
+                cursor: saving || rangeLoading || !rangePreview ? "default" : "pointer",
+                opacity: saving || rangeLoading || !rangePreview ? 0.6 : 1,
+              }}
+              title="Re-derive the sessions from the current calendars and save. If families are enrolled, you'll be asked to confirm first."
+            >
+              {saving ? "Updating…" : `Update to ${driftDerived} session${driftDerived === 1 ? "" : "s"}`}
+            </button>
+          )}
+          {/* Surface a failed Update right here at the notice -- otherwise the only
+              error message renders down by the form's Save button, off-screen from
+              the button the operator just clicked, and the notice looks inert. */}
+          {saveError && (
+            <div style={{ flexBasis: "100%", color: "#b53737", fontSize: 12, fontWeight: 600 }}>
+              {saveError}
+            </div>
+          )}
+        </div>
+      )}
       {/* Edit form — sectioned grid */}
       <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
         Edit program
