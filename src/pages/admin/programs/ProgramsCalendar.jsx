@@ -162,6 +162,36 @@ export default function ProgramsCalendar() {
       .eq("id", programId);
     if (updErr) throw updErr;
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, ...patch } : p)));
+    // The derived session dates + "N sessions" count shown on the row (the pill, the
+    // expanded dates list, Copy list) come from a bulk per-term RPC loaded once, so any
+    // save that changes the schedule leaves them stale until a reload -- a "✓ Saved"
+    // over a stale number. Refetch THIS one program's schedule and merge it so the row
+    // reflects the save immediately (honest state). Only when a schedule-affecting field
+    // actually changed, to avoid a needless round-trip on price/room/capacity edits.
+    const SCHEDULE_KEYS = ["first_session_date", "session_count", "end_date", "schedule_mode", "program_location_id", "day_of_week"];
+    if (SCHEDULE_KEYS.some((k) => k in patch)) {
+      // A schedule save re-materializes session_count from the CURRENT calendars,
+      // so this program is drift-free by construction now — clear any stale flag
+      // (chunk 4) so the "Schedule out of date" badge disappears immediately.
+      setDriftByProgram((prev) => {
+        if (!(programId in prev)) return prev;
+        const next = { ...prev };
+        delete next[programId];
+        return next;
+      });
+      try {
+        const { data: sched, error: schErr } = await supabase.rpc(
+          "derive_program_session_schedule",
+          { p_program_id: programId },
+        );
+        if (!schErr) {
+          const arr = (sched ?? []).map((r) => ({ date: r.entry_date, kind: r.kind, reason: r.reason }));
+          setSessionDatesByProgram((prev) => ({ ...prev, [programId]: arr }));
+        }
+      } catch (e) {
+        console.warn("Couldn't refresh derived dates after save:", e?.message ?? e);
+      }
+    }
   }
 
   // Copy a program into another term — same location/day/time/curriculum/price,
@@ -299,6 +329,11 @@ export default function ProgramsCalendar() {
     return () => { alive = false; };
   }, [org?.id]);
   const [sessionDatesByProgram, setSessionDatesByProgram] = useState({});
+  // Range programs whose materialized session_count went STALE after a school
+  // calendar changed (chunk 4). Keyed by program_id -> { stored, derived }; only
+  // drifted programs are present. Re-derived from the CURRENT calendars server-side,
+  // so a new/removed no-school day in the window surfaces as a flag on the row.
+  const [driftByProgram, setDriftByProgram] = useState({});
   const [expandedDates, setExpandedDates] = useState(() => new Set());
   // Per-location calendar coverage for this term, keyed by program_location_id:
   //   Map<location_id, { hasDistrict, hasCalendar }> while a school year applies,
@@ -364,7 +399,7 @@ export default function ProgramsCalendar() {
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             max_capacity, status, term, instructor_name, price_cents,
             runs_own_registration, external_registration_url, list_in_public_catalog,
-            first_session_date, session_count,
+            first_session_date, session_count, schedule_mode, end_date, organization_id,
             facility_requested_at, facility_approved_at, facility_notes,
             program_location_id,
             program_locations (id, name, district)
@@ -416,6 +451,32 @@ export default function ProgramsCalendar() {
           console.warn("Couldn't load derived session dates:", e?.message ?? e);
         }
 
+        // Range-schedule drift (chunk 4): for every RANGE program in this term,
+        // compare the materialized session_count to the count re-derived from the
+        // CURRENT calendars. A difference means a school added/removed a no-school
+        // day inside the window after the program was saved, so its stored dates
+        // are stale. Flag it on the row; never silently shift the saved schedule.
+        // Keep only the drifted rows so the map is empty in the common (no-drift) case.
+        let driftMap = {};
+        try {
+          const { data: driftRows, error: driftErr } = await supabase.rpc(
+            "range_programs_schedule_drift",
+            { p_organization_id: org.id, p_term: term },
+          );
+          if (driftErr) throw driftErr;
+          for (const r of driftRows ?? []) {
+            if (
+              r.stored_count != null &&
+              r.derived_count != null &&
+              r.derived_count !== r.stored_count
+            ) {
+              driftMap[r.program_id] = { stored: r.stored_count, derived: r.derived_count };
+            }
+          }
+        } catch (e) {
+          console.warn("Couldn't check range schedule drift:", e?.message ?? e);
+        }
+
         // Per-location calendar coverage for this term. Structure-aware via
         // program_locations_calendar_coverage(), which matches a school's
         // calendar by the structured district_id link OR the legacy free-text
@@ -446,6 +507,7 @@ export default function ProgramsCalendar() {
           setPrograms(progRows ?? []);
           setEnrollmentByProgram(enrollment);
           setSessionDatesByProgram(datesByProgram);
+          setDriftByProgram(driftMap);
           setCalendarCoverage(coverageByLocation);
           setExpandedDates(new Set()); // collapse all when term changes
         }
@@ -591,6 +653,7 @@ export default function ProgramsCalendar() {
               programs={programs}
               enrollment={enrollmentByProgram}
               sessionDatesByProgram={sessionDatesByProgram}
+              driftByProgram={driftByProgram}
               calendarCoverage={calendarCoverage}
               expandedDates={expandedDates}
               onToggleDates={toggleDatesExpanded}
@@ -610,6 +673,7 @@ export default function ProgramsCalendar() {
               programs={programs}
               enrollment={enrollmentByProgram}
               sessionDatesByProgram={sessionDatesByProgram}
+              driftByProgram={driftByProgram}
               calendarCoverage={calendarCoverage}
               expandedDates={expandedDates}
               onToggleDates={toggleDatesExpanded}
@@ -668,7 +732,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -706,6 +770,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
               program={p}
               e={enrollment[p.id]}
               sessionDates={sessionDatesByProgram?.[p.id]}
+              drift={driftByProgram?.[p.id]}
               districtHasCalendar={districtHasCal(p, calendarCoverage)}
               isDatesExpanded={expandedDates?.has(p.id)}
               onToggleDates={onToggleDates}
@@ -728,7 +793,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, calendarCov
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -826,6 +891,7 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, calendarCov
                 program={p}
                 e={enrollment[p.id]}
                 sessionDates={sessionDatesByProgram?.[p.id]}
+                drift={driftByProgram?.[p.id]}
                 districtHasCalendar={districtHasCal(p, calendarCoverage)}
                 isDatesExpanded={expandedDates?.has(p.id)}
                 onToggleDates={onToggleDates}
@@ -892,7 +958,7 @@ function districtHasCal(program, calendarCoverage) {
   return entry.hasCalendar;
 }
 
-function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -1009,6 +1075,29 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
               )}
             </>
           )}
+          {/* Chunk 4: this range program's saved session count no longer matches
+              what its date window yields under the CURRENT school calendar (a
+              no-school day was added or removed after it was saved). Flag it here
+              so the operator sees it without expanding; the fix lives in the panel. */}
+          {drift && (
+            <span
+              title={`A school-calendar change moved this program's class days. Its saved schedule has ${drift.stored} session${drift.stored === 1 ? "" : "s"}, but the dates now yield ${drift.derived}. Expand to review and update.`}
+              style={{
+                fontSize: 10,
+                color: AMBER,
+                background: `${AMBER}1F`,
+                border: `1px solid ${AMBER}66`,
+                padding: "2px 8px",
+                borderRadius: 999,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+                flexShrink: 0,
+              }}
+            >
+              Schedule out of date
+            </span>
+          )}
           <button
             type="button"
             onClick={() => onToggleDates?.(p.id)}
@@ -1094,6 +1183,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
       <ExpandedProgramPanel
         program={p}
         dates={scheduleArr}
+        drift={drift}
         districtHasCalendar={districtHasCalendar}
         onUpdate={onUpdate}
         onPublish={onPublish}
@@ -1114,7 +1204,7 @@ function ProgramRow({ program: p, e, sessionDates, districtHasCalendar, isDatesE
 // bottom, an editable form for day/time/dates/capacity/price/location at
 // the top, and the unpublish + delete actions on a footer row. The panel
 // only renders when the operator clicks "Expand" on a program row.
-function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   // Local draft so the operator can edit several fields and save in one go
   // (avoid round-tripping the DB on every keystroke).
   const [draft, setDraft] = useState({
@@ -1126,6 +1216,10 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
     end_time: to24h(program.end_time),
     first_session_date: program.first_session_date ?? "",
     session_count: program.session_count ?? "",
+    // Range mode: 'count' (default, the J2S way) vs 'range' (Jeff's way -- count
+    // derives from start+end). end_date is only used in range mode.
+    schedule_mode: program.schedule_mode === "range" ? "range" : "count",
+    end_date: program.end_date ?? "",
     max_capacity: program.max_capacity ?? "",
     price_cents: program.price_cents ?? "",
     program_location_id: program.program_location_id ?? "",
@@ -1143,6 +1237,34 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   const [copyTerm, setCopyTerm] = useState("");
   const [copying, setCopying] = useState(false);
   const [copyResult, setCopyResult] = useState(null); // { ok: bool, message }
+
+  // Range mode live preview: as the operator types start/end, ask the DB to derive
+  // the count + skipped no-school days for THIS location's calendar. Params-based
+  // (preview_program_range_schedule) so it reflects the typed-but-unsaved dates,
+  // not the stored row. { count, skipped, first_session, last_session } | { error }.
+  const [rangePreview, setRangePreview] = useState(null);
+  const [rangeLoading, setRangeLoading] = useState(false);
+  useEffect(() => {
+    if (draft.schedule_mode !== "range") { setRangePreview(null); setRangeLoading(false); return; }
+    if (!draft.day_of_week || !draft.first_session_date || !draft.end_date || !draft.program_location_id || !program.organization_id) {
+      setRangePreview(null); setRangeLoading(false); return;
+    }
+    let alive = true;
+    setRangeLoading(true);
+    supabase.rpc("preview_program_range_schedule", {
+      p_organization_id: program.organization_id,
+      p_location_id: draft.program_location_id,
+      p_term: program.term,
+      p_day_of_week: titleDay(draft.day_of_week),
+      p_start_date: draft.first_session_date,
+      p_end_date: draft.end_date,
+    }).then(({ data, error }) => {
+      if (!alive) return;
+      setRangeLoading(false);
+      setRangePreview(error ? { error: error.message } : data);
+    });
+    return () => { alive = false; };
+  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, program.organization_id, program.term]);
 
   function set(field, value) {
     setDraft((d) => ({ ...d, [field]: value }));
@@ -1175,13 +1297,77 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
     setSaving(true);
     setSaveError(null);
     try {
+      const isRange = draft.schedule_mode === "range";
+      // Range mode: the count is DERIVED, not typed. Require a real window that
+      // actually contains class days -- refuse to save a range program that would
+      // resolve to 0 sessions (session_count is NOT NULL, and 0 is meaningless).
+      let derivedCount = null;
+      let rangeFirstSession = null;
+      if (isRange) {
+        if (!draft.day_of_week) {
+          throw new Error("Range mode needs a day of the week for the class.");
+        }
+        if (!draft.first_session_date || !draft.end_date) {
+          throw new Error("Range mode needs both a start date and an end date.");
+        }
+        if (draft.end_date < draft.first_session_date) {
+          throw new Error("The end date is before the start date.");
+        }
+        if (rangeLoading) {
+          throw new Error("Still calculating the sessions — give it a second, then save.");
+        }
+        if (rangePreview?.error) {
+          throw new Error("Couldn't calculate the sessions for that window — check the dates.");
+        }
+        // The preview only runs once a location is set (it needs the school calendar).
+        // If it never ran, say THAT rather than misreporting an empty window.
+        if (!rangePreview) {
+          throw new Error("Pick a location first — the schedule uses its school calendar.");
+        }
+        derivedCount = Number(rangePreview.count);
+        if (!derivedCount || derivedCount < 1) {
+          throw new Error("No class days fall between that start and end date — adjust the dates.");
+        }
+        // Store the DERIVED first actual session (a real chosen-weekday date), so
+        // first_session_date is always a true class day and derive_program_session_dates
+        // keys off the right weekday. NO fallback to the raw typed start -- that could be
+        // a non-chosen-weekday date, which would silently re-derive on the wrong day (the
+        // seam-bug class). first_session is guaranteed non-null here (count>=1 above).
+        rangeFirstSession = rangePreview.first_session;
+        if (!rangeFirstSession) {
+          throw new Error("Couldn't determine the first class date — check the day and dates.");
+        }
+      } else {
+        // Count mode: session_count is NOT NULL and 0 is meaningless. Guard here so a
+        // blanked/zero field gives a plain message instead of a raw Postgres NOT NULL
+        // error -- which would otherwise block saving EVERY other edit on the program.
+        const n = draft.session_count === "" || draft.session_count === null ? NaN : Number(draft.session_count);
+        if (!Number.isFinite(n) || n < 1) {
+          throw new Error("Number of sessions must be at least 1.");
+        }
+      }
+      // Listing on the public reg page needs somewhere to send families.
+      if (draft.runs_own_registration && draft.list_in_public_catalog && !draft.external_registration_url?.trim()) {
+        throw new Error("Add the partner's registration link before listing it on your public page.");
+      }
       const patch = {
+        // The class weekday is the operator's choice in BOTH modes.
         day_of_week: draft.day_of_week ? titleDay(draft.day_of_week) : null,
         // Convert the 24-hour input values back to the stored 12-hour text format.
         start_time: draft.start_time ? to12hText(draft.start_time) : null,
         end_time: draft.end_time ? to12hText(draft.end_time) : null,
-        first_session_date: draft.first_session_date || null,
-        session_count: draft.session_count === "" || draft.session_count === null ? null : Number(draft.session_count),
+        first_session_date: isRange ? rangeFirstSession : (draft.first_session_date || null),
+        schedule_mode: isRange ? "range" : "count",
+        // end_date only means anything in range mode; null it in count mode so a
+        // program switched back to count never carries a stale window.
+        end_date: isRange ? (draft.end_date || null) : null,
+        // Range mode materializes the DERIVED count into session_count -- the same
+        // field count mode uses -- so pricing/payroll/emails/date-fns all keep
+        // working unchanged. Computed from the typed dates (rangePreview), not from
+        // the stored row.
+        session_count: isRange
+          ? derivedCount
+          : (draft.session_count === "" || draft.session_count === null ? null : Number(draft.session_count)),
         max_capacity: draft.max_capacity === "" || draft.max_capacity === null ? null : Number(draft.max_capacity),
         price_cents: draft.price_cents === "" || draft.price_cents === null ? null : Number(draft.price_cents),
         program_location_id: draft.program_location_id || null,
@@ -1194,7 +1380,53 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
           ? !!draft.list_in_public_catalog
           : false,
       };
+      // Live-program guard: if this save actually CHANGES the schedule and the
+      // program already has enrolled families, confirm first -- a schedule change
+      // moves their real class dates. Checked at save time against live registrations
+      // (like Delete), so the count is authoritative, not a stale prop. Only when a
+      // schedule field truly changed, so price/room/capacity edits never prompt.
+      const norm = (v) => (v === "" || v === undefined ? null : v);
+      const scheduleChanged =
+        norm(patch.schedule_mode) !== norm(program.schedule_mode ?? "count") ||
+        norm(patch.first_session_date) !== norm(program.first_session_date) ||
+        norm(patch.end_date) !== norm(program.end_date) ||
+        Number(patch.session_count) !== Number(program.session_count) ||
+        norm(patch.day_of_week) !== norm(program.day_of_week ? titleDay(program.day_of_week) : null) ||
+        norm(patch.program_location_id) !== norm(program.program_location_id);
+      if (scheduleChanged) {
+        const { count: enrolledCount, error: regErr } = await supabase
+          .from("registrations")
+          .select("id", { count: "exact", head: true })
+          .eq("program_id", program.id)
+          .is("cancelled_at", null);
+        // FAIL CLOSED: if the enrollment check errors we can't prove the program is
+        // empty, so warn anyway rather than silently move possibly-enrolled families'
+        // dates (Delete aborts on this error; here a soft confirm is enough).
+        const mightBeEnrolled = regErr ? true : (enrolledCount ?? 0) > 0;
+        if (mightBeEnrolled) {
+          const lead = regErr
+            ? "Couldn't confirm whether families are enrolled, so to be safe:"
+            : `${enrolledCount} ${enrolledCount === 1 ? "family is" : "families are"} enrolled in this program.`;
+          const ok = window.confirm(
+            `${lead} Changing the schedule will move their class dates. Save anyway?`,
+          );
+          if (!ok) return; // finally{} resets saving
+        }
+      }
       await onUpdate(program.id, patch);
+      // Sync the draft to what was actually STORED for every field the
+      // "unsaved schedule changes" banner compares, so a good save always clears
+      // it. Two fields the save rewrites out from under the draft:
+      //  - first_session_date: in range mode the stored value is the DERIVED first
+      //    session (a real chosen-weekday date), not the typed window start.
+      //  - end_date: count mode stores NULL (count programs have no window), but the
+      //    draft still holds the old date -- so a range->count save left the banner
+      //    stuck comparing a stale draft end date against the nulled stored value.
+      setDraft((d) => ({
+        ...d,
+        first_session_date: patch.first_session_date ?? "",
+        end_date: patch.end_date ?? "",
+      }));
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     } catch (err) {
@@ -1207,6 +1439,38 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   const isDraft = program.status === "draft";
   const isOpen = program.status === "open";
 
+  // Unsaved SCHEDULE edits? The SESSION DATES list at the bottom shows the SAVED
+  // schedule (from the derive fn), so it won't match the form's live preview until
+  // Save. Flag that so an in-progress edit doesn't look like the feature is "missing
+  // dates". Range mode: session_count is derived, so compare the inputs, not the count.
+  const schedNorm = (v) => (v === "" || v === undefined ? null : v);
+  const schedulePendingSave =
+    schedNorm(draft.schedule_mode) !== schedNorm(program.schedule_mode ?? "count") ||
+    schedNorm(draft.first_session_date) !== schedNorm(program.first_session_date) ||
+    schedNorm(draft.end_date) !== schedNorm(program.end_date) ||
+    schedNorm(draft.day_of_week ? titleDay(draft.day_of_week) : null) !== schedNorm(program.day_of_week ? titleDay(program.day_of_week) : null) ||
+    schedNorm(draft.program_location_id) !== schedNorm(program.program_location_id) ||
+    (draft.schedule_mode !== "range" && Number(draft.session_count) !== Number(program.session_count));
+
+  // Chunk 4 drift notice: this range program's materialized session_count went
+  // stale because a school calendar changed after it was saved. Show the count the
+  // window yields NOW (live from the preview once it loads; the drift snapshot until
+  // then) and offer a one-click fix that just re-runs the normal Save -- which
+  // re-materializes session_count against the current calendars and fires the same
+  // live-program confirm if families are enrolled. No second write path. Hidden once
+  // the operator starts editing (the unsaved-changes banner + live count cover that),
+  // and hidden the moment the numbers agree again (honest state).
+  const driftDerived = drift && draft.schedule_mode === "range"
+    ? (rangePreview && !rangePreview.error && !rangeLoading
+        ? Number(rangePreview.count)
+        : (drift.derived ?? null))
+    : null;
+  const showDriftNotice = !!drift
+    && draft.schedule_mode === "range"
+    && !schedulePendingSave
+    && driftDerived != null
+    && driftDerived !== Number(program.session_count);
+
   return (
     <div style={{
       padding: "14px 16px 16px 16px",
@@ -1214,6 +1478,61 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
       borderBottom: `1px solid ${RULE}`,
       fontSize: 13,
     }}>
+      {showDriftNotice && (
+        <div style={{
+          display: "flex",
+          gap: 12,
+          alignItems: "center",
+          flexWrap: "wrap",
+          justifyContent: "space-between",
+          padding: "10px 12px",
+          marginBottom: 12,
+          background: `${AMBER}14`,
+          border: `1px solid ${AMBER}66`,
+          borderRadius: 8,
+          color: INK,
+          fontSize: 12.5,
+          lineHeight: 1.4,
+        }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <strong style={{ color: "#8a5a00" }}>Schedule out of date.</strong>{" "}
+            {driftDerived === 0
+              ? `A calendar change means no class days fall in this window anymore. Its saved schedule still has ${program.session_count} session${Number(program.session_count) === 1 ? "" : "s"} — extend the end date below, then Save.`
+              : `A school-calendar change means this program's dates now yield ${driftDerived} session${driftDerived === 1 ? "" : "s"}, but its saved schedule still has ${program.session_count}. Update to move families onto the corrected dates.`}
+          </div>
+          {driftDerived > 0 && (
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || rangeLoading || !rangePreview}
+              style={{
+                flexShrink: 0,
+                padding: "7px 14px",
+                background: BRIGHT,
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                fontSize: 12.5,
+                fontWeight: 700,
+                fontFamily: "inherit",
+                cursor: saving || rangeLoading || !rangePreview ? "default" : "pointer",
+                opacity: saving || rangeLoading || !rangePreview ? 0.6 : 1,
+              }}
+              title="Re-derive the sessions from the current calendars and save. If families are enrolled, you'll be asked to confirm first."
+            >
+              {saving ? "Updating…" : `Update to ${driftDerived} session${driftDerived === 1 ? "" : "s"}`}
+            </button>
+          )}
+          {/* Surface a failed Update right here at the notice -- otherwise the only
+              error message renders down by the form's Save button, off-screen from
+              the button the operator just clicked, and the notice looks inert. */}
+          {saveError && (
+            <div style={{ flexBasis: "100%", color: "#b53737", fontSize: 12, fontWeight: 600 }}>
+              {saveError}
+            </div>
+          )}
+        </div>
+      )}
       {/* Edit form — sectioned grid */}
       <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
         Edit program
@@ -1225,9 +1544,12 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         marginBottom: 12,
       }}>
         <ExpandField label="Day of week">
-          {/* Option values are Title-Case to match how the column is stored —
-              a lowercase value here would save a day that breaks the VIP
-              bundle match and renders lowercase on the public catalog. */}
+          {/* Editable in BOTH modes. In range mode this IS the class weekday the
+              derivation follows -- the start date is only the window's earliest edge,
+              and the schedule snaps to the first of THIS weekday on/after it.
+              Option values are Title-Case to match how the column is stored -- a
+              lowercase value breaks the VIP bundle match and renders lowercase on
+              the public catalog. */}
           <select value={titleDay(draft.day_of_week)} onChange={(e) => set("day_of_week", e.target.value)} style={expandInputStyle}>
             <option value="">—</option>
             {DAYS_OF_WEEK.map((d) => (
@@ -1241,12 +1563,70 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         <ExpandField label="End time">
           <input type="time" value={draft.end_time ?? ""} onChange={(e) => set("end_time", e.target.value)} style={expandInputStyle} />
         </ExpandField>
-        <ExpandField label="First session">
-          <input type="date" value={draft.first_session_date ?? ""} onChange={(e) => set("first_session_date", e.target.value)} style={expandInputStyle} />
+        <ExpandField label="Scheduling">
+          {/* Count = the usual way (set a number of sessions). Range = set a start
+              and end date; the count derives. Default count; range is opt-in per program. */}
+          <div style={{ display: "flex", gap: 0, border: `1.5px solid ${RULE}`, borderRadius: 6, overflow: "hidden" }}>
+            {[["count", "By count"], ["range", "By dates"]].map(([mode, label]) => {
+              const active = (draft.schedule_mode === "range") === (mode === "range");
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => set("schedule_mode", mode)}
+                  style={{
+                    flex: 1, padding: "7px 6px", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
+                    cursor: "pointer", border: "none",
+                    background: active ? BRIGHT : "#fff",
+                    color: active ? "#fff" : MUTED,
+                  }}
+                >{label}</button>
+              );
+            })}
+          </div>
         </ExpandField>
-        <ExpandField label="Sessions">
-          <input type="number" min="1" max="40" value={draft.session_count ?? ""} onChange={(e) => set("session_count", e.target.value)} style={expandInputStyle} />
-        </ExpandField>
+
+        {draft.schedule_mode === "range" ? (
+          <>
+            <ExpandField label="Start date">
+              <input type="date" value={draft.first_session_date ?? ""} onChange={(e) => set("first_session_date", e.target.value)} style={expandInputStyle} />
+            </ExpandField>
+            <ExpandField label="End date">
+              <input type="date" value={draft.end_date ?? ""} onChange={(e) => set("end_date", e.target.value)} style={expandInputStyle} />
+            </ExpandField>
+            <ExpandField label="Sessions (from dates)">
+              {/* Read-only: the count is never typed in range mode -- it derives. */}
+              <div style={{
+                ...expandInputStyle,
+                background: "#f4f3ee", color: INK, display: "flex", alignItems: "center",
+                minHeight: 36, fontSize: 12.5, lineHeight: 1.3,
+              }}>
+                {rangeLoading
+                  ? "Calculating…"
+                  : rangePreview?.error
+                    ? <span style={{ color: "#b53737" }}>Couldn't calculate</span>
+                    : (!draft.first_session_date || !draft.end_date)
+                      ? <span style={{ color: MUTED }}>Set start & end</span>
+                      : (draft.end_date < draft.first_session_date)
+                        ? <span style={{ color: AMBER }}>End date is before the start date</span>
+                        : rangePreview
+                          ? (Number(rangePreview.count) > 0
+                              ? <span><strong>{rangePreview.count}</strong> session{Number(rangePreview.count) === 1 ? "" : "s"}{Number(rangePreview.skipped) > 0 ? ` · ${rangePreview.skipped} no-school day${Number(rangePreview.skipped) === 1 ? "" : "s"} skipped` : ""}</span>
+                              : <span style={{ color: AMBER }}>No class days in this window</span>)
+                          : <span style={{ color: MUTED }}>—</span>}
+              </div>
+            </ExpandField>
+          </>
+        ) : (
+          <>
+            <ExpandField label="First session">
+              <input type="date" value={draft.first_session_date ?? ""} onChange={(e) => set("first_session_date", e.target.value)} style={expandInputStyle} />
+            </ExpandField>
+            <ExpandField label="Sessions">
+              <input type="number" min="1" max="40" value={draft.session_count ?? ""} onChange={(e) => set("session_count", e.target.value)} style={expandInputStyle} />
+            </ExpandField>
+          </>
+        )}
         <ExpandField label="Capacity">
           <input type="number" min="0" max="999" value={draft.max_capacity ?? ""} onChange={(e) => set("max_capacity", e.target.value)} style={expandInputStyle} />
         </ExpandField>
@@ -1319,16 +1699,22 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
 
       {/* Action row: Save · Publish/Unpublish · Delete */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${RULE}` }}>
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving}
-          style={{
-            background: BRIGHT, color: "#fff", border: "none", padding: "8px 16px",
-            borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit",
-            cursor: saving ? "wait" : "pointer", opacity: saving ? 0.6 : 1,
-          }}
-        >{saving ? "Saving…" : "Save changes"}</button>
+        {(() => {
+          const rangeBusy = draft.schedule_mode === "range" && rangeLoading;
+          const disabled = saving || rangeBusy;
+          return (
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={disabled}
+              style={{
+                background: BRIGHT, color: "#fff", border: "none", padding: "8px 16px",
+                borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit",
+                cursor: disabled ? "wait" : "pointer", opacity: disabled ? 0.6 : 1,
+              }}
+            >{saving ? "Saving…" : rangeBusy ? "Calculating…" : "Save changes"}</button>
+          );
+        })()}
         {savedFlash && <span style={{ color: OK_GREEN, fontWeight: 600, fontSize: 12 }}>✓ Saved</span>}
 
         <ShareProgram
@@ -1425,6 +1811,11 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
       </div>
 
       {/* Session dates view (existing) */}
+      {schedulePendingSave && (
+        <div style={{ fontSize: 12, color: AMBER, fontWeight: 600, marginBottom: 6 }}>
+          Unsaved schedule changes — the dates below update when you Save.
+        </div>
+      )}
       <SessionDatesPanel program={program} dates={dates} districtHasCalendar={districtHasCalendar} inline />
     </div>
   );
@@ -1477,9 +1868,17 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
   const districtLabel = district || "this school's district";
   const showMissingCalendarWarning = districtHasCalendar === false;
 
-  // No dates to show? Skip the panel entirely.
+  // No dates yet? Say so honestly (mode-aware) instead of vanishing -- otherwise a
+  // program with an incomplete schedule looks like a rendering gap.
   if (sessions.length === 0) {
-    return null;
+    const hint = program.schedule_mode === "range"
+      ? "set a start and end date to generate the schedule"
+      : "set a first session date to generate the schedule";
+    return (
+      <div style={{ fontSize: 12.5, color: MUTED, padding: inline ? "8px 0 0" : "8px 12px" }}>
+        No session dates yet — {hint}.
+      </div>
+    );
   }
 
   // When nested inside ExpandedProgramPanel ("inline"), drop our outer box
