@@ -39,7 +39,16 @@ AS $function$
   FROM public.programs p
   WHERE p.organization_id = p_organization_id
     AND p.term            = p_term
-    AND p.schedule_mode   = 'range';
+    AND p.schedule_mode   = 'range'
+    -- Only fully-configured range programs can DRIFT. A range program with a NULL
+    -- window (first_session_date/end_date) is not drifted, it is not-yet-scheduled --
+    -- e.g. a Copy-to-term duplicate, which keeps schedule_mode='range' + the copied
+    -- session_count but resets the window to NULL. Without this guard such a copy
+    -- derives to 0 and false-flags as "Schedule out of date" over the correct
+    -- "No dates yet -- set a start and end date" empty state. A legitimately saved
+    -- range program always has both (handleSave requires them + materializes first).
+    AND p.first_session_date IS NOT NULL
+    AND p.end_date          IS NOT NULL;
 $function$;
 
 REVOKE EXECUTE ON FUNCTION public.range_programs_schedule_drift(uuid, text) FROM public, anon;
