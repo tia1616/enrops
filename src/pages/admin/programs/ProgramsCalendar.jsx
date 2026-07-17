@@ -1167,9 +1167,9 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   const [rangePreview, setRangePreview] = useState(null);
   const [rangeLoading, setRangeLoading] = useState(false);
   useEffect(() => {
-    if (draft.schedule_mode !== "range") { setRangePreview(null); return; }
+    if (draft.schedule_mode !== "range") { setRangePreview(null); setRangeLoading(false); return; }
     if (!draft.first_session_date || !draft.end_date || !draft.program_location_id || !program.organization_id) {
-      setRangePreview(null); return;
+      setRangePreview(null); setRangeLoading(false); return;
     }
     let alive = true;
     setRangeLoading(true);
@@ -1303,15 +1303,25 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         marginBottom: 12,
       }}>
         <ExpandField label="Day of week">
-          {/* Option values are Title-Case to match how the column is stored —
-              a lowercase value here would save a day that breaks the VIP
-              bundle match and renders lowercase on the public catalog. */}
-          <select value={titleDay(draft.day_of_week)} onChange={(e) => set("day_of_week", e.target.value)} style={expandInputStyle}>
-            <option value="">—</option>
-            {DAYS_OF_WEEK.map((d) => (
-              <option key={d} value={DAY_LABELS[d]}>{DAY_LABELS[d]}</option>
-            ))}
-          </select>
+          {draft.schedule_mode === "range" ? (
+            // In range mode the weekday is the start date's weekday -- not a separate
+            // choice. Show it read-only (derived) rather than an editable control that
+            // gets silently overridden on save.
+            <div style={{ ...expandInputStyle, background: "#f4f3ee", color: INK, display: "flex", alignItems: "center", minHeight: 36 }}>
+              {weekdayLabelFromISO(draft.first_session_date)
+                ?? <span style={{ color: MUTED }}>from start date</span>}
+            </div>
+          ) : (
+            /* Option values are Title-Case to match how the column is stored --
+               a lowercase value here would save a day that breaks the VIP
+               bundle match and renders lowercase on the public catalog. */
+            <select value={titleDay(draft.day_of_week)} onChange={(e) => set("day_of_week", e.target.value)} style={expandInputStyle}>
+              <option value="">—</option>
+              {DAYS_OF_WEEK.map((d) => (
+                <option key={d} value={DAY_LABELS[d]}>{DAY_LABELS[d]}</option>
+              ))}
+            </select>
+          )}
         </ExpandField>
         <ExpandField label="Start time">
           <input type="time" value={draft.start_time ?? ""} onChange={(e) => set("start_time", e.target.value)} style={expandInputStyle} />
@@ -1453,16 +1463,22 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
 
       {/* Action row: Save · Publish/Unpublish · Delete */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${RULE}` }}>
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving}
-          style={{
-            background: BRIGHT, color: "#fff", border: "none", padding: "8px 16px",
-            borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit",
-            cursor: saving ? "wait" : "pointer", opacity: saving ? 0.6 : 1,
-          }}
-        >{saving ? "Saving…" : "Save changes"}</button>
+        {(() => {
+          const rangeBusy = draft.schedule_mode === "range" && rangeLoading;
+          const disabled = saving || rangeBusy;
+          return (
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={disabled}
+              style={{
+                background: BRIGHT, color: "#fff", border: "none", padding: "8px 16px",
+                borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit",
+                cursor: disabled ? "wait" : "pointer", opacity: disabled ? 0.6 : 1,
+              }}
+            >{saving ? "Saving…" : rangeBusy ? "Calculating…" : "Save changes"}</button>
+          );
+        })()}
         {savedFlash && <span style={{ color: OK_GREEN, fontWeight: 600, fontSize: 12 }}>✓ Saved</span>}
 
         <ShareProgram
