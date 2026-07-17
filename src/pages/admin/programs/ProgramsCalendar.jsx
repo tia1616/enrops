@@ -162,6 +162,27 @@ export default function ProgramsCalendar() {
       .eq("id", programId);
     if (updErr) throw updErr;
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, ...patch } : p)));
+    // The derived session dates + "N sessions" count shown on the row (the pill, the
+    // expanded dates list, Copy list) come from a bulk per-term RPC loaded once, so any
+    // save that changes the schedule leaves them stale until a reload -- a "✓ Saved"
+    // over a stale number. Refetch THIS one program's schedule and merge it so the row
+    // reflects the save immediately (honest state). Only when a schedule-affecting field
+    // actually changed, to avoid a needless round-trip on price/room/capacity edits.
+    const SCHEDULE_KEYS = ["first_session_date", "session_count", "end_date", "schedule_mode", "program_location_id", "day_of_week"];
+    if (SCHEDULE_KEYS.some((k) => k in patch)) {
+      try {
+        const { data: sched, error: schErr } = await supabase.rpc(
+          "derive_program_session_schedule",
+          { p_program_id: programId },
+        );
+        if (!schErr) {
+          const arr = (sched ?? []).map((r) => ({ date: r.entry_date, kind: r.kind, reason: r.reason }));
+          setSessionDatesByProgram((prev) => ({ ...prev, [programId]: arr }));
+        }
+      } catch (e) {
+        console.warn("Couldn't refresh derived dates after save:", e?.message ?? e);
+      }
+    }
   }
 
   // Copy a program into another term — same location/day/time/curriculum/price,
@@ -1234,6 +1255,18 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         // the raw typed start -- so first_session_date is always a true class day
         // and derive_program_session_dates keys off the right weekday.
         rangeFirstSession = rangePreview?.first_session ?? draft.first_session_date;
+      } else {
+        // Count mode: session_count is NOT NULL and 0 is meaningless. Guard here so a
+        // blanked/zero field gives a plain message instead of a raw Postgres NOT NULL
+        // error -- which would otherwise block saving EVERY other edit on the program.
+        const n = draft.session_count === "" || draft.session_count === null ? NaN : Number(draft.session_count);
+        if (!Number.isFinite(n) || n < 1) {
+          throw new Error("Number of sessions must be at least 1.");
+        }
+      }
+      // Listing on the public reg page needs somewhere to send families.
+      if (draft.runs_own_registration && draft.list_in_public_catalog && !draft.external_registration_url?.trim()) {
+        throw new Error("Add the partner's registration link before listing it on your public page.");
       }
       const patch = {
         // The class weekday is the operator's choice in BOTH modes.
