@@ -59,18 +59,6 @@ function titleDay(d) {
   return d.charAt(0).toUpperCase() + d.slice(1).toLowerCase();
 }
 
-// Title-case weekday name for an ISO date ("2026-09-03" -> "Thursday"), UTC so the
-// day never wobbles by timezone. Used in range mode to keep programs.day_of_week in
-// sync with the chosen start date -- the schedule view, emails, and matcher all read
-// day_of_week, so a start-date weekday that disagreed with it would be a lie.
-const JS_DOW_TO_KEY = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-function weekdayLabelFromISO(iso) {
-  if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
-  const [y, m, d] = iso.split("-").map(Number);
-  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
-  return DAY_LABELS[JS_DOW_TO_KEY[dow]] ?? null;
-}
-
 export default function ProgramsCalendar() {
   const { user, org, orgMember } = useOutletContext();
   const perm = getPermissions(orgMember?.role);
@@ -1168,7 +1156,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   const [rangeLoading, setRangeLoading] = useState(false);
   useEffect(() => {
     if (draft.schedule_mode !== "range") { setRangePreview(null); setRangeLoading(false); return; }
-    if (!draft.first_session_date || !draft.end_date || !draft.program_location_id || !program.organization_id) {
+    if (!draft.day_of_week || !draft.first_session_date || !draft.end_date || !draft.program_location_id || !program.organization_id) {
       setRangePreview(null); setRangeLoading(false); return;
     }
     let alive = true;
@@ -1177,6 +1165,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
       p_organization_id: program.organization_id,
       p_location_id: draft.program_location_id,
       p_term: program.term,
+      p_day_of_week: titleDay(draft.day_of_week),
       p_start_date: draft.first_session_date,
       p_end_date: draft.end_date,
     }).then(({ data, error }) => {
@@ -1185,7 +1174,7 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
       setRangePreview(error ? { error: error.message } : data);
     });
     return () => { alive = false; };
-  }, [draft.schedule_mode, draft.first_session_date, draft.end_date, draft.program_location_id, program.organization_id, program.term]);
+  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, program.organization_id, program.term]);
 
   function set(field, value) {
     setDraft((d) => ({ ...d, [field]: value }));
@@ -1223,7 +1212,11 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
       // actually contains class days -- refuse to save a range program that would
       // resolve to 0 sessions (session_count is NOT NULL, and 0 is meaningless).
       let derivedCount = null;
+      let rangeFirstSession = null;
       if (isRange) {
+        if (!draft.day_of_week) {
+          throw new Error("Range mode needs a day of the week for the class.");
+        }
         if (!draft.first_session_date || !draft.end_date) {
           throw new Error("Range mode needs both a start date and an end date.");
         }
@@ -1237,18 +1230,18 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         if (!derivedCount || derivedCount < 1) {
           throw new Error("No class days fall between that start and end date — adjust the dates.");
         }
+        // Store the DERIVED first actual session (a real chosen-weekday date), not
+        // the raw typed start -- so first_session_date is always a true class day
+        // and derive_program_session_dates keys off the right weekday.
+        rangeFirstSession = rangePreview?.first_session ?? draft.first_session_date;
       }
       const patch = {
-        // In range mode the weekday follows the start date, so day_of_week can't
-        // drift out of sync with the real class day (the schedule view, emails, and
-        // matcher all read day_of_week).
-        day_of_week: isRange
-          ? weekdayLabelFromISO(draft.first_session_date)
-          : (draft.day_of_week ? titleDay(draft.day_of_week) : null),
+        // The class weekday is the operator's choice in BOTH modes.
+        day_of_week: draft.day_of_week ? titleDay(draft.day_of_week) : null,
         // Convert the 24-hour input values back to the stored 12-hour text format.
         start_time: draft.start_time ? to12hText(draft.start_time) : null,
         end_time: draft.end_time ? to12hText(draft.end_time) : null,
-        first_session_date: draft.first_session_date || null,
+        first_session_date: isRange ? rangeFirstSession : (draft.first_session_date || null),
         schedule_mode: isRange ? "range" : "count",
         // end_date only means anything in range mode; null it in count mode so a
         // program switched back to count never carries a stale window.
@@ -1303,25 +1296,18 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         marginBottom: 12,
       }}>
         <ExpandField label="Day of week">
-          {draft.schedule_mode === "range" ? (
-            // In range mode the weekday is the start date's weekday -- not a separate
-            // choice. Show it read-only (derived) rather than an editable control that
-            // gets silently overridden on save.
-            <div style={{ ...expandInputStyle, background: "#f4f3ee", color: INK, display: "flex", alignItems: "center", minHeight: 36 }}>
-              {weekdayLabelFromISO(draft.first_session_date)
-                ?? <span style={{ color: MUTED }}>from start date</span>}
-            </div>
-          ) : (
-            /* Option values are Title-Case to match how the column is stored --
-               a lowercase value here would save a day that breaks the VIP
-               bundle match and renders lowercase on the public catalog. */
-            <select value={titleDay(draft.day_of_week)} onChange={(e) => set("day_of_week", e.target.value)} style={expandInputStyle}>
-              <option value="">—</option>
-              {DAYS_OF_WEEK.map((d) => (
-                <option key={d} value={DAY_LABELS[d]}>{DAY_LABELS[d]}</option>
-              ))}
-            </select>
-          )}
+          {/* Editable in BOTH modes. In range mode this IS the class weekday the
+              derivation follows -- the start date is only the window's earliest edge,
+              and the schedule snaps to the first of THIS weekday on/after it.
+              Option values are Title-Case to match how the column is stored -- a
+              lowercase value breaks the VIP bundle match and renders lowercase on
+              the public catalog. */}
+          <select value={titleDay(draft.day_of_week)} onChange={(e) => set("day_of_week", e.target.value)} style={expandInputStyle}>
+            <option value="">—</option>
+            {DAYS_OF_WEEK.map((d) => (
+              <option key={d} value={DAY_LABELS[d]}>{DAY_LABELS[d]}</option>
+            ))}
+          </select>
         </ExpandField>
         <ExpandField label="Start time">
           <input type="time" value={draft.start_time ?? ""} onChange={(e) => set("start_time", e.target.value)} style={expandInputStyle} />
