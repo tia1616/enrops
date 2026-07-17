@@ -1308,6 +1308,33 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
           ? !!draft.list_in_public_catalog
           : false,
       };
+      // Live-program guard: if this save actually CHANGES the schedule and the
+      // program already has enrolled families, confirm first -- a schedule change
+      // moves their real class dates. Checked at save time against live registrations
+      // (like Delete), so the count is authoritative, not a stale prop. Only when a
+      // schedule field truly changed, so price/room/capacity edits never prompt.
+      const norm = (v) => (v === "" || v === undefined ? null : v);
+      const scheduleChanged =
+        norm(patch.schedule_mode) !== norm(program.schedule_mode ?? "count") ||
+        norm(patch.first_session_date) !== norm(program.first_session_date) ||
+        norm(patch.end_date) !== norm(program.end_date) ||
+        Number(patch.session_count) !== Number(program.session_count) ||
+        norm(patch.day_of_week) !== norm(program.day_of_week ? titleDay(program.day_of_week) : null) ||
+        norm(patch.program_location_id) !== norm(program.program_location_id);
+      if (scheduleChanged) {
+        const { count: enrolledCount } = await supabase
+          .from("registrations")
+          .select("id", { count: "exact", head: true })
+          .eq("program_id", program.id)
+          .is("cancelled_at", null);
+        if ((enrolledCount ?? 0) > 0) {
+          const ok = window.confirm(
+            `${enrolledCount} ${enrolledCount === 1 ? "family is" : "families are"} enrolled in this program. ` +
+            `Changing the schedule will move their class dates. Save anyway?`,
+          );
+          if (!ok) return; // finally{} resets saving
+        }
+      }
       await onUpdate(program.id, patch);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
