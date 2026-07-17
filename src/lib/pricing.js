@@ -237,7 +237,7 @@ export function calculateCart(cart) {
           term: prog.term,
           term_label: termLabel, // 'Fall' / 'Winter' / 'Spring' for VIP lines, null otherwise
           first_session_date: prog.first_session_date,
-          sessions: prog.sessions || prog.session_count || 8,
+          sessions: prog.session_count || 8,
           // VIP-only: surface Winter and Spring start dates for installment scheduling
           vip_winter_first_session_date:
             item.isVip && item.vipBundle?.winter?.first_session_date

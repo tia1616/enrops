@@ -559,11 +559,6 @@ export default function ProgramWizardNew() {
         end_time: toDbTime12h(formData.end_time),
         first_session_date: formData.first_session_date,
         session_count: formData.session_count,
-        // Legacy column: nullable, defaults to 8. Some downstream code (pricing
-        // formula fallback, possibly older reports) still reads `sessions` not
-        // `session_count`. Write both to the same value so nothing silently
-        // disagrees. Deprecate-and-drop is a separate cleanup.
-        sessions: formData.session_count,
         max_capacity: formData.max_capacity,
         age_format: formData.age_format,
         // Only write the active range; null the other so we don't lie.
