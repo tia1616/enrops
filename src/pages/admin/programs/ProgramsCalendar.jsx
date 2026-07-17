@@ -1646,9 +1646,17 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
   const districtLabel = district || "this school's district";
   const showMissingCalendarWarning = districtHasCalendar === false;
 
-  // No dates to show? Skip the panel entirely.
+  // No dates yet? Say so honestly (mode-aware) instead of vanishing -- otherwise a
+  // program with an incomplete schedule looks like a rendering gap.
   if (sessions.length === 0) {
-    return null;
+    const hint = program.schedule_mode === "range"
+      ? "set a start and end date to generate the schedule"
+      : "set a first session date to generate the schedule";
+    return (
+      <div style={{ fontSize: 12.5, color: MUTED, padding: inline ? "8px 0 0" : "8px 12px" }}>
+        No session dates yet — {hint}.
+      </div>
+    );
   }
 
   // When nested inside ExpandedProgramPanel ("inline"), drop our outer box
