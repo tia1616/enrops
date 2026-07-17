@@ -52,25 +52,40 @@ export async function runGateCheck(
     return null;
   }
 
-  // Per-org toggle: when background checks are turned off for this org, the
-  // background-check step is dropped from the required set AND the "check must
-  // be clear" condition is treated as satisfied — otherwise onboarding could
-  // never reach 'complete'. Default enabled=true (config or column absent).
+  // Per-org toggles: two optional steps.
+  // - Background checks off  → drop 'checkr_submitted' from the required set AND
+  //   treat the "check must be clear" condition as satisfied (else onboarding
+  //   could never reach 'complete'). Default enabled=true (config/column absent).
+  // - Training on            → ADD 'training_completed' to the required set, but
+  //   only when the org also has at least one active REQUIRED video — an
+  //   enabled-but-empty library must not block onboarding. Default off.
   let bgcEnabled = true;
+  let trainingRequired = false;
   if (row.organization_id) {
     const { data: org } = await supabase
       .from('organizations')
-      .select('background_check_config')
+      .select('background_check_config, training_config')
       .eq('id', row.organization_id)
       .maybeSingle();
     const cfg = (org?.background_check_config as { enabled?: boolean } | null) ?? null;
     bgcEnabled = cfg?.enabled !== false;
+    const tcfg = (org?.training_config as { enabled?: boolean } | null) ?? null;
+    if (tcfg?.enabled === true) {
+      const { count } = await supabase
+        .from('instructor_training_videos')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', row.organization_id)
+        .eq('active', true)
+        .eq('is_required', true);
+      trainingRequired = (count ?? 0) > 0;
+    }
   }
 
   const steps = (row.steps_completed as Record<string, unknown>) ?? {};
-  const requiredSteps = bgcEnabled
+  let requiredSteps: StepKey[] = bgcEnabled
     ? ALL_STEPS
     : ALL_STEPS.filter((k) => k !== 'checkr_submitted');
+  if (trainingRequired) requiredSteps = [...requiredSteps, 'training_completed'];
   const allStepsDone = requiredSteps.every((k) => steps[k]);
   const checkrClear = !bgcEnabled || row.checkr_status === 'clear';
   const stripeReady = row.stripe_payouts_enabled === true;

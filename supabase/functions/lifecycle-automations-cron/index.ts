@@ -65,6 +65,18 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// A send that fails is recorded (status='failed') and re-attempted on the next
+// daily run — as long as the recipient is still in the automation's audience
+// window. MAX_SEND_ATTEMPTS caps that cross-run retry so a hard bounce (bad
+// address) isn't hammered forever; a permanent 4xx from Resend caps immediately.
+// 5 gives ~5 daily chances to clear a transient provider blip, comfortably inside
+// the default 7-day welcome window, before we stop and leave it for the operator.
+const MAX_SEND_ATTEMPTS = 5;
+// In-run retry for a single send: absorbs a momentary Resend hiccup within THIS
+// run instead of waiting a full day. Only transient failures (429 / 5xx / network)
+// are retried; a 4xx like an invalid address is permanent and fails fast.
+const IN_RUN_MAX_TRIES = 3;
+
 // ───────────────────────────────────────────────────────────────────────────
 // Types
 // ───────────────────────────────────────────────────────────────────────────
@@ -383,22 +395,39 @@ async function runAutomation(
   // 3. Load brand once per org
   const brand = await loadOrgBrand(supabase, a.organization_id);
 
-  // 4. Pre-check which context_keys already sent (one query, not N)
+  // 4. Pre-check prior recipient rows (one query, not N). A row is "done" — and
+  // therefore skipped — only when it already SENT, or when it has FAILED enough
+  // times to exhaust MAX_SEND_ATTEMPTS. A failed row under the cap is NOT done:
+  // it stays eligible so this and future runs retry it. (Previously ANY existing
+  // row counted as done, but failures wrote no row at all, so this set only ever
+  // held successes; now that failures are recorded, the status filter is what
+  // keeps them retryable instead of being mistaken for "already handled".)
   const contextKeys = audience.map((e) => e.context_key);
-  const { data: alreadySent } = await supabase
+  const { data: priorRows } = await supabase
     .from("automation_run_recipients")
-    .select("context_key")
+    .select("context_key, status, attempts")
     .eq("automation_id", a.id)
     .in("context_key", contextKeys);
-  const alreadySentSet = new Set((alreadySent ?? []).map((r: { context_key: string }) => r.context_key));
+  const priorByKey = new Map<string, { status: string; attempts: number }>(
+    (priorRows ?? []).map((r: { context_key: string; status: string; attempts: number | null }) =>
+      [r.context_key, { status: r.status, attempts: r.attempts ?? 0 }]),
+  );
+  const isDone = (contextKey: string): boolean => {
+    const p = priorByKey.get(contextKey);
+    if (!p) return false;
+    if (p.status === "sent") return true;
+    if (p.status === "failed" && p.attempts >= MAX_SEND_ATTEMPTS) return true; // exhausted — leave for operator
+    return false;
+  };
 
-  // 5. Per-recipient: send-first-then-insert pattern (avoids stranded-parent bug
-  // — if Resend fails, we don't write a row, so the next cron retries).
-  // Batch of 5 concurrent sends to stay within edge function 150s timeout
-  // at scale-target audience sizes.
+  // 5. Per-recipient: send, then UPSERT the outcome (status='sent' or 'failed').
+  // Recording failures (not writing nothing) makes silent misses visible AND
+  // keeps them retryable via the status-aware pre-check above. Batch of 5
+  // concurrent sends to stay within the edge function 150s timeout at
+  // scale-target audience sizes.
   let sent = 0, failed = 0, skipped = 0;
   const BATCH_SIZE = 5;
-  const toSend = audience.filter((e) => !alreadySentSet.has(e.context_key));
+  const toSend = audience.filter((e) => !isDone(e.context_key));
   skipped = audience.length - toSend.length;
 
   // Resolve this automation's comms attachments ONCE (shared across recipients).
@@ -419,7 +448,8 @@ async function runAutomation(
   for (let i = 0; i < toSend.length; i += BATCH_SIZE) {
     const batch = toSend.slice(i, i + BATCH_SIZE);
     const results = await Promise.allSettled(batch.map((entry) =>
-      sendOne(supabase, a, brand, runRow.id, entry, downloadButtonsHtml, downloadButtonsText, resendAttachments),
+      sendOne(supabase, a, brand, runRow.id, entry, downloadButtonsHtml, downloadButtonsText, resendAttachments,
+        priorByKey.get(entry.context_key)?.attempts ?? 0),
     ));
     for (const r of results) {
       if (r.status === "fulfilled" && r.value === "sent") sent += 1;
@@ -475,6 +505,7 @@ async function sendOne(
   downloadButtonsHtml: string,
   downloadButtonsText: string,
   resendAttachments: { filename: string; content: string }[],
+  priorAttempts: number,
 ): Promise<"sent" | "failed"> {
   const tokens = buildTokens(entry, brand);
   // A resolver may attach per-entry copy (entry.subject_template/body_template)
@@ -508,67 +539,128 @@ async function sendOne(
     ? `${plainBody}\n\nUnsubscribe: ${unsubscribeUrl}`
     : plainBody;
 
-  let resendMessageId: string | null = null;
-  let errorMessage: string | null = null;
+  // Send with a short in-run retry: a transient Resend failure (429 rate-limit,
+  // 5xx, or a network blip) is retried a few times with exponential backoff so a
+  // provider hiccup no longer costs a whole day. A 4xx (e.g. invalid address) is
+  // permanent — fail fast, don't burn retries.
+  const send = await sendResendEmail({
+    from: formatFromAddress(brand),
+    to: entry.parent_email,
+    reply_to: brand.reply_to,
+    subject,
+    html: fullHtml,
+    text: plainText,
+    tags: [
+      { name: "type", value: "lifecycle" },
+      { name: "automation", value: a.template.key },
+    ],
+    ...(resendAttachments.length ? { attachments: resendAttachments } : {}),
+  });
 
-  try {
-    const resp = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${RESEND_API_KEY}`,
-      },
-      body: JSON.stringify({
-        from: formatFromAddress(brand),
-        to: entry.parent_email,
-        reply_to: brand.reply_to,
-        subject,
-        html: fullHtml,
-        text: plainText,
-        tags: [
-          { name: "type", value: "lifecycle" },
-          { name: "automation", value: a.template.key },
-        ],
-        ...(resendAttachments.length ? { attachments: resendAttachments } : {}),
-      }),
-    });
-    if (resp.ok) {
-      const json = await resp.json() as { id?: string };
-      resendMessageId = json.id ?? null;
-    } else {
-      const errText = await resp.text();
-      errorMessage = `Resend ${resp.status}: ${errText.slice(0, 400)}`;
-      console.error(`[lifecycle-automations-cron] ${errorMessage}`);
-    }
-  } catch (e) {
-    errorMessage = (e as Error).message.slice(0, 500);
-  }
+  const nowIso = new Date().toISOString();
+  const status: "sent" | "failed" = send.ok ? "sent" : "failed";
+  // A permanent (4xx) failure will never succeed on retry, so cap its attempts
+  // immediately (won't be re-tried). A transient failure just increments, so it
+  // retries on the next daily run until it clears or exhausts MAX_SEND_ATTEMPTS.
+  const attempts = send.ok
+    ? priorAttempts + 1
+    : (send.permanent ? MAX_SEND_ATTEMPTS : priorAttempts + 1);
 
-  if (errorMessage) {
-    // Don't insert a row — next cron will retry. Stranded-parent prevention.
-    return "failed";
-  }
+  // UPSERT on the (automation_id, context_key) unique key. This records EVERY
+  // outcome — success or failure — instead of the old "write nothing on failure"
+  // (which made misses invisible and unretriable-by-tracking). A prior 'failed'
+  // row flips to 'sent' on success, or refreshes its error/attempts on another
+  // failure. Upsert (not insert) also sidesteps the 23505 race a concurrent run
+  // could hit.
+  const row: Record<string, unknown> = {
+    automation_run_id: runId,
+    automation_id: a.id,
+    organization_id: a.organization_id,
+    parent_id: entry.parent_id,
+    context_key: entry.context_key,
+    email: entry.parent_email,
+    resend_message_id: send.ok ? send.id : null,
+    status,
+    error_message: send.ok ? null : send.error,
+    attempts,
+    last_attempt_at: nowIso,
+  };
+  // sent_at is NOT NULL (defaults now()). Stamp it only on success so it means
+  // "when it actually sent"; last_attempt_at carries the honest last touch for a
+  // still-failing row.
+  if (send.ok) row.sent_at = nowIso;
 
-  // Post-send insert. Race with a concurrent cron run could trigger 23505 →
-  // a duplicate Resend send happened. Acceptable bound: at most one duplicate
-  // per concurrent run pair, which is extremely rare for a once-daily cron.
   const { error: recErr } = await supabase
     .from("automation_run_recipients")
-    .insert({
-      automation_run_id: runId,
-      automation_id: a.id,
-      organization_id: a.organization_id,
-      parent_id: entry.parent_id,
-      context_key: entry.context_key,
-      email: entry.parent_email,
-      resend_message_id: resendMessageId,
-      status: "sent",
-    });
-  if (recErr && (recErr as { code?: string }).code !== "23505") {
-    console.error("[lifecycle-automations-cron] post-send insert failed:", recErr);
-    return "failed";
+    .upsert(row, { onConflict: "automation_id,context_key" });
+  if (recErr) {
+    // The email may already have gone out; log but return the true send result so
+    // the run tally is honest. A missing row just means the next cron re-attempts.
+    console.error("[lifecycle-automations-cron] recipient upsert failed:", recErr);
   }
-  return "sent";
+  return status;
+}
+
+// ── Resend send with in-run retry ───────────────────────────────────────────
+type ResendSendResult =
+  | { ok: true; id: string | null }
+  | { ok: false; error: string; permanent: boolean };
+
+// POSTs one email to Resend, retrying transient failures with exponential
+// backoff. `permanent` on failure means a non-retryable 4xx (e.g. invalid
+// address); transient (429/5xx/network) exhausted its in-run tries and should be
+// retried on the next daily run.
+async function sendResendEmail(payload: Record<string, unknown>): Promise<ResendSendResult> {
+  let lastError = "unknown send error";
+  for (let attempt = 1; attempt <= IN_RUN_MAX_TRIES; attempt++) {
+    try {
+      const resp = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${RESEND_API_KEY}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (resp.ok) {
+        const json = await resp.json() as { id?: string };
+        return { ok: true, id: json.id ?? null };
+      }
+      const errText = await resp.text();
+      lastError = `Resend ${resp.status}: ${errText.slice(0, 400)}`;
+      // 429 (rate limit) and 5xx are transient → retry; other 4xx are permanent.
+      const transient = resp.status === 429 || resp.status >= 500;
+      if (!transient) {
+        console.error(`[lifecycle-automations-cron] ${lastError}`);
+        return { ok: false, error: lastError, permanent: true };
+      }
+      if (attempt === IN_RUN_MAX_TRIES) {
+        console.error(`[lifecycle-automations-cron] ${lastError} (gave up after ${attempt} tries)`);
+        return { ok: false, error: lastError, permanent: false };
+      }
+      await sleep(backoffMs(attempt, resp.headers.get("retry-after")));
+    } catch (e) {
+      lastError = (e as Error).message.slice(0, 500);
+      if (attempt === IN_RUN_MAX_TRIES) {
+        console.error(`[lifecycle-automations-cron] send network error: ${lastError} (gave up after ${attempt} tries)`);
+        return { ok: false, error: lastError, permanent: false };
+      }
+      await sleep(backoffMs(attempt, null));
+    }
+  }
+  return { ok: false, error: lastError, permanent: false };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Exponential backoff — 0.5s, 1s, 2s… capped at 5s. Honors a Resend Retry-After
+// header (seconds) on a 429 when present.
+function backoffMs(attempt: number, retryAfter: string | null): number {
+  const ra = retryAfter ? Number(retryAfter) : NaN;
+  if (Number.isFinite(ra) && ra > 0) return Math.min(ra * 1000, 5000);
+  return Math.min(500 * 2 ** (attempt - 1), 5000);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
