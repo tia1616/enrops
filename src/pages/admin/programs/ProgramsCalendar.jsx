@@ -1325,20 +1325,31 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         norm(patch.day_of_week) !== norm(program.day_of_week ? titleDay(program.day_of_week) : null) ||
         norm(patch.program_location_id) !== norm(program.program_location_id);
       if (scheduleChanged) {
-        const { count: enrolledCount } = await supabase
+        const { count: enrolledCount, error: regErr } = await supabase
           .from("registrations")
           .select("id", { count: "exact", head: true })
           .eq("program_id", program.id)
           .is("cancelled_at", null);
-        if ((enrolledCount ?? 0) > 0) {
+        // FAIL CLOSED: if the enrollment check errors we can't prove the program is
+        // empty, so warn anyway rather than silently move possibly-enrolled families'
+        // dates (Delete aborts on this error; here a soft confirm is enough).
+        const mightBeEnrolled = regErr ? true : (enrolledCount ?? 0) > 0;
+        if (mightBeEnrolled) {
+          const lead = regErr
+            ? "Couldn't confirm whether families are enrolled, so to be safe:"
+            : `${enrolledCount} ${enrolledCount === 1 ? "family is" : "families are"} enrolled in this program.`;
           const ok = window.confirm(
-            `${enrolledCount} ${enrolledCount === 1 ? "family is" : "families are"} enrolled in this program. ` +
-            `Changing the schedule will move their class dates. Save anyway?`,
+            `${lead} Changing the schedule will move their class dates. Save anyway?`,
           );
           if (!ok) return; // finally{} resets saving
         }
       }
       await onUpdate(program.id, patch);
+      // Sync the draft's first_session_date to what was actually STORED. In range
+      // mode that's the DERIVED first session (a real chosen-weekday date), not the
+      // typed window start -- otherwise the "unsaved schedule changes" banner would
+      // compare typed-vs-derived and never clear after a good save.
+      setDraft((d) => ({ ...d, first_session_date: patch.first_session_date ?? "" }));
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     } catch (err) {
