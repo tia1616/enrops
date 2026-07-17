@@ -1414,11 +1414,19 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         }
       }
       await onUpdate(program.id, patch);
-      // Sync the draft's first_session_date to what was actually STORED. In range
-      // mode that's the DERIVED first session (a real chosen-weekday date), not the
-      // typed window start -- otherwise the "unsaved schedule changes" banner would
-      // compare typed-vs-derived and never clear after a good save.
-      setDraft((d) => ({ ...d, first_session_date: patch.first_session_date ?? "" }));
+      // Sync the draft to what was actually STORED for every field the
+      // "unsaved schedule changes" banner compares, so a good save always clears
+      // it. Two fields the save rewrites out from under the draft:
+      //  - first_session_date: in range mode the stored value is the DERIVED first
+      //    session (a real chosen-weekday date), not the typed window start.
+      //  - end_date: count mode stores NULL (count programs have no window), but the
+      //    draft still holds the old date -- so a range->count save left the banner
+      //    stuck comparing a stale draft end date against the nulled stored value.
+      setDraft((d) => ({
+        ...d,
+        first_session_date: patch.first_session_date ?? "",
+        end_date: patch.end_date ?? "",
+      }));
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     } catch (err) {
