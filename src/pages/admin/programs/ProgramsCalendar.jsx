@@ -59,6 +59,18 @@ function titleDay(d) {
   return d.charAt(0).toUpperCase() + d.slice(1).toLowerCase();
 }
 
+// Title-case weekday name for an ISO date ("2026-09-03" -> "Thursday"), UTC so the
+// day never wobbles by timezone. Used in range mode to keep programs.day_of_week in
+// sync with the chosen start date -- the schedule view, emails, and matcher all read
+// day_of_week, so a start-date weekday that disagreed with it would be a lie.
+const JS_DOW_TO_KEY = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+function weekdayLabelFromISO(iso) {
+  if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const [y, m, d] = iso.split("-").map(Number);
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return DAY_LABELS[JS_DOW_TO_KEY[dow]] ?? null;
+}
+
 export default function ProgramsCalendar() {
   const { user, org, orgMember } = useOutletContext();
   const perm = getPermissions(orgMember?.role);
@@ -364,7 +376,7 @@ export default function ProgramsCalendar() {
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             max_capacity, status, term, instructor_name, price_cents,
             runs_own_registration, external_registration_url, list_in_public_catalog,
-            first_session_date, session_count,
+            first_session_date, session_count, schedule_mode, end_date, organization_id,
             facility_requested_at, facility_approved_at, facility_notes,
             program_location_id,
             program_locations (id, name, district)
@@ -1126,6 +1138,10 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
     end_time: to24h(program.end_time),
     first_session_date: program.first_session_date ?? "",
     session_count: program.session_count ?? "",
+    // Range mode: 'count' (default, the J2S way) vs 'range' (Jeff's way -- count
+    // derives from start+end). end_date is only used in range mode.
+    schedule_mode: program.schedule_mode === "range" ? "range" : "count",
+    end_date: program.end_date ?? "",
     max_capacity: program.max_capacity ?? "",
     price_cents: program.price_cents ?? "",
     program_location_id: program.program_location_id ?? "",
@@ -1143,6 +1159,33 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   const [copyTerm, setCopyTerm] = useState("");
   const [copying, setCopying] = useState(false);
   const [copyResult, setCopyResult] = useState(null); // { ok: bool, message }
+
+  // Range mode live preview: as the operator types start/end, ask the DB to derive
+  // the count + skipped no-school days for THIS location's calendar. Params-based
+  // (preview_program_range_schedule) so it reflects the typed-but-unsaved dates,
+  // not the stored row. { count, skipped, first_session, last_session } | { error }.
+  const [rangePreview, setRangePreview] = useState(null);
+  const [rangeLoading, setRangeLoading] = useState(false);
+  useEffect(() => {
+    if (draft.schedule_mode !== "range") { setRangePreview(null); return; }
+    if (!draft.first_session_date || !draft.end_date || !draft.program_location_id || !program.organization_id) {
+      setRangePreview(null); return;
+    }
+    let alive = true;
+    setRangeLoading(true);
+    supabase.rpc("preview_program_range_schedule", {
+      p_organization_id: program.organization_id,
+      p_location_id: draft.program_location_id,
+      p_term: program.term,
+      p_start_date: draft.first_session_date,
+      p_end_date: draft.end_date,
+    }).then(({ data, error }) => {
+      if (!alive) return;
+      setRangeLoading(false);
+      setRangePreview(error ? { error: error.message } : data);
+    });
+    return () => { alive = false; };
+  }, [draft.schedule_mode, draft.first_session_date, draft.end_date, draft.program_location_id, program.organization_id, program.term]);
 
   function set(field, value) {
     setDraft((d) => ({ ...d, [field]: value }));
@@ -1175,13 +1218,48 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
     setSaving(true);
     setSaveError(null);
     try {
+      const isRange = draft.schedule_mode === "range";
+      // Range mode: the count is DERIVED, not typed. Require a real window that
+      // actually contains class days -- refuse to save a range program that would
+      // resolve to 0 sessions (session_count is NOT NULL, and 0 is meaningless).
+      let derivedCount = null;
+      if (isRange) {
+        if (!draft.first_session_date || !draft.end_date) {
+          throw new Error("Range mode needs both a start date and an end date.");
+        }
+        if (rangeLoading) {
+          throw new Error("Still calculating the sessions — give it a second, then save.");
+        }
+        if (rangePreview?.error) {
+          throw new Error("Couldn't calculate the sessions for that window — check the dates.");
+        }
+        derivedCount = rangePreview ? Number(rangePreview.count) : 0;
+        if (!derivedCount || derivedCount < 1) {
+          throw new Error("No class days fall between that start and end date — adjust the dates.");
+        }
+      }
       const patch = {
-        day_of_week: draft.day_of_week ? titleDay(draft.day_of_week) : null,
+        // In range mode the weekday follows the start date, so day_of_week can't
+        // drift out of sync with the real class day (the schedule view, emails, and
+        // matcher all read day_of_week).
+        day_of_week: isRange
+          ? weekdayLabelFromISO(draft.first_session_date)
+          : (draft.day_of_week ? titleDay(draft.day_of_week) : null),
         // Convert the 24-hour input values back to the stored 12-hour text format.
         start_time: draft.start_time ? to12hText(draft.start_time) : null,
         end_time: draft.end_time ? to12hText(draft.end_time) : null,
         first_session_date: draft.first_session_date || null,
-        session_count: draft.session_count === "" || draft.session_count === null ? null : Number(draft.session_count),
+        schedule_mode: isRange ? "range" : "count",
+        // end_date only means anything in range mode; null it in count mode so a
+        // program switched back to count never carries a stale window.
+        end_date: isRange ? (draft.end_date || null) : null,
+        // Range mode materializes the DERIVED count into session_count -- the same
+        // field count mode uses -- so pricing/payroll/emails/date-fns all keep
+        // working unchanged. Computed from the typed dates (rangePreview), not from
+        // the stored row.
+        session_count: isRange
+          ? derivedCount
+          : (draft.session_count === "" || draft.session_count === null ? null : Number(draft.session_count)),
         max_capacity: draft.max_capacity === "" || draft.max_capacity === null ? null : Number(draft.max_capacity),
         price_cents: draft.price_cents === "" || draft.price_cents === null ? null : Number(draft.price_cents),
         program_location_id: draft.program_location_id || null,
@@ -1241,12 +1319,68 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         <ExpandField label="End time">
           <input type="time" value={draft.end_time ?? ""} onChange={(e) => set("end_time", e.target.value)} style={expandInputStyle} />
         </ExpandField>
-        <ExpandField label="First session">
-          <input type="date" value={draft.first_session_date ?? ""} onChange={(e) => set("first_session_date", e.target.value)} style={expandInputStyle} />
+        <ExpandField label="Scheduling">
+          {/* Count = the usual way (set a number of sessions). Range = set a start
+              and end date; the count derives. Default count; range is opt-in per program. */}
+          <div style={{ display: "flex", gap: 0, border: `1.5px solid ${RULE}`, borderRadius: 6, overflow: "hidden" }}>
+            {[["count", "By count"], ["range", "By dates"]].map(([mode, label]) => {
+              const active = (draft.schedule_mode === "range") === (mode === "range");
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => set("schedule_mode", mode)}
+                  style={{
+                    flex: 1, padding: "7px 6px", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
+                    cursor: "pointer", border: "none",
+                    background: active ? BRIGHT : "#fff",
+                    color: active ? "#fff" : MUTED,
+                  }}
+                >{label}</button>
+              );
+            })}
+          </div>
         </ExpandField>
-        <ExpandField label="Sessions">
-          <input type="number" min="1" max="40" value={draft.session_count ?? ""} onChange={(e) => set("session_count", e.target.value)} style={expandInputStyle} />
-        </ExpandField>
+
+        {draft.schedule_mode === "range" ? (
+          <>
+            <ExpandField label="Start date">
+              <input type="date" value={draft.first_session_date ?? ""} onChange={(e) => set("first_session_date", e.target.value)} style={expandInputStyle} />
+            </ExpandField>
+            <ExpandField label="End date">
+              <input type="date" value={draft.end_date ?? ""} onChange={(e) => set("end_date", e.target.value)} style={expandInputStyle} />
+            </ExpandField>
+            <ExpandField label="Sessions (from dates)">
+              {/* Read-only: the count is never typed in range mode -- it derives. */}
+              <div style={{
+                ...expandInputStyle,
+                background: "#f4f3ee", color: INK, display: "flex", alignItems: "center",
+                minHeight: 36, fontSize: 12.5, lineHeight: 1.3,
+              }}>
+                {rangeLoading
+                  ? "Calculating…"
+                  : rangePreview?.error
+                    ? <span style={{ color: "#b53737" }}>Couldn't calculate</span>
+                    : (!draft.first_session_date || !draft.end_date)
+                      ? <span style={{ color: MUTED }}>Set start & end</span>
+                      : rangePreview
+                        ? (Number(rangePreview.count) > 0
+                            ? <span><strong>{rangePreview.count}</strong> session{Number(rangePreview.count) === 1 ? "" : "s"}{Number(rangePreview.skipped) > 0 ? ` · ${rangePreview.skipped} no-school day${Number(rangePreview.skipped) === 1 ? "" : "s"} skipped` : ""}</span>
+                            : <span style={{ color: AMBER }}>No class days in this window</span>)
+                        : <span style={{ color: MUTED }}>—</span>}
+              </div>
+            </ExpandField>
+          </>
+        ) : (
+          <>
+            <ExpandField label="First session">
+              <input type="date" value={draft.first_session_date ?? ""} onChange={(e) => set("first_session_date", e.target.value)} style={expandInputStyle} />
+            </ExpandField>
+            <ExpandField label="Sessions">
+              <input type="number" min="1" max="40" value={draft.session_count ?? ""} onChange={(e) => set("session_count", e.target.value)} style={expandInputStyle} />
+            </ExpandField>
+          </>
+        )}
         <ExpandField label="Capacity">
           <input type="number" min="0" max="999" value={draft.max_capacity ?? ""} onChange={(e) => set("max_capacity", e.target.value)} style={expandInputStyle} />
         </ExpandField>
