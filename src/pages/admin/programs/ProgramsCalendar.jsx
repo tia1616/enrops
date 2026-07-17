@@ -1241,6 +1241,9 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         if (!draft.first_session_date || !draft.end_date) {
           throw new Error("Range mode needs both a start date and an end date.");
         }
+        if (draft.end_date < draft.first_session_date) {
+          throw new Error("The end date is before the start date.");
+        }
         if (rangeLoading) {
           throw new Error("Still calculating the sessions — give it a second, then save.");
         }
@@ -1348,6 +1351,19 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
   const isDraft = program.status === "draft";
   const isOpen = program.status === "open";
 
+  // Unsaved SCHEDULE edits? The SESSION DATES list at the bottom shows the SAVED
+  // schedule (from the derive fn), so it won't match the form's live preview until
+  // Save. Flag that so an in-progress edit doesn't look like the feature is "missing
+  // dates". Range mode: session_count is derived, so compare the inputs, not the count.
+  const schedNorm = (v) => (v === "" || v === undefined ? null : v);
+  const schedulePendingSave =
+    schedNorm(draft.schedule_mode) !== schedNorm(program.schedule_mode ?? "count") ||
+    schedNorm(draft.first_session_date) !== schedNorm(program.first_session_date) ||
+    schedNorm(draft.end_date) !== schedNorm(program.end_date) ||
+    schedNorm(draft.day_of_week ? titleDay(draft.day_of_week) : null) !== schedNorm(program.day_of_week ? titleDay(program.day_of_week) : null) ||
+    schedNorm(draft.program_location_id) !== schedNorm(program.program_location_id) ||
+    (draft.schedule_mode !== "range" && Number(draft.session_count) !== Number(program.session_count));
+
   return (
     <div style={{
       padding: "14px 16px 16px 16px",
@@ -1429,11 +1445,13 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
                     ? <span style={{ color: "#b53737" }}>Couldn't calculate</span>
                     : (!draft.first_session_date || !draft.end_date)
                       ? <span style={{ color: MUTED }}>Set start & end</span>
-                      : rangePreview
-                        ? (Number(rangePreview.count) > 0
-                            ? <span><strong>{rangePreview.count}</strong> session{Number(rangePreview.count) === 1 ? "" : "s"}{Number(rangePreview.skipped) > 0 ? ` · ${rangePreview.skipped} no-school day${Number(rangePreview.skipped) === 1 ? "" : "s"} skipped` : ""}</span>
-                            : <span style={{ color: AMBER }}>No class days in this window</span>)
-                        : <span style={{ color: MUTED }}>—</span>}
+                      : (draft.end_date < draft.first_session_date)
+                        ? <span style={{ color: AMBER }}>End date is before the start date</span>
+                        : rangePreview
+                          ? (Number(rangePreview.count) > 0
+                              ? <span><strong>{rangePreview.count}</strong> session{Number(rangePreview.count) === 1 ? "" : "s"}{Number(rangePreview.skipped) > 0 ? ` · ${rangePreview.skipped} no-school day${Number(rangePreview.skipped) === 1 ? "" : "s"} skipped` : ""}</span>
+                              : <span style={{ color: AMBER }}>No class days in this window</span>)
+                          : <span style={{ color: MUTED }}>—</span>}
               </div>
             </ExpandField>
           </>
@@ -1631,6 +1649,11 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
       </div>
 
       {/* Session dates view (existing) */}
+      {schedulePendingSave && (
+        <div style={{ fontSize: 12, color: AMBER, fontWeight: 600, marginBottom: 6 }}>
+          Unsaved schedule changes — the dates below update when you Save.
+        </div>
+      )}
       <SessionDatesPanel program={program} dates={dates} districtHasCalendar={districtHasCalendar} inline />
     </div>
   );
