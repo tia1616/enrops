@@ -1247,14 +1247,24 @@ function ExpandedProgramPanel({ program, dates, districtHasCalendar, onUpdate, o
         if (rangePreview?.error) {
           throw new Error("Couldn't calculate the sessions for that window — check the dates.");
         }
-        derivedCount = rangePreview ? Number(rangePreview.count) : 0;
+        // The preview only runs once a location is set (it needs the school calendar).
+        // If it never ran, say THAT rather than misreporting an empty window.
+        if (!rangePreview) {
+          throw new Error("Pick a location first — the schedule uses its school calendar.");
+        }
+        derivedCount = Number(rangePreview.count);
         if (!derivedCount || derivedCount < 1) {
           throw new Error("No class days fall between that start and end date — adjust the dates.");
         }
-        // Store the DERIVED first actual session (a real chosen-weekday date), not
-        // the raw typed start -- so first_session_date is always a true class day
-        // and derive_program_session_dates keys off the right weekday.
-        rangeFirstSession = rangePreview?.first_session ?? draft.first_session_date;
+        // Store the DERIVED first actual session (a real chosen-weekday date), so
+        // first_session_date is always a true class day and derive_program_session_dates
+        // keys off the right weekday. NO fallback to the raw typed start -- that could be
+        // a non-chosen-weekday date, which would silently re-derive on the wrong day (the
+        // seam-bug class). first_session is guaranteed non-null here (count>=1 above).
+        rangeFirstSession = rangePreview.first_session;
+        if (!rangeFirstSession) {
+          throw new Error("Couldn't determine the first class date — check the day and dates.");
+        }
       } else {
         // Count mode: session_count is NOT NULL and 0 is meaningless. Guard here so a
         // blanked/zero field gives a plain message instead of a raw Postgres NOT NULL
