@@ -418,6 +418,13 @@ export default function CurriculumReview() {
     () => docs.length === 0 && Object.keys(extractedByName).length === 0,
     [docs, extractedByName],
   );
+  // "Replace source doc" only makes sense when there IS a source doc to
+  // replace. On an empty panel (or one holding only materials) the operator
+  // wants Add, so Replace is hidden rather than offered as a dead control.
+  const hasSourceDoc = useMemo(
+    () => docs.some((d) => d.doc_type === "instructor_guide"),
+    [docs],
+  );
 
   function flashSaved(fieldName) {
     setSavingField(fieldName);
@@ -946,7 +953,7 @@ export default function CurriculumReview() {
             + Add document
           </button>
           )}
-          {canManageDocs && (
+          {canManageDocs && hasSourceDoc && (
           <button
             type="button"
             onClick={() => setReplaceDocOpen(true)}
