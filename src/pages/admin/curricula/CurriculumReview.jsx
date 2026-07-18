@@ -17,6 +17,8 @@ import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom
 import { supabase, API_BASE } from "../../../lib/supabase.js";
 import { CAPABILITY_ICONS as SHARED_CAPABILITY_ICONS, deriveOrgStatesForCurriculum as sharedDeriveStates, isCapabilityUnlocked as sharedIsUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 import Chevron from "../../../components/Chevron.jsx";
+import Ennie from "../../../components/Ennie.jsx";
+import { getPermissions } from "../../../lib/permissions.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -210,7 +212,10 @@ function computeFlagCount(curriculum, extractedByName) {
 
 export default function CurriculumReview() {
   const { id: curriculumId } = useParams();
-  const { org, user } = useOutletContext();
+  const { org, user, orgMember } = useOutletContext();
+  // Document add/replace/delete is owner/admin only in the DB, so the controls
+  // are hidden for staff/viewer rather than shown and failing on RLS.
+  const canManageDocs = getPermissions(orgMember?.role).canManageCurriculumDocs;
   const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
@@ -256,6 +261,13 @@ export default function CurriculumReview() {
   // the curriculum doc to re-run extraction without losing the curriculum_id
   // (so linked programs + camp_sessions stay attached).
   const [replaceDocOpen, setReplaceDocOpen] = useState(false);
+  // Add-a-document modal (materials / handouts), and the inline "really delete
+  // this file?" confirm. Deleting removes the storage object + row, so it is
+  // never a single click.
+  const [addDocOpen, setAddDocOpen] = useState(false);
+  const [docPendingDelete, setDocPendingDelete] = useState(null); // doc id
+  const [docDeleting, setDocDeleting] = useState(false);
+  const [docError, setDocError] = useState("");
   // Capability detail modal: opens when the operator clicks any celebration
   // tile (also used by CurriculaList for the strip icons via the same shared
   // component).
@@ -621,6 +633,36 @@ export default function CurriculumReview() {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
+  // Delete a single document: storage object first (best-effort - an orphaned
+  // row is worse than an orphaned file), then the row. Extracted fields are
+  // intentionally left alone; removing the file it came from doesn't unmake the
+  // details the operator already reviewed.
+  async function deleteDoc(doc) {
+    if (!doc?.id || docDeleting) return;
+    setDocDeleting(true);
+    setDocError("");
+    // Row FIRST. If it fails we have changed nothing and can surface a clean
+    // error. Removing the storage object first would leave a row pointing at a
+    // missing file, so "Open" would break on a delete we just reported failed.
+    const { error } = await supabase.from("curriculum_documents").delete().eq("id", doc.id);
+    if (error) {
+      // Never swallow this - the operator's next decision depends on whether
+      // the file is actually gone.
+      console.error("delete doc failed", error);
+      setDocDeleting(false);
+      setDocError(`Couldn't delete ${doc.original_filename || "that file"}. Please try again.`);
+      return;
+    }
+    // Row is gone, so a failed cleanup only orphans an invisible file.
+    if (doc.storage_path) {
+      const { error: stErr } = await supabase.storage.from("curriculum-documents").remove([doc.storage_path]);
+      if (stErr) console.warn("Row deleted but storage cleanup failed (orphaned file):", stErr.message);
+    }
+    setDocDeleting(false);
+    setDocs((ds) => ds.filter((d) => d.id !== doc.id));
+    setDocPendingDelete(null);
+  }
+
   async function saveAsDraft() {
     if (!curriculum) return;
     // Commit any pending debounced edit before we leave (was: cancelled here,
@@ -833,12 +875,12 @@ export default function CurriculumReview() {
       <div style={layout}>
         {/* LEFT: source docs */}
         <div style={docsPanel}>
-          <div style={panelLabel}>Source documents</div>
+          <div style={panelLabel}>Documents</div>
           {docs.length === 0 && (
-            <div style={{ color: MUTED, fontSize: 13 }}>No source docs on file.</div>
+            <div style={{ color: MUTED, fontSize: 13 }}>No documents on file.</div>
           )}
           {docs.map((d, idx) => (
-            <div key={d.id} style={{ ...docRow, borderTop: idx === 0 ? 0 : `1px solid ${RULE}`, paddingTop: idx === 0 ? 0 : 10 }}>
+            <div key={d.id} style={{ ...docRow, borderTop: idx === 0 ? 0 : `1px solid ${RULE}`, paddingTop: idx === 0 ? 0 : 10, flexWrap: "wrap" }}>
               <span style={{ color: PURPLE, flexShrink: 0 }}>📄</span>
               <div style={{ flex: 1, fontSize: 13, minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" }}>
                 {d.original_filename || "(unnamed)"}<br />
@@ -848,11 +890,45 @@ export default function CurriculumReview() {
                 onClick={() => openDocLink(d.storage_path, d.original_filename)}
                 style={openLinkBtn}
               >Open</button>
+              {canManageDocs && (
+                <button
+                  type="button"
+                  title={`Delete ${d.original_filename || "this file"}`}
+                  aria-label={`Delete ${d.original_filename || "this file"}`}
+                  onClick={() => { setDocError(""); setDocPendingDelete(d.id); }}
+                  style={{ background: "none", border: "none", color: MUTED, cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1 }}
+                >🗑</button>
+              )}
+              {canManageDocs && docPendingDelete === d.id && (
+                <div style={{ flexBasis: "100%", marginTop: 6, background: "#fff5f5", border: "1px solid #f0c4c4", borderRadius: 4, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 12, color: INK, lineHeight: 1.4, marginBottom: 6 }}>
+                    Delete this file? This can't be undone. Your curriculum details stay as they are.
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => deleteDoc(d)}
+                      disabled={docDeleting}
+                      style={{ background: "#a13a3a", color: "#fff", border: "none", borderRadius: 4, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: docDeleting ? "default" : "pointer", opacity: docDeleting ? 0.6 : 1, fontFamily: "inherit" }}
+                    >{docDeleting ? "Deleting…" : "Delete"}</button>
+                    <button
+                      type="button"
+                      onClick={() => setDocPendingDelete(null)}
+                      disabled={docDeleting}
+                      style={{ background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 4, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+                    >Cancel</button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
+          {docError && (
+            <div style={{ marginTop: 10, color: "#a13a3a", fontSize: 12, lineHeight: 1.4 }}>{docError}</div>
+          )}
+          {canManageDocs && (
           <button
             type="button"
-            onClick={() => setReplaceDocOpen(true)}
+            onClick={() => setAddDocOpen(true)}
             style={{
               marginTop: 14,
               width: "100%",
@@ -867,8 +943,30 @@ export default function CurriculumReview() {
               fontFamily: "inherit",
             }}
           >
-            ↻ Replace with new doc
+            + Add document
           </button>
+          )}
+          {canManageDocs && (
+          <button
+            type="button"
+            onClick={() => setReplaceDocOpen(true)}
+            style={{
+              marginTop: 8,
+              width: "100%",
+              padding: "8px 12px",
+              background: "transparent",
+              border: `1px dashed ${PURPLE}66`,
+              borderRadius: 6,
+              color: PURPLE,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            ↻ Replace source doc
+          </button>
+          )}
         </div>
 
         {/* RIGHT */}
@@ -1134,12 +1232,37 @@ export default function CurriculumReview() {
         />
       )}
 
+      {addDocOpen && curriculum && (
+        <DocUploadModal
+          mode="add"
+          curriculumId={curriculum.id}
+          curriculumName={curriculum.name}
+          organizationId={org.id}
+          onClose={() => setAddDocOpen(false)}
+          onAdded={(newDoc) => {
+            setDocs((ds) => [...ds, newDoc]);
+            setAddDocOpen(false);
+          }}
+          onStarted={() => {
+            setAddDocOpen(false);
+            navigate(`/admin/curricula/${curriculum.id}/extracting`);
+          }}
+        />
+      )}
+
       {replaceDocOpen && curriculum && (
-        <ReplaceDocModal
+        <DocUploadModal
+          mode="replace"
           curriculumId={curriculum.id}
           curriculumName={curriculum.name}
           organizationId={org.id}
           onClose={() => setReplaceDocOpen(false)}
+          onAdded={(newDoc) => {
+            // Replaced the file without re-extracting: the old source row is
+            // gone, so swap the panel to just the new one plus any materials.
+            setDocs((ds) => [...ds.filter((d) => d.doc_type !== "instructor_guide"), newDoc]);
+            setReplaceDocOpen(false);
+          }}
           onStarted={(docId) => {
             setReplaceDocOpen(false);
             navigate(`/admin/curricula/${curriculum.id}/extracting`);
@@ -1182,27 +1305,6 @@ function SaveStateLabel({ state }) {
 
 // --- Subcomponents ---
 
-function EnnieAvatar({ size = 38, calm = false }) {
-  return (
-    <div style={{
-      width: size, height: size, borderRadius: "50%", overflow: "hidden",
-      background: "#fafaf3", flexShrink: 0,
-      border: `1px solid ${calm ? RULE : GOLD_BORDER}`,
-    }}>
-      <img
-        src="/ennie-full.jpg"
-        alt="Ennie"
-        style={{
-          width: "100%", height: "100%",
-          objectFit: "cover", objectPosition: "center 18%",
-          display: "block",
-          filter: calm ? "grayscale(0.65)" : "none",
-          opacity: calm ? 0.75 : 1,
-        }}
-      />
-    </div>
-  );
-}
 
 function ProgressMeter({ progress }) {
   if (!progress || !progress.total) return null;
@@ -1229,7 +1331,7 @@ function EnnieBanner({ flagCount, onJump, manual, progress }) {
   if (manual) {
     return (
       <section style={ennieBannerCalm}>
-        <EnnieAvatar calm />
+        <Ennie state="idle" calm />
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 700, color: INK, fontSize: 14 }}>
             Ennie <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -1244,7 +1346,7 @@ function EnnieBanner({ flagCount, onJump, manual, progress }) {
   }
   return (
     <section style={calm ? ennieBannerCalm : ennieBanner}>
-      <EnnieAvatar calm={calm} />
+      <Ennie state="idle" calm={calm} />
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700, color: calm ? INK : PURPLE, fontSize: 14 }}>
           Ennie <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -1724,7 +1826,7 @@ function PolishModal({ curriculumId, config, onClose }) {
     <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={modal}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-          <EnnieAvatar size={54} />
+          <Ennie state="idle" size={54} />
           <div>
             <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>
               Ennie<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -1839,12 +1941,19 @@ function PolishModal({ curriculumId, config, onClose }) {
   );
 }
 
-// Modal to replace the source doc on an existing curriculum and re-run
-// extraction. Keeps the curriculum row (so linked programs + camp_sessions
-// stay attached) and preserves the curriculum name; everything else
-// (sessions, extracted fields) gets overwritten from the new doc.
-function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose, onStarted }) {
+// Upload modal for a curriculum's documents. Two modes:
+//   replace - swap the SOURCE doc (removes the old instructor_guide)
+//   add     - attach an extra material (materials_list); nothing is removed
+// In BOTH modes the operator explicitly chooses whether to run AI extraction.
+// Extraction is the only thing that rewrites sessions/extracted fields, so
+// "just attach it" is always safe - a tiny doc tweak never forces a re-extract.
+// Either way the curriculum row (and its linked programs/camps) stays attached.
+function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organizationId, onClose, onStarted, onAdded }) {
+  const isAdd = mode === "add";
   const [file, setFile] = useState(null);
+  // Default matches intent: replacing the source usually means re-extracting;
+  // adding a material usually doesn't. Either can be changed before uploading.
+  const [runExtraction, setRunExtraction] = useState(!isAdd);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1871,8 +1980,13 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
     setFile(f);
   }
 
-  async function doReplace() {
-    if (!file || !confirmed || busy) return;
+  // Extraction is the only step that overwrites existing fields, so the
+  // "I understand" confirm is required only when it is actually going to run.
+  const needsConfirm = runExtraction;
+  const canSubmit = !!file && (!needsConfirm || confirmed) && !busy;
+
+  async function doUpload() {
+    if (!canSubmit) return;
     setBusy(true);
     setError("");
     try {
@@ -1892,12 +2006,15 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
           id: docId,
           curriculum_id: curriculumId,
           organization_id: organizationId,
-          doc_type: "instructor_guide",
+          doc_type: isAdd ? "materials_list" : "instructor_guide",
           source_type: "upload",
           storage_path: path,
           original_filename: file.name,
           mime_type: file.type || null,
-          extraction_status: "pending",
+          // 'complete' when we are not extracting: nothing is queued for this
+          // doc. Safe against the extraction dedup lookup, which also requires
+          // a file_hash + extraction_result that a non-extracted doc never has.
+          extraction_status: runExtraction ? "pending" : "complete",
         })
         .select("id")
         .single();
@@ -1906,27 +2023,47 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
         throw new Error(`Couldn't save ${file.name} record: ${insErr?.message ?? "no row"}`);
       }
 
-      // 2b. Delete the OLD instructor_guide docs (this is a REPLACE flow, not
-      //     an append). Other doc_types (materials_list, student_materials)
-      //     stay -- they aren't being replaced. Failures here are non-fatal:
-      //     we warn but don't block the re-extraction.
-      const { data: oldDocs } = await supabase
-        .from("curriculum_documents")
-        .select("id, storage_path")
-        .eq("curriculum_id", curriculumId)
-        .eq("doc_type", "instructor_guide")
-        .neq("id", docRow.id);
-      if (oldDocs && oldDocs.length > 0) {
-        const oldPaths = oldDocs.map((d) => d.storage_path).filter(Boolean);
-        if (oldPaths.length > 0) {
-          const { error: stErr } = await supabase.storage.from("curriculum-documents").remove(oldPaths);
-          if (stErr) console.warn("Couldn't clean old doc storage (continuing):", stErr.message);
-        }
-        const { error: delErr } = await supabase
+      // 2b. REPLACE mode only: remove the OLD instructor_guide docs, since the
+      //     source is being swapped. ADD mode is an append, so nothing is
+      //     removed. Other doc_types (materials_list, student_materials) always
+      //     stay. Failures here are non-fatal: we warn but don't block.
+      if (!isAdd) {
+        const { data: oldDocs } = await supabase
           .from("curriculum_documents")
-          .delete()
-          .in("id", oldDocs.map((d) => d.id));
-        if (delErr) console.warn("Couldn't delete old doc rows (continuing):", delErr.message);
+          .select("id, storage_path")
+          .eq("curriculum_id", curriculumId)
+          .eq("doc_type", "instructor_guide")
+          .neq("id", docRow.id);
+        if (oldDocs && oldDocs.length > 0) {
+          const oldPaths = oldDocs.map((d) => d.storage_path).filter(Boolean);
+          if (oldPaths.length > 0) {
+            const { error: stErr } = await supabase.storage.from("curriculum-documents").remove(oldPaths);
+            if (stErr) console.warn("Couldn't clean old doc storage (continuing):", stErr.message);
+          }
+          const { error: delErr } = await supabase
+            .from("curriculum_documents")
+            .delete()
+            .in("id", oldDocs.map((d) => d.id));
+          if (delErr) console.warn("Couldn't delete old doc rows (continuing):", delErr.message);
+        }
+      }
+
+      // 2c. Operator chose NOT to re-extract: the file is attached and their
+      //     existing details are untouched. Hand the new row back so the panel
+      //     updates in place instead of bouncing to the extraction screen.
+      if (!runExtraction) {
+        // Clear busy before handing off: the parent normally closes us here,
+        // but if it doesn't, the operator sees an honest idle modal rather than
+        // a permanent "Uploading..." over an upload that already finished.
+        setBusy(false);
+        onAdded?.({
+          id: docRow.id,
+          original_filename: file.name,
+          doc_type: isAdd ? "materials_list" : "instructor_guide",
+          storage_path: path,
+          uploaded_at: new Date().toISOString(),
+        });
+        return;
       }
 
       // 3. Kick off extract-curriculum-details with preserve_name=true so the
@@ -1957,10 +2094,13 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
     <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div style={{ ...modal, maxWidth: 540 }}>
         <h3 style={{ margin: "0 0 6px", color: INK, fontSize: 20, fontWeight: 700 }}>
-          Replace the source doc for {curriculumName}
+          {isAdd ? `Add a document to ${curriculumName}` : `Replace the source doc for ${curriculumName}`}
         </h3>
         <p style={{ color: MUTED, fontSize: 13, margin: "0 0 16px", lineHeight: 1.45 }}>
-          Upload an edited version of your curriculum doc. We'll re-run extraction on the new file.
+          {isAdd
+            ? "Attach a materials list, student handout, or any supporting file."
+            : "Upload an edited version of your curriculum doc."}
+          {" "}You choose below whether it should update your curriculum details.
           The offering name and any programs / camps already linked to it stay attached.
         </p>
 
@@ -1998,39 +2138,81 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
           )}
         </label>
 
-        <div style={{
-          background: "#fff5f5",
-          border: "1px solid #f0c4c4",
-          borderLeft: "3px solid #a13a3a",
-          borderRadius: 4,
-          padding: "12px 14px",
-          marginBottom: 14,
-        }}>
-          <strong style={{ color: "#7a1a1a", display: "block", marginBottom: 6 }}>Heads up — this overwrites your edits</strong>
-          <div style={{ color: INK, fontSize: 13, lineHeight: 1.5, marginBottom: 10 }}>
-            All current sessions, recap templates, skill lists, and extracted fields will be replaced with whatever the new doc produces. Linked programs / camps + the offering name stay.
+        {/* Explicit extraction choice. A tiny doc tweak or a supporting file
+            should never be forced through a full re-extract. */}
+        <div style={{ border: `1px solid ${RULE}`, borderRadius: 6, padding: "12px 14px", marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: INK, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.4 }}>
+            What should we do with it?
           </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, color: INK, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", marginBottom: 8 }}>
             <input
-              type="checkbox"
-              checked={confirmed}
-              onChange={(e) => setConfirmed(e.target.checked)}
-              style={{ width: 16, height: 16 }}
+              type="radio"
+              name="doc-extraction-choice"
+              checked={runExtraction}
+              onChange={() => setRunExtraction(true)}
+              style={{ marginTop: 3 }}
             />
-            I understand. Replace it.
+            <span style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+              <strong>Update my curriculum details from this file.</strong>{" "}
+              <span style={{ color: MUTED }}>Re-runs extraction and rewrites the fields below.</span>
+            </span>
+          </label>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+            <input
+              type="radio"
+              name="doc-extraction-choice"
+              checked={!runExtraction}
+              onChange={() => setRunExtraction(false)}
+              style={{ marginTop: 3 }}
+            />
+            <span style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+              <strong>Just attach the file.</strong>{" "}
+              <span style={{ color: MUTED }}>Your curriculum details stay exactly as they are.</span>
+            </span>
           </label>
         </div>
+
+        {/* Only extraction overwrites existing work, so this warning + confirm
+            appear only when the operator picked that option. */}
+        {needsConfirm && (
+          <div style={{
+            background: "#fff5f5",
+            border: "1px solid #f0c4c4",
+            borderLeft: "3px solid #a13a3a",
+            borderRadius: 4,
+            padding: "12px 14px",
+            marginBottom: 14,
+          }}>
+            <strong style={{ color: "#7a1a1a", display: "block", marginBottom: 6 }}>Heads up — this overwrites your edits</strong>
+            <div style={{ color: INK, fontSize: 13, lineHeight: 1.5, marginBottom: 10 }}>
+              All current sessions, recap templates, skill lists, and extracted fields will be replaced with whatever the new doc produces. Linked programs / camps + the offering name stay.
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, color: INK, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={confirmed}
+                onChange={(e) => setConfirmed(e.target.checked)}
+                style={{ width: 16, height: 16 }}
+              />
+              I understand. Update my details.
+            </label>
+          </div>
+        )}
 
         {error && <div style={{ ...errorBox, marginBottom: 12 }}>{error}</div>}
 
         <div style={modalActions}>
           <button onClick={onClose} style={tertiaryBtn} disabled={busy}>Cancel</button>
           <button
-            onClick={doReplace}
-            disabled={!file || !confirmed || busy}
-            style={{ ...primaryBtn, opacity: !file || !confirmed || busy ? 0.5 : 1, cursor: !file || !confirmed || busy ? "not-allowed" : "pointer" }}
+            onClick={doUpload}
+            disabled={!canSubmit}
+            style={{ ...primaryBtn, opacity: canSubmit ? 1 : 0.5, cursor: canSubmit ? "pointer" : "not-allowed" }}
           >
-            {busy ? "Starting…" : "Replace and re-extract →"}
+            {busy
+              ? (runExtraction ? "Starting…" : "Uploading…")
+              : runExtraction
+                ? (isAdd ? "Add and update details →" : "Replace and re-extract →")
+                : (isAdd ? "Attach document" : "Replace file")}
           </button>
         </div>
       </div>
@@ -2429,7 +2611,7 @@ function PublishModal({
     >
       <div style={isCelebration ? celebrationModal : modal}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-          <EnnieAvatar size={isCelebration ? 72 : 54} />
+          <Ennie state={isCelebration ? "celebrate" : "idle"} size={isCelebration ? 72 : 54} />
           <div>
             <div style={{ fontWeight: 700, color: PURPLE, fontSize: isCelebration ? 16 : 15 }}>
               Ennie<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -2561,7 +2743,7 @@ function PublishModal({
                   gap: 12,
                   alignItems: "flex-start",
                 }}>
-                  <EnnieAvatar size={48} />
+                  <Ennie state="idle" size={48} />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 11, color: MUTED, marginBottom: 2 }}>
                       <strong style={{ color: PURPLE }}>Ennie's recommendation</strong>

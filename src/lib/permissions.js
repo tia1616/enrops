@@ -41,6 +41,11 @@ export function getPermissions(role) {
     canViewMoney: canHandleMoney, // see Receivables/revenue, Payouts/Stripe
     canManageTeam: canAdmin, // invite/change/remove members
     canManageSettings: canAdmin, // org settings, branding, sending domain, Stripe/fees
+    // Add/replace/delete curriculum documents. Deliberately canAdmin (NOT
+    // canEdit) so it mirrors the DB policy org_admins_write_curriculum_documents,
+    // which restricts writes to owner/admin. Staff can still read + edit the
+    // curriculum's fields; they just can't change the underlying files.
+    canManageCurriculumDocs: canAdmin,
     canTransferOrg: isOwner, // transfer ownership / delete org
     // generic gate
     can(action) {
