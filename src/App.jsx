@@ -107,8 +107,13 @@ export default function App() {
         <Route path="register/success" element={<J2SRegisterSuccess />} />
         <Route path="login" element={<J2SLogin />} />
         <Route path="dashboard" element={<J2SDashboard />} />
-        <Route path="privacy" element={<PolicyPage policyType="privacy" orgSlug="j2s" />} />
-        <Route path="terms" element={<PolicyPage policyType="terms" orgSlug="j2s" />} />
+        {/* No orgSlug prop: PolicyPage resolves the provider from the `:slug`
+            URL param above. It used to be hardcoded to "j2s", which served
+            Journey to STEAM LLC's privacy policy under every other provider's
+            brand. The platform's own docs are the `/privacy` `/terms` routes
+            further up, which pass orgSlug="enrops" explicitly. */}
+        <Route path="privacy" element={<PolicyPage policyType="privacy" />} />
+        <Route path="terms" element={<PolicyPage policyType="terms" />} />
       </Route>
       <Route path="/j2s/instructor" element={<InstructorPortal />} />
       {/* /:slug/instructor for multi-tenant — currently J2S only but the

@@ -137,7 +137,13 @@ export default function Dashboard() {
   const { org } = useOutletContext();
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const tenant = getTenant(org?.slug || 'j2s');
+  // Fail CLOSED on an unresolved tenant. This used to be `org?.slug || 'j2s'`,
+  // which would have shown another provider's support address and pushed the
+  // family into the J2S portal. PublicLayout gates this Outlet on a resolved
+  // org, so in practice slug is always present — the guard below is the
+  // backstop, not a fallback tenant.
+  const slug = org?.slug || null;
+  const tenant = slug ? getTenant(slug) : null;
   const supportEmail = tenant?.supportEmail || 'support@enrops.com';
 
   const [parent, setParent] = useState(null);
@@ -163,8 +169,9 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (!slug) return; // unresolved tenant — rendered as an error below, never redirected into J2S
     if (!authLoading && !user) {
-      navigate(`/${org?.slug || 'j2s'}/login`, { replace: true });
+      navigate(`/${slug}/login`, { replace: true });
       return;
     }
     if (user) fetchData();
@@ -188,7 +195,6 @@ export default function Dashboard() {
         // family login both funnel everyone to this dashboard, so an instructor
         // or org admin can land here by mistake. Route them to their real home
         // instead of dead-ending on "couldn't find your account".
-        const slug = org?.slug || 'j2s';
         const roles = await getUserRoles(user.id);
         if (roles.isInstructor) { navigate(`/${slug}/instructor`, { replace: true }); return; }
         if (roles.isAdmin) { navigate('/admin', { replace: true }); return; }
@@ -410,6 +416,19 @@ export default function Dashboard() {
   const todayClasses = useMemo(() => enrollments.filter((e) => e.sessionInfo?.state === 'today'), [enrollments]);
 
   /* ---- Render gates ---- */
+  // Fail closed rather than fall back to a tenant. Reaching this means the
+  // layout handed us no org, so we have no idea whose data this account belongs
+  // to — showing the J2S portal would be a guess with someone's family data.
+  if (!slug) {
+    return (
+      <div className="mx-auto max-w-md px-4 py-16 text-center">
+        <h1 className="font-titan text-2xl text-j2s-ink">We couldn&rsquo;t load your provider</h1>
+        <p className="mt-3 text-j2s-ink/70">
+          Please use the link your provider sent you, or contact them for the correct address.
+        </p>
+      </div>
+    );
+  }
   if (authLoading) {
     return <div className="flex min-h-[50vh] items-center justify-center"><div className="animate-pulse text-j2s-ink/50">Loading&hellip;</div></div>;
   }
@@ -431,7 +450,7 @@ export default function Dashboard() {
         <a href={`mailto:${supportEmail}`} className="mt-6 inline-block rounded-lg bg-j2s-purple px-6 py-3 font-bold text-white transition hover:bg-j2s-purple-dark">Email {supportEmail}</a>
         <p className="mt-6 text-sm text-j2s-ink/60">
           Are you an instructor?{' '}
-          <Link to={`/${org?.slug || 'j2s'}/instructor`} className="font-semibold text-j2s-purple hover:underline">Go to the instructor portal →</Link>
+          <Link to={`/${slug}/instructor`} className="font-semibold text-j2s-purple hover:underline">Go to the instructor portal →</Link>
         </p>
       </div>
     );
