@@ -1804,13 +1804,6 @@ function SessionRow({ session, open, onToggle, onSave, savingField, onPolishSkil
             onChange={(arr) => onSave({ materials_session: arr }, true)}
             saved={savingField === `session-${session.id}-materials_session`}
           />
-          <FieldTextarea
-            label="Recap template"
-            help="Shown in the parent portal after this session runs. Also used in the mid-term and final recap emails."
-            value={session.recap_template ?? ""}
-            onChange={(v) => onSave({ recap_template: v })}
-            saved={savingField === `session-${session.id}-recap_template`}
-          />
           <FieldText
             label="Parent engagement question"
             value={session.parent_engagement_question ?? ""}

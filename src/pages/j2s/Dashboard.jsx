@@ -62,26 +62,34 @@ function timeAgo(dateStr) {
 /* ------------------------------------------------------------------ */
 /*  Session math                                                       */
 /* ------------------------------------------------------------------ */
+// The PROGRAM decides how many classes there are: the same curriculum can run
+// 8 sessions at one school and 10 at another, and across terms. The authored
+// session list is CONTENT that may run out - never the source of truth for the
+// count. Deriving the total from sessions.length told families their class was
+// "complete" as soon as the lesson plans ran out, weeks before it actually ended.
 function getSessionInfo(program, sessions) {
-  if (!program?.first_session_date || !sessions?.length) return null;
+  const total = program?.session_count || sessions?.length || 0;
+  if (!program?.first_session_date || !total) return null;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const first = new Date(program.first_session_date + 'T00:00:00');
-  if (today < first) return { state: 'upcoming', nextDate: program.first_session_date, session: sessions[0] };
+  if (today < first) return { state: 'upcoming', nextDate: program.first_session_date, session: sessions?.[0] ?? null, totalSessions: total };
 
   const diffWeeks = Math.floor((today - first) / (1000 * 60 * 60 * 24 * 7));
-  const sessionIdx = Math.min(diffWeeks, sessions.length - 1);
-  if (diffWeeks >= sessions.length) return { state: 'complete' };
+  const sessionIdx = Math.min(diffWeeks, total - 1);
+  if (diffWeeks >= total) return { state: 'complete' };
 
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const isClassDay = dayNames[today.getDay()].toLowerCase() === (program.day_of_week || '').toLowerCase();
 
   return {
     state: isClassDay ? 'today' : 'in-progress',
-    session: sessions[sessionIdx],
+    // May be null past the end of the authored lesson plans - the class is
+    // still running, we just have no content for that week.
+    session: sessions?.[sessionIdx] ?? null,
     sessionNumber: sessionIdx + 1,
-    totalSessions: sessions.length,
-    nextSession: sessionIdx + 1 < sessions.length ? sessions[sessionIdx + 1] : null,
+    totalSessions: total,
+    nextSession: sessionIdx + 1 < total ? (sessions?.[sessionIdx + 1] ?? null) : null,
     nextSessionNumber: sessionIdx + 2,
   };
 }
@@ -301,7 +309,9 @@ export default function Dashboard() {
           startTime: pr?.start_time, endTime: pr?.end_time,
           term: pr?.term, firstDate: pr?.first_session_date,
           programId: pr?.id,
-          sessionCount: maxSessions,
+          // NOT maxSessions: that carries the 999 slice sentinel when a program
+          // has no session_count, which would render "999 sessions" to parents.
+          sessionCount: pr?.session_count || sessions.length,
           sessions,
           sessionDates: [], // meeting dates only — filled by RPC below
           sessionSchedule: [], // full schedule incl. no-school days — filled below
@@ -567,7 +577,11 @@ function TodayTab({ todayClasses, enrollments, notifications, slug }) {
 
 function TodayCard({ enrollment: e }) {
   const s = e.sessionInfo?.session;
-  if (!s) return null;
+  // `s` is null once the program outruns the authored lesson plans (a 10-week
+  // term with 8 plans). The class IS still on today, so keep the card and drop
+  // only the lesson-specific detail - bailing here left the "Today in class"
+  // heading sitting above nothing.
+  if (!e.sessionInfo) return null;
   return (
     <div className="rounded-2xl border border-j2s-purple/10 bg-white shadow-card overflow-hidden">
       <div className="h-1 bg-j2s-purple" />
@@ -577,15 +591,15 @@ function TodayCard({ enrollment: e }) {
             <p className="text-xs font-bold uppercase tracking-wider text-j2s-purple/70">
               Session {e.sessionInfo.sessionNumber} of {e.sessionInfo.totalSessions}
             </p>
-            <p className="mt-1 text-lg font-bold text-j2s-ink">{s.title}</p>
+            <p className="mt-1 text-lg font-bold text-j2s-ink">{s?.title || e.name}</p>
           </div>
           <span className="shrink-0 rounded-full bg-j2s-green/10 px-2.5 py-1 text-xs font-bold text-j2s-green-dark">Today</span>
         </div>
         <p className="mt-1 text-sm text-j2s-ink/60">
           {e.student?.first_name} &middot; {e.name}{e.location ? ` at ${e.location}` : ''}
         </p>
-        {s.description && <p className="mt-3 text-sm leading-relaxed text-j2s-ink/70">{s.description}</p>}
-        {s.skills_practiced?.length > 0 && (
+        {s?.description && <p className="mt-3 text-sm leading-relaxed text-j2s-ink/70">{s.description}</p>}
+        {s?.skills_practiced?.length > 0 && (
           <div className="mt-3">
             <p className="mb-1.5 text-xs font-bold uppercase tracking-wider text-j2s-ink/40">Skills</p>
             <div className="flex flex-wrap gap-1.5">
@@ -595,7 +609,7 @@ function TodayCard({ enrollment: e }) {
             </div>
           </div>
         )}
-        {s.parent_engagement_question && (
+        {s?.parent_engagement_question && (
           <div className="mt-4 rounded-xl bg-amber-50 p-4">
             <p className="text-xs font-bold uppercase tracking-wider text-amber-700">{'💬'} Ask your child tonight</p>
             <p className="mt-1.5 text-sm italic leading-relaxed text-amber-900">&ldquo;{s.parent_engagement_question}&rdquo;</p>
