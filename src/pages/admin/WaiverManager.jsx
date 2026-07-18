@@ -1,9 +1,18 @@
-// /admin/waivers — manage the waivers/agreements families sign.
+// /admin/waivers — "Waivers & policies". Two things families read, in one place:
 //
-// These are the forms the parent portal's waiver gate enforces and that the
-// registration flow collects. Owner/admin only (reached from the settings-gated
-// nav; waivers are org-scoped via RLS). A provider with none can seed an
-// editable starter set. Brand-neutral copy — no tenant strings.
+//   1. Waivers — the agreements families SIGN. The portal's waiver gate enforces
+//      the required ones and registration collects them.
+//   2. Policies — the Privacy Policy and Terms of Service a provider PUBLISHES.
+//      These render publicly at /{slug}/privacy and /{slug}/terms.
+//
+// Owner/admin only (reached from the settings-gated nav). Both tables are
+// org-scoped via RLS. Brand-neutral copy — no tenant strings.
+//
+// Only privacy + terms are offered. `org_policies.policy_type` also permits
+// dpa / cookies / data-retention / subprocessors / acceptable-use, but those
+// are PLATFORM documents (published under the `enrops` org) and have no
+// per-provider public route — offering them here would let an operator write a
+// document no family could ever reach.
 
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
@@ -20,25 +29,54 @@ const GREEN_BG = "#f0fdf4";
 const GREEN_INK = "#166534";
 const RED = "#b53737";
 
+// The policy types a provider can publish, in display order. Keep in sync with
+// the public routes in App.jsx — never offer a type with no public route.
+const POLICY_KINDS = [
+  {
+    type: "privacy",
+    label: "Privacy Policy",
+    blurb: "How you collect, use, and protect family and student information.",
+  },
+  {
+    type: "terms",
+    label: "Terms of Service",
+    blurb: "The terms families agree to when they register with you.",
+  },
+];
+
 export default function WaiverManager() {
   const { org } = useOutletContext();
   const [waivers, setWaivers] = useState(null); // null = loading
+  const [policies, setPolicies] = useState(null); // null = loading; else the org's rows
+  const [policiesError, setPoliciesError] = useState("");
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(null); // waiver object, or { _new: true }
+  const [editingPolicy, setEditingPolicy] = useState(null); // { type, label, row|null }
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
 
   async function load() {
     if (!org?.id) return;
     setError("");
-    const { data, error: e } = await supabase
-      .from("waivers")
-      .select("id, name, content, required, active, version, updated_at")
-      .eq("organization_id", org.id)
-      .order("required", { ascending: false })
-      .order("name");
-    if (e) { setError(e.message); return; }
-    setWaivers(data ?? []);
+    const [wRes, pRes] = await Promise.all([
+      supabase
+        .from("waivers")
+        .select("id, name, content, required, active, version, updated_at")
+        .eq("organization_id", org.id)
+        .order("required", { ascending: false })
+        .order("name"),
+      supabase
+        .from("org_policies")
+        .select("id, policy_type, content_markdown, effective_date, last_updated")
+        .eq("organization_id", org.id),
+    ]);
+    if (wRes.error) { setError(wRes.error.message); return; }
+    setWaivers(wRes.data ?? []);
+    // Policies are secondary — a failure here shouldn't blank the waivers list.
+    // But it must NOT render as "Not published" either: that reads as a settled
+    // fact when we simply don't know. Track the failure and say so.
+    setPoliciesError(pRes.error ? (pRes.error.message ?? "Couldn't load your policies.") : "");
+    setPolicies(pRes.error ? [] : (pRes.data ?? []));
   }
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [org?.id]);
@@ -85,6 +123,52 @@ export default function WaiverManager() {
     load();
   }
 
+  // Upsert on the (organization_id, policy_type) unique constraint, so editing a
+  // published policy overwrites it instead of failing. That emits
+  // ON CONFLICT DO UPDATE, which Postgres requires an UPDATE policy for — the
+  // table has one ("Org members can update own org policies"), verified live on
+  // staging and prod. The SECOND save is the one that exercises it.
+  async function savePolicy({ type, content, effectiveDate }) {
+    setBusy(true); setError("");
+    try {
+      const { error: e } = await supabase.from("org_policies").upsert(
+        {
+          organization_id: org.id,
+          policy_type: type,
+          content_markdown: content,
+          effective_date: effectiveDate || null,
+          last_updated: new Date().toISOString(),
+        },
+        { onConflict: "organization_id,policy_type" },
+      );
+      if (e) throw e;
+      setEditingPolicy(null);
+      await load();
+      flash("Published. Families can read it now.");
+    } catch (e) {
+      // Never swallow this — the operator's next decision depends on whether it saved.
+      setError(e.message ?? "Couldn't save that policy.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unpublishPolicy(row, label) {
+    if (busy) return;
+    if (!window.confirm(`Unpublish your ${label}? Families will no longer see it, and the link will disappear from your site footer. You can publish it again later.`)) return;
+    setBusy(true); setError("");
+    try {
+      const { error: e } = await supabase.from("org_policies").delete().eq("id", row.id);
+      if (e) throw e;
+      await load();
+      flash(`${label} unpublished.`);
+    } catch (e) {
+      setError(e.message ?? "Couldn't unpublish that policy.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function seedTemplate() {
     if (busy) return;
     setBusy(true); setError("");
@@ -112,11 +196,18 @@ export default function WaiverManager() {
       <Link to="/admin/settings" style={{ fontSize: 13, color: MUTED, textDecoration: "none" }}>← Settings</Link>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginTop: 8 }}>
         <div>
-          <h1 style={{ margin: 0, color: PURPLE, fontSize: 24, fontWeight: 700 }}>Waivers &amp; forms</h1>
+          <h1 style={{ margin: 0, color: PURPLE, fontSize: 24, fontWeight: 700 }}>Waivers &amp; policies</h1>
           <p style={{ color: MUTED, fontSize: 14, marginTop: 4, lineHeight: 1.5, maxWidth: 560 }}>
-            The agreements families sign to enroll. Required ones must be signed before a family can see their program details in the portal.
+            The agreements families sign to enroll, and the privacy policy and terms you publish on your registration site.
           </p>
         </div>
+      </div>
+
+      <h2 style={{ margin: "24px 0 0", fontSize: 17, fontWeight: 700, color: INK }}>Waivers families sign</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginTop: 4 }}>
+        <p style={{ color: MUTED, fontSize: 13.5, margin: 0, lineHeight: 1.5, maxWidth: 560 }}>
+          Required ones must be signed before a family can see their program details in the portal.
+        </p>
         <button type="button" onClick={() => setEditing({ _new: true })} style={primaryBtn(false)}>+ Add a waiver</button>
       </div>
 
@@ -159,6 +250,62 @@ export default function WaiverManager() {
         </div>
       )}
 
+      <h2 style={{ margin: "36px 0 0", fontSize: 17, fontWeight: 700, color: INK }}>Policies you publish</h2>
+      <p style={{ color: MUTED, fontSize: 13.5, margin: "4px 0 0", lineHeight: 1.5, maxWidth: 620 }}>
+        Your own privacy policy and terms, shown on your registration site. Until you publish one,
+        its link stays off your site footer and anyone who visits the page is told you haven&rsquo;t
+        published one yet — families are never shown another provider&rsquo;s policy.
+      </p>
+
+      {policiesError && (
+        <div style={{ marginTop: 12, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>
+          We couldn&rsquo;t load your policies just now, so we can&rsquo;t show whether they&rsquo;re published. Refresh to try again. ({policiesError})
+        </div>
+      )}
+
+      <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12, opacity: policiesError ? 0.5 : 1 }}>
+        {POLICY_KINDS.map((kind) => {
+          const row = (policies ?? []).find((p) => p.policy_type === kind.type) || null;
+          const publicPath = `/${org?.slug ?? ""}/${kind.type}`;
+          return (
+            <div key={kind.type} style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "14px 16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: INK, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    {kind.label}
+                    {policiesError
+                      ? <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Unknown</Badge>
+                      : row
+                        ? <Badge bg={GREEN_BG} border="#bbf7d0" color={GREEN_INK}>Published</Badge>
+                        : <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Not published</Badge>}
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560 }}>
+                    {row ? (
+                      <>
+                        Last updated {formatStamp(row.last_updated)}
+                        {row.effective_date ? ` · effective ${formatStamp(row.effective_date)}` : ""}
+                        {" · "}
+                        <a href={publicPath} target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>
+                          View public page ↗
+                        </a>
+                      </>
+                    ) : kind.blurb}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => setEditingPolicy({ ...kind, row })} style={row ? ghostBtn(false) : primaryBtn(false)}>
+                    {row ? "Edit" : "Publish"}
+                  </button>
+                  {row && (
+                    <button type="button" onClick={() => unpublishPolicy(row, kind.label)} disabled={busy} style={ghostBtn(busy)}>Unpublish</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
       {editing && (
         <WaiverEditor
           waiver={editing}
@@ -167,6 +314,78 @@ export default function WaiverManager() {
           onSave={saveEditing}
         />
       )}
+
+      {editingPolicy && (
+        <PolicyEditor
+          // Remount per policy type so the textarea can't keep the previous
+          // policy's text in its initial state.
+          key={editingPolicy.type}
+          kind={editingPolicy}
+          busy={busy}
+          onCancel={() => setEditingPolicy(null)}
+          onSave={savePolicy}
+        />
+      )}
+    </div>
+  );
+}
+
+function formatStamp(v) {
+  if (!v) return "";
+  // Date-only columns (effective_date) must not be shifted by the local timezone.
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(`${v}T00:00:00`) : new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+}
+
+function PolicyEditor({ kind, busy, onCancel, onSave }) {
+  const row = kind.row;
+  const [content, setContent] = useState(row?.content_markdown ?? "");
+  const [effectiveDate, setEffectiveDate] = useState(row?.effective_date ?? "");
+  const valid = content.trim().length > 0;
+
+  return (
+    <div onClick={busy ? undefined : onCancel} style={{ position: "fixed", inset: 0, background: "rgba(28,0,79,0.32)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "5vh 16px", zIndex: 200 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, maxWidth: 720, width: "100%", maxHeight: "90vh", overflowY: "auto", padding: 24, boxShadow: "0 10px 40px rgba(0,0,0,0.25)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: INK }}>{row ? `Edit ${kind.label}` : `Publish ${kind.label}`}</h2>
+          <button onClick={onCancel} disabled={busy} aria-label="Close" style={{ background: "none", border: "none", fontSize: 20, color: MUTED, cursor: "pointer", lineHeight: 1 }}>✕</button>
+        </div>
+
+        <label style={lbl}>Effective date <span style={{ fontWeight: 400, color: MUTED }}>(optional)</span></label>
+        <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} style={{ ...input, maxWidth: 220 }} disabled={busy} />
+
+        <label style={{ ...lbl, marginTop: 16 }}>Policy text</label>
+        <p style={{ margin: "0 0 8px", fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
+          Paste your policy here. Plain text works. If you use Markdown, <strong>## Heading</strong> makes a
+          section heading, <strong>- item</strong> makes a bullet, and <strong>**bold**</strong> bolds text.
+        </p>
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          rows={16}
+          placeholder={`Paste your ${kind.label.toLowerCase()}…`}
+          style={{ ...input, resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }}
+          disabled={busy}
+        />
+
+        <div style={{ marginTop: 14, padding: "10px 12px", background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
+          This is your own legal document. Enrops publishes separate platform policies covering the
+          registration software itself — yours doesn&rsquo;t need to repeat them.
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20, borderTop: `1px solid ${RULE}`, paddingTop: 16 }}>
+          <button type="button" onClick={onCancel} disabled={busy} style={ghostBtn(busy)}>Cancel</button>
+          <button
+            type="button"
+            onClick={() => onSave({ type: kind.type, content, effectiveDate })}
+            disabled={busy || !valid}
+            style={primaryBtn(busy || !valid)}
+          >
+            {busy ? "Publishing…" : row ? "Save changes" : "Publish"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
