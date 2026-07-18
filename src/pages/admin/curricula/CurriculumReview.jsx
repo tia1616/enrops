@@ -17,6 +17,8 @@ import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom
 import { supabase, API_BASE } from "../../../lib/supabase.js";
 import { CAPABILITY_ICONS as SHARED_CAPABILITY_ICONS, deriveOrgStatesForCurriculum as sharedDeriveStates, isCapabilityUnlocked as sharedIsUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 import Chevron from "../../../components/Chevron.jsx";
+import Ennie from "../../../components/Ennie.jsx";
+import { getPermissions } from "../../../lib/permissions.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -36,10 +38,42 @@ const TIME_SAVED_HOURS = 10;
 
 // Fields Ennie flags when the value is null/empty AND the field is in this list.
 // Low-confidence extracted fields are flagged regardless of list membership.
+// Prerequisites and final_showcase are genuinely optional (plenty of offerings
+// have neither), so an empty one is not worth flagging - it just trains the
+// operator to ignore the gold outline.
 const FLAG_IF_NULL = new Set([
   "age_range", "grade_range", "class_size", "format",
   "session_types_supported", "short_description",
-  "prerequisites", "mid_term_skills", "final_recap_skills", "final_showcase",
+  "mid_term_skills", "final_recap_skills",
+]);
+
+// Fields that make an offering genuinely usable downstream (registration page,
+// instructor matching, parent emails). Powers the completeness meter in the
+// Ennie banner so an operator can see how close to "ready" they are. Advisory
+// only — never a publish gate (only a name is required to publish).
+const PROGRESS_FIELDS = [
+  "short_description", "format", "class_size", "age_grade",
+  "session_types_supported", "skills_overall",
+];
+function curriculumFieldFilled(curriculum, key) {
+  const has = (v) => !(v == null || v === "" || (Array.isArray(v) && v.length === 0));
+  switch (key) {
+    case "class_size":
+      return has(curriculum.class_size_min) || has(curriculum.class_size_max);
+    case "age_grade":
+      return has(curriculum.age_range_min) || has(curriculum.age_range_max)
+        || has(curriculum.grade_min) || has(curriculum.grade_max);
+    default:
+      return has(curriculum[key]);
+  }
+}
+
+// Fields OUTSIDE FLAG_IF_NULL that still render a gold "flagged" outline, so a
+// low-confidence extraction on them is worth counting. Anything not listed here
+// (name, session_count, sessions) has no flagged control on screen, so counting
+// it would inflate the banner's number and give "Jump to first" no target.
+const FLAGGABLE_EXTRA_FIELDS = new Set([
+  "themes", "narrative_arc", "skills_overall", "materials",
 ]);
 
 const FORMAT_OPTIONS = [
@@ -52,6 +86,29 @@ const CATEGORY_OPTIONS = [
   { value: "lego", label: "LEGO" },
   { value: "coding", label: "Coding" },
   { value: "robotics", label: "Robotics" },
+];
+
+// Document sections in the offering's panel. Grouping keeps the curriculum
+// source separate from supporting materials, so it's obvious at a glance what
+// drives extraction vs what's just kept on file. Anything with an unrecognised
+// doc_type falls into "Other" rather than disappearing.
+const DOC_GROUPS = [
+  { key: "instructor_guide", label: "Curriculum doc" },
+  { key: "materials_list", label: "Class materials" },
+  { key: "student_materials", label: "Student materials" },
+  { key: "other", label: "Other" },
+];
+const DOC_GROUP_KEYS = new Set(DOC_GROUPS.map((g) => g.key));
+function docGroupKey(docType) {
+  return DOC_GROUP_KEYS.has(docType) ? docType : "other";
+}
+
+// Grade dropdown options. Grade 0 is Kindergarten and shows as "K" everywhere
+// else in the app (Home, CurriculaList, AfterschoolSchedule, roster, register).
+// Stored value stays the integer (0 for K) so downstream readers are unchanged.
+const GRADE_OPTIONS = [
+  { value: "0", label: "K" },
+  ...Array.from({ length: 12 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })),
 ];
 
 // Best-guess curriculum family from its title, so the admin usually just confirms.
@@ -171,9 +228,14 @@ function computeFlagCount(curriculum, extractedByName) {
     const row = extractedByName[fieldName];
     if (isFieldFlagged({ curriculum, fieldName, extractedRow: row })) n++;
   }
-  // Also count any low-confidence extracted fields not already in FLAG_IF_NULL
+  // Also count any low-confidence extracted fields not already in FLAG_IF_NULL,
+  // but ONLY ones that actually render a gold outline. Extraction also writes
+  // confidence rows for name / session_count / sessions, which have no flagged
+  // control on screen - counting them made the banner promise N outlined fields
+  // that don't exist and left "Jump to first" scrolling to nothing.
   for (const [name, row] of Object.entries(extractedByName)) {
     if (FLAG_IF_NULL.has(name)) continue;
+    if (!FLAGGABLE_EXTRA_FIELDS.has(name)) continue;
     if (row && !row.human_approved && row.confidence != null && row.confidence < 0.7) n++;
   }
   return n;
@@ -181,7 +243,10 @@ function computeFlagCount(curriculum, extractedByName) {
 
 export default function CurriculumReview() {
   const { id: curriculumId } = useParams();
-  const { org, user } = useOutletContext();
+  const { org, user, orgMember } = useOutletContext();
+  // Document add/replace/delete is owner/admin only in the DB, so the controls
+  // are hidden for staff/viewer rather than shown and failing on RLS.
+  const canManageDocs = getPermissions(orgMember?.role).canManageCurriculumDocs;
   const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
@@ -209,6 +274,10 @@ export default function CurriculumReview() {
   // celebration screen totals so they reflect truth instead of only new links.
   const [preLinkedProgramCount, setPreLinkedProgramCount] = useState(0);
   const [preLinkedCampSessionCount, setPreLinkedCampSessionCount] = useState(0);
+  // The actual already-linked rows (not just their count) so step 2 can LIST
+  // which programs/camps this offering is attached to instead of only a tally.
+  const [preLinkedPrograms, setPreLinkedPrograms] = useState([]);
+  const [preLinkedCampSessions, setPreLinkedCampSessions] = useState([]);
 
   // Polish with Ennie: when set, the modal opens for this field
   const [polishConfig, setPolishConfig] = useState(null);
@@ -223,6 +292,13 @@ export default function CurriculumReview() {
   // the curriculum doc to re-run extraction without losing the curriculum_id
   // (so linked programs + camp_sessions stay attached).
   const [replaceDocOpen, setReplaceDocOpen] = useState(false);
+  // Add-a-document modal (materials / handouts), and the inline "really delete
+  // this file?" confirm. Deleting removes the storage object + row, so it is
+  // never a single click.
+  const [addDocOpen, setAddDocOpen] = useState(false);
+  const [docPendingDelete, setDocPendingDelete] = useState(null); // doc id
+  const [docDeleting, setDocDeleting] = useState(false);
+  const [docError, setDocError] = useState("");
   // Capability detail modal: opens when the operator clicks any celebration
   // tile (also used by CurriculaList for the strip icons via the same shared
   // component).
@@ -232,8 +308,25 @@ export default function CurriculumReview() {
   const [saveState, setSaveState] = useState("idle");
   const savedFlashTimer = useRef(null);
 
-  // Debounce timers per field-name
+  // Debounce timers per field-name. Each entry is { timer, run } so a pending
+  // edit can be committed (see flushPendingSaves) rather than lost.
   const debounceTimers = useRef(new Map());
+
+  // On unmount (route change / "Back to library" mid-type), commit any pending
+  // debounced write instead of letting its timer fire after this component is
+  // gone. Each entry's `run` captured its own field value + patch at schedule
+  // time, so this writes the last value the user typed. setState inside those
+  // writes lands after unmount and is a harmless no-op; the DB write is the point.
+  useEffect(() => {
+    const timers = debounceTimers.current;
+    return () => {
+      for (const p of timers.values()) {
+        clearTimeout(p.timer);
+        try { p.run(); } catch { /* best-effort flush on unmount */ }
+      }
+      timers.clear();
+    };
+  }, []);
 
   // Initial load
   useEffect(() => {
@@ -340,12 +433,37 @@ export default function CurriculumReview() {
     () => (curriculum ? computeFlagCount(curriculum, extractedByName) : 0),
     [curriculum, extractedByName],
   );
+  // How many key downstream-usable fields are filled — drives the banner's
+  // completeness meter so a half-finished offering shows visible "X of N left"
+  // progress instead of the operator wandering off unsure how much remains.
+  const progress = useMemo(() => {
+    if (!curriculum) return { filled: 0, total: PROGRESS_FIELDS.length };
+    let filled = 0;
+    for (const k of PROGRESS_FIELDS) if (curriculumFieldFilled(curriculum, k)) filled++;
+    return { filled, total: PROGRESS_FIELDS.length };
+  }, [curriculum]);
   // Manual-entry offerings have no document and no AI-extracted fields, so the
   // "here's what I found / flagged" framing doesn't apply — show a fill-it-in
   // prompt instead.
   const isManualEntry = useMemo(
     () => docs.length === 0 && Object.keys(extractedByName).length === 0,
     [docs, extractedByName],
+  );
+  // "Replace source doc" only makes sense when there IS a source doc to
+  // replace. On an empty panel (or one holding only materials) the operator
+  // wants Add, so Replace is hidden rather than offered as a dead control.
+  const hasSourceDoc = useMemo(
+    () => docs.some((d) => d.doc_type === "instructor_guide"),
+    [docs],
+  );
+  // True only when AI extraction actually authored content - i.e. some field
+  // carries a value the model produced (extracted_value), not just a value the
+  // operator typed (human_edited_value). "Has a document" is NOT a valid proxy:
+  // materials can be attached to a hand-typed offering, and crediting hours
+  // saved for work the operator did themselves would be a lie.
+  const aiAuthored = useMemo(
+    () => Object.values(extractedByName).some((r) => r?.extracted_value != null),
+    [extractedByName],
   );
 
   function flashSaved(fieldName) {
@@ -416,20 +534,27 @@ export default function CurriculumReview() {
   }
 
   // Debounced version for text inputs. Immediate variant for chips / selects.
+  // Each pending entry stores both its timer AND a `run` that performs the write,
+  // so flushPendingSaves() can commit an in-flight edit instead of the timer
+  // firing after unmount (write with no confirmation) or being cancelled on
+  // navigation (edit silently dropped).
   function saveTopFieldDebounced(fieldName, columnPatch, extractedValue, immediate = false) {
     // Optimistic local update so the UI reflects typing
     setCurriculum((c) => ({ ...c, ...columnPatch }));
     const timers = debounceTimers.current;
-    if (timers.has(fieldName)) clearTimeout(timers.get(fieldName));
+    const existing = timers.get(fieldName);
+    if (existing) clearTimeout(existing.timer);
+    const run = () => persistTopField(fieldName, columnPatch, extractedValue);
     if (immediate) {
-      persistTopField(fieldName, columnPatch, extractedValue);
+      timers.delete(fieldName);
+      run();
       return;
     }
-    const t = setTimeout(() => {
-      persistTopField(fieldName, columnPatch, extractedValue);
+    const timer = setTimeout(() => {
       timers.delete(fieldName);
+      run();
     }, 800);
-    timers.set(fieldName, t);
+    timers.set(fieldName, { timer, run });
   }
 
   // Curriculum family (lego/coding/robotics) — a plain column, not a doc-extracted field.
@@ -447,8 +572,11 @@ export default function CurriculumReview() {
     setSessions((rows) => rows.map((r) => (r.id === sessionId ? { ...r, ...columnPatch } : r)));
     const key = `session-${sessionId}-${Object.keys(columnPatch)[0]}`;
     const timers = debounceTimers.current;
-    if (timers.has(key)) clearTimeout(timers.get(key));
+    const existing = timers.get(key);
+    if (existing) clearTimeout(existing.timer);
     const run = async () => {
+      // Drop our own entry first so a concurrent flush() doesn't run us twice.
+      timers.delete(key);
       markSaveState("saving");
       const { error } = await supabase
         .from("curriculum_sessions")
@@ -461,10 +589,25 @@ export default function CurriculumReview() {
         flashSaved(key);
         markSaveState("saved");
       }
-      timers.delete(key);
     };
     if (immediate) { run(); return; }
-    timers.set(key, setTimeout(run, 800));
+    const timer = setTimeout(run, 800);
+    timers.set(key, { timer, run });
+  }
+
+  // Commit every pending debounced write NOW. The 800ms timers were previously
+  // just cancelled on Save-as-draft / Publish (dropping a just-typed edit) and
+  // left to fire after unmount on navigation (writing with no confirmation).
+  // Flushing runs the captured write for each and awaits them, so an in-flight
+  // edit is never lost. Best-effort: a single failing write never blocks the rest.
+  async function flushPendingSaves() {
+    const timers = debounceTimers.current;
+    const pending = Array.from(timers.values());
+    timers.clear();
+    await Promise.all(pending.map((p) => {
+      clearTimeout(p.timer);
+      try { return Promise.resolve(p.run()); } catch { return Promise.resolve(); }
+    }));
   }
 
   // Polish with Ennie: open the modal pre-loaded with the right field's context.
@@ -537,12 +680,49 @@ export default function CurriculumReview() {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
+  // Delete a single document: storage object first (best-effort - an orphaned
+  // row is worse than an orphaned file), then the row. Extracted fields are
+  // intentionally left alone; removing the file it came from doesn't unmake the
+  // details the operator already reviewed.
+  async function deleteDoc(doc) {
+    if (!doc?.id || docDeleting) return;
+    setDocDeleting(true);
+    setDocError("");
+    // Row FIRST. If it fails we have changed nothing and can surface a clean
+    // error. Removing the storage object first would leave a row pointing at a
+    // missing file, so "Open" would break on a delete we just reported failed.
+    const { error } = await supabase.from("curriculum_documents").delete().eq("id", doc.id);
+    if (error) {
+      // Never swallow this - the operator's next decision depends on whether
+      // the file is actually gone.
+      console.error("delete doc failed", error);
+      setDocDeleting(false);
+      setDocError(`Couldn't delete ${doc.original_filename || "that file"}. Please try again.`);
+      return;
+    }
+    // Row is gone, so a failed cleanup only orphans an invisible file.
+    if (doc.storage_path) {
+      const { error: stErr } = await supabase.storage.from("curriculum-documents").remove([doc.storage_path]);
+      if (stErr) console.warn("Row deleted but storage cleanup failed (orphaned file):", stErr.message);
+    }
+    setDocDeleting(false);
+    setDocs((ds) => ds.filter((d) => d.id !== doc.id));
+    setDocPendingDelete(null);
+  }
+
   async function saveAsDraft() {
     if (!curriculum) return;
-    // Flush any pending debounced writes
-    for (const [, t] of debounceTimers.current) clearTimeout(t);
-    debounceTimers.current.clear();
-    await supabase.from("curricula").update({ status: "extracted" }).eq("id", curriculum.id);
+    // Commit any pending debounced edit before we leave (was: cancelled here,
+    // which silently dropped a field the operator typed right before clicking).
+    await flushPendingSaves();
+    // "extracted" means AI actually pulled these details out of a document, so
+    // key off that directly rather than "a doc exists". Merely having a file
+    // isn't enough (one can be attached with extraction skipped), and losing the
+    // file later doesn't unmake an extraction that did happen. A hand-typed
+    // offering stays a Draft until published; the offerings list already gives
+    // doc-less drafts an "Edit details" + "Upload doc" pair of CTAs.
+    const nextStatus = aiAuthored ? "extracted" : "draft";
+    await supabase.from("curricula").update({ status: nextStatus }).eq("id", curriculum.id);
     navigate("/admin/curricula");
   }
 
@@ -569,8 +749,8 @@ export default function CurriculumReview() {
     const [
       { data: progRows },
       { data: campRows },
-      { count: alreadyProgCount },
-      { count: alreadyCampCount },
+      { data: alreadyProgRows },
+      { data: alreadyCampRows },
     ] = await Promise.all([
       supabase
         .from("programs")
@@ -582,19 +762,26 @@ export default function CurriculumReview() {
         .select("id, curriculum_name, session_type")
         .eq("organization_id", org.id)
         .is("curriculum_id", null),
+      // Fetch the ROWS (not just a count) so step 2 can list exactly which
+      // program runs this offering is already linked to.
       supabase
         .from("programs")
-        .select("id", { count: "exact", head: true })
+        .select("id, term, day_of_week, first_session_date, status, program_locations ( name )")
         .eq("organization_id", org.id)
-        .eq("curriculum_id", curriculum.id),
+        .eq("curriculum_id", curriculum.id)
+        .order("term", { ascending: true })
+        .order("first_session_date", { ascending: true, nullsFirst: false }),
       supabase
         .from("camp_sessions")
-        .select("id", { count: "exact", head: true })
+        .select("id, location_name, week_num, session_type, starts_on")
         .eq("organization_id", org.id)
-        .eq("curriculum_id", curriculum.id),
+        .eq("curriculum_id", curriculum.id)
+        .order("starts_on", { ascending: true, nullsFirst: false }),
     ]);
-    setPreLinkedProgramCount(alreadyProgCount ?? 0);
-    setPreLinkedCampSessionCount(alreadyCampCount ?? 0);
+    setPreLinkedProgramCount(alreadyProgRows?.length ?? 0);
+    setPreLinkedCampSessionCount(alreadyCampRows?.length ?? 0);
+    setPreLinkedPrograms(alreadyProgRows ?? []);
+    setPreLinkedCampSessions(alreadyCampRows ?? []);
 
     // Group by name within each source so the operator picks a clean "this match"
     // rather than dozens of individual rows.
@@ -636,9 +823,8 @@ export default function CurriculumReview() {
     setPublishing(true);
     setPublishError("");
     try {
-      // 1. flush debounce, save final name
-      for (const [, t] of debounceTimers.current) clearTimeout(t);
-      debounceTimers.current.clear();
+      // 1. commit any pending debounced edit, then save final name
+      await flushPendingSaves();
       const finalName = nameDraft.trim();
       if (finalName !== curriculum.name) {
         await supabase.from("curricula").update({ name: finalName }).eq("id", curriculum.id);
@@ -684,7 +870,7 @@ export default function CurriculumReview() {
       // A manual entry (no doc, no extracted fields) was typed by the operator,
       // so claiming "saved you N hours" at publish would be false. Downstream
       // surfaces (flyer/recap/registration) log their own savings when used.
-      if (!isManualEntry) {
+      if (aiAuthored) {
         const sessionCount = sessions.length || 5;
         const hoursSaved = Math.max(10, Math.ceil(sessionCount * 1.5));
         const { error: tsErr } = await supabase.from("time_saved_events").insert({
@@ -743,26 +929,70 @@ export default function CurriculumReview() {
       <div style={layout}>
         {/* LEFT: source docs */}
         <div style={docsPanel}>
-          <div style={panelLabel}>Source documents</div>
+          <div style={panelLabel}>Documents</div>
           {docs.length === 0 && (
-            <div style={{ color: MUTED, fontSize: 13 }}>No source docs on file.</div>
+            <div style={{ color: MUTED, fontSize: 13 }}>No documents on file.</div>
           )}
-          {docs.map((d, idx) => (
-            <div key={d.id} style={{ ...docRow, borderTop: idx === 0 ? 0 : `1px solid ${RULE}`, paddingTop: idx === 0 ? 0 : 10 }}>
+          {DOC_GROUPS.map((g) => {
+            const items = docs.filter((d) => docGroupKey(d.doc_type) === g.key);
+            if (items.length === 0) return null;
+            return (
+              <div key={g.key} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                  {g.label}
+                </div>
+                {items.map((d, idx) => (
+            <div key={d.id} style={{ ...docRow, borderTop: idx === 0 ? 0 : `1px solid ${RULE}`, paddingTop: idx === 0 ? 0 : 10, flexWrap: "wrap" }}>
               <span style={{ color: PURPLE, flexShrink: 0 }}>📄</span>
               <div style={{ flex: 1, fontSize: 13, minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" }}>
-                {d.original_filename || "(unnamed)"}<br />
-                <span style={{ color: MUTED, fontSize: 11 }}>{prettyDocType(d.doc_type)}</span>
+                {d.original_filename || "(unnamed)"}
               </div>
               <button
                 onClick={() => openDocLink(d.storage_path, d.original_filename)}
                 style={openLinkBtn}
               >Open</button>
+              {canManageDocs && (
+                <button
+                  type="button"
+                  title={`Delete ${d.original_filename || "this file"}`}
+                  aria-label={`Delete ${d.original_filename || "this file"}`}
+                  onClick={() => { setDocError(""); setDocPendingDelete(d.id); }}
+                  style={{ background: "none", border: "none", color: MUTED, cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1 }}
+                >🗑</button>
+              )}
+              {canManageDocs && docPendingDelete === d.id && (
+                <div style={{ flexBasis: "100%", marginTop: 6, background: "#fff5f5", border: "1px solid #f0c4c4", borderRadius: 4, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 12, color: INK, lineHeight: 1.4, marginBottom: 6 }}>
+                    Delete this file? This can't be undone. Your curriculum details stay as they are.
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => deleteDoc(d)}
+                      disabled={docDeleting}
+                      style={{ background: "#a13a3a", color: "#fff", border: "none", borderRadius: 4, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: docDeleting ? "default" : "pointer", opacity: docDeleting ? 0.6 : 1, fontFamily: "inherit" }}
+                    >{docDeleting ? "Deleting…" : "Delete"}</button>
+                    <button
+                      type="button"
+                      onClick={() => setDocPendingDelete(null)}
+                      disabled={docDeleting}
+                      style={{ background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 4, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+                    >Cancel</button>
+                  </div>
+                </div>
+              )}
             </div>
-          ))}
+                ))}
+              </div>
+            );
+          })}
+          {docError && (
+            <div style={{ marginTop: 10, color: "#a13a3a", fontSize: 12, lineHeight: 1.4 }}>{docError}</div>
+          )}
+          {canManageDocs && (
           <button
             type="button"
-            onClick={() => setReplaceDocOpen(true)}
+            onClick={() => setAddDocOpen(true)}
             style={{
               marginTop: 14,
               width: "100%",
@@ -777,13 +1007,35 @@ export default function CurriculumReview() {
               fontFamily: "inherit",
             }}
           >
-            ↻ Replace with new doc
+            + Add document
           </button>
+          )}
+          {canManageDocs && hasSourceDoc && (
+          <button
+            type="button"
+            onClick={() => setReplaceDocOpen(true)}
+            style={{
+              marginTop: 8,
+              width: "100%",
+              padding: "8px 12px",
+              background: "transparent",
+              border: `1px dashed ${PURPLE}66`,
+              borderRadius: 6,
+              color: PURPLE,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            ↻ Replace source doc
+          </button>
+          )}
         </div>
 
         {/* RIGHT */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <EnnieBanner flagCount={flagCount} onJump={jumpToFirstFlag} manual={isManualEntry} />
+          <EnnieBanner flagCount={flagCount} onJump={jumpToFirstFlag} manual={isManualEntry} progress={progress} />
 
           <section style={card}>
             <div style={sectionHead}>
@@ -817,7 +1069,7 @@ export default function CurriculumReview() {
                 setAgeOrGrade={setAgeOrGrade}
                 curriculum={curriculum}
                 flagged={isFieldFlagged({ curriculum, fieldName: "age_range", extractedRow: extractedByName.age_range })}
-                onSave={(patch, exVal) => saveTopFieldDebounced("age_range", patch, exVal)}
+                onSave={(patch, exVal, immediate) => saveTopFieldDebounced("age_range", patch, exVal, immediate)}
                 saved={savingField === "age_range"}
               />
 
@@ -853,9 +1105,15 @@ export default function CurriculumReview() {
             <div style={row2}>
               <FieldNumber
                 label="Sessions"
-                inlineHelp="change requires re-uploading"
+                inlineHelp="typical"
+                help="A default for this offering. Each program sets its own number of classes, so the same offering can run 8 sessions at one school and 10 at another."
                 value={curriculum.session_count ?? ""}
-                disabled
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  const v = raw === "" ? null : Number(raw);
+                  saveTopFieldDebounced("session_count", { session_count: v }, v);
+                }}
+                saved={savingField === "session_count"}
               />
 
               <ClassSizeField
@@ -873,7 +1131,6 @@ export default function CurriculumReview() {
               placeholder="e.g. Beginner OK · should be comfortable reading"
               value={curriculum.prerequisites ?? ""}
               onChange={(v) => saveTopFieldDebounced("prerequisites", { prerequisites: v || null }, v)}
-              flagged={isFieldFlagged({ curriculum, fieldName: "prerequisites", extractedRow: extractedByName.prerequisites })}
               saved={savingField === "prerequisites"}
             />
 
@@ -941,7 +1198,6 @@ export default function CurriculumReview() {
               help="If the offering ends with a capstone, performance, or family event. Powers the pre-launch reminder email."
               value={curriculum.final_showcase ?? ""}
               onChange={(v) => saveTopFieldDebounced("final_showcase", { final_showcase: v || null }, v)}
-              flagged={isFieldFlagged({ curriculum, fieldName: "final_showcase", extractedRow: extractedByName.final_showcase })}
               saved={savingField === "final_showcase"}
             />
 
@@ -1014,6 +1270,8 @@ export default function CurriculumReview() {
           linkedCampSessionCount={linkedCampSessionCount}
           preLinkedProgramCount={preLinkedProgramCount}
           preLinkedCampSessionCount={preLinkedCampSessionCount}
+          preLinkedPrograms={preLinkedPrograms}
+          preLinkedCampSessions={preLinkedCampSessions}
           capabilities={capabilities}
           recommendation={ennieRecommendation}
           onDone={() => navigate("/admin/curricula")}
@@ -1042,12 +1300,37 @@ export default function CurriculumReview() {
         />
       )}
 
+      {addDocOpen && curriculum && (
+        <DocUploadModal
+          mode="add"
+          curriculumId={curriculum.id}
+          curriculumName={curriculum.name}
+          organizationId={org.id}
+          onClose={() => setAddDocOpen(false)}
+          onAdded={(newDoc) => {
+            setDocs((ds) => [...ds, newDoc]);
+            setAddDocOpen(false);
+          }}
+          onStarted={() => {
+            setAddDocOpen(false);
+            navigate(`/admin/curricula/${curriculum.id}/extracting`);
+          }}
+        />
+      )}
+
       {replaceDocOpen && curriculum && (
-        <ReplaceDocModal
+        <DocUploadModal
+          mode="replace"
           curriculumId={curriculum.id}
           curriculumName={curriculum.name}
           organizationId={org.id}
           onClose={() => setReplaceDocOpen(false)}
+          onAdded={(newDoc) => {
+            // Replaced the file without re-extracting: the old source row is
+            // gone, so swap the panel to just the new one plus any materials.
+            setDocs((ds) => [...ds.filter((d) => d.doc_type !== "instructor_guide"), newDoc]);
+            setReplaceDocOpen(false);
+          }}
           onStarted={(docId) => {
             setReplaceDocOpen(false);
             navigate(`/admin/curricula/${curriculum.id}/extracting`);
@@ -1090,34 +1373,33 @@ function SaveStateLabel({ state }) {
 
 // --- Subcomponents ---
 
-function EnnieAvatar({ size = 38, calm = false }) {
+
+function ProgressMeter({ progress }) {
+  if (!progress || !progress.total) return null;
+  const { filled, total } = progress;
+  const done = filled >= total;
+  const pct = Math.round((filled / total) * 100);
   return (
-    <div style={{
-      width: size, height: size, borderRadius: "50%", overflow: "hidden",
-      background: "#fafaf3", flexShrink: 0,
-      border: `1px solid ${calm ? RULE : GOLD_BORDER}`,
-    }}>
-      <img
-        src="/ennie-full.jpg"
-        alt="Ennie"
-        style={{
-          width: "100%", height: "100%",
-          objectFit: "cover", objectPosition: "center 18%",
-          display: "block",
-          filter: calm ? "grayscale(0.65)" : "none",
-          opacity: calm ? 0.75 : 1,
-        }}
-      />
+    <div style={{ marginTop: 10, maxWidth: 460 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: done ? "#3a7c3a" : PURPLE }}>
+          {done ? "All key details filled ✓" : `${filled} of ${total} key details filled`}
+        </span>
+        {!done && <span style={{ fontSize: 11, color: MUTED }}>{total - filled} to go</span>}
+      </div>
+      <div style={{ height: 6, borderRadius: 4, background: "#ece9f7", overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: done ? "#3a7c3a" : BRIGHT, transition: "width 0.3s ease" }} />
+      </div>
     </div>
   );
 }
 
-function EnnieBanner({ flagCount, onJump, manual }) {
+function EnnieBanner({ flagCount, onJump, manual, progress }) {
   const calm = flagCount === 0;
   if (manual) {
     return (
       <section style={ennieBannerCalm}>
-        <EnnieAvatar calm />
+        <Ennie state="idle" calm framed={false} size={52} />
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 700, color: INK, fontSize: 14 }}>
             Ennie <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -1125,13 +1407,14 @@ function EnnieBanner({ flagCount, onJump, manual }) {
           <div style={{ fontSize: 14, color: INK, marginTop: 2, lineHeight: 1.45 }}>
             Fill in as much or as little as you like, then publish. Want it done for you? Add a document anytime and I'll auto-fill the rest.
           </div>
+          <ProgressMeter progress={progress} />
         </div>
       </section>
     );
   }
   return (
     <section style={calm ? ennieBannerCalm : ennieBanner}>
-      <EnnieAvatar calm={calm} />
+      <Ennie state="idle" calm={calm} framed={false} size={52} />
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700, color: calm ? INK : PURPLE, fontSize: 14 }}>
           Ennie <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -1141,6 +1424,7 @@ function EnnieBanner({ flagCount, onJump, manual }) {
             ? <>All caught up. ✓ Ready to publish whenever you are.</>
             : <>I flagged <strong style={{ color: PURPLE }}>{flagCount} field{flagCount === 1 ? "" : "s"}</strong> below worth a look — they're outlined in gold. Edit any of them to clear the flag.</>}
         </div>
+        <ProgressMeter progress={progress} />
       </div>
       {!calm && (
         <button onClick={onJump} style={ennieActionBtn}>Jump to first ↓</button>
@@ -1200,11 +1484,23 @@ function FieldText({ label, inlineHelp, help, value, onChange, flagged, saved, p
   );
 }
 
-function FieldNumber({ label, inlineHelp, value, ...rest }) {
+function FieldNumber({ label, inlineHelp, help, value, saved, disabled, ...rest }) {
   return (
     <div style={fieldWrap}>
-      <FieldLabel inlineHelp={inlineHelp}>{label}</FieldLabel>
-      <input type="number" value={value} style={{ ...textInput, maxWidth: 120, background: "#f7f6ef", color: MUTED }} {...rest} />
+      <FieldLabel inlineHelp={inlineHelp}>{label}<SavedTick on={saved} /></FieldLabel>
+      {help && <div style={fieldHelp}>{help}</div>}
+      <input
+        type="number"
+        value={value}
+        disabled={disabled}
+        style={{
+          ...textInput,
+          maxWidth: 120,
+          // Only look inert when it actually is.
+          ...(disabled ? { background: "#f7f6ef", color: MUTED } : {}),
+        }}
+        {...rest}
+      />
     </div>
   );
 }
@@ -1271,7 +1567,9 @@ function AgeGradeField({ ageOrGrade, setAgeOrGrade, curriculum, flagged, onSave,
       const patch = { age_range_min: v, age_range_max: curriculum.age_range_max };
       onSave(patch, { min: v, max: curriculum.age_range_max });
     } else {
-      onSave({ grade_min: v, grade_max: curriculum.grade_max }, { min: v, max: curriculum.grade_max });
+      // Grades use a dropdown — a discrete choice, so save immediately (like the
+      // Format select) rather than waiting out the text-input 800ms debounce.
+      onSave({ grade_min: v, grade_max: curriculum.grade_max }, { min: v, max: curriculum.grade_max }, true);
     }
   }
   function updateMax(raw) {
@@ -1279,11 +1577,29 @@ function AgeGradeField({ ageOrGrade, setAgeOrGrade, curriculum, flagged, onSave,
     if (isAges) {
       onSave({ age_range_min: curriculum.age_range_min, age_range_max: v }, { min: curriculum.age_range_min, max: v });
     } else {
-      onSave({ grade_min: curriculum.grade_min, grade_max: v }, { min: curriculum.grade_min, max: v });
+      onSave({ grade_min: curriculum.grade_min, grade_max: v }, { min: curriculum.grade_min, max: v }, true);
     }
   }
+  // Switching the mode clears the pair being switched away from, so an offering
+  // never carries both an age range and a grade range. Whichever mode is showing
+  // is the truth - otherwise stale values linger in the DB and downstream
+  // surfaces have to guess which one to believe.
   function flipMode(next) {
+    if ((next === "ages") === isAges) return; // already in this mode
     setAgeOrGrade(next);
+    if (next === "grades") {
+      onSave(
+        { age_range_min: null, age_range_max: null },
+        { min: curriculum.grade_min ?? null, max: curriculum.grade_max ?? null },
+        true,
+      );
+    } else {
+      onSave(
+        { grade_min: null, grade_max: null },
+        { min: curriculum.age_range_min ?? null, max: curriculum.age_range_max ?? null },
+        true,
+      );
+    }
   }
 
   return (
@@ -1294,19 +1610,43 @@ function AgeGradeField({ ageOrGrade, setAgeOrGrade, curriculum, flagged, onSave,
         <button onClick={() => flipMode("grades")} style={!isAges ? ageGradeBtnActive : ageGradeBtn}>Grades</button>
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", maxWidth: 260 }}>
-        <input
-          type="number"
-          value={minVal}
-          onChange={(e) => updateMin(e.target.value)}
-          style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
-        />
-        <span style={{ color: MUTED }}>to</span>
-        <input
-          type="number"
-          value={maxVal}
-          onChange={(e) => updateMax(e.target.value)}
-          style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
-        />
+        {isAges ? (
+          <>
+            <input
+              type="number"
+              value={minVal}
+              onChange={(e) => updateMin(e.target.value)}
+              style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
+            />
+            <span style={{ color: MUTED }}>to</span>
+            <input
+              type="number"
+              value={maxVal}
+              onChange={(e) => updateMax(e.target.value)}
+              style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
+            />
+          </>
+        ) : (
+          <>
+            <select
+              value={minVal === "" ? "" : String(minVal)}
+              onChange={(e) => updateMin(e.target.value)}
+              style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
+            >
+              <option value="">—</option>
+              {GRADE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <span style={{ color: MUTED }}>to</span>
+            <select
+              value={maxVal === "" ? "" : String(maxVal)}
+              onChange={(e) => updateMax(e.target.value)}
+              style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
+            >
+              <option value="">—</option>
+              {GRADE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1464,13 +1804,6 @@ function SessionRow({ session, open, onToggle, onSave, savingField, onPolishSkil
             onChange={(arr) => onSave({ materials_session: arr }, true)}
             saved={savingField === `session-${session.id}-materials_session`}
           />
-          <FieldTextarea
-            label="Recap template"
-            help="Shown in the parent portal after this session runs. Also used in the mid-term and final recap emails."
-            value={session.recap_template ?? ""}
-            onChange={(v) => onSave({ recap_template: v })}
-            saved={savingField === `session-${session.id}-recap_template`}
-          />
           <FieldText
             label="Parent engagement question"
             value={session.parent_engagement_question ?? ""}
@@ -1584,7 +1917,7 @@ function PolishModal({ curriculumId, config, onClose }) {
     <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={modal}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-          <EnnieAvatar size={54} />
+          <Ennie state="idle" framed={false} size={62} />
           <div>
             <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>
               Ennie<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -1699,12 +2032,22 @@ function PolishModal({ curriculumId, config, onClose }) {
   );
 }
 
-// Modal to replace the source doc on an existing curriculum and re-run
-// extraction. Keeps the curriculum row (so linked programs + camp_sessions
-// stay attached) and preserves the curriculum name; everything else
-// (sessions, extracted fields) gets overwritten from the new doc.
-function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose, onStarted }) {
+// Upload modal for a curriculum's documents. Two modes:
+//   replace - swap the SOURCE doc (removes the old instructor_guide)
+//   add     - attach an extra material (materials_list); nothing is removed
+// In BOTH modes the operator explicitly chooses whether to run AI extraction.
+// Extraction is the only thing that rewrites sessions/extracted fields, so
+// "just attach it" is always safe - a tiny doc tweak never forces a re-extract.
+// Either way the curriculum row (and its linked programs/camps) stays attached.
+function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organizationId, onClose, onStarted, onAdded }) {
+  const isAdd = mode === "add";
   const [file, setFile] = useState(null);
+  // Which section the added file lands in. Replace mode always targets the
+  // curriculum source, so the picker is add-only.
+  const [addDocType, setAddDocType] = useState("materials_list");
+  // Default matches intent: replacing the source usually means re-extracting;
+  // adding a material usually doesn't. Either can be changed before uploading.
+  const [runExtraction, setRunExtraction] = useState(!isAdd);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1731,8 +2074,13 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
     setFile(f);
   }
 
-  async function doReplace() {
-    if (!file || !confirmed || busy) return;
+  // Extraction is the only step that overwrites existing fields, so the
+  // "I understand" confirm is required only when it is actually going to run.
+  const needsConfirm = runExtraction;
+  const canSubmit = !!file && (!needsConfirm || confirmed) && !busy;
+
+  async function doUpload() {
+    if (!canSubmit) return;
     setBusy(true);
     setError("");
     try {
@@ -1752,12 +2100,15 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
           id: docId,
           curriculum_id: curriculumId,
           organization_id: organizationId,
-          doc_type: "instructor_guide",
+          doc_type: isAdd ? addDocType : "instructor_guide",
           source_type: "upload",
           storage_path: path,
           original_filename: file.name,
           mime_type: file.type || null,
-          extraction_status: "pending",
+          // 'complete' when we are not extracting: nothing is queued for this
+          // doc. Safe against the extraction dedup lookup, which also requires
+          // a file_hash + extraction_result that a non-extracted doc never has.
+          extraction_status: runExtraction ? "pending" : "complete",
         })
         .select("id")
         .single();
@@ -1766,27 +2117,47 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
         throw new Error(`Couldn't save ${file.name} record: ${insErr?.message ?? "no row"}`);
       }
 
-      // 2b. Delete the OLD instructor_guide docs (this is a REPLACE flow, not
-      //     an append). Other doc_types (materials_list, student_materials)
-      //     stay -- they aren't being replaced. Failures here are non-fatal:
-      //     we warn but don't block the re-extraction.
-      const { data: oldDocs } = await supabase
-        .from("curriculum_documents")
-        .select("id, storage_path")
-        .eq("curriculum_id", curriculumId)
-        .eq("doc_type", "instructor_guide")
-        .neq("id", docRow.id);
-      if (oldDocs && oldDocs.length > 0) {
-        const oldPaths = oldDocs.map((d) => d.storage_path).filter(Boolean);
-        if (oldPaths.length > 0) {
-          const { error: stErr } = await supabase.storage.from("curriculum-documents").remove(oldPaths);
-          if (stErr) console.warn("Couldn't clean old doc storage (continuing):", stErr.message);
-        }
-        const { error: delErr } = await supabase
+      // 2b. REPLACE mode only: remove the OLD instructor_guide docs, since the
+      //     source is being swapped. ADD mode is an append, so nothing is
+      //     removed. Other doc_types (materials_list, student_materials) always
+      //     stay. Failures here are non-fatal: we warn but don't block.
+      if (!isAdd) {
+        const { data: oldDocs } = await supabase
           .from("curriculum_documents")
-          .delete()
-          .in("id", oldDocs.map((d) => d.id));
-        if (delErr) console.warn("Couldn't delete old doc rows (continuing):", delErr.message);
+          .select("id, storage_path")
+          .eq("curriculum_id", curriculumId)
+          .eq("doc_type", "instructor_guide")
+          .neq("id", docRow.id);
+        if (oldDocs && oldDocs.length > 0) {
+          const oldPaths = oldDocs.map((d) => d.storage_path).filter(Boolean);
+          if (oldPaths.length > 0) {
+            const { error: stErr } = await supabase.storage.from("curriculum-documents").remove(oldPaths);
+            if (stErr) console.warn("Couldn't clean old doc storage (continuing):", stErr.message);
+          }
+          const { error: delErr } = await supabase
+            .from("curriculum_documents")
+            .delete()
+            .in("id", oldDocs.map((d) => d.id));
+          if (delErr) console.warn("Couldn't delete old doc rows (continuing):", delErr.message);
+        }
+      }
+
+      // 2c. Operator chose NOT to re-extract: the file is attached and their
+      //     existing details are untouched. Hand the new row back so the panel
+      //     updates in place instead of bouncing to the extraction screen.
+      if (!runExtraction) {
+        // Clear busy before handing off: the parent normally closes us here,
+        // but if it doesn't, the operator sees an honest idle modal rather than
+        // a permanent "Uploading..." over an upload that already finished.
+        setBusy(false);
+        onAdded?.({
+          id: docRow.id,
+          original_filename: file.name,
+          doc_type: isAdd ? addDocType : "instructor_guide",
+          storage_path: path,
+          uploaded_at: new Date().toISOString(),
+        });
+        return;
       }
 
       // 3. Kick off extract-curriculum-details with preserve_name=true so the
@@ -1817,10 +2188,13 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
     <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div style={{ ...modal, maxWidth: 540 }}>
         <h3 style={{ margin: "0 0 6px", color: INK, fontSize: 20, fontWeight: 700 }}>
-          Replace the source doc for {curriculumName}
+          {isAdd ? `Add a document to ${curriculumName}` : `Replace the source doc for ${curriculumName}`}
         </h3>
         <p style={{ color: MUTED, fontSize: 13, margin: "0 0 16px", lineHeight: 1.45 }}>
-          Upload an edited version of your curriculum doc. We'll re-run extraction on the new file.
+          {isAdd
+            ? "Attach a materials list, student handout, or any supporting file."
+            : "Upload an edited version of your curriculum doc."}
+          {" "}You choose below whether it should update your curriculum details.
           The offering name and any programs / camps already linked to it stay attached.
         </p>
 
@@ -1858,39 +2232,110 @@ function ReplaceDocModal({ curriculumId, curriculumName, organizationId, onClose
           )}
         </label>
 
-        <div style={{
-          background: "#fff5f5",
-          border: "1px solid #f0c4c4",
-          borderLeft: "3px solid #a13a3a",
-          borderRadius: 4,
-          padding: "12px 14px",
-          marginBottom: 14,
-        }}>
-          <strong style={{ color: "#7a1a1a", display: "block", marginBottom: 6 }}>Heads up — this overwrites your edits</strong>
-          <div style={{ color: INK, fontSize: 13, lineHeight: 1.5, marginBottom: 10 }}>
-            All current sessions, recap templates, skill lists, and extracted fields will be replaced with whatever the new doc produces. Linked programs / camps + the offering name stay.
+        {/* Which section it lands in. Add-only: replacing always targets the
+            curriculum source doc. */}
+        {isAdd && (
+          <div style={{ border: `1px solid ${RULE}`, borderRadius: 6, padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: INK, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.4 }}>
+              What kind of document is it?
+            </div>
+            {[
+              { value: "materials_list", label: "Class materials", hint: "What the instructor brings or orders" },
+              { value: "student_materials", label: "Student materials", hint: "Worksheets or printables" },
+              { value: "other", label: "Other", hint: "Anything else to keep on file" },
+            ].map((o) => (
+              <label key={o.value} style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", marginBottom: 6 }}>
+                <input
+                  type="radio"
+                  name="doc-kind-choice"
+                  checked={addDocType === o.value}
+                  onChange={() => setAddDocType(o.value)}
+                  style={{ marginTop: 3 }}
+                />
+                <span style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+                  <strong>{o.label}</strong>{" "}
+                  <span style={{ color: MUTED }}>{o.hint}</span>
+                </span>
+              </label>
+            ))}
           </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, color: INK, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+        )}
+
+        {/* Explicit extraction choice. A tiny doc tweak or a supporting file
+            should never be forced through a full re-extract. */}
+        <div style={{ border: `1px solid ${RULE}`, borderRadius: 6, padding: "12px 14px", marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: INK, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.4 }}>
+            What should we do with it?
+          </div>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", marginBottom: 8 }}>
             <input
-              type="checkbox"
-              checked={confirmed}
-              onChange={(e) => setConfirmed(e.target.checked)}
-              style={{ width: 16, height: 16 }}
+              type="radio"
+              name="doc-extraction-choice"
+              checked={runExtraction}
+              onChange={() => setRunExtraction(true)}
+              style={{ marginTop: 3 }}
             />
-            I understand. Replace it.
+            <span style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+              <strong>Update my curriculum details from this file.</strong>{" "}
+              <span style={{ color: MUTED }}>Re-runs extraction and rewrites the fields below.</span>
+            </span>
+          </label>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+            <input
+              type="radio"
+              name="doc-extraction-choice"
+              checked={!runExtraction}
+              onChange={() => setRunExtraction(false)}
+              style={{ marginTop: 3 }}
+            />
+            <span style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+              <strong>Just attach the file.</strong>{" "}
+              <span style={{ color: MUTED }}>Your curriculum details stay exactly as they are.</span>
+            </span>
           </label>
         </div>
+
+        {/* Only extraction overwrites existing work, so this warning + confirm
+            appear only when the operator picked that option. */}
+        {needsConfirm && (
+          <div style={{
+            background: "#fff5f5",
+            border: "1px solid #f0c4c4",
+            borderLeft: "3px solid #a13a3a",
+            borderRadius: 4,
+            padding: "12px 14px",
+            marginBottom: 14,
+          }}>
+            <strong style={{ color: "#7a1a1a", display: "block", marginBottom: 6 }}>Heads up — this overwrites your edits</strong>
+            <div style={{ color: INK, fontSize: 13, lineHeight: 1.5, marginBottom: 10 }}>
+              All current sessions, recap templates, skill lists, and extracted fields will be replaced with whatever the new doc produces. Linked programs / camps + the offering name stay.
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, color: INK, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={confirmed}
+                onChange={(e) => setConfirmed(e.target.checked)}
+                style={{ width: 16, height: 16 }}
+              />
+              I understand. Update my details.
+            </label>
+          </div>
+        )}
 
         {error && <div style={{ ...errorBox, marginBottom: 12 }}>{error}</div>}
 
         <div style={modalActions}>
           <button onClick={onClose} style={tertiaryBtn} disabled={busy}>Cancel</button>
           <button
-            onClick={doReplace}
-            disabled={!file || !confirmed || busy}
-            style={{ ...primaryBtn, opacity: !file || !confirmed || busy ? 0.5 : 1, cursor: !file || !confirmed || busy ? "not-allowed" : "pointer" }}
+            onClick={doUpload}
+            disabled={!canSubmit}
+            style={{ ...primaryBtn, opacity: canSubmit ? 1 : 0.5, cursor: canSubmit ? "pointer" : "not-allowed" }}
           >
-            {busy ? "Starting…" : "Replace and re-extract →"}
+            {busy
+              ? (runExtraction ? "Starting…" : "Uploading…")
+              : runExtraction
+                ? (isAdd ? "Add and update details →" : "Replace and re-extract →")
+                : (isAdd ? "Attach document" : "Replace file")}
           </button>
         </div>
       </div>
@@ -2231,6 +2676,7 @@ function PublishModal({
   publishing, error, onCancel, onContinue, onPublish,
   curriculum, sessionCount, linkedProgramCount, linkedCampSessionCount,
   preLinkedProgramCount = 0, preLinkedCampSessionCount = 0,
+  preLinkedPrograms = [], preLinkedCampSessions = [],
   capabilities = [], recommendation = null, onDone, onRecommendationCta, onLinkExisting,
   onCapabilityClick, manual = false,
 }) {
@@ -2243,6 +2689,27 @@ function PublishModal({
   }
   const hasMatches = programMatches.length > 0;
   const totalPreLinked = (preLinkedProgramCount || 0) + (preLinkedCampSessionCount || 0);
+  // The already-linked list is expanded by default so the operator can see at a
+  // glance WHICH runs an edit will flow to, not just a count.
+  const [linkedListOpen, setLinkedListOpen] = useState(true);
+  const hasPreLinkedRows = preLinkedPrograms.length > 0 || preLinkedCampSessions.length > 0;
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function fmtLinkedDate(s) {
+    if (!s) return null;
+    const [y, m, d] = String(s).slice(0, 10).split("-").map(Number);
+    if (!y || !m || !d) return null;
+    return `${MONTHS[m - 1]} ${d}, ${y}`;
+  }
+  function programLinkMeta(p) {
+    const date = fmtLinkedDate(p.first_session_date);
+    return [p.term, p.day_of_week, date && `starts ${date}`, p.status && p.status !== "open" ? p.status : null]
+      .filter(Boolean).join(" · ");
+  }
+  function campLinkMeta(c) {
+    const date = fmtLinkedDate(c.starts_on);
+    return [c.session_type, c.week_num ? `Week ${c.week_num}` : null, date && `starts ${date}`]
+      .filter(Boolean).join(" · ");
+  }
   function preLinkedSummary() {
     const parts = [];
     if (preLinkedCampSessionCount > 0) parts.push(`${preLinkedCampSessionCount} camp session${preLinkedCampSessionCount === 1 ? "" : "s"}`);
@@ -2267,7 +2734,7 @@ function PublishModal({
     >
       <div style={isCelebration ? celebrationModal : modal}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-          <EnnieAvatar size={isCelebration ? 72 : 54} />
+          <Ennie state={isCelebration ? "celebrate" : "idle"} framed={false} size={isCelebration ? 104 : 62} />
           <div>
             <div style={{ fontWeight: 700, color: PURPLE, fontSize: isCelebration ? 16 : 15 }}>
               Ennie<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -2399,7 +2866,7 @@ function PublishModal({
                   gap: 12,
                   alignItems: "flex-start",
                 }}>
-                  <EnnieAvatar size={48} />
+                  <Ennie state="idle" framed={false} size={56} />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 11, color: MUTED, marginBottom: 2 }}>
                       <strong style={{ color: PURPLE }}>Ennie's recommendation</strong>
@@ -2454,7 +2921,40 @@ function PublishModal({
             </p>
             {totalPreLinked > 0 && (
               <div style={{ background: GOLD_SOFT, border: `1px solid ${GOLD_BORDER}`, borderRadius: 6, padding: "10px 12px", marginBottom: 14, fontSize: 13, color: INK }}>
-                <strong style={{ color: "#7a5a00" }}>Already linked:</strong> {preLinkedSummary()}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <div><strong style={{ color: "#7a5a00" }}>Already linked:</strong> {preLinkedSummary()}</div>
+                  {hasPreLinkedRows && (
+                    <button
+                      type="button"
+                      onClick={() => setLinkedListOpen((o) => !o)}
+                      style={{ background: "none", border: "none", color: PURPLE, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 0 }}
+                    >
+                      {linkedListOpen ? "Hide" : "Show"}
+                    </button>
+                  )}
+                </div>
+                {hasPreLinkedRows && linkedListOpen && (
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${GOLD_BORDER}`, maxHeight: 200, overflowY: "auto" }}>
+                    {preLinkedCampSessions.length > 0 && (
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Summer camps</div>
+                    )}
+                    {preLinkedCampSessions.map((c) => (
+                      <div key={c.id} style={{ padding: "3px 0", lineHeight: 1.35 }}>
+                        <strong>{c.location_name || "Unspecified location"}</strong>
+                        {campLinkMeta(c) && <span style={{ color: MUTED, marginLeft: 6 }}>· {campLinkMeta(c)}</span>}
+                      </div>
+                    ))}
+                    {preLinkedPrograms.length > 0 && (
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#7a5a00", textTransform: "uppercase", letterSpacing: 0.5, margin: `${preLinkedCampSessions.length > 0 ? 8 : 0}px 0 4px` }}>Afterschool programs</div>
+                    )}
+                    {preLinkedPrograms.map((p) => (
+                      <div key={p.id} style={{ padding: "3px 0", lineHeight: 1.35 }}>
+                        <strong>{p.program_locations?.name || "Unspecified location"}</strong>
+                        {programLinkMeta(p) && <span style={{ color: MUTED, marginLeft: 6 }}>· {programLinkMeta(p)}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             {hasMatches && (() => {
@@ -2519,14 +3019,6 @@ function UnlockItem({ title, body }) {
   );
 }
 
-function prettyDocType(t) {
-  switch (t) {
-    case "instructor_guide": return "Instructor guide";
-    case "materials_list": return "Materials list";
-    case "student_materials": return "Student materials";
-    default: return t || "";
-  }
-}
 
 // --- styles ---
 
