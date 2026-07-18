@@ -324,12 +324,15 @@ export default function CurriculumNew() {
         primaryDocId = json.document_id;
       }
 
-      // Optional secondary uploads (file mode only; Drive secondary attachments
-      // can come later via the curriculum-detail edit page).
-      if (hasPrimary && materials) {
+      // Optional secondary uploads. NOT gated on hasPrimary: the zones are
+      // always visible now, so an operator can pick materials alongside a Drive
+      // link (or with no primary at all). The curriculum row exists by this
+      // point in every path, so anything picked gets attached rather than
+      // silently discarded.
+      if (materials) {
         await uploadOne({ file: materials, docType: "materials_list", curriculumId, organizationId: org.id });
       }
-      if (hasPrimary && journal) {
+      if (journal) {
         await uploadOne({ file: journal, docType: "student_materials", curriculumId, organizationId: org.id });
       }
 

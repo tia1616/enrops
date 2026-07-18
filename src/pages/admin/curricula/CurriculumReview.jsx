@@ -699,11 +699,13 @@ export default function CurriculumReview() {
     // Commit any pending debounced edit before we leave (was: cancelled here,
     // which silently dropped a field the operator typed right before clicking).
     await flushPendingSaves();
-    // "extracted" means we pulled these details out of a source document. With
-    // no source doc (hand-typed offering, or materials only) nothing was ever
-    // extracted, so the card would be lying - it stays a Draft until published.
-    // The offerings list already routes doc-less drafts to an Edit CTA.
-    const nextStatus = hasSourceDoc ? "extracted" : "draft";
+    // "extracted" means AI actually pulled these details out of a document, so
+    // key off that directly rather than "a doc exists". Merely having a file
+    // isn't enough (one can be attached with extraction skipped), and losing the
+    // file later doesn't unmake an extraction that did happen. A hand-typed
+    // offering stays a Draft until published; the offerings list already gives
+    // doc-less drafts an "Edit details" + "Upload doc" pair of CTAs.
+    const nextStatus = aiAuthored ? "extracted" : "draft";
     await supabase.from("curricula").update({ status: nextStatus }).eq("id", curriculum.id);
     navigate("/admin/curricula");
   }
