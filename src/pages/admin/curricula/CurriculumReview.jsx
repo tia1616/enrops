@@ -38,10 +38,13 @@ const TIME_SAVED_HOURS = 10;
 
 // Fields Ennie flags when the value is null/empty AND the field is in this list.
 // Low-confidence extracted fields are flagged regardless of list membership.
+// Prerequisites and final_showcase are genuinely optional (plenty of offerings
+// have neither), so an empty one is not worth flagging - it just trains the
+// operator to ignore the gold outline.
 const FLAG_IF_NULL = new Set([
   "age_range", "grade_range", "class_size", "format",
   "session_types_supported", "short_description",
-  "prerequisites", "mid_term_skills", "final_recap_skills", "final_showcase",
+  "mid_term_skills", "final_recap_skills",
 ]);
 
 // Fields that make an offering genuinely usable downstream (registration page,
@@ -1102,9 +1105,15 @@ export default function CurriculumReview() {
             <div style={row2}>
               <FieldNumber
                 label="Sessions"
-                inlineHelp="change requires re-uploading"
+                inlineHelp="typical"
+                help="A default for this offering. Each program sets its own number of classes, so the same offering can run 8 sessions at one school and 10 at another."
                 value={curriculum.session_count ?? ""}
-                disabled
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  const v = raw === "" ? null : Number(raw);
+                  saveTopFieldDebounced("session_count", { session_count: v }, v);
+                }}
+                saved={savingField === "session_count"}
               />
 
               <ClassSizeField
@@ -1122,7 +1131,6 @@ export default function CurriculumReview() {
               placeholder="e.g. Beginner OK · should be comfortable reading"
               value={curriculum.prerequisites ?? ""}
               onChange={(v) => saveTopFieldDebounced("prerequisites", { prerequisites: v || null }, v)}
-              flagged={isFieldFlagged({ curriculum, fieldName: "prerequisites", extractedRow: extractedByName.prerequisites })}
               saved={savingField === "prerequisites"}
             />
 
@@ -1190,7 +1198,6 @@ export default function CurriculumReview() {
               help="If the offering ends with a capstone, performance, or family event. Powers the pre-launch reminder email."
               value={curriculum.final_showcase ?? ""}
               onChange={(v) => saveTopFieldDebounced("final_showcase", { final_showcase: v || null }, v)}
-              flagged={isFieldFlagged({ curriculum, fieldName: "final_showcase", extractedRow: extractedByName.final_showcase })}
               saved={savingField === "final_showcase"}
             />
 
@@ -1477,11 +1484,23 @@ function FieldText({ label, inlineHelp, help, value, onChange, flagged, saved, p
   );
 }
 
-function FieldNumber({ label, inlineHelp, value, ...rest }) {
+function FieldNumber({ label, inlineHelp, help, value, saved, disabled, ...rest }) {
   return (
     <div style={fieldWrap}>
-      <FieldLabel inlineHelp={inlineHelp}>{label}</FieldLabel>
-      <input type="number" value={value} style={{ ...textInput, maxWidth: 120, background: "#f7f6ef", color: MUTED }} {...rest} />
+      <FieldLabel inlineHelp={inlineHelp}>{label}<SavedTick on={saved} /></FieldLabel>
+      {help && <div style={fieldHelp}>{help}</div>}
+      <input
+        type="number"
+        value={value}
+        disabled={disabled}
+        style={{
+          ...textInput,
+          maxWidth: 120,
+          // Only look inert when it actually is.
+          ...(disabled ? { background: "#f7f6ef", color: MUTED } : {}),
+        }}
+        {...rest}
+      />
     </div>
   );
 }
@@ -1561,8 +1580,26 @@ function AgeGradeField({ ageOrGrade, setAgeOrGrade, curriculum, flagged, onSave,
       onSave({ grade_min: curriculum.grade_min, grade_max: v }, { min: curriculum.grade_min, max: v }, true);
     }
   }
+  // Switching the mode clears the pair being switched away from, so an offering
+  // never carries both an age range and a grade range. Whichever mode is showing
+  // is the truth - otherwise stale values linger in the DB and downstream
+  // surfaces have to guess which one to believe.
   function flipMode(next) {
+    if ((next === "ages") === isAges) return; // already in this mode
     setAgeOrGrade(next);
+    if (next === "grades") {
+      onSave(
+        { age_range_min: null, age_range_max: null },
+        { min: curriculum.grade_min ?? null, max: curriculum.grade_max ?? null },
+        true,
+      );
+    } else {
+      onSave(
+        { grade_min: null, grade_max: null },
+        { min: curriculum.age_range_min ?? null, max: curriculum.age_range_max ?? null },
+        true,
+      );
+    }
   }
 
   return (
