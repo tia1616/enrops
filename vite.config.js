@@ -70,7 +70,17 @@ export default defineConfig({
         // heic2any chunk (~1.4 MB) get cached on first visit. Without this
         // the SW skips files >2 MB and instructors hit the network on
         // every reload.
-        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+        //
+        // 5 MiB, not 3. workbox FAILS THE BUILD (not just warns) when an asset
+        // exceeds this, and the main bundle had crept to ~3.14 MB - inside 2 KB
+        // of the old 3 MiB cap. A local build came in ~14 KB smaller than
+        // Netlify's and passed, so the prod build broke while every local gate
+        // stayed green. The headroom is deliberate: it must not sit one small
+        // dependency away from a red prod build again.
+        //
+        // The real fix is code-splitting the 3 MB main bundle (vite already
+        // warns about it on every build); tracked separately.
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         cleanupOutdatedCaches: true,
         // Take control of open clients as soon as the SW activates so the
         // first install qualifies on the first page load, not the second.
