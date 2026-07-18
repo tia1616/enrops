@@ -65,6 +65,14 @@ function curriculumFieldFilled(curriculum, key) {
   }
 }
 
+// Fields OUTSIDE FLAG_IF_NULL that still render a gold "flagged" outline, so a
+// low-confidence extraction on them is worth counting. Anything not listed here
+// (name, session_count, sessions) has no flagged control on screen, so counting
+// it would inflate the banner's number and give "Jump to first" no target.
+const FLAGGABLE_EXTRA_FIELDS = new Set([
+  "themes", "narrative_arc", "skills_overall", "materials",
+]);
+
 const FORMAT_OPTIONS = [
   { value: "summer_camp", label: "Summer camp" },
   { value: "afterschool", label: "Afterschool" },
@@ -217,9 +225,14 @@ function computeFlagCount(curriculum, extractedByName) {
     const row = extractedByName[fieldName];
     if (isFieldFlagged({ curriculum, fieldName, extractedRow: row })) n++;
   }
-  // Also count any low-confidence extracted fields not already in FLAG_IF_NULL
+  // Also count any low-confidence extracted fields not already in FLAG_IF_NULL,
+  // but ONLY ones that actually render a gold outline. Extraction also writes
+  // confidence rows for name / session_count / sessions, which have no flagged
+  // control on screen - counting them made the banner promise N outlined fields
+  // that don't exist and left "Jump to first" scrolling to nothing.
   for (const [name, row] of Object.entries(extractedByName)) {
     if (FLAG_IF_NULL.has(name)) continue;
+    if (!FLAGGABLE_EXTRA_FIELDS.has(name)) continue;
     if (row && !row.human_approved && row.confidence != null && row.confidence < 0.7) n++;
   }
   return n;
