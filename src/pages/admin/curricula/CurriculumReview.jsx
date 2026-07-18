@@ -77,6 +77,21 @@ const CATEGORY_OPTIONS = [
   { value: "robotics", label: "Robotics" },
 ];
 
+// Document sections in the offering's panel. Grouping keeps the curriculum
+// source separate from supporting materials, so it's obvious at a glance what
+// drives extraction vs what's just kept on file. Anything with an unrecognised
+// doc_type falls into "Other" rather than disappearing.
+const DOC_GROUPS = [
+  { key: "instructor_guide", label: "Curriculum doc" },
+  { key: "materials_list", label: "Class materials" },
+  { key: "student_materials", label: "Student materials" },
+  { key: "other", label: "Other" },
+];
+const DOC_GROUP_KEYS = new Set(DOC_GROUPS.map((g) => g.key));
+function docGroupKey(docType) {
+  return DOC_GROUP_KEYS.has(docType) ? docType : "other";
+}
+
 // Grade dropdown options. Grade 0 is Kindergarten and shows as "K" everywhere
 // else in the app (Home, CurriculaList, AfterschoolSchedule, roster, register).
 // Stored value stays the integer (0 for K) so downstream readers are unchanged.
@@ -425,6 +440,15 @@ export default function CurriculumReview() {
     () => docs.some((d) => d.doc_type === "instructor_guide"),
     [docs],
   );
+  // True only when AI extraction actually authored content - i.e. some field
+  // carries a value the model produced (extracted_value), not just a value the
+  // operator typed (human_edited_value). "Has a document" is NOT a valid proxy:
+  // materials can be attached to a hand-typed offering, and crediting hours
+  // saved for work the operator did themselves would be a lie.
+  const aiAuthored = useMemo(
+    () => Object.values(extractedByName).some((r) => r?.extracted_value != null),
+    [extractedByName],
+  );
 
   function flashSaved(fieldName) {
     setSavingField(fieldName);
@@ -675,7 +699,12 @@ export default function CurriculumReview() {
     // Commit any pending debounced edit before we leave (was: cancelled here,
     // which silently dropped a field the operator typed right before clicking).
     await flushPendingSaves();
-    await supabase.from("curricula").update({ status: "extracted" }).eq("id", curriculum.id);
+    // "extracted" means we pulled these details out of a source document. With
+    // no source doc (hand-typed offering, or materials only) nothing was ever
+    // extracted, so the card would be lying - it stays a Draft until published.
+    // The offerings list already routes doc-less drafts to an Edit CTA.
+    const nextStatus = hasSourceDoc ? "extracted" : "draft";
+    await supabase.from("curricula").update({ status: nextStatus }).eq("id", curriculum.id);
     navigate("/admin/curricula");
   }
 
@@ -823,7 +852,7 @@ export default function CurriculumReview() {
       // A manual entry (no doc, no extracted fields) was typed by the operator,
       // so claiming "saved you N hours" at publish would be false. Downstream
       // surfaces (flyer/recap/registration) log their own savings when used.
-      if (!isManualEntry) {
+      if (aiAuthored) {
         const sessionCount = sessions.length || 5;
         const hoursSaved = Math.max(10, Math.ceil(sessionCount * 1.5));
         const { error: tsErr } = await supabase.from("time_saved_events").insert({
@@ -886,12 +915,19 @@ export default function CurriculumReview() {
           {docs.length === 0 && (
             <div style={{ color: MUTED, fontSize: 13 }}>No documents on file.</div>
           )}
-          {docs.map((d, idx) => (
+          {DOC_GROUPS.map((g) => {
+            const items = docs.filter((d) => docGroupKey(d.doc_type) === g.key);
+            if (items.length === 0) return null;
+            return (
+              <div key={g.key} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                  {g.label}
+                </div>
+                {items.map((d, idx) => (
             <div key={d.id} style={{ ...docRow, borderTop: idx === 0 ? 0 : `1px solid ${RULE}`, paddingTop: idx === 0 ? 0 : 10, flexWrap: "wrap" }}>
               <span style={{ color: PURPLE, flexShrink: 0 }}>📄</span>
               <div style={{ flex: 1, fontSize: 13, minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" }}>
-                {d.original_filename || "(unnamed)"}<br />
-                <span style={{ color: MUTED, fontSize: 11 }}>{prettyDocType(d.doc_type)}</span>
+                {d.original_filename || "(unnamed)"}
               </div>
               <button
                 onClick={() => openDocLink(d.storage_path, d.original_filename)}
@@ -928,7 +964,10 @@ export default function CurriculumReview() {
                 </div>
               )}
             </div>
-          ))}
+                ))}
+              </div>
+            );
+          })}
           {docError && (
             <div style={{ marginTop: 10, color: "#a13a3a", fontSize: 12, lineHeight: 1.4 }}>{docError}</div>
           )}
@@ -1338,7 +1377,7 @@ function EnnieBanner({ flagCount, onJump, manual, progress }) {
   if (manual) {
     return (
       <section style={ennieBannerCalm}>
-        <Ennie state="idle" calm />
+        <Ennie state="idle" calm framed={false} size={52} />
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 700, color: INK, fontSize: 14 }}>
             Ennie <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -1353,7 +1392,7 @@ function EnnieBanner({ flagCount, onJump, manual, progress }) {
   }
   return (
     <section style={calm ? ennieBannerCalm : ennieBanner}>
-      <Ennie state="idle" calm={calm} />
+      <Ennie state="idle" calm={calm} framed={false} size={52} />
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700, color: calm ? INK : PURPLE, fontSize: 14 }}>
           Ennie <span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -1833,7 +1872,7 @@ function PolishModal({ curriculumId, config, onClose }) {
     <div style={modalBack} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={modal}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-          <Ennie state="idle" size={54} />
+          <Ennie state="idle" framed={false} size={62} />
           <div>
             <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>
               Ennie<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -1958,6 +1997,9 @@ function PolishModal({ curriculumId, config, onClose }) {
 function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organizationId, onClose, onStarted, onAdded }) {
   const isAdd = mode === "add";
   const [file, setFile] = useState(null);
+  // Which section the added file lands in. Replace mode always targets the
+  // curriculum source, so the picker is add-only.
+  const [addDocType, setAddDocType] = useState("materials_list");
   // Default matches intent: replacing the source usually means re-extracting;
   // adding a material usually doesn't. Either can be changed before uploading.
   const [runExtraction, setRunExtraction] = useState(!isAdd);
@@ -2013,7 +2055,7 @@ function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organi
           id: docId,
           curriculum_id: curriculumId,
           organization_id: organizationId,
-          doc_type: isAdd ? "materials_list" : "instructor_guide",
+          doc_type: isAdd ? addDocType : "instructor_guide",
           source_type: "upload",
           storage_path: path,
           original_filename: file.name,
@@ -2066,7 +2108,7 @@ function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organi
         onAdded?.({
           id: docRow.id,
           original_filename: file.name,
-          doc_type: isAdd ? "materials_list" : "instructor_guide",
+          doc_type: isAdd ? addDocType : "instructor_guide",
           storage_path: path,
           uploaded_at: new Date().toISOString(),
         });
@@ -2144,6 +2186,35 @@ function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organi
             </>
           )}
         </label>
+
+        {/* Which section it lands in. Add-only: replacing always targets the
+            curriculum source doc. */}
+        {isAdd && (
+          <div style={{ border: `1px solid ${RULE}`, borderRadius: 6, padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: INK, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.4 }}>
+              What kind of document is it?
+            </div>
+            {[
+              { value: "materials_list", label: "Class materials", hint: "What the instructor brings or orders" },
+              { value: "student_materials", label: "Student materials", hint: "Worksheets or printables" },
+              { value: "other", label: "Other", hint: "Anything else to keep on file" },
+            ].map((o) => (
+              <label key={o.value} style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", marginBottom: 6 }}>
+                <input
+                  type="radio"
+                  name="doc-kind-choice"
+                  checked={addDocType === o.value}
+                  onChange={() => setAddDocType(o.value)}
+                  style={{ marginTop: 3 }}
+                />
+                <span style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+                  <strong>{o.label}</strong>{" "}
+                  <span style={{ color: MUTED }}>{o.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
 
         {/* Explicit extraction choice. A tiny doc tweak or a supporting file
             should never be forced through a full re-extract. */}
@@ -2618,7 +2689,7 @@ function PublishModal({
     >
       <div style={isCelebration ? celebrationModal : modal}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-          <Ennie state={isCelebration ? "celebrate" : "idle"} size={isCelebration ? 72 : 54} />
+          <Ennie state={isCelebration ? "celebrate" : "idle"} framed={false} size={isCelebration ? 104 : 62} />
           <div>
             <div style={{ fontWeight: 700, color: PURPLE, fontSize: isCelebration ? 16 : 15 }}>
               Ennie<span style={{ color: MUTED, fontWeight: 500, fontSize: 12, marginLeft: 6 }}>your helper</span>
@@ -2750,7 +2821,7 @@ function PublishModal({
                   gap: 12,
                   alignItems: "flex-start",
                 }}>
-                  <Ennie state="idle" size={48} />
+                  <Ennie state="idle" framed={false} size={56} />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 11, color: MUTED, marginBottom: 2 }}>
                       <strong style={{ color: PURPLE }}>Ennie's recommendation</strong>
@@ -2903,14 +2974,6 @@ function UnlockItem({ title, body }) {
   );
 }
 
-function prettyDocType(t) {
-  switch (t) {
-    case "instructor_guide": return "Instructor guide";
-    case "materials_list": return "Materials list";
-    case "student_materials": return "Student materials";
-    default: return t || "";
-  }
-}
 
 // --- styles ---
 

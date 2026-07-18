@@ -407,6 +407,24 @@ export default function CurriculumNew() {
         .select("id")
         .single();
       if (curErr || !curRow) throw new Error(`Couldn't create it: ${curErr?.message ?? "no row"}`);
+      // The materials zones are always visible, so they can be filled in on the
+      // manual path too. Attach whatever was picked instead of silently
+      // discarding it. Non-fatal: the offering exists either way, and the
+      // review screen can add documents.
+      if (materials) {
+        try {
+          await uploadOne({ file: materials, docType: "materials_list", curriculumId: curRow.id, organizationId: org.id });
+        } catch (e) {
+          console.warn("Manual create: class materials upload failed:", e instanceof Error ? e.message : String(e));
+        }
+      }
+      if (journal) {
+        try {
+          await uploadOne({ file: journal, docType: "student_materials", curriculumId: curRow.id, organizationId: org.id });
+        } catch (e) {
+          console.warn("Manual create: student materials upload failed:", e instanceof Error ? e.message : String(e));
+        }
+      }
       navigate(`/admin/curricula/${curRow.id}/review`);
     } catch (e) {
       setErrors([{ zone: "manual", message: e instanceof Error ? e.message : String(e) }]);
@@ -558,12 +576,16 @@ export default function CurriculumNew() {
           </div>
         </div>
 
-        {/* Secondary zones (only when primary picked) */}
-        {primary && (
-          <>
-            <div style={revealNote}>
-              Got it. Anything else you want us to keep on file? All optional.
-            </div>
+        {/* Secondary zones - always visible. Operators shouldn't have to pick a
+            curriculum doc first to discover they can keep materials on file.
+            They attach to whichever path is taken: extraction, or the
+            "Create & fill in myself" manual path below. */}
+        <>
+          <div style={revealNote}>
+            {primary
+              ? "Got it. Anything else you want us to keep on file? All optional."
+              : "Anything else you want us to keep on file? All optional."}
+          </div>
             <div style={secondaryZones}>
               <SecondaryDropZone
                 title="Class materials"
@@ -590,8 +612,7 @@ export default function CurriculumNew() {
                 error={journalErr}
               />
             </div>
-          </>
-        )}
+        </>
 
         {/* Drive link */}
         <details style={driveSection} open={driveConnected === false || (!primary && !!driveUrl)}>
