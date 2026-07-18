@@ -42,6 +42,27 @@ const FLAG_IF_NULL = new Set([
   "prerequisites", "mid_term_skills", "final_recap_skills", "final_showcase",
 ]);
 
+// Fields that make an offering genuinely usable downstream (registration page,
+// instructor matching, parent emails). Powers the completeness meter in the
+// Ennie banner so an operator can see how close to "ready" they are. Advisory
+// only — never a publish gate (only a name is required to publish).
+const PROGRESS_FIELDS = [
+  "short_description", "format", "class_size", "age_grade",
+  "session_types_supported", "skills_overall",
+];
+function curriculumFieldFilled(curriculum, key) {
+  const has = (v) => !(v == null || v === "" || (Array.isArray(v) && v.length === 0));
+  switch (key) {
+    case "class_size":
+      return has(curriculum.class_size_min) || has(curriculum.class_size_max);
+    case "age_grade":
+      return has(curriculum.age_range_min) || has(curriculum.age_range_max)
+        || has(curriculum.grade_min) || has(curriculum.grade_max);
+    default:
+      return has(curriculum[key]);
+  }
+}
+
 const FORMAT_OPTIONS = [
   { value: "summer_camp", label: "Summer camp" },
   { value: "afterschool", label: "Afterschool" },
@@ -52,6 +73,14 @@ const CATEGORY_OPTIONS = [
   { value: "lego", label: "LEGO" },
   { value: "coding", label: "Coding" },
   { value: "robotics", label: "Robotics" },
+];
+
+// Grade dropdown options. Grade 0 is Kindergarten and shows as "K" everywhere
+// else in the app (Home, CurriculaList, AfterschoolSchedule, roster, register).
+// Stored value stays the integer (0 for K) so downstream readers are unchanged.
+const GRADE_OPTIONS = [
+  { value: "0", label: "K" },
+  ...Array.from({ length: 12 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })),
 ];
 
 // Best-guess curriculum family from its title, so the admin usually just confirms.
@@ -236,8 +265,25 @@ export default function CurriculumReview() {
   const [saveState, setSaveState] = useState("idle");
   const savedFlashTimer = useRef(null);
 
-  // Debounce timers per field-name
+  // Debounce timers per field-name. Each entry is { timer, run } so a pending
+  // edit can be committed (see flushPendingSaves) rather than lost.
   const debounceTimers = useRef(new Map());
+
+  // On unmount (route change / "Back to library" mid-type), commit any pending
+  // debounced write instead of letting its timer fire after this component is
+  // gone. Each entry's `run` captured its own field value + patch at schedule
+  // time, so this writes the last value the user typed. setState inside those
+  // writes lands after unmount and is a harmless no-op; the DB write is the point.
+  useEffect(() => {
+    const timers = debounceTimers.current;
+    return () => {
+      for (const p of timers.values()) {
+        clearTimeout(p.timer);
+        try { p.run(); } catch { /* best-effort flush on unmount */ }
+      }
+      timers.clear();
+    };
+  }, []);
 
   // Initial load
   useEffect(() => {
@@ -344,6 +390,15 @@ export default function CurriculumReview() {
     () => (curriculum ? computeFlagCount(curriculum, extractedByName) : 0),
     [curriculum, extractedByName],
   );
+  // How many key downstream-usable fields are filled — drives the banner's
+  // completeness meter so a half-finished offering shows visible "X of N left"
+  // progress instead of the operator wandering off unsure how much remains.
+  const progress = useMemo(() => {
+    if (!curriculum) return { filled: 0, total: PROGRESS_FIELDS.length };
+    let filled = 0;
+    for (const k of PROGRESS_FIELDS) if (curriculumFieldFilled(curriculum, k)) filled++;
+    return { filled, total: PROGRESS_FIELDS.length };
+  }, [curriculum]);
   // Manual-entry offerings have no document and no AI-extracted fields, so the
   // "here's what I found / flagged" framing doesn't apply — show a fill-it-in
   // prompt instead.
@@ -420,20 +475,27 @@ export default function CurriculumReview() {
   }
 
   // Debounced version for text inputs. Immediate variant for chips / selects.
+  // Each pending entry stores both its timer AND a `run` that performs the write,
+  // so flushPendingSaves() can commit an in-flight edit instead of the timer
+  // firing after unmount (write with no confirmation) or being cancelled on
+  // navigation (edit silently dropped).
   function saveTopFieldDebounced(fieldName, columnPatch, extractedValue, immediate = false) {
     // Optimistic local update so the UI reflects typing
     setCurriculum((c) => ({ ...c, ...columnPatch }));
     const timers = debounceTimers.current;
-    if (timers.has(fieldName)) clearTimeout(timers.get(fieldName));
+    const existing = timers.get(fieldName);
+    if (existing) clearTimeout(existing.timer);
+    const run = () => persistTopField(fieldName, columnPatch, extractedValue);
     if (immediate) {
-      persistTopField(fieldName, columnPatch, extractedValue);
+      timers.delete(fieldName);
+      run();
       return;
     }
-    const t = setTimeout(() => {
-      persistTopField(fieldName, columnPatch, extractedValue);
+    const timer = setTimeout(() => {
       timers.delete(fieldName);
+      run();
     }, 800);
-    timers.set(fieldName, t);
+    timers.set(fieldName, { timer, run });
   }
 
   // Curriculum family (lego/coding/robotics) — a plain column, not a doc-extracted field.
@@ -451,8 +513,11 @@ export default function CurriculumReview() {
     setSessions((rows) => rows.map((r) => (r.id === sessionId ? { ...r, ...columnPatch } : r)));
     const key = `session-${sessionId}-${Object.keys(columnPatch)[0]}`;
     const timers = debounceTimers.current;
-    if (timers.has(key)) clearTimeout(timers.get(key));
+    const existing = timers.get(key);
+    if (existing) clearTimeout(existing.timer);
     const run = async () => {
+      // Drop our own entry first so a concurrent flush() doesn't run us twice.
+      timers.delete(key);
       markSaveState("saving");
       const { error } = await supabase
         .from("curriculum_sessions")
@@ -465,10 +530,25 @@ export default function CurriculumReview() {
         flashSaved(key);
         markSaveState("saved");
       }
-      timers.delete(key);
     };
     if (immediate) { run(); return; }
-    timers.set(key, setTimeout(run, 800));
+    const timer = setTimeout(run, 800);
+    timers.set(key, { timer, run });
+  }
+
+  // Commit every pending debounced write NOW. The 800ms timers were previously
+  // just cancelled on Save-as-draft / Publish (dropping a just-typed edit) and
+  // left to fire after unmount on navigation (writing with no confirmation).
+  // Flushing runs the captured write for each and awaits them, so an in-flight
+  // edit is never lost. Best-effort: a single failing write never blocks the rest.
+  async function flushPendingSaves() {
+    const timers = debounceTimers.current;
+    const pending = Array.from(timers.values());
+    timers.clear();
+    await Promise.all(pending.map((p) => {
+      clearTimeout(p.timer);
+      try { return Promise.resolve(p.run()); } catch { return Promise.resolve(); }
+    }));
   }
 
   // Polish with Ennie: open the modal pre-loaded with the right field's context.
@@ -543,9 +623,9 @@ export default function CurriculumReview() {
 
   async function saveAsDraft() {
     if (!curriculum) return;
-    // Flush any pending debounced writes
-    for (const [, t] of debounceTimers.current) clearTimeout(t);
-    debounceTimers.current.clear();
+    // Commit any pending debounced edit before we leave (was: cancelled here,
+    // which silently dropped a field the operator typed right before clicking).
+    await flushPendingSaves();
     await supabase.from("curricula").update({ status: "extracted" }).eq("id", curriculum.id);
     navigate("/admin/curricula");
   }
@@ -647,9 +727,8 @@ export default function CurriculumReview() {
     setPublishing(true);
     setPublishError("");
     try {
-      // 1. flush debounce, save final name
-      for (const [, t] of debounceTimers.current) clearTimeout(t);
-      debounceTimers.current.clear();
+      // 1. commit any pending debounced edit, then save final name
+      await flushPendingSaves();
       const finalName = nameDraft.trim();
       if (finalName !== curriculum.name) {
         await supabase.from("curricula").update({ name: finalName }).eq("id", curriculum.id);
@@ -794,7 +873,7 @@ export default function CurriculumReview() {
 
         {/* RIGHT */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <EnnieBanner flagCount={flagCount} onJump={jumpToFirstFlag} manual={isManualEntry} />
+          <EnnieBanner flagCount={flagCount} onJump={jumpToFirstFlag} manual={isManualEntry} progress={progress} />
 
           <section style={card}>
             <div style={sectionHead}>
@@ -828,7 +907,7 @@ export default function CurriculumReview() {
                 setAgeOrGrade={setAgeOrGrade}
                 curriculum={curriculum}
                 flagged={isFieldFlagged({ curriculum, fieldName: "age_range", extractedRow: extractedByName.age_range })}
-                onSave={(patch, exVal) => saveTopFieldDebounced("age_range", patch, exVal)}
+                onSave={(patch, exVal, immediate) => saveTopFieldDebounced("age_range", patch, exVal, immediate)}
                 saved={savingField === "age_range"}
               />
 
@@ -1125,7 +1204,27 @@ function EnnieAvatar({ size = 38, calm = false }) {
   );
 }
 
-function EnnieBanner({ flagCount, onJump, manual }) {
+function ProgressMeter({ progress }) {
+  if (!progress || !progress.total) return null;
+  const { filled, total } = progress;
+  const done = filled >= total;
+  const pct = Math.round((filled / total) * 100);
+  return (
+    <div style={{ marginTop: 10, maxWidth: 460 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: done ? "#3a7c3a" : PURPLE }}>
+          {done ? "All key details filled ✓" : `${filled} of ${total} key details filled`}
+        </span>
+        {!done && <span style={{ fontSize: 11, color: MUTED }}>{total - filled} to go</span>}
+      </div>
+      <div style={{ height: 6, borderRadius: 4, background: "#ece9f7", overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: done ? "#3a7c3a" : BRIGHT, transition: "width 0.3s ease" }} />
+      </div>
+    </div>
+  );
+}
+
+function EnnieBanner({ flagCount, onJump, manual, progress }) {
   const calm = flagCount === 0;
   if (manual) {
     return (
@@ -1138,6 +1237,7 @@ function EnnieBanner({ flagCount, onJump, manual }) {
           <div style={{ fontSize: 14, color: INK, marginTop: 2, lineHeight: 1.45 }}>
             Fill in as much or as little as you like, then publish. Want it done for you? Add a document anytime and I'll auto-fill the rest.
           </div>
+          <ProgressMeter progress={progress} />
         </div>
       </section>
     );
@@ -1154,6 +1254,7 @@ function EnnieBanner({ flagCount, onJump, manual }) {
             ? <>All caught up. ✓ Ready to publish whenever you are.</>
             : <>I flagged <strong style={{ color: PURPLE }}>{flagCount} field{flagCount === 1 ? "" : "s"}</strong> below worth a look — they're outlined in gold. Edit any of them to clear the flag.</>}
         </div>
+        <ProgressMeter progress={progress} />
       </div>
       {!calm && (
         <button onClick={onJump} style={ennieActionBtn}>Jump to first ↓</button>
@@ -1284,7 +1385,9 @@ function AgeGradeField({ ageOrGrade, setAgeOrGrade, curriculum, flagged, onSave,
       const patch = { age_range_min: v, age_range_max: curriculum.age_range_max };
       onSave(patch, { min: v, max: curriculum.age_range_max });
     } else {
-      onSave({ grade_min: v, grade_max: curriculum.grade_max }, { min: v, max: curriculum.grade_max });
+      // Grades use a dropdown — a discrete choice, so save immediately (like the
+      // Format select) rather than waiting out the text-input 800ms debounce.
+      onSave({ grade_min: v, grade_max: curriculum.grade_max }, { min: v, max: curriculum.grade_max }, true);
     }
   }
   function updateMax(raw) {
@@ -1292,7 +1395,7 @@ function AgeGradeField({ ageOrGrade, setAgeOrGrade, curriculum, flagged, onSave,
     if (isAges) {
       onSave({ age_range_min: curriculum.age_range_min, age_range_max: v }, { min: curriculum.age_range_min, max: v });
     } else {
-      onSave({ grade_min: curriculum.grade_min, grade_max: v }, { min: curriculum.grade_min, max: v });
+      onSave({ grade_min: curriculum.grade_min, grade_max: v }, { min: curriculum.grade_min, max: v }, true);
     }
   }
   function flipMode(next) {
@@ -1307,19 +1410,43 @@ function AgeGradeField({ ageOrGrade, setAgeOrGrade, curriculum, flagged, onSave,
         <button onClick={() => flipMode("grades")} style={!isAges ? ageGradeBtnActive : ageGradeBtn}>Grades</button>
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", maxWidth: 260 }}>
-        <input
-          type="number"
-          value={minVal}
-          onChange={(e) => updateMin(e.target.value)}
-          style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
-        />
-        <span style={{ color: MUTED }}>to</span>
-        <input
-          type="number"
-          value={maxVal}
-          onChange={(e) => updateMax(e.target.value)}
-          style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
-        />
+        {isAges ? (
+          <>
+            <input
+              type="number"
+              value={minVal}
+              onChange={(e) => updateMin(e.target.value)}
+              style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
+            />
+            <span style={{ color: MUTED }}>to</span>
+            <input
+              type="number"
+              value={maxVal}
+              onChange={(e) => updateMax(e.target.value)}
+              style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
+            />
+          </>
+        ) : (
+          <>
+            <select
+              value={minVal === "" ? "" : String(minVal)}
+              onChange={(e) => updateMin(e.target.value)}
+              style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
+            >
+              <option value="">—</option>
+              {GRADE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <span style={{ color: MUTED }}>to</span>
+            <select
+              value={maxVal === "" ? "" : String(maxVal)}
+              onChange={(e) => updateMax(e.target.value)}
+              style={{ ...textInput, maxWidth: 90, ...(flagged ? lowConf : {}) }}
+            >
+              <option value="">—</option>
+              {GRADE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </>
+        )}
       </div>
     </div>
   );
