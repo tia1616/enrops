@@ -66,21 +66,30 @@ export default defineConfig({
           /^\/api\//,                  // any future server functions
           /\.(?:supabase\.co|stripe\.com)/,
         ],
-        // Bump precache size cap so the agreement PDF chunk (~1.5 MB) and
-        // heic2any chunk (~1.4 MB) get cached on first visit. Without this
-        // the SW skips files >2 MB and instructors hit the network on
-        // every reload.
+        // Precache size cap. READ THIS BEFORE CHANGING IT.
         //
-        // 5 MiB, not 3. workbox FAILS THE BUILD (not just warns) when an asset
-        // exceeds this, and the main bundle had crept to ~3.14 MB - inside 2 KB
-        // of the old 3 MiB cap. A local build came in ~14 KB smaller than
-        // Netlify's and passed, so the prod build broke while every local gate
-        // stayed green. The headroom is deliberate: it must not sit one small
-        // dependency away from a red prod build again.
+        // workbox FAILS THE BUILD (not just warns) when any asset exceeds this
+        // value. On 2026-07-18 that took prod down for ~25 min: the cap was
+        // 3 MiB and the main bundle had crept to 3.14 MB, landing within 2 KB
+        // of it. The local build came out ~14 KB smaller than Netlify's, so
+        // every local gate stayed green while the prod build went red and
+        // Netlify silently kept serving the previous deploy.
         //
-        // The real fix is code-splitting the 3 MB main bundle (vite already
-        // warns about it on every build); tracked separately.
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        // Two things changed since:
+        //   1. The app is route-split (see App.jsx), so the main chunk is
+        //      ~516 kB instead of 3.14 MB. The old runaway is gone.
+        //   2. A CI job builds on a clean `npm ci` (.github/workflows), so a
+        //      cap breach fails a PR instead of a production deploy.
+        //
+        // With that in place the 5 MiB emergency headroom is no longer earning
+        // its keep, so this is back to the workbox default of 2 MiB. Current
+        // largest asset is agreementPdf at ~1.46 MB, leaving ~600 kB (~40%)
+        // of real margin.
+        //
+        // If this ever fails the build, the fix is to split the offending
+        // chunk, NOT to raise the number. Raising it is what let the main
+        // bundle grow unnoticed to 3.14 MB in the first place.
+        maximumFileSizeToCacheInBytes: 2 * 1024 * 1024,
         cleanupOutdatedCaches: true,
         // Take control of open clients as soon as the SW activates so the
         // first install qualifies on the first page load, not the second.
@@ -98,5 +107,22 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        // Split the long-lived vendor code out of the app chunk. These change
+        // only when we bump a dependency, so pulling them out means a normal
+        // app deploy doesn't invalidate ~200 kB of framework the browser
+        // already has cached.
+        //
+        // React, react-dom and react-router ship as ONE chunk on purpose:
+        // they have interdependent module-init order, and splitting them into
+        // separate chunks is a well-known way to get a "Cannot read properties
+        // of undefined" at startup depending on which loads first.
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-supabase': ['@supabase/supabase-js'],
+        },
+      },
+    },
   },
 });

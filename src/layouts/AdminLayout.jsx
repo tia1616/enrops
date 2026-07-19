@@ -3,7 +3,7 @@
 // All admin pages render inside <Outlet />. Enrops chrome (Plum/Gold/Chalk).
 // Multi-tenant: never hardcodes J2S. Reads org from logged-in user's org_members row.
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
@@ -13,6 +13,7 @@ import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
 import PortalSwitcher from "../components/PortalSwitcher.jsx";
+import RouteFallback from "../components/RouteFallback.jsx";
 import { setOrgGroup } from "../lib/analytics";
 
 // Enrops brand tokens
@@ -468,7 +469,13 @@ export default function AdminLayout() {
               })}
             </div>
           )}
-          <Outlet context={{ user, org, orgMember }} />
+          {/* Admin pages are lazy-loaded per route (see App.jsx). This inner
+              Suspense keeps the sidebar, header and tab strip on screen while
+              the next page's chunk downloads — without it the app-level
+              boundary would blank the whole shell on every nav click. */}
+          <Suspense fallback={<RouteFallback />}>
+            <Outlet context={{ user, org, orgMember }} />
+          </Suspense>
           </>
           )}
         </main>

@@ -1,0 +1,69 @@
+name: Frontend build
+
+# WHY THIS EXISTS
+#
+# On 2026-07-18 a push to main produced a FAILED Netlify build and prod
+# silently kept serving the previous deploy for ~25 minutes. Nobody caught it,
+# because every local gate was green: the pre-push hook builds with whatever is
+# already in the developer's node_modules, and that build came out ~14 KB
+# smaller than Netlify's clean-install build. The asset was 2 KB under the
+# workbox precache cap locally and over it on Netlify.
+#
+# The lesson is that "it built on my machine" says nothing about whether it
+# builds on a clean install. This job is the missing gate: `npm ci` from the
+# lockfile, then the real production build, on the same branches that deploy.
+#
+# It runs on staging AND main because the release flow lands on staging first —
+# catching a red build only after it reached main would still mean a broken
+# production deploy.
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Pinned to match Netlify's build image. If Netlify's Node version is
+          # changed in the site UI (Site settings -> Build & deploy ->
+          # Environment -> NODE_VERSION), change it here in the same pass —
+          # a drift between the two reopens exactly the local-vs-Netlify gap
+          # this job exists to close.
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install from lockfile
+        # `npm ci`, not `npm install` — this is the whole point of the job.
+        # It resolves strictly from package-lock.json into an empty
+        # node_modules, the way Netlify does, so dependency-resolution
+        # differences show up here instead of in production.
+        run: npm ci
+
+      - name: Production build
+        # Fails the workflow on any build error, including the workbox
+        # precache-size cap that took prod down. See vite.config.js for why
+        # the fix for a cap breach is to split the chunk, not raise the cap.
+        run: npm run build
+
+      - name: Report bundle sizes
+        # The root cause was silent growth: the main chunk crept to 3.14 MB
+        # over months with nothing reporting on it. This prints the largest
+        # assets into the job summary on every run so the trend is visible in
+        # the PR rather than discovered by an outage.
+        run: |
+          {
+            echo "### Largest built assets"
+            echo ""
+            echo '```'
+            ls -S dist/assets/*.js | head -12 | xargs -I{} sh -c 'printf "%8s  %s\n" "$(du -k "{}" | cut -f1)K" "{}"'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
