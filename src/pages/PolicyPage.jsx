@@ -4,10 +4,20 @@ import ReactMarkdown from 'react-markdown';
 import { supabase } from '../lib/supabase.js';
 
 /**
- * Multi-tenant policy page. Route: /:orgSlug/:policyType
- * Resolves org + policy from DB. Works for any provider without code changes.
+ * Multi-tenant policy page.
  *
- * orgSlug comes from URL (e.g. 'j2s' → resolves Journey to STEAM org row)
+ * Two ways in:
+ *   1. Provider routes — `/:slug/privacy`, `/:slug/terms`. The org comes from the
+ *      URL slug, so /the-ukulele-project/privacy renders THAT provider's policy.
+ *   2. Platform routes — `/privacy`, `/terms`, `/dpa`, ... These pass
+ *      orgSlug="enrops" explicitly because there is no slug in the URL. These are
+ *      Enrops' own docs and apply to every user of every provider.
+ *
+ * The prop deliberately wins over the URL param, but it is ONLY ever set on the
+ * platform routes. It used to be hardcoded to "j2s" on the provider routes too,
+ * which made /{any-slug}/privacy serve Journey to STEAM LLC's actual privacy
+ * policy under another provider's brand.
+ *
  * policyType is one of POLICY_TITLES keys below.
  */
 
@@ -22,17 +32,22 @@ const POLICY_TITLES = {
 };
 export default function PolicyPage({ policyType, orgSlug: orgSlugProp }) {
   const params = useParams();
-  const orgSlug = orgSlugProp || params.orgSlug;
+  // The route param in App.jsx is `:slug` (not `:orgSlug`). `params.orgSlug` was
+  // always undefined, which is why the hardcoded prop was masking the bug.
+  const orgSlug = orgSlugProp || params.slug;
+  const isPlatformDoc = orgSlug === 'enrops';
   const [policy, setPolicy] = useState(null);
   const [orgName, setOrgName] = useState('');
   const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
+  // 'org' = the slug doesn't resolve to a provider at all.
+  // 'policy' = the provider is real but hasn't published this document.
+  const [missing, setMissing] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
-      setNotFound(false);
+      setMissing(null);
 
       // Resolve org by slug
       const { data: org } = await supabase
@@ -43,24 +58,26 @@ export default function PolicyPage({ policyType, orgSlug: orgSlugProp }) {
 
       if (!org) {
         if (!cancelled) {
-          setNotFound(true);
+          setMissing('org');
           setLoading(false);
         }
         return;
       }
 
-      // Fetch the matching policy
+      // Fetch the matching policy. published = false is a hidden draft, so it
+      // reads to families exactly like "not published yet" — never show it.
       const { data: pol } = await supabase
         .from('org_policies')
         .select('content_markdown, effective_date, last_updated')
         .eq('organization_id', org.id)
         .eq('policy_type', policyType)
+        .eq('published', true)
         .maybeSingle();
 
       if (cancelled) return;
       setOrgName(org.name);
       setPolicy(pol);
-      setNotFound(!pol);
+      setMissing(pol ? null : 'policy');
       setLoading(false);
     }
     load();
@@ -77,16 +94,48 @@ export default function PolicyPage({ policyType, orgSlug: orgSlugProp }) {
     );
   }
 
-  if (notFound) {
+  if (missing) {
+    // Two genuinely different situations, so say which one it is rather than a
+    // generic 404. Never fall back to another org's document — a policy is a
+    // legal statement about who handles your child's data.
+    // When the SLUG itself didn't resolve, `/${orgSlug}` is another dead end
+    // (PublicLayout would render its own "couldn't find that page"). Only offer
+    // the provider's home when we know the provider is real.
+    const providerHome =
+      missing === 'policy' && orgSlug && !isPlatformDoc ? `/${orgSlug}` : '/';
     return (
       <div className="mx-auto max-w-3xl px-4 py-16 sm:px-6">
-        <h1 className="font-titan text-3xl text-j2s-ink">Policy not found</h1>
-        <p className="mt-4 text-j2s-ink/70">
-          We couldn&apos;t find a {title.toLowerCase()} for this provider.
-        </p>
-        <Link to="/j2s" className="mt-6 inline-block text-j2s-purple hover:underline">
-          Return home
-        </Link>
+        {missing === 'org' ? (
+          <>
+            <h1 className="font-titan text-3xl text-j2s-ink">We couldn&rsquo;t find that page</h1>
+            <p className="mt-4 text-j2s-ink/70">
+              The link you followed may be old, or the provider&rsquo;s address may have changed.
+            </p>
+          </>
+        ) : (
+          <>
+            <h1 className="font-titan text-3xl text-j2s-ink">No {title.toLowerCase()} published yet</h1>
+            <p className="mt-4 text-j2s-ink/70">
+              {orgName || 'This provider'} hasn&rsquo;t published a {title.toLowerCase()} yet.
+              Enrops, the platform that runs their registration, publishes its own
+              policies covering how your account and payment information are handled.
+            </p>
+            <p className="mt-4 text-sm text-j2s-ink/60">
+              For questions about how {orgName || 'this provider'} handles your family&rsquo;s
+              information, contact them directly.
+            </p>
+          </>
+        )}
+        <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+          {!isPlatformDoc && (
+            <Link to={`/${policyType === 'terms' ? 'terms' : 'privacy'}`} className="text-j2s-purple hover:underline">
+              Read the Enrops {policyType === 'terms' ? 'Terms of Service' : 'Privacy Policy'}
+            </Link>
+          )}
+          <Link to={providerHome} className="text-j2s-purple hover:underline">
+            Return home
+          </Link>
+        </div>
       </div>
     );
   }

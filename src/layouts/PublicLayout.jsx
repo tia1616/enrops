@@ -18,6 +18,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { supabase } from '../lib/supabase.js';
 import PwaInstallButton from '../components/pwa/PwaInstallButton.jsx';
 import PortalSwitcher from '../components/PortalSwitcher.jsx';
+import { fetchPublishedPolicyTypes, PLATFORM_LEGAL_LINKS } from '../lib/policies.js';
 
 const ENROPS_PURPLE = '#1C004F';
 const ENROPS_VIOLET = '#8C88FF';
@@ -29,6 +30,9 @@ export default function PublicLayout() {
   const location = useLocation();
   const [org, setOrg] = useState(null);
   const [loadState, setLoadState] = useState('loading'); // loading | ok | not_found
+  // Which legal docs THIS provider has published. Most have none, so the footer
+  // only links what actually renders. Enrops' platform docs link unconditionally.
+  const [policyTypes, setPolicyTypes] = useState(new Set());
 
   useEffect(() => {
     if (!slug) { setLoadState('not_found'); return; }
@@ -42,6 +46,12 @@ export default function PublicLayout() {
         .maybeSingle();
       if (cancelled) return;
       if (error || !data) { setLoadState('not_found'); return; }
+      // Resolve the published policy list BEFORE flipping to 'ok'. Setting
+      // 'ok' first would render the footer with an empty set, so J2S's real
+      // Privacy/Terms links would vanish for a frame and then pop back in.
+      const types = await fetchPublishedPolicyTypes(data.id);
+      if (cancelled) return;
+      setPolicyTypes(types);
       setOrg(data);
       setLoadState('ok');
     })();
@@ -74,13 +84,13 @@ export default function PublicLayout() {
   // Everyone else gets the Enrops base brand for now — per-tenant theming is
   // a separate backlog item.
   if (org.slug === 'j2s') {
-    return <J2SBrandedShell org={org} user={user} signOut={signOut} location={location} />;
+    return <J2SBrandedShell org={org} user={user} signOut={signOut} location={location} policyTypes={policyTypes} />;
   }
-  return <EnropsBrandedShell org={org} user={user} signOut={signOut} location={location} />;
+  return <EnropsBrandedShell org={org} user={user} signOut={signOut} location={location} policyTypes={policyTypes} />;
 }
 
 // ─── J2S brand (unchanged behavior; lifted from the old J2SLayout) ──────────
-function J2SBrandedShell({ org, user, signOut, location }) {
+function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
   const home = `/${org.slug}`;
   return (
     <div className="brand-j2s min-h-screen flex flex-col bg-white">
@@ -141,13 +151,26 @@ function J2SBrandedShell({ org, user, signOut, location }) {
                 <span className="text-xs" style={{ color: '#8C88FF' }}>→</span>
               </Link>
               <p className="mt-2 text-xs text-white/50">The enrichment operations platform.</p>
+              {/* Platform legal — governs every account regardless of provider,
+                  so it sits with the "Powered by" badge, not mixed in with the
+                  provider's own documents below. */}
+              <div className="mt-3 flex items-center gap-3 text-xs text-white/40">
+                {PLATFORM_LEGAL_LINKS.map((l) => (
+                  <Link key={l.to} to={l.to} className="hover:text-white/70">{l.label}</Link>
+                ))}
+              </div>
             </div>
           </div>
           <div className="mt-8 flex flex-col items-start justify-between gap-2 border-t border-white/10 pt-6 text-xs text-white/50 sm:flex-row sm:items-center">
             <div>&copy; {new Date().getFullYear()} Journey to STEAM. Future-ready skills, right after school.</div>
+            {/* Only link what this provider has actually published. */}
             <div className="flex items-center gap-4">
-              <Link to={`${home}/privacy`} className="hover:text-white">Privacy Policy</Link>
-              <Link to={`${home}/terms`} className="hover:text-white">Terms of Service</Link>
+              {policyTypes?.has('privacy') && (
+                <Link to={`${home}/privacy`} className="hover:text-white">Privacy Policy</Link>
+              )}
+              {policyTypes?.has('terms') && (
+                <Link to={`${home}/terms`} className="hover:text-white">Terms of Service</Link>
+              )}
             </div>
           </div>
         </div>
@@ -159,7 +182,7 @@ function J2SBrandedShell({ org, user, signOut, location }) {
 // ─── Enrops base brand (used for every non-J2S tenant for now) ──────────────
 // Intentionally clean and platform-neutral. Per-tenant branding (logos, colors,
 // custom copy) is the next pass — captured as a backlog item.
-function EnropsBrandedShell({ org, user, signOut, location }) {
+function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
   const home = `/${org.slug}`;
   return (
     <div className="brand-enrops-public" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: ENROPS_CREAM, color: '#1a1a1a', fontFamily: 'inherit' }}>
@@ -207,9 +230,18 @@ function EnropsBrandedShell({ org, user, signOut, location }) {
               &copy; {new Date().getFullYear()} {org.name}. Powered by{' '}
               <Link to="/" style={{ color: ENROPS_VIOLET, textDecoration: 'none' }}>Enrops</Link>.
             </div>
-            <div style={{ display: 'flex', gap: 16 }}>
-              <Link to={`${home}/privacy`} style={{ color: 'rgba(255,255,255,0.7)', textDecoration: 'none' }}>Privacy</Link>
-              <Link to={`${home}/terms`} style={{ color: 'rgba(255,255,255,0.7)', textDecoration: 'none' }}>Terms</Link>
+            {/* Provider's own docs only when published; Enrops platform docs
+                always, since they govern the account either way. */}
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              {policyTypes?.has('privacy') && (
+                <Link to={`${home}/privacy`} style={{ color: 'rgba(255,255,255,0.7)', textDecoration: 'none' }}>Privacy</Link>
+              )}
+              {policyTypes?.has('terms') && (
+                <Link to={`${home}/terms`} style={{ color: 'rgba(255,255,255,0.7)', textDecoration: 'none' }}>Terms</Link>
+              )}
+              {PLATFORM_LEGAL_LINKS.map((l) => (
+                <Link key={l.to} to={l.to} style={{ color: 'rgba(255,255,255,0.45)', textDecoration: 'none' }}>{l.label}</Link>
+              ))}
             </div>
           </div>
         </div>

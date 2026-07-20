@@ -138,18 +138,13 @@ export default function App() {
         <Route path="register/success" element={<J2SRegisterSuccess />} />
         <Route path="login" element={<J2SLogin />} />
         <Route path="dashboard" element={<J2SDashboard />} />
-        {/* orgSlug stays hardcoded here on PROD on purpose - do not drop it
-            without shipping the policies feature in the same release.
-            Staging removed this prop so PolicyPage resolves the provider from
-            the `:slug` URL param, but that only works with staging's
-            PolicyPage, which reads `params.slug`. THIS branch's PolicyPage
-            still reads `params.orgSlug`, and the route param is named `:slug`,
-            so with no prop the slug resolves to undefined and the query
-            becomes .eq('slug', undefined) - blanking /j2s/privacy and
-            /j2s/terms for parents. Kept as-is so this release changes only
-            bundling, never behaviour. */}
-        <Route path="privacy" element={<PolicyPage policyType="privacy" orgSlug="j2s" />} />
-        <Route path="terms" element={<PolicyPage policyType="terms" orgSlug="j2s" />} />
+        {/* No orgSlug prop: PolicyPage resolves the provider from the `:slug`
+            URL param above. It used to be hardcoded to "j2s", which served
+            Journey to STEAM LLC's privacy policy under every other provider's
+            brand. The platform's own docs are the `/privacy` `/terms` routes
+            further up, which pass orgSlug="enrops" explicitly. */}
+        <Route path="privacy" element={<PolicyPage policyType="privacy" />} />
+        <Route path="terms" element={<PolicyPage policyType="terms" />} />
       </Route>
       <Route path="/j2s/instructor" element={<InstructorPortal />} />
       {/* /:slug/instructor for multi-tenant — currently J2S only but the
