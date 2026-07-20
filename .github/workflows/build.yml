@@ -59,11 +59,22 @@ jobs:
         # over months with nothing reporting on it. This prints the largest
         # assets into the job summary on every run so the trend is visible in
         # the PR rather than discovered by an outage.
+        #
+        # continue-on-error + `|| true`: this step is a REPORT, not a gate. The
+        # gate is `npm run build` above. Without this, a hiccup in the reporting
+        # pipeline (no .js matched, `head` closing the pipe early and SIGPIPE-ing
+        # `ls`, a `du` quirk on the runner) would fail the step under bash -e and
+        # turn a perfectly good build red. A CI job that cries wolf is worse than
+        # no CI job, because people learn to ignore it - which is how the 7/18
+        # build failure went unnoticed in the first place.
+        continue-on-error: true
         run: |
           {
             echo "### Largest built assets"
             echo ""
             echo '```'
-            ls -S dist/assets/*.js | head -12 | xargs -I{} sh -c 'printf "%8s  %s\n" "$(du -k "{}" | cut -f1)K" "{}"'
+            find dist/assets -name '*.js' -printf '%s %p\n' 2>/dev/null \
+              | sort -rn | head -12 \
+              | awk '{ printf "%8.1f kB  %s\n", $1/1024, $2 }'
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY" || true
