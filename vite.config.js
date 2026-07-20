@@ -90,6 +90,26 @@ export default defineConfig({
         // chunk, NOT to raise the number. Raising it is what let the main
         // bundle grow unnoticed to 3.14 MB in the first place.
         maximumFileSizeToCacheInBytes: 2 * 1024 * 1024,
+        // Inline the workbox runtime into sw.js instead of emitting it as a
+        // separate workbox-<hash>.js that sw.js pulls in with importScripts().
+        //
+        // 2026-07-20: prod had a waiting service worker that could never
+        // activate. Tapping "Update" on the toast posts SKIP_WAITING to the
+        // waiting worker; the browser has to WAKE that worker to deliver the
+        // message, which re-evaluates sw.js. Re-evaluation hit
+        //   importScripts('/workbox-9c191d2f.js')
+        // and threw: "importScripts() of new scripts after service worker
+        // installation is not allowed" - the spec only permits importScripts
+        // during the worker's FIRST evaluation. The script died before
+        // registering its message listener, so skipWaiting() never ran and the
+        // worker stayed waiting forever. Every user who saw that toast was
+        // pinned to stale code with no way out but clearing site data.
+        //
+        // Inlining removes importScripts from sw.js entirely, so waking the
+        // worker to deliver a message can't fail. Costs ~15 kB on sw.js.
+        //
+        // Do NOT set this back to false to "save" that 15 kB.
+        inlineWorkboxRuntime: true,
         cleanupOutdatedCaches: true,
         // Take control of open clients as soon as the SW activates so the
         // first install qualifies on the first page load, not the second.
