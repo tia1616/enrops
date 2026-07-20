@@ -1,4 +1,4 @@
-// src/pages/j2s/InstructorAvailabilityForm.jsx
+// src/pages/portal/InstructorAvailabilityForm.jsx
 // In-portal availability survey. Replaces the Google Form → manual transcription
 // loop from SU26. Instructor sets which weeks + session types + locations +
 // curricula they'd like to work, plus role preference, Saturday availability,

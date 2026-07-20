@@ -1,4 +1,4 @@
-// src/pages/j2s/AfterschoolAvailabilityForm.jsx
+// src/pages/portal/AfterschoolAvailabilityForm.jsx
 // Afterschool availability survey (v2). Mirrors the real provider availability form:
 //   - per-WEEKDAY time availability ("available from [time]", optional "until")
 //   - how many days a week you want (a range)

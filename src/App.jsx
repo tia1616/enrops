@@ -17,11 +17,11 @@ import ChunkErrorBoundary from './components/ChunkErrorBoundary.jsx';
 // and only the content area suspends.
 // ---------------------------------------------------------------------------
 import EnropsLanding from './pages/enrops/Landing.jsx';
-import J2SHome from './pages/j2s/Home.jsx';
-import J2SRegister from './pages/j2s/Register.jsx';
-import J2SRegisterSuccess from './pages/j2s/RegisterSuccess.jsx';
-import J2SLogin from './pages/j2s/Login.jsx';
-import J2SDashboard from './pages/j2s/Dashboard.jsx';
+import Home from './pages/portal/Home.jsx';
+import Register from './pages/portal/Register.jsx';
+import RegisterSuccess from './pages/portal/RegisterSuccess.jsx';
+import Login from './pages/portal/Login.jsx';
+import Dashboard from './pages/portal/Dashboard.jsx';
 import PolicyPage from './pages/PolicyPage.jsx';
 import Unsubscribed from './pages/Unsubscribed.jsx';
 import AdminLogin from './pages/admin/AdminLogin.jsx';
@@ -76,7 +76,7 @@ const PayRatesSettings = lazy(() => import('./pages/admin/PayRatesSettings.jsx')
 const TimeSavedPage = lazy(() => import('./pages/admin/TimeSavedPage.jsx'));
 
 // Instructor + onboarding: a separate audience from the parent money path.
-const InstructorPortal = lazy(() => import('./pages/j2s/InstructorPortal.jsx'));
+const InstructorPortal = lazy(() => import('./pages/portal/InstructorPortal.jsx'));
 const GoogleAuthCallback = lazy(() => import('./pages/auth/GoogleAuthCallback.jsx'));
 const ErrorPage = lazy(() => import('./pages/error/ErrorPage.jsx'));
 const OnboardingRouter = lazy(() => import('./pages/onboarding/OnboardingRouter.jsx'));
@@ -133,11 +133,11 @@ export default function App() {
           </CartProvider>
         }
       >
-        <Route index element={<J2SHome />} />
-        <Route path="register" element={<J2SRegister />} />
-        <Route path="register/success" element={<J2SRegisterSuccess />} />
-        <Route path="login" element={<J2SLogin />} />
-        <Route path="dashboard" element={<J2SDashboard />} />
+        <Route index element={<Home />} />
+        <Route path="register" element={<Register />} />
+        <Route path="register/success" element={<RegisterSuccess />} />
+        <Route path="login" element={<Login />} />
+        <Route path="dashboard" element={<Dashboard />} />
         {/* No orgSlug prop: PolicyPage resolves the provider from the `:slug`
             URL param above. It used to be hardcoded to "j2s", which served
             Journey to STEAM LLC's privacy policy under every other provider's
