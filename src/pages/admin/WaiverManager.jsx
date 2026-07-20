@@ -49,6 +49,11 @@ export default function WaiverManager() {
   const [waivers, setWaivers] = useState(null); // null = loading
   const [policies, setPolicies] = useState(null); // null = loading; else the org's rows
   const [policiesError, setPoliciesError] = useState("");
+  // Save failures must render INSIDE the open editor. The page-level `error`
+  // banner sits at the top of the page, behind the modal overlay — an operator
+  // who clicks Save and hits an error saw the button un-busy and nothing else,
+  // which reads as "it worked" or "it's broken and I don't know why".
+  const [saveError, setSaveError] = useState("");
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(null); // waiver object, or { _new: true }
   const [editingPolicy, setEditingPolicy] = useState(null); // { type, label, row|null }
@@ -85,6 +90,14 @@ export default function WaiverManager() {
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 2200); }
 
+  // Open/close both editors through these so a stale save error from a previous
+  // attempt can never greet you on a freshly opened form. One place to edit
+  // beats six call sites, one of which would eventually get missed.
+  function openWaiverEditor(w) { setSaveError(""); setEditing(w); }
+  function closeWaiverEditor() { setSaveError(""); setEditing(null); }
+  function openPolicyEditor(kind, row) { setSaveError(""); setEditingPolicy({ ...kind, row }); }
+  function closePolicyEditor() { setSaveError(""); setEditingPolicy(null); }
+
   async function saveEditing(form) {
     setBusy(true); setError("");
     try {
@@ -108,7 +121,8 @@ export default function WaiverManager() {
       setEditing(null);
       await load();
     } catch (e) {
-      setError(e.message ?? "Couldn't save the waiver.");
+      // Stays inside the still-open editor, not behind it.
+      setSaveError(e.message ?? "Couldn't save the waiver.");
     } finally {
       setBusy(false);
     }
@@ -129,7 +143,7 @@ export default function WaiverManager() {
   // table has one ("Org members can update own org policies"), verified live on
   // staging and prod. The SECOND save is the one that exercises it.
   async function savePolicy({ type, content, effectiveDate }) {
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setSaveError("");
     try {
       const { error: e } = await supabase.from("org_policies").upsert(
         {
@@ -146,8 +160,10 @@ export default function WaiverManager() {
       await load();
       flash("Published. Families can read it now.");
     } catch (e) {
-      // Never swallow this — the operator's next decision depends on whether it saved.
-      setError(e.message ?? "Couldn't save that policy.");
+      // Never swallow this — the operator's next decision depends on whether it
+      // saved. Renders inside the still-open editor so it can't hide behind the
+      // modal overlay.
+      setSaveError(e.message ?? "Couldn't save that policy.");
     } finally {
       setBusy(false);
     }
@@ -188,6 +204,19 @@ export default function WaiverManager() {
   }
 
   if (waivers === null) {
+    // A failed load used to leave `waivers` null forever, so the page sat on
+    // "Loading waivers…" with the error banner stuck inside a return that never
+    // rendered. Say what happened instead of spinning.
+    if (error) {
+      return (
+        <div style={{ maxWidth: 820, margin: "0 auto", padding: "8px 0 40px" }}>
+          <Link to="/admin/settings" style={{ fontSize: 13, color: MUTED, textDecoration: "none" }}>← Settings</Link>
+          <div style={{ marginTop: 16, padding: "12px 14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13.5, lineHeight: 1.5 }}>
+            We couldn&rsquo;t load your waivers and policies. Refresh to try again. ({error})
+          </div>
+        </div>
+      );
+    }
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading waivers…</div>;
   }
 
@@ -208,7 +237,7 @@ export default function WaiverManager() {
         <p style={{ color: MUTED, fontSize: 13.5, margin: 0, lineHeight: 1.5, maxWidth: 560 }}>
           Required ones must be signed before a family can see their program details in the portal.
         </p>
-        <button type="button" onClick={() => setEditing({ _new: true })} style={primaryBtn(false)}>+ Add a waiver</button>
+        <button type="button" onClick={() => openWaiverEditor({ _new: true })} style={primaryBtn(false)}>+ Add a waiver</button>
       </div>
 
       {error && <div style={{ marginTop: 16, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
@@ -222,7 +251,7 @@ export default function WaiverManager() {
           </p>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
             <button type="button" onClick={seedTemplate} disabled={busy} style={primaryBtn(busy)}>{busy ? "Adding…" : "Start from a template"}</button>
-            <button type="button" onClick={() => setEditing({ _new: true })} style={ghostBtn(false)}>Add my own</button>
+            <button type="button" onClick={() => openWaiverEditor({ _new: true })} style={ghostBtn(false)}>Add my own</button>
           </div>
         </div>
       ) : (
@@ -239,7 +268,7 @@ export default function WaiverManager() {
                   <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>{w.content}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  <button type="button" onClick={() => setEditing(w)} style={ghostBtn(false)}>Edit</button>
+                  <button type="button" onClick={() => openWaiverEditor(w)} style={ghostBtn(false)}>Edit</button>
                   <button type="button" onClick={() => toggle(w, "required")} style={ghostBtn(false)}>{w.required ? "Make optional" : "Make required"}</button>
                   <button type="button" onClick={() => toggle(w, "active")} style={ghostBtn(false)}>{w.active ? "Archive" : "Restore"}</button>
                 </div>
@@ -293,7 +322,7 @@ export default function WaiverManager() {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  <button type="button" onClick={() => setEditingPolicy({ ...kind, row })} style={row ? ghostBtn(false) : primaryBtn(false)}>
+                  <button type="button" onClick={() => openPolicyEditor(kind, row)} style={row ? ghostBtn(false) : primaryBtn(false)}>
                     {row ? "Edit" : "Publish"}
                   </button>
                   {row && (
@@ -310,7 +339,8 @@ export default function WaiverManager() {
         <WaiverEditor
           waiver={editing}
           busy={busy}
-          onCancel={() => setEditing(null)}
+          saveError={saveError}
+          onCancel={closeWaiverEditor}
           onSave={saveEditing}
         />
       )}
@@ -322,7 +352,8 @@ export default function WaiverManager() {
           key={editingPolicy.type}
           kind={editingPolicy}
           busy={busy}
-          onCancel={() => setEditingPolicy(null)}
+          saveError={saveError}
+          onCancel={closePolicyEditor}
           onSave={savePolicy}
         />
       )}
@@ -338,7 +369,7 @@ function formatStamp(v) {
   return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 }
 
-function PolicyEditor({ kind, busy, onCancel, onSave }) {
+function PolicyEditor({ kind, busy, saveError, onCancel, onSave }) {
   const row = kind.row;
   const [content, setContent] = useState(row?.content_markdown ?? "");
   const [effectiveDate, setEffectiveDate] = useState(row?.effective_date ?? "");
@@ -374,6 +405,12 @@ function PolicyEditor({ kind, busy, onCancel, onSave }) {
           registration software itself — yours doesn&rsquo;t need to repeat them.
         </div>
 
+        {saveError && (
+          <div style={{ marginTop: 14, padding: "10px 12px", background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 8, color: "#991b1b", fontSize: 13, lineHeight: 1.5 }}>
+            That didn&rsquo;t save, so nothing changed for families. ({saveError})
+          </div>
+        )}
+
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20, borderTop: `1px solid ${RULE}`, paddingTop: 16 }}>
           <button type="button" onClick={onCancel} disabled={busy} style={ghostBtn(busy)}>Cancel</button>
           <button
@@ -390,7 +427,7 @@ function PolicyEditor({ kind, busy, onCancel, onSave }) {
   );
 }
 
-function WaiverEditor({ waiver, busy, onCancel, onSave }) {
+function WaiverEditor({ waiver, busy, saveError, onCancel, onSave }) {
   const isNew = !!waiver._new;
   const [name, setName] = useState(isNew ? "" : waiver.name ?? "");
   const [content, setContent] = useState(isNew ? "" : waiver.content ?? "");
@@ -415,6 +452,12 @@ function WaiverEditor({ waiver, busy, onCancel, onSave }) {
           <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} disabled={busy} />
           Required — families must sign this to enroll / see program details
         </label>
+
+        {saveError && (
+          <div style={{ marginTop: 14, padding: "10px 12px", background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 8, color: "#991b1b", fontSize: 13, lineHeight: 1.5 }}>
+            That didn&rsquo;t save, so nothing changed for families. ({saveError})
+          </div>
+        )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20, borderTop: `1px solid ${RULE}`, paddingTop: 16 }}>
           <button type="button" onClick={onCancel} disabled={busy} style={ghostBtn(busy)}>Cancel</button>
