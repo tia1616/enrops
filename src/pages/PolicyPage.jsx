@@ -64,12 +64,14 @@ export default function PolicyPage({ policyType, orgSlug: orgSlugProp }) {
         return;
       }
 
-      // Fetch the matching policy
+      // Fetch the matching policy. published = false is a hidden draft, so it
+      // reads to families exactly like "not published yet" — never show it.
       const { data: pol } = await supabase
         .from('org_policies')
         .select('content_markdown, effective_date, last_updated')
         .eq('organization_id', org.id)
         .eq('policy_type', policyType)
+        .eq('published', true)
         .maybeSingle();
 
       if (cancelled) return;

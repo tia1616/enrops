@@ -70,9 +70,11 @@ export default function WaiverManager() {
         .eq("organization_id", org.id)
         .order("required", { ascending: false })
         .order("name"),
+      // Admin reads ALL rows including hidden drafts (published = false), and
+      // keys each card on the flag. The public readers filter published = true.
       supabase
         .from("org_policies")
-        .select("id, policy_type, content_markdown, effective_date, last_updated")
+        .select("id, policy_type, content_markdown, effective_date, last_updated, published")
         .eq("organization_id", org.id),
     ]);
     if (wRes.error) { setError(wRes.error.message); return; }
@@ -152,6 +154,10 @@ export default function WaiverManager() {
           content_markdown: content,
           effective_date: effectiveDate || null,
           last_updated: new Date().toISOString(),
+          // Saving always (re)publishes. Without this, editing a hidden draft
+          // would keep published = false on the conflict update and the "Publish"
+          // button would silently save-but-not-publish.
+          published: true,
         },
         { onConflict: "organization_id,policy_type" },
       );
@@ -169,17 +175,40 @@ export default function WaiverManager() {
     }
   }
 
+  // Soft-unpublish: hide from families but KEEP the text as a draft, so "publish
+  // again" is one click and the promise in the confirm dialog is actually true.
   async function unpublishPolicy(row, label) {
     if (busy) return;
-    if (!window.confirm(`Unpublish your ${label}? Families will no longer see it, and the link will disappear from your site footer. You can publish it again later.`)) return;
+    if (!window.confirm(`Unpublish your ${label}? Families will no longer see it and the link will disappear from your site footer. Your text is kept as a draft — you can publish it again anytime.`)) return;
     setBusy(true); setError("");
     try {
-      const { error: e } = await supabase.from("org_policies").delete().eq("id", row.id);
+      const { error: e } = await supabase.from("org_policies")
+        .update({ published: false, last_updated: new Date().toISOString() })
+        .eq("id", row.id);
       if (e) throw e;
       await load();
-      flash(`${label} unpublished.`);
+      flash(`${label} unpublished — saved as a draft.`);
     } catch (e) {
       setError(e.message ?? "Couldn't unpublish that policy.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Re-publish a hidden draft in one click, no re-paste. Uses the same UPDATE
+  // policy as unpublish.
+  async function republishPolicy(row, label) {
+    if (busy) return;
+    setBusy(true); setError("");
+    try {
+      const { error: e } = await supabase.from("org_policies")
+        .update({ published: true, last_updated: new Date().toISOString() })
+        .eq("id", row.id);
+      if (e) throw e;
+      await load();
+      flash(`${label} published — families can read it now.`);
+    } catch (e) {
+      setError(e.message ?? "Couldn't publish that policy.");
     } finally {
       setBusy(false);
     }
@@ -296,6 +325,10 @@ export default function WaiverManager() {
         {POLICY_KINDS.map((kind) => {
           const row = (policies ?? []).find((p) => p.policy_type === kind.type) || null;
           const publicPath = `/${org?.slug ?? ""}/${kind.type}`;
+          // Three states: never created (no row), live (row + published), and
+          // hidden draft (row + !published — text saved but off the public site).
+          const isLive = !!row && row.published;
+          const isDraft = !!row && !row.published;
           return (
             <div key={kind.type} style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "14px 16px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
@@ -304,12 +337,14 @@ export default function WaiverManager() {
                     {kind.label}
                     {policiesError
                       ? <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Unknown</Badge>
-                      : row
+                      : isLive
                         ? <Badge bg={GREEN_BG} border="#bbf7d0" color={GREEN_INK}>Published</Badge>
-                        : <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Not published</Badge>}
+                        : isDraft
+                          ? <Badge bg="#fff7ed" border="#fed7aa" color="#9a3412">Draft — not shown to families</Badge>
+                          : <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Not published</Badge>}
                   </div>
                   <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560 }}>
-                    {row ? (
+                    {isLive ? (
                       <>
                         Last updated {formatStamp(row.last_updated)}
                         {row.effective_date ? ` · effective ${formatStamp(row.effective_date)}` : ""}
@@ -318,14 +353,19 @@ export default function WaiverManager() {
                           View public page ↗
                         </a>
                       </>
+                    ) : isDraft ? (
+                      <>Saved {formatStamp(row.last_updated)}, kept as a draft. Not shown on your site until you publish it.</>
                     ) : kind.blurb}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {isDraft && (
+                    <button type="button" onClick={() => republishPolicy(row, kind.label)} disabled={busy} style={primaryBtn(busy)}>Publish</button>
+                  )}
                   <button type="button" onClick={() => openPolicyEditor(kind, row)} style={row ? ghostBtn(false) : primaryBtn(false)}>
                     {row ? "Edit" : "Publish"}
                   </button>
-                  {row && (
+                  {isLive && (
                     <button type="button" onClick={() => unpublishPolicy(row, kind.label)} disabled={busy} style={ghostBtn(busy)}>Unpublish</button>
                   )}
                 </div>

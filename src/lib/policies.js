@@ -21,7 +21,10 @@ export async function fetchPublishedPolicyTypes(organizationId) {
   const { data, error } = await supabase
     .from('org_policies')
     .select('policy_type')
-    .eq('organization_id', organizationId);
+    .eq('organization_id', organizationId)
+    // Only live policies get a footer link. A row can now exist as a hidden
+    // draft (published = false); linking to it would dead-end on the public page.
+    .eq('published', true);
   // Fail closed: on error we show no provider legal links rather than linking to
   // a page we can't confirm exists. The Enrops platform links (below) still render,
   // so the footer is never left without a route to the terms that govern the account.
