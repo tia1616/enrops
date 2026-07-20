@@ -27,7 +27,7 @@ const OTHER_DISTRICT = 'Other schools & sites';
 // Week order for the recurring class schedule (day_of_week stored Title-Case).
 const WEEKLY_DAY_ORDER = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
 
-export default function J2SHome() {
+export default function Home() {
   const { org } = useOutletContext();
   const ORG_SLUG = org.slug;
   const navigate = useNavigate();
