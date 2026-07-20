@@ -1,4 +1,4 @@
-// src/pages/j2s/InstructorPortal.jsx
+// src/pages/portal/InstructorPortal.jsx
 // Minimal instructor portal: magic-link sign-in, list of published assignments,
 // Accept or Request Change per camp. Class detail + My Availability are v2.
 
