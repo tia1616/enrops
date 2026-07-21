@@ -245,7 +245,13 @@ serve(async (req) => {
         .insert({
           parent_id: parentId,
           organization_id: orgId,
-          school_id: child.school_id,
+          // NOTE: `students` has no `school_id` column (the location link would be
+          // `program_location_id`), and the client never sends `child.school_id`,
+          // so this key was always undefined and dropped before the insert — dead.
+          // The child's school/area is derived authoritatively from the program the
+          // family registered for (see auto_add_registrant_to_marketing_list). If a
+          // future feature needs a student-level location, wire program_location_id
+          // as its own scoped, tested change — not silently on the checkout path.
           first_name: student.first_name,
           last_name: student.last_name,
           grade: gradeVal,
