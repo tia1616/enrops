@@ -132,14 +132,14 @@ export function InstructorContacts({ org }) {
   return (
     <PeopleList
       title="Instructors"
-      subtitle={<>The team you can email. To send onboarding invites, run background checks, or edit details, go to <Link to="/admin/instructors" style={{ color: BRIGHT, fontWeight: 600 }}>Instructor Roster</Link>.</>}
+      subtitle={<>Everyone on your <Link to="/admin/instructors" style={{ color: BRIGHT, fontWeight: 600 }}>Instructor Roster</Link> shows up here automatically. Add instructors, send onboarding invites, or edit details there.</>}
       searchPlaceholder="Search name, email, phone…"
       columns={columns}
       rows={visible}
       loading={rows === null}
       error={error}
       searchText={(r) => [nameOf(r), r.email, r.phone].filter(Boolean).join(" ")}
-      emptyLabel="No instructors yet."
+      emptyLabel="No instructors yet — add them on your Instructor Roster and they'll appear here."
       noun="instructors"
       toolbar={
         <label style={{ display: "flex", alignItems: "center", gap: 6, color: MUTED, fontSize: 12 }}>
@@ -212,14 +212,14 @@ export function PartnerContacts({ org }) {
   return (
     <PeopleList
       title="Partners"
-      subtitle={<>The people at your partner sites you can email. To add partners, edit venues, or manage calendars, go to <Link to="/admin/schools" style={{ color: BRIGHT, fontWeight: 600 }}>Partners</Link>.</>}
+      subtitle={<>Partner contacts come from your <Link to="/admin/schools" style={{ color: BRIGHT, fontWeight: 600 }}>Partners</Link> tab — add or edit each partner&apos;s contacts there and they show up here to email.</>}
       searchPlaceholder="Search name, email, partner…"
       columns={columns}
       rows={rows}
       loading={rows === null}
       error={error}
       searchText={(r) => [r.contact_name, r.contact_email, r.contact_phone, r.partner_name, r.contact_role].filter(Boolean).join(" ")}
-      emptyLabel="No partner contacts yet."
+      emptyLabel="No partner contacts yet — add them under each partner in the Partners tab."
       noun="contacts"
     />
   );
