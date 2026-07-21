@@ -125,8 +125,8 @@ export default function CurriculaList() {
   }));
 
   // Delete a curriculum (any status):
-  //   1. confirm with operator -- stronger warning for published (will unlink
-  //      any linked programs + camp_sessions, those go back to free-text)
+  //   1. confirm with operator -- warn if any programs / camp sessions are
+  //      linked (they go back to free-text, not deleted)
   //   2. fetch curriculum_documents storage paths for cleanup (cascade doesn't
   //      extend to storage)
   //   3. UPDATE programs SET curriculum_id=NULL WHERE curriculum_id=this
@@ -136,18 +136,17 @@ export default function CurriculaList() {
   //   5. DELETE the curricula row -- cascade clears curriculum_sessions /
   //      curriculum_extracted_fields / curriculum_documents
   //   6. drop from local list
+  // NOTE: links are checked for EVERY status, not just published. A draft can
+  // already be linked to programs (e.g. via Match-from-Programs), and skipping
+  // the unlink there is what made drafts fail to delete on the programs FK.
   const [deleting, setDeleting] = useState(null); // curriculum id being deleted
   async function deleteCurriculum(c) {
-    let linkedProgCount = 0;
-    let linkedCampCount = 0;
-    if (c.status === "published") {
-      const [{ count: pc }, { count: cc }] = await Promise.all([
-        supabase.from("programs").select("id", { count: "exact", head: true }).eq("curriculum_id", c.id),
-        supabase.from("camp_sessions").select("id", { count: "exact", head: true }).eq("curriculum_id", c.id),
-      ]);
-      linkedProgCount = pc ?? 0;
-      linkedCampCount = cc ?? 0;
-    }
+    const [{ count: pc }, { count: cc }] = await Promise.all([
+      supabase.from("programs").select("id", { count: "exact", head: true }).eq("curriculum_id", c.id),
+      supabase.from("camp_sessions").select("id", { count: "exact", head: true }).eq("curriculum_id", c.id),
+    ]);
+    const linkedProgCount = pc ?? 0;
+    const linkedCampCount = cc ?? 0;
     const linkedTotal = linkedProgCount + linkedCampCount;
     const baseMsg = `Delete "${c.name}"?\n\nThis removes the offering, all its sessions, extracted fields, and any uploaded documents. This can't be undone.`;
     const linkMsg = linkedTotal > 0
@@ -164,16 +163,17 @@ export default function CurriculaList() {
 
       // Unlink programs first (FK is NO ACTION, would block the delete).
       // camp_sessions FK is SET NULL so it handles itself on cascade.
-      if (linkedProgCount > 0 || c.status === "published") {
-        const { error: unlinkErr } = await supabase
-          .from("programs")
-          .update({ curriculum_id: null })
-          .eq("curriculum_id", c.id);
-        if (unlinkErr) {
-          alert(`Couldn't unlink programs: ${unlinkErr.message}`);
-          setDeleting(null);
-          return;
-        }
+      // Run this UNCONDITIONALLY for any status: a draft can be linked too, and
+      // the UPDATE is a harmless no-op (0 rows) when nothing points here -- so we
+      // don't depend on the count query above being accurate to avoid the FK error.
+      const { error: unlinkErr } = await supabase
+        .from("programs")
+        .update({ curriculum_id: null })
+        .eq("curriculum_id", c.id);
+      if (unlinkErr) {
+        alert(`Couldn't unlink programs: ${unlinkErr.message}`);
+        setDeleting(null);
+        return;
       }
 
       if (paths.length > 0) {
