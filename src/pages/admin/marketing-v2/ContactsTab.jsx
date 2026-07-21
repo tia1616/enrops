@@ -16,12 +16,20 @@
 //
 // Org comes from useOutletContext — never hardcoded. Copy is tenant-neutral.
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
+
+// Comms is the single CRM hub for all three audiences. Instructors + Partners
+// are the SAME live components used at /admin/instructors and /admin/schools —
+// mirrored here (single source, no rebuild), not reimplemented. Lazy-loaded so
+// switching audience pulls them on demand instead of bloating the Comms chunk.
+const InstructorsTab = lazy(() => import("../contacts/InstructorsTab.jsx"));
+const SchoolsList = lazy(() => import("../schools/SchoolsList.jsx"));
+const LocationsList = lazy(() => import("../LocationsList.jsx"));
 
 const CREAM = "#FBFBFB";
 const RED = "#b53737";
@@ -180,7 +188,84 @@ const DOC_COLUMNS = ["email", "parent_name", "phone", "child_first_name", "child
 
 export default function ContactsTab() {
   const { org } = useOutletContext() ?? {};
+  const [params, setParams] = useSearchParams();
 
+  // Audience selection rides in the URL (?audience=) so it survives refresh +
+  // deep links, and the sidebar "Comms" item stays lit (path is unchanged:
+  // /admin/family-comms/contacts). Default (no param) = families.
+  const audience = ["instructors", "partners"].includes(params.get("audience"))
+    ? params.get("audience")
+    : "families";
+  function selectAudience(a) {
+    const next = new URLSearchParams(params);
+    if (a === "families") next.delete("audience");
+    else next.set("audience", a);
+    setParams(next, { replace: true });
+  }
+
+  // Own-venue tenants (a center/studio with no external partner schools) call
+  // the partner surface "Locations" and render the venue list; partner tenants
+  // (e.g. J2S) see "Partners" + the schools/partners surface. Mirror exactly
+  // what /admin/schools does per organizations.venue_model.
+  const ownVenue = org?.venue_model === "own_venue";
+  const partnerLabel = ownVenue ? "Locations" : "Partners";
+
+  return (
+    <div style={{ padding: "24px 32px" }}>
+      <FamilyCommsTabs active="contacts" />
+      <AudienceSwitcher active={audience} partnerLabel={partnerLabel} onSelect={selectAudience} />
+      {audience === "families" && <FamiliesContacts org={org} />}
+      {audience !== "families" && (
+        <Suspense fallback={<div style={{ color: MUTED, fontSize: 13, padding: 16 }}>Loading…</div>}>
+          {audience === "instructors" && <InstructorsTab org={org} />}
+          {audience === "partners" && (ownVenue ? <LocationsList embedded /> : <SchoolsList />)}
+        </Suspense>
+      )}
+    </div>
+  );
+}
+
+// Segmented control leading the Contacts surface. Three CRM audiences:
+// families (marketing_recipients), instructors (the roster), partners
+// (schools/partners) — the enrichment-specific shape no marketing tool nails.
+function AudienceSwitcher({ active, partnerLabel, onSelect }) {
+  const items = [
+    { key: "families", label: "Families" },
+    { key: "instructors", label: "Instructors" },
+    { key: "partners", label: partnerLabel },
+  ];
+  return (
+    <div role="tablist" aria-label="Contact audience" style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+      {items.map((it) => {
+        const on = active === it.key;
+        return (
+          <button
+            key={it.key}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            onClick={() => onSelect(it.key)}
+            style={{
+              padding: "7px 16px",
+              borderRadius: 999,
+              border: `1px solid ${on ? BRIGHT : RULE}`,
+              background: on ? BRIGHT : "#fff",
+              color: on ? "#fff" : MUTED,
+              fontSize: 13,
+              fontWeight: on ? 700 : 500,
+              fontFamily: "inherit",
+              cursor: "pointer",
+            }}
+          >
+            {it.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FamiliesContacts({ org }) {
   const [count, setCount] = useState(null); // null = loading
   const [countErr, setCountErr] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -204,12 +289,10 @@ export default function ContactsTab() {
   }, [org?.id, refreshKey]);
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
-      <FamilyCommsTabs active="contacts" />
-
+    <div style={{ maxWidth: 900, margin: "0 auto" }}>
       <header style={{ marginBottom: 24 }}>
         <h1 style={{ color: INK, fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>
-          Contacts
+          Families
         </h1>
         <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: 0 }}>
           This is the list your campaigns send to. Upload your families&apos; email
