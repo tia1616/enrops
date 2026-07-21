@@ -316,14 +316,16 @@ function ContactsList({ orgId, refreshKey }) {
     let alive = true;
     (async () => {
       // Filter list = tags in use ∪ the saved-tags registry, so a freshly
-      // created tag (not yet on any contact) still shows up.
+      // created tag (not yet on any contact) still shows up. In-use tags come
+      // from an RPC (server-side unnest+distinct) so a tag on a contact past
+      // row 2000 isn't silently dropped — the old .limit(2000) truncated it.
       const [usedRes, regRes] = await Promise.all([
-        supabase.from("marketing_recipients").select("tags").eq("organization_id", orgId).not("tags", "is", null).limit(2000),
+        supabase.rpc("distinct_marketing_tags", { p_org: orgId }),
         supabase.from("marketing_tags").select("name").eq("organization_id", orgId),
       ]);
       if (!alive) return;
       const set = new Set();
-      for (const r of usedRes.data ?? []) for (const t of r.tags ?? []) if (t) set.add(t);
+      for (const t of usedRes.data ?? []) if (t) set.add(t);
       for (const r of regRes.data ?? []) if (r.name) set.add(r.name);
       setTagOptions([...set].sort((a, b) => a.localeCompare(b)));
     })();
@@ -634,21 +636,16 @@ function UploadModal({ orgId, onClose, onImported }) {
   const [welcomeChoice, setWelcomeChoice] = useState("new");
 
   // Existing tags power the "tag everyone" autocomplete + the tidy-up nudge.
-  // Single page is fine — autocomplete doesn't need every tail tag, and the
-  // operator can still type a brand-new one.
+  // Uses the distinct-tags RPC (server-side unnest+distinct) so every tag shows,
+  // not just those on the first 2000 rows; the operator can still type a new one.
   useEffect(() => {
     if (!orgId) return;
     let alive = true;
     (async () => {
-      const { data } = await supabase
-        .from("marketing_recipients")
-        .select("tags")
-        .eq("organization_id", orgId)
-        .not("tags", "is", null)
-        .limit(2000);
+      const { data } = await supabase.rpc("distinct_marketing_tags", { p_org: orgId });
       if (!alive) return;
       const set = new Set();
-      for (const r of data ?? []) for (const t of r.tags ?? []) if (t) set.add(t);
+      for (const t of data ?? []) if (t) set.add(t);
       setExistingTags([...set].sort());
     })();
     return () => { alive = false; };
