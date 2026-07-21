@@ -747,6 +747,8 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
   const s = registration.student;
   const existingParent = registration.parent;
   const [form, setForm] = useState({
+    first_name: s.first_name ?? "",
+    last_name: s.last_name ?? "",
     birthdate: s.birthdate ?? "",
     allergies: s.allergies ?? "",
     dietary_restrictions: s.dietary_restrictions ?? "",
@@ -772,10 +774,20 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
 
   async function save() {
     if (busy) return;
+    // Name is required on both sides (students.first_name/last_name are NOT NULL).
+    // Block the save rather than let the DB reject it with a raw error.
+    const firstName = (form.first_name ?? "").trim();
+    const lastName = (form.last_name ?? "").trim();
+    if (!firstName || !lastName) {
+      setErr("First and last name are both required.");
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
       const studentFields = {
+        first_name: firstName,
+        last_name: lastName,
         birthdate: emptyOrNull(form.birthdate),
         allergies: emptyOrNull(form.allergies),
         dietary_restrictions: emptyOrNull(form.dietary_restrictions),
@@ -870,6 +882,15 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        {/* Student name — parents sometimes enter their own name here at
+            registration; correcting it also syncs the family's Contacts entry
+            (marketing_recipients child name) via a DB trigger. */}
+        <Lbl label="Student first name">
+          <Inp value={form.first_name} onChange={(v) => update("first_name", v)} placeholder="Required" />
+        </Lbl>
+        <Lbl label="Student last name">
+          <Inp value={form.last_name} onChange={(v) => update("last_name", v)} placeholder="Required" />
+        </Lbl>
         <Lbl label="Date of birth">
           <input
             type="date"
