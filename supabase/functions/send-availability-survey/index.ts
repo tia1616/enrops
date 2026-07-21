@@ -189,6 +189,20 @@ serve(async (req: Request) => {
       }
     }
 
+    // Durable per-instructor record of who was emailed this survey (Comms
+    // per-contact timeline source). Best-effort: a logging failure must never
+    // fail a send that already went out.
+    if (mode === 'send') {
+      const logRows = [
+        ...sent.map((id) => ({ organization_id: cycle.organization_id, instructor_id: id, survey_kind: 'camp_availability', cycle_id: cycle.id, status: 'sent' })),
+        ...failed.map((f) => ({ organization_id: cycle.organization_id, instructor_id: f.instructor_id, survey_kind: 'camp_availability', cycle_id: cycle.id, status: 'failed', failure_reason: f.reason })),
+      ];
+      if (logRows.length > 0) {
+        const { error: logErr } = await supabase.from('instructor_survey_sends').insert(logRows);
+        if (logErr) console.error('[send-availability-survey] survey-send log failed', logErr.message);
+      }
+    }
+
     // Real send: flip the cycle row so the portal banner unlocks for everyone.
     // Test mode does not flip — admins can re-test as many times as they want.
     if (mode === 'send') {
