@@ -1308,7 +1308,13 @@ export default function CurriculumReview() {
           organizationId={org.id}
           onClose={() => setAddDocOpen(false)}
           onAdded={(newDoc) => {
-            setDocs((ds) => [...ds, newDoc]);
+            // A "Main curriculum" add swaps the source, so drop any old
+            // instructor_guide from the panel; other kinds are a pure append.
+            setDocs((ds) =>
+              newDoc.doc_type === "instructor_guide"
+                ? [...ds.filter((d) => d.doc_type !== "instructor_guide"), newDoc]
+                : [...ds, newDoc]
+            );
             setAddDocOpen(false);
           }}
           onStarted={() => {
@@ -2084,6 +2090,13 @@ function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organi
     setBusy(true);
     setError("");
     try {
+      // The doc's effective type. Replace mode is always the source; add mode
+      // is whatever kind the operator picked -- which now includes "Main
+      // curriculum" (instructor_guide), so an added main doc becomes the source
+      // and its old source is swapped out below just like replace mode.
+      const effectiveDocType = isAdd ? addDocType : "instructor_guide";
+      const isSourceDoc = effectiveDocType === "instructor_guide";
+
       // 1. Upload to storage at the curriculum's existing path prefix.
       const docId = crypto.randomUUID();
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -2100,7 +2113,7 @@ function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organi
           id: docId,
           curriculum_id: curriculumId,
           organization_id: organizationId,
-          doc_type: isAdd ? addDocType : "instructor_guide",
+          doc_type: effectiveDocType,
           source_type: "upload",
           storage_path: path,
           original_filename: file.name,
@@ -2117,11 +2130,12 @@ function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organi
         throw new Error(`Couldn't save ${file.name} record: ${insErr?.message ?? "no row"}`);
       }
 
-      // 2b. REPLACE mode only: remove the OLD instructor_guide docs, since the
-      //     source is being swapped. ADD mode is an append, so nothing is
-      //     removed. Other doc_types (materials_list, student_materials) always
-      //     stay. Failures here are non-fatal: we warn but don't block.
-      if (!isAdd) {
+      // 2b. Whenever the new doc IS the source (replace mode, or add mode with
+      //     "Main curriculum" picked), remove the OLD instructor_guide docs so
+      //     there is only ever one source. Adding a non-source material is a
+      //     pure append -- nothing is removed. Failures here are non-fatal: we
+      //     warn but don't block.
+      if (isSourceDoc) {
         const { data: oldDocs } = await supabase
           .from("curriculum_documents")
           .select("id, storage_path")
@@ -2153,7 +2167,7 @@ function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organi
         onAdded?.({
           id: docRow.id,
           original_filename: file.name,
-          doc_type: isAdd ? addDocType : "instructor_guide",
+          doc_type: effectiveDocType,
           storage_path: path,
           uploaded_at: new Date().toISOString(),
         });
@@ -2192,7 +2206,7 @@ function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organi
         </h3>
         <p style={{ color: MUTED, fontSize: 13, margin: "0 0 16px", lineHeight: 1.45 }}>
           {isAdd
-            ? "Attach a materials list, student handout, or any supporting file."
+            ? "Attach the main curriculum, a materials list, student handout, or any supporting file."
             : "Upload an edited version of your curriculum doc."}
           {" "}You choose below whether it should update your curriculum details.
           The offering name and any programs / camps already linked to it stay attached.
@@ -2240,6 +2254,7 @@ function DocUploadModal({ mode = "replace", curriculumId, curriculumName, organi
               What kind of document is it?
             </div>
             {[
+              { value: "instructor_guide", label: "Main curriculum", hint: "The lesson plan or guide we build everything from" },
               { value: "materials_list", label: "Class materials", hint: "What the instructor brings or orders" },
               { value: "student_materials", label: "Student materials", hint: "Worksheets or printables" },
               { value: "other", label: "Other", hint: "Anything else to keep on file" },
