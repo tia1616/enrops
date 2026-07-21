@@ -26,12 +26,12 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 
 // Flat sidebar nav — every item is a single page. Sections with multiple
-// facets (Programs, Instructors, Money, Family Comms) expose an in-page tab
-// strip (rendered in <main>) instead of an expandable sidebar group, so the
-// sidebar pattern is uniform. Partners (/admin/schools) owns its own internal
-// ?tab= tabs, so it has no shell tab strip — `match` keeps the sidebar item lit
-// on its sub-routes (incl. the retired /admin/calendars, which now redirects
-// into the Calendars tab).
+// facets (Programs, Instructors, Money) expose an in-page tab strip (rendered
+// in <main>) instead of an expandable sidebar group, so the sidebar pattern is
+// uniform. Partners (/admin/schools) and Comms (/admin/family-comms) own their
+// own internal tab strips, so they have no shell tab strip — `match` keeps the
+// sidebar item lit on their sub-routes (for Partners, incl. the retired
+// /admin/calendars, which now redirects into the Calendars tab).
 //
 // URL guardrail: /admin/finances stays put — the Stripe return_url in
 // stripe-connect-onboard is hardcoded to /admin/finances?stripe=return.
@@ -81,12 +81,16 @@ const NAV = [
     ],
   },
   {
-    to: "/admin/family-comms/marketing", label: "Family Comms",
+    to: "/admin/family-comms/marketing", label: "Comms",
     gate: "send",        // owner/admin/staff — a sending surface, hidden from viewer
-    tabs: [
-      { to: "/admin/family-comms/marketing", label: "Marketing" },
-      { to: "/admin/family-comms/automations", label: "Automations" },
-    ],
+    // Comms owns its own 4-tab strip (FamilyCommsTabs, rendered inside each
+    // page: Campaigns / Automations / Contacts / Templates) instead of the
+    // shell strip. Same pattern as Partners — a shell strip here would be a
+    // second, redundant row, and the campaign list⇄wizard live on ONE route
+    // (internal reducer state) so the "Campaigns" tab needs an onReset the
+    // generic shell <Link> can't give. `match` keeps the sidebar item lit
+    // across all four sub-routes.
+    match: ["/admin/family-comms"],
   },
   { to: "/admin/community", label: "Community", soon: true },
   // Settings owns Waivers as a sub-page (/admin/waivers) — keep this item lit there.
