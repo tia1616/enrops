@@ -620,11 +620,15 @@ function NonResponders({ instructors, onNudge }) {
             background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, borderRadius: 8,
             padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
           }}
-          title="Open the availability survey on the Schedule board — non-responders are pre-selected there"
+          title="Opens the Schedule board, where you choose who to send to"
         >
-          Nudge non-responders
+          Nudge non-responders &rarr;
         </button>
       </div>
+      <p style={{ margin: "0 0 10px", fontSize: 12.5, color: MUTED, lineHeight: 1.4 }}>
+        This opens the availability survey on the Schedule board with these non-responders
+        pre-selected. Nothing sends until you review the list, pick who to email, and hit send.
+      </p>
       <div>
         {instructors.map((inst) => (
           <Chip key={inst.id} color={MUTED}>{instructorName(inst)}</Chip>
