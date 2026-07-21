@@ -23,6 +23,7 @@ import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
 import { InstructorContacts, PartnerContacts } from "./AudienceContacts.jsx";
+import ContactTimelineDrawer from "./ContactTimelineDrawer.jsx";
 
 // Comms is the single CRM hub for all three audiences. Instructors + Partners
 // get a light, consistent "your people" contacts list here (name / email /
@@ -370,6 +371,7 @@ function ContactsList({ orgId, refreshKey }) {
   const [tagOptions, setTagOptions] = useState([]);
   const [debouncedQ, setDebouncedQ] = useState("");
   const [editId, setEditId] = useState(null); // contact being edited, or null
+  const [activityRow, setActivityRow] = useState(null); // contact whose timeline is open
   const [localRefresh, setLocalRefresh] = useState(0); // bump to re-fetch after an edit
   const [newTagOpen, setNewTagOpen] = useState(false);
   const [newTag, setNewTag] = useState("");
@@ -526,7 +528,8 @@ function ContactsList({ orgId, refreshKey }) {
                     </span>
                   )}
                 </td>
-                <td style={{ ...listCell, textAlign: "right" }}>
+                <td style={{ ...listCell, textAlign: "right", whiteSpace: "nowrap" }}>
+                  <button type="button" onClick={() => setActivityRow(r)} style={{ padding: "3px 10px", marginRight: 6, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Activity</button>
                   <button type="button" onClick={() => setEditId(r.id)} style={{ padding: "3px 10px", background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Edit</button>
                 </td>
               </tr>
@@ -550,6 +553,16 @@ function ContactsList({ orgId, refreshKey }) {
           suggestions={tagOptions}
           onClose={() => setEditId(null)}
           onSaved={() => { setEditId(null); setLocalRefresh((n) => n + 1); }}
+        />
+      )}
+
+      {activityRow && (
+        <ContactTimelineDrawer
+          audience="families"
+          contact={activityRow}
+          contactLabel={activityRow.parent_name || activityRow.email}
+          orgId={orgId}
+          onClose={() => setActivityRow(null)}
         />
       )}
     </div>

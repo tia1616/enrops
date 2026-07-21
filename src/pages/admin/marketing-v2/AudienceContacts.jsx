@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
+import ContactTimelineDrawer from "./ContactTimelineDrawer.jsx";
 
 const CREAM = "#FBFBFB";
 const RED = "#b53737";
@@ -28,7 +29,7 @@ function Dash() { return <span style={{ color: MUTED }}>—</span>; }
 // Shared list scaffold: header (title + subtitle with a "manage" link), search
 // box (+ optional toolbar), the table, and a count. Consumers supply column
 // defs, the already-audience-filtered rows, and a per-row search string.
-function PeopleList({ title, subtitle, searchPlaceholder, columns, rows, loading, error, searchText, emptyLabel, noun, toolbar }) {
+function PeopleList({ title, subtitle, searchPlaceholder, columns, rows, loading, error, searchText, emptyLabel, noun, toolbar, onRowClick }) {
   const [q, setQ] = useState("");
   const filtered = useMemo(() => {
     if (!rows) return null;
@@ -36,7 +37,7 @@ function PeopleList({ title, subtitle, searchPlaceholder, columns, rows, loading
     if (!needle) return rows;
     return rows.filter((r) => searchText(r).toLowerCase().includes(needle));
   }, [rows, q, searchText]);
-  const span = columns.length;
+  const span = columns.length + (onRowClick ? 1 : 0);
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
@@ -59,7 +60,10 @@ function PeopleList({ title, subtitle, searchPlaceholder, columns, rows, loading
         <div style={{ overflowX: "auto", border: `1px solid ${RULE}`, borderRadius: 6 }}>
           <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
             <thead>
-              <tr>{columns.map((c) => <th key={c.key} style={headCell}>{c.label}</th>)}</tr>
+              <tr>
+                {columns.map((c) => <th key={c.key} style={headCell}>{c.label}</th>)}
+                {onRowClick && <th style={headCell} />}
+              </tr>
             </thead>
             <tbody>
               {loading ? (
@@ -69,8 +73,13 @@ function PeopleList({ title, subtitle, searchPlaceholder, columns, rows, loading
               ) : filtered.length === 0 ? (
                 <tr><td colSpan={span} style={{ padding: 16, color: MUTED, fontSize: 13 }}>{q ? `No ${noun} match “${q}”.` : emptyLabel}</td></tr>
               ) : filtered.map((r) => (
-                <tr key={r.__key} style={r.__dim ? { opacity: 0.55 } : undefined}>
+                <tr
+                  key={r.__key}
+                  onClick={onRowClick ? () => onRowClick(r) : undefined}
+                  style={{ ...(r.__dim ? { opacity: 0.55 } : null), ...(onRowClick ? { cursor: "pointer" } : null) }}
+                >
                   {columns.map((c) => <td key={c.key} style={listCell}>{c.render(r)}</td>)}
+                  {onRowClick && <td style={{ ...listCell, textAlign: "right", color: BRIGHT, fontWeight: 600, whiteSpace: "nowrap" }}>Activity ›</td>}
                 </tr>
               ))}
             </tbody>
@@ -91,6 +100,7 @@ export function InstructorContacts({ org }) {
   const [rows, setRows] = useState(null); // null = loading
   const [error, setError] = useState(null);
   const [showInactive, setShowInactive] = useState(false);
+  const [openRow, setOpenRow] = useState(null); // contact whose timeline is open
 
   useEffect(() => {
     if (!org?.id) return;
@@ -130,6 +140,7 @@ export function InstructorContacts({ org }) {
   ];
 
   return (
+    <>
     <PeopleList
       title="Instructors"
       subtitle={<>Everyone on your <Link to="/admin/instructors" style={{ color: BRIGHT, fontWeight: 600 }}>Instructor Roster</Link> shows up here automatically. Add instructors, send onboarding invites, or edit details there.</>}
@@ -146,7 +157,18 @@ export function InstructorContacts({ org }) {
           <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} /> Show inactive
         </label>
       }
+      onRowClick={setOpenRow}
     />
+    {openRow && (
+      <ContactTimelineDrawer
+        audience="instructors"
+        contact={openRow}
+        contactLabel={nameOf(openRow)}
+        orgId={org?.id}
+        onClose={() => setOpenRow(null)}
+      />
+    )}
+    </>
   );
 }
 
@@ -155,6 +177,7 @@ export function InstructorContacts({ org }) {
 export function PartnerContacts({ org }) {
   const [rows, setRows] = useState(null); // null = loading
   const [error, setError] = useState(null);
+  const [openRow, setOpenRow] = useState(null); // contact whose timeline is open
 
   useEffect(() => {
     if (!org?.id) return;
@@ -210,6 +233,7 @@ export function PartnerContacts({ org }) {
   ];
 
   return (
+    <>
     <PeopleList
       title="Partners"
       subtitle={<>Partner contacts come from your <Link to="/admin/schools" style={{ color: BRIGHT, fontWeight: 600 }}>Partners</Link> tab — add or edit each partner&apos;s contacts there and they show up here to email.</>}
@@ -221,6 +245,17 @@ export function PartnerContacts({ org }) {
       searchText={(r) => [r.contact_name, r.contact_email, r.contact_phone, r.partner_name, r.contact_role].filter(Boolean).join(" ")}
       emptyLabel="No partner contacts yet — add them under each partner in the Partners tab."
       noun="contacts"
+      onRowClick={setOpenRow}
     />
+    {openRow && (
+      <ContactTimelineDrawer
+        audience="partners"
+        contact={openRow}
+        contactLabel={openRow.contact_name || openRow.contact_email || "Partner contact"}
+        orgId={org?.id}
+        onClose={() => setOpenRow(null)}
+      />
+    )}
+    </>
   );
 }
