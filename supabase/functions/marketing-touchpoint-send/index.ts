@@ -482,11 +482,27 @@ serve(async (req: Request) => {
   }
 
   // ---- Suppressions ----
-  const { data: suppressions } = await supabase
-    .from("marketing_suppressions")
-    .select("email")
-    .eq("organization_id", campaign.organization_id);
-  const suppressedEmails = new Set(((suppressions ?? []) as Array<{ email: string }>).map((s) => s.email.toLowerCase()));
+  // Paginate: an unbounded select hits PostgREST's implicit 1000-row cap, so an
+  // org with >1000 suppressions would under-fetch and email people who
+  // unsubscribed. Fail closed on a read error (same contract as the dedup query
+  // below) — we can't honor unsubscribes we couldn't read, so skip this tick;
+  // the cron retries in ~5 min.
+  const suppressedEmails = new Set<string>();
+  {
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data: sup, error: sErr } = await supabase
+        .from("marketing_suppressions")
+        .select("email")
+        .eq("organization_id", campaign.organization_id)
+        .range(from, from + PAGE - 1);
+      if (sErr) return json({ error: `suppression query failed: ${sErr.message}` }, 500);
+      for (const s of (sup ?? []) as Array<{ email: string }>) {
+        if (s.email) suppressedEmails.add(s.email.toLowerCase());
+      }
+      if (!sup || sup.length < PAGE) break;
+    }
+  }
 
   // ---- Dedup: already-delivered marketing_sends for THIS campaign + touchpoint ----
   // Key on (campaign_id, touchpoint_id, recipient_id). Two touchpoints in the
