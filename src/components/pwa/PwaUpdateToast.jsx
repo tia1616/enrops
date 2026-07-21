@@ -3,10 +3,26 @@
 // vite-plugin-pwa registered with registerType: 'prompt' means the SW
 // downloads a new version in the background but does NOT activate until we
 // call updateSW(true). This component renders a small bottom toast when a
-// new version is ready: "New version available — Tap to update."
+// new version is ready.
 //
-// One tap reloads with the fresh assets. We deliberately never auto-reload
-// — an admin filling out a long form would lose their unsaved input.
+// WHY THE COPY MATTERS (2026-07-21). The old subtitle said "Reload to get the
+// latest." That is WRONG and it actively trained the wrong reflex: reloading a
+// page that has a waiting service worker does NOT apply the update — the waiting
+// worker just stays waiting, workbox re-detects it on the fresh load, and the
+// toast comes straight back. The ONLY thing that applies the update is clicking
+// the button (which sends skipWaiting). So the toast now tells the user to click
+// it, not to reload.
+//
+// We deliberately never auto-reload — an admin filling out a long form would
+// lose unsaved input. The update happens only on an explicit click.
+//
+// On click we also arm a short fallback reload. Normally updateSW(true) →
+// skipWaiting → the new worker takes control → vite-plugin-pwa reloads the page
+// within ~1s, so the fallback timer never fires. If that controlling-event
+// reload ever fails to fire (it is gated on event.isUpdate, which can be
+// undefined in edge cases), the fallback guarantees the click still results in a
+// reload instead of a dead button. See [[project_enrops_code_split]] item 4 for
+// the still-unexplained history of this toast getting stuck.
 //
 // Mount once at the app root.
 
@@ -18,6 +34,7 @@ const INK = '#1a1a1a';
 
 export default function PwaUpdateToast() {
   const [needRefresh, setNeedRefresh] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [updateSW, setUpdateSW] = useState(() => () => {});
 
   useEffect(() => {
@@ -34,6 +51,18 @@ export default function PwaUpdateToast() {
   }, []);
 
   if (!needRefresh) return null;
+
+  const onUpdate = () => {
+    if (updating) return;
+    setUpdating(true);
+    // Fires skipWaiting; the new worker taking control reloads the page.
+    updateSW(true);
+    // Belt-and-braces: if the controlling-event reload doesn't fire, force it.
+    // In the normal path the page has already reloaded well before this runs.
+    setTimeout(() => {
+      window.location.reload();
+    }, 3000);
+  };
 
   return (
     <div
@@ -61,14 +90,15 @@ export default function PwaUpdateToast() {
       <div style={{ fontSize: 13, color: INK, lineHeight: 1.4 }}>
         <strong>New version available</strong>
         <div style={{ fontSize: 12, color: '#6b6b6b', marginTop: 2 }}>
-          Reload to get the latest.
+          {updating ? 'Loading it now…' : 'Click Update to load it.'}
         </div>
       </div>
       <button
         type="button"
-        onClick={() => updateSW(true)}
+        onClick={onUpdate}
+        disabled={updating}
         style={{
-          background: '#5847C9',
+          background: updating ? '#9a90d8' : '#5847C9',
           color: '#fff',
           border: 'none',
           borderRadius: 6,
@@ -76,11 +106,11 @@ export default function PwaUpdateToast() {
           fontSize: 13,
           fontWeight: 600,
           fontFamily: 'inherit',
-          cursor: 'pointer',
+          cursor: updating ? 'default' : 'pointer',
           flexShrink: 0,
         }}
       >
-        Update
+        {updating ? 'Updating…' : 'Update'}
       </button>
     </div>
   );
