@@ -180,15 +180,17 @@ export default function App() {
       <Route path="/admin/login" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<AdminOverview />} />
-        {/* "Family Comms" — operator-facing name. Internal folder is still
-            marketing-v2/ to avoid touching dozens of imports.
+        {/* "Comms" — operator-facing name (renamed from "Family Comms"). The
+            route path + internal folder stay family-comms / marketing-v2 to
+            avoid touching dozens of imports and to keep old bookmarks working.
             Sub-routes:
-              /admin/family-comms              -> redirects to /marketing (default)
+              /admin/family-comms              -> redirects to /contacts (section home)
+              /admin/family-comms/contacts     -> Contact list + CSV upload (the CRM spine)
               /admin/family-comms/marketing    -> AI campaign builder (was /marketing-v2)
               /admin/family-comms/automations  -> Lifecycle automations dashboard
-              /admin/family-comms/contacts     -> Contact list + CSV upload
+              /admin/family-comms/templates    -> Reusable email templates
             /admin/marketing-v2 stays as a redirect for old bookmarks. */}
-        <Route path="family-comms" element={<Navigate to="/admin/family-comms/marketing" replace />} />
+        <Route path="family-comms" element={<Navigate to="/admin/family-comms/contacts" replace />} />
         <Route path="family-comms/marketing" element={<AICampaignBuilder />} />
         <Route path="family-comms/automations" element={<AutomationsTab />} />
         <Route path="family-comms/contacts" element={<ContactsTab />} />

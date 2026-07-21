@@ -538,6 +538,7 @@ serve(async (req: Request) => {
     sent: 0,
     skipped_suppressed: 0,
     skipped_deduped: 0,
+    skipped_email_deduped: 0,
     skipped_no_school_program: 0,
     skipped_no_email: 0,
     failed: 0,
@@ -557,11 +558,18 @@ serve(async (req: Request) => {
     recipientCamps: CampRow[]; // empty when not a camps campaign
   };
   const ready: ReadyRecipient[] = [];
+  const seenEmails = new Set<string>();
+  for (const r of recipientRows) {
+    if (alreadyDelivered.has(r.id) && r.email) seenEmails.add(r.email.toLowerCase());
+  }
   for (const r of recipientRows) {
     results.attempted++;
     if (!r.email) { results.skipped_no_email++; continue; }
-    if (suppressedEmails.has(r.email.toLowerCase())) { results.skipped_suppressed++; continue; }
+    const emailLc = r.email.toLowerCase();
+    if (suppressedEmails.has(emailLc)) { results.skipped_suppressed++; continue; }
     if (alreadyDelivered.has(r.id)) { results.skipped_deduped++; continue; }
+    if (seenEmails.has(emailLc)) { results.skipped_email_deduped++; continue; }
+    seenEmails.add(emailLc);
 
     // Resolve afterschool program(s) for this recipient (per-program tokens).
     let recipientPrograms = resolveRecipientPrograms(r, pickedPrograms, locationNameMap);

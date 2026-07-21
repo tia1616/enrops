@@ -1,9 +1,12 @@
-// FamilyCommsTabs — shared tab strip rendered atop both Family Comms surfaces:
-//   /admin/family-comms/marketing    (AI Campaign Builder — promotional)
-//   /admin/family-comms/automations  (Lifecycle automations — informational)
+// FamilyCommsTabs — the Comms section's tab strip, rendered inside each Comms
+// page (Campaigns / Automations / Contacts / Templates). Comms owns this strip
+// rather than the AdminLayout shell strip so the "Campaigns" tab can reset the
+// list⇄wizard reducer state via onReset (see AICampaignBuilder) — those views
+// share one route. File/component name kept as-is to avoid churning 5 imports;
+// the operator-facing section name is "Comms".
 //
-// Two surfaces, two different audiences:
-//   Marketing campaigns respect the promotional unsubscribe.
+// Campaigns vs Automations audiences differ:
+//   Campaigns respect the promotional unsubscribe.
 //   Automations bypass it — they're service comms to active families.
 
 import { Link } from "react-router-dom";
@@ -19,8 +22,14 @@ export default function FamilyCommsTabs({ active, onReset }) {
         marginBottom: 24,
       }}
       role="tablist"
-      aria-label="Family Comms surfaces"
+      aria-label="Comms surfaces"
     >
+      {/* Contacts leads — the CRM spine (your people) is the section home, per
+          Mailchimp/HubSpot norm. This is where the Families/Instructors/Partners
+          audience switcher will live. Campaigns/Automations/Templates follow. */}
+      <TabLink to="/admin/family-comms/contacts" active={active === "contacts"}>
+        Contacts
+      </TabLink>
       <TabLink
         to="/admin/family-comms/marketing"
         active={active === "marketing"}
@@ -33,9 +42,6 @@ export default function FamilyCommsTabs({ active, onReset }) {
       </TabLink>
       <TabLink to="/admin/family-comms/automations" active={active === "automations"}>
         Automations
-      </TabLink>
-      <TabLink to="/admin/family-comms/contacts" active={active === "contacts"}>
-        Contacts
       </TabLink>
       <TabLink to="/admin/family-comms/templates" active={active === "templates"}>
         Templates

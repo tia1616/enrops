@@ -27,10 +27,11 @@
 //     source?: string   // defaults to "csv_import"
 //   }
 //
-// Dedupe strategy: `marketing_recipients` has a UNIQUE index on
-// (organization_id, email, school_name, source), so we upsert on that exact
-// conflict target — a re-upload of the same list updates in place instead of
-// erroring or duplicating.
+// Dedupe strategy: `marketing_recipients` has a UNIQUE constraint on
+// (organization_id, email), so we upsert on that — a re-upload of the same
+// list updates in place instead of erroring or duplicating. When a contact
+// already exists from a different source (e.g. registration), the import
+// preserves the existing school_name and source='enrops_registration'.
 //
 // marketing_recipients columns touched: organization_id, email, parent_name,
 // phone, child_first_name, child_last_name, school_name, city, state, zip,
@@ -70,10 +71,9 @@ const corsHeaders = {
 // on the client is fine.
 const MAX_ROWS = 5000;
 
-// Conflict target must match the UNIQUE index exactly:
-//   marketing_recipients_organization_id_email_school_name_sour_key
-//   ON (organization_id, email, school_name, source)
-const CONFLICT_TARGET = "organization_id,email,school_name,source";
+// Conflict target must match the UNIQUE constraint exactly:
+//   marketing_recipients_org_email_unique ON (organization_id, email)
+const CONFLICT_TARGET = "organization_id,email";
 
 // Basic email shape check — cheap gate to drop obvious junk before a write.
 // Not RFC-perfect on purpose; the point is to skip rows with no usable address.
@@ -172,7 +172,7 @@ type RecipientRow = {
   phone: string | null;
   child_first_name: string | null;
   child_last_name: string | null;
-  school_name: string;
+  school_name: string | null;
   city: string | null;
   state: string | null;
   zip: string | null;
@@ -306,9 +306,7 @@ Deno.serve(async (req: Request) => {
       phone: str(c.phone),
       child_first_name: str(c.child_first_name),
       child_last_name: str(c.child_last_name),
-      // school_name is part of the unique key — coalesce null to "" so repeat
-      // uploads collapse onto the same row instead of inserting duplicates.
-      school_name: str(c.school_name) ?? "",
+      school_name: str(c.school_name) ?? null,
       city: str(c.city),
       state: str(c.state),
       zip: str(c.zip),
@@ -335,12 +333,8 @@ Deno.serve(async (req: Request) => {
   // ---- Split into net-new vs existing so we can report inserted vs updated ----
   // The upsert itself is one round-trip; this SELECT is only for accurate
   // counts (upsert alone can't tell you which rows already existed).
-  // Key the existing-check on the FULL conflict target — (org, email,
-  // school_name, source) — not email alone, so a row that shares an email but
-  // differs in school_name counts as new, not "updated". school_name is
-  // coalesced to "" on the rows we write, so compare against that same value.
-  const keyOf = (email: string, schoolName: string | null) =>
-    `${email}|${schoolName ?? ""}`;
+  // Key on (org, email) — one row per person.
+  const keyOf = (email: string) => email;
   const emails = rows.map((r) => r.email);
   const existing = new Set<string>();
   // Prior tags per existing row, so a re-import ADDS tags instead of replacing
@@ -354,25 +348,28 @@ Deno.serve(async (req: Request) => {
   // family we already decided about (re-importing an existing "skip welcome"
   // list as "new" shouldn't retroactively welcome them). Mirrors tags/birthdate.
   const priorSuppress = new Map<string, boolean>();
+  const priorSchool = new Map<string, string>();
+  const priorSource = new Map<string, string>();
   // Chunk the .in() lookup — a 5k-item IN list is unwieldy for one request.
   for (let i = 0; i < emails.length; i += 500) {
     const slice = emails.slice(i, i + 500);
     const { data: hits, error: selErr } = await supabase
       .from("marketing_recipients")
-      .select("email, school_name, tags, child_birthdate, suppress_welcome")
+      .select("email, school_name, source, tags, child_birthdate, suppress_welcome")
       .eq("organization_id", organization_id)
-      .eq("source", source)
       .in("email", slice);
     if (selErr) {
       return jsonError(`contact lookup failed: ${selErr.message}`, 500);
     }
     for (const h of hits ?? []) {
       if (h?.email) {
-        const k = keyOf(String(h.email).toLowerCase(), h.school_name);
+        const k = keyOf(String(h.email).toLowerCase());
         existing.add(k);
         priorTags.set(k, stringArray(h.tags));
         priorBirthdate.set(k, (h as { child_birthdate?: string | null }).child_birthdate ?? null);
         priorSuppress.set(k, (h as { suppress_welcome?: boolean }).suppress_welcome === true);
+        if ((h as { school_name?: string | null }).school_name) priorSchool.set(k, (h as { school_name: string }).school_name);
+        if ((h as { source?: string | null }).source) priorSource.set(k, (h as { source: string }).source);
       }
     }
   }
@@ -380,14 +377,16 @@ Deno.serve(async (req: Request) => {
   // Union each row's incoming tags with what the contact already had, so tags
   // accumulate across uploads and a tag-less re-import never wipes them.
   for (const row of rows) {
-    const k = keyOf(row.email, row.school_name);
+    const k = keyOf(row.email);
     const prior = priorTags.get(k) ?? [];
     row.tags = [...new Set([...prior, ...row.tags])];
-    // Preserve an existing DOB if this import didn't bring one.
     if (!row.child_birthdate) row.child_birthdate = priorBirthdate.get(k) ?? null;
-    // Preserve an existing contact's welcome decision — the batch flag only
-    // applies to brand-new contacts, never re-flips one we already imported.
-    if (existing.has(k)) row.suppress_welcome = priorSuppress.get(k) ?? row.suppress_welcome;
+    if (existing.has(k)) {
+      row.suppress_welcome = priorSuppress.get(k) ?? row.suppress_welcome;
+      if (!row.school_name) row.school_name = priorSchool.get(k) ?? null;
+      const ps = priorSource.get(k);
+      if (ps === "enrops_registration") row.source = ps;
+    }
   }
 
   // ---- Upsert on the real unique key (update-or-insert) ----
@@ -398,10 +397,7 @@ Deno.serve(async (req: Request) => {
     return jsonError(`contact import failed: ${upErr.message}`, 500);
   }
 
-  // `existing` holds the full conflict-target key (org, source, email,
-  // school_name) of rows already in the table, so this "updated" count is exact
-  // even when an email appears under more than one school_name.
-  const updated = rows.filter((r) => existing.has(keyOf(r.email, r.school_name))).length;
+  const updated = rows.filter((r) => existing.has(keyOf(r.email))).length;
   const inserted = rows.length - updated;
 
   await logPlatformEvent(supabase, {
