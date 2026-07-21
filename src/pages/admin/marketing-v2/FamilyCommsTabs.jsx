@@ -24,6 +24,12 @@ export default function FamilyCommsTabs({ active, onReset }) {
       role="tablist"
       aria-label="Comms surfaces"
     >
+      {/* Contacts leads — the CRM spine (your people) is the section home, per
+          Mailchimp/HubSpot norm. This is where the Families/Instructors/Partners
+          audience switcher will live. Campaigns/Automations/Templates follow. */}
+      <TabLink to="/admin/family-comms/contacts" active={active === "contacts"}>
+        Contacts
+      </TabLink>
       <TabLink
         to="/admin/family-comms/marketing"
         active={active === "marketing"}
@@ -36,9 +42,6 @@ export default function FamilyCommsTabs({ active, onReset }) {
       </TabLink>
       <TabLink to="/admin/family-comms/automations" active={active === "automations"}>
         Automations
-      </TabLink>
-      <TabLink to="/admin/family-comms/contacts" active={active === "contacts"}>
-        Contacts
       </TabLink>
       <TabLink to="/admin/family-comms/templates" active={active === "templates"}>
         Templates

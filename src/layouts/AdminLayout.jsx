@@ -81,10 +81,12 @@ const NAV = [
     ],
   },
   {
-    to: "/admin/family-comms/marketing", label: "Comms",
+    // Section home is Contacts (the CRM spine) — clicking the sidebar item
+    // lands on your people first, not the campaign builder.
+    to: "/admin/family-comms/contacts", label: "Comms",
     gate: "send",        // owner/admin/staff — a sending surface, hidden from viewer
     // Comms owns its own 4-tab strip (FamilyCommsTabs, rendered inside each
-    // page: Campaigns / Automations / Contacts / Templates) instead of the
+    // page: Contacts / Campaigns / Automations / Templates) instead of the
     // shell strip. Same pattern as Partners — a shell strip here would be a
     // second, redundant row, and the campaign list⇄wizard live on ONE route
     // (internal reducer state) so the "Campaigns" tab needs an onReset the
