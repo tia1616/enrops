@@ -40,7 +40,7 @@ function PeopleList({ title, subtitle, searchPlaceholder, columns, rows, loading
   const span = columns.length + (onRowClick ? 1 : 0);
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+    <div>
       <header style={{ marginBottom: 16 }}>
         <h1 style={{ color: INK, fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>{title}</h1>
         <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: 0 }}>{subtitle}</p>
@@ -61,8 +61,8 @@ function PeopleList({ title, subtitle, searchPlaceholder, columns, rows, loading
           <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
             <thead>
               <tr>
-                {columns.map((c) => <th key={c.key} style={headCell}>{c.label}</th>)}
-                {onRowClick && <th style={headCell} />}
+                {columns.map((c) => <th key={c.key} style={{ ...headCell, zIndex: 2 }}>{c.label}</th>)}
+                {onRowClick && <th style={{ ...headCell, right: 0, zIndex: 3, borderLeft: `1px solid ${RULE}` }} />}
               </tr>
             </thead>
             <tbody>
@@ -79,7 +79,7 @@ function PeopleList({ title, subtitle, searchPlaceholder, columns, rows, loading
                   style={{ ...(r.__dim ? { opacity: 0.55 } : null), ...(onRowClick ? { cursor: "pointer" } : null) }}
                 >
                   {columns.map((c) => <td key={c.key} style={listCell}>{c.render(r)}</td>)}
-                  {onRowClick && <td style={{ ...listCell, textAlign: "right", color: BRIGHT, fontWeight: 600, whiteSpace: "nowrap" }}>Activity ›</td>}
+                  {onRowClick && <td style={{ ...listCell, textAlign: "right", color: BRIGHT, fontWeight: 600, whiteSpace: "nowrap", position: "sticky", right: 0, zIndex: 1, background: "#fff", borderLeft: `1px solid ${RULE}` }}>Activity ›</td>}
                 </tr>
               ))}
             </tbody>

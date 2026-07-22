@@ -205,7 +205,7 @@ export default function ContactsTab() {
 
   return (
     <div style={{ padding: "24px 32px" }}>
-      <div style={{ maxWidth: 900, margin: "0 auto" }}>
+      <div>
         <FamilyCommsTabs active="contacts" />
         <AudienceSwitcher active={audience} onSelect={selectAudience} />
       </div>
@@ -280,7 +280,7 @@ function FamiliesContacts({ org }) {
   }, [org?.id, refreshKey]);
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+    <div>
       <header style={{ marginBottom: 24 }}>
         <h1 style={{ color: INK, fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>
           Families
@@ -501,9 +501,11 @@ function ContactsList({ orgId, refreshKey }) {
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
           <thead>
             <tr>
-              {["Email", "Parent", "Child", "Area", "Tags", ""].map((h) => (
-                <th key={h} style={{ position: "sticky", top: 0, background: CREAM, textAlign: "left", padding: "8px 10px", color: MUTED, fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${RULE}` }}>{h}</th>
+              {["Email", "Parent", "Child", "Area", "Tags"].map((h) => (
+                <th key={h} style={{ position: "sticky", top: 0, zIndex: 2, background: CREAM, textAlign: "left", padding: "8px 10px", color: MUTED, fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${RULE}` }}>{h}</th>
               ))}
+              <th style={{ position: "sticky", top: 0, right: 0, zIndex: 3, background: CREAM, borderBottom: `1px solid ${RULE}`, borderLeft: `1px solid ${RULE}` }} />
+
             </tr>
           </thead>
           <tbody>
@@ -528,7 +530,7 @@ function ContactsList({ orgId, refreshKey }) {
                     </span>
                   )}
                 </td>
-                <td style={{ ...listCell, textAlign: "right", whiteSpace: "nowrap" }}>
+                <td style={{ ...listCell, textAlign: "right", whiteSpace: "nowrap", position: "sticky", right: 0, zIndex: 1, background: "#fff", borderLeft: `1px solid ${RULE}` }}>
                   <button type="button" onClick={() => setActivityRow(r)} style={{ padding: "3px 10px", marginRight: 6, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Activity</button>
                   <button type="button" onClick={() => setEditId(r.id)} style={{ padding: "3px 10px", background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Edit</button>
                 </td>
