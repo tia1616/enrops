@@ -1454,7 +1454,7 @@ async function resolveInstructorBirthdayAudience(
   // TS (mirrors resolveBirthdayAudience). At tenant scale this is a small list.
   const { data: instructors, error } = await supabase
     .from("instructors")
-    .select("id, first_name, email, date_of_birth")
+    .select("id, first_name, preferred_name, email, date_of_birth")
     .eq("organization_id", a.organization_id)
     .eq("is_active", true)
     .not("date_of_birth", "is", null)
@@ -1474,7 +1474,10 @@ async function resolveInstructorBirthdayAudience(
       context_key: `instructor:${i.id}:year:${year}`,
       parent_id: null,
       parent_email: i.email,
-      parent_first_name: i.first_name,
+      // Prefer the name the instructor goes by — a birthday note is the most
+      // personal send there is, so "Bo" must not get "Happy birthday, Rebecca!"
+      // (mirrors the roster/contacts display rule: preferred_name ?? first_name).
+      parent_first_name: i.preferred_name?.trim() || i.first_name,
       child_first_name: null,
       program_name: "",
       program_start_date: "",

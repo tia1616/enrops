@@ -72,7 +72,7 @@ const AUTO_AUDIENCE = {
 const STAGES = [
   { key: "getting_started", label: "Getting started", blurb: "The first messages after someone joins" },
   { key: "during", label: "During the session", blurb: "Staying close while classes are running" },
-  { key: "wrapping_up", label: "Wrapping up", blurb: "Finishing strong and bringing them back" },
+  { key: "wrapping_up", label: "Wrapping up", blurb: "Finishing strong and setting up what's next" },
   { key: "anytime", label: "Anytime", blurb: "Thoughtful touches, any time of year" },
 ];
 
@@ -126,6 +126,11 @@ export default function AutomationsTab() {
     if (org?.id) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id]);
+
+  // Close any open editor when the audience filter changes — the edited row gets
+  // filtered out of view anyway, so leaving editingTpl set would strand a hidden
+  // editor (and mirrors the audience-switch behavior on the Templates tab).
+  useEffect(() => { setEditingTpl(null); }, [audience]);
 
   async function load() {
     setLoading(true);

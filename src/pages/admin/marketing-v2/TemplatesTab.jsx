@@ -75,18 +75,18 @@ const AUDIENCES = {
     label: "Instructors",
     intro: (
       <>
-        Save the wording you use with your instructors — an availability survey,
-        a class offer, a sub request — so it&apos;s ready when you send from your
-        schedule.
+        Draft and save the wording you use with your instructors — an
+        availability survey, a class offer, a sub request — so it&apos;s written
+        once and ready to reuse.
       </>
     ),
     nameHint: "Just for you, so you can find it. Instructors never see this name.",
     subjectPlaceholder: "e.g. Your classes for next week",
     bodyHint: (
       <>
-        Blank line = new paragraph. Save the wording you use for availability
-        surveys, class offers, or sub requests here, so you can drop it in when
-        you send from your schedule.
+        Blank line = new paragraph. Keep the wording you use for availability
+        surveys, class offers, or sub requests here, written once and ready to
+        reuse.
       </>
     ),
     emptyTitle: "No instructor templates yet",
