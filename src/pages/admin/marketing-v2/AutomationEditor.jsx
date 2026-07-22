@@ -193,6 +193,34 @@ function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryCo
 </body></html>`;
 }
 
+// Board sends (operator_initiated) only let the operator write the INTRO
+// paragraph; at send time the edge fn adds a greeting above it and the system
+// content below (a sample schedule + review button + deadline for offers; a
+// form link + deadline for the survey). The editor preview composes that full
+// shape around the operator's live intro with SEEDED sample data, so they see
+// where their words land — real recipients and dates come from the Schedule
+// board when they actually send.
+function boardSendExampleBody(templateKey, introHtml, primaryColor) {
+  const color = primaryColor || "#1C004F";
+  const button = (label) =>
+    `<div style="margin:20px 0;"><span style="display:inline-block;background:${color};color:#fff;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:700;">${label}</span></div>`;
+  const autoBlock = (inner) =>
+    `<div style="margin-top:18px;padding-top:14px;border-top:1px dashed #d9d6e2;"><div style="font-size:10px;color:#9a97ab;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px;">Added automatically</div>${inner}</div>`;
+  const greeting = `<p style="margin:0 0 14px;">Hi Jordan,</p>`;
+  const intro = introHtml || "";
+  if (templateKey === "availability_survey") {
+    const sys = `${button("Share your availability &rarr;")}<p style="margin:0;color:#6b6880;font-size:14px;">Please reply by <strong>Fri, Aug 8</strong>.</p>`;
+    return `${greeting}${intro}${autoBlock(sys)}`;
+  }
+  // assignment_offer (offer-style): sample schedule + one CTA + deadline.
+  const rows = `<table role="presentation" width="100%" style="border-collapse:collapse;font-size:14px;margin:4px 0 0;">`
+    + `<tr><td style="padding:9px 0;border-bottom:1px solid #eee;"><strong>LEGO Robotics</strong> &middot; Lincoln Elementary<br><span style="color:#6b6880;">Mon&ndash;Fri, Jul 14&ndash;18 &middot; 9:00am</span></td></tr>`
+    + `<tr><td style="padding:9px 0;border-bottom:1px solid #eee;"><strong>Stop-Motion Studio</strong> &middot; Lincoln Elementary<br><span style="color:#6b6880;">Mon&ndash;Fri, Jul 21&ndash;25 &middot; 1:00pm</span></td></tr>`
+    + `</table>`;
+  const sys = `${rows}${button("Review and respond &rarr;")}<p style="margin:0;color:#6b6880;font-size:14px;">Please respond by <strong>Fri, Aug 8</strong>.</p>`;
+  return `${greeting}${intro}${autoBlock(sys)}`;
+}
+
 // review_request ships with a placeholder review link the operator must replace.
 // Rather than make a non-dev hand-edit HTML/markdown, review_request shows a
 // dedicated "Your review link" field that reads/writes the single <a> in the body.
@@ -438,8 +466,12 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   }, [success, error]);
 
   const previewHtml = useMemo(
-    () => buildPreviewHtml(subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type === "marketing"),
-    [subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type],
+    () => buildPreviewHtml(
+      subject,
+      isBoardSend ? boardSendExampleBody(template.key, body, orgPrimaryColor) : body,
+      orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type === "marketing",
+    ),
+    [subject, body, isBoardSend, template.key, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type],
   );
 
   // What the iframe actually shows. When a real source is picked AND the server
@@ -848,14 +880,13 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
           </div>
           )}
 
-          {/* Available tokens */}
+          {/* Available tokens — omitted entirely when the message has none
+              (e.g. board sends, whose intro is plain text with no merge fields). */}
+          {tokens.length > 0 && (
           <div style={{ marginBottom: 24 }}>
             <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
               Available tokens
             </span>
-            {tokens.length === 0 ? (
-              <p style={{ margin: 0, fontSize: 13, color: MUTED }}>None for this message.</p>
-            ) : (
               <>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {tokens.map((t) => (
@@ -889,8 +920,8 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                   Drag any token into the body where you want it, or click to copy.
                 </p>
               </>
-            )}
           </div>
+          )}
 
           {/* Timing — for templates with an editable days_after or days_before offset */}
           {hasTiming && (
@@ -971,7 +1002,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               board where you pick real recipients. Show a note instead. */}
           {isBoardSend ? (
             <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
-              Save the default message here. To preview or test the full email (with assignment details), use the Send from your Schedule tab.
+              The preview above shows an example of the full email with sample details. Save the default message here; you send the real one (with actual instructors and dates) from the Schedule tab.
             </div>
           ) : (
           <>
