@@ -9,7 +9,7 @@
 // Multi-tenant: org from outlet context. RLS on registrations + students
 // limits everything to the operator's org.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import EmailRosterModal from "./EmailRosterModal";
@@ -368,14 +368,20 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
   const [campers, setCampers] = useState(null); // null = loading
   const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts] }
   const [editingId, setEditingId] = useState(null);
+  const [justSavedId, setJustSavedId] = useState(null); // reg id to flash "Saved" + scroll into view
   const [err, setErr] = useState("");
   // Afterschool programs have "students"; camps have "campers".
   const noun = target.column === "program_id" ? "student" : "camper";
 
-  async function load() {
+  // silent=true refreshes data in place (after a save/remove) without blanking
+  // the list to "Loading…", which would unmount every row and yank the scroll
+  // position. Only the initial load shows the loading state.
+  async function load(silent = false) {
     setErr("");
-    setCampers(null);
-    setContactsByStudent({});
+    if (!silent) {
+      setCampers(null);
+      setContactsByStudent({});
+    }
     let q = supabase
       .from("registrations")
       .select(`
@@ -451,10 +457,13 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
               onToggleEdit={() => setEditingId((cur) => (cur === reg.id ? null : reg.id))}
               orgId={orgId}
               canManage={canManage}
+              justSaved={justSavedId === reg.id}
               onSaved={() => {
                 setEditingId(null);
-                load();
+                setJustSavedId(reg.id);       // row scrolls itself into view + flashes "Saved"
+                load(true);                    // in-place refresh, no unmount/scroll-yank
                 if (onChanged) onChanged();
+                setTimeout(() => setJustSavedId((cur) => (cur === reg.id ? null : cur)), 2600);
               }}
               onRemoved={() => {
                 setEditingId(null);
@@ -482,10 +491,19 @@ function TelLink({ phone }) {
   return <a href={`tel:${phone.replace(/[^0-9+]/g, "")}`} style={{ color: PURPLE, textDecoration: "underline" }}>{phone}</a>;
 }
 
-function CamperEditableRow({ registration, contacts = [], isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved }) {
+function CamperEditableRow({ registration, contacts = [], isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved, justSaved }) {
   const s = registration.student;
   const [confirming, setConfirming] = useState(false);
   const [refunding, setRefunding] = useState(false);
+  const rowRef = useRef(null);
+  // After a save, bring the just-saved row back into view — a collapsing edit
+  // form otherwise leaves the result below the fold and the operator has to
+  // hunt for it. See memory feedback_feedback_in_viewport.
+  useEffect(() => {
+    if (justSaved && rowRef.current) {
+      rowRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [justSaved]);
   if (!s) return null;
   const guardians = contacts.filter((c) => c.role === "guardian");
   const pickups = contacts.filter((c) => c.role === "authorized_pickup");
@@ -509,12 +527,14 @@ function CamperEditableRow({ registration, contacts = [], isEditing, onToggleEdi
 
   return (
     <div
+      ref={rowRef}
       style={{
         background: CREAM,
-        border: `1px solid ${RULE}`,
-        borderLeft: flagged ? `3px solid ${RED}` : `1px solid ${RULE}`,
+        border: `1px solid ${justSaved ? OK : RULE}`,
+        borderLeft: flagged ? `3px solid ${RED}` : `1px solid ${justSaved ? OK : RULE}`,
         borderRadius: 6,
         padding: isEditing ? "12px 14px" : "8px 12px",
+        transition: "border-color 0.4s ease",
       }}
     >
       {!isEditing && (
@@ -535,6 +555,11 @@ function CamperEditableRow({ registration, contacts = [], isEditing, onToggleEdi
               {badge && (
                 <span style={{ marginLeft: 8, fontSize: 10, color: badge.color, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${badge.color}`, borderRadius: 4, padding: "1px 5px" }}>
                   {badge.text}
+                </span>
+              )}
+              {justSaved && (
+                <span style={{ marginLeft: 8, fontSize: 10, color: OK, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${OK}`, borderRadius: 4, padding: "1px 5px" }}>
+                  ✓ Saved
                 </span>
               )}
             </div>
@@ -962,6 +987,15 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
           <Inp value={form.notes} onChange={(v) => update("notes", v)} />
         </FullField>
       </div>
+
+      {/* Error repeated right next to the Save button — the form scrolls, and
+          the top copy is off-screen when the operator clicks Save down here.
+          See memory feedback_feedback_in_viewport. */}
+      {err && (
+        <div style={{ background: `${RED}1A`, color: RED, padding: 8, borderRadius: 6, marginTop: 12, fontSize: 12 }}>
+          {err}
+        </div>
+      )}
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 12 }}>
         <button
