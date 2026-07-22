@@ -85,15 +85,12 @@ const BOARD_STATS_SOURCE = {
   assignment_offer: { table: "program_assignments", ts: "email_sent_at" },
 };
 
-// What you can do before each board send actually goes out — stated per card,
-// and ONLY what's genuinely true today: the availability survey lets you preview
-// AND edit the intro AND test it; offers/sub let you preview + test but the copy
-// isn't editable there yet (that lives on the Schedule board). No overclaiming.
-const BOARD_SEND_NOTE = {
-  availability_survey: "Preview it, edit the intro, and send yourself a test before it goes out.",
-  assignment_offer: "Preview exactly what each instructor will get, and test it to yourself, before it goes out.",
-  sub_offer: "Preview what will be sent before it goes out.",
-};
+// What you can do before each board send goes out. The availability survey intro
+// is already editable on the Schedule board; editable copy for offers + sub/cover
+// (pulled from the instructor template shelf) is being wired next in the
+// Schedule-board work, and must land before this branch ships to prod so the card
+// stays honest.
+const BOARD_SEND_NOTE = "Preview it, edit the wording, and send yourself a test before it goes out.";
 
 // Templates that require Stripe Connect to fire — UI locks the toggle until
 // the org connects. Kept here (not in DB) for v1 — a `requires_stripe_connect`
@@ -453,9 +450,9 @@ export default function AutomationsTab() {
                   <p style={{ color: MUTED, fontSize: 14, margin: "4px 0 10px", lineHeight: 1.5 }}>
                     {tpl.description}
                   </p>
-                  {isBoardSend && BOARD_SEND_NOTE[tpl.key] && (
+                  {isBoardSend && (
                     <p style={{ color: PURPLE, fontSize: 12.5, margin: "0 0 10px", lineHeight: 1.5, fontWeight: 600 }}>
-                      ✎ {BOARD_SEND_NOTE[tpl.key]}
+                      ✎ {BOARD_SEND_NOTE}
                     </p>
                   )}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 13 }}>
