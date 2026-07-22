@@ -24,6 +24,7 @@ import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
 import { InstructorContacts, PartnerContacts } from "./AudienceContacts.jsx";
 import ContactTimelineDrawer from "./ContactTimelineDrawer.jsx";
+import AudienceSwitcher from "./AudienceSwitcher.jsx";
 
 // Comms is the single CRM hub for all three audiences. Instructors + Partners
 // get a light, consistent "your people" contacts list here (name / email /
@@ -207,51 +208,11 @@ export default function ContactsTab() {
     <div style={{ padding: "24px 32px" }}>
       <div>
         <FamilyCommsTabs active="contacts" />
-        <AudienceSwitcher active={audience} onSelect={selectAudience} />
+        <AudienceSwitcher active={audience} onSelect={selectAudience} label="Contact audience" />
       </div>
       {audience === "families" && <FamiliesContacts org={org} />}
       {audience === "instructors" && <InstructorContacts org={org} />}
       {audience === "partners" && <PartnerContacts org={org} />}
-    </div>
-  );
-}
-
-// Segmented control leading the Contacts surface. Three CRM audiences:
-// families (marketing_recipients), instructors (the roster), partners
-// (partner_contacts) — the enrichment-specific shape no marketing tool nails.
-function AudienceSwitcher({ active, onSelect }) {
-  const items = [
-    { key: "families", label: "Families" },
-    { key: "instructors", label: "Instructors" },
-    { key: "partners", label: "Partners" },
-  ];
-  return (
-    <div role="tablist" aria-label="Contact audience" style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
-      {items.map((it) => {
-        const on = active === it.key;
-        return (
-          <button
-            key={it.key}
-            type="button"
-            role="tab"
-            aria-selected={on}
-            onClick={() => onSelect(it.key)}
-            style={{
-              padding: "7px 16px",
-              borderRadius: 999,
-              border: `1px solid ${on ? BRIGHT : RULE}`,
-              background: on ? BRIGHT : "#fff",
-              color: on ? "#fff" : MUTED,
-              fontSize: 13,
-              fontWeight: on ? 700 : 500,
-              fontFamily: "inherit",
-              cursor: "pointer",
-            }}
-          >
-            {it.label}
-          </button>
-        );
-      })}
     </div>
   );
 }

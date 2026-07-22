@@ -31,6 +31,7 @@ import { supabase } from "../../../lib/supabase.js";
 import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import AttachmentPicker from "./AttachmentPicker.jsx";
+import AudienceSwitcher from "./AudienceSwitcher.jsx";
 import { htmlToEditable, editableToHtml, highlightTokens, stripHtml } from "./bodyEditorUtils.js";
 
 const RED = "#b53737";
@@ -206,7 +207,7 @@ export default function TemplatesTab() {
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
       <FamilyCommsTabs active="templates" />
-      <AudienceSwitcher active={audience} onSelect={selectAudience} />
+      <AudienceSwitcher active={audience} onSelect={selectAudience} label="Template audience" />
 
       <header style={{ marginBottom: 20, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
         <div>
@@ -281,45 +282,6 @@ export default function TemplatesTab() {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-// Segmented control leading the Templates surface — the same three Comms
-// audiences as Contacts. Mirrors the switcher in ContactsTab.
-function AudienceSwitcher({ active, onSelect }) {
-  const items = [
-    { key: "families", label: "Families" },
-    { key: "instructors", label: "Instructors" },
-    { key: "partners", label: "Partners" },
-  ];
-  return (
-    <div role="tablist" aria-label="Template audience" style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
-      {items.map((it) => {
-        const on = active === it.key;
-        return (
-          <button
-            key={it.key}
-            type="button"
-            role="tab"
-            aria-selected={on}
-            onClick={() => onSelect(it.key)}
-            style={{
-              padding: "7px 16px",
-              borderRadius: 999,
-              border: `1px solid ${on ? BRIGHT : RULE}`,
-              background: on ? BRIGHT : "#fff",
-              color: on ? "#fff" : MUTED,
-              fontSize: 13,
-              fontWeight: on ? 700 : 500,
-              fontFamily: "inherit",
-              cursor: "pointer",
-            }}
-          >
-            {it.label}
-          </button>
-        );
-      })}
     </div>
   );
 }

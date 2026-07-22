@@ -16,13 +16,55 @@
 //     with a helpful pointer to Stripe setup.
 
 import { useEffect, useState } from "react";
-import { Link, useOutletContext } from "react-router-dom";
+import { Link, useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
+import AudienceSwitcher from "./AudienceSwitcher.jsx";
 import AutomationEditor from "./AutomationEditor.jsx";
 import SenderSetupNotice from "./SenderSetupNotice.jsx";
 import DeliveryIssuesPanel from "./DeliveryIssuesPanel.jsx";
+
+// Per-audience header copy + empty state. The audience filter (?audience=) shows
+// one audience at a time — the same spine as Comms>Contacts and >Templates — so
+// each gets framing that fits (family LTV framing shouldn't lead an instructor
+// list). Program-type chips only make sense for family/program automations.
+const AUTO_AUDIENCE = {
+  families: {
+    intro: (
+      <>
+        Stay close to families between sessions. Enrops sends the messages
+        automatically so you don&apos;t have to, saving hours of manual work.
+        Every touch builds Lifetime Value (<strong>LTV</strong> — the total
+        revenue from a family across every program their kids take with you).
+      </>
+    ),
+    note: "These reach every parent of a registered student, even if they unsubscribed from marketing. They’re service updates, not sales.",
+    empty: "No family automations yet.",
+  },
+  instructors: {
+    intro: (
+      <>
+        Keep your instructors in the loop automatically — a birthday note today,
+        more to come. Enrops sends these for you, so staying thoughtful with your
+        team doesn&apos;t cost you time.
+      </>
+    ),
+    note: "These go to your instructors, not families.",
+    empty: "No instructor automations yet — more are on the way.",
+  },
+  partners: {
+    intro: (
+      <>
+        Keep your partner sites informed automatically — like a class roster
+        before the first day. Enrops sends these on schedule so you don&apos;t
+        have to remember.
+      </>
+    ),
+    note: "These go to your partner-site contacts, not families.",
+    empty: "No partner automations yet — more are on the way.",
+  },
+};
 
 // Templates that require Stripe Connect to fire — UI locks the toggle until
 // the org connects. Kept here (not in DB) for v1 — a `requires_stripe_connect`
@@ -38,6 +80,21 @@ const REVIEW_LINK_PLACEHOLDER = "your-review-link-here";
 
 export default function AutomationsTab() {
   const { user, org } = useOutletContext();
+  const [params, setParams] = useSearchParams();
+
+  // Audience filter rides in the URL (?audience=) so it survives refresh + deep
+  // links and matches Comms>Contacts / >Templates. Default (no param) = families.
+  const audience = ["instructors", "partners"].includes(params.get("audience"))
+    ? params.get("audience")
+    : "families";
+  const audienceCfg = AUTO_AUDIENCE[audience];
+  function selectAudience(a) {
+    const next = new URLSearchParams(params);
+    if (a === "families") next.delete("audience");
+    else next.set("audience", a);
+    setParams(next, { replace: true });
+  }
+
   const [editingTpl, setEditingTpl] = useState(null);
   const [orgLogoUrl, setOrgLogoUrl] = useState(null);
   const [orgSenderName, setOrgSenderName] = useState(null);
@@ -195,6 +252,10 @@ export default function AutomationsTab() {
     );
   }
 
+  // Show one audience at a time. Older catalog rows predate the column, so treat
+  // a missing audience as 'families' (the backfill default).
+  const visibleTemplates = templates.filter((t) => (t.audience ?? "families") === audience);
+
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
       {/* Celebration animation keyframes — used on the row chip when an
@@ -216,6 +277,7 @@ export default function AutomationsTab() {
         }
       `}</style>
       <FamilyCommsTabs active="automations" />
+      <AudienceSwitcher active={audience} onSelect={selectAudience} label="Automation audience" />
 
       <SenderSetupNotice orgId={org?.id} />
 
@@ -224,14 +286,10 @@ export default function AutomationsTab() {
           Automations
         </h1>
         <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: "0 0 10px" }}>
-          Stay close to families between sessions. Enrops sends the messages
-          automatically so you don&apos;t have to, saving hours of manual work.
-          Every touch builds Lifetime Value (<strong>LTV</strong> — the total
-          revenue from a family across every program their kids take with you).
+          {audienceCfg.intro}
         </p>
         <p style={{ color: MUTED, fontSize: 13, lineHeight: 1.55, margin: 0, fontStyle: "italic" }}>
-          These reach every parent of a registered student, even if they
-          unsubscribed from marketing. They&apos;re service updates, not sales.
+          {audienceCfg.note}
         </p>
       </header>
 
@@ -254,8 +312,13 @@ export default function AutomationsTab() {
         </div>
       )}
 
+      {visibleTemplates.length === 0 ? (
+        <div style={{ border: `1px dashed ${RULE}`, borderRadius: 12, padding: "32px 24px", textAlign: "center", color: MUTED, fontSize: 14 }}>
+          {audienceCfg.empty}
+        </div>
+      ) : (
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {templates.map((tpl) => {
+        {visibleTemplates.map((tpl) => {
           const auto = automationByTpl[tpl.id];
           const stats = auto ? runStats[auto.id] : null;
           const locked = STRIPE_DEPENDENT_KEYS.has(tpl.key) && !stripeReady;
@@ -291,18 +354,21 @@ export default function AutomationsTab() {
                       disabledTemplate={disabledTemplate}
                       enabled={enabled}
                     />
-                    <Chip color={INFO} bg="#eef4fc">
-                      {/* Instructor/partner automations aren't program-scoped —
-                          label them by audience, not by camp/after-school, so an
-                          instructor birthday doesn't read "Camps + after-school". */}
-                      {tpl.trigger_type === "instructor_birthday"
-                        ? "Instructors"
-                        : tpl.applies_to_program_type === "camps"
+                    {/* The program-type chip only means something for family/
+                        program automations. Instructor/partner ones aren't
+                        program-scoped and the audience pill already conveys who
+                        they reach, so no chip there (no more "Camps + after-school"
+                        on an instructor birthday). Driven by audience, not a
+                        per-trigger special-case. */}
+                    {(tpl.audience ?? "families") === "families" && (
+                      <Chip color={INFO} bg="#eef4fc">
+                        {tpl.applies_to_program_type === "camps"
                           ? "Camps only"
                           : tpl.applies_to_program_type === "afterschool"
                             ? "After-school only"
                             : "Camps + after-school"}
-                    </Chip>
+                      </Chip>
+                    )}
                   </div>
                   <p style={{ color: MUTED, fontSize: 14, margin: "4px 0 10px", lineHeight: 1.5 }}>
                     {tpl.description}
@@ -420,6 +486,7 @@ export default function AutomationsTab() {
           );
         })}
       </ul>
+      )}
     </div>
   );
 }
