@@ -87,11 +87,11 @@ export default function QuestionStep({
               )}
               <button
                 onClick={onStartDrafting}
-                disabled={!canNext || loading}
+                disabled={!canNext || loading || manualBusy}
                 style={{
-                  padding: "10px 18px", background: canNext && !loading ? PURPLE : "#cfcfcf",
+                  padding: "10px 18px", background: canNext && !loading && !manualBusy ? PURPLE : "#cfcfcf",
                   color: "#fff", border: "none", borderRadius: 6,
-                  cursor: canNext && !loading ? "pointer" : "not-allowed",
+                  cursor: canNext && !loading && !manualBusy ? "pointer" : "not-allowed",
                   fontSize: 14, fontWeight: 600,
                 }}
               >
