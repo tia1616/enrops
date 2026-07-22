@@ -301,7 +301,7 @@ export default function ContactTimelineDrawer({ audience, contact, contactLabel,
         </div>
 
         <div style={{ padding: "10px 20px", borderTop: `1px solid ${RULE}`, fontSize: 11, color: MUTED }}>
-          Shows emails sent + tracked responses. Replies go to your own reply-to inbox.
+          Shows sign-ups, emails sent, and tracked responses. Replies go to your own reply-to inbox.
         </div>
       </div>
     </div>
