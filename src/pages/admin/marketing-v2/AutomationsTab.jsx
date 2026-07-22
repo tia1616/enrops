@@ -85,12 +85,13 @@ const BOARD_STATS_SOURCE = {
   assignment_offer: { table: "program_assignments", ts: "email_sent_at" },
 };
 
-// What you can do before each board send goes out. The availability survey intro
-// is already editable on the Schedule board; editable copy for offers + sub/cover
-// (pulled from the instructor template shelf) is being wired next in the
-// Schedule-board work, and must land before this branch ships to prod so the card
-// stays honest.
-const BOARD_SEND_NOTE = "You can preview, edit, and send yourself a test before it goes out from the Schedule tab.";
+// Per-card note for what you can do with each board send. Must be literally true
+// per-send — no overclaiming. Updated as the Schedule-board wiring lands.
+const BOARD_SEND_NOTE = {
+  availability_survey: "Edit the default intro here, then preview and send from your Schedule tab.",
+  assignment_offer: "Edit the default message here, then preview and send from your Schedule tab.",
+  sub_offer: "Edit the default message here. Sent when you assign a substitute on the Schedule board.",
+};
 
 // Templates that require Stripe Connect to fire — UI locks the toggle until
 // the org connects. Kept here (not in DB) for v1 — a `requires_stripe_connect`
@@ -454,9 +455,9 @@ export default function AutomationsTab() {
                   <p style={{ color: MUTED, fontSize: 14, margin: "4px 0 10px", lineHeight: 1.5 }}>
                     {tpl.description}
                   </p>
-                  {isBoardSend && (
+                  {isBoardSend && BOARD_SEND_NOTE[tpl.key] && (
                     <p style={{ color: PURPLE, fontSize: 12.5, margin: "0 0 10px", lineHeight: 1.5, fontWeight: 600 }}>
-                      ✎ {BOARD_SEND_NOTE}
+                      ✎ {BOARD_SEND_NOTE[tpl.key]}
                     </p>
                   )}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 13 }}>
@@ -532,7 +533,7 @@ export default function AutomationsTab() {
 
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
                   {isBoardSend ? (
-                    // Sent by hand from the Schedule board — link there instead of a toggle.
+                    <>
                     <Link
                       to="/admin/schedule"
                       style={{
@@ -543,6 +544,22 @@ export default function AutomationsTab() {
                     >
                       Send from your Schedule →
                     </Link>
+                    <button
+                      type="button"
+                      onClick={() => setEditingTpl((prev) => (prev?.id === tpl.id ? null : tpl))}
+                      style={{
+                        background: editingTpl?.id === tpl.id ? PURPLE : "transparent",
+                        border: `1px solid ${editingTpl?.id === tpl.id ? PURPLE : RULE}`,
+                        color: editingTpl?.id === tpl.id ? "#fff" : INK,
+                        padding: "6px 12px",
+                        borderRadius: 8,
+                        fontSize: 13,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {editingTpl?.id === tpl.id ? "Close" : "Edit message"}
+                    </button>
+                    </>
                   ) : (
                   <>
                   <Toggle
