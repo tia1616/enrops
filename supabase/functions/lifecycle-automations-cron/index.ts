@@ -1523,15 +1523,20 @@ async function runPartnerRosterAutomation(
 
   // Find afterschool programs starting in 7 days OR today, where WE run
   // registration (not partner-run) and the location has a partner.
+  // NOTE: the `programs` table IS the afterschool table (camps live in
+  // camp_sessions), so there is no program_type='afterschool' filter — that
+  // column is the subject category ('standard'|'coding_robotics') and filtering
+  // on 'afterschool' matched zero rows, silently sending nothing. Every row here
+  // is afterschool; mirror the other program queries (match-afterschool, the
+  // recap resolver) which scope by organization_id only.
   const { data: programs, error: pErr } = await supabase
     .from("programs")
     .select(`
       id, organization_id, program_location_id, curriculum,
-      first_session_date, program_type, runs_own_registration,
+      first_session_date, runs_own_registration,
       program_locations!inner ( id, partner_id, contact_email )
     `)
     .eq("organization_id", a.organization_id)
-    .eq("program_type", "afterschool")
     .eq("runs_own_registration", false)
     .not("program_locations.partner_id", "is", null)
     .or(`first_session_date.eq.${sevenDayStr},first_session_date.eq.${todayStr}`);
