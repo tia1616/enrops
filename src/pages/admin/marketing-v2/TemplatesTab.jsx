@@ -36,23 +36,6 @@ import { htmlToEditable, editableToHtml, highlightTokens, stripHtml } from "./bo
 
 const RED = "#b53737";
 
-// Instructor templates can be tagged with WHICH board send they feed. The
-// Schedule board seeds that send's editable copy box from the org's template
-// with the matching purpose (most-recently-updated wins if several share one).
-// "" = a general instructor template with no board binding (reuse by hand).
-// Only offered for the instructors audience; families/partners save null.
-const INSTRUCTOR_PURPOSES = [
-  { value: "", label: "General — not tied to a send" },
-  { value: "availability_survey", label: "Availability survey" },
-  { value: "assignment_offer", label: "Class / assignment offer" },
-  { value: "sub_offer", label: "Sub & cover request" },
-];
-const PURPOSE_LABEL = {
-  availability_survey: "Availability survey",
-  assignment_offer: "Class offer",
-  sub_offer: "Sub & cover",
-};
-
 // Per-audience copy for the shelf. Only surface text differs; the editor, storage,
 // and RLS are identical across audiences. Families keeps the merge-token hint it
 // ships with today; instructor/partner hints stay honest — they don't promise a
@@ -201,7 +184,7 @@ export default function TemplatesTab() {
       setLoadErr(null);
       const { data, error } = await supabase
         .from("saved_email_templates")
-        .select("id, name, subject, body_html, updated_at, email_attachments, purpose")
+        .select("id, name, subject, body_html, updated_at, email_attachments")
         .eq("organization_id", org.id)
         .eq("audience", audience)
         .order("updated_at", { ascending: false });
@@ -212,14 +195,13 @@ export default function TemplatesTab() {
     return () => { cancelled = true; };
   }, [org?.id, audience, refreshKey]);
 
-  const startNew = () => setEditing({ name: "", subject: "", editableText: "", purpose: "" });
+  const startNew = () => setEditing({ name: "", subject: "", editableText: "" });
   const startEdit = (t) => setEditing({
     id: t.id,
     name: t.name ?? "",
     subject: t.subject ?? "",
     editableText: htmlToEditable(t.body_html ?? ""),
     email_attachments: Array.isArray(t.email_attachments) ? t.email_attachments : [],
-    purpose: t.purpose ?? "",
   });
 
   return (
@@ -328,17 +310,7 @@ function TemplateCard({ template, onEdit, onDeleted, orgId }) {
       display: "flex", gap: 14, alignItems: "flex-start",
     }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>{template.name}</div>
-          {PURPOSE_LABEL[template.purpose] && (
-            <span style={{
-              fontSize: 11, fontWeight: 600, color: "#5a3fa0", background: "#efe9f7",
-              padding: "2px 9px", borderRadius: 999, whiteSpace: "nowrap",
-            }}>
-              Feeds: {PURPOSE_LABEL[template.purpose]}
-            </span>
-          )}
-        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>{template.name}</div>
         {template.subject && (
           <div style={{ fontSize: 13, color: INK, marginTop: 3 }}>
             <span style={{ color: MUTED }}>Subject: </span>{template.subject}
@@ -410,14 +382,12 @@ function TemplateEditor({ org, audience, cfg, value, onDirtyChange, onCancel, on
   const [name, setName] = useState(value.name);
   const [subject, setSubject] = useState(value.subject);
   const [editableText, setEditableText] = useState(value.editableText);
-  const [purpose, setPurpose] = useState(value.purpose ?? "");
   const [emailAttachments, setEmailAttachments] = useState(
     Array.isArray(value.email_attachments) ? value.email_attachments : [],
   );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
 
-  const isInstructor = audience === "instructors";
   const bodyHtml = editableToHtml(editableText);
   const canSave = name.trim().length > 0 && !saving;
 
@@ -427,7 +397,6 @@ function TemplateEditor({ org, audience, cfg, value, onDirtyChange, onCancel, on
     name !== value.name ||
     subject !== value.subject ||
     editableText !== value.editableText ||
-    (purpose ?? "") !== (value.purpose ?? "") ||
     JSON.stringify(emailAttachments ?? []) !== JSON.stringify(value.email_attachments ?? []);
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -452,9 +421,6 @@ function TemplateEditor({ org, audience, cfg, value, onDirtyChange, onCancel, on
       body_html: bodyHtml || null,
       body_text: stripHtml(bodyHtml) || null,
       email_attachments: emailAttachments ?? [],
-      // Purpose only applies to instructor board sends. Families/partners always
-      // save null so a stray value can't linger if a template is re-audienced.
-      purpose: isInstructor ? (purpose || null) : null,
     };
     let error;
     if (value.id) {
@@ -501,26 +467,6 @@ function TemplateEditor({ org, audience, cfg, value, onDirtyChange, onCancel, on
           {cfg.nameHint}
         </p>
       </div>
-
-      {isInstructor && (
-        <div>
-          <label style={labelStyle}>Use this for</label>
-          <select
-            value={purpose}
-            onChange={(e) => setPurpose(e.target.value)}
-            style={{ ...inputStyle, cursor: "pointer" }}
-          >
-            {INSTRUCTOR_PURPOSES.map((p) => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </select>
-          <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
-            {purpose
-              ? "When you send this from the Schedule board, your message box starts with this wording — you can tweak it before it goes out."
-              : "Tie this to a Schedule-board send so its message box pre-fills with your wording. Leave as “General” to just keep it here for reuse."}
-          </p>
-        </div>
-      )}
 
       <div>
         <label style={labelStyle}>Subject</label>
