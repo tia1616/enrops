@@ -82,7 +82,11 @@ const STAGES = [
 // shows no stats (honest — a made-up number would be worse than none).
 const BOARD_STATS_SOURCE = {
   availability_survey: { table: "instructor_survey_sends", ts: "sent_at" },
-  assignment_offer: { table: "program_assignments", ts: "email_sent_at" },
+  // distinctBy: one offer email stamps the SAME email_sent_at across all of an
+  // instructor's assignment rows, so count distinct (instructor, sent-time) pairs
+  // = actual emails sent, not assignment rows (which would overcount + inflate the
+  // time-saved pill).
+  assignment_offer: { table: "program_assignments", ts: "email_sent_at", distinctBy: "instructor_id" },
 };
 
 // Per-card note for what you can do with each board send. Must be literally true
@@ -187,6 +191,20 @@ export default function AutomationsTab() {
       const boardTpls = (tplRes.data ?? []).filter((t) => BOARD_STATS_SOURCE[t.key]);
       const boardEntries = await Promise.all(boardTpls.map(async (t) => {
         const src = BOARD_STATS_SOURCE[t.key];
+        if (src.distinctBy) {
+          // Count distinct (distinctBy, sent-time) pairs = actual emails sent,
+          // since one send stamps many rows with the same timestamp.
+          const { data, error: bErr } = await supabase
+            .from(src.table)
+            .select(`${src.distinctBy}, ${src.ts}`)
+            .eq("organization_id", org.id)
+            .not(src.ts, "is", null)
+            .order(src.ts, { ascending: false });
+          if (bErr) return [t.key, null];
+          const rows = data ?? [];
+          const distinct = new Set(rows.map((r) => `${r[src.distinctBy]}|${r[src.ts]}`)).size;
+          return [t.key, { count: distinct, lastSent: rows[0]?.[src.ts] ?? null }];
+        }
         const { data, count, error: bErr } = await supabase
           .from(src.table)
           .select(src.ts, { count: "exact" })
