@@ -355,6 +355,11 @@ export default function AutomationsTab() {
           const disabledTemplate = !tpl.is_v1_enabled;
           const enabled = !!auto?.enabled;
           const isSaving = savingTplId === tpl.id;
+          // Operator-initiated sends (availability survey, class offers, sub
+          // requests) are shown for TRANSPARENCY but sent from the Schedule board,
+          // so they get a link, not an on/off toggle (a toggle would be a dead
+          // control for a manual send).
+          const isBoardSend = tpl.trigger_type === "operator_initiated";
           // A template still carrying the placeholder review link can't be turned
           // on (see toggleAutomation). Surface that inline so the reason is visible
           // right at the card, not only in the page-top error banner.
@@ -379,11 +384,15 @@ export default function AutomationsTab() {
                     <h2 style={{ color: INK, fontSize: 17, fontWeight: 700, margin: 0 }}>
                       {tpl.display_name}
                     </h2>
-                    <StatusPill
-                      locked={locked}
-                      disabledTemplate={disabledTemplate}
-                      enabled={enabled}
-                    />
+                    {isBoardSend ? (
+                      <Chip color={INFO} bg="#eef4fc">You send this</Chip>
+                    ) : (
+                      <StatusPill
+                        locked={locked}
+                        disabledTemplate={disabledTemplate}
+                        enabled={enabled}
+                      />
+                    )}
                     {/* The program-type chip only means something in the FAMILIES
                         view (family/program automations). Under Instructors/Partners
                         it's meaningless and the pill already conveys the audience —
@@ -457,6 +466,20 @@ export default function AutomationsTab() {
                 </div>
 
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
+                  {isBoardSend ? (
+                    // Sent by hand from the Schedule board — link there instead of a toggle.
+                    <Link
+                      to="/admin/schedule"
+                      style={{
+                        display: "inline-block", whiteSpace: "nowrap",
+                        background: PURPLE, color: "#fff", padding: "8px 14px",
+                        borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none",
+                      }}
+                    >
+                      Send from your Schedule →
+                    </Link>
+                  ) : (
+                  <>
                   <Toggle
                     checked={enabled}
                     onClick={() => toggleAutomation(tpl)}
@@ -488,6 +511,8 @@ export default function AutomationsTab() {
                   >
                     {editingTpl?.id === tpl.id ? "Close" : "Edit"}
                   </button>
+                  </>
+                  )}
                 </div>
               </div>
 
