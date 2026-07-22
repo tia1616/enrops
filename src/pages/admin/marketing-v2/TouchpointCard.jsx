@@ -2,7 +2,7 @@
 // Expandable. Shows summary collapsed; editor + preview when open.
 // Edits are local until "Save as draft" or "Approve & Schedule" (chunk 07 wires).
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import EditableField from "./EditableField.jsx";
 import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
 import AttachmentPicker from "./AttachmentPicker.jsx";
@@ -416,7 +416,6 @@ const MERGE_TOKENS = [
     { key: "regular_price", label: "Regular $", tip: "Regular price" },
     { key: "early_bird_deadline", label: "EB deadline", tip: "Early bird cutoff date" },
     { key: "promo_code", label: "Promo code", tip: "Active promo code" },
-    { key: "promo_amount", label: "Promo $", tip: "Promo discount amount" },
   ]},
   { group: "Links & blocks", tokens: [
     { key: "register_url", label: "Reg link", tip: "Registration page URL" },
@@ -429,8 +428,18 @@ const MERGE_TOKENS = [
 function BodyEditor({ value, onChange, onCommit }) {
   const [editing, setEditing] = useState(false);
   const textareaRef = useRef(null);
+  const cursorRef = useRef(null);
   const [editableText, setEditableText] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    if (cursorRef.current != null && textareaRef.current) {
+      const pos = cursorRef.current;
+      cursorRef.current = null;
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(pos, pos);
+    }
+  }, [editableText]);
 
   const toggleEditing = () => {
     if (editing) {
@@ -451,17 +460,12 @@ function BodyEditor({ value, onChange, onCommit }) {
     const tag = `{{${key}}}`;
     const ta = textareaRef.current;
     if (!ta) return;
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
+    const start = ta.selectionStart ?? editableText.length;
+    const end = ta.selectionEnd ?? start;
     const before = editableText.slice(0, start);
     const after = editableText.slice(end);
-    const next = before + tag + after;
-    handleTextChange(next);
-    requestAnimationFrame(() => {
-      ta.focus();
-      const pos = start + tag.length;
-      ta.setSelectionRange(pos, pos);
-    });
+    cursorRef.current = start + tag.length;
+    handleTextChange(before + tag + after);
   };
 
   return (

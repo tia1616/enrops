@@ -598,8 +598,8 @@ export default function AICampaignBuilder() {
       return;
     }
     setManualBusy(true);
-    const inputsForEdge = prepareInputsForEdge(state.inputs);
     try {
+    const inputsForEdge = prepareInputsForEdge(state.inputs);
       const { data, error } = await supabase.functions.invoke("marketing-draft-campaign", {
         body: { organization_id: org.id, inputs: inputsForEdge, skip_ai: true },
       });

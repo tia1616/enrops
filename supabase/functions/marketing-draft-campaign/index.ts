@@ -2342,7 +2342,7 @@ Deno.serve(async (req: Request) => {
           subject: (tp.payload as { subject?: string })?.subject ?? null,
           body_html: (tp.payload as { body_html?: string })?.body_html ?? null,
           body_text: (tp.payload as { body_text?: string })?.body_text ?? null,
-          reason: null,
+          reason: (tp.payload as { reason?: string })?.reason ?? null,
           topics: tp.topics,
         })),
       },
