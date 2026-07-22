@@ -60,8 +60,14 @@ serve(async (req: Request) => {
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) return json({ error: 'auth required' }, 401);
     const token = authHeader.replace('Bearer ', '');
-    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
-    if (userErr || !userData?.user) return json({ error: 'invalid auth' }, 401);
+    const isSystemAuth = token === SUPABASE_SERVICE_ROLE_KEY;
+    let callerUserId: string | null = null;
+
+    if (!isSystemAuth) {
+      const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+      if (userErr || !userData?.user) return json({ error: 'invalid auth' }, 401);
+      callerUserId = userData.user.id;
+    }
 
     // ── Load program + location + partner ──────────────────────────────────
     const { data: program, error: progErr } = await supabase
@@ -75,14 +81,16 @@ serve(async (req: Request) => {
       .maybeSingle();
     if (progErr || !program) return json({ error: 'program not found' }, 404);
 
-    const { data: memberRow } = await supabase
-      .from('org_members')
-      .select('role')
-      .eq('auth_user_id', userData.user.id)
-      .eq('organization_id', program.organization_id)
-      .maybeSingle();
-    if (!memberRow || !['owner', 'admin'].includes(memberRow.role)) {
-      return json({ error: 'forbidden' }, 403);
+    if (!isSystemAuth) {
+      const { data: memberRow } = await supabase
+        .from('org_members')
+        .select('role')
+        .eq('auth_user_id', callerUserId!)
+        .eq('organization_id', program.organization_id)
+        .maybeSingle();
+      if (!memberRow || !['owner', 'admin'].includes(memberRow.role)) {
+        return json({ error: 'forbidden' }, 403);
+      }
     }
 
     const { data: org } = await supabase
@@ -278,7 +286,7 @@ serve(async (req: Request) => {
       organization_id: program.organization_id,
       program_id: program.id,
       partner_id: partner?.id ?? null,
-      sent_by_user_id: userData.user.id,
+      sent_by_user_id: callerUserId,
       recipients,
       message: message || null,
       resend_message_id: sent.length > 0 ? sent[0].message_id : null,

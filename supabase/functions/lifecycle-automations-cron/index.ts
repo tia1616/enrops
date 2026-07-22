@@ -18,6 +18,11 @@
 //                                   before a district closure, to the affected
 //                                   afterschool families AND assigned instructor)
 //
+//   - partner_roster            (partner_roster — SPECIAL: invokes
+//                                   email-program-roster via system-auth for
+//                                   each qualifying afterschool program, 7 days
+//                                   before and morning-of first session)
+//
 // Intentionally not fired here:
 //   - event_registration_confirmed (handled by stripe-webhook, not cron)
 //   - survey_pending (template stays is_v1_enabled=false until surveys ship)
@@ -366,6 +371,8 @@ async function runAutomation(
     case "days_before_no_school":
       audience = await resolveNoSchoolDayAudience(supabase, a);
       break;
+    case "partner_roster":
+      return await runPartnerRosterAutomation(supabase, a);
     case "event_registration_confirmed":
       // Handled by stripe-webhook (registration table → confirmation email).
       // Cron isn't the right trigger here — checkout completion is event-driven.
@@ -1494,6 +1501,144 @@ async function resolveInstructorBirthdayAudience(
       register_url: "",
       next_term_available: false,
     }));
+}
+
+// ─── Partner roster (afterschool only, we-run-registration, to partner sites) ─
+// This automation is SPECIAL: it doesn't use the normal audience→sendOne pipeline.
+// Instead it finds qualifying programs and invokes email-program-roster (which
+// builds a branded PDF and sends it). Two fires per program: 7 days before
+// first_session_date (snapshot) + morning of the first day (final). Idempotent
+// per program per day via roster_email_sends. Records in automation_runs for the
+// Automations UI stats, and in roster_email_sends for per-send tracking.
+async function runPartnerRosterAutomation(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+) {
+  const now = new Date();
+  const todayStr = now.toISOString().split("T")[0];
+
+  const sevenOut = new Date(now);
+  sevenOut.setDate(sevenOut.getDate() + 7);
+  const sevenDayStr = sevenOut.toISOString().split("T")[0];
+
+  // Find afterschool programs starting in 7 days OR today, where WE run
+  // registration (not partner-run) and the location has a partner.
+  const { data: programs, error: pErr } = await supabase
+    .from("programs")
+    .select(`
+      id, organization_id, program_location_id, curriculum,
+      first_session_date, program_type, runs_own_registration,
+      program_locations!inner ( id, partner_id, contact_email )
+    `)
+    .eq("organization_id", a.organization_id)
+    .eq("program_type", "afterschool")
+    .eq("runs_own_registration", false)
+    .not("program_locations.partner_id", "is", null)
+    .or(`first_session_date.eq.${sevenDayStr},first_session_date.eq.${todayStr}`);
+
+  if (pErr) throw pErr;
+
+  if (!programs || programs.length === 0) {
+    await supabase.from("automation_runs").insert({
+      automation_id: a.id,
+      organization_id: a.organization_id,
+      audience_size: 0,
+      status: "skipped_no_audience",
+    });
+    return { audience: 0, sent: 0, failed: 0, skipped: 0 };
+  }
+
+  // Idempotency: check which programs already had a roster sent today
+  const programIds = programs.map((p: any) => p.id);
+  const { data: sentToday } = await supabase
+    .from("roster_email_sends")
+    .select("program_id")
+    .in("program_id", programIds)
+    .gte("sent_at", `${todayStr}T00:00:00+00:00`)
+    .eq("status", "sent");
+  const alreadySent = new Set((sentToday ?? []).map((r: any) => r.program_id));
+
+  let sent = 0;
+  let failed = 0;
+  let skippedCount = 0;
+
+  for (const prog of programs as any[]) {
+    if (alreadySent.has(prog.id)) {
+      skippedCount++;
+      continue;
+    }
+
+    const partnerId = prog.program_locations?.partner_id;
+    if (!partnerId) { skippedCount++; continue; }
+
+    // Resolve partner_contacts for this partner
+    const { data: contacts } = await supabase
+      .from("partner_contacts")
+      .select("id")
+      .eq("partner_id", partnerId)
+      .eq("organization_id", a.organization_id);
+
+    const contactIds = (contacts ?? []).map((c: any) => c.id);
+    if (contactIds.length === 0 && !prog.program_locations?.contact_email) {
+      skippedCount++;
+      continue;
+    }
+
+    // Invoke email-program-roster with service-role auth
+    try {
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/email-program-roster`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${SERVICE_KEY}`,
+        },
+        body: JSON.stringify({
+          program_id: prog.id,
+          recipient_contact_ids: contactIds,
+          include_location_contact: true,
+          mode: "send",
+        }),
+      });
+
+      if (resp.ok) {
+        sent++;
+      } else {
+        const errBody = await resp.text().catch(() => "");
+        console.error(`[partner-roster] send failed for program ${prog.id}: ${errBody.slice(0, 300)}`);
+        failed++;
+      }
+    } catch (err) {
+      console.error(`[partner-roster] invoke failed for program ${prog.id}:`, err);
+      failed++;
+    }
+  }
+
+  // Track the automation run
+  const totalAudience = sent + failed;
+  const timeSavedMinutes = sent * a.template.time_saved_minutes_per_send;
+  const finalStatus = totalAudience === 0 ? "skipped_no_audience" : (failed > 0 && sent === 0 ? "failed" : "sent");
+  await supabase.from("automation_runs").insert({
+    automation_id: a.id,
+    organization_id: a.organization_id,
+    audience_size: totalAudience,
+    status: finalStatus,
+    time_saved_minutes: timeSavedMinutes,
+    error_message: failed > 0 ? `${failed} of ${programs.length} roster sends failed` : null,
+  });
+
+  if (sent > 0) {
+    const siteWord = sent === 1 ? "site" : "sites";
+    await supabase.from("time_saved_events").insert({
+      organization_id: a.organization_id,
+      action_type: "automation_fired",
+      action_label: `Sent roster to ${sent} partner ${siteWord}`,
+      hours_saved: timeSavedMinutes / 60,
+      related_entity_type: "automation",
+      related_entity_id: a.id,
+    });
+  }
+
+  return { programs_found: programs.length, sent, failed, skipped: skippedCount, time_saved_minutes: timeSavedMinutes };
 }
 
 async function resolveBirthdayAudience(
