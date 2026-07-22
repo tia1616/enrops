@@ -106,54 +106,28 @@ async function fetchFamily(contact, orgId) {
       events.push({ id: "sup" + s.suppressed_at, at: s.suppressed_at, icon: "🚫", title: "Unsubscribed", detail: s.reason ? cap(s.reason) : "", tone: "negative" });
     }
 
-    // Registrations — the programs/camps this family signed up for and (by date)
-    // attended. marketing_recipients is email-keyed, so the link runs
-    // email -> parents -> registrations (org-scoped). RLS: parents are visible
-    // only when linked to this org, registrations/students are is_org_member.
-    const { data: parentRows } = await supabase.from("parents").select("id").eq("email", email);
-    const parentIds = [...new Set((parentRows ?? []).map((p) => p.id))];
-    if (parentIds.length) {
-      const { data: regs } = await supabase
-        .from("registrations")
-        .select("id, registered_at, cancelled_at, status, program_id, camp_session_id, student_id")
-        .eq("organization_id", orgId)
-        .in("parent_id", parentIds)
-        .limit(200);
-      const rList = regs ?? [];
-      const progIds = [...new Set(rList.map((r) => r.program_id).filter(Boolean))];
-      const csIds = [...new Set(rList.map((r) => r.camp_session_id).filter(Boolean))];
-      const stuIds = [...new Set(rList.map((r) => r.student_id).filter(Boolean))];
-      const pMap = new Map();
-      const csMap = new Map();
-      const stuMap = new Map();
-      if (progIds.length) { const { data } = await supabase.from("programs").select("id, curriculum, term, first_session_date").in("id", progIds); for (const p of data ?? []) pMap.set(p.id, p); }
-      if (csIds.length) { const { data } = await supabase.from("camp_sessions").select("id, curriculum_name, week_num, starts_on").in("id", csIds); for (const s of data ?? []) csMap.set(s.id, s); }
-      if (stuIds.length) { const { data } = await supabase.from("students").select("id, first_name, last_name").in("id", stuIds); for (const s of data ?? []) stuMap.set(s.id, s); }
-      const now = new Date();
-      for (const r of rList) {
-        const prog = r.program_id ? pMap.get(r.program_id) : null;
-        const cs = r.camp_session_id ? csMap.get(r.camp_session_id) : null;
-        const name = prog
-          ? `${prog.curriculum ?? "Class"}${prog.term ? ` · ${prog.term}` : ""}`
-          : cs
-          ? `${cs.curriculum_name ?? "Camp"}${cs.week_num ? ` · Wk ${cs.week_num}` : ""}`
-          : "a program";
-        const stu = r.student_id ? stuMap.get(r.student_id) : null;
-        const child = stu ? [stu.first_name, stu.last_name].filter(Boolean).join(" ") : "";
-        const cancelled = !!r.cancelled_at;
-        const startAt = prog?.first_session_date ?? cs?.starts_on ?? null;
-        const past = !cancelled && startAt && new Date(startAt) < now;
-        events.push({
-          id: "reg" + r.id,
-          at: r.registered_at,
-          icon: cancelled ? "📝" : past ? "🎓" : "📝",
-          title: `${past ? "Attended" : "Registered"}: ${name}`,
-          detail: [child, cancelled ? "later cancelled" : (r.status && r.status !== "confirmed" ? cap(r.status) : "")].filter(Boolean).join(" · "),
-          tone: cancelled ? "neutral" : "positive",
-        });
-        if (cancelled) {
-          events.push({ id: "regc" + r.id, at: r.cancelled_at, icon: "✖️", title: `Cancelled: ${name}`, detail: child, tone: "negative" });
-        }
+    // Registrations — the programs/camps this family signed up for + attended.
+    // Via a SECURITY DEFINER RPC (gated to org members, scoped to org+email)
+    // because the parents RLS hides most registered parents from the admin
+    // (missing parent_org_relationships), so an email->parents read comes back
+    // empty. The RPC returns only this org's registrations for this email.
+    const { data: regs } = await supabase.rpc("family_registration_timeline", { p_org: orgId, p_email: email });
+    const now = new Date();
+    for (const r of regs ?? []) {
+      const name = r.program_name || "a program";
+      const child = r.child_name || "";
+      const cancelled = !!r.cancelled_at;
+      const past = !cancelled && r.starts_at && new Date(r.starts_at) < now;
+      events.push({
+        id: "reg" + r.registration_id,
+        at: r.registered_at,
+        icon: past ? "🎓" : "📝",
+        title: `${past ? "Attended" : "Registered"}: ${name}`,
+        detail: [child, cancelled ? "later cancelled" : (r.status && r.status !== "confirmed" ? cap(r.status) : "")].filter(Boolean).join(" · "),
+        tone: cancelled ? "neutral" : "positive",
+      });
+      if (cancelled) {
+        events.push({ id: "regc" + r.registration_id, at: r.cancelled_at, icon: "✖️", title: `Cancelled: ${name}`, detail: child, tone: "negative" });
       }
     }
   }
