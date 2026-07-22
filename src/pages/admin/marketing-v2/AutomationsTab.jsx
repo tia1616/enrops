@@ -90,7 +90,7 @@ const BOARD_STATS_SOURCE = {
 const BOARD_SEND_NOTE = {
   availability_survey: "Edit the default intro here, then preview and send from your Schedule tab.",
   assignment_offer: "Edit the default message here, then preview and send from your Schedule tab.",
-  sub_offer: "Edit the default message here. Sent when you assign a substitute on the Schedule board.",
+  sub_offer: "Sent automatically when you assign a substitute on the Schedule board.",
 };
 
 // Templates that require Stripe Connect to fire — UI locks the toggle until
@@ -544,6 +544,11 @@ export default function AutomationsTab() {
                     >
                       Send from your Schedule →
                     </Link>
+                    {/* Only the intro-editable board sends expose "Edit message". sub_offer's
+                        email is built per-send by create-assignment-substitution, which does
+                        not read a saved body_override, so a customizable box here would be a
+                        dead control (saves copy nothing sends). */}
+                    {tpl.key !== "sub_offer" && (
                     <button
                       type="button"
                       onClick={() => setEditingTpl((prev) => (prev?.id === tpl.id ? null : tpl))}
@@ -559,6 +564,7 @@ export default function AutomationsTab() {
                     >
                       {editingTpl?.id === tpl.id ? "Close" : "Edit message"}
                     </button>
+                    )}
                     </>
                   ) : (
                   <>

@@ -1800,13 +1800,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     await loadAll();
   }
 
-  function builtinOfferIntro() {
-    return "Your proposed schedule is below. Please review each assignment and let us know — your schedule isn't confirmed until we hear back on every one.";
-  }
-
   function openSendOffers() {
     setSelectedInstructorIds(new Set(sendableInstructors.map((i) => i.id)));
-    setOfferIntro(orgOfferIntro.trim() || builtinOfferIntro());
+    // Seed from the operator's saved default only; blank -> intro_message null ->
+    // the edge fn builds each instructor's personalized intro (their class count +
+    // term dates). A single shared string here can't carry per-instructor counts.
+    setOfferIntro(orgOfferIntro.trim());
     setOfferDialog({ mode: "choose", payload: null });
   }
 
@@ -2141,7 +2140,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           setDeadline={setOfferDeadline}
           intro={offerIntro}
           onIntroChange={setOfferIntro}
-          defaultIntro={builtinOfferIntro()}
+          defaultIntro={orgOfferIntro.trim()}
           busy={busy === "offers"}
           onRun={runOffers}
           onPreview={previewOffers}
@@ -3117,7 +3116,7 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
           value={intro ?? ""}
           onChange={(e) => onIntroChange(e.target.value)}
           rows={3}
-          placeholder={defaultIntro}
+          placeholder="Leave blank to give each instructor their own summary (their class count + your term dates). Type here to write one note for everyone instead."
           style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 13, fontFamily: "inherit", lineHeight: 1.5, resize: "vertical", marginBottom: 4 }}
         />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>

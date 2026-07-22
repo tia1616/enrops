@@ -1866,12 +1866,12 @@ export default function Schedule() {
     return `We're planning the ${cycleDisplayName(state.cycle?.name)} schedule and want to know when and where you'd like to work.`;
   }
 
-  function builtinOfferIntro() {
-    return "Your proposed schedule is below. Please review each assignment and let us know — your schedule isn't confirmed until we hear back on every one.";
-  }
-
   function openOfferDialog() {
-    setOfferIntro(orgOfferIntro.trim() || builtinOfferIntro());
+    // Seed from the operator's saved default only. When they haven't saved one we
+    // leave it blank so the send passes intro_message: null and the edge fn builds
+    // each instructor's personalized intro (their own camp count + cycle dates) —
+    // a single shared string here can't carry per-instructor counts.
+    setOfferIntro(orgOfferIntro.trim());
     setOfferDialog({ mode: "choose", payload: null });
   }
 
@@ -1968,7 +1968,7 @@ export default function Schedule() {
     try {
       const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient },
+        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient, intro_message: offerIntro || null },
       });
       if (error) {
         // Read the actual response body so we can see the real error message.
@@ -2354,7 +2354,7 @@ export default function Schedule() {
           onAutoRemindersChange={setAutoReminders}
           intro={offerIntro}
           onIntroChange={setOfferIntro}
-          defaultIntro={builtinOfferIntro()}
+          defaultIntro={orgOfferIntro.trim()}
           publishedCount={state.assignments?.filter((a) => a.status === "published").length ?? 0}
           onRollback={handleRollback}
           rollingBack={busy === "rolling_back"}
@@ -4342,7 +4342,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
           value={intro ?? ""}
           onChange={(e) => onIntroChange(e.target.value)}
           rows={3}
-          placeholder={defaultIntro}
+          placeholder="Leave blank to give each instructor their own summary (their camp count + your cycle dates). Type here to write one note for everyone instead."
           style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 6, border: `1px solid ${RULE}`, fontSize: 13, fontFamily: "inherit", lineHeight: 1.5, resize: "vertical" }}
         />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: -4 }}>
