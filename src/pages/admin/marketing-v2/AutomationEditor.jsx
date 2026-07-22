@@ -208,6 +208,23 @@ function boardSendExampleBody(templateKey, introHtml, primaryColor) {
     `<div style="margin-top:18px;padding-top:14px;border-top:1px dashed #d9d6e2;"><div style="font-size:10px;color:#9a97ab;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px;">Added automatically</div>${inner}</div>`;
   const greeting = `<p style="margin:0 0 14px;">Hi Jordan,</p>`;
   const intro = introHtml || "";
+  if (templateKey === "sub_offer") {
+    // Fully system-generated (create-assignment-substitution). No operator intro —
+    // the whole email is the example, keyed to the day being covered.
+    const details = `<table role="presentation" width="100%" style="border-collapse:collapse;font-size:14px;margin:4px 0 16px;border:1px solid #eee;border-radius:8px;">`
+      + `<tr><td style="padding:9px 14px;color:#6b6880;">Program</td><td style="padding:9px 14px;"><strong>LEGO Robotics</strong></td></tr>`
+      + `<tr><td style="padding:9px 14px;color:#6b6880;border-top:1px solid #f0f0f0;">Date</td><td style="padding:9px 14px;border-top:1px solid #f0f0f0;">Mon, Jul 14</td></tr>`
+      + `<tr><td style="padding:9px 14px;color:#6b6880;border-top:1px solid #f0f0f0;">Time</td><td style="padding:9px 14px;border-top:1px solid #f0f0f0;">3:00pm&ndash;4:00pm</td></tr>`
+      + `<tr><td style="padding:9px 14px;color:#6b6880;border-top:1px solid #f0f0f0;">Where</td><td style="padding:9px 14px;border-top:1px solid #f0f0f0;">Lincoln Elementary</td></tr>`
+      + `<tr><td style="padding:9px 14px;color:#6b6880;border-top:1px solid #f0f0f0;">Role</td><td style="padding:9px 14px;border-top:1px solid #f0f0f0;">Lead</td></tr>`
+      + `</table>`;
+    return `${greeting}`
+      + `<p style="margin:0 0 14px;">Looking for a sub for <strong>LEGO Robotics</strong> on <strong>Mon, Jul 14</strong> — would you be able to take it?</p>`
+      + details
+      + `<p style="margin:0 0 4px;">Open your portal to accept or decline — once you accept, you'll see the lesson plan and the day's roster.</p>`
+      + button("Open your portal &rarr;")
+      + `<p style="margin:0;color:#6b6880;font-size:14px;">If this day doesn't work, just decline and we'll find someone else — no harm done.</p>`;
+  }
   if (templateKey === "availability_survey") {
     const sys = `${button("Share your availability &rarr;")}<p style="margin:0;color:#6b6880;font-size:14px;">Please reply by <strong>Fri, Aug 8</strong>.</p>`;
     return `${greeting}${intro}${autoBlock(sys)}`;
@@ -270,6 +287,10 @@ function setReviewUrlInBody(body, url) {
 
 export default function AutomationEditor({ template, automation, orgId, orgName, orgSlug, orgLogoUrl, orgSenderName, orgPrimaryColor, userEmail, onClose, onSaved }) {
   const isBoardSend = template.trigger_type === "operator_initiated";
+  // sub_offer copy is fully system-generated (create-assignment-substitution
+  // builds it per send and never reads an override), so its editor is
+  // PREVIEW-ONLY: show the example email, no editable fields, no Save.
+  const isPreviewOnly = template.key === "sub_offer";
   const [subject, setSubject] = useState(automation?.subject_override ?? template.default_subject);
   const [body, setBody] = useState(automation?.body_override ?? template.default_body);
   // Toggle: false = render the HTML with token pills; true = textarea with
@@ -800,6 +821,12 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             </div>
           )}
 
+          {isPreviewOnly ? (
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: MUTED, lineHeight: 1.6 }}>
+              This email is sent automatically when you assign a sub or cover on the Schedule board. Its wording is set by the system — here's an example of what the instructor receives:
+            </p>
+          ) : (
+          <>
           {/* Body — toggle between rendered display (default) and markdown-ish
               edit mode. Operators never see raw HTML tags. Pattern mirrors
               the campaign BodyEditor in TouchpointCard.jsx. */}
@@ -865,6 +892,8 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             <p style={{ margin: "0 0 16px", fontSize: 12, color: MUTED, lineHeight: 1.5, fontStyle: "italic" }}>
               This is the default intro paragraph. The greeting, assignment details, response buttons, and deadline are added automatically when you send from the Schedule tab.
             </p>
+          )}
+          </>
           )}
 
           {/* Attachments — add files that appear as a Download button at the email bottom */}
@@ -1002,7 +1031,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               board where you pick real recipients. Show a note instead. */}
           {isBoardSend ? (
             <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
-              The preview above shows an example of the full email with sample details. Save the default message here; you send the real one (with actual instructors and dates) from the Schedule tab.
+              {isPreviewOnly
+                ? "The preview above shows an example of this email. It's sent automatically when you assign a sub or cover on the Schedule board — its wording isn't editable."
+                : "The preview above shows an example of the full email with sample details. Save the default message here; you send the real one (with actual instructors and dates) from the Schedule tab."}
             </div>
           ) : (
           <>
@@ -1070,7 +1101,8 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
           </div>
           </>
           )}
-          {/* Save / Reset row */}
+          {/* Save / Reset row — hidden for preview-only sends (nothing to save) */}
+          {!isPreviewOnly && (
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button
               type="button"
@@ -1100,6 +1132,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               {saving ? "Saving…" : "Save"}
             </button>
           </div>
+          )}
         </div>
     </div>
   );

@@ -544,11 +544,10 @@ export default function AutomationsTab() {
                     >
                       Send from your Schedule →
                     </Link>
-                    {/* Only the intro-editable board sends expose "Edit message". sub_offer's
-                        email is built per-send by create-assignment-substitution, which does
-                        not read a saved body_override, so a customizable box here would be a
-                        dead control (saves copy nothing sends). */}
-                    {tpl.key !== "sub_offer" && (
+                    {/* Intro-editable board sends (survey, offer) open an editor;
+                        sub_offer's email is built per-send by create-assignment-
+                        substitution and never reads an override, so its button opens
+                        a PREVIEW-ONLY view (see the example, nothing to edit). */}
                     <button
                       type="button"
                       onClick={() => setEditingTpl((prev) => (prev?.id === tpl.id ? null : tpl))}
@@ -562,9 +561,8 @@ export default function AutomationsTab() {
                         cursor: "pointer",
                       }}
                     >
-                      {editingTpl?.id === tpl.id ? "Close" : "Edit message"}
+                      {editingTpl?.id === tpl.id ? "Close" : (tpl.key === "sub_offer" ? "Preview email" : "Edit message")}
                     </button>
-                    )}
                     </>
                   ) : (
                   <>
