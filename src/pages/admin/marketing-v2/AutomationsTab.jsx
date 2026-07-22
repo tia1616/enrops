@@ -85,6 +85,16 @@ const BOARD_STATS_SOURCE = {
   assignment_offer: { table: "program_assignments", ts: "email_sent_at" },
 };
 
+// What you can do before each board send actually goes out — stated per card,
+// and ONLY what's genuinely true today: the availability survey lets you preview
+// AND edit the intro AND test it; offers/sub let you preview + test but the copy
+// isn't editable there yet (that lives on the Schedule board). No overclaiming.
+const BOARD_SEND_NOTE = {
+  availability_survey: "Preview it, edit the intro, and send yourself a test before it goes out.",
+  assignment_offer: "Preview exactly what each instructor will get, and test it to yourself, before it goes out.",
+  sub_offer: "Preview what will be sent before it goes out.",
+};
+
 // Templates that require Stripe Connect to fire — UI locks the toggle until
 // the org connects. Kept here (not in DB) for v1 — a `requires_stripe_connect`
 // column on automation_templates would be cleaner but premature now.
@@ -340,7 +350,10 @@ export default function AutomationsTab() {
         </p>
       </header>
 
-      <DeliveryIssuesPanel org={org} />
+      {/* Delivery-issue alerts are framed for families ("families who didn't get
+          an email") and only make sense on the Families view — don't surface them
+          on the Instructors/Partners pills. */}
+      {audience === "families" && <DeliveryIssuesPanel org={org} />}
 
       {error && (
         <div
@@ -440,6 +453,11 @@ export default function AutomationsTab() {
                   <p style={{ color: MUTED, fontSize: 14, margin: "4px 0 10px", lineHeight: 1.5 }}>
                     {tpl.description}
                   </p>
+                  {isBoardSend && BOARD_SEND_NOTE[tpl.key] && (
+                    <p style={{ color: PURPLE, fontSize: 12.5, margin: "0 0 10px", lineHeight: 1.5, fontWeight: 600 }}>
+                      ✎ {BOARD_SEND_NOTE[tpl.key]}
+                    </p>
+                  )}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 13 }}>
                     {isBoardSend && BOARD_STATS_SOURCE[tpl.key] && (
                       boardStats[tpl.key]?.count > 0 ? (
