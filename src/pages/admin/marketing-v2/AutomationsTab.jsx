@@ -76,6 +76,15 @@ const STAGES = [
   { key: "anytime", label: "Anytime", blurb: "Thoughtful touches, any time of year" },
 ];
 
+// Where each operator-initiated (board) send records its history, so an
+// informational card can show REAL last-sent + volume + time saved instead of
+// nothing. Org-scoped reads. sub_offer has no durable per-send table yet, so it
+// shows no stats (honest — a made-up number would be worse than none).
+const BOARD_STATS_SOURCE = {
+  availability_survey: { table: "instructor_survey_sends", ts: "sent_at" },
+  assignment_offer: { table: "program_assignments", ts: "email_sent_at" },
+};
+
 // Templates that require Stripe Connect to fire — UI locks the toggle until
 // the org connects. Kept here (not in DB) for v1 — a `requires_stripe_connect`
 // column on automation_templates would be cleaner but premature now.
@@ -117,6 +126,7 @@ export default function AutomationsTab() {
   const [templates, setTemplates] = useState([]);
   const [automationByTpl, setAutomationByTpl] = useState({});
   const [runStats, setRunStats] = useState({});
+  const [boardStats, setBoardStats] = useState({}); // key -> { count, lastSent } for operator-initiated cards
   const [stripeReady, setStripeReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -162,6 +172,24 @@ export default function AutomationsTab() {
       if (orgRes.error) throw orgRes.error;
 
       setTemplates(tplRes.data ?? []);
+
+      // Real stats for the operator-initiated (board) cards, from each send's own
+      // history table (org-scoped). Best-effort: a blocked/missing source just
+      // leaves that card without stats rather than failing the whole load.
+      const boardTpls = (tplRes.data ?? []).filter((t) => BOARD_STATS_SOURCE[t.key]);
+      const boardEntries = await Promise.all(boardTpls.map(async (t) => {
+        const src = BOARD_STATS_SOURCE[t.key];
+        const { data, count, error: bErr } = await supabase
+          .from(src.table)
+          .select(src.ts, { count: "exact" })
+          .eq("organization_id", org.id)
+          .not(src.ts, "is", null)
+          .order(src.ts, { ascending: false })
+          .limit(1);
+        if (bErr) return [t.key, null];
+        return [t.key, { count: count ?? 0, lastSent: data?.[0]?.[src.ts] ?? null }];
+      }));
+      setBoardStats(Object.fromEntries(boardEntries));
 
       const aMap = {};
       (autoRes.data ?? []).forEach((a) => { aMap[a.template_id] = a; });
@@ -413,6 +441,24 @@ export default function AutomationsTab() {
                     {tpl.description}
                   </p>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 13 }}>
+                    {isBoardSend && BOARD_STATS_SOURCE[tpl.key] && (
+                      boardStats[tpl.key]?.count > 0 ? (
+                        <>
+                          {boardStats[tpl.key].lastSent && (
+                            <Chip color={MUTED} bg="#f5f4ee">
+                              Last sent {relativeTime(boardStats[tpl.key].lastSent)}
+                            </Chip>
+                          )}
+                          <Chip color={OK} bg="#ecf6ec">
+                            ⏱ {formatTimeSaved(boardStats[tpl.key].count * (tpl.time_saved_minutes_per_send || 0))}
+                            {" · "}
+                            {boardStats[tpl.key].count} sent
+                          </Chip>
+                        </>
+                      ) : (
+                        <Chip color={MUTED} bg="#f5f4ee">Not sent yet</Chip>
+                      )
+                    )}
                     {stats?.last_fired && (
                       <Chip color={MUTED} bg="#f5f4ee">
                         Last sent {relativeTime(stats.last_fired)}
