@@ -422,9 +422,13 @@ export default function AutomationsTab() {
                     <h2 style={{ color: INK, fontSize: 17, fontWeight: 700, margin: 0 }}>
                       {tpl.display_name}
                     </h2>
-                    {isBoardSend ? (
-                      <Chip color={INFO} bg="#eef4fc">You send this</Chip>
-                    ) : (
+                    {/* MODE badge — same position on every card so the auto-fire vs
+                        manual split is scannable at a glance (this list mixes both,
+                        unlike Sawyer/Jumbula which separate them into tabs). Auto
+                        cards ALSO show their on/off StatusPill; the mode badge is a
+                        distinct signal from the status. */}
+                    <ModeBadge isBoardSend={isBoardSend} />
+                    {!isBoardSend && (
                       <StatusPill
                         locked={locked}
                         disabledTemplate={disabledTemplate}
@@ -650,6 +654,15 @@ function CelebrationOverlay({ templateName }) {
       </span>
     </div>
   );
+}
+
+// The one badge that answers "does this send on its own, or do I send it?" —
+// rendered in a fixed spot on every card so the mixed auto/manual list reads as
+// two clear kinds. Manual (board) sends point to where the operator does it.
+function ModeBadge({ isBoardSend }) {
+  return isBoardSend
+    ? <Chip color="#8a5a00" bg="#fdf2df">✋ You send this · from the Schedule tab</Chip>
+    : <Chip color={PURPLE} bg="#efe9f7">⚡ Runs automatically</Chip>;
 }
 
 function StatusPill({ locked, disabledTemplate, enabled }) {
