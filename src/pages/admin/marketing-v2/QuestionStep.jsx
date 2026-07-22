@@ -14,6 +14,7 @@ export default function QuestionStep({
   loading = false,
   loadingLabel,
   onStartDrafting,
+  onStartManual,
   rightExtras,
 }) {
   return (
@@ -65,18 +66,36 @@ export default function QuestionStep({
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {rightExtras}
           {isLast ? (
-            <button
-              onClick={onStartDrafting}
-              disabled={!canNext || loading}
-              style={{
-                padding: "10px 18px", background: canNext && !loading ? PURPLE : "#cfcfcf",
-                color: "#fff", border: "none", borderRadius: 6,
-                cursor: canNext && !loading ? "pointer" : "not-allowed",
-                fontSize: 14, fontWeight: 600,
-              }}
-            >
-              {loading ? (loadingLabel ?? "Drafting your campaign...") : "Draft it ✨"}
-            </button>
+            <>
+              {onStartManual && (
+                <button
+                  onClick={onStartManual}
+                  disabled={!canNext || loading}
+                  style={{
+                    padding: "10px 18px", background: "#fff",
+                    color: canNext && !loading ? INK : "#cfcfcf",
+                    border: `1px solid ${canNext && !loading ? RULE : "#cfcfcf"}`,
+                    borderRadius: 6,
+                    cursor: canNext && !loading ? "pointer" : "not-allowed",
+                    fontSize: 14, fontWeight: 500, fontFamily: "inherit",
+                  }}
+                >
+                  Write it myself
+                </button>
+              )}
+              <button
+                onClick={onStartDrafting}
+                disabled={!canNext || loading}
+                style={{
+                  padding: "10px 18px", background: canNext && !loading ? PURPLE : "#cfcfcf",
+                  color: "#fff", border: "none", borderRadius: 6,
+                  cursor: canNext && !loading ? "pointer" : "not-allowed",
+                  fontSize: 14, fontWeight: 600,
+                }}
+              >
+                {loading ? (loadingLabel ?? "Drafting your campaign...") : "Draft it ✨"}
+              </button>
+            </>
           ) : (
             <button
               onClick={onNext}
