@@ -87,13 +87,29 @@ async function fetchFamily(contact, orgId) {
   if (email) {
     const { data: autos } = await supabase
       .from("automation_run_recipients")
-      .select("id, sent_at, status")
+      .select("id, sent_at, status, automation_id")
       .eq("email", email)
       .order("sent_at", { ascending: false })
       .limit(300);
+    // Resolve each automation to its friendly name (automation_templates.display_name),
+    // so the row reads "Welcome — camp" not a bare "Automated email". automation_run_
+    // recipients stores no subject, and the template default_subject has {{...}}
+    // placeholders, so display_name is the clean label.
+    const autoIds = [...new Set((autos ?? []).map((a) => a.automation_id).filter(Boolean))];
+    const autoLabel = new Map();
+    if (autoIds.length) {
+      const { data: arows } = await supabase.from("automations").select("id, template_id").in("id", autoIds);
+      const tplIds = [...new Set((arows ?? []).map((a) => a.template_id).filter(Boolean))];
+      const tpl = new Map();
+      if (tplIds.length) {
+        const { data } = await supabase.from("automation_templates").select("id, display_name").in("id", tplIds);
+        for (const t of data ?? []) tpl.set(t.id, t.display_name);
+      }
+      for (const a of arows ?? []) autoLabel.set(a.id, tpl.get(a.template_id) || null);
+    }
     for (const a of autos ?? []) {
       const tone = a.status === "sent" ? "sent" : (a.status?.startsWith("skipped") ? "neutral" : "negative");
-      events.push({ id: "ar" + a.id, at: a.sent_at, icon: "🔔", title: "Automated email", detail: a.status ? cap(a.status.replace(/_/g, " ")) : "", tone });
+      events.push({ id: "ar" + a.id, at: a.sent_at, icon: "🔔", title: autoLabel.get(a.automation_id) || "Automated email", detail: a.status ? cap(a.status.replace(/_/g, " ")) : "", tone });
     }
 
     const { data: sup } = await supabase

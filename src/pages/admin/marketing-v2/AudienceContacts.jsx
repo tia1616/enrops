@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
-import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
+import { BRIGHT, INK, MUTED, PURPLE, RULE } from "../marketing/tokens.jsx";
 import ContactTimelineDrawer from "./ContactTimelineDrawer.jsx";
 
 const CREAM = "#FBFBFB";
@@ -178,6 +178,7 @@ export function PartnerContacts({ org }) {
   const [rows, setRows] = useState(null); // null = loading
   const [error, setError] = useState(null);
   const [openRow, setOpenRow] = useState(null); // contact whose timeline is open
+  const [q, setQ] = useState("");
 
   useEffect(() => {
     if (!org?.id) return;
@@ -193,7 +194,7 @@ export function PartnerContacts({ org }) {
           .eq("organization_id", org.id),
         supabase
           .from("partners")
-          .select("id, partner_name, inactive")
+          .select("id, partner_name, partner_type, location_area, inactive")
           .eq("organization_id", org.id),
       ]);
       if (!alive) return;
@@ -205,57 +206,108 @@ export function PartnerContacts({ org }) {
           ...c,
           __key: c.id,
           partner_name: p?.partner_name ?? null,
+          partner_type: p?.partner_type ?? null,
+          partner_area: p?.location_area ?? null,
           __dim: !!p?.inactive,
         };
       });
-      // Group visually by partner: sort by partner name, then contact name.
-      merged.sort((a, b) =>
-        (a.partner_name ?? "").localeCompare(b.partner_name ?? "") ||
-        (a.contact_name ?? "").localeCompare(b.contact_name ?? ""));
       setRows(merged);
     })();
     return () => { alive = false; };
   }, [org?.id]);
 
-  const columns = [
-    { key: "contact", label: "Contact", render: (r) => (
-      <span>
-        <strong>{r.contact_name || <em style={{ fontWeight: 400, color: MUTED }}>(no name)</em>}</strong>
-        {r.is_org_inbox && <span style={{ fontSize: 10, color: AMBER, marginLeft: 6, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>shared inbox</span>}
-      </span>
-    ) },
-    { key: "email", label: "Email", render: (r) => r.contact_email || <Dash /> },
-    { key: "phone", label: "Phone", render: (r) => r.contact_phone || <Dash /> },
-    { key: "role", label: "Role", render: (r) => (r.contact_role ? r.contact_role.replace(/_/g, " ") : <Dash />) },
-    { key: "partner", label: "Partner", render: (r) => (
-      <span>{r.partner_name || <Dash />}{r.__dim && <span style={{ color: MUTED, fontWeight: 400 }}> · inactive</span>}</span>
-    ) },
-  ];
+  // Group contacts by partner — a school in the normal case, an umbrella org
+  // (Parks & Rec, a district) for the ones that cover multiple venues. Search
+  // filters within groups; empty groups drop out.
+  const groups = useMemo(() => {
+    if (!rows) return null;
+    const needle = q.trim().toLowerCase();
+    const visible = needle
+      ? rows.filter((r) => [r.contact_name, r.contact_email, r.contact_phone, r.partner_name, r.contact_role].filter(Boolean).join(" ").toLowerCase().includes(needle))
+      : rows;
+    const map = new Map();
+    for (const r of visible) {
+      const key = r.partner_id ?? "__none__";
+      if (!map.has(key)) map.set(key, { key, name: r.partner_name || "Unassigned", type: r.partner_type, area: r.partner_area, dim: r.__dim, contacts: [] });
+      map.get(key).contacts.push(r);
+    }
+    for (const g of map.values()) g.contacts.sort((a, b) => (a.contact_name ?? "").localeCompare(b.contact_name ?? ""));
+    return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows, q]);
+
+  const total = rows?.length ?? 0;
 
   return (
-    <>
-    <PeopleList
-      title="Partners"
-      subtitle={<>Partner contacts come from your <Link to="/admin/schools" style={{ color: BRIGHT, fontWeight: 600 }}>Partners</Link> tab — add or edit each partner&apos;s contacts there and they show up here to email.</>}
-      searchPlaceholder="Search name, email, partner…"
-      columns={columns}
-      rows={rows}
-      loading={rows === null}
-      error={error}
-      searchText={(r) => [r.contact_name, r.contact_email, r.contact_phone, r.partner_name, r.contact_role].filter(Boolean).join(" ")}
-      emptyLabel="No partner contacts yet — add them under each partner in the Partners tab."
-      noun="contacts"
-      onRowClick={setOpenRow}
-    />
-    {openRow && (
-      <ContactTimelineDrawer
-        audience="partners"
-        contact={openRow}
-        contactLabel={openRow.contact_name || openRow.contact_email || "Partner contact"}
-        orgId={org?.id}
-        onClose={() => setOpenRow(null)}
-      />
-    )}
-    </>
+    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+      <header style={{ marginBottom: 16 }}>
+        <h1 style={{ color: INK, fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>Partners</h1>
+        <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: 0 }}>
+          The people at your partner sites you can email, grouped by school or organization. Add or edit each partner&apos;s contacts in the <Link to="/admin/schools" style={{ color: BRIGHT, fontWeight: 600 }}>Partners</Link> tab.
+        </p>
+      </header>
+
+      <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 16 }}>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search name, email, partner…"
+          style={{ width: "100%", padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", color: INK, marginBottom: 12, boxSizing: "border-box" }}
+        />
+
+        {rows === null ? (
+          <div style={{ color: MUTED, fontSize: 13, padding: 16 }}>Loading…</div>
+        ) : error ? (
+          <div style={{ color: RED, fontSize: 13, padding: 16 }}>{error}</div>
+        ) : groups.length === 0 ? (
+          <div style={{ color: MUTED, fontSize: 13, padding: 16 }}>{q ? `No partner contacts match “${q}”.` : "No partner contacts yet — add them under each partner in the Partners tab."}</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {groups.map((g) => (
+              <div key={g.key} style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden", opacity: g.dim ? 0.6 : 1 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", background: CREAM, padding: "8px 12px", borderBottom: `1px solid ${RULE}` }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 700, color: INK }}>{g.name}</span>
+                  {g.type && <span style={{ fontSize: 10.5, fontWeight: 600, color: PURPLE, background: `${PURPLE}0F`, border: `1px solid ${PURPLE}22`, borderRadius: 999, padding: "1px 8px" }}>{PARTNER_TYPE_LABELS[g.type] || g.type.replace(/_/g, " ")}</span>}
+                  {g.area && <span style={{ fontSize: 11.5, color: MUTED }}>· {g.area}</span>}
+                  {g.dim && <span style={{ fontSize: 10.5, color: AMBER, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>inactive</span>}
+                  <span style={{ fontSize: 11.5, color: MUTED, marginLeft: "auto" }}>{g.contacts.length} contact{g.contacts.length === 1 ? "" : "s"}</span>
+                </div>
+                <div>
+                  {g.contacts.map((c) => (
+                    <button
+                      key={c.__key}
+                      type="button"
+                      onClick={() => setOpenRow(c)}
+                      style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", background: "#fff", border: "none", borderBottom: `1px solid ${CREAM}`, padding: "9px 12px", cursor: "pointer", fontFamily: "inherit" }}
+                    >
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>{c.contact_name || <em style={{ fontWeight: 400, color: MUTED }}>(no name)</em>}</span>
+                        {c.contact_role && <span style={{ fontSize: 10.5, color: MUTED, marginLeft: 6, textTransform: "uppercase", letterSpacing: 0.4 }}>{c.contact_role.replace(/_/g, " ")}</span>}
+                        {c.is_org_inbox && <span style={{ fontSize: 10, color: AMBER, marginLeft: 6, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>shared inbox</span>}
+                        <span style={{ display: "block", fontSize: 12, color: MUTED, marginTop: 1 }}>{c.contact_email || "no email"}{c.contact_phone ? ` · ${c.contact_phone}` : ""}</span>
+                      </span>
+                      <span style={{ color: BRIGHT, fontWeight: 600, fontSize: 12, whiteSpace: "nowrap" }}>Activity ›</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
+          {rows && `${total} contact${total === 1 ? "" : "s"} across ${groups?.length ?? 0} partner${(groups?.length ?? 0) === 1 ? "" : "s"}`}
+        </div>
+      </div>
+
+      {openRow && (
+        <ContactTimelineDrawer audience="partners" contact={openRow} contactLabel={openRow.contact_name || openRow.contact_email || "Partner contact"} orgId={org?.id} onClose={() => setOpenRow(null)} />
+      )}
+    </div>
   );
 }
+
+const PARTNER_TYPE_LABELS = {
+  public_school: "Public school", private_school: "Private school",
+  charter_school: "Charter school", school_district: "School district",
+  parks_rec: "Parks & Rec", community_org: "Community org", church: "Church",
+};
