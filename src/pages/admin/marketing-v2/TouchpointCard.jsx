@@ -400,8 +400,9 @@ export default function TouchpointCard({
 
 const MERGE_TOKENS = [
   { group: "Personalization", tokens: [
-    { key: "first_name", label: "First name", tip: "Parent's first name" },
-    { key: "parent_name", label: "Full name", tip: "Parent's full name" },
+    { key: "first_name", label: "Parent first name", tip: "The contact's (parent's) first name" },
+    { key: "parent_name", label: "Parent full name", tip: "The contact's (parent's) full name" },
+    { key: "child_first_name", label: "Student first name", tip: "The enrolled child's first name" },
     { key: "school", label: "School", tip: "School or location name" },
   ]},
   { group: "Program details", tokens: [
