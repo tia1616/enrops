@@ -8,13 +8,20 @@
 //   - days_after_first_session     (check_in)
 //   - session_midpoint             (mid_recap)
 //   - session_last_day             (final_recap)
-//   - birthday                     (birthday)
+//   - birthday                     (birthday — family/student audience)
+//   - instructor_birthday          (instructor_birthday — active instructors, by
+//                                   instructors.date_of_birth; instructor audience)
 //   - contact_added                (welcome_contact)
 //   - days_after_engagement        (review_request — dual anchor: N days after a
 //                                   first session OR after a contact was added)
 //   - days_before_no_school        (no_school_day — CALENDAR-anchored: N days
 //                                   before a district closure, to the affected
 //                                   afterschool families AND assigned instructor)
+//
+//   - partner_roster            (partner_roster — SPECIAL: invokes
+//                                   email-program-roster via system-auth for
+//                                   each qualifying afterschool program, 7 days
+//                                   before and morning-of first session)
 //
 // Intentionally not fired here:
 //   - event_registration_confirmed (handled by stripe-webhook, not cron)
@@ -352,6 +359,9 @@ async function runAutomation(
     case "birthday":
       audience = await resolveBirthdayAudience(supabase, a);
       break;
+    case "instructor_birthday":
+      audience = await resolveInstructorBirthdayAudience(supabase, a);
+      break;
     case "contact_added":
       audience = await resolveContactAddedAudience(supabase, a);
       break;
@@ -361,6 +371,8 @@ async function runAutomation(
     case "days_before_no_school":
       audience = await resolveNoSchoolDayAudience(supabase, a);
       break;
+    case "partner_roster":
+      return await runPartnerRosterAutomation(supabase, a);
     case "event_registration_confirmed":
       // Handled by stripe-webhook (registration table → confirmation email).
       // Cron isn't the right trigger here — checkout completion is event-driven.
@@ -1426,6 +1438,214 @@ async function resolveRecapAudience(
 }
 
 // ─── Birthday (camps + afterschool, fires when student DOB matches today) ───
+// ─── Instructor birthday (fires on an active instructor's birthday) ──────────
+// The instructor-audience sibling of resolveBirthdayAudience. Reads
+// instructors.date_of_birth (not students), and messages only ACTIVE instructors
+// who have an email. Single-audience automation: the operator-editable body IS
+// the instructor copy, so it sets NO per-entry subject_template/body_template
+// (unlike no_school_day's two-audience split) — sendOne falls back to the
+// override/default, which is what we want. {{first_name}} = the instructor's
+// first name; no age is referenced. Org-scoped; no hardcoded tenant. Idempotent
+// per instructor per year via the context_key.
+async function resolveInstructorBirthdayAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const day = now.getDate();
+  const year = now.getFullYear();
+
+  // PostgREST can't easily filter on EXTRACT(month/day FROM date_of_birth), so
+  // fetch active instructors with a birthdate in this org and match month/day in
+  // TS (mirrors resolveBirthdayAudience). At tenant scale this is a small list.
+  const { data: instructors, error } = await supabase
+    .from("instructors")
+    .select("id, first_name, preferred_name, email, date_of_birth")
+    .eq("organization_id", a.organization_id)
+    .eq("is_active", true)
+    .not("date_of_birth", "is", null)
+    .not("email", "is", null);
+  if (error) throw error;
+
+  return (instructors ?? [])
+    .filter((i: any) => {
+      if (!i.date_of_birth || !i.email) return false;
+      const parts = String(i.date_of_birth).split("-").map(Number);
+      return parts[1] === month && parts[2] === day;
+    })
+    .map((i: any) => ({
+      // parent_* are the engine's GENERIC recipient fields (just named "parent").
+      // parent_id stays null: automation_run_recipients.parent_id has no FK, and
+      // an instructor id is not a parent id — writing one would be a lie.
+      context_key: `instructor:${i.id}:year:${year}`,
+      parent_id: null,
+      parent_email: i.email,
+      // Prefer the name the instructor goes by — a birthday note is the most
+      // personal send there is, so "Bo" must not get "Happy birthday, Rebecca!"
+      // (mirrors the roster/contacts display rule: preferred_name ?? first_name).
+      parent_first_name: i.preferred_name?.trim() || i.first_name,
+      child_first_name: null,
+      program_name: "",
+      program_start_date: "",
+      program_end_date: "",
+      location_name: "",
+      abandoned_resume_url: "",
+      age_turning: "",
+      final_showcase_raw: "",
+      mid_term_skills_raw: [],
+      final_recap_skills_raw: [],
+      arrival_instructions_raw: "",
+      dismissal_instructions_raw: "",
+      session_dates_raw: [],
+      register_url: "",
+      next_term_available: false,
+    }));
+}
+
+// ─── Partner roster (afterschool only, we-run-registration, to partner sites) ─
+// This automation is SPECIAL: it doesn't use the normal audience→sendOne pipeline.
+// Instead it finds qualifying programs and invokes email-program-roster (which
+// builds a branded PDF and sends it). Two fires per program: 7 days before
+// first_session_date (snapshot) + morning of the first day (final). Idempotent
+// per program per day via roster_email_sends. Records in automation_runs for the
+// Automations UI stats, and in roster_email_sends for per-send tracking.
+async function runPartnerRosterAutomation(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+) {
+  const now = new Date();
+  const todayStr = now.toISOString().split("T")[0];
+
+  const sevenOut = new Date(now);
+  sevenOut.setDate(sevenOut.getDate() + 7);
+  const sevenDayStr = sevenOut.toISOString().split("T")[0];
+
+  // Find afterschool programs starting in 7 days OR today, where WE run
+  // registration (not partner-run) and the location has a partner.
+  // NOTE: the `programs` table IS the afterschool table (camps live in
+  // camp_sessions), so there is no program_type='afterschool' filter — that
+  // column is the subject category ('standard'|'coding_robotics') and filtering
+  // on 'afterschool' matched zero rows, silently sending nothing. Every row here
+  // is afterschool; mirror the other program queries (match-afterschool, the
+  // recap resolver) which scope by organization_id only.
+  const { data: programs, error: pErr } = await supabase
+    .from("programs")
+    .select(`
+      id, organization_id, program_location_id, curriculum,
+      first_session_date, runs_own_registration,
+      program_locations!inner ( id, partner_id, contact_email )
+    `)
+    .eq("organization_id", a.organization_id)
+    .eq("runs_own_registration", false)
+    .not("program_locations.partner_id", "is", null)
+    .or(`first_session_date.eq.${sevenDayStr},first_session_date.eq.${todayStr}`);
+
+  if (pErr) throw pErr;
+
+  if (!programs || programs.length === 0) {
+    await supabase.from("automation_runs").insert({
+      automation_id: a.id,
+      organization_id: a.organization_id,
+      audience_size: 0,
+      status: "skipped_no_audience",
+    });
+    return { audience: 0, sent: 0, failed: 0, skipped: 0 };
+  }
+
+  // Idempotency: check which programs already had a roster sent today
+  const programIds = programs.map((p: any) => p.id);
+  const { data: sentToday } = await supabase
+    .from("roster_email_sends")
+    .select("program_id")
+    .in("program_id", programIds)
+    .gte("sent_at", `${todayStr}T00:00:00+00:00`)
+    .eq("status", "sent");
+  const alreadySent = new Set((sentToday ?? []).map((r: any) => r.program_id));
+
+  let sent = 0;
+  let failed = 0;
+  let skippedCount = 0;
+
+  for (const prog of programs as any[]) {
+    if (alreadySent.has(prog.id)) {
+      skippedCount++;
+      continue;
+    }
+
+    const partnerId = prog.program_locations?.partner_id;
+    if (!partnerId) { skippedCount++; continue; }
+
+    // Resolve partner_contacts for this partner
+    const { data: contacts } = await supabase
+      .from("partner_contacts")
+      .select("id")
+      .eq("partner_id", partnerId)
+      .eq("organization_id", a.organization_id);
+
+    const contactIds = (contacts ?? []).map((c: any) => c.id);
+    if (contactIds.length === 0 && !prog.program_locations?.contact_email) {
+      skippedCount++;
+      continue;
+    }
+
+    // Invoke email-program-roster with service-role auth
+    try {
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/email-program-roster`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${SERVICE_KEY}`,
+        },
+        body: JSON.stringify({
+          program_id: prog.id,
+          recipient_contact_ids: contactIds,
+          include_location_contact: true,
+          mode: "send",
+        }),
+      });
+
+      if (resp.ok) {
+        sent++;
+      } else {
+        const errBody = await resp.text().catch(() => "");
+        console.error(`[partner-roster] send failed for program ${prog.id}: ${errBody.slice(0, 300)}`);
+        failed++;
+      }
+    } catch (err) {
+      console.error(`[partner-roster] invoke failed for program ${prog.id}:`, err);
+      failed++;
+    }
+  }
+
+  // Track the automation run
+  const totalAudience = sent + failed;
+  const timeSavedMinutes = sent * a.template.time_saved_minutes_per_send;
+  const finalStatus = totalAudience === 0 ? "skipped_no_audience" : (failed > 0 && sent === 0 ? "failed" : "sent");
+  await supabase.from("automation_runs").insert({
+    automation_id: a.id,
+    organization_id: a.organization_id,
+    audience_size: totalAudience,
+    status: finalStatus,
+    time_saved_minutes: timeSavedMinutes,
+    error_message: failed > 0 ? `${failed} of ${programs.length} roster sends failed` : null,
+  });
+
+  if (sent > 0) {
+    const siteWord = sent === 1 ? "site" : "sites";
+    await supabase.from("time_saved_events").insert({
+      organization_id: a.organization_id,
+      action_type: "automation_fired",
+      action_label: `Sent roster to ${sent} partner ${siteWord}`,
+      hours_saved: timeSavedMinutes / 60,
+      related_entity_type: "automation",
+      related_entity_id: a.id,
+    });
+  }
+
+  return { programs_found: programs.length, sent, failed, skipped: skippedCount, time_saved_minutes: timeSavedMinutes };
+}
+
 async function resolveBirthdayAudience(
   supabase: SupabaseClient,
   a: AutomationRow,

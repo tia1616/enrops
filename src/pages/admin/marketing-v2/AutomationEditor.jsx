@@ -55,6 +55,9 @@ const TOKENS_BY_TEMPLATE_KEY = {
   mid_recap:              ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_time", "mid_term_skills_block", "register_url"],
   final_recap:            ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "program_time", "program_end_date", "final_showcase_block", "final_recap_skills_block", "next_term_link_block", "register_url"],
   birthday:               ["first_name", "child_first_name", "org_name", "sender_name", "age_turning"],
+  // instructor_birthday: recipient is the INSTRUCTOR, so no child/program/age
+  // tokens — only their name + org identity. {{first_name}} = the instructor's.
+  instructor_birthday:    ["first_name", "org_name", "sender_name"],
   abandoned_registration: ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "abandoned_resume_url"],
   survey_nudge:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name"],
   // review_request reaches enrolled families AND bare contacts, so it only
@@ -66,6 +69,14 @@ const TOKENS_BY_TEMPLATE_KEY = {
   // kids in one class). {{no_school_dates}} = the affected class day(s);
   // {{no_school_reason}} = why (falls back to "a no-school day" if blank).
   no_school_day:          ["first_name", "no_school_dates", "no_school_reason", "program_name", "location_name", "org_name", "sender_name"],
+  // Board sends (operator_initiated): the operator edits the INTRO paragraph
+  // ONLY, and the edge fn renders that intro as ESCAPED PLAIN TEXT with no token
+  // substitution — the greeting ("Hi <name>,"), assignment details, response
+  // buttons, and deadline are all system-generated. So NO merge tokens here:
+  // advertising {{first_name}} would email instructors the literal "{{first_name}}".
+  availability_survey:    [],
+  assignment_offer:       [],
+  sub_offer:              [],
 };
 
 // HTML-pre-rendered tokens — preview passes their sample HTML through verbatim.
@@ -182,6 +193,51 @@ function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryCo
 </body></html>`;
 }
 
+// Board sends (operator_initiated) only let the operator write the INTRO
+// paragraph; at send time the edge fn adds a greeting above it and the system
+// content below (a sample schedule + review button + deadline for offers; a
+// form link + deadline for the survey). The editor preview composes that full
+// shape around the operator's live intro with SEEDED sample data, so they see
+// where their words land — real recipients and dates come from the Schedule
+// board when they actually send.
+function boardSendExampleBody(templateKey, introHtml, primaryColor) {
+  const color = primaryColor || "#1C004F";
+  const button = (label) =>
+    `<div style="margin:20px 0;"><span style="display:inline-block;background:${color};color:#fff;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:700;">${label}</span></div>`;
+  const autoBlock = (inner) =>
+    `<div style="margin-top:18px;padding-top:14px;border-top:1px dashed #d9d6e2;"><div style="font-size:10px;color:#9a97ab;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px;">Added automatically</div>${inner}</div>`;
+  const greeting = `<p style="margin:0 0 14px;">Hi Jordan,</p>`;
+  const intro = introHtml || "";
+  if (templateKey === "sub_offer") {
+    // Fully system-generated (create-assignment-substitution). No operator intro —
+    // the whole email is the example, keyed to the day being covered.
+    const details = `<table role="presentation" width="100%" style="border-collapse:collapse;font-size:14px;margin:4px 0 16px;border:1px solid #eee;border-radius:8px;">`
+      + `<tr><td style="padding:9px 14px;color:#6b6880;">Program</td><td style="padding:9px 14px;"><strong>LEGO Robotics</strong></td></tr>`
+      + `<tr><td style="padding:9px 14px;color:#6b6880;border-top:1px solid #f0f0f0;">Date</td><td style="padding:9px 14px;border-top:1px solid #f0f0f0;">Mon, Jul 14</td></tr>`
+      + `<tr><td style="padding:9px 14px;color:#6b6880;border-top:1px solid #f0f0f0;">Time</td><td style="padding:9px 14px;border-top:1px solid #f0f0f0;">3:00pm&ndash;4:00pm</td></tr>`
+      + `<tr><td style="padding:9px 14px;color:#6b6880;border-top:1px solid #f0f0f0;">Where</td><td style="padding:9px 14px;border-top:1px solid #f0f0f0;">Lincoln Elementary</td></tr>`
+      + `<tr><td style="padding:9px 14px;color:#6b6880;border-top:1px solid #f0f0f0;">Role</td><td style="padding:9px 14px;border-top:1px solid #f0f0f0;">Lead</td></tr>`
+      + `</table>`;
+    return `${greeting}`
+      + `<p style="margin:0 0 14px;">Looking for a sub for <strong>LEGO Robotics</strong> on <strong>Mon, Jul 14</strong> — would you be able to take it?</p>`
+      + details
+      + `<p style="margin:0 0 4px;">Open your portal to accept or decline — once you accept, you'll see the lesson plan and the day's roster.</p>`
+      + button("Open your portal &rarr;")
+      + `<p style="margin:0;color:#6b6880;font-size:14px;">If this day doesn't work, just decline and we'll find someone else — no harm done.</p>`;
+  }
+  if (templateKey === "availability_survey") {
+    const sys = `${button("Share your availability &rarr;")}<p style="margin:0;color:#6b6880;font-size:14px;">Please reply by <strong>Fri, Aug 8</strong>.</p>`;
+    return `${greeting}${intro}${autoBlock(sys)}`;
+  }
+  // assignment_offer (offer-style): sample schedule + one CTA + deadline.
+  const rows = `<table role="presentation" width="100%" style="border-collapse:collapse;font-size:14px;margin:4px 0 0;">`
+    + `<tr><td style="padding:9px 0;border-bottom:1px solid #eee;"><strong>LEGO Robotics</strong> &middot; Lincoln Elementary<br><span style="color:#6b6880;">Mon&ndash;Fri, Jul 14&ndash;18 &middot; 9:00am</span></td></tr>`
+    + `<tr><td style="padding:9px 0;border-bottom:1px solid #eee;"><strong>Stop-Motion Studio</strong> &middot; Lincoln Elementary<br><span style="color:#6b6880;">Mon&ndash;Fri, Jul 21&ndash;25 &middot; 1:00pm</span></td></tr>`
+    + `</table>`;
+  const sys = `${rows}${button("Review and respond &rarr;")}<p style="margin:0;color:#6b6880;font-size:14px;">Please respond by <strong>Fri, Aug 8</strong>.</p>`;
+  return `${greeting}${intro}${autoBlock(sys)}`;
+}
+
 // review_request ships with a placeholder review link the operator must replace.
 // Rather than make a non-dev hand-edit HTML/markdown, review_request shows a
 // dedicated "Your review link" field that reads/writes the single <a> in the body.
@@ -230,6 +286,11 @@ function setReviewUrlInBody(body, url) {
 }
 
 export default function AutomationEditor({ template, automation, orgId, orgName, orgSlug, orgLogoUrl, orgSenderName, orgPrimaryColor, userEmail, onClose, onSaved }) {
+  const isBoardSend = template.trigger_type === "operator_initiated";
+  // sub_offer copy is fully system-generated (create-assignment-substitution
+  // builds it per send and never reads an override), so its editor is
+  // PREVIEW-ONLY: show the example email, no editable fields, no Save.
+  const isPreviewOnly = template.key === "sub_offer";
   const [subject, setSubject] = useState(automation?.subject_override ?? template.default_subject);
   const [body, setBody] = useState(automation?.body_override ?? template.default_body);
   // Toggle: false = render the HTML with token pills; true = textarea with
@@ -426,8 +487,12 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   }, [success, error]);
 
   const previewHtml = useMemo(
-    () => buildPreviewHtml(subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type === "marketing"),
-    [subject, body, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type],
+    () => buildPreviewHtml(
+      subject,
+      isBoardSend ? boardSendExampleBody(template.key, body, orgPrimaryColor) : body,
+      orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type === "marketing",
+    ),
+    [subject, body, isBoardSend, template.key, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type],
   );
 
   // What the iframe actually shows. When a real source is picked AND the server
@@ -475,7 +540,10 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       const cleanedBody = decodeCommonEntities(body);
       // Only set overrides for fields that actually differ from defaults —
       // keeps the table clean and makes "Reset" semantically simple.
-      const subjectOverride = cleanedSubject !== template.default_subject ? cleanedSubject : null;
+      // Board sends never read subject_override (their subject is system-generated),
+      // so never persist one — otherwise a stale default would sit in the table as
+      // a dead value. Only non-board templates store a subject override.
+      const subjectOverride = isBoardSend ? null : (cleanedSubject !== template.default_subject ? cleanedSubject : null);
       const bodyOverride = cleanedBody !== template.default_body ? cleanedBody : null;
       // Timing override: only for templates with the control, and only when it
       // differs from the default (equal-to-default clears it, like subject/body).
@@ -700,7 +768,10 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               </p>
             </div>
           )}
-          {/* Subject */}
+          {/* Subject — hidden for board sends: their subject line is system-
+              generated by the edge fn (subject_override is never read), so an
+              editable field here would be a dead control. */}
+          {!isBoardSend && (
           <div style={{ marginBottom: 16 }}>
             <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
               Subject
@@ -721,6 +792,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               </span>
             </div>
           </div>
+          )}
 
           {/* Your review link — review_request only. The operator pastes their
               review URL here; we splice it into the body's link so they never
@@ -749,6 +821,12 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             </div>
           )}
 
+          {isPreviewOnly ? (
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: MUTED, lineHeight: 1.6 }}>
+              This email is sent automatically when you assign a sub or cover on the Schedule tab. Its wording is set by the system — here's an example of what the instructor receives:
+            </p>
+          ) : (
+          <>
           {/* Body — toggle between rendered display (default) and markdown-ish
               edit mode. Operators never see raw HTML tags. Pattern mirrors
               the campaign BodyEditor in TouchpointCard.jsx. */}
@@ -782,9 +860,13 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                   }}
                 />
                 <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
-                  Blank line = new paragraph. <strong>**text**</strong> = bold,
-                  <em> _text_</em> = italic.
-                  <span style={{ fontFamily: "ui-monospace, monospace" }}> [link text]({"{{register_url}}"})</span> = clickable link.
+                  {isBoardSend ? (
+                    <>This is the intro paragraph, sent as plain text. Blank line = new paragraph. The greeting, schedule details, response buttons, and deadline are added automatically.</>
+                  ) : (
+                    <>Blank line = new paragraph. <strong>**text**</strong> = bold,
+                    <em> _text_</em> = italic.
+                    <span style={{ fontFamily: "ui-monospace, monospace" }}> [link text]({"{{register_url}}"})</span> = clickable link.</>
+                  )}
                 </p>
               </>
             ) : (
@@ -803,7 +885,19 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             )}
           </div>
 
+          {/* Board sends: the operator edits the INTRO paragraph only; the edge
+              function adds the greeting + assignment details + response buttons +
+              deadline automatically. Attachments aren't supported on board sends. */}
+          {isBoardSend && (
+            <p style={{ margin: "0 0 16px", fontSize: 12, color: MUTED, lineHeight: 1.5, fontStyle: "italic" }}>
+              This is the default intro paragraph. The greeting, assignment details, response buttons, and deadline are added automatically when you send from the Schedule tab.
+            </p>
+          )}
+          </>
+          )}
+
           {/* Attachments — add files that appear as a Download button at the email bottom */}
+          {!isBoardSend && (
           <div style={{ marginBottom: 16 }}>
             <AttachmentPicker
               orgId={orgId}
@@ -813,15 +907,15 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               primaryColor={orgPrimaryColor || PURPLE}
             />
           </div>
+          )}
 
-          {/* Available tokens */}
+          {/* Available tokens — omitted entirely when the message has none
+              (e.g. board sends, whose intro is plain text with no merge fields). */}
+          {tokens.length > 0 && (
           <div style={{ marginBottom: 24 }}>
             <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
               Available tokens
             </span>
-            {tokens.length === 0 ? (
-              <p style={{ margin: 0, fontSize: 13, color: MUTED }}>None for this message.</p>
-            ) : (
               <>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {tokens.map((t) => (
@@ -855,8 +949,8 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                   Drag any token into the body where you want it, or click to copy.
                 </p>
               </>
-            )}
           </div>
+          )}
 
           {/* Timing — for templates with an editable days_after or days_before offset */}
           {hasTiming && (
@@ -933,6 +1027,16 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
 
         {/* Action bar — sits below the editor content, no longer a fixed footer */}
         <div style={{ marginTop: 16, padding: "16px", borderTop: `1px solid ${RULE}`, background: "#fbfaf6", borderRadius: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Board sends: no test-send here — testing happens from the Schedule
+              board where you pick real recipients. Show a note instead. */}
+          {isBoardSend ? (
+            <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
+              {isPreviewOnly
+                ? "The preview above shows an example of this email. It's sent automatically when you assign a sub or cover on the Schedule tab — its wording isn't editable."
+                : "The preview above shows an example of the full email with sample details. Save the default message here; you send the real one (with actual instructors and dates) from the Schedule tab."}
+            </div>
+          ) : (
+          <>
           {/* Real-data test source picker — only for program-based templates */}
           {sourceType && (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -995,7 +1099,10 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               {sendingTest ? "Sending…" : "Send test"}
             </button>
           </div>
-          {/* Save / Reset row */}
+          </>
+          )}
+          {/* Save / Reset row — hidden for preview-only sends (nothing to save) */}
+          {!isPreviewOnly && (
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button
               type="button"
@@ -1025,6 +1132,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               {saving ? "Saving…" : "Save"}
             </button>
           </div>
+          )}
         </div>
     </div>
   );

@@ -14,6 +14,8 @@ export default function QuestionStep({
   loading = false,
   loadingLabel,
   onStartDrafting,
+  onStartManual,
+  manualBusy = false,
   rightExtras,
 }) {
   return (
@@ -65,18 +67,37 @@ export default function QuestionStep({
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {rightExtras}
           {isLast ? (
-            <button
-              onClick={onStartDrafting}
-              disabled={!canNext || loading}
-              style={{
-                padding: "10px 18px", background: canNext && !loading ? PURPLE : "#cfcfcf",
-                color: "#fff", border: "none", borderRadius: 6,
-                cursor: canNext && !loading ? "pointer" : "not-allowed",
-                fontSize: 14, fontWeight: 600,
-              }}
-            >
-              {loading ? (loadingLabel ?? "Drafting your campaign...") : "Draft it ✨"}
-            </button>
+            <>
+              {onStartManual && (
+                <button
+                  onClick={onStartManual}
+                  disabled={!canNext || loading || manualBusy}
+                  style={{
+                    padding: "10px 18px",
+                    background: canNext && !loading && !manualBusy ? "#EDE8F5" : "#f0f0f0",
+                    color: canNext && !loading && !manualBusy ? PURPLE : "#cfcfcf",
+                    border: `1px solid ${canNext && !loading && !manualBusy ? "#C4B5DC" : "#cfcfcf"}`,
+                    borderRadius: 6,
+                    cursor: canNext && !loading && !manualBusy ? "pointer" : "not-allowed",
+                    fontSize: 14, fontWeight: 600, fontFamily: "inherit",
+                  }}
+                >
+                  {manualBusy ? "Setting up..." : "Write it myself"}
+                </button>
+              )}
+              <button
+                onClick={onStartDrafting}
+                disabled={!canNext || loading || manualBusy}
+                style={{
+                  padding: "10px 18px", background: canNext && !loading && !manualBusy ? PURPLE : "#cfcfcf",
+                  color: "#fff", border: "none", borderRadius: 6,
+                  cursor: canNext && !loading && !manualBusy ? "pointer" : "not-allowed",
+                  fontSize: 14, fontWeight: 600,
+                }}
+              >
+                {loading ? (loadingLabel ?? "Drafting your campaign...") : "Draft it ✨"}
+              </button>
+            </>
           ) : (
             <button
               onClick={onNext}

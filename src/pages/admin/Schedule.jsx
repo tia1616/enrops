@@ -423,6 +423,8 @@ export default function Schedule() {
   const [surveyDialog, setSurveyDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
   const [orgSurveyIntro, setOrgSurveyIntro] = useState(""); // operator's saved default camp intro (org_survey_config)
   const [surveyIntro, setSurveyIntro] = useState(""); // editable lead paragraph for this send
+  const [orgOfferIntro, setOrgOfferIntro] = useState(""); // operator's saved default offer intro (automations body_override)
+  const [offerIntro, setOfferIntro] = useState(""); // editable intro for the current offer send
   const [surveySelectedIds, setSurveySelectedIds] = useState(null); // Set<id> recipients | null = all emailable
   const [surveyDeadline, setSurveyDeadline] = useState(() => businessDaysFromToday(10));
   // Term/cycle picker — list of all non-archived cycles for this org + the currently
@@ -527,6 +529,47 @@ export default function Schedule() {
       if (curPrefRes.error) throw curPrefRes.error;
       if (declinesRes.error) throw declinesRes.error;
       setOrgSurveyIntro(cfgRes?.data?.intro ?? "");
+
+      // If the operator saved a default intro in Automations > Instructors >
+      // Availability survey (body_override), it takes priority over the legacy
+      // org_survey_config row. HTML → plain text for the textarea.
+      try {
+        const { data: surveyTpl } = await supabase
+          .from("automation_templates").select("id").eq("key", "availability_survey").maybeSingle();
+        if (surveyTpl?.id) {
+          const { data: surveyAuto } = await supabase
+            .from("automations").select("body_override").eq("organization_id", org.id)
+            .eq("template_id", surveyTpl.id).maybeSingle();
+          if (surveyAuto?.body_override) {
+            const plain = surveyAuto.body_override
+              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
+              .replace(/<[^>]+>/g, "")
+              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
+            if (plain) setOrgSurveyIntro(plain);
+          }
+        }
+      } catch { /* non-critical — falls back to org_survey_config or builtin */ }
+
+      try {
+        const { data: offerTpl } = await supabase
+          .from("automation_templates").select("id").eq("key", "assignment_offer").maybeSingle();
+        if (offerTpl?.id) {
+          const { data: offerAuto } = await supabase
+            .from("automations").select("body_override").eq("organization_id", org.id)
+            .eq("template_id", offerTpl.id).maybeSingle();
+          if (offerAuto?.body_override) {
+            const plain = offerAuto.body_override
+              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
+              .replace(/<[^>]+>/g, "")
+              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
+            if (plain) setOrgOfferIntro(plain);
+          }
+        }
+      } catch { /* non-critical */ }
 
       // Load substitutions for all camp assignments so the grid can show sub indicators.
       const assignmentIds = (assignmentsRes.data ?? []).map((a) => a.id);
@@ -994,7 +1037,7 @@ export default function Schedule() {
         message: `${total} camp${total === 1 ? "" : "s"} ${total === 1 ? "is" : "are"} ready to send out to instructors. Want to send all the offers now?`,
         primary: {
           label: "Send offers",
-          onClick: () => setOfferDialog({ mode: "choose", payload: null }),
+          onClick: () => openOfferDialog(),
         },
       });
     }
@@ -1699,7 +1742,7 @@ export default function Schedule() {
       // edge function payload.
       const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode, instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient },
+        body: { cycle_id: state.cycle.id, mode, instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient, intro_message: offerIntro.trim() || null },
       });
       if (error) {
         let realMsg = error.message ?? "function error";
@@ -1741,7 +1784,7 @@ export default function Schedule() {
     if (state.status !== "ready") return [];
     const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
     const { data, error } = await supabase.functions.invoke("send-offers", {
-      body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient },
+      body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient, intro_message: offerIntro.trim() || null },
     });
     if (error) {
       let realMsg = error.message ?? "function error";
@@ -1821,6 +1864,15 @@ export default function Schedule() {
   // the edge fn's own default copy so an unchanged send reads the same.
   function builtinCampIntro() {
     return `We're planning the ${cycleDisplayName(state.cycle?.name)} schedule and want to know when and where you'd like to work.`;
+  }
+
+  function openOfferDialog() {
+    // Seed from the operator's saved default only. When they haven't saved one we
+    // leave it blank so the send passes intro_message: null and the edge fn builds
+    // each instructor's personalized intro (their own camp count + cycle dates) —
+    // a single shared string here can't carry per-instructor counts.
+    setOfferIntro(orgOfferIntro.trim());
+    setOfferDialog({ mode: "choose", payload: null });
   }
 
   // Open the survey drawer. Seed the intro from the operator's saved default
@@ -1916,7 +1968,7 @@ export default function Schedule() {
     try {
       const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient },
+        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient, intro_message: offerIntro.trim() || null },
       });
       if (error) {
         // Read the actual response body so we can see the real error message.
@@ -2193,7 +2245,7 @@ export default function Schedule() {
         canRunReminders={state.assignments.some((a) => a.status === "published" && !a.instructor_response_at)}
         onApprove={handleApprove}
         onSurveyClick={() => openSurvey()}
-        onSendClick={() => setOfferDialog({ mode: "choose", payload: null })}
+        onSendClick={() => openOfferDialog()}
         onPreviewClick={handlePreviewOffers}
         onRerunAgent={handleRerunAgent}
         onRemindersClick={() => setOfferDialog({ mode: "reminders_choose", payload: null })}
@@ -2300,6 +2352,9 @@ export default function Schedule() {
           onDeadlineChange={setOfferDeadline}
           autoReminders={autoReminders}
           onAutoRemindersChange={setAutoReminders}
+          intro={offerIntro}
+          onIntroChange={setOfferIntro}
+          defaultIntro={orgOfferIntro.trim()}
           publishedCount={state.assignments?.filter((a) => a.status === "published").length ?? 0}
           onRollback={handleRollback}
           rollingBack={busy === "rolling_back"}
@@ -4083,7 +4138,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
   );
 }
 
-function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange, onPreview }) {
+function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, intro, onIntroChange, defaultIntro, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange, onPreview }) {
   const [previews, setPreviews] = useState(null);
   const [pvIdx, setPvIdx] = useState(0);
   const [pvBusy, setPvBusy] = useState(false);
@@ -4282,6 +4337,18 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
             </span>
           </span>
         </label>
+        <label style={{ fontSize: 13, fontWeight: 600, color: INK }}>Message to instructors</label>
+        <textarea
+          value={intro ?? ""}
+          onChange={(e) => onIntroChange(e.target.value)}
+          rows={3}
+          placeholder="Leave blank to give each instructor their own summary (their camp count + your cycle dates). Type here to write one note for everyone instead."
+          style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 6, border: `1px solid ${RULE}`, fontSize: 13, fontFamily: "inherit", lineHeight: 1.5, resize: "vertical" }}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: -4 }}>
+          <span style={{ fontSize: 12, color: MUTED }}>The assignment table, response buttons, and deadline are added automatically.</span>
+          {defaultIntro && (intro ?? "").trim() !== defaultIntro && <button type="button" onClick={() => onIntroChange(defaultIntro)} style={{ border: "none", background: "none", color: BRIGHT, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>Reset to default</button>}
+        </div>
         <InstructorPickerPanel
           eligibleInstructors={eligibleInstructors}
           selectedInstructorIds={selectedInstructorIds}

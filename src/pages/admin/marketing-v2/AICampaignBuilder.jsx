@@ -590,6 +590,48 @@ export default function AICampaignBuilder() {
     alert(`Regenerate ${touchpointId} — coming soon.`);
   };
 
+  const [manualBusy, setManualBusy] = useState(false);
+
+  async function startManual() {
+    if (!org?.id) {
+      dispatch({ type: "DRAFT_FAILED", error: "Couldn't find your organization. Refresh and try again." });
+      return;
+    }
+    setManualBusy(true);
+    try {
+    const inputsForEdge = prepareInputsForEdge(state.inputs);
+      const { data, error } = await supabase.functions.invoke("marketing-draft-campaign", {
+        body: { organization_id: org.id, inputs: inputsForEdge, skip_ai: true },
+      });
+      if (error) {
+        const msg = await friendlyDraftError(error);
+        dispatch({ type: "DRAFT_FAILED", error: msg });
+        return;
+      }
+      if (!data?.schedule?.touchpoints?.length) {
+        dispatch({ type: "DRAFT_FAILED", error: "Couldn't create the draft. Try again." });
+        return;
+      }
+      dispatch({
+        type: "DRAFT_RECEIVED",
+        draft: {
+          campaign_id: data.campaign_id,
+          schedule: {
+            summary: data.schedule.summary,
+            notes_to_operator: data.schedule.notes_to_operator ?? "",
+            touchpoints: data.schedule.touchpoints,
+          },
+          sender: data.sender,
+          recipients: data.recipients,
+          mechanical_checks: data.mechanical_checks ?? null,
+          warning: data.warning ?? null,
+        },
+      });
+    } finally {
+      setManualBusy(false);
+    }
+  }
+
   async function startDrafting() {
     if (!org?.id) {
       dispatch({ type: "DRAFT_FAILED", error: "Couldn't find your organization. Refresh and try again." });
@@ -597,9 +639,6 @@ export default function AICampaignBuilder() {
     }
     dispatch({ type: "START_DRAFTING" });
 
-    // Edge function consumes the structured `what` shape directly — loads
-    // program/camp rows server-side and injects grounded facts into Ennie's
-    // prompt. No more client-side bridge / topic derivation.
     const inputsForEdge = prepareInputsForEdge(state.inputs);
 
     const { data, error } = await supabase.functions.invoke("marketing-draft-campaign", {
@@ -775,6 +814,8 @@ export default function AICampaignBuilder() {
     canNext: isStepValid(state.step, state.inputs),
     loading: state.loading,
     onStartDrafting: startDrafting,
+    onStartManual: startManual,
+    manualBusy,
     onApplyPreselect: applyPreselectAndAdvance, // Q1 only
   };
 

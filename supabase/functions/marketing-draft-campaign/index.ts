@@ -2088,6 +2088,7 @@ Deno.serve(async (req: Request) => {
   const parsed = parseRequest(body);
   if (!parsed.ok) return jsonError(parsed.error, parsed.status);
   const { organization_id, inputs } = parsed.req;
+  const skipAi = !!(body as Record<string, unknown>).skip_ai;
 
   // ---- Multi-tenant gate ----
   if (!caller.isPlatformAdmin && !caller.adminOrgIds.has(organization_id)) {
@@ -2099,7 +2100,10 @@ Deno.serve(async (req: Request) => {
   // policy from inside this trusted function).
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-  // ---- Rate limit: 15s cooldown + 50 drafts/day per org ----
+  // ---- Rate limit: 15s cooldown + 50 drafts/day per org (AI only) ----
+  if (skipAi) {
+    // Manual drafts skip the AI rate limit entirely — no Claude call, no cost.
+  } else {
   const DRAFT_COOLDOWN_MS = 15_000;
   const DAILY_DRAFT_CAP = 50;
   const { data: recentDrafts, error: rlErr } = await supabase
@@ -2120,6 +2124,7 @@ Deno.serve(async (req: Request) => {
       return jsonError("Daily draft limit reached (50 per org). Try again tomorrow.", 429);
     }
   }
+  } // end skipAi else
 
   // ---- Audience gate (v1: parents only) ----
   if (inputs.who.audience !== "parents") {
@@ -2247,9 +2252,123 @@ Deno.serve(async (req: Request) => {
   // campaigns get a deterministic schedule the model writes copy against; the
   // handler overwrites every scheduled_at from these slots below.
   const cadenceSlots = inputs.send_at ? [] : computeCadenceSlots(inputs, facts, Date.now());
+  const orgTimezone = orgRow.timezone ?? "America/Los_Angeles";
+
+  // ---- "Write it myself" path: skip AI, create a blank draft ----
+  if (skipAi) {
+    // Build touchpoint slots: use the server-computed cadence (same schedule
+    // the AI path would have used) so the operator gets the right number of
+    // emails at the right times. One-off sends get a single touchpoint.
+    const touchpointSlots = cadenceSlots.length > 0
+      ? cadenceSlots.map((slot) => ({
+          order_index: slot.order_index,
+          scheduled_at: slot.scheduled_at,
+          label: slot.label,
+          reason: slot.reason,
+        }))
+      : [{
+          order_index: 0,
+          scheduled_at: inputs.send_at
+            ? resolveSendAtIso(inputs.send_at, orgTimezone)
+            : new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+          label: "draft",
+          reason: null as string | null,
+        }];
+
+    const campaignName = ((): string => {
+      const mode = parsed.structuredWhat?.mode;
+      if (mode === "programs" && facts.programs.length > 0) {
+        if (facts.programs.length === 1) return facts.programs[0].curriculum ?? "After-school campaign";
+        const terms = [...new Set(facts.programs.map((p) => p.term).filter(Boolean))];
+        const termPart = terms.length === 1 ? `${terms[0]} ` : "";
+        return `${termPart}after-school: ${facts.programs.length} programs`;
+      }
+      if (mode === "camps" && facts.camps.length > 0) {
+        if (facts.camps.length === 1) return facts.camps[0].curriculum_name ?? "Camp campaign";
+        return `Camps: ${facts.camps.length} sessions`;
+      }
+      return topicsArr[0] ?? "Campaign";
+    })().slice(0, 200);
+
+    const { data: inserted, error: iErr } = await supabase
+      .from("marketing_campaigns")
+      .insert({
+        organization_id,
+        name: campaignName,
+        campaign_type: "custom",
+        status: "draft",
+        subject_template: "",
+        body_template: "",
+        draft_source: "manual",
+        draft_inputs: inputs as unknown as Record<string, unknown>,
+        draft_model: null,
+        approved_at: null,
+      })
+      .select("id")
+      .single<{ id: string }>();
+    if (iErr || !inserted) {
+      return jsonError(`failed to persist draft: ${iErr?.message ?? "unknown"}`, 500);
+    }
+
+    const { data: insertedTps, error: tpErr } = await supabase
+      .from("marketing_campaign_touchpoints")
+      .insert(touchpointSlots.map((slot) => ({
+        campaign_id: inserted.id,
+        organization_id,
+        type: "email",
+        order_index: slot.order_index,
+        scheduled_at: slot.scheduled_at,
+        status: "queued",
+        payload: { label: slot.label, subject: null, body_html: null, body_text: null, reason: slot.reason },
+        topics: topicsArr,
+      })))
+      .select("id, order_index, type, scheduled_at, status, payload, topics");
+    if (tpErr) {
+      return jsonError(`failed to persist touchpoint: ${tpErr.message}`, 500);
+    }
+
+    return jsonOk({
+      campaign_id: inserted.id,
+      schedule: {
+        summary: "",
+        notes_to_operator: "",
+        touchpoints: (insertedTps ?? []).map((tp: { id: string; order_index: number; type: string; scheduled_at: string; status: string; payload: Record<string, unknown>; topics: string[] }) => ({
+          id: tp.id,
+          order_index: tp.order_index,
+          type: tp.type,
+          scheduled_at: tp.scheduled_at,
+          status: tp.status,
+          label: (tp.payload as { label?: string })?.label ?? null,
+          subject: (tp.payload as { subject?: string })?.subject ?? null,
+          body_html: (tp.payload as { body_html?: string })?.body_html ?? null,
+          body_text: (tp.payload as { body_text?: string })?.body_text ?? null,
+          reason: (tp.payload as { reason?: string })?.reason ?? null,
+          topics: tp.topics,
+        })),
+      },
+      sender: { name: orgRow.default_sender_name!, email: orgRow.default_sender_email! },
+      recipients: { ids: recipientIds, count: recipientCount, segment_summary },
+      mechanical_checks: { retried: false, touchpoints: [] },
+      curriculum_matches: curriculumMatches.map((m) => ({
+        topic: m.topic, score: Number(m.score.toFixed(3)),
+        matched: m.match ? { id: m.match.id, name: m.match.name } : null,
+      })),
+      grounded_facts: (facts.programs.length > 0 || facts.camps.length > 0) ? {
+        mode: parsed.structuredWhat?.mode ?? null,
+        program_count: facts.programs.length,
+        camp_count: facts.camps.length,
+        curricula: facts.topics,
+        schools: [...new Set(facts.programs.map((p) => p.school_name))],
+        locations: [...new Set(facts.camps.map((c) => c.location_name))],
+        early_bird_active: facts.programs.some((p) => p.early_bird_price_cents && p.early_bird_deadline),
+      } : null,
+      model: null,
+      inputs_echo: inputs,
+      ...(zeroRecipientWarning ? { warning: zeroRecipientWarning } : {}),
+    });
+  }
 
   // ---- Build prompt + call Claude ----
-  const orgTimezone = orgRow.timezone ?? "America/Los_Angeles";
   const todayIso = new Date().toISOString();
   const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone, programDetailsBlock, topicsArr, cadenceSlots);
   let claudeResult = await callClaude(systemPrompt, topicsArr);

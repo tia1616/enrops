@@ -258,6 +258,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const [surveySelectedIds, setSurveySelectedIds] = useState(null); // Set<id> | null (=all)
   const [surveyIntro, setSurveyIntro] = useState(""); // editable lead paragraph
   const [orgSurveyIntro, setOrgSurveyIntro] = useState(""); // operator's saved default intro (org_survey_config)
+  const [orgOfferIntro, setOrgOfferIntro] = useState("");
+  const [offerIntro, setOfferIntro] = useState("");
   const [matchResult, setMatchResult] = useState(null);
   const [view, setView] = useState("grid"); // 'list' | 'grid' — default to the week-at-a-glance grid
   // Week focus for the week-grid view. undefined = use the default (current/upcoming) week;
@@ -361,6 +363,47 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (areaPrefRes.error) throw areaPrefRes.error;
       if (cycleRes.error) throw cycleRes.error;
       setOrgSurveyIntro(cfgRes.data?.intro ?? "");
+
+      // If the operator saved a default intro in Automations > Instructors >
+      // Availability survey (body_override), it takes priority over the legacy
+      // org_survey_config row. HTML → plain text for the textarea.
+      try {
+        const { data: surveyTpl } = await supabase
+          .from("automation_templates").select("id").eq("key", "availability_survey").maybeSingle();
+        if (surveyTpl?.id) {
+          const { data: surveyAuto } = await supabase
+            .from("automations").select("body_override").eq("organization_id", org.id)
+            .eq("template_id", surveyTpl.id).maybeSingle();
+          if (surveyAuto?.body_override) {
+            const plain = surveyAuto.body_override
+              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
+              .replace(/<[^>]+>/g, "")
+              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
+            if (plain) setOrgSurveyIntro(plain);
+          }
+        }
+      } catch { /* non-critical — falls back to org_survey_config or builtin */ }
+
+      try {
+        const { data: offerTpl } = await supabase
+          .from("automation_templates").select("id").eq("key", "assignment_offer").maybeSingle();
+        if (offerTpl?.id) {
+          const { data: offerAuto } = await supabase
+            .from("automations").select("body_override").eq("organization_id", org.id)
+            .eq("template_id", offerTpl.id).maybeSingle();
+          if (offerAuto?.body_override) {
+            const plain = offerAuto.body_override
+              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
+              .replace(/<[^>]+>/g, "")
+              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
+            if (plain) setOrgOfferIntro(plain);
+          }
+        }
+      } catch { /* non-critical */ }
 
       const programs = (progRes.data ?? []).filter((p) => DAY_TO_CODE[dayKey(p.day_of_week)]);
       const programIds = programs.map((p) => p.id);
@@ -1325,7 +1368,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     try {
       const instructor_ids = selectedInstructorIds && selectedInstructorIds.size > 0 ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-afterschool-offers", {
-        body: { organization_id: org.id, term, mode, instructor_ids, deadline: offerDeadline || null, test_recipient: testRecipient },
+        body: { organization_id: org.id, term, mode, instructor_ids, deadline: offerDeadline || null, test_recipient: testRecipient, intro_message: offerIntro.trim() || null },
       });
       if (error) {
         let msg = error.message ?? "function error";
@@ -1361,7 +1404,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   async function previewOffers() {
     const instructor_ids = selectedInstructorIds && selectedInstructorIds.size > 0 ? Array.from(selectedInstructorIds) : null;
     const { data, error } = await supabase.functions.invoke("send-afterschool-offers", {
-      body: { organization_id: org.id, term, mode: "preview", instructor_ids, deadline: offerDeadline || null, test_recipient: testRecipient },
+      body: { organization_id: org.id, term, mode: "preview", instructor_ids, deadline: offerDeadline || null, test_recipient: testRecipient, intro_message: offerIntro.trim() || null },
     });
     if (error) {
       let msg = error.message ?? "function error";
@@ -1758,9 +1801,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   }
 
   function openSendOffers() {
-    // Pre-select every instructor with approved classes — "sending to all" by default;
-    // the admin unchecks to narrow.
     setSelectedInstructorIds(new Set(sendableInstructors.map((i) => i.id)));
+    // Seed from the operator's saved default only; blank -> intro_message null ->
+    // the edge fn builds each instructor's personalized intro (their class count +
+    // term dates). A single shared string here can't carry per-instructor counts.
+    setOfferIntro(orgOfferIntro.trim());
     setOfferDialog({ mode: "choose", payload: null });
   }
 
@@ -2093,6 +2138,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           setSelectedInstructorIds={setSelectedInstructorIds}
           deadline={offerDeadline}
           setDeadline={setOfferDeadline}
+          intro={offerIntro}
+          onIntroChange={setOfferIntro}
+          defaultIntro={orgOfferIntro.trim()}
           busy={busy === "offers"}
           onRun={runOffers}
           onPreview={previewOffers}
@@ -2988,7 +3036,7 @@ function SurveyDialog({ dialog, term, instructors, availability, alreadyOpen, se
   );
 }
 
-function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds, setSelectedInstructorIds, deadline, setDeadline, busy, onRun, onPreview, onClose }) {
+function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds, setSelectedInstructorIds, deadline, setDeadline, intro, onIntroChange, defaultIntro, busy, onRun, onPreview, onClose }) {
   const [previews, setPreviews] = useState(null);
   const [pvIdx, setPvIdx] = useState(0);
   const [pvBusy, setPvBusy] = useState(false);
@@ -3063,6 +3111,18 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
         </div>
         <input type="date" value={deadline ?? ""} onChange={(e) => setDeadline(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit", marginBottom: 4 }} />
         <div style={{ fontSize: 12, color: MUTED, marginBottom: 16 }}>{deadline ? "Instructors are asked to respond by this date." : "No deadline — instructors are asked to respond, but no date is shown."}</div>
+        <label style={{ fontSize: 13, fontWeight: 600, color: INK }}>Message to instructors</label>
+        <textarea
+          value={intro ?? ""}
+          onChange={(e) => onIntroChange(e.target.value)}
+          rows={3}
+          placeholder="Leave blank to give each instructor their own summary (their class count + your term dates). Type here to write one note for everyone instead."
+          style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 13, fontFamily: "inherit", lineHeight: 1.5, resize: "vertical", marginBottom: 4 }}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <span style={{ fontSize: 12, color: MUTED }}>The assignment table, response buttons, and deadline are added automatically.</span>
+          {defaultIntro && (intro ?? "").trim() !== defaultIntro && <button type="button" onClick={() => onIntroChange(defaultIntro)} style={linkBtn}>Reset to default</button>}
+        </div>
         <details style={{ marginBottom: 16 }} open>
           <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600, color: PURPLE }}>
             {allSelected ? `Sending to all ${total} instructor${total === 1 ? "" : "s"} with approved classes` : selCount === 0 ? "No instructors selected" : `Sending to ${selCount} of ${total} instructors`}

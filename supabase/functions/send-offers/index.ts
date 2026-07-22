@@ -140,6 +140,7 @@ serve(async (req: Request) => {
     const mode: 'preview' | 'test' | 'send' = body.mode ?? 'preview';
     const deadline: string | null = body.deadline ?? null; // YYYY-MM-DD
     const testRecipient: string | undefined = body.test_recipient; // test-mode override; else tenant alert_email
+    const introMessage: string | null = body.intro_message ?? null;
 
     if (!cycleId) return json({ error: 'cycle_id is required' }, 400);
     if (!['preview', 'test', 'send'].includes(mode)) return json({ error: `unknown mode "${mode}"` }, 400);
@@ -274,8 +275,8 @@ serve(async (req: Request) => {
       const subject = `Your ${cycleDisplay} schedule is ready — please review`;
       if (!org.slug) throw new Error(`send-offers: org ${org.id} has no slug; cannot build portal URL`);
       const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
-      const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand) });
-      const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById });
+      const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand), introMessage });
+      const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById, introMessage });
       const recipient = mode === 'send' ? instructor.email! : testInbox;
 
       previews.push({ instructor_id: instructorId, to: recipient, subject, html, text });
@@ -415,7 +416,7 @@ function renderVenueDetailsText(loc: LocationDetails | undefined): string[] {
   return out;
 }
 
-function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml }: {
+function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml, introMessage }: {
   cycle: Cycle;
   org: Org;
   branding: Branding;
@@ -425,6 +426,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
   deadline: string | null;
   locationById: Map<string, LocationDetails>;
   signatureHtml: string;
+  introMessage: string | null;
 }) {
   const primary = branding.primary_color ?? DEFAULT_PRIMARY;
   const firstName = instructor.preferred_name ?? instructor.first_name ?? 'there';
@@ -483,7 +485,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
             <td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
               Hi ${escape(firstName)},
               <br /><br />
-              Your proposed schedule for ${escape(cycleDisplayName(cycle.name))} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${unitLabel(cycle.cycle_type, campCount)}</strong>${cycleRange ? ` · ${cycleRange}` : ''} — your schedule isn't confirmed until we hear back from you on every one.${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
+              ${introMessage ? escape(introMessage).replace(/\n/g, '<br />') : `Your proposed schedule for ${escape(cycleDisplayName(cycle.name))} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${unitLabel(cycle.cycle_type, campCount)}</strong>${cycleRange ? ` · ${cycleRange}` : ''} — your schedule isn't confirmed until we hear back from you on every one.`}${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
             </td>
           </tr>
           <tr>
@@ -521,7 +523,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
 </html>`;
 }
 
-function renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById }: {
+function renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById, introMessage }: {
   cycle: Cycle;
   org: Org;
   instructor: InstructorRow;
@@ -529,13 +531,14 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline, locati
   portalUrl: string;
   deadline: string | null;
   locationById: Map<string, LocationDetails>;
+  introMessage: string | null;
 }) {
   const firstName = instructor.preferred_name ?? instructor.first_name ?? 'there';
   const cycleRange = (cycle.starts_on && cycle.ends_on) ? ` (${fmt(cycle.starts_on)} – ${fmt(cycle.ends_on)})` : '';
   const lines: string[] = [];
   lines.push(`Hi ${firstName},`);
   lines.push('');
-  lines.push(`Your proposed schedule for ${cycleDisplayName(cycle.name)}${cycleRange} is below. Please tap Accept or Request change on each of the ${camps.length} ${unitLabel(cycle.cycle_type, camps.length)} — your schedule isn't confirmed until we hear back from you on every one.`);
+  lines.push(introMessage || `Your proposed schedule for ${cycleDisplayName(cycle.name)}${cycleRange} is below. Please tap Accept or Request change on each of the ${camps.length} ${unitLabel(cycle.cycle_type, camps.length)} — your schedule isn't confirmed until we hear back from you on every one.`);
   if (deadline) {
     lines.push('');
     lines.push(`Please respond by ${fmt(deadline)}.`);

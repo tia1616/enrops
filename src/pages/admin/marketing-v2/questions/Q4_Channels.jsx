@@ -16,7 +16,7 @@ const CHANNELS = [
   { key: "social", label: "Social post", icon: "📣", helper: "Caption + hashtags + tags.", disabled: true },
 ];
 
-export default function Q4_Channels({ inputs, setField, onBack, canNext, loading, onStartDrafting }) {
+export default function Q4_Channels({ inputs, setField, onBack, canNext, loading, onStartDrafting, onStartManual, manualBusy }) {
   const navigate = useNavigate();
   const channels = inputs.channels;
 
@@ -37,6 +37,8 @@ export default function Q4_Channels({ inputs, setField, onBack, canNext, loading
       isLast
       loading={loading}
       onStartDrafting={onStartDrafting}
+      onStartManual={onStartManual}
+      manualBusy={manualBusy}
       rightExtras={
         <button
           onClick={() => {

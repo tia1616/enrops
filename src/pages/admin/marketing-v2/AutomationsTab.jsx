@@ -16,13 +16,82 @@
 //     with a helpful pointer to Stripe setup.
 
 import { useEffect, useState } from "react";
-import { Link, useOutletContext } from "react-router-dom";
+import { Link, useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
+import AudienceSwitcher from "./AudienceSwitcher.jsx";
 import AutomationEditor from "./AutomationEditor.jsx";
 import SenderSetupNotice from "./SenderSetupNotice.jsx";
 import DeliveryIssuesPanel from "./DeliveryIssuesPanel.jsx";
+
+// Per-audience header copy + empty state. The audience filter (?audience=) shows
+// one audience at a time — the same spine as Comms>Contacts and >Templates — so
+// each gets framing that fits (family LTV framing shouldn't lead an instructor
+// list). Program-type chips only make sense for family/program automations.
+const AUTO_AUDIENCE = {
+  families: {
+    intro: (
+      <>
+        Stay close to families between sessions. Enrops sends the messages
+        automatically so you don&apos;t have to, saving hours of manual work.
+        Every touch builds Lifetime Value (<strong>LTV</strong> — the total
+        revenue from a family across every program their kids take with you).
+      </>
+    ),
+    note: "These reach every parent of a registered student, even if they unsubscribed from marketing. They’re service updates, not sales.",
+    empty: "No family automations yet.",
+  },
+  instructors: {
+    intro: (
+      <>
+        Keep your instructors in the loop automatically — a birthday note today,
+        more to come. Enrops sends these for you, so staying thoughtful with your
+        team doesn&apos;t cost you time.
+      </>
+    ),
+    note: "These go to your instructors, not families.",
+    empty: "No instructor automations yet — more are on the way.",
+  },
+  partners: {
+    intro: (
+      <>
+        Keep your partner sites informed automatically — like a class roster
+        before the first day. Enrops sends these on schedule so you don&apos;t
+        have to remember.
+      </>
+    ),
+    note: "These go to your partner-site contacts, not families.",
+    empty: "No partner automations yet — more are on the way.",
+  },
+};
+
+// Lifecycle stages the automations list groups by (from automation_templates
+// .lifecycle_stage). Order here = display order; a stage with no automations in
+// the active audience is skipped. Blurbs are audience-neutral ("someone").
+const STAGES = [
+  { key: "getting_started", label: "Getting started", blurb: "The first messages after someone joins" },
+  { key: "during", label: "During the session", blurb: "Staying close while classes are running" },
+  { key: "wrapping_up", label: "Wrapping up", blurb: "Finishing strong and setting up what's next" },
+  { key: "anytime", label: "Anytime", blurb: "Thoughtful touches, any time of year" },
+];
+
+// Where each operator-initiated (board) send records its history, so an
+// informational card can show REAL last-sent + volume + time saved instead of
+// nothing. Org-scoped reads. sub_offer has no durable per-send table yet, so it
+// shows no stats (honest — a made-up number would be worse than none).
+const BOARD_STATS_SOURCE = {
+  availability_survey: { table: "instructor_survey_sends", ts: "sent_at" },
+  assignment_offer: { table: "program_assignments", ts: "email_sent_at" },
+};
+
+// Per-card note for what you can do with each board send. Must be literally true
+// per-send — no overclaiming. Updated as the Schedule-board wiring lands.
+const BOARD_SEND_NOTE = {
+  availability_survey: "Edit the default intro here, then preview and send from your Schedule tab.",
+  assignment_offer: "Edit the default message here, then preview and send from your Schedule tab.",
+  sub_offer: "Sent automatically when you assign a substitute on the Schedule tab.",
+};
 
 // Templates that require Stripe Connect to fire — UI locks the toggle until
 // the org connects. Kept here (not in DB) for v1 — a `requires_stripe_connect`
@@ -38,6 +107,21 @@ const REVIEW_LINK_PLACEHOLDER = "your-review-link-here";
 
 export default function AutomationsTab() {
   const { user, org } = useOutletContext();
+  const [params, setParams] = useSearchParams();
+
+  // Audience filter rides in the URL (?audience=) so it survives refresh + deep
+  // links and matches Comms>Contacts / >Templates. Default (no param) = families.
+  const audience = ["instructors", "partners"].includes(params.get("audience"))
+    ? params.get("audience")
+    : "families";
+  const audienceCfg = AUTO_AUDIENCE[audience];
+  function selectAudience(a) {
+    const next = new URLSearchParams(params);
+    if (a === "families") next.delete("audience");
+    else next.set("audience", a);
+    setParams(next, { replace: true });
+  }
+
   const [editingTpl, setEditingTpl] = useState(null);
   const [orgLogoUrl, setOrgLogoUrl] = useState(null);
   const [orgSenderName, setOrgSenderName] = useState(null);
@@ -50,6 +134,7 @@ export default function AutomationsTab() {
   const [templates, setTemplates] = useState([]);
   const [automationByTpl, setAutomationByTpl] = useState({});
   const [runStats, setRunStats] = useState({});
+  const [boardStats, setBoardStats] = useState({}); // key -> { count, lastSent } for operator-initiated cards
   const [stripeReady, setStripeReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -59,6 +144,11 @@ export default function AutomationsTab() {
     if (org?.id) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id]);
+
+  // Close any open editor when the audience filter changes — the edited row gets
+  // filtered out of view anyway, so leaving editingTpl set would strand a hidden
+  // editor (and mirrors the audience-switch behavior on the Templates tab).
+  useEffect(() => { setEditingTpl(null); }, [audience]);
 
   async function load() {
     setLoading(true);
@@ -90,6 +180,24 @@ export default function AutomationsTab() {
       if (orgRes.error) throw orgRes.error;
 
       setTemplates(tplRes.data ?? []);
+
+      // Real stats for the operator-initiated (board) cards, from each send's own
+      // history table (org-scoped). Best-effort: a blocked/missing source just
+      // leaves that card without stats rather than failing the whole load.
+      const boardTpls = (tplRes.data ?? []).filter((t) => BOARD_STATS_SOURCE[t.key]);
+      const boardEntries = await Promise.all(boardTpls.map(async (t) => {
+        const src = BOARD_STATS_SOURCE[t.key];
+        const { data, count, error: bErr } = await supabase
+          .from(src.table)
+          .select(src.ts, { count: "exact" })
+          .eq("organization_id", org.id)
+          .not(src.ts, "is", null)
+          .order(src.ts, { ascending: false })
+          .limit(1);
+        if (bErr) return [t.key, null];
+        return [t.key, { count: count ?? 0, lastSent: data?.[0]?.[src.ts] ?? null }];
+      }));
+      setBoardStats(Object.fromEntries(boardEntries));
 
       const aMap = {};
       (autoRes.data ?? []).forEach((a) => { aMap[a.template_id] = a; });
@@ -195,6 +303,14 @@ export default function AutomationsTab() {
     );
   }
 
+  // Show one audience at a time. An automation can belong to MORE THAN ONE
+  // audience (no_school_day reaches families + instructors), so match on the
+  // membership array. Missing/empty falls back to families (backfill default).
+  const visibleTemplates = templates.filter((t) => {
+    const auds = Array.isArray(t.audiences) && t.audiences.length ? t.audiences : ["families"];
+    return auds.includes(audience);
+  });
+
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
       {/* Celebration animation keyframes — used on the row chip when an
@@ -216,6 +332,7 @@ export default function AutomationsTab() {
         }
       `}</style>
       <FamilyCommsTabs active="automations" />
+      <AudienceSwitcher active={audience} onSelect={selectAudience} label="Automation audience" />
 
       <SenderSetupNotice orgId={org?.id} />
 
@@ -224,18 +341,17 @@ export default function AutomationsTab() {
           Automations
         </h1>
         <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: "0 0 10px" }}>
-          Stay close to families between sessions. Enrops sends the messages
-          automatically so you don&apos;t have to, saving hours of manual work.
-          Every touch builds Lifetime Value (<strong>LTV</strong> — the total
-          revenue from a family across every program their kids take with you).
+          {audienceCfg.intro}
         </p>
         <p style={{ color: MUTED, fontSize: 13, lineHeight: 1.55, margin: 0, fontStyle: "italic" }}>
-          These reach every parent of a registered student, even if they
-          unsubscribed from marketing. They&apos;re service updates, not sales.
+          {audienceCfg.note}
         </p>
       </header>
 
-      <DeliveryIssuesPanel org={org} />
+      {/* Delivery-issue alerts are framed for families ("families who didn't get
+          an email") and only make sense on the Families view — don't surface them
+          on the Instructors/Partners pills. */}
+      {audience === "families" && <DeliveryIssuesPanel org={org} />}
 
       {error && (
         <div
@@ -254,14 +370,35 @@ export default function AutomationsTab() {
         </div>
       )}
 
-      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {templates.map((tpl) => {
-          const auto = automationByTpl[tpl.id];
+      {visibleTemplates.length === 0 ? (
+        <div style={{ border: `1px dashed ${RULE}`, borderRadius: 12, padding: "32px 24px", textAlign: "center", color: MUTED, fontSize: 14 }}>
+          {audienceCfg.empty}
+        </div>
+      ) : (
+        STAGES.map((stage) => {
+          const stageRows = visibleTemplates.filter((t) => (t.lifecycle_stage ?? "during") === stage.key);
+          if (stageRows.length === 0) return null;
+          return (
+            <section key={stage.key} style={{ marginBottom: 24 }}>
+              <div style={{ margin: "0 0 12px" }}>
+                <h2 style={{ color: INK, fontSize: 15, fontWeight: 800, margin: 0, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  {stage.label}
+                </h2>
+                <p style={{ color: MUTED, fontSize: 13, margin: "2px 0 0" }}>{stage.blurb}</p>
+              </div>
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {stageRows.map((tpl) => {
+                  const auto = automationByTpl[tpl.id];
           const stats = auto ? runStats[auto.id] : null;
           const locked = STRIPE_DEPENDENT_KEYS.has(tpl.key) && !stripeReady;
           const disabledTemplate = !tpl.is_v1_enabled;
           const enabled = !!auto?.enabled;
           const isSaving = savingTplId === tpl.id;
+          // Operator-initiated sends (availability survey, class offers, sub
+          // requests) are shown for TRANSPARENCY but sent from the Schedule tab,
+          // so they get a link, not an on/off toggle (a toggle would be a dead
+          // control for a manual send).
+          const isBoardSend = tpl.trigger_type === "operator_initiated";
           // A template still carrying the placeholder review link can't be turned
           // on (see toggleAutomation). Surface that inline so the reason is visible
           // right at the card, not only in the page-top error banner.
@@ -286,23 +423,62 @@ export default function AutomationsTab() {
                     <h2 style={{ color: INK, fontSize: 17, fontWeight: 700, margin: 0 }}>
                       {tpl.display_name}
                     </h2>
-                    <StatusPill
-                      locked={locked}
-                      disabledTemplate={disabledTemplate}
-                      enabled={enabled}
-                    />
-                    <Chip color={INFO} bg="#eef4fc">
-                      {tpl.applies_to_program_type === "camps"
-                        ? "Camps only"
-                        : tpl.applies_to_program_type === "afterschool"
-                          ? "After-school only"
-                          : "Camps + after-school"}
-                    </Chip>
+                    {/* MODE badge — same position on every card so the auto-fire vs
+                        manual split is scannable at a glance (this list mixes both,
+                        unlike Sawyer/Jumbula which separate them into tabs). Auto
+                        cards ALSO show their on/off StatusPill; the mode badge is a
+                        distinct signal from the status. */}
+                    <ModeBadge isBoardSend={isBoardSend} />
+                    {!isBoardSend && (
+                      <StatusPill
+                        locked={locked}
+                        disabledTemplate={disabledTemplate}
+                        enabled={enabled}
+                      />
+                    )}
+                    {/* The program-type chip only means something in the FAMILIES
+                        view (family/program automations). Under Instructors/Partners
+                        it's meaningless and the pill already conveys the audience —
+                        so gate on the audience being VIEWED, not the template's. A
+                        dual-audience automation (no_school_day) thus shows the chip
+                        under Families but not under Instructors. */}
+                    {audience === "families" && (
+                      <Chip color={INFO} bg="#eef4fc">
+                        {tpl.applies_to_program_type === "camps"
+                          ? "Camps only"
+                          : tpl.applies_to_program_type === "afterschool"
+                            ? "After-school only"
+                            : "Camps + after-school"}
+                      </Chip>
+                    )}
                   </div>
                   <p style={{ color: MUTED, fontSize: 14, margin: "4px 0 10px", lineHeight: 1.5 }}>
                     {tpl.description}
                   </p>
+                  {isBoardSend && BOARD_SEND_NOTE[tpl.key] && (
+                    <p style={{ color: PURPLE, fontSize: 12.5, margin: "0 0 10px", lineHeight: 1.5, fontWeight: 600 }}>
+                      {tpl.key === "sub_offer" ? "" : "✎ "}{BOARD_SEND_NOTE[tpl.key]}
+                    </p>
+                  )}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 13 }}>
+                    {isBoardSend && BOARD_STATS_SOURCE[tpl.key] && (
+                      boardStats[tpl.key]?.count > 0 ? (
+                        <>
+                          {boardStats[tpl.key].lastSent && (
+                            <Chip color={MUTED} bg="#f5f4ee">
+                              Last sent {relativeTime(boardStats[tpl.key].lastSent)}
+                            </Chip>
+                          )}
+                          <Chip color={OK} bg="#ecf6ec">
+                            ⏱ {formatTimeSaved(boardStats[tpl.key].count * (tpl.time_saved_minutes_per_send || 0))}
+                            {" · "}
+                            {boardStats[tpl.key].count} sent
+                          </Chip>
+                        </>
+                      ) : (
+                        <Chip color={MUTED} bg="#f5f4ee">Not sent yet</Chip>
+                      )
+                    )}
                     {stats?.last_fired && (
                       <Chip color={MUTED} bg="#f5f4ee">
                         Last sent {relativeTime(stats.last_fired)}
@@ -356,6 +532,40 @@ export default function AutomationsTab() {
                 </div>
 
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
+                  {isBoardSend ? (
+                    <>
+                    <Link
+                      to="/admin/schedule"
+                      style={{
+                        display: "inline-block", whiteSpace: "nowrap",
+                        background: PURPLE, color: "#fff", padding: "8px 14px",
+                        borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none",
+                      }}
+                    >
+                      Send from your Schedule →
+                    </Link>
+                    {/* Intro-editable board sends (survey, offer) open an editor;
+                        sub_offer's email is built per-send by create-assignment-
+                        substitution and never reads an override, so its button opens
+                        a PREVIEW-ONLY view (see the example, nothing to edit). */}
+                    <button
+                      type="button"
+                      onClick={() => setEditingTpl((prev) => (prev?.id === tpl.id ? null : tpl))}
+                      style={{
+                        background: editingTpl?.id === tpl.id ? PURPLE : "transparent",
+                        border: `1px solid ${editingTpl?.id === tpl.id ? PURPLE : RULE}`,
+                        color: editingTpl?.id === tpl.id ? "#fff" : INK,
+                        padding: "6px 12px",
+                        borderRadius: 8,
+                        fontSize: 13,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {editingTpl?.id === tpl.id ? "Close" : (tpl.key === "sub_offer" ? "Preview email" : "Edit message")}
+                    </button>
+                    </>
+                  ) : (
+                  <>
                   <Toggle
                     checked={enabled}
                     onClick={() => toggleAutomation(tpl)}
@@ -387,6 +597,8 @@ export default function AutomationsTab() {
                   >
                     {editingTpl?.id === tpl.id ? "Close" : "Edit"}
                   </button>
+                  </>
+                  )}
                 </div>
               </div>
 
@@ -413,8 +625,12 @@ export default function AutomationsTab() {
               )}
             </li>
           );
-        })}
-      </ul>
+                })}
+              </ul>
+            </section>
+          );
+        })
+      )}
     </div>
   );
 }
@@ -459,6 +675,15 @@ function CelebrationOverlay({ templateName }) {
       </span>
     </div>
   );
+}
+
+// The one badge that answers "does this send on its own, or do I send it?" —
+// rendered in a fixed spot on every card so the mixed auto/manual list reads as
+// two clear kinds. Manual (board) sends point to where the operator does it.
+function ModeBadge({ isBoardSend }) {
+  return isBoardSend
+    ? <Chip color="#8a5a00" bg="#fdf2df">✋ You send this · from the Schedule tab</Chip>
+    : <Chip color={PURPLE} bg="#efe9f7">⚡ Runs automatically</Chip>;
 }
 
 function StatusPill({ locked, disabledTemplate, enabled }) {
