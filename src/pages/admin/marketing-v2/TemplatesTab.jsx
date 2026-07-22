@@ -150,21 +150,29 @@ export default function TemplatesTab() {
     ? params.get("audience")
     : "families";
   const cfg = AUDIENCES[audience];
-  function selectAudience(a) {
-    const next = new URLSearchParams(params);
-    if (a === "families") next.delete("audience");
-    else next.set("audience", a);
-    setParams(next, { replace: true });
-  }
 
   const [templates, setTemplates] = useState(null); // null = loading
   const [loadErr, setLoadErr] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   // editing: null (list view) | { id?, name, subject, editableText }
   const [editing, setEditing] = useState(null);
+  // Whether the open editor has unsaved edits — lets the audience switch nudge
+  // before it throws the draft away (the editor reports this up).
+  const [editorDirty, setEditorDirty] = useState(false);
+
+  function selectAudience(a) {
+    // Switching audience closes the editor (below), which would silently drop an
+    // in-progress draft — confirm first if there are unsaved changes.
+    if (editing && editorDirty && !window.confirm("Discard your unsaved changes to this template?")) return;
+    const next = new URLSearchParams(params);
+    if (a === "families") next.delete("audience");
+    else next.set("audience", a);
+    setParams(next, { replace: true });
+  }
 
   // Leaving the editor when the audience changes prevents saving a draft under
-  // the wrong audience (the editor writes whichever audience is active).
+  // the wrong audience (the editor writes whichever audience is active). The
+  // switch is guarded above, so by here the operator has already confirmed.
   useEffect(() => { setEditing(null); }, [audience]);
 
   useEffect(() => {
@@ -230,6 +238,7 @@ export default function TemplatesTab() {
           audience={audience}
           cfg={cfg}
           value={editing}
+          onDirtyChange={setEditorDirty}
           onCancel={() => setEditing(null)}
           onSaved={() => { setEditing(null); setRefreshKey((k) => k + 1); }}
         />
@@ -407,7 +416,7 @@ function TemplateCard({ template, onEdit, onDeleted, orgId }) {
   );
 }
 
-function TemplateEditor({ org, audience, cfg, value, onCancel, onSaved }) {
+function TemplateEditor({ org, audience, cfg, value, onDirtyChange, onCancel, onSaved }) {
   const [name, setName] = useState(value.name);
   const [subject, setSubject] = useState(value.subject);
   const [editableText, setEditableText] = useState(value.editableText);
@@ -419,6 +428,23 @@ function TemplateEditor({ org, audience, cfg, value, onCancel, onSaved }) {
 
   const bodyHtml = editableToHtml(editableText);
   const canSave = name.trim().length > 0 && !saving;
+
+  // Dirty = any field differs from what we opened with. Powers both the Cancel
+  // confirm and the parent's audience-switch nudge. Attachments compare by value.
+  const dirty =
+    name !== value.name ||
+    subject !== value.subject ||
+    editableText !== value.editableText ||
+    JSON.stringify(emailAttachments ?? []) !== JSON.stringify(value.email_attachments ?? []);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false); // reset the parent when the editor closes
+  }, [dirty, onDirtyChange]);
+
+  const handleCancel = () => {
+    if (dirty && !window.confirm("Discard your unsaved changes to this template?")) return;
+    onCancel();
+  };
 
   const save = async () => {
     if (!name.trim()) { setErr("Give your template a name so you can find it later."); return; }
@@ -541,7 +567,7 @@ function TemplateEditor({ org, audience, cfg, value, onCancel, onSaved }) {
         </button>
         <button
           type="button"
-          onClick={onCancel}
+          onClick={handleCancel}
           disabled={saving}
           style={{
             background: "#fff", border: `1px solid ${RULE}`, color: INK, borderRadius: 999,
