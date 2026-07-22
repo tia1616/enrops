@@ -2256,11 +2256,24 @@ Deno.serve(async (req: Request) => {
 
   // ---- "Write it myself" path: skip AI, create a blank draft ----
   if (skipAi) {
-    const blankScheduledAt = cadenceSlots.length > 0
-      ? cadenceSlots[0].scheduled_at
-      : (inputs.send_at
-        ? resolveSendAtIso(inputs.send_at, orgTimezone)
-        : new Date(Date.now() + 24 * 60 * 60_000).toISOString());
+    // Build touchpoint slots: use the server-computed cadence (same schedule
+    // the AI path would have used) so the operator gets the right number of
+    // emails at the right times. One-off sends get a single touchpoint.
+    const touchpointSlots = cadenceSlots.length > 0
+      ? cadenceSlots.map((slot) => ({
+          order_index: slot.order_index,
+          scheduled_at: slot.scheduled_at,
+          label: slot.label,
+          reason: slot.reason,
+        }))
+      : [{
+          order_index: 0,
+          scheduled_at: inputs.send_at
+            ? resolveSendAtIso(inputs.send_at, orgTimezone)
+            : new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+          label: "draft",
+          reason: null as string | null,
+        }];
 
     const campaignName = ((): string => {
       const mode = parsed.structuredWhat?.mode;
@@ -2299,16 +2312,16 @@ Deno.serve(async (req: Request) => {
 
     const { data: insertedTps, error: tpErr } = await supabase
       .from("marketing_campaign_touchpoints")
-      .insert([{
+      .insert(touchpointSlots.map((slot) => ({
         campaign_id: inserted.id,
         organization_id,
         type: "email",
-        order_index: 0,
-        scheduled_at: blankScheduledAt,
+        order_index: slot.order_index,
+        scheduled_at: slot.scheduled_at,
         status: "queued",
-        payload: { label: "draft", subject: null, body_html: null, body_text: null, reason: null },
+        payload: { label: slot.label, subject: null, body_html: null, body_text: null, reason: slot.reason },
         topics: topicsArr,
-      }])
+      })))
       .select("id, order_index, type, scheduled_at, status, payload, topics");
     if (tpErr) {
       return jsonError(`failed to persist touchpoint: ${tpErr.message}`, 500);

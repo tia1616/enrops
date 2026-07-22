@@ -15,6 +15,7 @@ export default function QuestionStep({
   loadingLabel,
   onStartDrafting,
   onStartManual,
+  manualBusy = false,
   rightExtras,
 }) {
   return (
@@ -70,17 +71,18 @@ export default function QuestionStep({
               {onStartManual && (
                 <button
                   onClick={onStartManual}
-                  disabled={!canNext || loading}
+                  disabled={!canNext || loading || manualBusy}
                   style={{
-                    padding: "10px 18px", background: "#fff",
-                    color: canNext && !loading ? INK : "#cfcfcf",
-                    border: `1px solid ${canNext && !loading ? RULE : "#cfcfcf"}`,
+                    padding: "10px 18px",
+                    background: canNext && !loading && !manualBusy ? "#EDE8F5" : "#f0f0f0",
+                    color: canNext && !loading && !manualBusy ? PURPLE : "#cfcfcf",
+                    border: `1px solid ${canNext && !loading && !manualBusy ? "#C4B5DC" : "#cfcfcf"}`,
                     borderRadius: 6,
-                    cursor: canNext && !loading ? "pointer" : "not-allowed",
-                    fontSize: 14, fontWeight: 500, fontFamily: "inherit",
+                    cursor: canNext && !loading && !manualBusy ? "pointer" : "not-allowed",
+                    fontSize: 14, fontWeight: 600, fontFamily: "inherit",
                   }}
                 >
-                  Write it myself
+                  {manualBusy ? "Setting up..." : "Write it myself"}
                 </button>
               )}
               <button

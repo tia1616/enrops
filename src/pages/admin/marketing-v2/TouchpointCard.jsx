@@ -2,7 +2,7 @@
 // Expandable. Shows summary collapsed; editor + preview when open.
 // Edits are local until "Save as draft" or "Approve & Schedule" (chunk 07 wires).
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import EditableField from "./EditableField.jsx";
 import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
 import AttachmentPicker from "./AttachmentPicker.jsx";
@@ -398,15 +398,39 @@ export default function TouchpointCard({
   );
 }
 
+const MERGE_TOKENS = [
+  { group: "Personalization", tokens: [
+    { key: "first_name", label: "First name", tip: "Parent's first name" },
+    { key: "parent_name", label: "Full name", tip: "Parent's full name" },
+    { key: "school", label: "School", tip: "School or location name" },
+  ]},
+  { group: "Program details", tokens: [
+    { key: "curriculum", label: "Program", tip: "Program or curriculum name(s)" },
+    { key: "first_session_date", label: "Start date", tip: "First session date" },
+    { key: "session_count", label: "Sessions", tip: "Number of sessions" },
+    { key: "day_of_week", label: "Day", tip: "Day(s) the program meets" },
+  ]},
+  { group: "Pricing & promos", tokens: [
+    { key: "savings", label: "Savings", tip: "Dollar amount saved" },
+    { key: "early_bird_price", label: "Early bird $", tip: "Early bird price" },
+    { key: "regular_price", label: "Regular $", tip: "Regular price" },
+    { key: "early_bird_deadline", label: "EB deadline", tip: "Early bird cutoff date" },
+    { key: "promo_code", label: "Promo code", tip: "Active promo code" },
+    { key: "promo_amount", label: "Promo $", tip: "Promo discount amount" },
+  ]},
+  { group: "Links & blocks", tokens: [
+    { key: "register_url", label: "Reg link", tip: "Registration page URL" },
+    { key: "register_button", label: "Reg button", tip: "Branded registration button" },
+    { key: "vip_block", label: "VIP block", tip: "Annual pass offer (auto-suppressed per school)" },
+    { key: "camp_details", label: "Camp list", tip: "Camp names, venues & dates for recipient's area" },
+  ]},
+];
+
 function BodyEditor({ value, onChange, onCommit }) {
   const [editing, setEditing] = useState(false);
-  // Plain-text working copy used only while the textarea is open. Seeded
-  // from `value` (HTML) when Edit is clicked. Bubbled back up as HTML on
-  // every keystroke via onChange(editableToHtml(...)), so the parent's
-  // body_html stays canonical. On Done editing we additionally call
-  // onCommit(html) which PATCHes the touchpoint row to the DB so the
-  // edits survive Send test, reloads, and Approve.
+  const textareaRef = useRef(null);
   const [editableText, setEditableText] = useState("");
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const toggleEditing = () => {
     if (editing) {
@@ -421,6 +445,23 @@ function BodyEditor({ value, onChange, onCommit }) {
   const handleTextChange = (newText) => {
     setEditableText(newText);
     onChange(editableToHtml(newText));
+  };
+
+  const insertToken = (key) => {
+    const tag = `{{${key}}}`;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const before = editableText.slice(0, start);
+    const after = editableText.slice(end);
+    const next = before + tag + after;
+    handleTextChange(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + tag.length;
+      ta.setSelectionRange(pos, pos);
+    });
   };
 
   return (
@@ -445,7 +486,55 @@ function BodyEditor({ value, onChange, onCommit }) {
 
       {editing ? (
         <>
+          <div style={{ marginBottom: 8 }}>
+            <button
+              type="button"
+              onClick={() => setPaletteOpen((v) => !v)}
+              style={{
+                background: paletteOpen ? "#EDE8F5" : "#f7f4ec", border: `1px solid ${paletteOpen ? "#C4B5DC" : RULE}`,
+                color: paletteOpen ? PURPLE : INK, padding: "5px 12px", borderRadius: 999,
+                cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
+              }}
+            >
+              {paletteOpen ? "Hide personalization fields" : "Personalize with fields"}
+            </button>
+            {paletteOpen && (
+              <div style={{
+                marginTop: 8, padding: 12, background: "#faf8f1",
+                border: `1px solid ${RULE}`, borderRadius: 8,
+              }}>
+                <p style={{ margin: "0 0 8px", fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
+                  Click a field to insert it at your cursor. Each tag gets replaced with the real value for every parent when the email sends.
+                </p>
+                {MERGE_TOKENS.map((g) => (
+                  <div key={g.group} style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, marginBottom: 4 }}>
+                      {g.group}
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {g.tokens.map((t) => (
+                        <button
+                          key={t.key}
+                          type="button"
+                          onClick={() => insertToken(t.key)}
+                          title={t.tip}
+                          style={{
+                            background: "#fff", border: `1px solid #C4B5DC`, borderRadius: 999,
+                            padding: "3px 10px", fontSize: 12, fontFamily: "ui-monospace, monospace",
+                            color: PURPLE, cursor: "pointer", fontWeight: 500,
+                          }}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <textarea
+            ref={textareaRef}
             value={editableText}
             onChange={(e) => handleTextChange(e.target.value)}
             rows={12}

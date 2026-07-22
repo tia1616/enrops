@@ -90,7 +90,7 @@ const BOARD_STATS_SOURCE = {
 // (pulled from the instructor template shelf) is being wired next in the
 // Schedule-board work, and must land before this branch ships to prod so the card
 // stays honest.
-const BOARD_SEND_NOTE = "Preview it, edit the wording, and send yourself a test before it goes out.";
+const BOARD_SEND_NOTE = "You can preview, edit, and send yourself a test before it goes out from the Schedule tab.";
 
 // Templates that require Stripe Connect to fire — UI locks the toggle until
 // the org connects. Kept here (not in DB) for v1 — a `requires_stripe_connect`
