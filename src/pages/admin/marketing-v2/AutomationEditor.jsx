@@ -823,7 +823,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
 
           {isPreviewOnly ? (
             <p style={{ margin: "0 0 16px", fontSize: 13, color: MUTED, lineHeight: 1.6 }}>
-              This email is sent automatically when you assign a sub or cover on the Schedule board. Its wording is set by the system — here's an example of what the instructor receives:
+              This email is sent automatically when you assign a sub or cover on the Schedule tab. Its wording is set by the system — here's an example of what the instructor receives:
             </p>
           ) : (
           <>
@@ -1032,7 +1032,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
           {isBoardSend ? (
             <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
               {isPreviewOnly
-                ? "The preview above shows an example of this email. It's sent automatically when you assign a sub or cover on the Schedule board — its wording isn't editable."
+                ? "The preview above shows an example of this email. It's sent automatically when you assign a sub or cover on the Schedule tab — its wording isn't editable."
                 : "The preview above shows an example of the full email with sample details. Save the default message here; you send the real one (with actual instructors and dates) from the Schedule tab."}
             </div>
           ) : (

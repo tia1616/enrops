@@ -90,7 +90,7 @@ const BOARD_STATS_SOURCE = {
 const BOARD_SEND_NOTE = {
   availability_survey: "Edit the default intro here, then preview and send from your Schedule tab.",
   assignment_offer: "Edit the default message here, then preview and send from your Schedule tab.",
-  sub_offer: "Sent automatically when you assign a substitute on the Schedule board.",
+  sub_offer: "Sent automatically when you assign a substitute on the Schedule tab.",
 };
 
 // Templates that require Stripe Connect to fire — UI locks the toggle until
@@ -395,7 +395,7 @@ export default function AutomationsTab() {
           const enabled = !!auto?.enabled;
           const isSaving = savingTplId === tpl.id;
           // Operator-initiated sends (availability survey, class offers, sub
-          // requests) are shown for TRANSPARENCY but sent from the Schedule board,
+          // requests) are shown for TRANSPARENCY but sent from the Schedule tab,
           // so they get a link, not an on/off toggle (a toggle would be a dead
           // control for a manual send).
           const isBoardSend = tpl.trigger_type === "operator_initiated";
