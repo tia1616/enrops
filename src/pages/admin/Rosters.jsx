@@ -774,12 +774,13 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
 
   async function save() {
     if (busy) return;
-    // Name is required on both sides (students.first_name/last_name are NOT NULL).
-    // Block the save rather than let the DB reject it with a raw error.
+    // Guard against blanking a name that was set (a blank student name is never
+    // intended). Only blocks when the operator clears a previously-filled name —
+    // a row that was already blank can still save its other fields.
     const firstName = (form.first_name ?? "").trim();
     const lastName = (form.last_name ?? "").trim();
-    if (!firstName || !lastName) {
-      setErr("First and last name are both required.");
+    if ((!firstName && (s.first_name ?? "").trim()) || (!lastName && (s.last_name ?? "").trim())) {
+      setErr("Student first and last name can't be left blank.");
       return;
     }
     setBusy(true);
