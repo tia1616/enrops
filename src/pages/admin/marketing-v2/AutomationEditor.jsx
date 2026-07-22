@@ -55,6 +55,9 @@ const TOKENS_BY_TEMPLATE_KEY = {
   mid_recap:              ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_time", "mid_term_skills_block", "register_url"],
   final_recap:            ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "program_time", "program_end_date", "final_showcase_block", "final_recap_skills_block", "next_term_link_block", "register_url"],
   birthday:               ["first_name", "child_first_name", "org_name", "sender_name", "age_turning"],
+  // instructor_birthday: recipient is the INSTRUCTOR, so no child/program/age
+  // tokens — only their name + org identity. {{first_name}} = the instructor's.
+  instructor_birthday:    ["first_name", "org_name", "sender_name"],
   abandoned_registration: ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "abandoned_resume_url"],
   survey_nudge:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name"],
   // review_request reaches enrolled families AND bare contacts, so it only

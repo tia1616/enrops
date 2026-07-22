@@ -8,7 +8,9 @@
 //   - days_after_first_session     (check_in)
 //   - session_midpoint             (mid_recap)
 //   - session_last_day             (final_recap)
-//   - birthday                     (birthday)
+//   - birthday                     (birthday — family/student audience)
+//   - instructor_birthday          (instructor_birthday — active instructors, by
+//                                   instructors.date_of_birth; instructor audience)
 //   - contact_added                (welcome_contact)
 //   - days_after_engagement        (review_request — dual anchor: N days after a
 //                                   first session OR after a contact was added)
@@ -351,6 +353,9 @@ async function runAutomation(
       break;
     case "birthday":
       audience = await resolveBirthdayAudience(supabase, a);
+      break;
+    case "instructor_birthday":
+      audience = await resolveInstructorBirthdayAudience(supabase, a);
       break;
     case "contact_added":
       audience = await resolveContactAddedAudience(supabase, a);
@@ -1426,6 +1431,68 @@ async function resolveRecapAudience(
 }
 
 // ─── Birthday (camps + afterschool, fires when student DOB matches today) ───
+// ─── Instructor birthday (fires on an active instructor's birthday) ──────────
+// The instructor-audience sibling of resolveBirthdayAudience. Reads
+// instructors.date_of_birth (not students), and messages only ACTIVE instructors
+// who have an email. Single-audience automation: the operator-editable body IS
+// the instructor copy, so it sets NO per-entry subject_template/body_template
+// (unlike no_school_day's two-audience split) — sendOne falls back to the
+// override/default, which is what we want. {{first_name}} = the instructor's
+// first name; no age is referenced. Org-scoped; no hardcoded tenant. Idempotent
+// per instructor per year via the context_key.
+async function resolveInstructorBirthdayAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const day = now.getDate();
+  const year = now.getFullYear();
+
+  // PostgREST can't easily filter on EXTRACT(month/day FROM date_of_birth), so
+  // fetch active instructors with a birthdate in this org and match month/day in
+  // TS (mirrors resolveBirthdayAudience). At tenant scale this is a small list.
+  const { data: instructors, error } = await supabase
+    .from("instructors")
+    .select("id, first_name, email, date_of_birth")
+    .eq("organization_id", a.organization_id)
+    .eq("is_active", true)
+    .not("date_of_birth", "is", null)
+    .not("email", "is", null);
+  if (error) throw error;
+
+  return (instructors ?? [])
+    .filter((i: any) => {
+      if (!i.date_of_birth || !i.email) return false;
+      const parts = String(i.date_of_birth).split("-").map(Number);
+      return parts[1] === month && parts[2] === day;
+    })
+    .map((i: any) => ({
+      // parent_* are the engine's GENERIC recipient fields (just named "parent").
+      // parent_id stays null: automation_run_recipients.parent_id has no FK, and
+      // an instructor id is not a parent id — writing one would be a lie.
+      context_key: `instructor:${i.id}:year:${year}`,
+      parent_id: null,
+      parent_email: i.email,
+      parent_first_name: i.first_name,
+      child_first_name: null,
+      program_name: "",
+      program_start_date: "",
+      program_end_date: "",
+      location_name: "",
+      abandoned_resume_url: "",
+      age_turning: "",
+      final_showcase_raw: "",
+      mid_term_skills_raw: [],
+      final_recap_skills_raw: [],
+      arrival_instructions_raw: "",
+      dismissal_instructions_raw: "",
+      session_dates_raw: [],
+      register_url: "",
+      next_term_available: false,
+    }));
+}
+
 async function resolveBirthdayAudience(
   supabase: SupabaseClient,
   a: AutomationRow,

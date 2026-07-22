@@ -292,11 +292,16 @@ export default function AutomationsTab() {
                       enabled={enabled}
                     />
                     <Chip color={INFO} bg="#eef4fc">
-                      {tpl.applies_to_program_type === "camps"
-                        ? "Camps only"
-                        : tpl.applies_to_program_type === "afterschool"
-                          ? "After-school only"
-                          : "Camps + after-school"}
+                      {/* Instructor/partner automations aren't program-scoped —
+                          label them by audience, not by camp/after-school, so an
+                          instructor birthday doesn't read "Camps + after-school". */}
+                      {tpl.trigger_type === "instructor_birthday"
+                        ? "Instructors"
+                        : tpl.applies_to_program_type === "camps"
+                          ? "Camps only"
+                          : tpl.applies_to_program_type === "afterschool"
+                            ? "After-school only"
+                            : "Camps + after-school"}
                     </Chip>
                   </div>
                   <p style={{ color: MUTED, fontSize: 14, margin: "4px 0 10px", lineHeight: 1.5 }}>
