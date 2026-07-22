@@ -66,6 +66,16 @@ const AUTO_AUDIENCE = {
   },
 };
 
+// Lifecycle stages the automations list groups by (from automation_templates
+// .lifecycle_stage). Order here = display order; a stage with no automations in
+// the active audience is skipped. Blurbs are audience-neutral ("someone").
+const STAGES = [
+  { key: "getting_started", label: "Getting started", blurb: "The first messages after someone joins" },
+  { key: "during", label: "During the session", blurb: "Staying close while classes are running" },
+  { key: "wrapping_up", label: "Wrapping up", blurb: "Finishing strong and bringing them back" },
+  { key: "anytime", label: "Anytime", blurb: "Thoughtful touches, any time of year" },
+];
+
 // Templates that require Stripe Connect to fire — UI locks the toggle until
 // the org connects. Kept here (not in DB) for v1 — a `requires_stripe_connect`
 // column on automation_templates would be cleaner but premature now.
@@ -317,9 +327,20 @@ export default function AutomationsTab() {
           {audienceCfg.empty}
         </div>
       ) : (
-      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {visibleTemplates.map((tpl) => {
-          const auto = automationByTpl[tpl.id];
+        STAGES.map((stage) => {
+          const stageRows = visibleTemplates.filter((t) => (t.lifecycle_stage ?? "during") === stage.key);
+          if (stageRows.length === 0) return null;
+          return (
+            <section key={stage.key} style={{ marginBottom: 24 }}>
+              <div style={{ margin: "0 0 12px" }}>
+                <h2 style={{ color: INK, fontSize: 15, fontWeight: 800, margin: 0, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  {stage.label}
+                </h2>
+                <p style={{ color: MUTED, fontSize: 13, margin: "2px 0 0" }}>{stage.blurb}</p>
+              </div>
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {stageRows.map((tpl) => {
+                  const auto = automationByTpl[tpl.id];
           const stats = auto ? runStats[auto.id] : null;
           const locked = STRIPE_DEPENDENT_KEYS.has(tpl.key) && !stripeReady;
           const disabledTemplate = !tpl.is_v1_enabled;
@@ -484,8 +505,11 @@ export default function AutomationsTab() {
               )}
             </li>
           );
-        })}
-      </ul>
+                })}
+              </ul>
+            </section>
+          );
+        })
       )}
     </div>
   );
