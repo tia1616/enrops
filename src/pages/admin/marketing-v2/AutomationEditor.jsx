@@ -814,11 +814,11 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
           </div>
 
           {/* Board sends: the operator edits the INTRO paragraph only; the edge
-              function appends assignment details, response buttons, and deadline
-              automatically. Attachments aren't supported on board sends. */}
+              function adds the greeting + assignment details + response buttons +
+              deadline automatically. Attachments aren't supported on board sends. */}
           {isBoardSend && (
             <p style={{ margin: "0 0 16px", fontSize: 12, color: MUTED, lineHeight: 1.5, fontStyle: "italic" }}>
-              This is the default intro for this email. The rest (assignment details, response buttons, deadline) is added automatically when you send from the Schedule tab.
+              This is the default intro paragraph. The greeting, assignment details, response buttons, and deadline are added automatically when you send from the Schedule tab.
             </p>
           )}
 

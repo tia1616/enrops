@@ -528,6 +528,28 @@ export default function Schedule() {
       if (declinesRes.error) throw declinesRes.error;
       setOrgSurveyIntro(cfgRes?.data?.intro ?? "");
 
+      // If the operator saved a default intro in Automations > Instructors >
+      // Availability survey (body_override), it takes priority over the legacy
+      // org_survey_config row. HTML → plain text for the textarea.
+      try {
+        const { data: surveyTpl } = await supabase
+          .from("automation_templates").select("id").eq("key", "availability_survey").maybeSingle();
+        if (surveyTpl?.id) {
+          const { data: surveyAuto } = await supabase
+            .from("automations").select("body_override").eq("organization_id", org.id)
+            .eq("template_id", surveyTpl.id).maybeSingle();
+          if (surveyAuto?.body_override) {
+            const plain = surveyAuto.body_override
+              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
+              .replace(/<[^>]+>/g, "")
+              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
+            if (plain) setOrgSurveyIntro(plain);
+          }
+        }
+      } catch { /* non-critical — falls back to org_survey_config or builtin */ }
+
       // Load substitutions for all camp assignments so the grid can show sub indicators.
       const assignmentIds = (assignmentsRes.data ?? []).map((a) => a.id);
       let substitutions = [];

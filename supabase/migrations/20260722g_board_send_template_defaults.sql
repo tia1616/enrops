@@ -7,17 +7,19 @@
 --
 -- Additive (data-only UPDATE); no schema change; parity both envs.
 
+-- Body = the intro PARAGRAPH only (no greeting). The edge function adds
+-- "Hi [name]," separately, matching the existing survey pattern.
 update public.automation_templates set
   default_subject = 'Your availability for the upcoming schedule',
-  default_body = '<p>Hi {{first_name}},</p><p>We''re planning the upcoming schedule and want to know when and where you''d like to work. The survey only takes a few minutes and helps us match you with the right classes.</p>'
+  default_body = '<p>We''re planning the upcoming schedule and want to know when and where you''d like to work. The survey only takes a few minutes and helps us match you with the right classes.</p>'
 where key = 'availability_survey';
 
 update public.automation_templates set
   default_subject = 'Your schedule is ready',
-  default_body = '<p>Hi {{first_name}},</p><p>Your proposed schedule is below. Please review each assignment and let us know. Your schedule isn''t confirmed until we hear back on every one.</p>'
+  default_body = '<p>Your proposed schedule is below. Please review each assignment and let us know. Your schedule isn''t confirmed until we hear back on every one.</p>'
 where key = 'assignment_offer';
 
 update public.automation_templates set
   default_subject = 'Can you cover a class?',
-  default_body = '<p>Hi {{first_name}},</p><p>We need someone to cover a class. See the details below and let us know if you can take it.</p>'
+  default_body = '<p>We need someone to cover a class. See the details below and let us know if you can take it.</p>'
 where key = 'sub_offer';
