@@ -1,22 +1,32 @@
-// TemplatesTab — the Family Comms "Templates" surface.
+// TemplatesTab — the Comms "Templates" surface, now a SHARED TEMPLATE SHELF.
 //
 // Why this exists: operators send the same kinds of emails over and over
 // (a welcome, a win-back, a "spots are filling"). Saved templates let them
 // write the wording ONCE, name it, and reuse it — instead of rebuilding it or
 // digging up an old campaign every time. Richelle's ask.
 //
-// This tab is where templates are CREATED and MANAGED. Reusing one happens
-// inside a campaign email: TouchpointCard has "Save as template" and "Use a
-// saved template" so the loop closes where the operator is actually writing.
+// Comms is one hub for THREE audiences, so the shelf holds copy for each:
+//   • Families    — campaign email (also reachable from a campaign touchpoint's
+//                   "Save as template" / "Use a saved template").
+//   • Instructors — availability surveys, class offers, sub requests.
+//   • Partners    — what you email a partner site (e.g. a class roster).
+// An audience switcher (mirrors Comms>Contacts) scopes the list; the in-context
+// send buttons (Schedule / roster) read their audience's templates from here.
 //
-// Storage: saved_email_templates, one row per org (RLS gates to org owner/admin).
+// This tab is where templates are CREATED and MANAGED. Reusing a FAMILY one also
+// happens inside a campaign email: TouchpointCard has "Save as template" and
+// "Use a saved template" (family-scoped) so the loop closes where the operator
+// is actually writing.
+//
+// Storage: saved_email_templates, one row per template, `audience` column added
+// in 20260721c (RLS gates to org owner/admin — same policy for every audience).
 // Body is the same friendly-editor HTML as campaign touchpoints, so merge tags
 // like {{first_name}} survive and render the same way when reused.
 //
 // Org comes from useOutletContext — never hardcoded. Copy is tenant-neutral.
 
 import { useEffect, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
@@ -24,6 +34,96 @@ import AttachmentPicker from "./AttachmentPicker.jsx";
 import { htmlToEditable, editableToHtml, highlightTokens, stripHtml } from "./bodyEditorUtils.js";
 
 const RED = "#b53737";
+
+// Per-audience copy for the shelf. Only surface text differs; the editor, storage,
+// and RLS are identical across audiences. Families keeps the merge-token hint it
+// ships with today; instructor/partner hints stay honest — they don't promise a
+// token the send buttons don't yet fill in (that lands with Chunk 4).
+const AUDIENCES = {
+  families: {
+    key: "families",
+    label: "Families",
+    intro: (
+      <>
+        Save an email you send often, so you can reuse it in one click. When
+        you&apos;re writing a campaign email, click <em>Use a saved template</em> to
+        drop one in.
+      </>
+    ),
+    nameHint: "Just for you, so you can find it. Families never see this name.",
+    subjectPlaceholder: "e.g. Welcome to {{org_name}}!",
+    bodyHint: (
+      <>
+        Blank line = new paragraph. Square brackets{" "}
+        <span style={{ fontFamily: "ui-monospace, monospace" }}>[link text]({"{{register_url}}"})</span>{" "}
+        make a clickable button. Tags like{" "}
+        <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span>{" "}
+        get filled in for each family when you send.
+      </>
+    ),
+    emptyTitle: "No family templates yet",
+    emptyBody: (
+      <>
+        Save the emails you reach for again and again, a welcome, a win-back,
+        a &quot;spots are filling.&quot; Write it once, reuse it anytime.
+      </>
+    ),
+  },
+  instructors: {
+    key: "instructors",
+    label: "Instructors",
+    intro: (
+      <>
+        Save the wording you use with your instructors — an availability survey,
+        a class offer, a sub request — so it&apos;s ready when you send from your
+        schedule.
+      </>
+    ),
+    nameHint: "Just for you, so you can find it. Instructors never see this name.",
+    subjectPlaceholder: "e.g. Your classes for next week",
+    bodyHint: (
+      <>
+        Blank line = new paragraph. Save the wording you use for availability
+        surveys, class offers, or sub requests here, so you can drop it in when
+        you send from your schedule.
+      </>
+    ),
+    emptyTitle: "No instructor templates yet",
+    emptyBody: (
+      <>
+        Save the messages you send your instructors again and again — an
+        availability survey, a class offer, a sub request. Write it once, reuse
+        it anytime.
+      </>
+    ),
+  },
+  partners: {
+    key: "partners",
+    label: "Partners",
+    intro: (
+      <>
+        Save the wording you use when you email a partner site — like sending a
+        class roster — so you can reuse it instead of rewriting it.
+      </>
+    ),
+    nameHint: "Just for you, so you can find it. Partners never see this name.",
+    subjectPlaceholder: "e.g. This week's class roster",
+    bodyHint: (
+      <>
+        Blank line = new paragraph. Save the wording you use when you email a
+        partner site — like the note that goes with a class roster — so you can
+        reuse it.
+      </>
+    ),
+    emptyTitle: "No partner templates yet",
+    emptyBody: (
+      <>
+        Save the messages you send your partner sites again and again — like the
+        note that goes with a class roster. Write it once, reuse it anytime.
+      </>
+    ),
+  },
+};
 
 function snippet(html, max = 140) {
   const t = stripHtml(html);
@@ -41,12 +141,31 @@ function fmtDate(iso) {
 
 export default function TemplatesTab() {
   const { org } = useOutletContext() ?? {};
+  const [params, setParams] = useSearchParams();
+
+  // Audience rides in the URL (?audience=) so it survives refresh + deep links
+  // and matches Comms>Contacts. Default (no param) = families, so the campaign
+  // template experience is byte-for-byte unchanged.
+  const audience = ["instructors", "partners"].includes(params.get("audience"))
+    ? params.get("audience")
+    : "families";
+  const cfg = AUDIENCES[audience];
+  function selectAudience(a) {
+    const next = new URLSearchParams(params);
+    if (a === "families") next.delete("audience");
+    else next.set("audience", a);
+    setParams(next, { replace: true });
+  }
 
   const [templates, setTemplates] = useState(null); // null = loading
   const [loadErr, setLoadErr] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   // editing: null (list view) | { id?, name, subject, editableText }
   const [editing, setEditing] = useState(null);
+
+  // Leaving the editor when the audience changes prevents saving a draft under
+  // the wrong audience (the editor writes whichever audience is active).
+  useEffect(() => { setEditing(null); }, [audience]);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -58,13 +177,14 @@ export default function TemplatesTab() {
         .from("saved_email_templates")
         .select("id, name, subject, body_html, updated_at, email_attachments")
         .eq("organization_id", org.id)
+        .eq("audience", audience)
         .order("updated_at", { ascending: false });
       if (cancelled) return;
       if (error) { setLoadErr(error.message); setTemplates([]); return; }
       setTemplates(data ?? []);
     })();
     return () => { cancelled = true; };
-  }, [org?.id, refreshKey]);
+  }, [org?.id, audience, refreshKey]);
 
   const startNew = () => setEditing({ name: "", subject: "", editableText: "" });
   const startEdit = (t) => setEditing({
@@ -78,6 +198,7 @@ export default function TemplatesTab() {
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
       <FamilyCommsTabs active="templates" />
+      <AudienceSwitcher active={audience} onSelect={selectAudience} />
 
       <header style={{ marginBottom: 20, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
         <div>
@@ -85,9 +206,7 @@ export default function TemplatesTab() {
             Templates
           </h1>
           <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: 0, maxWidth: 620 }}>
-            Save an email you send often, so you can reuse it in one click. When
-            you&apos;re writing a campaign email, click <em>Use a saved template</em> to
-            drop one in.
+            {cfg.intro}
           </p>
         </div>
         {!editing && (
@@ -108,6 +227,8 @@ export default function TemplatesTab() {
       {editing ? (
         <TemplateEditor
           org={org}
+          audience={audience}
+          cfg={cfg}
           value={editing}
           onCancel={() => setEditing(null)}
           onSaved={() => { setEditing(null); setRefreshKey((k) => k + 1); }}
@@ -122,11 +243,10 @@ export default function TemplatesTab() {
           textAlign: "center", background: "#fff",
         }}>
           <div style={{ fontSize: 15, color: INK, fontWeight: 600, marginBottom: 6 }}>
-            No saved templates yet
+            {cfg.emptyTitle}
           </div>
           <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.55, margin: "0 auto 16px", maxWidth: 420 }}>
-            Save the emails you reach for again and again, a welcome, a win-back,
-            a &quot;spots are filling.&quot; Write it once, reuse it anytime.
+            {cfg.emptyBody}
           </p>
           <button
             type="button"
@@ -152,6 +272,45 @@ export default function TemplatesTab() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Segmented control leading the Templates surface — the same three Comms
+// audiences as Contacts. Mirrors the switcher in ContactsTab.
+function AudienceSwitcher({ active, onSelect }) {
+  const items = [
+    { key: "families", label: "Families" },
+    { key: "instructors", label: "Instructors" },
+    { key: "partners", label: "Partners" },
+  ];
+  return (
+    <div role="tablist" aria-label="Template audience" style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+      {items.map((it) => {
+        const on = active === it.key;
+        return (
+          <button
+            key={it.key}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            onClick={() => onSelect(it.key)}
+            style={{
+              padding: "7px 16px",
+              borderRadius: 999,
+              border: `1px solid ${on ? BRIGHT : RULE}`,
+              background: on ? BRIGHT : "#fff",
+              color: on ? "#fff" : MUTED,
+              fontSize: 13,
+              fontWeight: on ? 700 : 500,
+              fontFamily: "inherit",
+              cursor: "pointer",
+            }}
+          >
+            {it.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -248,7 +407,7 @@ function TemplateCard({ template, onEdit, onDeleted, orgId }) {
   );
 }
 
-function TemplateEditor({ org, value, onCancel, onSaved }) {
+function TemplateEditor({ org, audience, cfg, value, onCancel, onSaved }) {
   const [name, setName] = useState(value.name);
   const [subject, setSubject] = useState(value.subject);
   const [editableText, setEditableText] = useState(value.editableText);
@@ -268,6 +427,7 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
     setErr(null);
     const row = {
       organization_id: org.id,
+      audience,
       name: name.trim(),
       subject: subject.trim() || null,
       body_html: bodyHtml || null,
@@ -316,7 +476,7 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
           autoFocus
         />
         <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED }}>
-          Just for you, so you can find it. Families never see this name.
+          {cfg.nameHint}
         </p>
       </div>
 
@@ -325,7 +485,7 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
         <input
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
-          placeholder="e.g. Welcome to {{org_name}}!"
+          placeholder={cfg.subjectPlaceholder}
           style={inputStyle}
         />
       </div>
@@ -340,11 +500,7 @@ function TemplateEditor({ org, value, onCancel, onSaved }) {
           style={{ ...inputStyle, lineHeight: 1.55, resize: "vertical" }}
         />
         <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
-          Blank line = new paragraph. Square brackets{" "}
-          <span style={{ fontFamily: "ui-monospace, monospace" }}>[link text]({"{{register_url}}"})</span>{" "}
-          make a clickable button. Tags like{" "}
-          <span style={{ fontFamily: "ui-monospace, monospace" }}>{"{{first_name}}"}</span>{" "}
-          get filled in for each family when you send.
+          {cfg.bodyHint}
         </p>
       </div>
 

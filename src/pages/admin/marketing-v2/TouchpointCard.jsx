@@ -511,6 +511,11 @@ function TemplateControls({ organizationId, subject, bodyHtml, emailAttachments,
     const { data: userData } = await supabase.auth.getUser();
     const { error } = await supabase.from("saved_email_templates").insert({
       organization_id: organizationId,
+      // Campaigns send to families, so a touchpoint's saved copy is family copy.
+      // Explicit (not just the column default) so it can't drift, and so it's
+      // read back by the family-scoped picker below — never the instructor/
+      // partner shelves in the Templates tab.
+      audience: "families",
       name: nm,
       subject: subject && subject.trim() ? subject : null,
       body_html: bodyHtml || null,
@@ -538,6 +543,9 @@ function TemplateControls({ organizationId, subject, bodyHtml, emailAttachments,
       .from("saved_email_templates")
       .select("id, name, subject, body_html, email_attachments")
       .eq("organization_id", organizationId)
+      // Family copy only — a campaign picker must not surface instructor/partner
+      // templates from the shared shelf (they'd carry the wrong audience's copy).
+      .eq("audience", "families")
       .order("updated_at", { ascending: false });
     setBusy(false);
     // Leave templates === null on error so the empty-state ("none yet") copy
