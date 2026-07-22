@@ -118,7 +118,7 @@ serve(async (req: Request) => {
     }
 
     // ── Resolve recipients ─────────────────────────────────────────────────
-    type Recipient = { name: string; email: string; role: string | null; source: 'partner_contact' | 'location_contact' | 'ad_hoc_cc' };
+    type Recipient = { name: string; email: string; role: string | null; source: 'partner_contact' | 'location_contact' | 'ad_hoc_cc'; partner_contact_id?: string | null };
     const recipients: Recipient[] = [];
     const seen = new Set<string>();
 
@@ -132,11 +132,14 @@ serve(async (req: Request) => {
         const email = (c.contact_email ?? '').trim().toLowerCase();
         if (!email || seen.has(email)) continue;
         seen.add(email);
+        // partner_contact_id keys this recipient back to the partner_contacts row
+        // so the Comms per-contact timeline can find every roster send to them.
         recipients.push({
           name: c.contact_name ?? '',
           email,
           role: c.contact_role ?? null,
           source: 'partner_contact',
+          partner_contact_id: c.id,
         });
       }
     }

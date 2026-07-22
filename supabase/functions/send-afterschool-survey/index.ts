@@ -183,6 +183,20 @@ serve(async (req: Request) => {
       }
     }
 
+    // Durable per-instructor record of who was emailed this survey (Comms
+    // per-contact timeline source). Best-effort: a logging failure must never
+    // fail a send that already went out.
+    if (mode === 'send') {
+      const logRows = [
+        ...sent.map((id) => ({ organization_id: organizationId, instructor_id: id, survey_kind: 'afterschool_availability', term, status: 'sent' })),
+        ...failed.map((f) => ({ organization_id: organizationId, instructor_id: f.instructor_id, survey_kind: 'afterschool_availability', term, status: 'failed', failure_reason: f.reason })),
+      ];
+      if (logRows.length > 0) {
+        const { error: logErr } = await supabase.from('instructor_survey_sends').insert(logRows);
+        if (logErr) console.error('[send-afterschool-survey] survey-send log failed', logErr.message);
+      }
+    }
+
     // Real send: open the survey for the term so the portal banner unlocks.
     // Preserve the original opened_at on a straggler re-send (don't reset it). The
     // deadline is authoritative from the caller: the drawer pre-fills the existing

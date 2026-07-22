@@ -17,11 +17,19 @@
 // Org comes from useOutletContext — never hardcoded. Copy is tenant-neutral.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
+import { InstructorContacts, PartnerContacts } from "./AudienceContacts.jsx";
+import ContactTimelineDrawer from "./ContactTimelineDrawer.jsx";
+
+// Comms is the single CRM hub for all three audiences. Instructors + Partners
+// get a light, consistent "your people" contacts list here (name / email /
+// phone) that matches the Families list — NOT the full operational surfaces.
+// Onboarding, background checks, venues, and calendars stay at
+// /admin/instructors and /admin/schools; these views link out to them.
 
 const CREAM = "#FBFBFB";
 const RED = "#b53737";
@@ -180,7 +188,75 @@ const DOC_COLUMNS = ["email", "parent_name", "phone", "child_first_name", "child
 
 export default function ContactsTab() {
   const { org } = useOutletContext() ?? {};
+  const [params, setParams] = useSearchParams();
 
+  // Audience selection rides in the URL (?audience=) so it survives refresh +
+  // deep links, and the sidebar "Comms" item stays lit (path is unchanged:
+  // /admin/family-comms/contacts). Default (no param) = families.
+  const audience = ["instructors", "partners"].includes(params.get("audience"))
+    ? params.get("audience")
+    : "families";
+  function selectAudience(a) {
+    const next = new URLSearchParams(params);
+    if (a === "families") next.delete("audience");
+    else next.set("audience", a);
+    setParams(next, { replace: true });
+  }
+
+  return (
+    <div style={{ padding: "24px 32px" }}>
+      <div>
+        <FamilyCommsTabs active="contacts" />
+        <AudienceSwitcher active={audience} onSelect={selectAudience} />
+      </div>
+      {audience === "families" && <FamiliesContacts org={org} />}
+      {audience === "instructors" && <InstructorContacts org={org} />}
+      {audience === "partners" && <PartnerContacts org={org} />}
+    </div>
+  );
+}
+
+// Segmented control leading the Contacts surface. Three CRM audiences:
+// families (marketing_recipients), instructors (the roster), partners
+// (partner_contacts) — the enrichment-specific shape no marketing tool nails.
+function AudienceSwitcher({ active, onSelect }) {
+  const items = [
+    { key: "families", label: "Families" },
+    { key: "instructors", label: "Instructors" },
+    { key: "partners", label: "Partners" },
+  ];
+  return (
+    <div role="tablist" aria-label="Contact audience" style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+      {items.map((it) => {
+        const on = active === it.key;
+        return (
+          <button
+            key={it.key}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            onClick={() => onSelect(it.key)}
+            style={{
+              padding: "7px 16px",
+              borderRadius: 999,
+              border: `1px solid ${on ? BRIGHT : RULE}`,
+              background: on ? BRIGHT : "#fff",
+              color: on ? "#fff" : MUTED,
+              fontSize: 13,
+              fontWeight: on ? 700 : 500,
+              fontFamily: "inherit",
+              cursor: "pointer",
+            }}
+          >
+            {it.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FamiliesContacts({ org }) {
   const [count, setCount] = useState(null); // null = loading
   const [countErr, setCountErr] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -204,12 +280,10 @@ export default function ContactsTab() {
   }, [org?.id, refreshKey]);
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
-      <FamilyCommsTabs active="contacts" />
-
+    <div>
       <header style={{ marginBottom: 24 }}>
         <h1 style={{ color: INK, fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>
-          Contacts
+          Families
         </h1>
         <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: 0 }}>
           This is the list your campaigns send to. Upload your families&apos; email
@@ -297,6 +371,7 @@ function ContactsList({ orgId, refreshKey }) {
   const [tagOptions, setTagOptions] = useState([]);
   const [debouncedQ, setDebouncedQ] = useState("");
   const [editId, setEditId] = useState(null); // contact being edited, or null
+  const [activityRow, setActivityRow] = useState(null); // contact whose timeline is open
   const [localRefresh, setLocalRefresh] = useState(0); // bump to re-fetch after an edit
   const [newTagOpen, setNewTagOpen] = useState(false);
   const [newTag, setNewTag] = useState("");
@@ -426,9 +501,11 @@ function ContactsList({ orgId, refreshKey }) {
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
           <thead>
             <tr>
-              {["Email", "Parent", "Child", "Area", "Tags", ""].map((h) => (
-                <th key={h} style={{ position: "sticky", top: 0, background: CREAM, textAlign: "left", padding: "8px 10px", color: MUTED, fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${RULE}` }}>{h}</th>
+              {["Email", "Parent", "Child", "Area", "Tags"].map((h) => (
+                <th key={h} style={{ position: "sticky", top: 0, zIndex: 2, background: CREAM, textAlign: "left", padding: "8px 10px", color: MUTED, fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${RULE}` }}>{h}</th>
               ))}
+              <th style={{ position: "sticky", top: 0, right: 0, zIndex: 3, background: CREAM, borderBottom: `1px solid ${RULE}`, borderLeft: `1px solid ${RULE}` }} />
+
             </tr>
           </thead>
           <tbody>
@@ -453,7 +530,8 @@ function ContactsList({ orgId, refreshKey }) {
                     </span>
                   )}
                 </td>
-                <td style={{ ...listCell, textAlign: "right" }}>
+                <td style={{ ...listCell, textAlign: "right", whiteSpace: "nowrap", position: "sticky", right: 0, zIndex: 1, background: "#fff", borderLeft: `1px solid ${RULE}` }}>
+                  <button type="button" onClick={() => setActivityRow(r)} style={{ padding: "3px 10px", marginRight: 6, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Activity</button>
                   <button type="button" onClick={() => setEditId(r.id)} style={{ padding: "3px 10px", background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Edit</button>
                 </td>
               </tr>
@@ -477,6 +555,16 @@ function ContactsList({ orgId, refreshKey }) {
           suggestions={tagOptions}
           onClose={() => setEditId(null)}
           onSaved={() => { setEditId(null); setLocalRefresh((n) => n + 1); }}
+        />
+      )}
+
+      {activityRow && (
+        <ContactTimelineDrawer
+          audience="families"
+          contact={activityRow}
+          contactLabel={activityRow.parent_name || activityRow.email}
+          orgId={orgId}
+          onClose={() => setActivityRow(null)}
         />
       )}
     </div>
