@@ -267,9 +267,13 @@ export default function AutomationsTab() {
     );
   }
 
-  // Show one audience at a time. Older catalog rows predate the column, so treat
-  // a missing audience as 'families' (the backfill default).
-  const visibleTemplates = templates.filter((t) => (t.audience ?? "families") === audience);
+  // Show one audience at a time. An automation can belong to MORE THAN ONE
+  // audience (no_school_day reaches families + instructors), so match on the
+  // membership array. Missing/empty falls back to families (backfill default).
+  const visibleTemplates = templates.filter((t) => {
+    const auds = Array.isArray(t.audiences) && t.audiences.length ? t.audiences : ["families"];
+    return auds.includes(audience);
+  });
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
@@ -380,13 +384,13 @@ export default function AutomationsTab() {
                       disabledTemplate={disabledTemplate}
                       enabled={enabled}
                     />
-                    {/* The program-type chip only means something for family/
-                        program automations. Instructor/partner ones aren't
-                        program-scoped and the audience pill already conveys who
-                        they reach, so no chip there (no more "Camps + after-school"
-                        on an instructor birthday). Driven by audience, not a
-                        per-trigger special-case. */}
-                    {(tpl.audience ?? "families") === "families" && (
+                    {/* The program-type chip only means something in the FAMILIES
+                        view (family/program automations). Under Instructors/Partners
+                        it's meaningless and the pill already conveys the audience —
+                        so gate on the audience being VIEWED, not the template's. A
+                        dual-audience automation (no_school_day) thus shows the chip
+                        under Families but not under Instructors. */}
+                    {audience === "families" && (
                       <Chip color={INFO} bg="#eef4fc">
                         {tpl.applies_to_program_type === "camps"
                           ? "Camps only"
