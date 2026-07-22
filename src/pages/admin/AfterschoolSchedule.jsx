@@ -1368,7 +1368,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     try {
       const instructor_ids = selectedInstructorIds && selectedInstructorIds.size > 0 ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-afterschool-offers", {
-        body: { organization_id: org.id, term, mode, instructor_ids, deadline: offerDeadline || null, test_recipient: testRecipient, intro_message: offerIntro || null },
+        body: { organization_id: org.id, term, mode, instructor_ids, deadline: offerDeadline || null, test_recipient: testRecipient, intro_message: offerIntro.trim() || null },
       });
       if (error) {
         let msg = error.message ?? "function error";
@@ -1404,7 +1404,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   async function previewOffers() {
     const instructor_ids = selectedInstructorIds && selectedInstructorIds.size > 0 ? Array.from(selectedInstructorIds) : null;
     const { data, error } = await supabase.functions.invoke("send-afterschool-offers", {
-      body: { organization_id: org.id, term, mode: "preview", instructor_ids, deadline: offerDeadline || null, test_recipient: testRecipient, intro_message: offerIntro || null },
+      body: { organization_id: org.id, term, mode: "preview", instructor_ids, deadline: offerDeadline || null, test_recipient: testRecipient, intro_message: offerIntro.trim() || null },
     });
     if (error) {
       let msg = error.message ?? "function error";

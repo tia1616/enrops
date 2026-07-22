@@ -457,7 +457,7 @@ export default function AutomationsTab() {
                   </p>
                   {isBoardSend && BOARD_SEND_NOTE[tpl.key] && (
                     <p style={{ color: PURPLE, fontSize: 12.5, margin: "0 0 10px", lineHeight: 1.5, fontWeight: 600 }}>
-                      ✎ {BOARD_SEND_NOTE[tpl.key]}
+                      {tpl.key === "sub_offer" ? "" : "✎ "}{BOARD_SEND_NOTE[tpl.key]}
                     </p>
                   )}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 13 }}>

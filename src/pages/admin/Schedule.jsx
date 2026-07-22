@@ -1742,7 +1742,7 @@ export default function Schedule() {
       // edge function payload.
       const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode, instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient, intro_message: offerIntro || null },
+        body: { cycle_id: state.cycle.id, mode, instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient, intro_message: offerIntro.trim() || null },
       });
       if (error) {
         let realMsg = error.message ?? "function error";
@@ -1784,7 +1784,7 @@ export default function Schedule() {
     if (state.status !== "ready") return [];
     const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
     const { data, error } = await supabase.functions.invoke("send-offers", {
-      body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient, intro_message: offerIntro || null },
+      body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient, intro_message: offerIntro.trim() || null },
     });
     if (error) {
       let realMsg = error.message ?? "function error";
@@ -1968,7 +1968,7 @@ export default function Schedule() {
     try {
       const idsPayload = selectedInstructorIds ? Array.from(selectedInstructorIds) : null;
       const { data, error } = await supabase.functions.invoke("send-offers", {
-        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient, intro_message: offerIntro || null },
+        body: { cycle_id: state.cycle.id, mode: "preview", instructor_ids: idsPayload, deadline: offerDeadline, test_recipient: testRecipient, intro_message: offerIntro.trim() || null },
       });
       if (error) {
         // Read the actual response body so we can see the real error message.
