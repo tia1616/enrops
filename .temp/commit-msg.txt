@@ -1,0 +1,13 @@
+feat(comms): editable offer intro in OfferDialog + edge fn override (Chunk 4b step 5)
+
+Both camp (Schedule.jsx) and afterschool (AfterschoolSchedule.jsx) OfferDialogs
+now include a "Message to instructors" textarea seeded from the saved default in
+Automations > Instructors > assignment_offer body_override (HTML converted to
+plain text). Fallback is the built-in copy. Reset-to-default link when the text
+diverges.
+
+All 4 offer edge fns (send-offers, send-afterschool-offers, send-patch-offer,
+send-afterschool-patch-offer) accept an optional intro_message parameter. When
+present, it replaces the hardcoded intro paragraph only -- the greeting, deadline,
+assignment table, and response buttons stay system-generated (control-audit
+safety). When absent, the existing copy is used unchanged.

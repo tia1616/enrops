@@ -119,6 +119,7 @@ serve(async (req: Request) => {
     const body = await req.json();
     const assignmentIds: string[] | undefined = body.assignment_ids;
     const mode: 'preview' | 'send' = body.mode === 'preview' ? 'preview' : 'send';
+    const introMessage: string | null = body.intro_message ?? null;
     if (!Array.isArray(assignmentIds) || assignmentIds.length === 0) {
       return json({ error: 'assignment_ids is required (non-empty array)' }, 400);
     }
@@ -240,8 +241,8 @@ serve(async (req: Request) => {
       const subject = classes.length === 1
         ? `Another after-school class on your ${termDisplay} schedule`
         : `${classes.length} more after-school classes on your ${termDisplay} schedule`;
-      const html = renderPatchHtml({ termDisplay, org, primary, instructor, classes, portalUrl, deadline, locationById, signatureHtml });
-      const text = renderPatchText({ termDisplay, org, instructor, classes, portalUrl, deadline, locationById });
+      const html = renderPatchHtml({ termDisplay, org, primary, instructor, classes, portalUrl, deadline, locationById, signatureHtml, introMessage });
+      const text = renderPatchText({ termDisplay, org, instructor, classes, portalUrl, deadline, locationById, introMessage });
 
       previews.push({ instructor_id: instructorId, to: instructor.email, subject, html, text });
 
@@ -337,10 +338,11 @@ function renderVenueDetailsText(loc: Record<string, unknown> | undefined): strin
   return out;
 }
 
-function renderPatchHtml({ termDisplay, org, primary, instructor, classes, portalUrl, deadline, locationById, signatureHtml }: {
+function renderPatchHtml({ termDisplay, org, primary, instructor, classes, portalUrl, deadline, locationById, signatureHtml, introMessage }: {
   termDisplay: string; org: { name: string }; primary: string; instructor: { first_name?: string | null };
   classes: Array<{ a: Record<string, unknown>; p: Record<string, unknown> | undefined }>;
   portalUrl: string; deadline: string; locationById: Map<string, Record<string, unknown>>; signatureHtml: string;
+  introMessage: string | null;
 }) {
   const firstName = instructor.first_name ?? 'there';
   const isOne = classes.length === 1;
@@ -374,9 +376,11 @@ function renderPatchHtml({ termDisplay, org, primary, instructor, classes, porta
       </td></tr>
       <tr><td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
         Hi ${escape(firstName)},<br /><br />
-        ${isOne
-          ? `Good news — another after-school class just got added to your ${escape(termDisplay)} schedule. <strong>Please tap Accept or Request change</strong> when you get a moment.`
-          : `${classes.length} more after-school classes just got added to your ${escape(termDisplay)} schedule. <strong>Please tap Accept or Request change on each one</strong> when you get a moment.`}
+        ${introMessage
+          ? escape(introMessage).replace(/\n/g, '<br />')
+          : isOne
+            ? `Good news — another after-school class just got added to your ${escape(termDisplay)} schedule. <strong>Please tap Accept or Request change</strong> when you get a moment.`
+            : `${classes.length} more after-school classes just got added to your ${escape(termDisplay)} schedule. <strong>Please tap Accept or Request change on each one</strong> when you get a moment.`}
         ${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
       </td></tr>
       <tr><td style="padding:8px 32px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${rows}</table></td></tr>
@@ -389,17 +393,20 @@ function renderPatchHtml({ termDisplay, org, primary, instructor, classes, porta
 </body></html>`;
 }
 
-function renderPatchText({ termDisplay, org, instructor, classes, portalUrl, deadline, locationById }: {
+function renderPatchText({ termDisplay, org, instructor, classes, portalUrl, deadline, locationById, introMessage }: {
   termDisplay: string; org: { name: string }; instructor: { first_name?: string | null };
   classes: Array<{ a: Record<string, unknown>; p: Record<string, unknown> | undefined }>;
   portalUrl: string; deadline: string; locationById: Map<string, Record<string, unknown>>;
+  introMessage: string | null;
 }) {
   const firstName = instructor.first_name ?? 'there';
   const isOne = classes.length === 1;
   const lines: string[] = [`Hi ${firstName},`, ''];
-  lines.push(isOne
-    ? `Good news — another after-school class just got added to your ${termDisplay} schedule. Please tap Accept or Request change when you get a moment.`
-    : `${classes.length} more after-school classes just got added to your ${termDisplay} schedule. Please tap Accept or Request change on each one when you get a moment.`);
+  lines.push(introMessage
+    ? introMessage
+    : isOne
+      ? `Good news — another after-school class just got added to your ${termDisplay} schedule. Please tap Accept or Request change when you get a moment.`
+      : `${classes.length} more after-school classes just got added to your ${termDisplay} schedule. Please tap Accept or Request change on each one when you get a moment.`);
   if (deadline) { lines.push(''); lines.push(`Please respond by ${fmt(deadline)}.`); }
   lines.push('');
   for (const { a, p } of classes) {

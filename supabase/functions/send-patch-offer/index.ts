@@ -118,6 +118,7 @@ serve(async (req: Request) => {
     const body = await req.json();
     const assignmentIds: string[] | undefined = body.assignment_ids;
     const mode: 'preview' | 'send' = body.mode === 'preview' ? 'preview' : 'send';
+    const introMessage: string | null = body.intro_message ?? null;
     if (!Array.isArray(assignmentIds) || assignmentIds.length === 0) {
       return json({ error: 'assignment_ids is required (non-empty array)' }, 400);
     }
@@ -252,8 +253,8 @@ serve(async (req: Request) => {
         : `${camps.length} more ${unitLabel(cycle.cycle_type, camps.length)} on your ${cycleDisplay} schedule`;
       if (!org.slug) throw new Error(`send-patch-offer: org ${org.id} has no slug; cannot build portal URL`);
       const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
-      const html = renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand) });
-      const text = renderPatchText({ cycle, org, instructor, camps, portalUrl, deadline, locationById });
+      const html = renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand), introMessage });
+      const text = renderPatchText({ cycle, org, instructor, camps, portalUrl, deadline, locationById, introMessage });
 
       previews.push({ instructor_id: instructorId, to: instructor.email!, subject, html, text });
 
@@ -371,7 +372,7 @@ function renderVenueDetailsText(loc: any): string[] {
   return out;
 }
 
-function renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml }: any) {
+function renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml, introMessage }: any) {
   const primary = branding.primary_color ?? DEFAULT_PRIMARY;
   const firstName = instructor.first_name ?? 'there';
   const cycleDisplay = cycleDisplayName(cycle.name);
@@ -424,9 +425,11 @@ function renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, d
             <td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
               Hi ${escape(firstName)},
               <br /><br />
-              ${isOne
-                ? `Good news — another ${unitLabel(cycle.cycle_type, 1)} just got added to your ${escape(cycleDisplay)} schedule. <strong>Please tap Accept or Request change</strong> when you get a moment.`
-                : `${camps.length} more ${unitLabel(cycle.cycle_type, camps.length)} just got added to your ${escape(cycleDisplay)} schedule. <strong>Please tap Accept or Request change on each one</strong> when you get a moment.`}
+              ${introMessage
+                ? escape(introMessage).replace(/\n/g, '<br />')
+                : isOne
+                  ? `Good news — another ${unitLabel(cycle.cycle_type, 1)} just got added to your ${escape(cycleDisplay)} schedule. <strong>Please tap Accept or Request change</strong> when you get a moment.`
+                  : `${camps.length} more ${unitLabel(cycle.cycle_type, camps.length)} just got added to your ${escape(cycleDisplay)} schedule. <strong>Please tap Accept or Request change on each one</strong> when you get a moment.`}
               ${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
             </td>
           </tr>
@@ -460,14 +463,16 @@ function renderPatchHtml({ cycle, org, branding, instructor, camps, portalUrl, d
 </html>`;
 }
 
-function renderPatchText({ cycle, org, instructor, camps, portalUrl, deadline, locationById }: any) {
+function renderPatchText({ cycle, org, instructor, camps, portalUrl, deadline, locationById, introMessage }: any) {
   const firstName = instructor.first_name ?? 'there';
   const cycleDisplay = cycleDisplayName(cycle.name);
   const isOne = camps.length === 1;
   const lines: string[] = [];
   lines.push(`Hi ${firstName},`);
   lines.push('');
-  if (isOne) {
+  if (introMessage) {
+    lines.push(introMessage);
+  } else if (isOne) {
     lines.push(`Good news — another ${unitLabel(cycle.cycle_type, 1)} just got added to your ${cycleDisplay} schedule. Please tap Accept or Request change when you get a moment.`);
   } else {
     lines.push(`${camps.length} more ${unitLabel(cycle.cycle_type, camps.length)} just got added to your ${cycleDisplay} schedule. Please tap Accept or Request change on each one when you get a moment.`);
