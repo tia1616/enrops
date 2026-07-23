@@ -1805,31 +1805,6 @@ export default function Schedule() {
     }
   }
 
-  async function handleRunReminders(dryRun) {
-    if (state.status !== "ready") return;
-    setBusy("reminders");
-    setSaveError(null);
-    try {
-      const { data, error } = await supabase.functions.invoke("offer-reminders-cron", {
-        body: { dry_run: dryRun, scope: "camp" },
-      });
-      if (error) {
-        let realMsg = error.message ?? "function error";
-        try { const body = await error.context?.json?.(); if (body?.error) realMsg = body.error; } catch {}
-        throw new Error(realMsg);
-      }
-      if (data?.error) throw new Error(data.error);
-      await loadAll();
-      setOfferDialog({ mode: "result", payload: { kind: "reminders", dry_run: dryRun, ...data } });
-    } catch (err) {
-      console.error("Reminders failed:", err);
-      setSaveError(`Couldn't run reminders: ${err.message ?? "unknown error"}`);
-      setTimeout(() => setSaveError(null), 8000);
-    } finally {
-      setBusy(null);
-    }
-  }
-
   // Built-in fallback intro when the operator hasn't saved a default. Matches
   // the edge fn's own default copy so an unchanged send reads the same.
   function builtinCampIntro() {
@@ -2212,13 +2187,11 @@ export default function Schedule() {
         canApprove={cycle.status !== "published" && state.assignments.some((a) => a.status === "proposed")}
         canSend={state.assignments.some((a) => a.status === "confirmed")}
         canRematch={cycle.status === "collecting"}
-        canRunReminders={state.assignments.some((a) => a.status === "published" && !a.instructor_response_at)}
         onApprove={handleApprove}
         onSurveyClick={() => openSurvey()}
         onSendClick={() => openOfferDialog()}
         onPreviewClick={handlePreviewOffers}
         onRerunAgent={handleRerunAgent}
-        onRemindersClick={() => setOfferDialog({ mode: "reminders_choose", payload: null })}
         nextReminders={nextRemindersForecast}
         onOpenEmailActivity={() => setEmailActivityOpen(true)}
         onArchiveCycle={handleArchiveCycle}
@@ -2328,8 +2301,6 @@ export default function Schedule() {
           publishedCount={state.assignments?.filter((a) => a.status === "published").length ?? 0}
           onRollback={handleRollback}
           rollingBack={busy === "rolling_back"}
-          onRunReminders={handleRunReminders}
-          remindersBusy={busy === "reminders"}
           eligibleInstructors={(() => {
             // Build a unique, sorted list of instructors who have any
             // proposed/confirmed assignment in this cycle. These are the
@@ -2624,7 +2595,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSurveyClick, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
+function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, onApprove, onSurveyClick, onSendClick, onPreviewClick, onRerunAgent, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
   const otherCycles = (allCycles ?? []).filter((c) => c.id !== cycle.id);
   const hasOtherViews = otherCycles.length > 0 || (afterschoolTerms ?? []).length > 0;
   return (
@@ -2885,17 +2856,6 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
               Send offers
             </button>
           </>
-        )}
-        {canRunReminders && (
-          <button
-            type="button"
-            onClick={onRemindersClick}
-            disabled={busy === "reminders"}
-            title="Fire reminder emails right now to anyone whose response is still pending (the cron auto-fires 2–3 days before each deadline — this is for manual nudges)"
-            style={btn("transparent", BRIGHT, true, busy === "reminders")}
-          >
-            {busy === "reminders" ? "Working…" : "Send reminders now"}
-          </button>
         )}
       </div>
     </header>
@@ -4108,7 +4068,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
   );
 }
 
-function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, intro, onIntroChange, defaultIntro, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange, onPreview }) {
+function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, intro, onIntroChange, defaultIntro, publishedCount, onRollback, rollingBack, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange, onPreview }) {
   const [previews, setPreviews] = useState(null);
   const [pvIdx, setPvIdx] = useState(0);
   const [pvBusy, setPvBusy] = useState(false);
@@ -4175,85 +4135,6 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
                 {rollingBack ? "Resetting…" : `Reset ${publishedCount} already-sent ${publishedCount === 1 ? "offer" : "offers"}`}
               </button>
             </div>
-          )}
-        </div>
-        <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>Close</button>
-        </div>
-      </ModalShell>
-    );
-  }
-
-  if (dialog.mode === "reminders_choose") {
-    return (
-      <ModalShell onClose={onClose} title="Reminders + deadline check">
-        <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55, display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ color: MUTED }}>
-            Runs two passes against your active cycle:
-            <br />• Sends a reminder email to any instructor whose deadline is 2–4 days away and who hasn't responded yet
-            <br />• Flags anyone whose deadline has already passed (the card turns Flagged in your calendar — no email)
-          </div>
-          <DialogChoice
-            title="Preview (no emails, no flags)"
-            subtitle="Shows you which instructors would get a reminder and how many camps would be flagged. Nothing changes."
-            disabled={remindersBusy}
-            onClick={() => onRunReminders(true)}
-          />
-          <DialogChoice
-            title="Run it for real"
-            subtitle="Sends reminder emails to non-responders and flags expired offers in your calendar."
-            disabled={remindersBusy}
-            onClick={() => onRunReminders(false)}
-            tone="warn"
-          />
-          {remindersBusy && <div style={{ color: MUTED, fontSize: 12 }}>Working…</div>}
-        </div>
-      </ModalShell>
-    );
-  }
-
-  if (dialog.mode === "result" && dialog.payload?.kind === "reminders") {
-    const p = dialog.payload;
-    const sent = p.reminder_results?.filter((r) => r.sent).length ?? 0;
-    const wouldSend = p.reminder_results?.filter((r) => r.reason === "dry_run").length ?? 0;
-    const upcoming = p.upcoming ?? [];
-    const formatDate = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "long", day: "numeric" });
-    return (
-      <ModalShell onClose={onClose} title={p.dry_run ? "Reminders preview" : "Reminders sent"}>
-        <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
-          {p.dry_run ? (
-            <>
-              <div><strong>Today:</strong> {wouldSend} reminder{wouldSend === 1 ? "" : "s"} would fire now, {p.expired_count} card{p.expired_count === 1 ? "" : "s"} would be flagged past-deadline.</div>
-            </>
-          ) : (
-            <>
-              <div><strong>{sent}</strong> reminder email{sent === 1 ? "" : "s"} delivered.</div>
-              <div style={{ marginTop: 6 }}><strong>{p.expired_count}</strong> assignment{p.expired_count === 1 ? "" : "s"} flagged as past-deadline.</div>
-            </>
-          )}
-          {upcoming.length > 0 && (
-            <div style={{ marginTop: 16, padding: 12, background: `${VIOLET}1A`, border: `1px solid ${VIOLET}66`, borderRadius: 6 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-                Auto-scheduled
-              </div>
-              <ul style={{ margin: 0, paddingLeft: 18, color: INK, fontSize: 13 }}>
-                {upcoming.map((u, i) => (
-                  <li key={i}>
-                    <strong>{formatDate(u.fire_date)}</strong> — {u.instructor_count} instructor{u.instructor_count === 1 ? "" : "s"} ({u.assignment_count} camp{u.assignment_count === 1 ? "" : "s"})
-                  </li>
-                ))}
-              </ul>
-              <div style={{ marginTop: 8, fontSize: 11, color: MUTED }}>
-                These fire automatically — you don't need to come back and click anything.
-              </div>
-            </div>
-          )}
-          {p.reminder_results && p.reminder_results.length > 0 && (
-            <ul style={{ marginTop: 12, paddingLeft: 18, color: MUTED, fontSize: 12 }}>
-              {p.reminder_results.map((r, i) => (
-                <li key={i}>{r.email ?? r.instructor_id.slice(0, 8)} — {r.sent ? "sent" : r.reason}</li>
-              ))}
-            </ul>
           )}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>

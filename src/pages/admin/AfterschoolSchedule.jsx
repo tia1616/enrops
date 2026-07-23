@@ -3158,9 +3158,8 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
 // for a term (programs link by term, not cycle_id) — turning the toggle on creates
 // it so both this control and the cron have a row to read/write.
 function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
-  const [busy, setBusy] = useState(null); // 'toggle' | 'run' | null
+  const [busy, setBusy] = useState(null); // 'toggle' | null
   const [err, setErr] = useState(null);
-  const [result, setResult] = useState(null); // { sent, flagged } from a manual run
   const enabled = !!cycle?.auto_reminders_enabled;
 
   // Forecast: published rows still awaiting a response, bucketed by their
@@ -3204,30 +3203,6 @@ function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
     } finally { setBusy(null); }
   }
 
-  async function runNow() {
-    setBusy("run"); setErr(null); setResult(null);
-    try {
-      // Scope the run to THIS term's after-school reminders only — never touch
-      // camp/summer or other terms from this button.
-      const { data, error } = await supabase.functions.invoke("offer-reminders-cron", {
-        body: { dry_run: false, scope: "program", organization_id: org.id, term },
-      });
-      if (error) {
-        let msg = error.message ?? "function error";
-        try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
-        throw new Error(msg);
-      }
-      if (data?.error) throw new Error(data.error);
-      const sent = (data?.program_reminder_results ?? []).filter((r) => r.sent).length;
-      const flagged = data?.program_expired_count ?? 0;
-      setResult({ sent, flagged });
-      await onChanged();
-    } catch (e) {
-      setErr(`Couldn't send reminders: ${e.message ?? "unknown error"}`);
-      setTimeout(() => setErr(null), 8000);
-    } finally { setBusy(null); }
-  }
-
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
       <label style={{ display: "inline-flex", alignItems: "center", gap: 9, cursor: busy ? "default" : "pointer", fontSize: 13.5, color: INK, fontWeight: 600 }}>
@@ -3241,17 +3216,9 @@ function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
               : "No replies outstanding right now.")
           : "Off — instructors won’t be nudged automatically."}
       </span>
-      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-        {result && (
-          <span style={{ fontSize: 12.5, color: OK_GREEN, fontWeight: 600 }}>
-            Sent {result.sent} reminder{result.sent === 1 ? "" : "s"}{result.flagged ? ` · flagged ${result.flagged} overdue` : ""}
-          </span>
-        )}
-        {err && <span style={{ fontSize: 12.5, color: CORAL, fontWeight: 600 }}>{err}</span>}
-        <button type="button" onClick={runNow} disabled={!!busy} style={{ background: enabled ? BRIGHT : "#fff", color: enabled ? "#fff" : MUTED, border: enabled ? "none" : `1px solid ${RULE}`, borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, fontFamily: "inherit" }}>
-          {busy === "run" ? "Sending…" : "Send reminders now"}
-        </button>
-      </div>
+      {err && (
+        <span style={{ marginLeft: "auto", fontSize: 12.5, color: CORAL, fontWeight: 600 }}>{err}</span>
+      )}
     </div>
   );
 }
