@@ -90,7 +90,7 @@ export default function OperatorSignup() {
     setLoading(true); setError(''); setMsg('');
     try {
       const { data, error: fnErr } = await supabase.functions.invoke('auth-send-magic-link', {
-        body: { email, redirect_to: `${window.location.origin}/signup`, context: 'admin' },
+        body: { email, redirect_to: `${window.location.origin}/signup`, context: 'signup' },
       });
       if (fnErr) throw fnErr;
       if (data?.error) throw new Error(data.error);

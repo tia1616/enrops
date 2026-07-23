@@ -7,6 +7,10 @@
 //   context: "parent" (J2S branded) | "admin" (Enrops admin) | "instructor" (J2S instructor)
 //          | "onboarding" (J2S contractor mid-wizard — different subject/body so they don't
 //            see "view your schedule" before they have one)
+//          | "signup" (Enrops operator self-serve signup — CREATES the auth user for a
+//            brand-new email so the link actually signs them in, then routes them to name
+//            their business. Login contexts intentionally no-op on unknown emails to avoid
+//            enumeration; a signup surface inherently creates an account, so there's no leak.)
 // OUTPUT: { sent: true } or { error: "..." }
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
@@ -50,6 +54,7 @@ serve(async (req: Request) => {
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
     let isInstructor = context === 'instructor';
     let isOnboarding = context === 'onboarding';
+    const isSignup = context === 'signup';
     // Onboarding emails are sent to contractors who have an instructors row but may not
     // yet have an auth.users row (admin invited them but they haven't signed in). Same
     // auto-create-on-first-sign-in behavior as instructor context.
@@ -81,6 +86,19 @@ serve(async (req: Request) => {
           // Email isn't a known instructor — silent no-op.
           return json({ sent: true });
         }
+      } else if (isSignup) {
+        // Operator self-serve signup: create the account for a brand-new email
+        // so the magic link actually signs them in. (No enumeration concern — a
+        // signup surface creates an account by design.)
+        const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+          email,
+          email_confirm: true,
+        });
+        if (createErr || !created?.user) {
+          throw new Error(`Couldn't create auth user: ${createErr?.message ?? 'unknown error'}`);
+        }
+        user = created.user;
+        console.log(`Auto-created auth user for operator signup ${email}`);
       } else {
         // Don't reveal whether email exists — always say "check your inbox"
         console.log(`No auth user found for ${email}, returning success silently`);
@@ -127,8 +145,10 @@ serve(async (req: Request) => {
 
     // Contractor still mid-onboarding keeps the gentler onboarding copy so we
     // never say "view your schedule" before they have one.
-    let template: 'admin' | 'onboarding' | 'instructor' | 'parent';
-    if (isOnboarding) {
+    let template: 'admin' | 'onboarding' | 'instructor' | 'parent' | 'signup';
+    if (isSignup) {
+      template = 'signup';
+    } else if (isOnboarding) {
       template = 'onboarding';
     } else if (context === 'admin' && adminRow) {
       template = 'admin';
@@ -154,13 +174,15 @@ serve(async (req: Request) => {
     else if (parentRow?.first_name) firstName = parentRow.first_name;
 
     const subject =
-      template === 'admin' ? 'Sign in to Enrops Admin'
+      template === 'signup' ? 'Finish setting up your enrops page'
+      : template === 'admin' ? 'Sign in to Enrops Admin'
       : template === 'onboarding' ? 'Continue your Journey to STEAM onboarding'
       : template === 'instructor' ? 'Sign in to view your schedule'
       : 'Sign in to Journey to STEAM';
 
     const html =
-      template === 'admin' ? buildAdminEmail(firstName, signInUrl)
+      template === 'signup' ? buildSignupEmail(signInUrl)
+      : template === 'admin' ? buildAdminEmail(firstName, signInUrl)
       : template === 'onboarding' ? buildOnboardingEmail(firstName, signInUrl)
       : template === 'instructor' ? buildInstructorEmail(firstName, signInUrl)
       : buildParentEmail(firstName, signInUrl);
@@ -214,6 +236,29 @@ function buildAdminEmail(firstName: string, signInUrl: string): string {
       </a>
     </div>
     <p style="margin:0;font-size:13px;color:#6b6b6b;">This link expires in 24 hours.</p>
+  </div>
+</div>
+</body></html>`;
+}
+
+function buildSignupEmail(signInUrl: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#FBFBFB;font-family:'Poppins',system-ui,sans-serif;">
+<div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
+  <div style="background:#1C004F;padding:32px 28px;text-align:center;">
+    <div style="color:#8C88FF;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">enrops</div>
+    <h1 style="color:#fff;margin:8px 0 0;font-size:24px;font-weight:700;">You're almost live</h1>
+  </div>
+  <div style="padding:28px;">
+    <p style="margin:0 0 24px;font-size:15px;color:#1a1a1a;line-height:1.6;">
+      Tap below to finish creating your registration page. Name your program and you'll have a shareable link in minutes &mdash; free to start, no credit card.
+    </p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${signInUrl}" style="display:inline-block;background:#26D687;color:#1C004F;text-decoration:none;padding:14px 36px;border-radius:8px;font-size:15px;font-weight:700;">
+        Finish setup
+      </a>
+    </div>
+    <p style="margin:0;font-size:13px;color:#6b6b6b;">This link expires in 24 hours. Didn't request this? You can ignore this email.</p>
   </div>
 </div>
 </body></html>`;
