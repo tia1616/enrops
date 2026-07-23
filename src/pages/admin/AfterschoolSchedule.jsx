@@ -1848,15 +1848,6 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     { key: "offers", name: "Offers", meta: counts.sendable > 0 ? `${counts.sendable} ready to send` : offersOut ? (awaitingReply > 0 ? `${awaitingReply} awaiting reply` : "all responded") : "Not sent", state: (!offersOut && counts.sendable === 0) ? "todo" : (counts.sendable > 0 || awaitingReply > 0 || counts.changeRequested > 0) ? "active" : "done" },
     { key: "confirmed", name: "Confirmed", meta: counts.accepted > 0 ? `${counts.accepted} accepted` : "—", state: (offersOut && awaitingReply === 0 && counts.sendable === 0 && counts.proposed === 0 && counts.needsHire === 0 && counts.accepted > 0) ? "done" : offersOut ? "active" : "todo" },
   ];
-  const ennieCaption = !survey?.opened_at
-    ? "Start by sending the availability survey to your instructors."
-    : counts.needsHire > 0 ? `${counts.needsHire} class${counts.needsHire === 1 ? "" : "es"} still need an instructor — match, or add a hire.`
-    : counts.proposed > 0 ? `${counts.proposed} draft match${counts.proposed === 1 ? "" : "es"} ready to lock in.`
-    : counts.sendable > 0 ? `${counts.sendable} class${counts.sendable === 1 ? "" : "es"} ready to send offers.`
-    : offersOut && awaitingReply > 0 ? `Offers are out — waiting on ${awaitingReply} repl${awaitingReply === 1 ? "y" : "ies"}. Reminders fire automatically.`
-    : (counts.instructors > 0 && submittedCount < counts.instructors) ? `${submittedCount} of ${counts.instructors} have sent availability. Match when you're ready.`
-    : "You're all set for this term.";
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {saveError && (
@@ -1864,8 +1855,6 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           {saveError}
         </div>
       )}
-
-      <ScheduleStepBar steps={cockpitSteps} ennieCaption={ennieCaption} />
 
       {pendingPatchAssignments.length > 0 && (
         <HatGuide
@@ -1917,6 +1906,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         lastOp={lastOp}
         onUndo={handleUndo}
         offersOut={offersOut}
+        steps={cockpitSteps}
       />
 
       {approveResult && (
@@ -2231,23 +2221,82 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
 const linkBtn = { background: "transparent", border: "none", color: PURPLE, fontWeight: 600, cursor: "pointer", marginLeft: 10, fontSize: 13, textDecoration: "underline" };
 
-function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms, lastOp, onUndo, offersOut }) {
-  // Unified term selector: afterschool terms (this view) + camp cycles (switches back to Schedule).
+// The after-school scheduling COCKPIT — one card that replaces the old header +
+// passive step bar. Term selector + a clickable pipeline stepper + a panel that
+// shows ONLY the selected step's status and its primary action (progressive
+// disclosure — one clear next thing, not a wall of buttons). The scattered
+// action buttons now live inside their step's panel.
+function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms, lastOp, onUndo, offersOut, steps }) {
   const value = `as:${term}`;
   function onChange(e) {
     const v = e.target.value;
     if (v.startsWith("as:")) onSwitchTerm && onSwitchTerm(v.slice(3));
     else onSwitchToCamp && onSwitchToCamp(v);
   }
+
+  // Focus the current step by default; clicks let the operator revisit any step
+  // (re-enterable). Fall back to the current step if the selection went stale
+  // (e.g. after a term switch).
+  const firstActive = steps.find((s) => s.state === "active")?.key ?? steps[0]?.key;
+  const [selected, setSelected] = useState(firstActive);
+  const selKey = steps.some((s) => s.key === selected) ? selected : firstActive;
+
+  const someStaffed = (counts.assigned + counts.accepted + counts.flagged + counts.changeRequested) > 0;
+  const nothingToMatch = counts.needsHire === 0;
+  const out = Math.max(0, counts.instructors - submittedCount);
+
+  const PANELS = {
+    survey: {
+      status: survey?.opened_at
+        ? `Availability survey sent${survey.deadline ? ` · due ${fmtDeadline(survey.deadline)}` : ""}.`
+        : "Ask your instructors when and where they can teach. Their answers feed the draft.",
+      actions: [{ label: survey?.opened_at ? "Resend survey" : "Send availability survey", onClick: onOpenSurvey, primary: !survey?.opened_at, disabled: !!busy }],
+    },
+    responses: {
+      status: survey?.opened_at
+        ? `${submittedCount} of ${counts.instructors} responded${out ? ` · ${out} still out` : ""}${survey.deadline ? ` · due ${fmtDeadline(survey.deadline)}` : ""}.`
+        : "Send the availability survey first — responses land here.",
+      actions: survey?.opened_at && out > 0
+        ? [{ label: `Remind ${out} non-responder${out === 1 ? "" : "s"}`, onClick: onOpenSurvey, primary: true, disabled: !!busy }]
+        : [],
+    },
+    draft: {
+      status: counts.needsHire > 0
+        ? `${counts.needsHire} class${counts.needsHire === 1 ? "" : "es"} still need an instructor.`
+        : counts.proposed > 0
+          ? `${counts.proposed} draft match${counts.proposed === 1 ? "" : "es"} ready to lock in.`
+          : "Draft is built. Locking it in sends no emails.",
+      actions: [
+        ...(!nothingToMatch ? [{ label: busy === "matching" ? "Matching…" : (someStaffed ? "Match remaining" : "Match instructors"), onClick: onMatch, primary: counts.proposed === 0, disabled: !!busy || !hasPrograms }] : []),
+        ...(counts.proposed > 0 && !offersOut ? [{ label: busy === "approving" ? "Locking in…" : "Lock in draft", onClick: onApprove, primary: true, disabled: !!busy, note: "no emails sent" }] : []),
+      ],
+    },
+    offers: {
+      status: counts.sendable > 0
+        ? `${counts.sendable} class${counts.sendable === 1 ? "" : "es"} ready to send offers.`
+        : offersOut
+          ? "Offers are out — waiting on replies. Reminders fire automatically."
+          : "Lock in the draft first, then send offers.",
+      actions: counts.sendable > 0
+        ? [{ label: busy === "offers" ? "Sending…" : `Send offers (${counts.sendable})`, onClick: onSendOffers, primary: true, disabled: !!busy }]
+        : [],
+    },
+    confirmed: {
+      status: `${counts.accepted} accepted${counts.assigned ? ` · ${counts.assigned} awaiting reply` : ""}${counts.changeRequested ? ` · ${counts.changeRequested} change requested` : ""}.`,
+      actions: [],
+    },
+  };
+  const panel = PANELS[selKey] ?? PANELS.survey;
+
   return (
-    <header style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "18px 22px", display: "flex", flexWrap: "wrap", gap: 20, alignItems: "center", justifyContent: "space-between" }}>
-      <div>
+    <section style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
           <select
             value={value}
             onChange={onChange}
             title="Switch term"
-            style={{ fontSize: 14, fontWeight: 700, color: INK, letterSpacing: -0.2, fontFamily: "inherit", background: "transparent", border: "none", borderBottom: `2px dotted ${RULE}`, padding: "0 22px 2px 0", cursor: "pointer", appearance: "none",
+            style={{ fontSize: 15, fontWeight: 700, color: INK, letterSpacing: -0.2, fontFamily: "inherit", background: "transparent", border: "none", borderBottom: `2px dotted ${RULE}`, padding: "0 22px 2px 0", cursor: "pointer", appearance: "none",
               backgroundImage: `linear-gradient(45deg, transparent 50%, ${MUTED} 50%), linear-gradient(135deg, ${MUTED} 50%, transparent 50%)`,
               backgroundPosition: "calc(100% - 12px) center, calc(100% - 7px) center",
               backgroundSize: "5px 5px, 5px 5px",
@@ -2270,92 +2319,41 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             After-school
           </span>
         </div>
-        <div style={{ marginTop: 8, fontSize: 13, color: MUTED, display: "flex", gap: 14, flexWrap: "wrap" }}>
-          <span><strong style={{ color: INK }}>{counts.assigned + counts.accepted}</strong> assigned</span>
-          {counts.draft > 0 && <span><strong style={{ color: INK }}>{counts.draft}</strong> need approval</span>}
-          <span><strong style={{ color: counts.needsHire ? CORAL : INK }}>{counts.needsHire}</strong> need an instructor</span>
-          {counts.changeRequested > 0 && <span><strong style={{ color: CHANGE_REQ }}>{counts.changeRequested}</strong> change requested</span>}
-          <span><strong style={{ color: INK }}>{counts.instructors}</strong> active instructors</span>
-        </div>
-        {survey?.opened_at ? (
-          <div style={{ marginTop: 6, fontSize: 12, color: OK_GREEN }}>
-            Survey open · {submittedCount} submitted{survey.deadline ? ` · due ${fmtDeadline(survey.deadline)}` : ""}
-          </div>
-        ) : (
-          <div style={{ marginTop: 6, fontSize: 12, color: MUTED }}>Availability survey not sent yet.</div>
-        )}
-      </div>
-
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <button
-          type="button"
-          onClick={onOpenSurvey}
-          disabled={!!busy}
-          style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}` }}
-        >
-          {survey?.opened_at ? "Resend survey" : "Open availability survey"}
-        </button>
-        {(() => {
-          // The matcher only fills EMPTY classes (idempotent; never touches accepted).
-          // With nothing unfilled it's a no-op, so grey it out — it re-enables the
-          // moment a slot opens (unassign someone). De-emphasize once offers exist.
-          const nothingToMatch = counts.needsHire === 0;
-          const someStaffed = (counts.assigned + counts.accepted + counts.flagged + counts.changeRequested) > 0;
-          const secondary = nothingToMatch || counts.proposed > 0 || counts.sendable > 0;
-          return (
-            <button
-              type="button"
-              onClick={onMatch}
-              disabled={!!busy || !hasPrograms || nothingToMatch}
-              title={nothingToMatch ? "Every class already has an instructor — nothing to match. Unassign someone to re-open a slot." : ""}
-              style={{ ...btnStyle,
-                background: nothingToMatch ? "#f3f1ea" : (secondary ? "#fff" : BRIGHT),
-                color: nothingToMatch ? MUTED : (secondary ? BRIGHT : "#fff"),
-                border: `1.5px solid ${nothingToMatch ? RULE : BRIGHT}`,
-                cursor: nothingToMatch ? "default" : "pointer",
-                opacity: busy === "matching" ? 0.7 : 1 }}
-            >
-              {busy === "matching" ? "Matching…" : nothingToMatch ? "All classes staffed" : someStaffed ? "Match remaining" : "Match instructors"}
-            </button>
-          );
-        })()}
         {lastOp && onUndo && (
           <button
             type="button"
             onClick={onUndo}
             title={`${lastOp.label} — undo it`}
-            style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}
+            style={{ background: "transparent", border: "none", color: MUTED, fontSize: 12.5, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}
           >
             Undo: {lastOp.label}
           </button>
         )}
-        {/* Bulk Approve is a pre-send tool. Once offers are out it would sweep up
-            every draft on the board in one click, so it goes away (camp does the
-            same via cycle.status). Mid-flight, a newly assigned instructor is
-            approved + emailed one row at a time through the patch offer — the nudge,
-            or the Hat tip that catches the ones dismissed with "Later". */}
-        {counts.proposed > 0 && !offersOut && (
-          <button
-            type="button"
-            onClick={onApprove}
-            disabled={!!busy}
-            style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, opacity: busy === "approving" ? 0.7 : 1 }}
-          >
-            {busy === "approving" ? "Locking in…" : "Lock in draft"}
-          </button>
-        )}
-        {counts.sendable > 0 && (
-          <button
-            type="button"
-            onClick={onSendOffers}
-            disabled={!!busy}
-            style={{ ...btnStyle, background: BRIGHT, color: "#fff", border: `1.5px solid ${BRIGHT}`, opacity: busy === "offers" ? 0.7 : 1 }}
-          >
-            {busy === "offers" ? "Sending…" : `Send offers (${counts.sendable})`}
-          </button>
+      </div>
+
+      <ScheduleStepBar steps={steps} selected={selKey} onSelect={setSelected} />
+
+      <div style={{ background: "#faf9fc", border: `1px solid ${RULE}`, borderRadius: 10, padding: "13px 15px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13.5, color: INK, lineHeight: 1.45, maxWidth: "58ch" }}>{panel.status}</div>
+        {panel.actions.length > 0 && (
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+            {panel.actions.map((a, idx) => (
+              <div key={idx} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                <button
+                  type="button"
+                  onClick={a.onClick}
+                  disabled={a.disabled}
+                  style={{ ...btnStyle, background: a.primary ? BRIGHT : "#fff", color: a.primary ? "#fff" : BRIGHT, border: `1.5px solid ${BRIGHT}`, opacity: a.disabled ? 0.6 : 1, cursor: a.disabled ? "default" : "pointer" }}
+                >
+                  {a.label}
+                </button>
+                {a.note && <span style={{ fontSize: 11, color: MUTED }}>{a.note}</span>}
+              </div>
+            ))}
+          </div>
         )}
       </div>
-    </header>
+    </section>
   );
 }
 
