@@ -11,6 +11,7 @@
 // its own honest status; nothing is greyed out for being "past".
 
 import React from "react";
+import Ennie from "./Ennie.jsx";
 
 const BRIGHT = "#5847C9";   // indigo — active
 const GREEN = "#2C935F";    // done
@@ -29,11 +30,7 @@ export default function ScheduleStepBar({ steps = [], ennieCaption }) {
       }}
     >
       <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, paddingRight: 16, borderRight: `1px solid ${RULE}`, minWidth: 72 }}>
-        <div
-          className="ennie-orb"
-          aria-hidden="true"
-          style={{ width: 46, height: 46, borderRadius: "50%", background: `linear-gradient(150deg, ${BRIGHT}, #8C88FF)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 25, boxShadow: "0 2px 10px rgba(88,71,201,.35)" }}
-        >✨</div>
+        <Ennie state="idle" size={50} />
         <div style={{ fontSize: 11, fontWeight: 700, color: BRIGHT, letterSpacing: 0.4 }}>Ennie</div>
       </div>
 
@@ -73,8 +70,6 @@ export default function ScheduleStepBar({ steps = [], ennieCaption }) {
           })}
         </div>
       </div>
-
-      <style>{`@keyframes enniePulse{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}.ennie-orb{animation:enniePulse 2.6s ease-in-out infinite}@media (prefers-reduced-motion: reduce){.ennie-orb{animation:none}}`}</style>
     </section>
   );
 }

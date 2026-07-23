@@ -18,6 +18,7 @@
 // condition still holds)."
 
 import { useEffect, useState } from "react";
+import Ennie from "./Ennie.jsx";
 
 const PURPLE = "#1C004F";
 const VIOLET = "#8C88FF";
@@ -75,23 +76,27 @@ export default function HatGuide({ character = "instructor", tip }) {
         padding: "16px 20px",
       }}
     >
-      <div
-        aria-hidden="true"
-        style={{
-          flex: "0 0 auto",
-          width: 44,
-          height: 44,
-          borderRadius: "50%",
-          background: `${VIOLET}22`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 26,
-          lineHeight: 1,
-        }}
-      >
-        {char.emoji}
-      </div>
+      {character === "ennie" ? (
+        <Ennie state="idle" size={44} />
+      ) : (
+        <div
+          aria-hidden="true"
+          style={{
+            flex: "0 0 auto",
+            width: 44,
+            height: 44,
+            borderRadius: "50%",
+            background: `${VIOLET}22`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 26,
+            lineHeight: 1,
+          }}
+        >
+          {char.emoji}
+        </div>
+      )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{
