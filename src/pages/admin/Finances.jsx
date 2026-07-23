@@ -387,7 +387,7 @@ export default function Finances() {
     // Confirm when flipping to pass-through (parents will see a fee)
     if (nextValue === true) {
       const ok = window.confirm(
-        "Pass-through mode: families will see the 1% platform fee as a separate line " +
+        "Pass-through mode: families will see the platform fee as a separate line " +
         "at checkout, so you keep your full price. Switch to pass-through?"
       );
       if (!ok) return;
@@ -576,7 +576,7 @@ export default function Finances() {
                     </div>
                     <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
                       {feePassThrough
-                        ? "Families see the 1% platform fee as a separate line at checkout — you keep your full price."
+                        ? "Families see the platform fee as a separate line at checkout — you keep your full price."
                         : "Your organization absorbs the fee — families pay your base price."}
                     </div>
                   </div>
@@ -1397,7 +1397,7 @@ function WhatToExpect() {
         <strong style={{ color: INK }}>What happens after:</strong> Stripe verifies your
         info (usually instant; up to a day if they need to review documents). You'll be set
         to "Active" automatically, and parents start paying through your account on new
-        registrations. Enrops keeps a 1% platform fee (no cap); the
+        registrations. enrops keeps a small platform fee on each registration; the
         rest lands in your bank.
         <br /><br />
         <strong style={{ color: INK }}>Already have a Stripe account?</strong> This creates

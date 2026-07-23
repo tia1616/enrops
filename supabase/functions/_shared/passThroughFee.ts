@@ -1,13 +1,14 @@
 // passThroughFee — when an operator opts to pass the platform fee to families
 // (organizations.fee_pass_through = true), the family pays the base price PLUS
-// the 1% platform fee as a separate, visible line. The application_fee_amount
-// is unchanged (still 1% of base, via computePlatformFee/buildConnectChargeParams)
-// — the only difference is whether the family is charged that 1% on top.
+// the platform fee as a separate, visible line. The application_fee_amount is
+// unchanged (the same computePlatformFee value) — the only difference is whether
+// the family is charged that fee on top.
 //
 // Reusing computePlatformFee guarantees the line the family pays === the fee the
 // platform keeps, so the operator nets their full base price (minus Stripe's own
-// processing fee, which the connected account always pays). Method-agnostic:
-// card and ACH are both 1%, so the amount is the same whichever the family picks.
+// processing fee, which the connected account always pays). The fee follows the
+// org's configured rate / floor / cap per payment method, so the card and ACH
+// lines can differ.
 
 import { computePlatformFee, PaymentMethodType, PlatformFeeConfig } from './computePlatformFee.ts';
 
@@ -48,7 +49,10 @@ export function passThroughLineItem(
       currency: 'usd',
       product_data: {
         name: 'Platform fee',
-        description: 'Supports the registration platform (1%).',
+        // No hardcoded percentage: the effective rate varies once the floor/cap
+        // apply, so a flat "X%" would be misleading. The exact charged amount is
+        // the unit_amount below.
+        description: 'Registration platform fee.',
       },
       unit_amount: fee,
     },

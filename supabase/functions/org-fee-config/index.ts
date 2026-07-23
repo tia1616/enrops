@@ -45,7 +45,7 @@ serve(async (req) => {
 
     const { data, error } = await admin
       .from('organizations')
-      .select('fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, sibling_discount_pct')
+      .select('fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents, sibling_discount_pct')
       .eq('slug', slug)
       .eq('status', 'active')
       .single();
@@ -53,7 +53,7 @@ serve(async (req) => {
     if (error || !data) {
       // Unknown/inactive slug: return absorb defaults so the UI just shows the
       // base price (never throws the registration flow).
-      return json({ fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0 });
+      return json({ fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0, platform_fee_floor_cents: null });
     }
 
     // Return BOTH method rates so the family-facing "Platform fee" line matches
@@ -63,6 +63,9 @@ serve(async (req) => {
       platform_fee_card_pct: Number(data.platform_fee_card_pct) || 0,
       platform_fee_ach_pct: Number(data.platform_fee_ach_pct) || 0,
       platform_fee_cap_cents: Number(data.platform_fee_cap_cents) || 0,
+      // Min fee per transaction; null = no floor. Sent so StepPay's displayed fee
+      // matches the server-charged fee (computePlatformFee applies the same floor).
+      platform_fee_floor_cents: data.platform_fee_floor_cents == null ? null : Number(data.platform_fee_floor_cents),
       // Sibling discount % so the review screen matches the server-authoritative
       // charge (create-registration reads the same org config). null = off.
       sibling_discount_pct: data.sibling_discount_pct == null ? null : Number(data.sibling_discount_pct),
