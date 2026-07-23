@@ -63,7 +63,7 @@ Deno.test('pass-through builds a "Platform fee" line item with the fee as unit_a
   assertEquals(passThroughLineItem(27500, 'card', PASS), {
     price_data: {
       currency: 'usd',
-      product_data: { name: 'Platform fee', description: 'Registration platform fee.' },
+      product_data: { name: 'Service fee', description: 'Registration service fee.' },
       unit_amount: 275,
     },
     quantity: 1,

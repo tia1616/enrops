@@ -48,11 +48,12 @@ export function passThroughLineItem(
     price_data: {
       currency: 'usd',
       product_data: {
-        name: 'Platform fee',
+        name: 'Service fee',
         // No hardcoded percentage: the effective rate varies once the floor/cap
         // apply, so a flat "X%" would be misleading. The exact charged amount is
-        // the unit_amount below.
-        description: 'Registration platform fee.',
+        // the unit_amount below. "Service fee" mirrors consumer-checkout norms
+        // (Eventbrite/Airbnb/Ticketmaster) — clearer to families than "platform fee".
+        description: 'Registration service fee.',
       },
       unit_amount: fee,
     },

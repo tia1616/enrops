@@ -387,7 +387,7 @@ export default function Finances() {
     // Confirm when flipping to pass-through (parents will see a fee)
     if (nextValue === true) {
       const ok = window.confirm(
-        "Pass-through mode: families will see the platform fee as a separate line " +
+        "Pass-through mode: families will see the service fee as a separate line " +
         "at checkout, so you keep your full price. Switch to pass-through?"
       );
       if (!ok) return;
@@ -576,7 +576,7 @@ export default function Finances() {
                     </div>
                     <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
                       {feePassThrough
-                        ? "Families see the platform fee as a separate line at checkout — you keep your full price."
+                        ? "Families see the service fee as a separate line at checkout — you keep your full price."
                         : "Your organization absorbs the fee — families pay your base price."}
                     </div>
                   </div>
