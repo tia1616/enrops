@@ -16,6 +16,7 @@ import NotifyRemovalModal from "./NotifyRemovalModal.jsx";
 import AssignSubModal from "./AssignSubModal";
 import HatGuide from "../../components/HatGuide";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
+import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 
 const PURPLE = "#1C004F";
@@ -1836,6 +1837,26 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const changeReqProgram = state.programs.find((p) => enriched.get(p.id)?.status === "change_requested");
   const changeReqLead = changeReqProgram ? enriched.get(changeReqProgram.id)?.lead : null;
 
+  // Cockpit step map — status per step from live state. Non-linear: several steps
+  // can be active at once (a new hire back at Survey while the rest are mid-Offers).
+  const awaitingReply = counts.assigned; // confirmed + emailed, not yet responded
+  const hasDraft = (counts.proposed + counts.sendable + counts.assigned + counts.accepted + counts.draft + counts.flagged + counts.changeRequested) > 0;
+  const cockpitSteps = [
+    { key: "survey", name: "Availability", meta: survey?.opened_at ? "Survey sent" : "Not sent yet", state: survey?.opened_at ? "done" : "active" },
+    { key: "responses", name: "Responses", meta: survey?.opened_at ? `${submittedCount} of ${counts.instructors} in` : "waiting on the survey", state: !survey?.opened_at ? "todo" : (counts.instructors > 0 && submittedCount >= counts.instructors ? "done" : "active") },
+    { key: "draft", name: "Draft", meta: counts.needsHire > 0 ? `${counts.needsHire} need an instructor` : counts.proposed > 0 ? `${counts.proposed} to lock in` : hasDraft ? "Drafted" : "Not started", state: (!hasDraft && counts.needsHire === 0) ? "todo" : (counts.needsHire > 0 || counts.proposed > 0) ? "active" : "done" },
+    { key: "offers", name: "Offers", meta: counts.sendable > 0 ? `${counts.sendable} ready to send` : offersOut ? (awaitingReply > 0 ? `${awaitingReply} awaiting reply` : "all responded") : "Not sent", state: (!offersOut && counts.sendable === 0) ? "todo" : (counts.sendable > 0 || awaitingReply > 0 || counts.changeRequested > 0) ? "active" : "done" },
+    { key: "confirmed", name: "Confirmed", meta: counts.accepted > 0 ? `${counts.accepted} accepted` : "—", state: (offersOut && awaitingReply === 0 && counts.sendable === 0 && counts.proposed === 0 && counts.needsHire === 0 && counts.accepted > 0) ? "done" : offersOut ? "active" : "todo" },
+  ];
+  const ennieCaption = !survey?.opened_at
+    ? "Start by sending the availability survey to your instructors."
+    : counts.needsHire > 0 ? `${counts.needsHire} class${counts.needsHire === 1 ? "" : "es"} still need an instructor — match, or add a hire.`
+    : counts.proposed > 0 ? `${counts.proposed} draft match${counts.proposed === 1 ? "" : "es"} ready to lock in.`
+    : counts.sendable > 0 ? `${counts.sendable} class${counts.sendable === 1 ? "" : "es"} ready to send offers.`
+    : offersOut && awaitingReply > 0 ? `Offers are out — waiting on ${awaitingReply} repl${awaitingReply === 1 ? "y" : "ies"}. Reminders fire automatically.`
+    : (counts.instructors > 0 && submittedCount < counts.instructors) ? `${submittedCount} of ${counts.instructors} have sent availability. Match when you're ready.`
+    : "You're all set for this term.";
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {saveError && (
@@ -1844,9 +1865,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         </div>
       )}
 
+      <ScheduleStepBar steps={cockpitSteps} ennieCaption={ennieCaption} />
+
       {pendingPatchAssignments.length > 0 && (
         <HatGuide
-          character="instructor"
+          character="ennie"
           tip={{
             key: `as-${term}-pendingpatch-${pendingPatchAssignments.length}`,
             message: pendingPatchAssignments.length === 1
@@ -1862,7 +1885,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
       {counts.changeRequested > 0 && changeReqLead && (
         <HatGuide
-          character="instructor"
+          character="ennie"
           tip={{
             key: `as-${term}-changereq-${counts.changeRequested}`,
             message: counts.changeRequested === 1

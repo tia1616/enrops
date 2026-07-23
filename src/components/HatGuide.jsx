@@ -27,6 +27,7 @@ const RULE = "#e2dfd5";
 
 const CHARACTERS = {
   instructor: { emoji: "🎓", name: "Instructor Hat" },
+  ennie: { emoji: "✨", name: "Ennie" },
 };
 
 const DISMISS_HOURS = 24;
