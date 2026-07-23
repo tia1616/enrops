@@ -40,27 +40,41 @@ const STATUS_LABEL = {
   missed: 'Missed',
 };
 
-// Why an instructor is flagged as booked on the chosen date (from the
-// sub_availability_on_date RPC's booked_reason).
-const REASON_LABEL = {
+// Why an instructor is already working that date (RPC working_reason).
+const WORKING_LABEL = {
   teaching: 'already teaching an after-school class that day',
   camp: 'already at a camp that day',
   subbing: 'already subbing that day',
 };
 
-// Rank buckets (lower = surfaced first). 0 free, 1 marked off, 2 booked.
-const AVAIL = 0, MARKED_OFF = 1, BOOKED = 2;
-function bucketOf(av) {
-  if (!av) return AVAIL;
-  if (av.is_booked) return BOOKED;
-  if (av.is_marked_off) return MARKED_OFF;
-  return AVAIL;
-}
+// Three display groups, best first:
+//   SUGGEST - availability matches this day & time and they're free (the picks)
+//   OTHER   - free, but not an exact match (no survey / wrong time / wrong day)
+//   OUT     - marked this day off, or already working
+const SUGGEST = 0, OTHER = 1, OUT = 2;
 const GROUP_META = {
-  [AVAIL]:      { label: 'Available that day',            color: '#3a7c3a' },
-  [MARKED_OFF]: { label: 'Marked unavailable that day',   color: '#9a6a00' },
-  [BOOKED]:     { label: 'Already booked that day',       color: '#b53737' },
+  [SUGGEST]: { label: 'Available — matches this day & time', color: '#3a7c3a' },
+  [OTHER]:   { label: 'Other instructors',                        color: '#6b6b6b' },
+  [OUT]:     { label: 'Marked off or already working',            color: '#b53737' },
 };
+
+// Map one instructor's availability signal to a group + a fine sort rank +
+// the note to show under their name. av is undefined until the date loads.
+function classify(av) {
+  if (!av) return { group: OTHER, rank: 1, note: null };            // no signal yet
+  if (av.is_working) {
+    return { group: OUT, rank: 6, note: WORKING_LABEL[av.working_reason] ?? 'already working that day' };
+  }
+  if (av.is_date_off) {
+    return { group: OUT, rank: 5, note: 'marked this day off' };
+  }
+  switch (av.day_time_match) {
+    case 'match': return { group: SUGGEST, rank: 0, note: null };
+    case 'time':  return { group: OTHER, rank: 2, note: 'not available at this class time' };
+    case 'day':   return { group: OTHER, rank: 3, note: 'usually off that day' };
+    default:      return { group: OTHER, rank: 1, note: 'no availability on file' };   // 'none'
+  }
+}
 
 export default function AssignSubModal({
   parentAssignment,           // { id, instructor_id, role }
@@ -87,7 +101,7 @@ export default function AssignSubModal({
   // from the sub_availability_on_date RPC whenever the date changes.
   const [availability, setAvailability] = useState({});
   const [availLoading, setAvailLoading] = useState(false);
-  const [showBooked, setShowBooked] = useState(false);   // "show everyone" override
+  const [showAll, setShowAll] = useState(false);   // "show everyone" override
 
   const minDate = parentType === 'camp' ? sessionInfo?.starts_on : sessionInfo?.first_session_date;
   const maxDate = parentType === 'camp' ? sessionInfo?.ends_on   : null;
@@ -99,21 +113,23 @@ export default function AssignSubModal({
       .sort((a, b) => shortName(a).localeCompare(shortName(b)));
   }, [instructors, parentAssignment?.instructor_id]);
 
-  // Rank by availability: free first, marked-off next, booked last; alpha
-  // within each bucket. Availability is empty until a date is chosen, so this
-  // is a plain alpha list up front.
+  // Rank by availability match: exact day+time matches first, then other free
+  // instructors, then marked-off / already-working; alpha within each rank.
+  // Availability is empty until a date is chosen, so this is a plain alpha list
+  // up front (everyone lands in OTHER with no note).
   const ranked = useMemo(() => {
     return eligible
       .map((i) => {
         const av = availability[i.id];
-        return { instr: i, av, bucket: bucketOf(av) };
+        const c = classify(av);
+        return { instr: i, av, ...c, outOfArea: !!av?.out_of_area };
       })
-      .sort((a, b) => a.bucket - b.bucket || shortName(a.instr).localeCompare(shortName(b.instr)));
+      .sort((a, b) => a.rank - b.rank || shortName(a.instr).localeCompare(shortName(b.instr)));
   }, [eligible, availability]);
 
   const grouped = useMemo(() => {
-    const g = { [AVAIL]: [], [MARKED_OFF]: [], [BOOKED]: [] };
-    ranked.forEach((r) => g[r.bucket].push(r));
+    const g = { [SUGGEST]: [], [OTHER]: [], [OUT]: [] };
+    ranked.forEach((r) => g[r.group].push(r));
     return g;
   }, [ranked]);
 
@@ -142,12 +158,16 @@ export default function AssignSubModal({
   // every date change so a swap to a different day re-checks.
   useEffect(() => {
     let cancelled = false;
-    if (!date || !organizationId) { setAvailability({}); setShowBooked(false); setAvailLoading(false); return; }
+    if (!date || !organizationId || !parentAssignment?.id) {
+      setAvailability({}); setShowAll(false); setAvailLoading(false); return;
+    }
     (async () => {
       setAvailLoading(true);
       const { data, error } = await supabase.rpc('sub_availability_on_date', {
         p_org: organizationId,
         p_date: date,
+        p_parent_type: parentType,
+        p_parent_assignment_id: parentAssignment.id,
       });
       if (cancelled) return;
       if (error) {
@@ -160,17 +180,19 @@ export default function AssignSubModal({
       const map = {};
       for (const row of data ?? []) {
         map[row.instructor_id] = {
-          is_booked: row.is_booked,
-          booked_reason: row.booked_reason,
-          is_marked_off: row.is_marked_off,
+          is_working: row.is_working,
+          working_reason: row.working_reason,
+          is_date_off: row.is_date_off,
+          day_time_match: row.day_time_match,
+          out_of_area: row.out_of_area,
         };
       }
       setAvailability(map);
-      setShowBooked(false);   // collapse conflicts again for the new date
+      setShowAll(false);   // collapse non-matches again for the new date
       setAvailLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [date, organizationId]);
+  }, [date, organizationId, parentType, parentAssignment?.id]);
 
   // Is the (date, sub) combo a resend? Keyed off email_sent_at on the
   // matching existing row.
@@ -306,86 +328,72 @@ export default function AssignSubModal({
 
           <Field label="Sub instructor">
             {!date ? (
-              <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
-                Pick a date above to see who's free that day.
+              <div style={{ fontSize: 12, color: MUTED }}>
+                Pick a date above to see who's available that day.
               </div>
-            ) : availLoading ? (
-              <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>Checking who's free that day…</div>
-            ) : null}
-
+            ) : (
+            <>
+            {availLoading && (
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>Checking availability…</div>
+            )}
             <div style={{ border: `1px solid ${RULE}`, borderRadius: 6, overflow: 'hidden' }}>
-              {ranked.length === 0 && (
+              {ranked.length === 0 ? (
                 <div style={{ padding: 12, fontSize: 13, color: MUTED }}>No other instructors in this org.</div>
-              )}
-              {[AVAIL, MARKED_OFF, BOOKED].map((bucket) => {
-                const rows = grouped[bucket];
-                if (rows.length === 0) return null;
-                const selectedHere = bucket === BOOKED && rows.some((r) => r.instr.id === subInstructorId);
-                const collapsed = bucket === BOOKED && !showBooked && !selectedHere;
-                const meta = GROUP_META[bucket];
+              ) : (() => {
+                const suggested = grouped[SUGGEST];
+                const hidden = [...grouped[OTHER], ...grouped[OUT]];
+                const selectedHidden = hidden.some((r) => r.instr.id === subInstructorId);
+                const noMatches = !!date && !availLoading && suggested.length === 0;
+                const expanded = showAll || selectedHidden || noMatches;
+                const renderRow = (row) => (
+                  <SubRow
+                    key={row.instr.id}
+                    row={row}
+                    selected={row.instr.id === subInstructorId}
+                    onSelect={() => setSubInstructorId(row.instr.id)}
+                  />
+                );
                 return (
-                  <div key={bucket}>
-                    {date && (
-                      <div style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        padding: '6px 10px', background: CREAM,
-                        borderTop: bucket !== AVAIL ? `1px solid ${RULE}` : 'none',
-                        fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4,
-                        color: meta.color,
-                      }}>
-                        <span>{bucket === BOOKED ? '⚠ ' : ''}{meta.label} ({rows.length})</span>
-                        {bucket === BOOKED && !selectedHere && (
-                          <button
-                            type="button"
-                            onClick={() => setShowBooked((v) => !v)}
-                            style={{ background: 'none', border: 'none', color: BRIGHT, fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}
-                          >
-                            {showBooked ? 'Hide' : 'Show everyone'}
-                          </button>
-                        )}
+                  <>
+                    {date && suggested.length > 0 && (
+                      <GroupHeader meta={GROUP_META[SUGGEST]} count={suggested.length} first />
+                    )}
+                    {suggested.map(renderRow)}
+
+                    {noMatches && (
+                      <div style={{ padding: '8px 10px', fontSize: 12, color: MUTED, background: CREAM, borderTop: `1px solid ${RULE}` }}>
+                        No one matches this day &amp; time — showing everyone.
                       </div>
                     )}
-                    {!collapsed && rows.map(({ instr, av }) => {
-                      const selected = instr.id === subInstructorId;
-                      const reason = av?.is_booked
-                        ? (REASON_LABEL[av.booked_reason] ?? 'already booked that day')
-                        : (av?.is_marked_off ? 'marked this day off' : null);
+
+                    {date && hidden.length > 0 && !expanded && (
+                      <button type="button" onClick={() => setShowAll(true)} style={toggleRowStyle}>
+                        Show everyone ({hidden.length})
+                      </button>
+                    )}
+
+                    {expanded && [OTHER, OUT].map((group) => {
+                      const rows = grouped[group];
+                      if (rows.length === 0) return null;
                       return (
-                        <div
-                          key={instr.id}
-                          role="radio"
-                          aria-checked={selected}
-                          onClick={() => setSubInstructorId(instr.id)}
-                          style={{
-                            display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', cursor: 'pointer',
-                            borderTop: `1px solid ${RULE}`,
-                            background: selected ? '#f2f0ff' : '#fff',
-                          }}
-                        >
-                          <span style={{
-                            width: 14, height: 14, borderRadius: '50%', flexShrink: 0,
-                            border: `2px solid ${selected ? BRIGHT : RULE}`,
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          }}>
-                            {selected && <span style={{ width: 6, height: 6, borderRadius: '50%', background: BRIGHT }} />}
-                          </span>
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            <div style={{ fontSize: 13, color: INK, fontWeight: selected ? 700 : 500 }}>
-                              {shortName(instr)}
-                            </div>
-                            {reason ? (
-                              <div style={{ fontSize: 11, color: meta.color }}>{reason}</div>
-                            ) : instr.email ? (
-                              <div style={{ fontSize: 11, color: MUTED }}>{instr.email}</div>
-                            ) : null}
-                          </div>
+                        <div key={group}>
+                          {date && <GroupHeader meta={GROUP_META[group]} count={rows.length} />}
+                          {rows.map(renderRow)}
                         </div>
                       );
                     })}
-                  </div>
+
+                    {date && hidden.length > 0 && showAll && !selectedHidden && !noMatches && (
+                      <button type="button" onClick={() => setShowAll(false)} style={toggleRowStyle}>
+                        Show fewer
+                      </button>
+                    )}
+                  </>
                 );
-              })}
+              })()}
             </div>
+            </>
+            )}
           </Field>
 
           <Field label="Role for this day">
@@ -448,6 +456,72 @@ function Field({ label, children }) {
     </div>
   );
 }
+
+function GroupHeader({ meta, count, first }) {
+  return (
+    <div style={{
+      padding: '6px 10px', background: CREAM,
+      borderTop: first ? 'none' : `1px solid ${RULE}`,
+      fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4,
+      color: meta.color,
+    }}>
+      {meta.label} ({count})
+    </div>
+  );
+}
+
+// One clickable candidate row: radio dot + name + the availability note.
+function SubRow({ row, selected, onSelect }) {
+  const { instr, note, outOfArea, group } = row;
+  const noteColor = group === OUT ? CORAL : MUTED;
+  return (
+    <div
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', cursor: 'pointer',
+        borderTop: `1px solid ${RULE}`,
+        background: selected ? '#f2f0ff' : '#fff',
+      }}
+    >
+      <span style={{
+        width: 14, height: 14, borderRadius: '50%', flexShrink: 0,
+        border: `2px solid ${selected ? BRIGHT : RULE}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        {selected && <span style={{ width: 6, height: 6, borderRadius: '50%', background: BRIGHT }} />}
+      </span>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 13, color: INK, fontWeight: selected ? 700 : 500 }}>
+          {shortName(instr)}
+        </div>
+        {note ? (
+          <div style={{ fontSize: 11, color: noteColor }}>
+            {note}{outOfArea ? ' · outside their districts' : ''}
+          </div>
+        ) : outOfArea ? (
+          <div style={{ fontSize: 11, color: '#9a6a00' }}>outside their districts</div>
+        ) : instr.email ? (
+          <div style={{ fontSize: 11, color: MUTED }}>{instr.email}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const toggleRowStyle = {
+  width: '100%',
+  textAlign: 'left',
+  padding: '8px 10px',
+  background: '#fff',
+  border: 'none',
+  borderTop: `1px solid ${RULE}`,
+  color: BRIGHT,
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: 'pointer',
+};
 
 const inputStyle = {
   width: '100%',
