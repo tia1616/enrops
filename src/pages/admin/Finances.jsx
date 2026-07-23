@@ -504,7 +504,7 @@ export default function Finances() {
       ) : (
         <Card>
           <Section>
-            <Heading>Get paid through Enrops</Heading>
+            <Heading>Get paid through enrops</Heading>
 
             {status === "not_connected" && (
               <NotConnectedBody
@@ -564,7 +564,7 @@ export default function Finances() {
             <Section>
               <Heading>Platform fee</Heading>
               <p style={{ color: MUTED, fontSize: 14, marginTop: 0 }}>
-                Enrops's cut of each parent payment. The rest goes to your bank automatically.
+                enrops's cut of each parent payment. The rest goes to your bank automatically.
               </p>
               <FeeReadout config={config} />
 
@@ -916,7 +916,7 @@ function TabsNav({ tab, onTab }) {
   );
 }
 
-// Revenue / Activity — money collected through Enrops, from our own DB (not the
+// Revenue / Activity — money collected through enrops, from our own DB (not the
 // Stripe API). Reads two money-gated RPCs (owner/admin only): get_revenue_summary
 // + get_revenue_activity. NET-to-bank is intentionally NOT shown (Stripe's
 // processing fee isn't stored) — we link to Stripe for the real deposit figure.
@@ -1078,13 +1078,13 @@ function ActivityTab({ org }) {
         <div style={{ textAlign: "center", padding: "28px 16px", color: MUTED, fontSize: 14, lineHeight: 1.6 }}>
           {ext > 0 ? (
             <>
-              <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>You collect payments outside Enrops</div>
-              Payment totals live in your own system. We track <strong>{ext}</strong> {ext === 1 ? "registration" : "registrations"} for you here — once families pay <em>through</em> Enrops, the money shows up on this screen.
+              <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>You collect payments outside enrops</div>
+              Payment totals live in your own system. We track <strong>{ext}</strong> {ext === 1 ? "registration" : "registrations"} for you here — once families pay <em>through</em> enrops, the money shows up on this screen.
             </>
           ) : (
             <>
               <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>No payments yet</div>
-              Once families pay through Enrops, every payment and refund will show up here automatically.
+              Once families pay through enrops, every payment and refund will show up here automatically.
             </>
           )}
         </div>
@@ -1105,7 +1105,7 @@ function ActivityTab({ org }) {
 
       {/* Summary band */}
       <div style={{ marginBottom: 6 }}>
-        <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>Collected through Enrops</div>
+        <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>Collected through enrops</div>
         <div style={{ fontSize: 34, fontWeight: 800, color: PURPLE, lineHeight: 1.1, marginTop: 2 }}>{fmtCents(collected)}</div>
       </div>
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "12px 0 16px" }}>
@@ -1116,7 +1116,7 @@ function ActivityTab({ org }) {
 
       {external > 0 && (
         <div style={{ fontSize: 12, color: MUTED, marginBottom: 14 }}>
-          {external} {external === 1 ? "registration was" : "registrations were"} paid outside Enrops (imported) and aren&rsquo;t counted above.
+          {external} {external === 1 ? "registration was" : "registrations were"} paid outside enrops (imported) and aren&rsquo;t counted above.
         </div>
       )}
 
@@ -1345,7 +1345,7 @@ function DisconnectedBody(props) {
   return (
     <>
       <Banner tone="warn">
-        Stripe is disconnected. New parent payments are landing in Enrops's account until
+        Stripe is disconnected. New parent payments are landing in enrops's account until
         you reconnect. We'll transfer them to you once you're set up.
       </Banner>
       <WhatToExpect />
@@ -1401,7 +1401,7 @@ function WhatToExpect() {
         rest lands in your bank.
         <br /><br />
         <strong style={{ color: INK }}>Already have a Stripe account?</strong> This creates
-        a separate account just for Enrops. Your existing Stripe account stays untouched.
+        a separate account just for enrops. Your existing Stripe account stays untouched.
       </div>
     </div>
   );

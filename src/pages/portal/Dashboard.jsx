@@ -445,9 +445,10 @@ export default function Dashboard() {
   if (error === 'no_account') {
     return (
       <div className="mx-auto max-w-xl px-4 py-12 text-center">
-        <h2 className="font-titan text-2xl text-j2s-purple">Hmm, we couldn't find your account.</h2>
-        <p className="mt-3 text-j2s-ink/70">This sometimes happens if your account is still being set up. Please email us and we'll sort it out right away.</p>
-        <a href={`mailto:${supportEmail}`} className="mt-6 inline-block rounded-lg bg-j2s-purple px-6 py-3 font-bold text-white transition hover:bg-j2s-purple-dark">Email {supportEmail}</a>
+        <h2 className="font-titan text-2xl text-j2s-purple">Check your email to access your dashboard</h2>
+        <p className="mt-3 text-j2s-ink/70">If you just registered, we sent a sign-in link to your inbox — click it to see your child&rsquo;s schedule and details. Still stuck? Email us and we&rsquo;ll sort it out right away.</p>
+        <Link to={`/${slug}`} className="mt-6 inline-block rounded-lg bg-j2s-purple px-6 py-3 font-bold text-white transition hover:bg-j2s-purple-dark">Browse programs</Link>
+        <p className="mt-4 text-sm text-j2s-ink/60"><a href={`mailto:${supportEmail}`} className="font-semibold text-j2s-purple hover:underline">Email {supportEmail}</a></p>
         <p className="mt-6 text-sm text-j2s-ink/60">
           Are you an instructor?{' '}
           <Link to={`/${slug}/instructor`} className="font-semibold text-j2s-purple hover:underline">Go to the instructor portal →</Link>

@@ -84,7 +84,7 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
           />
         </div>
         <div>
-          <label className="label-field">Homeroom teacher *</label>
+          <label className="label-field">Homeroom teacher</label>
           <input
             className="input-field"
             value={student.homeroom_teacher}

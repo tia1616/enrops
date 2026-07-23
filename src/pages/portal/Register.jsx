@@ -298,7 +298,6 @@ export default function Register() {
           !!s.last_name &&
           s.grade !== '' &&
           !!s.birthdate &&
-          !!s.homeroom_teacher &&
           !!s.emergency_contact_name &&
           !!s.emergency_contact_phone;
         if (!base) return false;
