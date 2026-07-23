@@ -17,6 +17,7 @@ import ChunkErrorBoundary from './components/ChunkErrorBoundary.jsx';
 // and only the content area suspends.
 // ---------------------------------------------------------------------------
 import EnropsLanding from './pages/enrops/Landing.jsx';
+import OperatorSignup from './pages/enrops/OperatorSignup.jsx';
 import Home from './pages/portal/Home.jsx';
 import Register from './pages/portal/Register.jsx';
 import RegisterSuccess from './pages/portal/RegisterSuccess.jsx';
@@ -107,6 +108,7 @@ export default function App() {
           users see the card (with its own Log in button), so staging + prod
           behave the same now. */}
       <Route path="/" element={<EnropsLanding />} />
+      <Route path="/signup" element={<OperatorSignup />} />
       <Route path="/privacy" element={<PolicyPage policyType="privacy" orgSlug="enrops" />} />
       <Route path="/terms" element={<PolicyPage policyType="terms" orgSlug="enrops" />} />
       <Route path="/acceptable-use" element={<PolicyPage policyType="acceptable-use" orgSlug="enrops" />} />
