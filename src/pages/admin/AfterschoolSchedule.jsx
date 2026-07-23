@@ -1844,7 +1844,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const cockpitSteps = [
     { key: "survey", name: "Availability", meta: survey?.opened_at ? "Survey sent" : "Not sent yet", state: survey?.opened_at ? "done" : "active" },
     { key: "responses", name: "Responses", meta: survey?.opened_at ? `${submittedCount} of ${counts.instructors} in` : "waiting on the survey", state: !survey?.opened_at ? "todo" : (counts.instructors > 0 && submittedCount >= counts.instructors ? "done" : "active") },
-    { key: "draft", name: "Draft", meta: counts.needsHire > 0 ? `${counts.needsHire} need an instructor` : counts.proposed > 0 ? `${counts.proposed} to lock in` : hasDraft ? "Drafted" : "Not started", state: (!hasDraft && counts.needsHire === 0) ? "todo" : (counts.needsHire > 0 || counts.proposed > 0) ? "active" : "done" },
+    { key: "draft", name: "Draft", meta: counts.needsHire > 0 ? `${counts.needsHire} need an instructor` : counts.proposed > 0 ? (offersOut ? `${counts.proposed} to send` : `${counts.proposed} to lock in`) : hasDraft ? "Drafted" : "Not started", state: (!hasDraft && counts.needsHire === 0) ? "todo" : (counts.needsHire > 0 || counts.proposed > 0) ? "active" : "done" },
     { key: "offers", name: "Offers", meta: counts.sendable > 0 ? `${counts.sendable} ready to send` : offersOut ? (awaitingReply > 0 ? `${awaitingReply} awaiting reply` : "all responded") : "Not sent", state: (!offersOut && counts.sendable === 0) ? "todo" : (counts.sendable > 0 || awaitingReply > 0 || counts.changeRequested > 0) ? "active" : "done" },
     { key: "confirmed", name: "Confirmed", meta: counts.accepted > 0 ? `${counts.accepted} accepted` : "—", state: (offersOut && awaitingReply === 0 && counts.sendable === 0 && counts.proposed === 0 && counts.needsHire === 0 && counts.accepted > 0) ? "done" : offersOut ? "active" : "todo" },
   ];
@@ -2264,7 +2264,9 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
       status: counts.needsHire > 0
         ? `${counts.needsHire} class${counts.needsHire === 1 ? "" : "es"} still need an instructor.`
         : counts.proposed > 0
-          ? `${counts.proposed} draft match${counts.proposed === 1 ? "" : "es"} ready to lock in.`
+          ? (offersOut
+              ? `${counts.proposed} instructor${counts.proposed === 1 ? "" : "s"} added since offers went out — send their offer from Ennie's prompt.`
+              : `${counts.proposed} draft match${counts.proposed === 1 ? "" : "es"} ready to lock in.`)
           : "Draft is built. Locking it in sends no emails.",
       actions: [
         ...(!nothingToMatch ? [{ label: busy === "matching" ? "Matching…" : (someStaffed ? "Match remaining" : "Match instructors"), onClick: onMatch, primary: counts.proposed === 0, disabled: !!busy || !hasPrograms }] : []),
