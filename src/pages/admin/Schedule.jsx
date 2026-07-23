@@ -1666,7 +1666,7 @@ export default function Schedule() {
       if (flippedIds.length > 0) {
         logTimeSaved({
           actionType: "camp_matches_approved",
-          label: `Approved ${flippedIds.length} camp ${flippedIds.length === 1 ? "match" : "matches"} for ${cycleDisplayName(state.cycle.name)}`,
+          label: `Locked in ${flippedIds.length} camp ${flippedIds.length === 1 ? "match" : "matches"} for ${cycleDisplayName(state.cycle.name)}`,
           hours: Math.round(flippedIds.length * 0.017 * 100) / 100,
         });
       }
@@ -1681,7 +1681,7 @@ export default function Schedule() {
         type: "approve",
         assignmentIds: flippedIds,
         prevCycleStatus,
-        label: `Approved ${flippedIds.length} assignment${flippedIds.length === 1 ? "" : "s"}`,
+        label: `Locked in ${flippedIds.length} assignment${flippedIds.length === 1 ? "" : "s"}`,
       });
       await loadAll();
       setOfferDialog({ mode: "result", payload: { kind: "approve", count: flippedIds.length } });
@@ -2829,10 +2829,10 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
             type="button"
             onClick={onApprove}
             disabled={busy === "approving"}
-            title="Lock in the AI's draft assignments — flips every proposed row to confirmed so you can send offers. This is the draft-approval gate, not instructor acceptances."
+            title="Lock in the draft — marks every proposed match ready to send. No emails go out; this is the draft-approval gate, not instructor acceptances."
             style={btn("transparent", BRIGHT, true, busy === "approving")}
           >
-            {busy === "approving" ? "Approving…" : "Approve draft"}
+            {busy === "approving" ? "Locking in…" : "Lock in draft"}
           </button>
         )}
         {canSend && (
@@ -4080,7 +4080,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
     try {
       const p = await onPreview();
       setPreviews(p); setPvIdx(0);
-      if (!p.length) setPvErr("Nothing to preview — approve some assignments first.");
+      if (!p.length) setPvErr("Nothing to preview — lock in the draft first.");
     } catch (e) {
       setPvErr(e.message || "Couldn't build the preview.");
     } finally { setPvBusy(false); }
@@ -4088,10 +4088,9 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
 
   if (dialog.mode === "result" && dialog.payload?.kind === "approve") {
     return (
-      <ModalShell onClose={onClose} title="Approved">
+      <ModalShell onClose={onClose} title="Locked in">
         <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.5 }}>
-          {dialog.payload.count} assignment{dialog.payload.count === 1 ? "" : "s"} flipped from <em>proposed</em> to <em>confirmed</em>.
-          You can now send offers.
+          {dialog.payload.count} assignment{dialog.payload.count === 1 ? "" : "s"} locked in and ready to send. <strong>No emails went out yet</strong> — click Send offers when you're ready.
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
           <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>OK</button>
@@ -5310,7 +5309,7 @@ function PreviewViewer({ data, onClose, onSend, sendLabel, sending, excludedInst
     return (
       <ModalShell onClose={onClose} title="Preview">
         <div style={{ padding: 20, color: MUTED, fontSize: 14 }}>
-          {data?.note ?? "No confirmed assignments to preview yet. Click Approve first."}
+          {data?.note ?? "No confirmed assignments to preview yet. Lock in the draft first."}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
           <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>Close</button>

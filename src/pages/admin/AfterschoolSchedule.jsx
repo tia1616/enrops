@@ -1297,7 +1297,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   async function handleApprove() {
     if (programIds.length === 0) return;
     const ok = window.confirm(
-      "Approve all proposed matches for this term? This moves them to ‘ready to send’ so you can email offers. It won’t change anything an instructor has already accepted."
+      "Lock in all proposed matches for this term? This marks them ready to send — no emails go out yet. It won’t change anything an instructor has already accepted."
     );
     if (!ok) return;
     setBusy("approving");
@@ -1318,7 +1318,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (approved > 0) {
         logTimeSaved({
           actionType: "afterschool_matches_approved",
-          label: `Approved ${approved} after-school ${approved === 1 ? "match" : "matches"} for ${termDisplayName(term)}`,
+          label: `Locked in ${approved} after-school ${approved === 1 ? "match" : "matches"} for ${termDisplayName(term)}`,
           hours: Math.round(approved * 0.017 * 100) / 100,
         });
       }
@@ -1899,8 +1899,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       {approveResult && (
         <div style={{ background: `${OK_GREEN}14`, border: `1px solid ${OK_GREEN}55`, borderRadius: 8, padding: "12px 16px", fontSize: 14, color: INK }}>
           {approveResult.count > 0
-            ? <>Approved <strong>{approveResult.count}</strong> match{approveResult.count === 1 ? "" : "es"}. They're ready to send — click <strong>Send offers</strong>.</>
-            : <>No proposed matches to approve.</>}
+            ? <>Locked in <strong>{approveResult.count}</strong> match{approveResult.count === 1 ? "" : "es"} — ready to send. <strong>No emails went out yet.</strong> Click <strong>Send offers</strong>.</>
+            : <>No draft matches to lock in.</>}
           <button onClick={() => setApproveResult(null)} style={linkBtn}>Dismiss</button>
         </div>
       )}
@@ -2318,7 +2318,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             disabled={!!busy}
             style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, opacity: busy === "approving" ? 0.7 : 1 }}
           >
-            {busy === "approving" ? "Approving…" : `Approve ${counts.proposed} match${counts.proposed === 1 ? "" : "es"}`}
+            {busy === "approving" ? "Locking in…" : "Lock in draft"}
           </button>
         )}
         {counts.sendable > 0 && (
@@ -3062,7 +3062,7 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
     try {
       const p = await onPreview();
       setPreviews(p); setPvIdx(0);
-      if (!p.length) setPvErr("Nothing to preview — approve some matches first.");
+      if (!p.length) setPvErr("Nothing to preview — lock in the draft first.");
     } catch (e) {
       setPvErr(e.message || "Couldn't build the preview.");
     } finally { setPvBusy(false); }
@@ -3103,7 +3103,7 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
             </button>
           </div>
           <div style={{ maxHeight: 180, overflowY: "auto", marginTop: 4, border: `1px solid ${RULE}`, borderRadius: 8, padding: 8 }}>
-            {total === 0 && <div style={{ fontSize: 13, color: MUTED, padding: "4px 6px" }}>No instructors have approved classes yet — Approve some matches first.</div>}
+            {total === 0 && <div style={{ fontSize: 13, color: MUTED, padding: "4px 6px" }}>No instructors have classes ready yet — lock in the draft first.</div>}
             {instructors.map((i) => {
               const checked = selectedInstructorIds?.has(i.id) ?? false;
               return (
