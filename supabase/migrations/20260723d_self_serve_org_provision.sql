@@ -62,6 +62,11 @@ BEGIN
   IF v_name = '' THEN
     RAISE EXCEPTION 'business name is required';
   END IF;
+  -- org_members.email is NOT NULL; fail clearly if the session carries no email
+  -- (rather than a cryptic constraint error mid-provision).
+  IF v_email IS NULL THEN
+    RAISE EXCEPTION 'email unavailable';
+  END IF;
 
   -- One org per account: if the caller already OWNS an org, return it (no dup).
   SELECT o.slug INTO v_existing_slug

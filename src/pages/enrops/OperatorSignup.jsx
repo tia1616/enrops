@@ -26,6 +26,7 @@ const MUTED = '#9B9FBB';
 function friendly(err) {
   const m = (err?.message || String(err || '')).toLowerCase();
   if (m.includes('not authenticated')) return 'Your sign-in expired — please sign in again.';
+  if (m.includes('email unavailable')) return "We couldn't read your email from sign-in. Please try signing in again.";
   if (m.includes('business name')) return 'Please enter your business name.';
   if (m.includes('network') || m.includes('fetch') || m.includes('timeout')) return 'Network hiccup — please try again.';
   return "Sorry, that didn't work. Please try again.";
@@ -41,14 +42,16 @@ export default function OperatorSignup() {
   const [msg, setMsg] = useState('');
   const [createdSlug, setCreatedSlug] = useState('');
 
-  // On mount: resolve where the visitor is in the flow.
+  // On mount: resolve where the visitor is in the flow. We check the current
+  // session AND subscribe to auth changes, because after the Google OAuth
+  // redirect the session may be parsed from the URL slightly after mount —
+  // getSession() alone can miss it and flash the auth screen at a signed-in user.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    async function resolve(session) {
+      if (cancelled) return;
+      if (!session?.user) { setPhase('auth'); return; }
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (cancelled) return;
-        if (!session?.user) { setPhase('auth'); return; }
         // Signed in — do they already own an org?
         const { data: member } = await supabase
           .from('org_members')
@@ -60,10 +63,16 @@ export default function OperatorSignup() {
         if (member) { navigate('/admin', { replace: true }); return; }
         setPhase('name');
       } catch (err) {
-        if (!cancelled) { console.error('[OperatorSignup] init failed', err); setPhase('auth'); }
+        if (!cancelled) { console.error('[OperatorSignup] resolve failed', err); setPhase('auth'); }
       }
-    })();
-    return () => { cancelled = true; };
+    }
+    supabase.auth.getSession()
+      .then(({ data: { session } }) => resolve(session))
+      .catch(() => { if (!cancelled) setPhase('auth'); });
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) resolve(session);
+    });
+    return () => { cancelled = true; authSub?.subscription?.unsubscribe?.(); };
   }, [navigate]);
 
   async function handleGoogle() {
