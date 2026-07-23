@@ -15,6 +15,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -187,6 +188,18 @@ serve(async (req: Request) => {
       : template === 'instructor' ? buildInstructorEmail(firstName, signInUrl)
       : buildParentEmail(firstName, signInUrl);
 
+    // Operator-facing auth emails (signup + admin) send AS enrops from the
+    // verified enrops domain, with replies going to the enrops inbox — sourced
+    // from the enrops org row (no hardcoded address). Tenant flows
+    // (parent/instructor/onboarding) keep their own tenant sender (FROM_EMAIL).
+    let fromLine = FROM_EMAIL;
+    let replyTo: string | undefined = undefined;
+    if (isSignup || context === 'admin') {
+      const brand = await loadOrgBrand(supabase, null);
+      fromLine = formatFromAddress(brand);
+      replyTo = brand.reply_to;
+    }
+
     // Send via Resend
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -195,10 +208,11 @@ serve(async (req: Request) => {
         Authorization: `Bearer ${RESEND_API_KEY}`,
       },
       body: JSON.stringify({
-        from: FROM_EMAIL,
+        from: fromLine,
         to: email,
         subject,
         html,
+        reply_to: replyTo,
         tags: [{ name: 'type', value: 'magic_link' }],
       }),
     });

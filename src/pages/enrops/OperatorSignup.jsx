@@ -238,7 +238,7 @@ export default function OperatorSignup() {
         )}
       </div>
 
-      <p className="foot">Questions? <a href="mailto:hello@enrops.com">hello@enrops.com</a></p>
+      <p className="foot">Questions? <a href="mailto:jessica@enrops.com">jessica@enrops.com</a></p>
     </div>
   );
 }

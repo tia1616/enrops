@@ -197,7 +197,7 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
       </div>
 
       <p className="footer-link">
-        Questions? <a href="mailto:hello@enrops.com">hello@enrops.com</a>
+        Questions? <a href="mailto:jessica@enrops.com">jessica@enrops.com</a>
       </p>
       <p className="bottom-wordmark">enrops &middot; Everything your enrichment business runs on</p>
     </div>
