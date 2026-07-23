@@ -77,7 +77,7 @@ export default function HatGuide({ character = "instructor", tip }) {
       }}
     >
       {character === "ennie" ? (
-        <Ennie state="idle" size={44} />
+        <Ennie state="idle" size={46} framed={false} />
       ) : (
         <div
           aria-hidden="true"

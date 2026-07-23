@@ -30,7 +30,7 @@ export default function ScheduleStepBar({ steps = [], ennieCaption }) {
       }}
     >
       <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, paddingRight: 16, borderRight: `1px solid ${RULE}`, minWidth: 72 }}>
-        <Ennie state="idle" size={50} />
+        <Ennie state="idle" size={52} framed={false} />
         <div style={{ fontSize: 11, fontWeight: 700, color: BRIGHT, letterSpacing: 0.4 }}>Ennie</div>
       </div>
 
