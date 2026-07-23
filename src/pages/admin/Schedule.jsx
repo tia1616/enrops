@@ -10,6 +10,7 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { defaultTenantSlug } from "../../lib/tenants.js";
 import { fetchOrgTerms } from "../../lib/terms.js";
+import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import HatGuide from "../../components/HatGuide";
 import Chevron from "../../components/Chevron.jsx";
 import NotifyRemovalModal from "./NotifyRemovalModal";
@@ -530,46 +531,15 @@ export default function Schedule() {
       if (declinesRes.error) throw declinesRes.error;
       setOrgSurveyIntro(cfgRes?.data?.intro ?? "");
 
-      // If the operator saved a default intro in Automations > Instructors >
-      // Availability survey (body_override), it takes priority over the legacy
-      // org_survey_config row. HTML → plain text for the textarea.
-      try {
-        const { data: surveyTpl } = await supabase
-          .from("automation_templates").select("id").eq("key", "availability_survey").maybeSingle();
-        if (surveyTpl?.id) {
-          const { data: surveyAuto } = await supabase
-            .from("automations").select("body_override").eq("organization_id", org.id)
-            .eq("template_id", surveyTpl.id).maybeSingle();
-          if (surveyAuto?.body_override) {
-            const plain = surveyAuto.body_override
-              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
-              .replace(/<[^>]+>/g, "")
-              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
-              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
-            if (plain) setOrgSurveyIntro(plain);
-          }
-        }
-      } catch { /* non-critical — falls back to org_survey_config or builtin */ }
-
-      try {
-        const { data: offerTpl } = await supabase
-          .from("automation_templates").select("id").eq("key", "assignment_offer").maybeSingle();
-        if (offerTpl?.id) {
-          const { data: offerAuto } = await supabase
-            .from("automations").select("body_override").eq("organization_id", org.id)
-            .eq("template_id", offerTpl.id).maybeSingle();
-          if (offerAuto?.body_override) {
-            const plain = offerAuto.body_override
-              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
-              .replace(/<[^>]+>/g, "")
-              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
-              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
-            if (plain) setOrgOfferIntro(plain);
-          }
-        }
-      } catch { /* non-critical */ }
+      // Operator's saved default intros for the board sends, authored in
+      // Comms > Automations > Instructors (automations.body_override). Each takes
+      // priority over the fallback set just above (survey: org_survey_config;
+      // offer: the edge fn's per-instructor default). Shared resolver so the four
+      // board copies (survey/offer × camp/after-school) stay in one place.
+      const savedSurveyIntro = await resolveBoardSendIntro(supabase, org.id, "availability_survey");
+      if (savedSurveyIntro) setOrgSurveyIntro(savedSurveyIntro);
+      const savedOfferIntro = await resolveBoardSendIntro(supabase, org.id, "assignment_offer");
+      if (savedOfferIntro) setOrgOfferIntro(savedOfferIntro);
 
       // Load substitutions for all camp assignments so the grid can show sub indicators.
       const assignmentIds = (assignmentsRes.data ?? []).map((a) => a.id);
