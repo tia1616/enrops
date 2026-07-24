@@ -101,6 +101,28 @@ export default function QuickProgramBuilder() {
     return () => { cancelled = true; };
   }, [org?.id]);
 
+  // Locations the operator has set up (Settings -> Locations). One location
+  // auto-selects (no need to pick when there's only one); 2+ shows a picker;
+  // none = location-less (still valid — location is optional).
+  const [locations, setLocations] = useState([]);
+  const [locationId, setLocationId] = useState("");
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("program_locations")
+        .select("id, name")
+        .eq("organization_id", org.id)
+        .order("name");
+      if (cancelled) return;
+      const locs = data ?? [];
+      setLocations(locs);
+      if (locs.length === 1) setLocationId(locs[0].id);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
   const priceCents = Math.round(parseFloat(price || "0") * 100);
   const spotsNum = parseInt(spots || "0", 10);
   const sessionsNum = parseInt(sessions || "0", 10);
@@ -124,7 +146,7 @@ export default function QuickProgramBuilder() {
         term: org.active_registration_term,
         curriculum: name.trim(), // NOT NULL display name; no curriculum record
         curriculum_id: null,
-        program_location_id: null,
+        program_location_id: locationId || null,
         day_of_week: day,
         start_time: startTime ? toDbTime12h(startTime) : null,
         end_time: endTime ? toDbTime12h(endTime) : null,
@@ -159,6 +181,7 @@ export default function QuickProgramBuilder() {
     setSessions("8");
     setStartTime("");
     setEndTime("");
+    setLocationId(locations.length === 1 ? locations[0].id : "");
     setErr("");
     setCreatedId(null);
   }
@@ -283,6 +306,28 @@ export default function QuickProgramBuilder() {
             />
           </div>
         </div>
+
+        {locations.length >= 2 && (
+          <div>
+            <label style={labelStyle} htmlFor="qpb-location">Location</label>
+            <select id="qpb-location" style={inputStyle} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+              <option value="">— pick a location (optional) —</option>
+              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+            <div style={helpStyle}>Which of your locations this class runs at.</div>
+          </div>
+        )}
+        {locations.length === 1 && (
+          <div>
+            <label style={labelStyle}>Location</label>
+            <div style={{ ...inputStyle, color: INK, display: "flex", alignItems: "center" }}>{locations[0].name}</div>
+          </div>
+        )}
+        {locations.length === 0 && (
+          <div style={helpStyle}>
+            Running at set places? <span onClick={() => navigate("/admin/settings")} style={{ color: BRIGHT, cursor: "pointer", fontWeight: 600 }}>Add your locations in Settings</span>, then you can pick one here.
+          </div>
+        )}
 
         <div>
           <label style={labelStyle} htmlFor="qpb-day">Day of the week</label>
