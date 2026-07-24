@@ -64,6 +64,16 @@ export function buildConnectChargeParams(
   // of that fee — so it's deducted from the provider's payout instead of silently
   // eaten by Enrops's platform balance on a destination charge.
   //
+  // The uplift applies REGARDLESS of on_behalf_of. On a destination charge (which is
+  // what every connected org uses here — transfer_data.destination below), Stripe
+  // ALWAYS debits its processing fee from the PLATFORM (Enrops) balance, and
+  // on_behalf_of does NOT change that — per Stripe's docs it only changes the
+  // fee-calculation country, statement descriptor, and merchant of record. So both
+  // legacy (J2S) and enrops_platform orgs need the uplift to pass Stripe's fee onto
+  // the provider's payout; without it Enrops eats the fee. (A 2026-07-24 attempt to
+  // drop the uplift for on_behalf_of orgs was a mistake — it would have made Enrops
+  // lose ~$2 per charge. Verified against Stripe docs + a real staging charge.)
+  //
   // The Stripe-fee recovery is added ONLY here, never inside computePlatformFee:
   // that helper is shared with the family-facing pass-through line, which must stay
   // at the margin only. Capped at the charge amount (Stripe rejects an application

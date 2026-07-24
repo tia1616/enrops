@@ -181,6 +181,30 @@ Deno.test("legacy/unset instructor_pay_model → no on_behalf_of, statement suff
   assertEquals(result.statement_descriptor_suffix, 'J2S');
 });
 
+// ── Uplift applies WITH on_behalf_of too (regression guard) ─────────────────
+// Every connected org here uses a DESTINATION charge (transfer_data.destination).
+// Stripe always debits its processing fee from the PLATFORM (Enrops) balance on a
+// destination charge, and on_behalf_of does NOT change that — per Stripe's docs it
+// only changes the fee-calc country, statement descriptor, and merchant of record.
+// So enrops_platform orgs need the Stripe-fee uplift EXACTLY like J2S; dropping it
+// would make Enrops eat Stripe's fee (~$2 loss per charge). These lock that in,
+// guarding against the mistaken 2026-07-24 "double-charge" fix that removed it.
+Deno.test("enrops_platform + tenant card → uplift STILL applied (Enrops pays Stripe fee on destination charge)", () => {
+  const org: ConnectOrgConfig = { ...TENANT_ORG, instructor_pay_model: 'enrops_platform' };
+  const result = buildConnectChargeParams(20000, 'card', org, 'org-id');
+  // margin $2.00 + Stripe est $6.10 = 810 — same as the no-on_behalf_of case.
+  assertEquals(result.application_fee_amount, 810);
+  assertEquals(result.on_behalf_of, org.stripe_account_id);
+});
+
+Deno.test("enrops_platform + tenant ACH → uplift STILL applied", () => {
+  const org: ConnectOrgConfig = { ...TENANT_ORG, instructor_pay_model: 'enrops_platform' };
+  const result = buildConnectChargeParams(20000, 'us_bank_account', org, 'org-id');
+  // margin $2.00 + ACH est $1.60 = 360.
+  assertEquals(result.application_fee_amount, 360);
+  assertEquals(result.on_behalf_of, org.stripe_account_id);
+});
+
 // ── Registration fee model floor/cap in the application fee ─────────────────
 // 3% / $1.99 floor / $7.99 cap. No stripe_fee_payer → margin only, so the
 // application fee IS the floored/capped platform fee (clean floor assertion).
