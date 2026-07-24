@@ -239,7 +239,7 @@ export default function Register() {
     (async () => {
       const { data: matches } = await supabase
         .from('programs')
-        .select('*')
+        .select('*, program_locations:program_location_id(name)')
         .eq('program_location_id', program.program_location_id)
         .eq('day_of_week', program.day_of_week)
         .eq('runs_own_registration', false) // don't bundle partner-run programs into a paid VIP offer
@@ -269,7 +269,11 @@ export default function Register() {
         .order('name'),
       supabase
         .from('programs')
-        .select('*')
+        // Join the location NAME so the Review line can show it (pricing.js reads
+        // prog.program_locations?.name). Anon-safe: public_read_program_locations
+        // allows anon reads for public_org_directory orgs — same pattern Home.jsx
+        // already uses. Location-less programs return null here (name omitted).
+        .select('*, program_locations:program_location_id(name)')
         .eq('organization_id', ORG_ID)
         .eq('status', 'open')
         .eq('runs_own_registration', false) // exclude partner-run programs — no public checkout
