@@ -103,7 +103,9 @@ const NAV = [
 // Lean registration operators (instructor_pay_model === 'enrops_platform') run a
 // registration-only surface — no instructors, curriculum library, or comms yet.
 // Trim the sidebar to Home . Programs . Finances . Discounts . Settings and hide
-// the paid / curriculum surfaces. Any legacy_own_platform tenant (J2S) keeps the
+// the paid / curriculum surfaces. Locations (the Partners surface) moves under
+// Settings for lean ops — they set a venue inline in the program builder, so a
+// top-level manager is noise. Any legacy_own_platform tenant (J2S) keeps the
 // full nav — this returns the SAME array reference for them, so their path is
 // unchanged. Empirically safe: every enrops_platform tenant on prod has zero
 // instructors and zero programs, so nothing they use is being hidden.
@@ -111,6 +113,7 @@ function shapeNavForOrg(nav, org) {
   if (org?.instructor_pay_model !== "enrops_platform") return nav; // full nav (J2S etc.)
   const HIDE_TOP = new Set([
     "/admin/schedule",               // Instructors (paid upgrade)
+    "/admin/schools",                // Locations/Partners -> reachable via Settings
     "/admin/family-comms/contacts",  // Comms (paid upgrade)
     "/admin/community",              // Community (coming soon)
   ]);
@@ -126,9 +129,20 @@ function shapeNavForOrg(nav, org) {
       continue;
     }
     if (item.to === "/admin/finances" && item.tabs) {
-      // "Money" reads as "Finances"; Discounts is promoted to its own top-level item.
-      out.push({ ...item, label: "Finances", tabs: item.tabs.filter((t) => t.to !== "/admin/discounts") });
+      // "Money" reads as "Finances". Drop the whole Receivables/Payouts tab strip
+      // (Payouts is instructor payroll; a lean op has none, and Stripe payout
+      // history lives in their Stripe dashboard), so Finances is one clean page.
+      // Discounts is promoted to its own top-level item.
+      const { tabs: _drop, ...rest } = item;
+      void _drop;
+      out.push({ ...rest, label: "Finances" });
       out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
+      continue;
+    }
+    if (item.to === "/admin/settings") {
+      // Locations lives under Settings for lean ops, so keep Settings lit when
+      // they're on the /admin/schools (or calendars) page reached from there.
+      out.push({ ...item, match: [...(item.match || [item.to]), "/admin/schools", "/admin/calendars"] });
       continue;
     }
     out.push(item);

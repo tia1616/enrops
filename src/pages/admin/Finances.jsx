@@ -1295,14 +1295,14 @@ function Banner({ tone, children }) {
 
 function NotConnectedBody(props) {
   return (
-    <>
-      <p style={{ margin: "0 0 16px", fontSize: 14, color: INK, lineHeight: 1.6 }}>
-        Connect Stripe to start receiving parent payments directly into your bank account.
-        Onboarding is hosted by Stripe — takes about 5–10 minutes.
-      </p>
-      <WhatToExpect />
+    <StripeHero
+      title="Get paid straight to your bank"
+      subtitle="Connect Stripe once. Parents pay, and the money lands in your account. Stripe hosts the setup and asks for your details on the next screen."
+    >
       <ConnectButton {...props} label="Connect Stripe" />
-    </>
+      <TrustChips />
+      <WhatYouWillNeed />
+    </StripeHero>
   );
 }
 
@@ -1313,60 +1313,111 @@ function DisconnectedBody(props) {
         Stripe is disconnected. New parent payments are landing in enrops's account until
         you reconnect. We'll transfer them to you once you're set up.
       </Banner>
-      <WhatToExpect />
-      <ConnectButton {...props} label="Reconnect Stripe" />
+      <StripeHero
+        title="Reconnect Stripe to get paid again"
+        subtitle="Pick up where you left off. Your money lands straight in your bank."
+      >
+        <ConnectButton {...props} label="Reconnect Stripe" />
+        <TrustChips />
+        <WhatYouWillNeed />
+      </StripeHero>
     </>
   );
 }
 
-// Pre-Connect instructions panel. Tenant-agnostic — no J2S strings.
-// Mirrors the style of the instructor portal's Stripe onboarding step:
-// scannable list of what Stripe will ask, then expectations.
-function WhatToExpect() {
-  const itemStyle = { marginBottom: 6, fontSize: 13, color: INK, lineHeight: 1.55 };
-  const labelStyle = { fontWeight: 700, color: PURPLE };
+// Small stroke icon used across the Stripe connect states (hero + trust chips).
+function SIcon({ size = 20, children }) {
   return (
-    <div style={{
-      background: "#FBFBFB",
-      border: `1px solid ${RULE}`,
-      borderRadius: 8,
-      padding: "14px 16px",
-      marginBottom: 16,
-    }}>
-      <div style={{ fontWeight: 700, fontSize: 13, color: INK, marginBottom: 10 }}>
-        What Stripe will ask for — have these handy:
-      </div>
-      <ul style={{ margin: 0, paddingLeft: 18 }}>
-        <li style={itemStyle}>
-          <span style={labelStyle}>Your email and phone</span> — Stripe sends verification
-          codes and account notices here. Use a personal address you check regularly.
-        </li>
-        <li style={itemStyle}>
-          <span style={labelStyle}>Business details</span> — legal name, EIN, business address.
-        </li>
-        <li style={itemStyle}>
-          <span style={labelStyle}>Your personal info as account holder</span> — name,
-          date of birth, last 4 of SSN. (Stripe requires this for KYC; it's not stored on
-          our side.)
-        </li>
-        <li style={itemStyle}>
-          <span style={labelStyle}>Bank account</span> — routing and account number, or
-          connect via Plaid. This is where Stripe deposits parent payments.
-        </li>
-      </ul>
+    <svg
+      width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"
+      strokeLinejoin="round" aria-hidden="true"
+    >
+      {children}
+    </svg>
+  );
+}
+
+// Centered hero shell for the connect states: icon tile + headline + one line
+// of copy, then the caller's primary action + reassurance. Replaces the old
+// wall-of-text panel so the primary action stays the visual anchor.
+function StripeHero({ title, subtitle, children }) {
+  return (
+    <div style={{ textAlign: "center", maxWidth: 480, margin: "0 auto", padding: "8px 0" }}>
       <div style={{
-        marginTop: 12, paddingTop: 10, borderTop: `1px solid ${RULE}`,
-        fontSize: 12, color: MUTED, lineHeight: 1.55,
+        width: 48, height: 48, borderRadius: 12, background: "#EEEDFE",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        margin: "0 auto 12px", color: BRIGHT,
       }}>
-        <strong style={{ color: INK }}>What happens after:</strong> Stripe verifies your
-        info (usually instant; up to a day if they need to review documents). You'll be set
-        to "Active" automatically, and parents start paying through your account on new
-        registrations. enrops keeps a small platform fee on each registration; the
-        rest lands in your bank.
-        <br /><br />
-        <strong style={{ color: INK }}>Already have a Stripe account?</strong> This creates
-        a separate account just for enrops. Your existing Stripe account stays untouched.
+        <SIcon size={26}>
+          <path d="M3 21h18" /><path d="M5 21v-9M19 21v-9M10 21v-9M14 21v-9" /><path d="M12 3l8 4H4l8-4z" />
+        </SIcon>
       </div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: PURPLE, marginBottom: 6 }}>{title}</div>
+      <p style={{ fontSize: 14, color: MUTED, lineHeight: 1.55, margin: "0 0 18px" }}>{subtitle}</p>
+      {children}
+    </div>
+  );
+}
+
+// Compact reassurance row — answers the "how long / is it safe / where's my
+// money" worries as three chips instead of a paragraph.
+function TrustChips() {
+  const chip = { display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, color: MUTED };
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 16, marginTop: 14 }}>
+      <span style={chip}>
+        <SIcon size={16}><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 1.5" /></SIcon>
+        About 5 minutes
+      </span>
+      <span style={chip}>
+        <SIcon size={16}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></SIcon>
+        Secured by Stripe
+      </span>
+      <span style={chip}>
+        <SIcon size={16}><path d="M3 21h18" /><path d="M5 21v-9M19 21v-9M10 21v-9M14 21v-9" /><path d="M12 3l8 4H4l8-4z" /></SIcon>
+        Straight to your bank
+      </span>
+    </div>
+  );
+}
+
+// The KYC/bank specifics some operators want before they start — collapsed by
+// default so the screen isn't a wall of text. Tenant-agnostic, no J2S strings.
+function WhatYouWillNeed() {
+  const [open, setOpen] = useState(false);
+  const item = { fontSize: 13, color: INK, lineHeight: 1.55, marginBottom: 6 };
+  const lbl = { fontWeight: 600, color: PURPLE };
+  return (
+    <div style={{ maxWidth: 460, margin: "16px auto 0", textAlign: "left" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{
+          display: "flex", alignItems: "center", gap: 6, margin: "0 auto",
+          background: "transparent", border: "none", color: MUTED, fontSize: 13,
+          fontFamily: "inherit", cursor: "pointer",
+        }}
+      >
+        <span style={{ display: "inline-flex", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}>
+          <SIcon size={16}><path d="M6 9l6 6 6-6" /></SIcon>
+        </span>
+        What you'll need
+      </button>
+      {open && (
+        <div style={{ marginTop: 10, background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: "12px 14px" }}>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            <li style={item}><span style={lbl}>Email and phone</span> — where Stripe sends verification codes.</li>
+            <li style={item}><span style={lbl}>Business details</span> — legal name, EIN, address.</li>
+            <li style={item}><span style={lbl}>Your ID</span> — name, date of birth, last 4 of SSN. Stripe needs this to verify you; it isn't stored on our side.</li>
+            <li style={{ ...item, marginBottom: 0 }}><span style={lbl}>Bank account</span> — routing and account number, or connect via Plaid. This is where your money lands.</li>
+          </ul>
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED, lineHeight: 1.55 }}>
+            Already have a Stripe account? This creates a separate one just for enrops. Your existing account stays untouched.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1402,35 +1453,33 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
           providing additional info — click below to continue.
         </Banner>
       )}
-      <p style={{ margin: "0 0 16px", fontSize: 14, color: INK, lineHeight: 1.6 }}>
-        Stripe still needs more info before they can verify your account. Pick up where you
-        left off — Stripe remembers what you've already entered.
-      </p>
-      <div style={{ marginBottom: 16, fontSize: 14, color: INK }}>
-        <div style={{ marginBottom: 4 }}>
-          <strong>Charges:</strong>{" "}
-          <Pill on={chargesEnabled}>{chargesEnabled ? "enabled" : "pending"}</Pill>
+      <StripeHero
+        title="Almost there — finish with Stripe"
+        subtitle="Stripe needs a few more details to verify you. Pick up where you left off; Stripe remembers what you've entered."
+      >
+        <div style={{ display: "flex", justifyContent: "center", gap: 18, marginBottom: 16, fontSize: 13, color: INK }}>
+          <span><strong>Charges</strong>{" "}<Pill on={chargesEnabled}>{chargesEnabled ? "on" : "pending"}</Pill></span>
+          <span><strong>Payouts</strong>{" "}<Pill on={payoutsEnabled}>{payoutsEnabled ? "on" : "pending"}</Pill></span>
         </div>
-        <div>
-          <strong>Payouts:</strong>{" "}
-          <Pill on={payoutsEnabled}>{payoutsEnabled ? "enabled" : "pending"}</Pill>
-        </div>
-      </div>
-      <WhatToExpect />
-      {canManage ? (
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
-          <button onClick={onContinue} disabled={busy || checking} style={btn(BRIGHT, "#fff", false, busy || checking)}>
-            {busy ? "Loading…" : "Continue setup"}
-          </button>
-          <button onClick={onCheckStatus} disabled={busy || checking} style={btn("transparent", BRIGHT, true, busy || checking)}>
-            {checking ? "Checking…" : "Already finished? Check status"}
-          </button>
-        </div>
-      ) : (
-        <em style={{ color: MUTED, fontSize: 13 }}>
-          Only an owner or admin can finish Stripe setup.
-        </em>
-      )}
+        {canManage ? (
+          <>
+            <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: 10 }}>
+              <button onClick={onContinue} disabled={busy || checking} style={btn(BRIGHT, "#fff", false, busy || checking)}>
+                {busy ? "Loading…" : "Continue setup"}
+              </button>
+              <button onClick={onCheckStatus} disabled={busy || checking} style={btn("transparent", BRIGHT, true, busy || checking)}>
+                {checking ? "Checking…" : "Already finished? Check status"}
+              </button>
+            </div>
+            <TrustChips />
+            <WhatYouWillNeed />
+          </>
+        ) : (
+          <em style={{ color: MUTED, fontSize: 13 }}>
+            Only an owner or admin can finish Stripe setup.
+          </em>
+        )}
+      </StripeHero>
     </>
   );
 }
