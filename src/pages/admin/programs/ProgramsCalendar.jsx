@@ -576,10 +576,14 @@ export default function ProgramsCalendar() {
             {!term && <option value="">{termsLoaded ? "No terms yet" : "Loading terms…"}</option>}
             {termOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
-          <div style={toggleGroup}>
-            <button onClick={() => setViewMode("calendar")} style={viewMode === "calendar" ? toggleBtnActive : toggleBtn}>Calendar</button>
-            <button onClick={() => setViewMode("by_school")} style={viewMode === "by_school" ? toggleBtnActive : toggleBtn}>By school</button>
-          </div>
+          {/* "By school" groups by partner school — meaningless for a lean
+              single-venue op, so show only Calendar for them. J2S keeps both. */}
+          {org?.instructor_pay_model !== "enrops_platform" && (
+            <div style={toggleGroup}>
+              <button onClick={() => setViewMode("calendar")} style={viewMode === "calendar" ? toggleBtnActive : toggleBtn}>Calendar</button>
+              <button onClick={() => setViewMode("by_school")} style={viewMode === "by_school" ? toggleBtnActive : toggleBtn}>By school</button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -961,6 +965,11 @@ function districtHasCal(program, calendarCoverage) {
 }
 
 function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
+  // Lean registration ops have no curriculum library, no partner-school
+  // facilities, and no instructors — hide those J2S-shaped affordances. J2S
+  // (legacy_own_platform) keeps them all.
+  const { org: rowOrg } = useOutletContext() ?? {};
+  const isLean = rowOrg?.instructor_pay_model === "enrops_platform";
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -1018,7 +1027,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
               Offerings library — that's the common case, not "Untitled".
               The name looks fine on the page while parent emails silently
               lose the skills/projects blocks, so the row has to say it. */}
-          {!p.curriculum_id && (
+          {!isLean && !p.curriculum_id && (
             <span
               title="This program names a class but isn't linked to your Offerings library, so parent emails can't include its skills or projects"
               style={{
@@ -1125,7 +1134,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
             </svg>
             {isDatesExpanded ? "Hide" : "Expand"}
           </button>
-          <FacilityPill program={p} onClick={() => onEditFacility?.(p)} />
+          {!isLean && <FacilityPill program={p} onClick={() => onEditFacility?.(p)} />}
         </div>
         <div style={{ color: MUTED, fontSize: 12, marginTop: 2 }}>
           {!showDay && p.program_locations?.name ? p.program_locations.name : ""}
@@ -1167,7 +1176,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
 
       {/* Edit affordance */}
       <div style={{ textAlign: "right" }}>
-        {onEdit && (
+        {onEdit && !isLean && (
           <button
             type="button"
             onClick={() => onEdit(p)}

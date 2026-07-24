@@ -148,7 +148,10 @@ export default function Rosters() {
       {/* Tabs: each roster group is its own tab so neither buries the other. */}
       <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 18 }}>
         <TabBtn active={view === "afterschool"} onClick={() => setView("afterschool")} label="Afterschool" />
-        <TabBtn active={view === "camps"} onClick={() => setView("camps")} label="Camps" />
+        {/* Camps = J2S camp-cycle rosters; a lean registration op runs programs, not camps. */}
+        {org?.instructor_pay_model !== "enrops_platform" && (
+          <TabBtn active={view === "camps"} onClick={() => setView("camps")} label="Camps" />
+        )}
       </div>
 
       {view === "afterschool" && <AfterschoolRostersSection org={org} canEdit={canManage} />}
@@ -1900,6 +1903,10 @@ function AfterschoolRostersSection({ org, canEdit }) {
 // One afterschool program in the roster list. Mirrors CampRow: expand to edit
 // enrolled kids inline, plus add/upload + email + view/print actions.
 function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onToggle, onUpload, onEmail, subtitle, onChanged }) {
+  // "Email roster" sends a branded PDF to a partner school's logistics contacts.
+  // A lean own-venue op has no partner, so hide it. J2S keeps it.
+  const { org: rowOrg } = useOutletContext() ?? {};
+  const isLean = rowOrg?.instructor_pay_model === "enrops_platform";
   const lastEmailedLabel = p.last_emailed_at
     ? new Date(p.last_emailed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })
     : null;
@@ -1930,7 +1937,7 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
                 Add / upload →
               </button>
             )}
-            {p.enrolled > 0 && (
+            {p.enrolled > 0 && !isLean && (
               <button type="button" onClick={onEmail} style={{ padding: "6px 12px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }} title="Send a branded PDF roster to this location's partner contacts">
                 Email roster →
               </button>
