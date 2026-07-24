@@ -129,13 +129,13 @@ function shapeNavForOrg(nav, org) {
       continue;
     }
     if (item.to === "/admin/finances" && item.tabs) {
-      // "Money" reads as "Finances". Drop the whole Receivables/Payouts tab strip
-      // (Payouts is instructor payroll; a lean op has none, and Stripe payout
-      // history lives in their Stripe dashboard), so Finances is one clean page.
-      // Discounts is promoted to its own top-level item.
+      // "Money" reads as "Payments" for lean ops. Drop the whole
+      // Receivables/Payouts tab strip (Payouts is instructor payroll; a lean op
+      // has none, and Stripe payout history lives in their Stripe dashboard), so
+      // it's one clean page. Discounts is promoted to its own top-level item.
       const { tabs: _drop, ...rest } = item;
       void _drop;
-      out.push({ ...rest, label: "Finances" });
+      out.push({ ...rest, label: "Payments" });
       out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
       continue;
     }

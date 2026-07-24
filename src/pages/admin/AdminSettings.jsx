@@ -195,6 +195,7 @@ export default function AdminSettings() {
         </section>
       )}
 
+      {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Availability survey</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -207,6 +208,7 @@ export default function AdminSettings() {
           <Link to="/admin/survey-settings" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
+      )}
 
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Branding</h2>
@@ -234,6 +236,7 @@ export default function AdminSettings() {
         </div>
       </section>
 
+      {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Pay rates</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -246,7 +249,9 @@ export default function AdminSettings() {
           <Link to="/admin/pay-rates" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
+      )}
 
+      {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Background checks</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -259,7 +264,9 @@ export default function AdminSettings() {
           <Link to="/admin/background-checks" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
+      )}
 
+      {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Training videos</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -272,6 +279,7 @@ export default function AdminSettings() {
           <Link to="/admin/training" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
+      )}
 
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Connections</h2>
@@ -291,6 +299,8 @@ export default function AdminSettings() {
                   ? "Checking connection…"
                   : connection
                   ? <>Connected as <strong style={{ color: INK }}>{connection.google_email}</strong></>
+                  : org?.instructor_pay_model === "enrops_platform"
+                  ? "Connect your Google Drive to import documents directly into Enrops."
                   : "Connect your Google Drive to import curriculum documents directly into Enrops."}
               </div>
             </div>
