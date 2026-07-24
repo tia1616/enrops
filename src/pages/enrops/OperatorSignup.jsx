@@ -109,7 +109,19 @@ export default function OperatorSignup() {
     setLoading(true); setError('');
     const { data, error: err } = await supabase.rpc('provision_operator_org', { p_business_name: name });
     setLoading(false);
-    if (err) { setError(friendly(err)); return; }
+    if (err) {
+      // Concurrent double-submit: the owner unique index
+      // (org_members_one_owner_org_per_user) rejects the second call AFTER the
+      // first already stood up the org. They own a page now, so send them in
+      // rather than surface a raw duplicate-key error.
+      const em = (err.message || '').toLowerCase();
+      if (em.includes('one_owner_org_per_user') || (em.includes('duplicate key') && em.includes('org_members'))) {
+        navigate('/admin', { replace: true });
+        return;
+      }
+      setError(friendly(err));
+      return;
+    }
     if (data?.already_existed) { navigate('/admin', { replace: true }); return; }
     setCreatedSlug(data.slug);
     setPhase('done');
