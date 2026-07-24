@@ -26,7 +26,7 @@ const GRADE_OPTIONS = [
   { value: '6', label: '6th grade' },
 ];
 
-export default function StepStudent({ student, onUpdate, childIndex, regFields = { std: {}, custom: [] }, child = {}, onUpdateChild = () => {} }) {
+export default function StepStudent({ student, onUpdate, childIndex, regFields = { std: {}, custom: [] }, child = {}, onUpdateChild = () => {}, lean = false }) {
   const { std = {}, custom = [] } = regFields;
   return (
     <div>
@@ -34,7 +34,9 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
         {childIndex === 0 ? 'About your student' : `About child ${childIndex + 1}`}
       </h1>
       <p className="mt-2 text-j2s-ink/70">
-        We use this info for rosters, medical notes, and pickup.
+        {lean
+          ? 'We use this to build your roster and keep safety info on hand.'
+          : 'We use this info for rosters, medical notes, and pickup.'}
       </p>
 
       <div className="mt-8 grid gap-5 sm:grid-cols-2">
@@ -58,21 +60,23 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             name="student-last-name"
           />
         </div>
-        <div>
-          <label className="label-field">Grade *</label>
-          <select
-            className="input-field"
-            value={student.grade}
-            onChange={(e) => onUpdate({ grade: e.target.value })}
-          >
-            <option value="">Select&hellip;</option>
-            {GRADE_OPTIONS.map((g) => (
-              <option key={g.value} value={g.value}>
-                {g.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        {!lean && (
+          <div>
+            <label className="label-field">Grade *</label>
+            <select
+              className="input-field"
+              value={student.grade}
+              onChange={(e) => onUpdate({ grade: e.target.value })}
+            >
+              <option value="">Select&hellip;</option>
+              {GRADE_OPTIONS.map((g) => (
+                <option key={g.value} value={g.value}>
+                  {g.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <label className="label-field">Birth date *</label>
           <input
@@ -83,15 +87,17 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             required
           />
         </div>
-        <div>
-          <label className="label-field">Homeroom teacher</label>
-          <input
-            className="input-field"
-            value={student.homeroom_teacher}
-            onChange={(e) => onUpdate({ homeroom_teacher: e.target.value })}
-            placeholder="e.g. Ms. Smith"
-          />
-        </div>
+        {!lean && (
+          <div>
+            <label className="label-field">Homeroom teacher</label>
+            <input
+              className="input-field"
+              value={student.homeroom_teacher}
+              onChange={(e) => onUpdate({ homeroom_teacher: e.target.value })}
+              placeholder="e.g. Ms. Smith"
+            />
+          </div>
+        )}
       </div>
 
       <h2 className="mt-10 font-titan text-xl text-j2s-ink">Health &amp; safety</h2>
@@ -167,30 +173,34 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
         </>
       )}
 
-      <h2 className="mt-10 font-titan text-xl text-j2s-ink">One last thing</h2>
-      <div className="mt-4">
-        <label className="label-field">How did you hear about us?</label>
-        <select
-          className="input-field"
-          value={student.how_heard}
-          onChange={(e) => onUpdate({ how_heard: e.target.value })}
-        >
-          <option value="">Select&hellip;</option>
-          {REFERRAL_OPTIONS.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-        {student.how_heard === 'Other' && (
-          <input
-            className="input-field mt-3"
-            placeholder="Please tell us how&hellip;"
-            value={student.how_heard_other}
-            onChange={(e) => onUpdate({ how_heard_other: e.target.value })}
-          />
-        )}
-      </div>
+      {!lean && (
+        <>
+          <h2 className="mt-10 font-titan text-xl text-j2s-ink">One last thing</h2>
+          <div className="mt-4">
+            <label className="label-field">How did you hear about us?</label>
+            <select
+              className="input-field"
+              value={student.how_heard}
+              onChange={(e) => onUpdate({ how_heard: e.target.value })}
+            >
+              <option value="">Select&hellip;</option>
+              {REFERRAL_OPTIONS.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+            {student.how_heard === 'Other' && (
+              <input
+                className="input-field mt-3"
+                placeholder="Please tell us how&hellip;"
+                value={student.how_heard_other}
+                onChange={(e) => onUpdate({ how_heard_other: e.target.value })}
+              />
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
