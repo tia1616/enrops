@@ -562,7 +562,7 @@ function TodayTab({ todayClasses, enrollments, notifications, slug }) {
       {/* Notification feed — top of page */}
       {notifications.length > 0 && (
         <>
-          <SectionLabel>From Journey to STEAM</SectionLabel>
+          <SectionLabel>From {org?.name || 'your provider'}</SectionLabel>
           <div className="space-y-2">
             {notifications.map((n) => (
               <div key={n.id} className="flex items-center gap-3 rounded-xl border-l-4 border-l-j2s-purple border border-j2s-purple/10 bg-j2s-purple/[0.03] px-4 py-3">

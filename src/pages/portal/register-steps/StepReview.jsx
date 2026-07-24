@@ -268,7 +268,7 @@ export default function StepReview({
           </div>
           {pricing.sibling_total_cents > 0 && (
             <div className="flex justify-between">
-              <span className="text-white/70">Sibling discount (10%)</span>
+              <span className="text-white/70">Sibling discount</span>
               <span className="text-j2s-orange">
                 -{formatMoney(pricing.sibling_total_cents)}
               </span>

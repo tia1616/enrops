@@ -164,10 +164,10 @@ export default function RegisterSuccess() {
       <p className="mt-8 text-center text-sm text-j2s-ink/60">
         Questions? Reach us at{' '}
         <a
-          href="mailto:support@journeytosteam.com"
+          href="mailto:support@enrops.com"
           className="font-semibold text-j2s-purple hover:underline"
         >
-          support@journeytosteam.com
+          support@enrops.com
         </a>
       </p>
     </div>
