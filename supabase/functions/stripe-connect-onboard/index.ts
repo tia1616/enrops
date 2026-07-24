@@ -164,22 +164,20 @@ serve(async (req: Request) => {
 
     // ── create the Express account if still none ──────────────────────────
     if (!accountId) {
-      // Tenant must have stripe_business_type set before we can create the
-      // account — Stripe requires it at create-time for clean Express
-      // onboarding. The Finances UI gates the "Connect Stripe" button on this
-      // being set; this check is defense-in-depth.
-      if (!org.stripe_business_type) {
-        return json({
-          error: 'missing_business_type',
-          message: 'Business type must be set before connecting Stripe. Open Finances → Business setup.',
-        }, 400);
-      }
-
+      // One-click Connect: business_type is NOT required at Express account
+      // creation. Stripe's hosted onboarding collects it (it lands in
+      // requirements.currently_due when omitted). We prefill it ONLY when the
+      // org already has it saved (e.g. a legacy org that filled the old form)
+      // so Stripe confirms rather than re-asks; otherwise Stripe collects it.
+      // country defaults to the platform country (US) and is confirmed during
+      // onboarding. See docs.stripe.com/api/accounts/create (both optional).
       try {
         const accountParams: Stripe.AccountCreateParams = {
           type: 'express',
           country: org.stripe_country || 'US',
-          business_type: org.stripe_business_type as Stripe.AccountCreateParams.BusinessType,
+          ...(org.stripe_business_type
+            ? { business_type: org.stripe_business_type as Stripe.AccountCreateParams.BusinessType }
+            : {}),
           capabilities: {
             card_payments: { requested: true },
             transfers: { requested: true },

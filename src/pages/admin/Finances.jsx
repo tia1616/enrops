@@ -83,10 +83,6 @@ export default function Finances() {
   const [feePassThrough, setFeePassThrough] = useState(false);
   const [descriptorSuffix, setDescriptorSuffix] = useState("");
   const [withdrawalAdminFeeDollars, setWithdrawalAdminFeeDollars] = useState("");
-  // Pre-Connect business setup
-  const [businessType, setBusinessType] = useState("");
-  const [country, setCountry] = useState("US");
-  const [savingBiz, setSavingBiz] = useState(false);
   // Inline tabs (only meaningful when active). Default to Activity.
   const [tab, setTab] = useState("activity");
   // Collapsible "Manage setup" banner when active. Collapsed by default —
@@ -139,41 +135,7 @@ export default function Finances() {
         ? ((data.withdrawal_admin_fee_cents || 0) / 100).toFixed(2)
         : ""
     );
-    setBusinessType(data.stripe_business_type || "");
-    setCountry(data.stripe_country || "US");
     setLoading(false);
-  }
-
-  // Save the business-setup fields (type + country) BEFORE Connect Stripe
-  // is clickable. Owner/admin-gated. The edge function defensively re-checks
-  // business_type is set, so this is just UI flow.
-  async function saveBusinessSetup() {
-    if (!canManage) return;
-    if (!businessType) {
-      setError("Pick a business type first.");
-      return;
-    }
-    if (!/^[A-Z]{2}$/.test(country || "")) {
-      setError("Country must be a 2-letter code (US, CA, GB, ...).");
-      return;
-    }
-    setSavingBiz(true);
-    setError(null);
-    const { error: err } = await supabase
-      .from("organizations")
-      .update({
-        stripe_business_type: businessType,
-        stripe_country: country.toUpperCase(),
-      })
-      .eq("id", org.id);
-    setSavingBiz(false);
-    if (err) {
-      setError(err.message || "Could not save business setup.");
-      return;
-    }
-    setSavedToast("Business setup saved");
-    setTimeout(() => setSavedToast(null), 2200);
-    await reload();
   }
 
   // Actively poll Stripe and write the operator's status, then reload. This is
@@ -512,14 +474,6 @@ export default function Finances() {
                 onConnect={startOnboarding}
                 busy={busy}
                 canManage={canManage}
-                businessType={businessType}
-                setBusinessType={setBusinessType}
-                country={country}
-                setCountry={setCountry}
-                savedBusinessType={config?.stripe_business_type}
-                savedCountry={config?.stripe_country}
-                saveBusinessSetup={saveBusinessSetup}
-                savingBiz={savingBiz}
               />
             )}
 
@@ -541,14 +495,6 @@ export default function Finances() {
                 onReconnect={startOnboarding}
                 busy={busy}
                 canManage={canManage}
-                businessType={businessType}
-                setBusinessType={setBusinessType}
-                country={country}
-                setCountry={setCountry}
-                savedBusinessType={config?.stripe_business_type}
-                savedCountry={config?.stripe_country}
-                saveBusinessSetup={saveBusinessSetup}
-                savingBiz={savingBiz}
               />
             )}
           </Section>
@@ -1355,7 +1301,6 @@ function NotConnectedBody(props) {
         Onboarding is hosted by Stripe — takes about 5–10 minutes.
       </p>
       <WhatToExpect />
-      <BusinessSetupForm {...props} />
       <ConnectButton {...props} label="Connect Stripe" />
     </>
   );
@@ -1369,7 +1314,6 @@ function DisconnectedBody(props) {
         you reconnect. We'll transfer them to you once you're set up.
       </Banner>
       <WhatToExpect />
-      <BusinessSetupForm {...props} />
       <ConnectButton {...props} label="Reconnect Stripe" />
     </>
   );
@@ -1427,59 +1371,7 @@ function WhatToExpect() {
   );
 }
 
-// Business type + country capture. Must be saved before Connect Stripe button
-// is enabled. Per-tenant, never hardcoded.
-function BusinessSetupForm({
-  canManage, businessType, setBusinessType, country, setCountry,
-  savedBusinessType, savedCountry, saveBusinessSetup, savingBiz,
-}) {
-  if (!canManage) return null;
-  const isDirty = businessType !== (savedBusinessType || "") || country !== (savedCountry || "US");
-  return (
-    <div style={{ background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: 14, marginBottom: 16 }}>
-      <div style={{ fontWeight: 600, fontSize: 14, color: INK, marginBottom: 8 }}>Business setup</div>
-      <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>
-        Tell us how you're organized and where you operate. Stripe uses these to set up your account.
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 120px auto", gap: 10, alignItems: "end" }}>
-        <label style={{ display: "block", fontSize: 12, color: MUTED }}>
-          Business type
-          <select
-            value={businessType}
-            onChange={(e) => setBusinessType(e.target.value)}
-            style={{ display: "block", width: "100%", marginTop: 4, padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 5, fontSize: 13, fontFamily: "inherit" }}
-          >
-            <option value="">Choose…</option>
-            <option value="company">Company / LLC</option>
-            <option value="individual">Individual / sole proprietor</option>
-            <option value="non_profit">Non-profit</option>
-            <option value="government_entity">Government entity</option>
-          </select>
-        </label>
-        <label style={{ display: "block", fontSize: 12, color: MUTED }}>
-          Country
-          <input
-            type="text"
-            value={country}
-            onChange={(e) => setCountry(e.target.value.toUpperCase())}
-            maxLength={2}
-            placeholder="US"
-            style={{ display: "block", width: "100%", marginTop: 4, padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 5, fontSize: 13, fontFamily: "inherit", textTransform: "uppercase" }}
-          />
-        </label>
-        <button
-          onClick={saveBusinessSetup}
-          disabled={savingBiz || !isDirty}
-          style={btn(BRIGHT, "#fff", false, savingBiz || !isDirty)}
-        >
-          {savingBiz ? "Saving…" : "Save"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ConnectButton({ onConnect, onReconnect, busy, canManage, savedBusinessType, label }) {
+function ConnectButton({ onConnect, onReconnect, busy, canManage, label }) {
   const handler = onConnect || onReconnect;
   if (!canManage) {
     return (
@@ -1488,22 +1380,16 @@ function ConnectButton({ onConnect, onReconnect, busy, canManage, savedBusinessT
       </em>
     );
   }
-  const blocked = !savedBusinessType;
+  // One-click: no pre-form. Stripe's hosted onboarding collects business type,
+  // country, and business details on its own screens.
   return (
-    <>
-      <button
-        onClick={handler}
-        disabled={busy || blocked}
-        style={btn(BRIGHT, "#fff", false, busy || blocked)}
-      >
-        {busy ? "Starting…" : label}
-      </button>
-      {blocked && (
-        <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>
-          Save your business setup above before connecting.
-        </div>
-      )}
-    </>
+    <button
+      onClick={handler}
+      disabled={busy}
+      style={btn(BRIGHT, "#fff", false, busy)}
+    >
+      {busy ? "Starting…" : label}
+    </button>
   );
 }
 
