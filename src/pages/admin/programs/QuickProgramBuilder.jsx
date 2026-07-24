@@ -19,6 +19,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import PlacesAutocomplete from "../../../components/PlacesAutocomplete.jsx";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 const BRIGHT = "#5847C9";
@@ -122,6 +123,42 @@ export default function QuickProgramBuilder() {
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
+
+  // Inline "add a location" so a new op can set their venue right here instead
+  // of detouring to Settings. Writes to program_locations, then selects it.
+  const [addingLocation, setAddingLocation] = useState(false);
+  const [newLocName, setNewLocName] = useState("");
+  const [newLocAddress, setNewLocAddress] = useState("");
+  const [savingLoc, setSavingLoc] = useState(false);
+  const [locErr, setLocErr] = useState("");
+
+  async function saveNewLocation() {
+    const nm = newLocName.trim();
+    if (!nm || savingLoc) return;
+    setSavingLoc(true);
+    setLocErr("");
+    try {
+      // program_locations.slug is NOT NULL + globally unique; generate one from
+      // the name with a random suffix (mirrors LocationsList).
+      const base = nm.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "venue";
+      const slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
+      const { data, error } = await supabase
+        .from("program_locations")
+        .insert({ organization_id: org.id, name: nm, address: newLocAddress.trim() || null, slug })
+        .select("id, name")
+        .single();
+      if (error) throw error;
+      setLocations((ls) => [...ls, { id: data.id, name: data.name }].sort((a, b) => a.name.localeCompare(b.name)));
+      setLocationId(data.id);
+      setAddingLocation(false);
+      setNewLocName("");
+      setNewLocAddress("");
+    } catch (e) {
+      setLocErr(e?.message ?? "Couldn't save that location.");
+    } finally {
+      setSavingLoc(false);
+    }
+  }
 
   const priceCents = Math.round(parseFloat(price || "0") * 100);
   const spotsNum = parseInt(spots || "0", 10);
@@ -307,27 +344,47 @@ export default function QuickProgramBuilder() {
           </div>
         </div>
 
-        {locations.length >= 2 && (
-          <div>
-            <label style={labelStyle} htmlFor="qpb-location">Location</label>
-            <select id="qpb-location" style={inputStyle} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-              <option value="">— pick a location (optional) —</option>
-              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
-            <div style={helpStyle}>Which of your locations this class runs at.</div>
-          </div>
-        )}
-        {locations.length === 1 && (
-          <div>
-            <label style={labelStyle}>Location</label>
-            <div style={{ ...inputStyle, color: INK, display: "flex", alignItems: "center" }}>{locations[0].name}</div>
-          </div>
-        )}
-        {locations.length === 0 && (
-          <div style={helpStyle}>
-            Running at set places? <span onClick={() => navigate("/admin/settings")} style={{ color: BRIGHT, cursor: "pointer", fontWeight: 600 }}>Add your locations in Settings</span>, then you can pick one here.
-          </div>
-        )}
+        <div>
+          <label style={labelStyle} htmlFor="qpb-location">Location</label>
+          {addingLocation ? (
+            <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, background: "#FBFBFB" }}>
+              <input
+                style={{ ...inputStyle, marginBottom: 8 }}
+                value={newLocName}
+                onChange={(e) => setNewLocName(e.target.value)}
+                placeholder="Location name (e.g. Downtown Studio)"
+                maxLength={80}
+                autoFocus
+              />
+              <PlacesAutocomplete
+                value={newLocAddress}
+                onChange={setNewLocAddress}
+                onSelect={({ name, address }) => { if (!newLocName.trim()) setNewLocName(name); setNewLocAddress(address); }}
+                placeholder="Address (optional)"
+                style={inputStyle}
+              />
+              {locErr && <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>{locErr}</div>}
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <button type="button" onClick={saveNewLocation} disabled={savingLoc || !newLocName.trim()} style={{ ...primaryBtn, opacity: savingLoc || !newLocName.trim() ? 0.55 : 1 }}>
+                  {savingLoc ? "Saving…" : "Save location"}
+                </button>
+                <button type="button" onClick={() => { setAddingLocation(false); setNewLocName(""); setNewLocAddress(""); setLocErr(""); }} style={{ ...primaryBtn, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}` }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <select id="qpb-location" style={inputStyle} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                <option value="">No specific location</option>
+                {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+              <div style={{ marginTop: 6 }}>
+                <span onClick={() => setAddingLocation(true)} style={{ color: BRIGHT, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>+ Add a location</span>
+              </div>
+            </>
+          )}
+        </div>
 
         <div>
           <label style={labelStyle} htmlFor="qpb-day">Day of the week</label>
