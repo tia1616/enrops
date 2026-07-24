@@ -15,7 +15,7 @@
 //   - curriculum_id / program_location_id = null (no curriculum, location optional)
 // The operator never sees "term" — it's enrichment-provider vocabulary, not theirs.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
@@ -75,6 +75,25 @@ export default function QuickProgramBuilder() {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
   const [createdId, setCreatedId] = useState(null);
+
+  // Is the org able to actually take money yet? The share link goes live the
+  // moment a program is created, but Arielle's rule is "never a payment-less
+  // live page" — so on success we nudge the operator to connect Stripe FIRST
+  // (the WOW), before they share. null = still loading, don't nudge yet.
+  const [chargesEnabled, setChargesEnabled] = useState(null);
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("organizations")
+        .select("stripe_charges_enabled")
+        .eq("id", org.id)
+        .maybeSingle();
+      if (!cancelled) setChargesEnabled(!!data?.stripe_charges_enabled);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
 
   const priceCents = Math.round(parseFloat(price || "0") * 100);
   const spotsNum = parseInt(spots || "0", 10);
@@ -140,16 +159,40 @@ export default function QuickProgramBuilder() {
 
   // ---- Success: program is live, hand over the shareable link ----
   if (createdId) {
+    // Arielle's rule: never a payment-less live page. If Stripe isn't connected
+    // yet, lead with that step (the WOW) and dim the share link until it is.
+    const notConnected = chargesEnabled === false;
     return (
       <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
         <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
           Your program is live.
         </div>
-        <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
-          Families can register now. Share the link below — you'll see sign-ups show
-          up as they come in.
-        </p>
-        <div style={{ marginBottom: 24 }}>
+
+        {notConnected ? (
+          <>
+            <div style={{ background: "#EEEDFE", border: "1px solid #CECBF6", borderRadius: 12, padding: "16px 18px", marginBottom: 20 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#26215C", marginBottom: 4 }}>
+                One step left: connect Stripe to get paid
+              </div>
+              <p style={{ fontSize: 13.5, color: "#3C3489", lineHeight: 1.55, margin: "0 0 12px" }}>
+                Connect Stripe so families' payments land straight in your bank account. Takes about 5 minutes, then share your link.
+              </p>
+              <button onClick={() => navigate("/admin/finances")} style={primaryBtn}>
+                Connect Stripe →
+              </button>
+            </div>
+            <p style={{ color: MUTED, fontSize: 13, lineHeight: 1.55, margin: "0 0 10px" }}>
+              Your registration link — share it once you're set up to get paid:
+            </p>
+          </>
+        ) : (
+          <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
+            Families can register now. Share the link below — you'll see sign-ups show
+            up as they come in.
+          </p>
+        )}
+
+        <div style={{ marginBottom: 24, opacity: notConnected ? 0.6 : 1 }}>
           <ShareProgram
             slug={org.slug}
             activeTerm={org.active_registration_term}
