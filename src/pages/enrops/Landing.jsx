@@ -7,10 +7,11 @@ import EnropsWordmark from '../../components/EnropsWordmark.jsx';
 // enrops.com home page.
 //
 // Per Arielle's homepage brief (2026-06-09): enrops.com is the PLATFORM entry
-// point, NOT a marketing page (that's getenrops.com). State 1 (pre-launch /
-// invite-only): cohort members log in; everyone else is sent to getenrops.com
-// to request access. State 2 (self-serve, future) swaps the copy — Arielle will
-// say when. Marketing-brand palette (deep purple / violet / mint), intentionally
+// point, NOT a marketing page (that's getenrops.com). SELF-SERVE launch (2026-07):
+// the invite-only founding-cohort gate is retired — the page now leads with the
+// free self-serve signup (/signup), log-in secondary. Positioning is "free for
+// businesses" (Arielle's hard rule: never "free to start / start free / free
+// trial"). Marketing-brand palette (deep purple / violet / mint), intentionally
 // distinct from the app's indigo interior (Jessica's call 2026-06-09).
 //
 // Smart-redirect: when a signed-in user lands on '/', we route them to the
@@ -109,7 +110,7 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
     );
   }
 
-  // State 1 — pre-launch / invite-only entry point.
+  // Self-serve entry point — lead with the free signup, log-in secondary.
   return (
     <div className="enr-home">
       <style>{`
@@ -173,27 +174,20 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
       <div className="home-card">
         <div className="status-chip">
           <span className="dot" />
-          <span>Founding cohort &mdash; now open</span>
+          <span>Free for businesses</span>
         </div>
 
-        <h1>The platform is ready for<br />founding members.</h1>
+        <h1>Set up registration.<br />Start getting paid.</h1>
         <p className="lede">
-          If you&rsquo;re on the list, you can log in below.<br />
-          Not on the list yet? Get early access at getenrops.com.
+          Build your first program, share one link, and take sign-ups in minutes.
+          Free for your business &mdash; no subscription required.
         </p>
 
-        <Link to="/login" className="btn-primary">Log in to enrops</Link>
+        <Link to="/signup" className="btn-primary">Create your free page &rarr;</Link>
 
         <div className="divider">or</div>
 
-        <a
-          href="https://getenrops.com/join"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-secondary"
-        >
-          Get early access &rarr;
-        </a>
+        <Link to="/login" className="btn-secondary">Log in</Link>
       </div>
 
       <p className="footer-link">
