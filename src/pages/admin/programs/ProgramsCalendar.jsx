@@ -555,7 +555,9 @@ export default function ProgramsCalendar() {
             />
           )}
           <Link
-            to="/admin/programs/new"
+            // Lean registration operators (enrops_platform) get the curriculum-free
+            // QuickProgramBuilder; J2S / legacy tenants keep the full wizard.
+            to={org?.instructor_pay_model === "enrops_platform" ? "/admin/programs/quick-new" : "/admin/programs/new"}
             style={{
               padding: "8px 14px",
               background: BRIGHT,
