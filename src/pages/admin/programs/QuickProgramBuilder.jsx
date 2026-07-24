@@ -31,6 +31,12 @@ const RULE = "#e2dfd5";
 // ProgramWizardNew). Keep these Title-Case.
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+// Indexed by Date.getDay() (0 = Sunday). Used to warn when the chosen first
+// class date's weekday doesn't match the selected day-of-week — the session
+// dates derive from the DATE's weekday, so a mismatch silently meets on the
+// wrong day.
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 // Convert a native <input type="time"> value ("15:30", 24h) to the "3:30 PM" text
 // the rest of the app stores + reads (catalog, checkout, matcher). Mirrors the
 // same helper in ProgramWizardNew so both builders write start_time identically.
@@ -100,6 +106,11 @@ export default function QuickProgramBuilder() {
   const sessionsNum = parseInt(sessions || "0", 10);
   const priceValid = price !== "" && Number.isFinite(priceCents) && priceCents >= 0;
   const valid = name.trim() !== "" && priceValid && !!day && spotsNum >= 1;
+
+  // Warn (don't block) when the first class date falls on a different weekday
+  // than the selected day — the derived sessions follow the date, not the day.
+  const firstDateWeekday = startDate ? WEEKDAY_NAMES[new Date(`${startDate}T00:00:00`).getDay()] : null;
+  const dayMismatch = !!(day && firstDateWeekday && firstDateWeekday !== day);
 
   async function handleCreate() {
     if (!valid || submitting) return;
@@ -304,10 +315,10 @@ export default function QuickProgramBuilder() {
             <label style={labelStyle} htmlFor="qpb-end-time">End time</label>
             <input
               id="qpb-end-time"
+              type="time"
               style={inputStyle}
               value={endTime}
               onChange={(e) => setEndTime(e.target.value)}
-              placeholder="4:30 PM"
             />
           </div>
         </div>
@@ -337,6 +348,13 @@ export default function QuickProgramBuilder() {
             <div style={helpStyle}>How many weekly sessions.</div>
           </div>
         </div>
+
+        {dayMismatch && (
+          <div style={{ background: "#FDF6E3", border: "1px solid #F0D48A", color: "#8a5a00", borderRadius: 8, padding: "10px 12px", fontSize: 13, lineHeight: 1.5 }}>
+            Heads up: your first class date is a <strong>{firstDateWeekday}</strong>, but you chose <strong>{day}</strong>.
+            Classes will meet on {firstDateWeekday}s. Pick a {day} date, or change the day to match.
+          </div>
+        )}
 
         {err && (
           <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#b53737", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
