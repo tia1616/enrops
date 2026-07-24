@@ -204,7 +204,14 @@ export default function Register() {
   useEffect(() => {
     const programFromUrl = searchParams.get('program');
     const vipFromUrl = searchParams.get('vip') === '1';
-    if (!programFromUrl || !programs.length || !schools.length || activeChild.items.length) return;
+    // NOTE: do NOT gate on schools.length. A lean (enrops_platform) org can have
+    // ZERO program_locations — a location-less program ("No specific location" in
+    // the quick-builder) is valid and common. schools=[] is a real loaded state,
+    // not "still loading" (schools + programs load together in load()). Gating on
+    // it left location-less orgs with an empty cart -> $0 review -> no checkout.
+    // The school lookup below is already null-safe; pricing is program-driven and
+    // never needs a school. J2S always has locations, so this is a no-op for J2S.
+    if (!programFromUrl || !programs.length || activeChild.items.length) return;
 
     const program = programs.find((x) => x.id === programFromUrl);
     if (!program) return;
