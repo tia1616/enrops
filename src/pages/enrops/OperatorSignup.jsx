@@ -231,7 +231,7 @@ export default function OperatorSignup() {
               <span className="u">enrops.com/{createdSlug}</span>
             </div>
             <p className="note" style={{ marginBottom: 20 }}>You can change this address anytime in Settings.</p>
-            <button type="button" className="btn-mint" onClick={() => navigate('/admin', { replace: true })}>
+            <button type="button" className="btn-mint" onClick={() => navigate('/admin/programs/quick-new', { replace: true })}>
               Build your first program →
             </button>
           </>
