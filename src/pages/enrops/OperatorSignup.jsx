@@ -184,9 +184,9 @@ export default function OperatorSignup() {
 
         {phase === 'auth' && (
           <>
-            <div className="chip"><span className="dot" /><span>Free to start &mdash; no credit card</span></div>
+            <div className="chip"><span className="dot" /><span>Free for businesses &mdash; no credit card</span></div>
             <h1>Get your registration page live in minutes.</h1>
-            <p className="lede">Sign in to start &mdash; then just name your program and share your link. Free for operators.</p>
+            <p className="lede">Sign in to start &mdash; then just name your program and share your link. Free for businesses.</p>
 
             <button type="button" className="btn-ghost" onClick={handleGoogle} disabled={loading}>
               <GoogleG /> Continue with Google

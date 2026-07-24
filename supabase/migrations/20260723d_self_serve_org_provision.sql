@@ -102,7 +102,7 @@ BEGIN
     fee_pass_through, uses_enrops_registration, venue_model
   ) VALUES (
     v_name, v_slug, v_email, 'free',
-    0.03, 0.03,
+    0.03, 0.01,   -- card 3% / ACH 1% (Arielle fee model 2027-07-23), same floor/cap
     799, 199,
     true, true, 'own_venue'
   )

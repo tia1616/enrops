@@ -265,7 +265,7 @@ function buildSignupEmail(signInUrl: string): string {
   </div>
   <div style="padding:28px;">
     <p style="margin:0 0 24px;font-size:15px;color:#1a1a1a;line-height:1.6;">
-      Tap below to finish creating your registration page. Name your program and you'll have a shareable link in minutes &mdash; free to start, no credit card.
+      Tap below to finish creating your registration page. Name your program and you'll have a shareable link in minutes &mdash; free for businesses, no credit card.
     </p>
     <div style="text-align:center;margin:28px 0;">
       <a href="${signInUrl}" style="display:inline-block;background:#26D687;color:#1C004F;text-decoration:none;padding:14px 36px;border-radius:8px;font-size:15px;font-weight:700;">
