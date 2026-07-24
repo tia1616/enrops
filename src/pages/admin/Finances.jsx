@@ -118,6 +118,7 @@ export default function Finances() {
         platform_fee_card_pct,
         platform_fee_ach_pct,
         platform_fee_cap_cents,
+        platform_fee_floor_cents,
         fee_pass_through,
         statement_descriptor_suffix,
         withdrawal_admin_fee_cents,
@@ -562,22 +563,41 @@ export default function Finances() {
         <>
           <Card>
             <Section>
-              <Heading>Platform fee</Heading>
+              <Heading>Fees on each payment</Heading>
               <p style={{ color: MUTED, fontSize: 14, marginTop: 0 }}>
-                enrops's cut of each parent payment. The rest goes to your bank automatically.
+                Two separate fees come out of each parent payment — enrops's platform
+                fee and Stripe's processing fee. They're never bundled into one number.
               </p>
+
+              <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, margin: "4px 0 8px" }}>
+                enrops platform fee
+              </div>
               <FeeReadout config={config} />
+
+              <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, margin: "16px 0 8px" }}>
+                Stripe processing fee
+              </div>
+              <div style={{ background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 14, color: INK }}>
+                  Stripe's standard rate — about 2.9% + 30&cent; per card charge, or
+                  0.8% (capped at $5) for bank/ACH.
+                </div>
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+                  Charged by Stripe and deducted from your payout. This is separate from
+                  the enrops platform fee above — not an enrops fee.
+                </div>
+              </div>
 
               <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${RULE}` }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
                   <div>
                     <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
-                      Who pays the platform fee?
+                      Who pays the enrops platform fee?
                     </div>
                     <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
                       {feePassThrough
-                        ? "Families see the service fee as a separate line at checkout — you keep your full price."
-                        : "Your organization absorbs the fee — families pay your base price."}
+                        ? "Families cover the enrops platform fee as a separate line at checkout. (Stripe's processing fee still comes out of your payout.)"
+                        : "Your organization absorbs the enrops platform fee — families pay your base price. (Stripe's processing fee still applies.)"}
                     </div>
                   </div>
                   {canManage ? (
@@ -1553,14 +1573,23 @@ function ActiveBody({ accountId, onOpenDashboard, busy }) {
 }
 
 function FeeReadout({ config }) {
+  const floor = config.platform_fee_floor_cents;
+  const cap = config.platform_fee_cap_cents;
+  const hasFloor = typeof floor === "number" && floor > 0;
+  const noCap = cap >= 100000000;
+  // Show the per-registration bounds as a range when a floor is set (the current
+  // 3% / $1.99 / $7.99 model), else fall back to just the cap for legacy orgs.
+  const rangeValue = hasFloor
+    ? `${fmtCents(floor)}–${noCap ? "no cap" : fmtCents(cap)}`
+    : (noCap ? "No cap" : fmtCents(cap));
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
       <FeeStat label="Card" value={fmtPct(config.platform_fee_card_pct)} />
       <FeeStat label="ACH" value={fmtPct(config.platform_fee_ach_pct)} note="(when supported)" />
       <FeeStat
-        label="Fee cap"
-        value={config.platform_fee_cap_cents >= 100000000 ? "No cap" : fmtCents(config.platform_fee_cap_cents)}
-        note="per transaction"
+        label="Per registration"
+        value={rangeValue}
+        note={hasFloor ? "min–max" : "cap"}
       />
     </div>
   );
