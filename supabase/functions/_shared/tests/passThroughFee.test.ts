@@ -37,11 +37,33 @@ Deno.test('ACH carries the same 1% as card (method-agnostic at these rates)', ()
   assertEquals(passThroughFeeCents(27500, 'us_bank_account', PASS), 275);
 });
 
+// ── Registration fee model: 3% / $1.99 floor / $7.99 cap ───────────────────
+const REG: PassThroughConfig = {
+  platform_fee_card_pct: 0.03,
+  platform_fee_ach_pct: 0.03,
+  platform_fee_cap_cents: 799,
+  platform_fee_floor_cents: 199,
+  fee_pass_through: true,
+};
+
+Deno.test('reg model: $4 program parent-facing fee is the $1.99 floor', () => {
+  assertEquals(passThroughFeeCents(400, 'card', REG), 199);
+  assertEquals(passThroughLineItem(400, 'card', REG)?.price_data.unit_amount, 199);
+});
+
+Deno.test('reg model: $100 program parent-facing fee is 3% ($3.00), above floor', () => {
+  assertEquals(passThroughFeeCents(10000, 'card', REG), 300);
+});
+
+Deno.test('reg model: $300 program parent-facing fee hits the $7.99 cap', () => {
+  assertEquals(passThroughFeeCents(30000, 'card', REG), 799);
+});
+
 Deno.test('pass-through builds a "Platform fee" line item with the fee as unit_amount', () => {
   assertEquals(passThroughLineItem(27500, 'card', PASS), {
     price_data: {
       currency: 'usd',
-      product_data: { name: 'Platform fee', description: 'Supports the registration platform (1%).' },
+      product_data: { name: 'Service fee', description: 'Registration service fee.' },
       unit_amount: 275,
     },
     quantity: 1,

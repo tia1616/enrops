@@ -27,6 +27,10 @@ export default function Register() {
   const { org } = useOutletContext();
   const ORG_SLUG = org.slug;
   const ORG_ID = org.id;
+  // Lean registration operators (enrops_platform): trim the after-school-specific
+  // student fields (grade, homeroom teacher, school-flavored referral) that don't
+  // fit a dance / music / chess program. Legacy J2S keeps the full childcare form.
+  const isLean = org?.instructor_pay_model !== 'legacy_own_platform';
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const {
@@ -296,9 +300,8 @@ export default function Register() {
         const base =
           !!s.first_name &&
           !!s.last_name &&
-          s.grade !== '' &&
+          (isLean || s.grade !== '') &&
           !!s.birthdate &&
-          !!s.homeroom_teacher &&
           !!s.emergency_contact_name &&
           !!s.emergency_contact_phone;
         if (!base) return false;
@@ -547,6 +550,7 @@ export default function Register() {
               regFields={regFields}
               child={activeChild}
               onUpdateChild={updateActiveChild}
+              lean={isLean}
             />
           )}
           {step === 1 && (

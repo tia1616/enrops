@@ -100,6 +100,42 @@ const NAV = [
   { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
 ];
 
+// Lean registration operators (instructor_pay_model === 'enrops_platform') run a
+// registration-only surface — no instructors, curriculum library, or comms yet.
+// Trim the sidebar to Home . Programs . Finances . Discounts . Settings and hide
+// the paid / curriculum surfaces. Any legacy_own_platform tenant (J2S) keeps the
+// full nav — this returns the SAME array reference for them, so their path is
+// unchanged. Empirically safe: every enrops_platform tenant on prod has zero
+// instructors and zero programs, so nothing they use is being hidden.
+function shapeNavForOrg(nav, org) {
+  if (org?.instructor_pay_model !== "enrops_platform") return nav; // full nav (J2S etc.)
+  const HIDE_TOP = new Set([
+    "/admin/schedule",               // Instructors (paid upgrade)
+    "/admin/family-comms/contacts",  // Comms (paid upgrade)
+    "/admin/community",              // Community (coming soon)
+  ]);
+  const out = [];
+  for (const item of nav) {
+    if (HIDE_TOP.has(item.to)) continue;
+    if (item.to === "/admin/programs" && item.tabs) {
+      // Drop the curriculum "Offerings" library and the afterschool custody log.
+      out.push({
+        ...item,
+        tabs: item.tabs.filter((t) => t.to !== "/admin/curricula" && t.to !== "/admin/class-reports"),
+      });
+      continue;
+    }
+    if (item.to === "/admin/finances" && item.tabs) {
+      // "Money" reads as "Finances"; Discounts is promoted to its own top-level item.
+      out.push({ ...item, label: "Finances", tabs: item.tabs.filter((t) => t.to !== "/admin/discounts") });
+      out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
+}
+
 // A sidebar item is "active" when the current path is (or is under) any of its
 // routes. Overview matches exactly; tabbed sections match any tab route;
 // Partners matches its `match` list; otherwise the item's own `to`.
@@ -156,7 +192,7 @@ export default function AdminLayout() {
         // Fetch org name + branding (display only — does not gate access)
         const { data: orgRow } = await supabase
           .from("organizations")
-          .select("id, name, slug, active_registration_term, uses_enrops_registration, venue_model, background_check_config")
+          .select("id, name, slug, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;
@@ -262,14 +298,18 @@ export default function AdminLayout() {
   // show its in-page tab strip — only on the tab root pages, not deep sub-flows
   // like /admin/curricula/:id/review.
   const perm = getPermissions(orgMember?.role);
-  const visibleNav = NAV.filter((it) => !it.gate || perm.can(it.gate));
+  // Shape the nav for this org (lean for enrops_platform, full for J2S/legacy),
+  // then apply the role-permission filter. Using navItems everywhere below keeps
+  // the sidebar, the route guard, and the tab strip in sync.
+  const navItems = shapeNavForOrg(NAV, org);
+  const visibleNav = navItems.filter((it) => !it.gate || perm.can(it.gate));
   // Route guard: if the current path is under a gated section the user can't
   // access, block it (covers direct-URL navigation, not just nav hiding).
-  const blockedItem = NAV.find(
+  const blockedItem = navItems.find(
     (it) => it.gate && !perm.can(it.gate) && navItemActive(it, location.pathname)
   );
 
-  const activeTabSection = NAV.find(
+  const activeTabSection = navItems.find(
     (it) => it.tabs && it.tabs.some((t) => location.pathname === t.to || location.pathname.startsWith(t.to + "/"))
   );
   const showSectionTabs =

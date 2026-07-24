@@ -118,6 +118,7 @@ export default function Finances() {
         platform_fee_card_pct,
         platform_fee_ach_pct,
         platform_fee_cap_cents,
+        platform_fee_floor_cents,
         fee_pass_through,
         statement_descriptor_suffix,
         withdrawal_admin_fee_cents,
@@ -387,7 +388,7 @@ export default function Finances() {
     // Confirm when flipping to pass-through (parents will see a fee)
     if (nextValue === true) {
       const ok = window.confirm(
-        "Pass-through mode: families will see the 1% platform fee as a separate line " +
+        "Pass-through mode: families will see the service fee as a separate line " +
         "at checkout, so you keep your full price. Switch to pass-through?"
       );
       if (!ok) return;
@@ -504,7 +505,7 @@ export default function Finances() {
       ) : (
         <Card>
           <Section>
-            <Heading>Get paid through Enrops</Heading>
+            <Heading>Get paid through enrops</Heading>
 
             {status === "not_connected" && (
               <NotConnectedBody
@@ -562,22 +563,41 @@ export default function Finances() {
         <>
           <Card>
             <Section>
-              <Heading>Platform fee</Heading>
+              <Heading>Fees on each payment</Heading>
               <p style={{ color: MUTED, fontSize: 14, marginTop: 0 }}>
-                Enrops's cut of each parent payment. The rest goes to your bank automatically.
+                Two separate fees come out of each parent payment — enrops's platform
+                fee and Stripe's processing fee. They're never bundled into one number.
               </p>
+
+              <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, margin: "4px 0 8px" }}>
+                enrops platform fee
+              </div>
               <FeeReadout config={config} />
+
+              <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, margin: "16px 0 8px" }}>
+                Stripe processing fee
+              </div>
+              <div style={{ background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 14, color: INK }}>
+                  Stripe's standard rate — about 2.9% + 30&cent; per card charge, or
+                  0.8% (capped at $5) for bank/ACH.
+                </div>
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+                  Charged by Stripe and deducted from your payout. This is separate from
+                  the enrops platform fee above — not an enrops fee.
+                </div>
+              </div>
 
               <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${RULE}` }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
                   <div>
                     <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
-                      Who pays the platform fee?
+                      Who pays the enrops platform fee?
                     </div>
                     <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
                       {feePassThrough
-                        ? "Families see the 1% platform fee as a separate line at checkout — you keep your full price."
-                        : "Your organization absorbs the fee — families pay your base price."}
+                        ? "Families cover the enrops platform fee as a separate line at checkout. (Stripe's processing fee still comes out of your payout.)"
+                        : "Your organization absorbs the enrops platform fee — families pay your base price. (Stripe's processing fee still applies.)"}
                     </div>
                   </div>
                   {canManage ? (
@@ -916,7 +936,7 @@ function TabsNav({ tab, onTab }) {
   );
 }
 
-// Revenue / Activity — money collected through Enrops, from our own DB (not the
+// Revenue / Activity — money collected through enrops, from our own DB (not the
 // Stripe API). Reads two money-gated RPCs (owner/admin only): get_revenue_summary
 // + get_revenue_activity. NET-to-bank is intentionally NOT shown (Stripe's
 // processing fee isn't stored) — we link to Stripe for the real deposit figure.
@@ -1078,13 +1098,13 @@ function ActivityTab({ org }) {
         <div style={{ textAlign: "center", padding: "28px 16px", color: MUTED, fontSize: 14, lineHeight: 1.6 }}>
           {ext > 0 ? (
             <>
-              <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>You collect payments outside Enrops</div>
-              Payment totals live in your own system. We track <strong>{ext}</strong> {ext === 1 ? "registration" : "registrations"} for you here — once families pay <em>through</em> Enrops, the money shows up on this screen.
+              <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>You collect payments outside enrops</div>
+              Payment totals live in your own system. We track <strong>{ext}</strong> {ext === 1 ? "registration" : "registrations"} for you here — once families pay <em>through</em> enrops, the money shows up on this screen.
             </>
           ) : (
             <>
               <div style={{ fontWeight: 600, color: INK, marginBottom: 6 }}>No payments yet</div>
-              Once families pay through Enrops, every payment and refund will show up here automatically.
+              Once families pay through enrops, every payment and refund will show up here automatically.
             </>
           )}
         </div>
@@ -1105,7 +1125,7 @@ function ActivityTab({ org }) {
 
       {/* Summary band */}
       <div style={{ marginBottom: 6 }}>
-        <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>Collected through Enrops</div>
+        <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>Collected through enrops</div>
         <div style={{ fontSize: 34, fontWeight: 800, color: PURPLE, lineHeight: 1.1, marginTop: 2 }}>{fmtCents(collected)}</div>
       </div>
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "12px 0 16px" }}>
@@ -1116,7 +1136,7 @@ function ActivityTab({ org }) {
 
       {external > 0 && (
         <div style={{ fontSize: 12, color: MUTED, marginBottom: 14 }}>
-          {external} {external === 1 ? "registration was" : "registrations were"} paid outside Enrops (imported) and aren&rsquo;t counted above.
+          {external} {external === 1 ? "registration was" : "registrations were"} paid outside enrops (imported) and aren&rsquo;t counted above.
         </div>
       )}
 
@@ -1345,7 +1365,7 @@ function DisconnectedBody(props) {
   return (
     <>
       <Banner tone="warn">
-        Stripe is disconnected. New parent payments are landing in Enrops's account until
+        Stripe is disconnected. New parent payments are landing in enrops's account until
         you reconnect. We'll transfer them to you once you're set up.
       </Banner>
       <WhatToExpect />
@@ -1397,11 +1417,11 @@ function WhatToExpect() {
         <strong style={{ color: INK }}>What happens after:</strong> Stripe verifies your
         info (usually instant; up to a day if they need to review documents). You'll be set
         to "Active" automatically, and parents start paying through your account on new
-        registrations. Enrops keeps a 1% platform fee (no cap); the
+        registrations. enrops keeps a small platform fee on each registration; the
         rest lands in your bank.
         <br /><br />
         <strong style={{ color: INK }}>Already have a Stripe account?</strong> This creates
-        a separate account just for Enrops. Your existing Stripe account stays untouched.
+        a separate account just for enrops. Your existing Stripe account stays untouched.
       </div>
     </div>
   );
@@ -1553,14 +1573,23 @@ function ActiveBody({ accountId, onOpenDashboard, busy }) {
 }
 
 function FeeReadout({ config }) {
+  const floor = config.platform_fee_floor_cents;
+  const cap = config.platform_fee_cap_cents;
+  const hasFloor = typeof floor === "number" && floor > 0;
+  const noCap = cap >= 100000000;
+  // Show the per-registration bounds as a range when a floor is set (the current
+  // 3% / $1.99 / $7.99 model), else fall back to just the cap for legacy orgs.
+  const rangeValue = hasFloor
+    ? `${fmtCents(floor)}–${noCap ? "no cap" : fmtCents(cap)}`
+    : (noCap ? "No cap" : fmtCents(cap));
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
       <FeeStat label="Card" value={fmtPct(config.platform_fee_card_pct)} />
       <FeeStat label="ACH" value={fmtPct(config.platform_fee_ach_pct)} note="(when supported)" />
       <FeeStat
-        label="Fee cap"
-        value={config.platform_fee_cap_cents >= 100000000 ? "No cap" : fmtCents(config.platform_fee_cap_cents)}
-        note="per transaction"
+        label="Per registration"
+        value={rangeValue}
+        note={hasFloor ? "min–max" : "cap"}
       />
     </div>
   );

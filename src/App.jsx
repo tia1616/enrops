@@ -17,6 +17,7 @@ import ChunkErrorBoundary from './components/ChunkErrorBoundary.jsx';
 // and only the content area suspends.
 // ---------------------------------------------------------------------------
 import EnropsLanding from './pages/enrops/Landing.jsx';
+import OperatorSignup from './pages/enrops/OperatorSignup.jsx';
 import Home from './pages/portal/Home.jsx';
 import Register from './pages/portal/Register.jsx';
 import RegisterSuccess from './pages/portal/RegisterSuccess.jsx';
@@ -53,6 +54,7 @@ const CurriculumExtracting = lazy(() => import('./pages/admin/curricula/Curricul
 const CurriculumReview = lazy(() => import('./pages/admin/curricula/CurriculumReview.jsx'));
 const ProgramsCalendar = lazy(() => import('./pages/admin/programs/ProgramsCalendar.jsx'));
 const ProgramWizardNew = lazy(() => import('./pages/admin/programs/ProgramWizardNew.jsx'));
+const QuickProgramBuilder = lazy(() => import('./pages/admin/programs/QuickProgramBuilder.jsx'));
 const ProgramRoster = lazy(() => import('./pages/admin/programs/ProgramRoster.jsx'));
 const SchoolsLocations = lazy(() => import('./pages/admin/SchoolsLocations.jsx'));
 const InstructorsPage = lazy(() => import('./pages/admin/instructors/InstructorsPage.jsx'));
@@ -107,6 +109,7 @@ export default function App() {
           users see the card (with its own Log in button), so staging + prod
           behave the same now. */}
       <Route path="/" element={<EnropsLanding />} />
+      <Route path="/signup" element={<OperatorSignup />} />
       <Route path="/privacy" element={<PolicyPage policyType="privacy" orgSlug="enrops" />} />
       <Route path="/terms" element={<PolicyPage policyType="terms" orgSlug="enrops" />} />
       <Route path="/acceptable-use" element={<PolicyPage policyType="acceptable-use" orgSlug="enrops" />} />
@@ -206,6 +209,7 @@ export default function App() {
         <Route path="curricula/:id/edit" element={<CurriculumReview />} />
         <Route path="programs" element={<ProgramsCalendar />} />
         <Route path="programs/new" element={<ProgramWizardNew />} />
+        <Route path="programs/quick-new" element={<QuickProgramBuilder />} />
         <Route path="programs/:programId/roster" element={<ProgramRoster />} />
         <Route path="schools" element={<SchoolsLocations />} />
         {/* The classic Partners/Locations tabs were retired 2026-06-23; the

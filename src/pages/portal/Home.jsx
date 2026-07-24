@@ -232,6 +232,90 @@ export default function Home() {
     navigate(`/${ORG_SLUG}/register?${params.toString()}`);
   }
 
+  // Lean, enrops-branded registration for self-serve operators (everyone except
+  // legacy J2S). No hardcoded J2S hero and no district->school picker: the org's
+  // open programs render as a simple list straight to checkout, so a location-less
+  // program is reachable. J2S (legacy_own_platform) keeps its existing page below.
+  const isLeanReg = org?.instructor_pay_model !== 'legacy_own_platform';
+  if (isLeanReg) {
+    const openPrograms = programs || [];
+    const leanCard = (hl) => ({
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
+      padding: '16px 18px', border: `1px solid ${hl ? '#5847C9' : '#e2dfd5'}`,
+      borderRadius: 14, background: '#fff',
+      boxShadow: hl ? '0 0 0 3px rgba(88,71,201,0.15)' : 'none',
+    });
+    const leanBtn = {
+      flexShrink: 0, padding: '10px 18px', background: '#5847C9', color: '#fff',
+      border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 600,
+      fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'none', display: 'inline-block',
+    };
+    return (
+      <div style={{ minHeight: '100vh', background: '#F7F7FB', fontFamily: "'Poppins', system-ui, sans-serif", color: '#1a1a1a' }}>
+        <div style={{ background: '#1C004F', color: '#fff', padding: '56px 20px 72px' }}>
+          <div style={{ maxWidth: 820, margin: '0 auto' }}>
+            <span style={{ display: 'inline-block', background: 'rgba(38,214,135,0.14)', border: '1px solid rgba(38,214,135,0.35)', color: '#26D687', borderRadius: 100, padding: '5px 14px', fontSize: 12, fontWeight: 600 }}>
+              {termLabel ? `${termLabel} registration is open` : 'Registration is open'}
+            </span>
+            <h1 style={{ fontSize: 38, fontWeight: 700, lineHeight: 1.12, margin: '18px 0 12px' }}>
+              {branding?.hero_headline || org?.name || 'Register today'}
+            </h1>
+            <p style={{ fontSize: 17, lineHeight: 1.6, color: 'rgba(255,255,255,0.82)', maxWidth: 560, margin: 0 }}>
+              {branding?.hero_subtext || 'Pick a class below and sign your child up in under a minute.'}
+            </p>
+          </div>
+        </div>
+        <div style={{ maxWidth: 820, margin: '-40px auto 0', padding: '0 20px 64px' }}>
+          <div style={{ background: '#fff', border: '1px solid #e2dfd5', borderRadius: 20, padding: '24px 22px', boxShadow: '0 8px 30px rgba(28,0,79,0.06)' }}>
+            {loading ? (
+              <div style={{ color: '#6b6b6b', padding: '24px 0', textAlign: 'center' }}>Loading classes&hellip;</div>
+            ) : openPrograms.length === 0 ? (
+              <div style={{ color: '#6b6b6b', padding: '24px 0', textAlign: 'center' }}>No open programs yet. Check back soon.</div>
+            ) : (
+              <>
+                <h2 style={{ fontSize: 19, fontWeight: 700, margin: '2px 0 16px' }}>
+                  {openPrograms.length === 1 ? '1 open program' : `${openPrograms.length} open programs`}
+                </h2>
+                <div style={{ display: 'grid', gap: 12 }}>
+                  {openPrograms.map((p) => {
+                    const timeStr = [p.start_time, p.end_time].filter(Boolean).join(' – ');
+                    const meta = [`${p.day_of_week}s`, timeStr].filter(Boolean).join(' · ');
+                    const hl = highlightProgram === p.id;
+                    if (p.runs_own_registration) {
+                      return (
+                        <div key={p.id} id={`program-card-${p.id}`} style={leanCard(hl)}>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
+                            <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
+                          </div>
+                          <a href={p.external_registration_url} target="_blank" rel="noopener noreferrer" style={leanBtn}>Register &#8599;</a>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={p.id} id={`program-card-${p.id}`} style={leanCard(hl)}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
+                          <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
+                            {meta}{meta ? ' · ' : ''}<span style={{ fontWeight: 600, color: '#1a1a1a' }}>{formatMoney(p.price_cents)}</span>
+                          </div>
+                        </div>
+                        <button onClick={() => startRegistration(p.id, false)} style={leanBtn}>Register</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+          <p style={{ textAlign: 'center', color: '#9B9FBB', fontSize: 12, marginTop: 18 }}>
+            Powered by <a href="https://getenrops.com" style={{ color: '#5847C9', textDecoration: 'none', fontWeight: 600 }}>enrops</a>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       {/* Hero */}

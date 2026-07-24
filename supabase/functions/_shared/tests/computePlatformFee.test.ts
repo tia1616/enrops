@@ -70,3 +70,47 @@ Deno.test('ACH and card rates are independent', () => {
   assertEquals(cardFee, 500); // capped
   assertEquals(achFee, 250);  // 500 * 0.005 = 2.5
 });
+
+// --- Registration fee model: 3% / $1.99 floor / $7.99 cap (Arielle) ---
+const REG_TIER: PlatformFeeConfig = {
+  platform_fee_card_pct: 0.03,
+  platform_fee_ach_pct: 0.03,
+  platform_fee_cap_cents: 799,
+  platform_fee_floor_cents: 199,
+};
+
+Deno.test('floor: $10 charge (3% = $0.30) is lifted to the $1.99 floor', () => {
+  assertEquals(computePlatformFee(1000, 'card', REG_TIER), 199);
+});
+
+Deno.test('floor: $100 charge (3% = $3.00) sits above the floor, under the cap', () => {
+  assertEquals(computePlatformFee(10000, 'card', REG_TIER), 300);
+});
+
+Deno.test('cap: $300 charge (3% = $9.00) is clamped to the $7.99 cap', () => {
+  assertEquals(computePlatformFee(30000, 'card', REG_TIER), 799);
+});
+
+Deno.test('floor applies to ACH too (rate > 0)', () => {
+  assertEquals(computePlatformFee(1000, 'us_bank_account', REG_TIER), 199);
+});
+
+Deno.test('a 0% rate never triggers the floor (no phantom fee)', () => {
+  const noFee: PlatformFeeConfig = {
+    platform_fee_card_pct: 0,
+    platform_fee_ach_pct: 0,
+    platform_fee_cap_cents: 799,
+    platform_fee_floor_cents: 199,
+  };
+  assertEquals(computePlatformFee(5000, 'card', noFee), 0);
+});
+
+Deno.test('null floor = no floor (existing tenants unchanged)', () => {
+  const noFloor: PlatformFeeConfig = {
+    platform_fee_card_pct: 0.03,
+    platform_fee_ach_pct: 0.03,
+    platform_fee_cap_cents: 799,
+    platform_fee_floor_cents: null,
+  };
+  assertEquals(computePlatformFee(1000, 'card', noFloor), 30); // 3% of $10, no lift
+});

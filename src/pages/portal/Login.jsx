@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useOutletContext } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { supabase } from '../../lib/supabase.js';
 
 export default function Login() {
+  const { org } = useOutletContext();
   const { signInWithGoogle } = useAuth();
+  // Land the parent in THEIR org's portal after auth, never a hardcoded tenant.
+  const dashboardUrl = `${window.location.origin}/${org?.slug || ''}/dashboard`;
   const [email, setEmail] = useState('');
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
@@ -13,7 +16,7 @@ export default function Login() {
   async function handleGoogle() {
     setLoading(true);
     const { error: err } = await signInWithGoogle(
-      `${window.location.origin}/j2s/dashboard`,
+      dashboardUrl,
     );
     if (err) {
       setError(err.message);
@@ -28,8 +31,9 @@ export default function Login() {
       const { data, error: fnErr } = await supabase.functions.invoke('auth-send-magic-link', {
         body: {
           email,
-          redirect_to: `${window.location.origin}/j2s/dashboard`,
+          redirect_to: dashboardUrl,
           context: 'parent',
+          org_id: org?.id,
         },
       });
       if (fnErr) throw fnErr;
@@ -45,7 +49,7 @@ export default function Login() {
   return (
     <div className="mx-auto max-w-md px-4 py-16 sm:px-6">
       <div className="rounded-3xl bg-white p-8 shadow-card sm:p-10">
-        <h1 className="font-titan text-3xl text-j2s-ink">Sign in to J2S</h1>
+        <h1 className="font-titan text-3xl text-j2s-ink">Sign in to {org?.name || 'your account'}</h1>
         <p className="mt-2 text-j2s-ink/70">
           Access your registrations and your child's schedule.
         </p>
@@ -90,7 +94,7 @@ export default function Login() {
 
         <p className="mt-6 text-center text-sm text-j2s-ink/60">
           No account yet?{' '}
-          <Link to="/j2s" className="font-semibold text-j2s-purple hover:underline">
+          <Link to={`/${org?.slug || ''}`} className="font-semibold text-j2s-purple hover:underline">
             Register for a program →
           </Link>
         </p>

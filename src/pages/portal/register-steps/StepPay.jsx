@@ -36,7 +36,15 @@ export default function StepPay({
     ? Number(org?.platform_fee_ach_pct) || 0
     : Number(org?.platform_fee_card_pct) || 0;
   const feeCap = Number(org?.platform_fee_cap_cents) || Infinity;
-  const feeOn = (cents) => (passThrough ? Math.min(Math.round(cents * feeRate), feeCap) : 0);
+  // Min fee per transaction (null/0 = none). Mirror computePlatformFee EXACTLY —
+  // clamp(round(amount*rate), floor, cap), only when a rate is set and the amount
+  // is positive — so this pre-redirect number equals what Stripe charges, even on
+  // small amounts where the floor lifts the fee.
+  const feeFloor = Number(org?.platform_fee_floor_cents) || 0;
+  const feeOn = (cents) =>
+    passThrough && feeRate > 0 && cents > 0
+      ? Math.min(Math.max(Math.round(cents * feeRate), feeFloor), feeCap)
+      : 0;
   const charged = (cents) => cents + feeOn(cents);
 
   const feeToday = feeOn(displayAmount);
@@ -44,7 +52,6 @@ export default function StepPay({
   const grandTotal = useInstallments
     ? installmentSchedule.reduce((s, i) => s + charged(i.amount_cents), 0)
     : chargedToday;
-  const feePctLabel = `${+(feeRate * 100).toFixed(2)}%`;
 
   const fmtDate = (iso) =>
     new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
@@ -71,7 +78,7 @@ export default function StepPay({
         </p>
         {feeToday > 0 && (
           <p className="mt-2 text-sm text-white/90">
-            {formatMoney(displayAmount)} + {formatMoney(feeToday)} platform fee ({feePctLabel})
+            {formatMoney(displayAmount)} + {formatMoney(feeToday)} service fee
           </p>
         )}
         <p className="mt-3 text-white/80">
@@ -115,7 +122,7 @@ export default function StepPay({
           </div>
           <p className="mt-3 text-xs text-j2s-ink/60">
             Your card on file will be charged automatically on each date.
-            {feeToday > 0 && ` Each charge includes the ${feePctLabel} platform fee.`}
+            {feeToday > 0 && ' Each charge includes the service fee.'}
           </p>
         </div>
       )}
