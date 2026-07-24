@@ -21,6 +21,9 @@ export default function RegisterSuccess() {
   // session is still processing so we can tell the family accurately instead of
   // implying the payment is done (card settles instantly → processing=false).
   const [processing, setProcessing] = useState(false);
+  // Tenant-neutral calendar invite (real, closure-aware session dates) built by
+  // checkout-session-status. Lets the family add every class in one tap.
+  const [calendar, setCalendar] = useState(null);
 
   useEffect(() => {
     // Clear cart once we're on success
@@ -35,10 +38,25 @@ export default function RegisterSuccess() {
       const { data } = await supabase.functions.invoke('checkout-session-status', {
         body: { session_id: sessionId },
       });
-      if (!cancelled && data?.processing) setProcessing(true);
+      if (cancelled) return;
+      if (data?.processing) setProcessing(true);
+      if (data?.calendar?.ics) setCalendar(data.calendar);
     })();
     return () => { cancelled = true; };
   }, [sessionId]);
+
+  function downloadIcs() {
+    if (!calendar?.ics) return;
+    const blob = new Blob([calendar.ics], { type: 'text/calendar;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'your-classes.ics';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 
   async function handleMagicLink() {
     if (!email) return;
@@ -95,6 +113,40 @@ export default function RegisterSuccess() {
           <p className="mt-1 text-sm leading-relaxed">
             Bank transfers take 1–3 business days to clear. Your spot is held the whole time —
             we'll email you once your payment confirms. Nothing else to do right now.
+          </p>
+        </div>
+      )}
+
+      {/* Add-to-calendar — real, closure-aware sessions from the program. The
+          .ics adds every session across all apps; Google links add the first. */}
+      {calendar?.ics && (
+        <div className="mt-6 rounded-3xl border border-j2s-purple/10 bg-white p-6 shadow-card sm:p-8">
+          <h2 className="font-titan text-xl text-j2s-ink">Add your classes to your calendar</h2>
+          <p className="mt-2 text-sm text-j2s-ink/70">
+            Save {calendar.totalSessions === 1 ? 'your session' : `all ${calendar.totalSessions} sessions`} so you never miss a class.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button onClick={downloadIcs} className="btn-j2s-primary">
+              Download calendar file (.ics)
+            </button>
+            {(calendar.events || [])
+              .filter((e) => e.googleUrl)
+              .map((e, i) => (
+                <a
+                  key={i}
+                  href={e.googleUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center rounded-xl border-2 border-j2s-ink/15 bg-white px-5 py-3 font-semibold text-j2s-ink transition hover:border-j2s-ink/30 hover:bg-j2s-ink/5"
+                >
+                  {(calendar.events || []).filter((x) => x.googleUrl).length > 1
+                    ? `${e.programName} → Google`
+                    : 'Add to Google Calendar'}
+                </a>
+              ))}
+          </div>
+          <p className="mt-3 text-xs text-j2s-ink/50">
+            The .ics file adds every session and works with Apple Calendar, Google Calendar, and Outlook. Google links add your first session.
           </p>
         </div>
       )}
@@ -168,6 +220,27 @@ export default function RegisterSuccess() {
           className="font-semibold text-j2s-purple hover:underline"
         >
           support@enrops.com
+        </a>
+      </p>
+
+      {/* Powered-by attribution + acquisition CTA (the getenrops loop). */}
+      <p className="mt-4 text-center text-xs text-j2s-ink/50">
+        <a
+          href="https://getenrops.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-semibold text-j2s-purple hover:underline"
+        >
+          Powered by enrops
+        </a>{' '}
+        — start your own program free at{' '}
+        <a
+          href="https://getenrops.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:underline"
+        >
+          getenrops.com
         </a>
       </p>
     </div>

@@ -177,6 +177,25 @@ export default function AdminSettings() {
         </div>
       </section>
 
+      {/* Lean ops (enrops_platform) don't get a top-level Locations nav item —
+          they manage venues here or inline in the program builder. J2S keeps its
+          own top-level Partners item, so this would be redundant for them. */}
+      {org?.instructor_pay_model === "enrops_platform" && (
+        <section style={{ marginTop: 24 }}>
+          <h2 style={sectionTitle}>Locations</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Where your programs run</div>
+              <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+                Manage the venues families see at checkout. You can also set a location right in the program builder.
+              </div>
+            </div>
+            <Link to="/admin/schools" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
+          </div>
+        </section>
+      )}
+
+      {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Availability survey</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -189,6 +208,7 @@ export default function AdminSettings() {
           <Link to="/admin/survey-settings" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
+      )}
 
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Branding</h2>
@@ -216,6 +236,7 @@ export default function AdminSettings() {
         </div>
       </section>
 
+      {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Pay rates</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -228,7 +249,9 @@ export default function AdminSettings() {
           <Link to="/admin/pay-rates" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
+      )}
 
+      {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Background checks</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -241,7 +264,9 @@ export default function AdminSettings() {
           <Link to="/admin/background-checks" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
+      )}
 
+      {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Training videos</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -254,6 +279,7 @@ export default function AdminSettings() {
           <Link to="/admin/training" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
+      )}
 
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Connections</h2>
@@ -273,6 +299,8 @@ export default function AdminSettings() {
                   ? "Checking connection…"
                   : connection
                   ? <>Connected as <strong style={{ color: INK }}>{connection.google_email}</strong></>
+                  : org?.instructor_pay_model === "enrops_platform"
+                  ? "Connect your Google Drive to import documents directly into Enrops."
                   : "Connect your Google Drive to import curriculum documents directly into Enrops."}
               </div>
             </div>

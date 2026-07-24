@@ -48,6 +48,7 @@ export default function Home() {
   const [highlightProgram, setHighlightProgram] = useState('');
   const [weeklyClasses, setWeeklyClasses] = useState([]); // recurring class_schedule (outside-registration tenants), safe public view
   const [loading, setLoading] = useState(true);
+  const [locationFilter, setLocationFilter] = useState('all'); // lean multi-location filter
 
   // Labels for the term the catalog is serving, derived from the org's own
   // active term — never hardcoded to a season. termLabel: "Winter 2027";
@@ -91,7 +92,7 @@ export default function Home() {
 
     const { data: pg } = await supabase
       .from('programs')
-      .select('*')
+      .select('*, program_locations(name)')
       .eq('organization_id', org.id)
       .eq('term', catalogTerm)
       .eq('status', 'open')
@@ -238,7 +239,18 @@ export default function Home() {
   // program is reachable. J2S (legacy_own_platform) keeps its existing page below.
   const isLeanReg = org?.instructor_pay_model !== 'legacy_own_platform';
   if (isLeanReg) {
-    const openPrograms = programs || [];
+    const allOpen = programs || [];
+    // Distinct locations among the open programs — drives the multi-location filter.
+    const seenLoc = new Set();
+    const locOptions = [];
+    for (const p of allOpen) {
+      const nm = p.program_locations?.name;
+      if (nm && !seenLoc.has(nm)) { seenLoc.add(nm); locOptions.push(nm); }
+    }
+    const hasMultiLoc = locOptions.length >= 2;
+    const openPrograms = hasMultiLoc && locationFilter !== 'all'
+      ? allOpen.filter((p) => p.program_locations?.name === locationFilter)
+      : allOpen;
     const leanCard = (hl) => ({
       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
       padding: '16px 18px', border: `1px solid ${hl ? '#5847C9' : '#e2dfd5'}`,
@@ -269,17 +281,33 @@ export default function Home() {
           <div style={{ background: '#fff', border: '1px solid #e2dfd5', borderRadius: 20, padding: '24px 22px', boxShadow: '0 8px 30px rgba(28,0,79,0.06)' }}>
             {loading ? (
               <div style={{ color: '#6b6b6b', padding: '24px 0', textAlign: 'center' }}>Loading classes&hellip;</div>
-            ) : openPrograms.length === 0 ? (
+            ) : allOpen.length === 0 ? (
               <div style={{ color: '#6b6b6b', padding: '24px 0', textAlign: 'center' }}>No open programs yet. Check back soon.</div>
             ) : (
               <>
                 <h2 style={{ fontSize: 19, fontWeight: 700, margin: '2px 0 16px' }}>
                   {openPrograms.length === 1 ? '1 open program' : `${openPrograms.length} open programs`}
                 </h2>
+                {hasMultiLoc && (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '0 0 16px' }}>
+                    {['all', ...locOptions].map((loc) => {
+                      const active = locationFilter === loc;
+                      return (
+                        <button key={loc} onClick={() => setLocationFilter(loc)} style={{
+                          padding: '6px 14px', borderRadius: 100, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                          border: `1px solid ${active ? '#5847C9' : '#e2dfd5'}`,
+                          background: active ? '#5847C9' : '#fff', color: active ? '#fff' : '#1a1a1a',
+                        }}>
+                          {loc === 'all' ? 'All locations' : loc}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 <div style={{ display: 'grid', gap: 12 }}>
                   {openPrograms.map((p) => {
                     const timeStr = [p.start_time, p.end_time].filter(Boolean).join(' – ');
-                    const meta = [`${p.day_of_week}s`, timeStr].filter(Boolean).join(' · ');
+                    const meta = [`${p.day_of_week}s`, timeStr, p.program_locations?.name].filter(Boolean).join(' · ');
                     const hl = highlightProgram === p.id;
                     if (p.runs_own_registration) {
                       return (

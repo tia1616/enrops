@@ -15,10 +15,11 @@
 //   - curriculum_id / program_location_id = null (no curriculum, location optional)
 // The operator never sees "term" — it's enrichment-provider vocabulary, not theirs.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import PlacesAutocomplete from "../../../components/PlacesAutocomplete.jsx";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 const BRIGHT = "#5847C9";
@@ -30,6 +31,12 @@ const RULE = "#e2dfd5";
 // on the public catalog. Lowercase silently breaks the match (see the note in
 // ProgramWizardNew). Keep these Title-Case.
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+// Indexed by Date.getDay() (0 = Sunday). Used to warn when the chosen first
+// class date's weekday doesn't match the selected day-of-week — the session
+// dates derive from the DATE's weekday, so a mismatch silently meets on the
+// wrong day.
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 // Convert a native <input type="time"> value ("15:30", 24h) to the "3:30 PM" text
 // the rest of the app stores + reads (catalog, checkout, matcher). Mirrors the
@@ -76,11 +83,93 @@ export default function QuickProgramBuilder() {
   const [err, setErr] = useState("");
   const [createdId, setCreatedId] = useState(null);
 
+  // Is the org able to actually take money yet? The share link goes live the
+  // moment a program is created, but Arielle's rule is "never a payment-less
+  // live page" — so on success we nudge the operator to connect Stripe FIRST
+  // (the WOW), before they share. null = still loading, don't nudge yet.
+  const [chargesEnabled, setChargesEnabled] = useState(null);
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("organizations")
+        .select("stripe_charges_enabled")
+        .eq("id", org.id)
+        .maybeSingle();
+      if (!cancelled) setChargesEnabled(!!data?.stripe_charges_enabled);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
+  // Locations the operator has set up (Settings -> Locations). One location
+  // auto-selects (no need to pick when there's only one); 2+ shows a picker;
+  // none = location-less (still valid — location is optional).
+  const [locations, setLocations] = useState([]);
+  const [locationId, setLocationId] = useState("");
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("program_locations")
+        .select("id, name")
+        .eq("organization_id", org.id)
+        .order("name");
+      if (cancelled) return;
+      const locs = data ?? [];
+      setLocations(locs);
+      if (locs.length === 1) setLocationId(locs[0].id);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
+  // Inline "add a location" so a new op can set their venue right here instead
+  // of detouring to Settings. Writes to program_locations, then selects it.
+  const [addingLocation, setAddingLocation] = useState(false);
+  const [newLocName, setNewLocName] = useState("");
+  const [newLocAddress, setNewLocAddress] = useState("");
+  const [savingLoc, setSavingLoc] = useState(false);
+  const [locErr, setLocErr] = useState("");
+
+  async function saveNewLocation() {
+    const nm = newLocName.trim();
+    if (!nm || savingLoc) return;
+    setSavingLoc(true);
+    setLocErr("");
+    try {
+      // program_locations.slug is NOT NULL + globally unique; generate one from
+      // the name with a random suffix (mirrors LocationsList).
+      const base = nm.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "venue";
+      const slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
+      const { data, error } = await supabase
+        .from("program_locations")
+        .insert({ organization_id: org.id, name: nm, address: newLocAddress.trim() || null, slug })
+        .select("id, name")
+        .single();
+      if (error) throw error;
+      setLocations((ls) => [...ls, { id: data.id, name: data.name }].sort((a, b) => a.name.localeCompare(b.name)));
+      setLocationId(data.id);
+      setAddingLocation(false);
+      setNewLocName("");
+      setNewLocAddress("");
+    } catch (e) {
+      setLocErr(e?.message ?? "Couldn't save that location.");
+    } finally {
+      setSavingLoc(false);
+    }
+  }
+
   const priceCents = Math.round(parseFloat(price || "0") * 100);
   const spotsNum = parseInt(spots || "0", 10);
   const sessionsNum = parseInt(sessions || "0", 10);
   const priceValid = price !== "" && Number.isFinite(priceCents) && priceCents >= 0;
   const valid = name.trim() !== "" && priceValid && !!day && spotsNum >= 1;
+
+  // Warn (don't block) when the first class date falls on a different weekday
+  // than the selected day — the derived sessions follow the date, not the day.
+  const firstDateWeekday = startDate ? WEEKDAY_NAMES[new Date(`${startDate}T00:00:00`).getDay()] : null;
+  const dayMismatch = !!(day && firstDateWeekday && firstDateWeekday !== day);
 
   async function handleCreate() {
     if (!valid || submitting) return;
@@ -94,7 +183,7 @@ export default function QuickProgramBuilder() {
         term: org.active_registration_term,
         curriculum: name.trim(), // NOT NULL display name; no curriculum record
         curriculum_id: null,
-        program_location_id: null,
+        program_location_id: locationId || null,
         day_of_week: day,
         start_time: startTime ? toDbTime12h(startTime) : null,
         end_time: endTime ? toDbTime12h(endTime) : null,
@@ -129,6 +218,7 @@ export default function QuickProgramBuilder() {
     setSessions("8");
     setStartTime("");
     setEndTime("");
+    setLocationId(locations.length === 1 ? locations[0].id : "");
     setErr("");
     setCreatedId(null);
   }
@@ -140,16 +230,40 @@ export default function QuickProgramBuilder() {
 
   // ---- Success: program is live, hand over the shareable link ----
   if (createdId) {
+    // Arielle's rule: never a payment-less live page. If Stripe isn't connected
+    // yet, lead with that step (the WOW) and dim the share link until it is.
+    const notConnected = chargesEnabled === false;
     return (
       <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
         <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
           Your program is live.
         </div>
-        <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
-          Families can register now. Share the link below — you'll see sign-ups show
-          up as they come in.
-        </p>
-        <div style={{ marginBottom: 24 }}>
+
+        {notConnected ? (
+          <>
+            <div style={{ background: "#EEEDFE", border: "1px solid #CECBF6", borderRadius: 12, padding: "16px 18px", marginBottom: 20 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#26215C", marginBottom: 4 }}>
+                One step left: connect Stripe to get paid
+              </div>
+              <p style={{ fontSize: 13.5, color: "#3C3489", lineHeight: 1.55, margin: "0 0 12px" }}>
+                Connect Stripe so families' payments land straight in your bank account. Takes about 5 minutes, then share your link.
+              </p>
+              <button onClick={() => navigate("/admin/finances")} style={primaryBtn}>
+                Connect Stripe →
+              </button>
+            </div>
+            <p style={{ color: MUTED, fontSize: 13, lineHeight: 1.55, margin: "0 0 10px" }}>
+              Your registration link — share it once you're set up to get paid:
+            </p>
+          </>
+        ) : (
+          <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
+            Families can register now. Share the link below — you'll see sign-ups show
+            up as they come in.
+          </p>
+        )}
+
+        <div style={{ marginBottom: 24, opacity: notConnected ? 0.6 : 1 }}>
           <ShareProgram
             slug={org.slug}
             activeTerm={org.active_registration_term}
@@ -231,6 +345,48 @@ export default function QuickProgramBuilder() {
         </div>
 
         <div>
+          <label style={labelStyle} htmlFor="qpb-location">Location</label>
+          {addingLocation ? (
+            <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, background: "#FBFBFB" }}>
+              <input
+                style={{ ...inputStyle, marginBottom: 8 }}
+                value={newLocName}
+                onChange={(e) => setNewLocName(e.target.value)}
+                placeholder="Location name (e.g. Downtown Studio)"
+                maxLength={80}
+                autoFocus
+              />
+              <PlacesAutocomplete
+                value={newLocAddress}
+                onChange={setNewLocAddress}
+                onSelect={({ name, address }) => { if (!newLocName.trim()) setNewLocName(name); setNewLocAddress(address); }}
+                placeholder="Address (optional)"
+                style={inputStyle}
+              />
+              {locErr && <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>{locErr}</div>}
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <button type="button" onClick={saveNewLocation} disabled={savingLoc || !newLocName.trim()} style={{ ...primaryBtn, opacity: savingLoc || !newLocName.trim() ? 0.55 : 1 }}>
+                  {savingLoc ? "Saving…" : "Save location"}
+                </button>
+                <button type="button" onClick={() => { setAddingLocation(false); setNewLocName(""); setNewLocAddress(""); setLocErr(""); }} style={{ ...primaryBtn, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}` }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <select id="qpb-location" style={inputStyle} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                <option value="">No specific location</option>
+                {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+              <div style={{ marginTop: 6 }}>
+                <span onClick={() => setAddingLocation(true)} style={{ color: BRIGHT, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>+ Add a location</span>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div>
           <label style={labelStyle} htmlFor="qpb-day">Day of the week</label>
           <select
             id="qpb-day"
@@ -261,10 +417,10 @@ export default function QuickProgramBuilder() {
             <label style={labelStyle} htmlFor="qpb-end-time">End time</label>
             <input
               id="qpb-end-time"
+              type="time"
               style={inputStyle}
               value={endTime}
               onChange={(e) => setEndTime(e.target.value)}
-              placeholder="4:30 PM"
             />
           </div>
         </div>
@@ -294,6 +450,13 @@ export default function QuickProgramBuilder() {
             <div style={helpStyle}>How many weekly sessions.</div>
           </div>
         </div>
+
+        {dayMismatch && (
+          <div style={{ background: "#FDF6E3", border: "1px solid #F0D48A", color: "#8a5a00", borderRadius: 8, padding: "10px 12px", fontSize: 13, lineHeight: 1.5 }}>
+            Heads up: your first class date is a <strong>{firstDateWeekday}</strong>, but you chose <strong>{day}</strong>.
+            Classes will meet on {firstDateWeekday}s. Pick a {day} date, or change the day to match.
+          </div>
+        )}
 
         {err && (
           <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#b53737", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>

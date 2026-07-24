@@ -20,6 +20,10 @@ import { getPermissions } from "../../../lib/permissions.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
+
+// Indexed by Date.getDay() (0 = Sunday) — used to warn when a program's first
+// session date falls on a different weekday than its selected day-of-week.
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const VIOLET = "#8C88FF";
 const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
@@ -576,10 +580,14 @@ export default function ProgramsCalendar() {
             {!term && <option value="">{termsLoaded ? "No terms yet" : "Loading terms…"}</option>}
             {termOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
-          <div style={toggleGroup}>
-            <button onClick={() => setViewMode("calendar")} style={viewMode === "calendar" ? toggleBtnActive : toggleBtn}>Calendar</button>
-            <button onClick={() => setViewMode("by_school")} style={viewMode === "by_school" ? toggleBtnActive : toggleBtn}>By school</button>
-          </div>
+          {/* "By school" groups by partner school — meaningless for a lean
+              single-venue op, so show only Calendar for them. J2S keeps both. */}
+          {org?.instructor_pay_model !== "enrops_platform" && (
+            <div style={toggleGroup}>
+              <button onClick={() => setViewMode("calendar")} style={viewMode === "calendar" ? toggleBtnActive : toggleBtn}>Calendar</button>
+              <button onClick={() => setViewMode("by_school")} style={viewMode === "by_school" ? toggleBtnActive : toggleBtn}>By school</button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -961,6 +969,11 @@ function districtHasCal(program, calendarCoverage) {
 }
 
 function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
+  // Lean registration ops have no curriculum library, no partner-school
+  // facilities, and no instructors — hide those J2S-shaped affordances. J2S
+  // (legacy_own_platform) keeps them all.
+  const { org: rowOrg } = useOutletContext() ?? {};
+  const isLean = rowOrg?.instructor_pay_model === "enrops_platform";
   const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
   const enrolled = enr.paid + enr.unpaid;
   const capacity = p.max_capacity ?? 0;
@@ -1018,7 +1031,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
               Offerings library — that's the common case, not "Untitled".
               The name looks fine on the page while parent emails silently
               lose the skills/projects blocks, so the row has to say it. */}
-          {!p.curriculum_id && (
+          {!isLean && !p.curriculum_id && (
             <span
               title="This program names a class but isn't linked to your Offerings library, so parent emails can't include its skills or projects"
               style={{
@@ -1125,7 +1138,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
             </svg>
             {isDatesExpanded ? "Hide" : "Expand"}
           </button>
-          <FacilityPill program={p} onClick={() => onEditFacility?.(p)} />
+          {!isLean && <FacilityPill program={p} onClick={() => onEditFacility?.(p)} />}
         </div>
         <div style={{ color: MUTED, fontSize: 12, marginTop: 2 }}>
           {!showDay && p.program_locations?.name ? p.program_locations.name : ""}
@@ -1167,7 +1180,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
 
       {/* Edit affordance */}
       <div style={{ textAlign: "right" }}>
-        {onEdit && (
+        {onEdit && !isLean && (
           <button
             type="button"
             onClick={() => onEdit(p)}
@@ -1207,6 +1220,9 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
 // the top, and the unpublish + delete actions on a footer row. The panel
 // only renders when the operator clicks "Expand" on a program row.
 function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+  // Lean ops don't have partner-run registration or instructors — hide those.
+  const { org: panelOrg } = useOutletContext() ?? {};
+  const isLean = panelOrg?.instructor_pay_model === "enrops_platform";
   // Local draft so the operator can edit several fields and save in one go
   // (avoid round-tripping the DB on every keystroke).
   const [draft, setDraft] = useState({
@@ -1653,7 +1669,18 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         </ExpandField>
       </div>
 
-      {/* Registration ownership — who collects sign-ups for this program. */}
+      {(() => {
+        const fdw = draft.first_session_date ? WEEKDAY_NAMES[new Date(`${draft.first_session_date}T00:00:00`).getDay()] : null;
+        return draft.day_of_week && fdw && fdw !== draft.day_of_week ? (
+          <div style={{ background: "#FDF6E3", border: "1px solid #F0D48A", color: "#8a5a00", borderRadius: 6, padding: "8px 12px", fontSize: 12.5, lineHeight: 1.5, marginBottom: 12 }}>
+            Heads up: this date is a <strong>{fdw}</strong>, but the day is set to <strong>{draft.day_of_week}</strong>. Sessions will fall on {fdw}s — change the date or the day to match.
+          </div>
+        ) : null;
+      })()}
+
+      {/* Registration ownership — who collects sign-ups. Partner-run registration
+          is a J2S/partner concept; a lean self-serve op always uses our checkout. */}
+      {!isLean && (
       <div style={{ marginBottom: 12 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK, cursor: "pointer" }}>
           <input
@@ -1692,6 +1719,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           </div>
         )}
       </div>
+      )}
 
       {saveError && (
         <div style={{ background: "#fde7e7", color: "#b53737", padding: "8px 12px", borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>
@@ -1845,6 +1873,9 @@ const expandInputStyle = {
 };
 
 function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false }) {
+  // Lean ops have no instructors and no partner-school calendars.
+  const { org: sdpOrg } = useOutletContext() ?? {};
+  const isLean = sdpOrg?.instructor_pay_model === "enrops_platform";
   const [copied, setCopied] = useState(false);
 
   // `dates` is the full schedule: [{ date, kind: 'session'|'no_school', reason }].
@@ -1901,7 +1932,7 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
           Session dates · {sessions.length}
         </div>
         <div style={{ fontSize: 12, color: MUTED }}>
-          Derived from this program's first session, day of week, and the {district || "location"} school calendar.
+          Derived from this program's first session and day of week{!isLean ? `, and the ${district || "location"} school calendar` : ""}.
           {closureCount > 0 && " No-school days are shown struck through and don't count as sessions."}
         </div>
         <button
@@ -1918,12 +1949,14 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
         </button>
       </div>
       <div style={{ fontSize: 13, color: INK, marginBottom: 10, display: "flex", gap: 16, flexWrap: "wrap" }}>
-        <div>
-          <span style={{ color: MUTED, fontWeight: 600 }}>Instructor: </span>
-          {program.instructor_name
-            ? <span>{program.instructor_name}</span>
-            : <span style={{ color: MUTED, fontStyle: "italic" }}>Not assigned yet</span>}
-        </div>
+        {!isLean && (
+          <div>
+            <span style={{ color: MUTED, fontWeight: 600 }}>Instructor: </span>
+            {program.instructor_name
+              ? <span>{program.instructor_name}</span>
+              : <span style={{ color: MUTED, fontStyle: "italic" }}>Not assigned yet</span>}
+          </div>
+        )}
         {program.room && (
           <div>
             <span style={{ color: MUTED, fontWeight: 600 }}>Room: </span>

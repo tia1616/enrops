@@ -146,10 +146,10 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
             </div>
             <div>
               <h4 className="font-grotesk text-xs uppercase tracking-widest" style={{ color: '#8C88FF' }}>Powered by</h4>
-              <Link to="/" className="mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 transition hover:opacity-90" style={{ background: '#1C004F', color: '#FBFBFB' }}>
-                <span className="font-grotesk text-sm font-bold tracking-tight">Enrops</span>
+              <a href="https://getenrops.com" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 transition hover:opacity-90" style={{ background: '#1C004F', color: '#FBFBFB' }}>
+                <span className="font-grotesk text-sm font-bold tracking-tight">enrops</span>
                 <span className="text-xs" style={{ color: '#8C88FF' }}>→</span>
-              </Link>
+              </a>
               <p className="mt-2 text-xs text-white/50">The enrichment operations platform.</p>
               {/* Platform legal — governs every account regardless of provider,
                   so it sits with the "Powered by" badge, not mixed in with the
@@ -228,7 +228,7 @@ function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.55)', fontSize: 12 }}>
             <div>
               &copy; {new Date().getFullYear()} {org.name}. Powered by{' '}
-              <Link to="/" style={{ color: ENROPS_VIOLET, textDecoration: 'none' }}>Enrops</Link>.
+              <a href="https://getenrops.com" target="_blank" rel="noopener noreferrer" style={{ color: ENROPS_VIOLET, textDecoration: 'none' }}>enrops</a>.
             </div>
             {/* Provider's own docs only when published; Enrops platform docs
                 always, since they govern the account either way. */}

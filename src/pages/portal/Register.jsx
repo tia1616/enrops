@@ -204,7 +204,14 @@ export default function Register() {
   useEffect(() => {
     const programFromUrl = searchParams.get('program');
     const vipFromUrl = searchParams.get('vip') === '1';
-    if (!programFromUrl || !programs.length || !schools.length || activeChild.items.length) return;
+    // NOTE: do NOT gate on schools.length. A lean (enrops_platform) org can have
+    // ZERO program_locations — a location-less program ("No specific location" in
+    // the quick-builder) is valid and common. schools=[] is a real loaded state,
+    // not "still loading" (schools + programs load together in load()). Gating on
+    // it left location-less orgs with an empty cart -> $0 review -> no checkout.
+    // The school lookup below is already null-safe; pricing is program-driven and
+    // never needs a school. J2S always has locations, so this is a no-op for J2S.
+    if (!programFromUrl || !programs.length || activeChild.items.length) return;
 
     const program = programs.find((x) => x.id === programFromUrl);
     if (!program) return;
@@ -232,7 +239,7 @@ export default function Register() {
     (async () => {
       const { data: matches } = await supabase
         .from('programs')
-        .select('*')
+        .select('*, program_locations:program_location_id(name)')
         .eq('program_location_id', program.program_location_id)
         .eq('day_of_week', program.day_of_week)
         .eq('runs_own_registration', false) // don't bundle partner-run programs into a paid VIP offer
@@ -262,7 +269,11 @@ export default function Register() {
         .order('name'),
       supabase
         .from('programs')
-        .select('*')
+        // Join the location NAME so the Review line can show it (pricing.js reads
+        // prog.program_locations?.name). Anon-safe: public_read_program_locations
+        // allows anon reads for public_org_directory orgs — same pattern Home.jsx
+        // already uses. Location-less programs return null here (name omitted).
+        .select('*, program_locations:program_location_id(name)')
         .eq('organization_id', ORG_ID)
         .eq('status', 'open')
         .eq('runs_own_registration', false) // exclude partner-run programs — no public checkout

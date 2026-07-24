@@ -41,6 +41,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, OrgBrand } from '../_shared/orgBrand.ts';
+import { buildIcs, googleCalendarUrl, toBase64, calendarEventsFromRegistrations } from '../_shared/calendarInvite.ts';
 import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
 import { handleTransferReversed as sharedHandleTransferReversed } from '../_shared/handleTransferReversed.ts';
@@ -323,7 +324,7 @@ serve(async (req) => {
 
       // Confirmation email (unchanged from v16)
       const { data: regs } = await admin.from('registrations').select(
-        `id, amount_cents, programs(curriculum, day_of_week, start_time, end_time, first_session_date, term, program_locations(name, address, arrival_instructions, dismissal_instructions)), students(first_name, last_name)`,
+        `id, amount_cents, programs(id, curriculum, day_of_week, start_time, end_time, first_session_date, term, program_locations(name, address, arrival_instructions, dismissal_instructions)), students(first_name, last_name)`,
       ).in('id', regIds);
 
       // Tenant slug for portal URLs in the confirmation email. Never default
@@ -688,6 +689,48 @@ async function sendConfirmationEmail({
   const senderShortName = (brand.sender_name?.split(' @ ')[0]?.trim()) || brand.org_name;
   const childFirstName = registrations[0]?.students?.first_name || 'your child';
 
+  // ── Calendar invite ──────────────────────────────────────────────────────
+  // Build a real, closure-aware .ics from each program's derived session dates
+  // (never hardcoded — derive_program_session_dates honors location/district
+  // closures) plus the program's stored class time. Attach the .ics (works in
+  // Apple/Google/Outlook) and offer per-program Google Calendar quick-add links.
+  // Fully tenant-neutral: names come from the org's own rows. If nothing can be
+  // derived (e.g. undated program), the block and attachment are simply omitted.
+  let calendarBlock = '';
+  const calendarAttachments: { filename: string; content: string }[] = [];
+  try {
+    const events = await calendarEventsFromRegistrations(
+      registrations,
+      brand.org_name,
+      async (pid: string) => {
+        const { data } = await admin.rpc('derive_program_session_dates', { p_program_id: pid });
+        return (data as string[] | null) ?? [];
+      },
+    );
+    const ics = buildIcs(events, { uidSeed: sessionId, nowIso: new Date().toISOString() });
+    if (ics) {
+      calendarAttachments.push({ filename: 'your-classes.ics', content: toBase64(ics) });
+      const totalSessions = events.reduce((n, e) => n + e.sessionDates.length, 0);
+      const googleButtons = events
+        .map((e) => {
+          const url = googleCalendarUrl(e);
+          if (!url) return '';
+          // Escape the & param separators for HTML (values are already
+          // percent-encoded by googleCalendarUrl, so only the raw & need it).
+          const safeUrl = url.replace(/&/g, '&amp;');
+          return `<a href="${safeUrl}" style="display:inline-block;margin:4px 8px 4px 0;padding:8px 14px;background:${brand.primary_color};color:#ffffff;text-decoration:none;border-radius:8px;font-size:13px;font-weight:700;">${escapeHtml(e.programName)} in Google Calendar</a>`;
+        })
+        .join('');
+      calendarBlock = `<div style="background:#F5F3FF;border-radius:12px;padding:20px;margin:0 0 24px;font-family:'Nunito Sans',sans-serif;">
+  <div style="font-weight:700;color:${brand.secondary_color};margin-bottom:6px;">Add to your calendar</div>
+  <p style="margin:0 0 12px;font-size:14px;color:#1A1530;line-height:1.6;">The attached file (<strong>your-classes.ics</strong>) adds all ${totalSessions} session${totalSessions === 1 ? '' : 's'} in one tap. It works with Apple Calendar, Google Calendar, and Outlook.</p>
+  ${googleButtons ? `<p style="margin:0 0 8px;font-size:13px;color:#6b6880;">Prefer Google Calendar? Add your first session:</p><div>${googleButtons}</div>` : ''}
+</div>`;
+    }
+  } catch (calErr) {
+    console.error('[stripe-webhook] calendar invite build failed:', calErr);
+  }
+
   // Render the body — operator's override takes precedence over the template
   // default. {{registration_summary_block}} resolves to the auto-table here
   // (stripe-webhook is the only path that emits this token).
@@ -736,10 +779,12 @@ ${summaryBlock}
 <div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
 <div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">
 ${innerBody}
+${calendarBlock}
 ${renderSignatureBlock(brand)}
 </div>
 <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
-${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()}
+${escapeHtml(brand.org_name)} · ${new Date().getFullYear()}<br />
+<a href="https://getenrops.com" style="color:#8C88FF;text-decoration:none;font-weight:700;">Powered by enrops</a> &mdash; start your own program free at <a href="https://getenrops.com" style="color:#8C88FF;text-decoration:none;">getenrops.com</a>
 </div>
 </div>
 </body></html>`;
@@ -761,7 +806,9 @@ ${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()
     .replace(/&amp;/g, "&")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+/g, " ")
-    .trim();
+    .trim()
+    + (calendarAttachments.length ? "\n\nAdd to your calendar: the attached file (your-classes.ics) adds all your sessions in one tap (Apple Calendar, Google Calendar, and Outlook)." : "")
+    + `\n\n${brand.org_name} · ${new Date().getFullYear()}\nPowered by enrops — start your own program free at https://getenrops.com`;
 
   // Subject — operator override (with {{tokens}} resolved) wins; else fall
   // back to the legacy installments-aware subject for backward compatibility.
@@ -784,6 +831,7 @@ ${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()
       subject: renderedSubject,
       html,
       text: plainText,
+      ...(calendarAttachments.length ? { attachments: calendarAttachments } : {}),
       tags: [
         { name: 'type', value: useInstallments ? 'registration_confirmation_installments' : 'registration_confirmation' },
         { name: 'session', value: sessionId },

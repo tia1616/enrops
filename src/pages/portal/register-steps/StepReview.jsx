@@ -76,7 +76,9 @@ export default function StepReview({
                       )}
                     </div>
                     <p className="mt-1 text-sm text-j2s-ink/70">
-                      {l.school_name} &middot; {l.day_of_week}s &middot; {l.start_time}
+                      {[l.school_name, l.day_of_week ? `${l.day_of_week}s` : null, l.start_time]
+                        .filter(Boolean)
+                        .join(' · ')}
                     </p>
                     <p className="mt-1 text-xs text-j2s-ink/50">
                       Child {l.child_index + 1}

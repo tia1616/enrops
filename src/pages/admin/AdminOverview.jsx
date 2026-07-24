@@ -262,6 +262,36 @@ export default function AdminOverview() {
   const [view, setView] = useState("today"); // "today" | "week"
   const dateLabel = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 
+  // Lean registration operators (enrops_platform) get a stripped Home: no
+  // instructor/camp Week-Month calendars, no instructor "Today's schedule", and
+  // a first-run prompt until they've built their first program. J2S is
+  // unaffected. The instructor/comms/partner signal cards are already empty for
+  // them (get_home_signals returns 0 for those), so nothing else needs gating.
+  const isLean = org?.instructor_pay_model === "enrops_platform";
+  const [programCount, setProgramCount] = useState(null); // null = loading
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { count } = await supabase
+        .from("programs")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", org.id);
+      if (!cancelled) setProgramCount(count ?? 0);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
+  // First-run gate: a lean op with no program yet sees exactly one prompt.
+  if (isLean) {
+    if (programCount === null) {
+      return <div style={{ padding: 40, textAlign: "center", color: MUTED }}>Loading…</div>;
+    }
+    if (programCount === 0) {
+      return <FirstRunPrompt orgName={org?.name} />;
+    }
+  }
+
   return (
     <div>
       <EnnieHero
@@ -271,11 +301,12 @@ export default function AdminOverview() {
         onView={setView}
         orgName={org?.name}
         celebrate={Array.isArray(wins) && wins.length > 0}
+        showViewToggle={!isLean}
       />
 
-      {view === "week" ? (
+      {view === "week" && !isLean ? (
         <WeekView org={org} />
-      ) : view === "month" ? (
+      ) : view === "month" && !isLean ? (
         <MonthView org={org} />
       ) : (
         <>
@@ -283,7 +314,7 @@ export default function AdminOverview() {
 
           <ImportantToday org={org} user={user} openHires={openHires} />
 
-          <TodayAgenda org={org} />
+          {!isLean && <TodayAgenda org={org} />}
 
           <TermChecklist org={org} />
 
@@ -296,9 +327,32 @@ export default function AdminOverview() {
   );
 }
 
+// First-run prompt for a lean op with no program yet — Arielle's "first screen
+// shows exactly one prompt, nothing else visible." One CTA into the builder.
+function FirstRunPrompt({ orgName }) {
+  return (
+    <div style={{ maxWidth: 520, margin: "40px auto", textAlign: "center", padding: "0 16px" }}>
+      <Ennie state="idle" framed={false} size={120} />
+      <h1 style={{ fontSize: 24, fontWeight: 700, color: INK, margin: "8px 0" }}>
+        Build your first program and get your link
+      </h1>
+      <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.6, margin: "0 0 24px" }}>
+        Name it, set a price, pick a day. You'll get a shareable registration link the
+        moment you save{orgName ? ` — welcome, ${orgName}` : ""}.
+      </p>
+      <Link
+        to="/admin/programs/quick-new"
+        style={{ display: "inline-block", padding: "13px 26px", background: BRIGHT, color: "#fff", borderRadius: 10, fontSize: 15, fontWeight: 700, textDecoration: "none" }}
+      >
+        Build your first program →
+      </Link>
+    </div>
+  );
+}
+
 // Ennie greeting hero — the ONE place the character lives (idle here; thinks while
 // the home loads; celebrates a joy-worthy win). Enrops-branded shell, not tenant.
-function EnnieHero({ greeting, dateLabel, view, onView, orgName, celebrate }) {
+function EnnieHero({ greeting, dateLabel, view, onView, orgName, celebrate, showViewToggle = true }) {
   // Ennie idles by default; when a joy-worthy win lands she plays celebrate once,
   // then settles back to idle.
   const [ennieState, setEnnieState] = useState("idle");
@@ -320,7 +374,9 @@ function EnnieHero({ greeting, dateLabel, view, onView, orgName, celebrate }) {
           {dateLabel}{orgName ? ` · ${orgName}` : ""}
         </p>
       </div>
-      <ViewToggle view={view} onView={onView} />
+      {/* Week/Month populate from camps only, so they're empty for lean
+          registration ops — hide the toggle for them (Today is all they have). */}
+      {showViewToggle && <ViewToggle view={view} onView={onView} />}
     </div>
   );
 }
