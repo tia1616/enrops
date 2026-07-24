@@ -54,6 +54,7 @@ const CurriculumExtracting = lazy(() => import('./pages/admin/curricula/Curricul
 const CurriculumReview = lazy(() => import('./pages/admin/curricula/CurriculumReview.jsx'));
 const ProgramsCalendar = lazy(() => import('./pages/admin/programs/ProgramsCalendar.jsx'));
 const ProgramWizardNew = lazy(() => import('./pages/admin/programs/ProgramWizardNew.jsx'));
+const QuickProgramBuilder = lazy(() => import('./pages/admin/programs/QuickProgramBuilder.jsx'));
 const ProgramRoster = lazy(() => import('./pages/admin/programs/ProgramRoster.jsx'));
 const SchoolsLocations = lazy(() => import('./pages/admin/SchoolsLocations.jsx'));
 const InstructorsPage = lazy(() => import('./pages/admin/instructors/InstructorsPage.jsx'));
@@ -208,6 +209,7 @@ export default function App() {
         <Route path="curricula/:id/edit" element={<CurriculumReview />} />
         <Route path="programs" element={<ProgramsCalendar />} />
         <Route path="programs/new" element={<ProgramWizardNew />} />
+        <Route path="programs/quick-new" element={<QuickProgramBuilder />} />
         <Route path="programs/:programId/roster" element={<ProgramRoster />} />
         <Route path="schools" element={<SchoolsLocations />} />
         {/* The classic Partners/Locations tabs were retired 2026-06-23; the
