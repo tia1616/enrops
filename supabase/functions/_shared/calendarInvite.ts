@@ -160,7 +160,7 @@ export function buildIcs(
       count += 1;
       const uid = `enrops-${opts.uidSeed}-${ei}-${di}@enrops.com`;
       lines.push('BEGIN:VEVENT');
-      lines.push(`UID:${uid}`);
+      lines.push(foldLine(`UID:${uid}`));
       lines.push(`DTSTAMP:${stamp}`);
       if (start) {
         // End defaults to +1h when only a start time is known. A class never

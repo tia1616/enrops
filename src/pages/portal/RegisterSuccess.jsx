@@ -233,7 +233,7 @@ export default function RegisterSuccess() {
         >
           Powered by enrops
         </a>{' '}
-        · Run your own program, free for providers, at{' '}
+        — start your own program free at{' '}
         <a
           href="https://getenrops.com"
           target="_blank"

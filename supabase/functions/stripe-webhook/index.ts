@@ -715,7 +715,10 @@ async function sendConfirmationEmail({
         .map((e) => {
           const url = googleCalendarUrl(e);
           if (!url) return '';
-          return `<a href="${url}" style="display:inline-block;margin:4px 8px 4px 0;padding:8px 14px;background:${brand.primary_color};color:#ffffff;text-decoration:none;border-radius:8px;font-size:13px;font-weight:700;">${escapeHtml(e.programName)} in Google Calendar</a>`;
+          // Escape the & param separators for HTML (values are already
+          // percent-encoded by googleCalendarUrl, so only the raw & need it).
+          const safeUrl = url.replace(/&/g, '&amp;');
+          return `<a href="${safeUrl}" style="display:inline-block;margin:4px 8px 4px 0;padding:8px 14px;background:${brand.primary_color};color:#ffffff;text-decoration:none;border-radius:8px;font-size:13px;font-weight:700;">${escapeHtml(e.programName)} in Google Calendar</a>`;
         })
         .join('');
       calendarBlock = `<div style="background:#F5F3FF;border-radius:12px;padding:20px;margin:0 0 24px;font-family:'Nunito Sans',sans-serif;">
@@ -781,7 +784,7 @@ ${renderSignatureBlock(brand)}
 </div>
 <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
 ${escapeHtml(brand.org_name)} · ${new Date().getFullYear()}<br />
-<a href="https://getenrops.com" style="color:#8C88FF;text-decoration:none;font-weight:700;">Powered by enrops</a> · Run your own program, free for providers, at <a href="https://getenrops.com" style="color:#8C88FF;text-decoration:none;">getenrops.com</a>
+<a href="https://getenrops.com" style="color:#8C88FF;text-decoration:none;font-weight:700;">Powered by enrops</a> &mdash; start your own program free at <a href="https://getenrops.com" style="color:#8C88FF;text-decoration:none;">getenrops.com</a>
 </div>
 </div>
 </body></html>`;
@@ -805,7 +808,7 @@ ${escapeHtml(brand.org_name)} · ${new Date().getFullYear()}<br />
     .replace(/[ \t]+/g, " ")
     .trim()
     + (calendarAttachments.length ? "\n\nAdd to your calendar: the attached file (your-classes.ics) adds all your sessions in one tap (Apple Calendar, Google Calendar, and Outlook)." : "")
-    + `\n\n${brand.org_name} · ${new Date().getFullYear()}\nPowered by enrops · Run your own program, free for providers, at https://getenrops.com`;
+    + `\n\n${brand.org_name} · ${new Date().getFullYear()}\nPowered by enrops — start your own program free at https://getenrops.com`;
 
   // Subject — operator override (with {{tokens}} resolved) wins; else fall
   // back to the legacy installments-aware subject for backward compatibility.

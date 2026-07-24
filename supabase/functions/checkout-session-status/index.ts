@@ -68,6 +68,14 @@ async function buildCalendarPayload(sessionId: string, metaRegIds: string) {
       return (data as string[] | null) ?? [];
     },
   );
+  // This endpoint is anon (verify_jwt=false) and reachable by anyone holding the
+  // Stripe session id (it rides in the success-page URL, so it can leak via
+  // Referer). Expose only the child's FIRST name here. The emailed .ics goes to
+  // the verified parent inbox and keeps the full name (built separately in
+  // stripe-webhook).
+  for (const e of events) {
+    if (e.studentName) e.studentName = e.studentName.split(' ')[0];
+  }
   const ics = buildIcs(events, { uidSeed: sessionId, nowIso: new Date().toISOString() });
   if (!ics) return null;
 
