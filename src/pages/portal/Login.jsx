@@ -33,6 +33,7 @@ export default function Login() {
           email,
           redirect_to: dashboardUrl,
           context: 'parent',
+          org_id: org?.id,
         },
       });
       if (fnErr) throw fnErr;
