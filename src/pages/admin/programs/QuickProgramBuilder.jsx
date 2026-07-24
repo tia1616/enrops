@@ -31,6 +31,21 @@ const RULE = "#e2dfd5";
 // ProgramWizardNew). Keep these Title-Case.
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+// Convert a native <input type="time"> value ("15:30", 24h) to the "3:30 PM" text
+// the rest of the app stores + reads (catalog, checkout, matcher). Mirrors the
+// same helper in ProgramWizardNew so both builders write start_time identically.
+function toDbTime12h(hhmm) {
+  if (!hhmm || typeof hhmm !== "string") return null;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const min = m[2];
+  const ampm = h >= 12 ? "PM" : "AM";
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${h12}:${min} ${ampm}`;
+}
+
 const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 };
 const inputStyle = {
   width: "100%",
@@ -81,8 +96,8 @@ export default function QuickProgramBuilder() {
         curriculum_id: null,
         program_location_id: null,
         day_of_week: day,
-        start_time: startTime.trim() || null,
-        end_time: endTime.trim() || null,
+        start_time: startTime ? toDbTime12h(startTime) : null,
+        end_time: endTime ? toDbTime12h(endTime) : null,
         first_session_date: startDate || null,
         session_count: sessionsNum >= 1 ? sessionsNum : 1,
         max_capacity: spotsNum,
@@ -236,10 +251,10 @@ export default function QuickProgramBuilder() {
             <label style={labelStyle} htmlFor="qpb-start-time">Start time</label>
             <input
               id="qpb-start-time"
+              type="time"
               style={inputStyle}
               value={startTime}
               onChange={(e) => setStartTime(e.target.value)}
-              placeholder="3:30 PM"
             />
           </div>
           <div>
