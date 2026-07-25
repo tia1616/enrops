@@ -116,6 +116,13 @@ function shapeNavForOrg(nav, org) {
                                      // here"), so there is no dashboard to give
                                      // them. Programs is their home; /admin
                                      // redirects there (see AdminOverview).
+    "/admin/team",                   // Extra admin seats. The checklist lists
+                                     // "full seats" as a PRO unlock, and free is
+                                     // registration + parent portal only — a
+                                     // solo operator has nobody to invite, so
+                                     // this is clutter until they upgrade. The
+                                     // ROUTE still works, so any org that
+                                     // already has a second admin keeps it.
     "/admin/schedule",               // Instructors (paid upgrade)
     "/admin/schools",                // Locations/Partners -> reachable via Settings
     "/admin/family-comms/contacts",  // Comms (paid upgrade)
