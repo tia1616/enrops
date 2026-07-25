@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { districtFullName } from '../../lib/tenants.js';
 import { useCart } from '../../context/CartContext.jsx';
+import { isEmbedContext } from '../../layouts/PublicLayout.jsx';
 import {
   formatMoney,
   formatEarlyBirdDate,
@@ -31,6 +32,10 @@ export default function Home() {
   const { org } = useOutletContext();
   const ORG_SLUG = org.slug;
   const navigate = useNavigate();
+  const embedLocation = useLocation();
+  // Embedded in the operator's own site (iframe): drop the big hero and the page
+  // background so the widget reads as part of THEIR page, not a framed app.
+  const isEmbed = isEmbedContext(embedLocation);
   const [searchParams] = useSearchParams();
   // ?keep=1 means we arrived here from the wizard's "Add another child" flow.
   // Skip clearCart so the in-progress sibling registration keeps its parent + child 1 state.
@@ -230,6 +235,9 @@ export default function Home() {
     const params = new URLSearchParams({ school: selectedSchool });
     if (programId) params.set('program', programId);
     if (isVip) params.set('vip', '1');
+    // Carry embed mode into the registration steps so the family never sees our
+    // header/footer appear mid-flow inside the operator's own page.
+    if (isEmbed) params.set('embed', '1');
     navigate(`/${ORG_SLUG}/register?${params.toString()}`);
   }
 
@@ -263,7 +271,17 @@ export default function Home() {
       fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'none', display: 'inline-block',
     };
     return (
-      <div style={{ minHeight: '100vh', background: '#F7F7FB', fontFamily: "'Poppins', system-ui, sans-serif", color: '#1a1a1a' }}>
+      <div style={{
+        minHeight: isEmbed ? 0 : '100vh',
+        background: isEmbed ? 'transparent' : '#F7F7FB',
+        fontFamily: "'Poppins', system-ui, sans-serif",
+        color: '#1a1a1a',
+      }}>
+        {/* The dark hero is the operator's PUBLIC page identity. Inside their own
+            website they've already got a header and their own branding above this
+            iframe, so repeating a big purple banner just looks like a bolted-on
+            widget. Embed mode goes straight to the classes. */}
+        {!isEmbed && (
         <div style={{ background: '#1C004F', color: '#fff', padding: '56px 20px 72px' }}>
           <div style={{ maxWidth: 820, margin: '0 auto' }}>
             <span style={{ display: 'inline-block', background: 'rgba(38,214,135,0.14)', border: '1px solid rgba(38,214,135,0.35)', color: '#26D687', borderRadius: 100, padding: '5px 14px', fontSize: 12, fontWeight: 600 }}>
@@ -277,8 +295,19 @@ export default function Home() {
             </p>
           </div>
         </div>
-        <div style={{ maxWidth: 820, margin: '-40px auto 0', padding: '0 20px 64px' }}>
-          <div style={{ background: '#fff', border: '1px solid #e2dfd5', borderRadius: 20, padding: '24px 22px', boxShadow: '0 8px 30px rgba(28,0,79,0.06)' }}>
+        )}
+        <div style={{
+          maxWidth: 820,
+          margin: isEmbed ? '0 auto' : '-40px auto 0',
+          padding: isEmbed ? '0' : '0 20px 64px',
+        }}>
+          <div style={{
+            background: '#fff',
+            border: isEmbed ? 'none' : '1px solid #e2dfd5',
+            borderRadius: isEmbed ? 0 : 20,
+            padding: isEmbed ? '4px 0' : '24px 22px',
+            boxShadow: isEmbed ? 'none' : '0 8px 30px rgba(28,0,79,0.06)',
+          }}>
             {loading ? (
               <div style={{ color: '#6b6b6b', padding: '24px 0', textAlign: 'center' }}>Loading classes&hellip;</div>
             ) : allOpen.length === 0 ? (

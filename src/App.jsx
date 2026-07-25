@@ -152,6 +152,12 @@ export default function App() {
         }
       >
         <Route index element={<Home />} />
+        {/* Embeddable catalog for the operator's OWN website. Same component as
+            the public catalog (one source of truth for the query + cards); Home
+            renders a compact, chrome-less variant when it's in embed mode, and
+            PublicLayout drops its header/footer for /embed and any ?embed=1
+            route so the whole flow looks native inside the operator's page. */}
+        <Route path="embed" element={<Home />} />
         <Route path="register" element={<Register />} />
         <Route path="register/success" element={<RegisterSuccess />} />
         <Route path="login" element={<Login />} />

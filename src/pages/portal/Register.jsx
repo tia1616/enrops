@@ -392,6 +392,25 @@ export default function Register() {
     navigate(`/${ORG_SLUG}?keep=1`);
   }
 
+  // Embedded in the operator's own website (iframe)? Stripe's hosted checkout
+  // REFUSES to be framed, so when we hand off to payment we must navigate the
+  // TOP-level window, not the iframe — otherwise the family gets a blank/refused
+  // frame at the exact moment they try to pay. `_top` works cross-origin given
+  // the click's user activation; fall back to a normal navigation if a sandbox
+  // blocks it (better a framed error than a dead button).
+  const isEmbed = searchParams.get('embed') === '1';
+  function goToPayment(url) {
+    if (isEmbed && window.self !== window.top) {
+      try {
+        window.open(url, '_top');
+        return;
+      } catch (_) {
+        /* fall through to same-frame navigation */
+      }
+    }
+    window.location.href = url;
+  }
+
   // paymentMethod: 'card' | 'us_bank_account', chosen on StepPay. Passed to
   // create-checkout so it builds a single-method session with the matching fee.
   // Ignored on the installments path (always card).
@@ -519,11 +538,11 @@ export default function Register() {
       }
       if (coData.comp) {
         // $0 scholarship — no payment. Go straight to the success page.
-        window.location.href = `/${ORG_SLUG}/register/success?comp=1`;
+        goToPayment(`/${ORG_SLUG}/register/success?comp=1`);
         return;
       }
       if (coData.url) {
-        window.location.href = coData.url;
+        goToPayment(coData.url);
       } else {
         throw new Error('Checkout session missing URL.');
       }

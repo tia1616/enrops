@@ -80,6 +80,15 @@ export default function PublicLayout() {
     );
   }
 
+  // EMBED: the operator has dropped this into an iframe on their OWN website, so
+  // we render NO header, footer, logo or account chrome — just the content, on a
+  // transparent background that inherits their page. Applies to /{slug}/embed and
+  // to any route carrying ?embed=1 (the registration steps the catalog links to),
+  // so the whole flow looks native inside their site instead of a bolted-on app.
+  if (isEmbedContext(location)) {
+    return <EmbedShell org={org} />;
+  }
+
   // J2S keeps its existing brand to avoid disturbing the live experience.
   // Everyone else gets the Enrops base brand for now â€” per-tenant theming is
   // a separate backlog item.
@@ -99,6 +108,60 @@ export default function PublicLayout() {
 // NOTE: computed per-shell, not in PublicLayout — these shells are SEPARATE
 // components that receive `location` as a prop, so a parent-scope const is not
 // visible here (that mistake white-screened the catalog once).
+// The embed shell: no header, no footer, no account chrome, transparent
+// background — just the content, so it reads as part of the operator's own page.
+//
+// It also reports its height to the host page. An iframe can't size itself, so
+// without this the operator would have to guess a fixed height and families
+// would get a scrollbar INSIDE their page (the thing that makes competitors'
+// embeds feel broken). We post on mount and on any content resize — stepping
+// through the registration steps changes the height a lot.
+//
+// postMessage targetOrigin is '*' deliberately: we don't know (and shouldn't
+// have to configure) the operator's domain, and the payload is a single layout
+// number with no personal data in it.
+function EmbedShell({ org }) {
+  useEffect(() => {
+    if (typeof window === 'undefined' || window.parent === window) return undefined;
+    const post = () => {
+      const height = Math.ceil(
+        document.documentElement?.scrollHeight || document.body?.scrollHeight || 0,
+      );
+      if (height > 0) window.parent.postMessage({ type: 'enrops:height', height }, '*');
+    };
+    post();
+    let ro;
+    if (typeof ResizeObserver !== 'undefined' && document.body) {
+      ro = new ResizeObserver(post);
+      ro.observe(document.body);
+    }
+    window.addEventListener('load', post);
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener('load', post);
+    };
+  }, []);
+
+  return (
+    <div
+      className={org.slug === 'j2s' ? 'brand-j2s' : 'brand-enrops-public'}
+      style={{ background: 'transparent', color: '#1a1a1a', fontFamily: 'inherit' }}
+    >
+      <Outlet context={{ org }} />
+    </div>
+  );
+}
+
+// True when we're rendering inside an operator's embedded iframe: either the
+// /{slug}/embed catalog itself, or a registration step it linked to carrying
+// ?embed=1. Module-level (not a component const) so both shells and the embed
+// branch can use it — see the scope note on isCheckoutPath below.
+export function isEmbedContext(location) {
+  const p = location?.pathname || '';
+  const q = location?.search || '';
+  return p.endsWith('/embed') || /[?&]embed=1(&|$)/.test(q);
+}
+
 function isCheckoutPath(location) {
   const p = location?.pathname || '';
   return p.includes('/register') && !p.includes('/register/success');
