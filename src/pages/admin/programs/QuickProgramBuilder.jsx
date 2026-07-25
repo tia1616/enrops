@@ -830,7 +830,9 @@ export default function QuickProgramBuilder() {
                     ))}
                   </div>
                 )}
-                <div style={{ marginTop: 6, color: MUTED }}>
+                {/* Bolded: this is the instruction, not commentary. It's the
+                    answer to the question the whole panel provokes. */}
+                <div style={{ marginTop: 6, color: INK, fontWeight: 600 }}>
                   To change any of it, finish this class first — it&rsquo;s all in Settings, under
                   Registration questions and Waivers &amp; policies.
                 </div>
