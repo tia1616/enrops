@@ -584,6 +584,12 @@ export default function QuickProgramBuilder() {
                 {/* Opens in place. Sending someone to the waiver editor here
                     drops them out of setting up their first class with no way
                     back to it — the one flow that must not be interrupted. */}
+                {/* Said up front, not only after expanding. "Can I change
+                    this?" is the question a waiver list provokes, and the
+                    answer was hidden behind a click. */}
+                <div style={{ fontSize: 12.5, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
+                  You can edit these any time in Settings, under Waivers &amp; policies.
+                </div>
                 <button
                   type="button"
                   onClick={() => setOpenWaiverId((id) => (id === "all" ? null : "all"))}
