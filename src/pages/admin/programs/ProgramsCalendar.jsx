@@ -541,6 +541,23 @@ export default function ProgramsCalendar() {
 
   return (
     <div>
+      {/* MOBILE PROGRAM ROWS. Each row is a 6-column grid with 450px of FIXED
+          columns, so on a phone it overflowed horizontally and the cells at the
+          end — enrollment and the roster chevron — were pushed off-screen. This
+          page is now the lean operator's HOME, and enrollment is the number they
+          come here for, so it can't be the thing that gets clipped.
+          Under 900px the row reflows to "details | number" and wraps, keeping
+          every cell on screen. !important because the row styles are inline. */}
+      <style>{`
+        @media (max-width: 900px) {
+          [data-program-row] {
+            grid-template-columns: 1fr auto !important;
+            gap: 4px 12px !important;
+            padding: 12px 14px !important;
+            align-items: start !important;
+          }
+        }
+      `}</style>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Scheduled programs</h1>
@@ -1025,7 +1042,12 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
 
   return (
     <>
-    <div style={{
+    <div data-program-row style={{
+      // 450px of FIXED columns before the flexible one, so on a phone the row
+      // overflowed and the enrollment + action cells were pushed off-screen.
+      // The mobile rule (in ProgramsCalendar's <style>) reflows this to two
+      // columns so enrollment stays visible — it's the number an operator opens
+      // this page for.
       display: "grid",
       gridTemplateColumns: "100px 1fr 110px 90px 80px 70px",
       gap: 14,
