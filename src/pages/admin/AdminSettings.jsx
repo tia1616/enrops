@@ -387,7 +387,11 @@ function PageAddressSection({ org, onSaved }) {
     setSaving(true);
     setErr("");
     try {
-      const { data, error } = await supabase.rpc("rename_org_slug", { p_slug: cleaned });
+      // The org id is passed explicitly and authorized server-side. The function
+      // used to infer it from the caller's oldest membership, which renames the
+      // WRONG organisation for anyone who administers two - and on prod the
+      // oldest membership is the J2S ownership.
+      const { data, error } = await supabase.rpc("rename_org_slug", { p_org_id: org.id, p_slug: cleaned });
       if (error) throw error;
       if (!data?.ok) {
         setErr(MESSAGES[data?.code] || "That didn't work. Please try another address.");
