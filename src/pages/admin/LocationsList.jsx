@@ -535,7 +535,9 @@ function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
           {populatedFields.length === 0 && contactBits.length === 0 ? (
             <div style={{ fontSize: 13, color: CORAL, fontStyle: "italic" }}>
-              No details filled in yet — instructors won't see any extra info for this location.
+              {isLean
+                ? "No address yet — families won't see where this one is."
+                : "No details filled in yet — instructors won't see any extra info for this location."}
             </div>
           ) : (
             <>
@@ -578,9 +580,13 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
         <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>
           {isNew ? "New location" : `Editing ${title}`}
         </div>
-        <div style={{ fontSize: 11, color: MUTED }}>
-          Fields marked <span style={{ color: OK_GREEN, fontWeight: 600 }}>visible to instructors</span> show up in offer emails.
-        </div>
+        {/* The legend explains a badge that no longer appears for registration
+            operators, so it goes with it. */}
+        {!isLean && (
+          <div style={{ fontSize: 11, color: MUTED }}>
+            Fields marked <span style={{ color: OK_GREEN, fontWeight: 600 }}>visible to instructors</span> show up in offer emails.
+          </div>
+        )}
       </div>
 
       <Field
