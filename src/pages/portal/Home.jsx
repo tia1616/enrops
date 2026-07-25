@@ -359,7 +359,20 @@ export default function Home() {
                 <div style={{ display: 'grid', gap: 12 }}>
                   {openPrograms.map((p) => {
                     const timeStr = [p.start_time, p.end_time].filter(Boolean).join(' – ');
-                    const meta = [`${p.day_of_week}s`, timeStr, p.program_locations?.name].filter(Boolean).join(' · ');
+                    // "Is my child old enough?" is the first thing a parent asks
+                    // and the most common reason they message the provider
+                    // instead of registering. Only shown when the operator has
+                    // actually said - never guessed from grades.
+                    const ageStr = p.age_min != null && p.age_max != null
+                      ? `Ages ${p.age_min}–${p.age_max}`
+                      : p.age_min != null
+                        ? `Ages ${p.age_min}+`
+                        : p.age_max != null
+                          ? `Up to age ${p.age_max}`
+                          : null;
+                    // A one-off workshop meets once, so "Mondays" would be wrong.
+                    const dayStr = p.session_count === 1 ? p.day_of_week : `${p.day_of_week}s`;
+                    const meta = [dayStr, timeStr, p.program_locations?.name, ageStr].filter(Boolean).join(' · ');
                     const hl = highlightProgram === p.id;
                     // Optional program photo. alt="" because the class name sits
                     // right beside it — announcing the file twice adds nothing.

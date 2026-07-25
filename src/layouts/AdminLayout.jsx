@@ -218,7 +218,10 @@ export default function AdminLayout() {
           // stripe_charges_enabled rides along so any admin surface can tell the
           // truth about whether this org can actually take money yet (a program
           // can be "open for registration" while payments have nowhere to land).
-          .select("id, name, slug, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, stripe_charges_enabled")
+          // The onboarding answers ride along too: they decide which fields the
+          // program builder shows, so every surface that reads `org` from the
+          // outlet can adapt without its own query.
+          .select("id, name, slug, email, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, stripe_charges_enabled, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;

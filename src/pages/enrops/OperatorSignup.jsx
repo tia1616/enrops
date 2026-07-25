@@ -107,7 +107,15 @@ export default function OperatorSignup() {
     const name = businessName.trim();
     if (!name) { setError('Please enter your business name.'); return; }
     setLoading(true); setError('');
-    const { data, error: err } = await supabase.rpc('provision_operator_org', { p_business_name: name });
+    // Timezone, taken silently rather than asked. organizations.timezone defaults
+    // to America/Los_Angeles, so until now every operator outside the Pacific has
+    // been running on Pacific times without ever being told - class times,
+    // reminders, everything derived from them. The browser already knows, and an
+    // unrecognised value is ignored server-side, so this can only improve on the
+    // guess. Changeable later in Settings.
+    let tz = null;
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { tz = null; }
+    const { data, error: err } = await supabase.rpc('provision_operator_org', { p_business_name: name, p_timezone: tz });
     setLoading(false);
     if (err) {
       // Concurrent double-submit: the owner unique index
