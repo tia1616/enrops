@@ -60,6 +60,8 @@ function suggestStatementSuffix(orgName) {
 
 export default function Finances() {
   const { org, orgMember } = useOutletContext();
+  // Registration-only operators: no school invoicing, no instructor payroll.
+  const isLean = org?.instructor_pay_model === "enrops_platform";
   const [searchParams] = useSearchParams();
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -426,11 +428,18 @@ export default function Finances() {
 
   return (
     <PageShell>
+      {/* Heading and subtitle follow the nav. A registration operator's nav says
+          "Payments", so a page titled "Receivables" reads as a different screen —
+          and the old subtitle promised "invoices to schools", which they don't
+          have and can't get. Say what this page actually is for them. J2S keeps
+          the accounting language its nav still uses. */}
       <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700 }}>
-        Receivables
+        {isLean ? "Payments" : "Receivables"}
       </h1>
       <p style={{ margin: "0 0 24px", color: MUTED, fontSize: 14 }}>
-        Money coming in — parent payments, invoices to schools, refunds.
+        {isLean
+          ? "Money from families — what's come in, and anything you've refunded."
+          : "Money coming in — parent payments, invoices to schools, refunds."}
       </p>
 
       {stripeParam === "return" && (
@@ -686,9 +695,13 @@ export default function Finances() {
       {isActive && (
         <>
           <AchAttention org={org} />
-          <TabsNav tab={tab} onTab={setTab} />
-          {tab === "activity" && <ActivityTab org={org} />}
-          {tab === "invoices" && <InvoicesTab />}
+          {/* Invoices is school-billing, which a registration operator has no
+              use for. Hidden for lean along with its tab, and `tab` is coerced
+              back to activity so a stale "invoices" selection can't render an
+              empty screen with no way out. */}
+          <TabsNav tab={tab} onTab={setTab} hideInvoices={isLean} />
+          {(tab === "activity" || (isLean && tab === "invoices")) && <ActivityTab org={org} />}
+          {tab === "invoices" && !isLean && <InvoicesTab />}
           {tab === "refunds" && <RefundsTab />}
         </>
       )}
@@ -840,11 +853,13 @@ function SetupBanner({ accountId, chargesEnabled, payoutsEnabled, open, onToggle
   );
 }
 
-// Horizontal tabs nav inside Receivables.
-function TabsNav({ tab, onTab }) {
+// Horizontal tabs nav inside the payments/receivables page.
+function TabsNav({ tab, onTab, hideInvoices = false }) {
   const items = [
     { key: "activity", label: "Activity" },
-    { key: "invoices", label: "Invoices" },
+    // Invoices = billing a partner school. A registration operator bills
+    // families through checkout and never raises one.
+    ...(hideInvoices ? [] : [{ key: "invoices", label: "Invoices" }]),
     { key: "refunds",  label: "Refunds" },
   ];
   return (
