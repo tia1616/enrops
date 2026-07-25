@@ -277,20 +277,35 @@ export default function QuickProgramBuilder() {
   // get. Naming them here is the whole fix.
   const [waivers, setWaivers] = useState([]);
   const [openWaiverId, setOpenWaiverId] = useState(null);
+  const [extraQuestions, setExtraQuestions] = useState([]);
+  const [showInherited, setShowInherited] = useState(false);
+  // Loaded for every lean operator, not just first-run: the returning-operator
+  // line below summarises these in place rather than sending anyone to Settings
+  // mid-build.
   useEffect(() => {
-    if (!org?.id || !needsOnboarding) return;
+    if (!org?.id || !isLean) return;
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
-        .from("waivers")
-        .select("id, name, required, content")
-        .eq("organization_id", org.id)
-        .eq("active", true)
-        .order("created_at");
-      if (!cancelled) setWaivers(data ?? []);
+      const [{ data: wv }, { data: qs }] = await Promise.all([
+        supabase
+          .from("waivers")
+          .select("id, name, required, content")
+          .eq("organization_id", org.id)
+          .eq("active", true)
+          .order("created_at"),
+        supabase
+          .from("custom_reg_fields")
+          .select("label")
+          .eq("organization_id", org.id)
+          .eq("is_active", true)
+          .order("sort_order"),
+      ]);
+      if (cancelled) return;
+      setWaivers(wv ?? []);
+      setExtraQuestions((qs ?? []).map((q) => q.label).filter(Boolean));
     })();
     return () => { cancelled = true; };
-  }, [org?.id, needsOnboarding]);
+  }, [org?.id, isLean]);
 
   const ansAgeMinNum = ansAgeMin === "" ? null : parseInt(ansAgeMin, 10);
   const ansAgeMaxNum = ansAgeMax === "" ? null : parseInt(ansAgeMax, 10);
@@ -734,16 +749,46 @@ export default function QuickProgramBuilder() {
         {/* Every class after the first inherits the questions and waivers set
             during onboarding. Saying so once, quietly, is the difference between
             "it just works" and "did it ask them anything?" */}
+        {/* Shows what will be asked, IN PLACE. This used to be a "Change" link
+            straight to Settings, which threw an operator out of a half-filled
+            class with no route back - the same trap as the onboarding card's
+            waiver link. Nothing here navigates: the answer to "what do these
+            say?" is shown, and the answer to "how do I change them?" is a
+            sentence, because Settings is thirty seconds away once the class is
+            saved. */}
         {isLean && profile.onboarding_completed_at && (
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", fontSize: 13, color: MUTED, background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px" }}>
-            <span>Using your usual questions and waivers.</span>
-            <button
-              type="button"
-              onClick={() => navigate("/admin/registration-questions")}
-              style={{ background: "none", border: "none", color: BRIGHT, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
-            >
-              Change
-            </button>
+          <div style={{ fontSize: 13, color: MUTED, background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <span>Using your usual questions and waivers.</span>
+              <button
+                type="button"
+                onClick={() => setShowInherited((v) => !v)}
+                aria-expanded={showInherited}
+                style={{ background: "none", border: "none", color: BRIGHT, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+              >
+                {showInherited ? "Hide" : "See what that means"}
+              </button>
+            </div>
+            {showInherited && (
+              <div style={{ marginTop: 8, lineHeight: 1.6 }}>
+                <div>
+                  <strong style={{ color: INK }}>Families are asked for</strong> their child&rsquo;s name and
+                  birth date, allergies and medical notes, an emergency contact, and the parent&rsquo;s
+                  contact details
+                  {extraQuestions.length > 0 && <>, plus: {extraQuestions.join(", ")}</>}.
+                </div>
+                {waivers.length > 0 && (
+                  <div style={{ marginTop: 4 }}>
+                    <strong style={{ color: INK }}>They sign</strong>{" "}
+                    {waivers.map((w) => w.name).join(", ")}.
+                  </div>
+                )}
+                <div style={{ marginTop: 6, color: MUTED }}>
+                  To change any of it, finish this class first — it&rsquo;s all in Settings, under
+                  Registration questions and Waivers &amp; policies.
+                </div>
+              </div>
+            )}
           </div>
         )}
 
