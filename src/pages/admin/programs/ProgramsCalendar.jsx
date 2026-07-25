@@ -14,6 +14,7 @@ import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
+import EmbedSnippet from "../../../components/EmbedSnippet.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
@@ -557,6 +558,12 @@ export default function ProgramsCalendar() {
               description="One link to all your open programs — families pick a class and sign up. Put it in your bio, an email, or a flyer."
               qrFileBase="registration-page"
             />
+          )}
+          {/* On-domain embed — the biggest differentiator vs Jumbula/Sawyer/
+              CourseStorm, whose widgets redirect off-site or slow the page.
+              Registration ops only; J2S runs its own site and doesn't need it. */}
+          {org?.slug && org?.instructor_pay_model === "enrops_platform" && (
+            <EmbedSnippet slug={org.slug} orgName={org.name} />
           )}
           <Link
             // Lean registration operators (enrops_platform) get the curriculum-free
