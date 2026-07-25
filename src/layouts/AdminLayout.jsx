@@ -111,6 +111,11 @@ const NAV = [
 function shapeNavForOrg(nav, org) {
   if (org?.instructor_pay_model !== "enrops_platform") return nav; // full nav (J2S etc.)
   const HIDE_TOP = new Set([
+    "/admin",                        // Overview/dashboard — the free tier is
+                                     // REGISTRATION ONLY ("nothing else lives
+                                     // here"), so there is no dashboard to give
+                                     // them. Programs is their home; /admin
+                                     // redirects there (see AdminOverview).
     "/admin/schedule",               // Instructors (paid upgrade)
     "/admin/schools",                // Locations/Partners -> reachable via Settings
     "/admin/family-comms/contacts",  // Comms (paid upgrade)
@@ -203,7 +208,10 @@ export default function AdminLayout() {
         // Fetch org name + branding (display only — does not gate access)
         const { data: orgRow } = await supabase
           .from("organizations")
-          .select("id, name, slug, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model")
+          // stripe_charges_enabled rides along so any admin surface can tell the
+          // truth about whether this org can actually take money yet (a program
+          // can be "open for registration" while payments have nowhere to land).
+          .select("id, name, slug, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, stripe_charges_enabled")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;

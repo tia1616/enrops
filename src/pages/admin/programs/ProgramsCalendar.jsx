@@ -593,9 +593,28 @@ export default function ProgramsCalendar() {
 
       {term && termsLoaded && (
         activeTerm === term ? (
-          <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
-            ✓ {formatTermLabel(term)} is open for registration — this is what parents see.
-          </div>
+          // Honest state: a term can be "open for registration" while the org has
+          // no Stripe account connected — the page takes sign-ups but the money
+          // has nowhere of theirs to land. Saying a plain green "open" there tells
+          // an operator they're done when they aren't. Lean ops only; J2S is
+          // connected and keeps the original banner exactly.
+          org?.instructor_pay_model === "enrops_platform" && org?.stripe_charges_enabled === false ? (
+            <div style={{ ...registrationBanner, background: "#fff8ec", borderColor: "#f0dfb8", color: AMBER }}>
+              <span>
+                {formatTermLabel(term)} is open for registration, but you can't get paid yet — connect Stripe to start receiving payments.
+              </span>
+              <Link
+                to="/admin/finances"
+                style={{ background: AMBER, color: "#fff", borderRadius: 6, padding: "6px 12px", fontSize: 13, fontWeight: 600, textDecoration: "none", flexShrink: 0, whiteSpace: "nowrap" }}
+              >
+                Connect Stripe →
+              </Link>
+            </div>
+          ) : (
+            <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
+              ✓ {formatTermLabel(term)} is open for registration — this is what parents see.
+            </div>
+          )
         ) : (
           <div style={{ ...registrationBanner, background: "#fff8ec", borderColor: "#f0dfb8", color: AMBER }}>
             <span>

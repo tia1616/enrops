@@ -2,7 +2,7 @@
 // Default landing for /admin. Placeholder cards for the surfaces being built.
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, useOutletContext } from "react-router-dom";
+import { Link, Navigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { defaultTenantSlug } from "../../lib/tenants.js";
 import { fetchOrgTerms } from "../../lib/terms.js";
@@ -282,7 +282,11 @@ export default function AdminOverview() {
     return () => { cancelled = true; };
   }, [org?.id]);
 
-  // First-run gate: a lean op with no program yet sees exactly one prompt.
+  // The free tier is REGISTRATION ONLY — "nothing else lives here" — so a lean
+  // operator has no dashboard at all. No program yet: the single build prompt.
+  // Once they have one, Programs IS their home, so /admin redirects there
+  // rather than showing a stats dashboard for features they don't have.
+  // "Overview" is also hidden from their sidebar (AdminLayout shapeNavForOrg).
   if (isLean) {
     if (programCount === null) {
       return <div style={{ padding: 40, textAlign: "center", color: MUTED }}>Loading…</div>;
@@ -290,6 +294,7 @@ export default function AdminOverview() {
     if (programCount === 0) {
       return <FirstRunPrompt orgName={org?.name} />;
     }
+    return <Navigate to="/admin/programs" replace />;
   }
 
   return (
