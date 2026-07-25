@@ -161,7 +161,12 @@ create or replace function public.seed_default_waivers(p_org_id uuid)
 returns integer
 language plpgsql
 security definer
-set search_path to 'public'
+-- pg_temp is named explicitly: without it Postgres searches the temp schema
+-- FIRST for unqualified relation names, so a temp table called `organizations`
+-- could redirect the slug='enrops' lookup below and seed one org's waivers from
+-- another's. The sibling functions in this release already do this; this one
+-- inherited the gap from its predecessor.
+set search_path to 'public', 'pg_temp'
 as $function$
 declare
   v_platform uuid;
@@ -206,12 +211,24 @@ begin
     select id, name from public.organizations
     where instructor_pay_model = 'enrops_platform' and id <> v_platform
   loop
-    -- Retire anything that still carries a blank or a baked name.
+    -- Retire only what is RECOGNISABLY our unmodified stock template.
+    --
+    -- The unfilled "[your ...]" placeholders are the reliable tell: they exist
+    -- only in text nobody has edited, because editing is precisely what fills
+    -- them in. Every seeded copy in both environments carries them (verified by
+    -- count before running).
+    --
+    -- An earlier version of this also archived anything missing the {{org}}
+    -- token, which would have silently deactivated and replaced the waivers of
+    -- any operator who had WRITTEN THEIR OWN — their text has no token either.
+    -- Losing an operator's own legal wording to a backfill is not a trade worth
+    -- making to tidy up a template, so the token clause is gone. An operator
+    -- who customised their waiver simply keeps it.
     update public.waivers
     set active = false, updated_at = now()
     where organization_id = v_org.id
       and active = true
-      and (content like '%[your %' or content not like '%{{org}}%');
+      and content like '%[your %';
 
     -- Copy the current library across, skipping any the org already has by name.
     insert into public.waivers (organization_id, name, content, required, active)

@@ -39,10 +39,17 @@ begin
     return jsonb_build_object('ok', false, 'code', 'not_authenticated');
   end if;
 
+  -- accepted_at must be checked HERE, not only inside can_admin_org. Without it
+  -- an older UNACCEPTED admin invite to org A sorts first, becomes v_org, and
+  -- then fails can_admin_org - permanently blocking the caller from renaming the
+  -- org they actually own. Fails closed, so it's a lockout rather than a hole,
+  -- but it locks out the wrong person.
   select m.organization_id, o.slug into v_org, v_current
   from public.org_members m
   join public.organizations o on o.id = m.organization_id
-  where m.auth_user_id = v_uid and m.role in ('owner', 'admin')
+  where m.auth_user_id = v_uid
+    and m.role in ('owner', 'admin')
+    and m.accepted_at is not null
   order by m.created_at
   limit 1;
 

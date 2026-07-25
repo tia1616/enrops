@@ -383,9 +383,17 @@ serve(async (req) => {
       );
 
       if (waiverIds.length) {
+        // Same-org enforcement on every referenced row. waiverIds arrives in
+        // the request body and this is a PUBLIC endpoint holding a service-role
+        // client, so without the organization_id filter a caller could name
+        // another org's waiver id and have that org's text stored as the
+        // agreement this family signed. Low value to steal, but the rule in
+        // this function is that nothing client-supplied is trusted without
+        // being re-scoped server-side, and this line was the exception.
         const { data: waiverRows } = await admin
           .from('waivers')
           .select('id, name, content, version')
+          .eq('organization_id', orgId)
           .in('id', waiverIds);
 
         // Create signature for each agreed waiver on each registration for this child.
