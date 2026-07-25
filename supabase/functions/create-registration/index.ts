@@ -404,10 +404,25 @@ serve(async (req) => {
         let programFitText = '';
 
         for (const w of waiverRows || []) {
-          const isJ2sWaiver = /waiver.*agreement|j2s.*waiver|waiver.*j2s/i.test(w.name);
+          // Photo consent is recorded from whichever document actually carries
+          // the photo clause. Two shapes exist and both must keep working:
+          //
+          //   - the LEGACY bundled agreement, where the photo clause is one
+          //     numbered line inside the liability text (J2S signs this today,
+          //     91 signatures deep) — matched by name, exactly as before;
+          //   - the SEPARATE photo release, which is its own optional document.
+          //
+          // Dropping the legacy match would silently stop recording consent for
+          // J2S; not adding the new one would silently stop recording it for
+          // every provider on the split templates. The split also makes the
+          // consent meaningful for the first time: a family can decline the
+          // photo release and still register, which is impossible while the
+          // clause is buried inside an agreement they must accept to enroll.
+          const isLegacyBundledWaiver = /waiver.*agreement|j2s.*waiver|waiver.*j2s/i.test(w.name);
+          const isPhotoRelease = /photo|media release/i.test(w.name);
           const isProgFit = /program fit|inclusivity/i.test(w.name);
 
-          if (isJ2sWaiver) photoReleaseTrue = true;
+          if (isLegacyBundledWaiver || isPhotoRelease) photoReleaseTrue = true;
           if (isProgFit) {
             programFitTrue = true;
             programFitText = child.waivers[w.id]?.comments || '';

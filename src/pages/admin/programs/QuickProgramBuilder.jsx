@@ -267,13 +267,14 @@ export default function QuickProgramBuilder() {
   // been shown them, which is why "do we even have a waiver?" is a question we
   // get. Naming them here is the whole fix.
   const [waivers, setWaivers] = useState([]);
+  const [openWaiverId, setOpenWaiverId] = useState(null);
   useEffect(() => {
     if (!org?.id || !needsOnboarding) return;
     let cancelled = false;
     (async () => {
       const { data } = await supabase
         .from("waivers")
-        .select("id, name, required")
+        .select("id, name, required, content")
         .eq("organization_id", org.id)
         .eq("active", true)
         .order("created_at");
@@ -569,13 +570,34 @@ export default function QuickProgramBuilder() {
                         <span key={w.id}>{i > 0 && (i === waivers.length - 1 ? " and " : ", ")}<strong>{w.name}</strong></span>
                       ))} before they finish registering.</>}
                 </div>
+                {/* Opens in place. Sending someone to the waiver editor here
+                    drops them out of setting up their first class with no way
+                    back to it — the one flow that must not be interrupted. */}
                 <button
                   type="button"
-                  onClick={() => navigate("/admin/waivers")}
+                  onClick={() => setOpenWaiverId((id) => (id === "all" ? null : "all"))}
+                  aria-expanded={openWaiverId === "all"}
                   style={{ marginTop: 6, background: "none", border: "none", color: BRIGHT, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
                 >
-                  Read or edit the wording
+                  {openWaiverId === "all" ? "Hide the wording" : "Read the wording"}
                 </button>
+                {openWaiverId === "all" && (
+                  <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                    {waivers.map((w) => (
+                      <div key={w.id}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: INK, marginBottom: 4 }}>
+                          {w.name}{w.required === false ? " (families can decline this one)" : ""}
+                        </div>
+                        <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff", padding: 10, fontSize: 12, color: MUTED, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
+                          {renderWaiverText(w.content, org?.name)}
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{ fontSize: 12, color: MUTED }}>
+                      You can edit any of this later in Settings, under Waivers &amp; policies.
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -583,13 +605,11 @@ export default function QuickProgramBuilder() {
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: 13, color: INK, lineHeight: 1.6 }}>
                 When a family replies to one of your emails, it goes to{" "}
                 <strong style={{ wordBreak: "break-all" }}>{org.email}</strong>.
-                <button
-                  type="button"
-                  onClick={() => navigate("/admin/email-sender")}
-                  style={{ marginLeft: 6, background: "none", border: "none", color: BRIGHT, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
-                >
-                  Change
-                </button>
+                {/* Deliberately not a link. Everything on this screen has to
+                    keep them on this screen; changing the address is a Settings
+                    job they can do any time, and saying where it lives is
+                    enough. */}
+                <span style={{ color: MUTED }}> You can change that later in Settings.</span>
               </div>
             )}
           </div>

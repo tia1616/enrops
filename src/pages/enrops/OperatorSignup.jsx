@@ -94,7 +94,13 @@ export default function OperatorSignup() {
       });
       if (fnErr) throw fnErr;
       if (data?.error) throw new Error(data.error);
-      setMsg(`Check ${email} for your sign-in link, then you're one step from live.`);
+      // Names what is actually left instead of claiming "one step from live",
+      // which it never was — after the link there's the business name, the first
+      // class, and Stripe. Three small things read as fast on their own; the
+      // shortness of the list is the promise, so it doesn't need a time claim.
+      // Deliberately NOT "in under ten minutes": that is the target we are
+      // building toward, not a number anyone has measured yet.
+      setMsg(`Check ${email} for your sign-in link. Then it's three things: name your business, add your first class, and connect Stripe to get paid.`);
     } catch (err) {
       setError(friendly(err));
     } finally {

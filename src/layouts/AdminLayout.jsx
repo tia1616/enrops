@@ -183,6 +183,12 @@ export default function AdminLayout() {
   const [timeSavedTotal, setTimeSavedTotal] = useState(null);
   const [timeSavedRecent, setTimeSavedRecent] = useState([]);
   const [tallyOpen, setTallyOpen] = useState(false);
+  // Mobile menu. Desktop ignores this entirely — the sidebar is always shown
+  // there and the button that toggles this is display:none above 900px.
+  const [navOpen, setNavOpen] = useState(false);
+  // Tapping a destination should take you there, not leave the menu covering
+  // the page you just asked for.
+  useEffect(() => { setNavOpen(false); }, [location.pathname]);
 
   useEffect(() => {
     let mounted = true;
@@ -353,38 +359,48 @@ export default function AdminLayout() {
           The active-item accent moves from a left border (meaningless in a row) to
           the white pill + colour it already carries. */}
       <style>{`
+        /* Desktop keeps the sidebar; the mobile bar only exists under 900px. */
+        [data-admin-mobilebar] { display: none; }
+
         @media (max-width: 900px) {
           [data-admin-grid] { grid-template-columns: 1fr !important; }
+
+          /* A menu button, not a scrolling strip.
+             The first pass at mobile turned the sidebar into a horizontally
+             scrollable row of links, which fixed "unusable" but isn't how a
+             phone menu works — items sit off-screen with nothing to say they
+             exist, and you have to swipe a strip to find "Settings". Standard
+             behaviour is a menu button that opens the whole list, so that's
+             what this is. */
+          [data-admin-mobilebar] {
+            display: flex !important;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 14px;
+            background: ${LAVENDER};
+            border-bottom: 1px solid ${RULE};
+            position: sticky;
+            top: 0;
+            z-index: 40;
+          }
+
+          /* Closed by default; the button reveals it as a full-width panel. */
           [data-admin-sidebar] {
+            display: none !important;
+          }
+          [data-admin-sidebar][data-open="true"] {
+            display: flex !important;
             position: static !important;
             height: auto !important;
-            flex-direction: row !important;
-            align-items: center !important;
-            gap: 4px;
-            overflow-x: auto !important;
-            overflow-y: hidden !important;
-            -webkit-overflow-scrolling: touch;
-            padding: 8px 12px !important;
+            padding: 8px 0 14px !important;
             border-right: none !important;
             border-bottom: 1px solid ${RULE} !important;
           }
-          [data-admin-sidebar] > div:first-child {
-            border-bottom: none !important;
-            padding: 0 14px 0 0 !important;
-            flex: 0 0 auto;
-          }
-          [data-admin-sidebar] nav {
-            display: flex !important;
-            flex-direction: row !important;
-            flex: 0 0 auto !important;
-            padding: 0 !important;
-            gap: 4px;
-          }
-          [data-admin-sidebar] nav a {
-            white-space: nowrap;
-            margin: 0 !important;
-            border-left: none !important;
-          }
+          /* The wordmark and org name already sit in the bar above. */
+          [data-admin-sidebar] > div:first-child { display: none !important; }
+          [data-admin-sidebar] nav a { border-left: none !important; }
+
           [data-admin-main] { padding: 16px 14px !important; max-width: 100% !important; }
 
           /* ROOT CAUSE of admin pages being wider than the phone: a flex or grid
@@ -417,9 +433,44 @@ export default function AdminLayout() {
           [data-admin-main] textarea { font-size: 16px !important; }
         }
       `}</style>
+      {/* Mobile bar: wordmark, who you're signed in as, and the menu button.
+          Hidden entirely on desktop, where the sidebar is always visible. */}
+      <div data-admin-mobilebar>
+        <div style={{ minWidth: 0 }}>
+          <EnropsWordmark height={22} />
+          <div style={{ fontSize: 11.5, color: MUTED, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            Admin · {org?.name ?? "—"}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setNavOpen((v) => !v)}
+          aria-expanded={navOpen}
+          aria-controls="admin-nav"
+          aria-label={navOpen ? "Close menu" : "Open menu"}
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            background: navOpen ? BRIGHT : "#fff",
+            color: navOpen ? "#fff" : INK,
+            border: `1px solid ${navOpen ? BRIGHT : RULE}`,
+            borderRadius: 8, padding: "9px 13px", cursor: "pointer",
+            fontFamily: "inherit", fontSize: 14, fontWeight: 600,
+            // 44px is the minimum comfortable touch target.
+            minHeight: 44,
+          }}
+        >
+          <span aria-hidden="true" style={{ display: "inline-flex", flexDirection: "column", gap: 3.5 }}>
+            <span style={{ display: "block", width: 17, height: 2, borderRadius: 2, background: "currentColor" }} />
+            <span style={{ display: "block", width: 17, height: 2, borderRadius: 2, background: "currentColor" }} />
+            <span style={{ display: "block", width: 17, height: 2, borderRadius: 2, background: "currentColor" }} />
+          </span>
+          Menu
+        </button>
+      </div>
+
       <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
         {/* Sidebar */}
-        <aside data-admin-sidebar style={{
+        <aside data-admin-sidebar id="admin-nav" data-open={navOpen ? "true" : "false"} style={{
           background: LAVENDER,
           borderRight: `1px solid ${RULE}`,
           padding: "20px 0",
