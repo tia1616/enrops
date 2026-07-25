@@ -230,6 +230,13 @@ export default function Dashboard() {
             )
           )`)
         .eq('parent_id', p.id)
+        // Scope to the provider whose portal this is. Without it a parent with
+        // children at two providers sees provider A's enrolments on provider
+        // B's page, and — worse — the waiver gate below pairs THIS provider's
+        // required waivers with the OTHER provider's registrations, recording a
+        // signature against a contract it doesn't belong to. Four such rows
+        // already exist on staging, written in one batch.
+        .eq('organization_id', org.id)
         .in('status', ['confirmed'])
         .not('program_id', 'is', null)
         .order('registered_at', { ascending: true });
@@ -247,6 +254,7 @@ export default function Dashboard() {
             )
           )`)
         .eq('parent_id', p.id)
+        .eq('organization_id', org.id)   // same tenant scoping as the program query above
         .in('status', ['confirmed'])
         .not('camp_session_id', 'is', null)
         .order('registered_at', { ascending: true });
