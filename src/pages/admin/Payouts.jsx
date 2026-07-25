@@ -99,7 +99,7 @@ function ReportsTab() {
       background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12,
       padding: 32, textAlign: "center", color: MUTED, fontSize: 14,
     }}>
-      Annual statements, instructor 1099s, and platform fee summaries will
+      Annual statements, instructor 1099s, and enrops service fee summaries will
       live here.
       <div style={{ fontSize: 12, marginTop: 8 }}>
         Coming next — exportable for your accountant.

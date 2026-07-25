@@ -519,13 +519,19 @@ export default function Finances() {
           <Card>
             <Section>
               <Heading>Fees on each payment</Heading>
+              {/* "service fee", never "processing fee", for OUR charge. It is
+                  enrops's own fee taken as a Stripe Connect application fee, not
+                  a markup on the card transaction — and surcharging a card cost
+                  to a customer is prohibited in CT/ME/MA and constrained in CA.
+                  Stripe's own fee below keeps the word "processing", because
+                  that is exactly what it is. The two must never read as one. */}
               <p style={{ color: MUTED, fontSize: 14, marginTop: 0 }}>
-                Two separate fees come out of each parent payment — enrops's platform
+                Two separate fees come out of each parent payment — the enrops service
                 fee and Stripe's processing fee. They're never bundled into one number.
               </p>
 
               <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, margin: "4px 0 8px" }}>
-                enrops platform fee
+                enrops service fee
               </div>
               <FeeReadout config={config} />
 
@@ -539,7 +545,7 @@ export default function Finances() {
                 </div>
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
                   Charged by Stripe and deducted from your payout. This is separate from
-                  the enrops platform fee above — not an enrops fee.
+                  the enrops service fee above — not an enrops fee.
                 </div>
               </div>
 
@@ -892,12 +898,12 @@ function FeePayerRow({ feePassThrough, canManage, onToggle }) {
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
       <div>
         <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
-          Who pays the enrops platform fee?
+          Who pays the enrops service fee?
         </div>
         <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
           {feePassThrough
-            ? "Families cover the enrops platform fee as a separate line at checkout. (Stripe's processing fee still comes out of your payout.)"
-            : "Your organization absorbs the enrops platform fee — families pay your base price. (Stripe's processing fee still applies.)"}
+            ? "Families cover the enrops service fee as a separate line at checkout. (Stripe's processing fee still comes out of your payout.)"
+            : "Your organization absorbs the enrops service fee — families pay your base price. (Stripe's processing fee still applies.)"}
         </div>
       </div>
       {canManage ? (

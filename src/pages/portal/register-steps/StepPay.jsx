@@ -69,7 +69,7 @@ export default function StepPay({
         </p>
         {feeToday > 0 && (
           <p className="mt-2 text-sm text-white/90">
-            {formatMoney(displayAmount)} + {formatMoney(feeToday)} service fee
+            {formatMoney(displayAmount)} + {formatMoney(feeToday)} enrops service fee
           </p>
         )}
         <p className="mt-3 text-white/80">
@@ -113,7 +113,7 @@ export default function StepPay({
           </div>
           <p className="mt-3 text-xs text-j2s-ink/60">
             Your card on file will be charged automatically on each date.
-            {feeToday > 0 && ' Each charge includes the service fee.'}
+            {feeToday > 0 && ' Each charge includes the enrops service fee.'}
           </p>
         </div>
       )}

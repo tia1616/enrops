@@ -430,7 +430,7 @@ export default function Home() {
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               <span style={{ fontWeight: 600, color: '#1a1a1a' }}>{formatMoney(totalWithFee(p.price_cents, feeConfig))}</span>
                               {feeOnCents(p.price_cents, feeConfig) > 0 && (
-                                <span> · {formatMoney(p.price_cents)} class + {formatMoney(feeOnCents(p.price_cents, feeConfig))} service fee</span>
+                                <span> · {formatMoney(p.price_cents)} class + {formatMoney(feeOnCents(p.price_cents, feeConfig))} enrops service fee</span>
                               )}
                             </div>
                           </div>
