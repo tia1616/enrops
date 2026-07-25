@@ -41,7 +41,7 @@ export default function PublicLayout() {
       setLoadState('loading');
       const { data, error } = await supabase
         .from('public_org_directory')
-        .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model')
+        .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled')
         .eq('slug', slug)
         .maybeSingle();
       if (cancelled) return;

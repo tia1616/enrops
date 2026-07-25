@@ -246,6 +246,11 @@ export default function Home() {
   // open programs render as a simple list straight to checkout, so a location-less
   // program is reachable. J2S (legacy_own_platform) keeps its existing page below.
   const isLeanReg = org?.instructor_pay_model !== 'legacy_own_platform';
+  // Can this provider actually be paid? Only gates the LEAN catalog — J2S is
+  // connected and its page below is untouched. `!== false` so an older cached
+  // org row (before the view exposed the flag) still shows the catalog rather
+  // than blanking a working provider's page.
+  const paymentsReady = org?.stripe_charges_enabled !== false;
   if (isLeanReg) {
     const allOpen = programs || [];
     // Distinct locations among the open programs — drives the multi-location filter.
@@ -310,6 +315,18 @@ export default function Home() {
           }}>
             {loading ? (
               <div style={{ color: '#6b6b6b', padding: '24px 0', textAlign: 'center' }}>Loading classes&hellip;</div>
+            ) : !paymentsReady ? (
+              /* No Stripe = no way to take money, so don't advertise classes at
+                 all. Listing them and blocking at the Pay step is a worse
+                 experience: a family picks a class, fills in their child's
+                 details, and only then finds out. Says nothing about Stripe —
+                 that's the provider's business, not the family's. */
+              <div style={{ color: '#6b6b6b', padding: '28px 0', textAlign: 'center' }}>
+                <div style={{ fontWeight: 600, color: '#1a1a1a', marginBottom: 4 }}>
+                  Registration isn&rsquo;t open yet
+                </div>
+                {org?.name} is still getting set up. Check back soon.
+              </div>
             ) : allOpen.length === 0 ? (
               <div style={{ color: '#6b6b6b', padding: '24px 0', textAlign: 'center' }}>No open programs yet. Check back soon.</div>
             ) : (
