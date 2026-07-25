@@ -376,6 +376,19 @@ export default function AdminLayout() {
             border-left: none !important;
           }
           [data-admin-main] { padding: 16px 14px !important; max-width: 100% !important; }
+
+          /* ROOT CAUSE of admin pages being wider than the phone: a flex or grid
+             child defaults to min-width:auto, which refuses to shrink below its
+             own content. One long row of buttons or an unbreakable string then
+             sets the page's minimum width and pushes everything else off the
+             right edge — which is why enrollment numbers were disappearing.
+             min-width:0 lets those children actually shrink so text wraps.
+             Applied only under 900px, so desktop layout is untouched. */
+          [data-admin-main] * { min-width: 0; }
+          [data-admin-main] img { max-width: 100%; height: auto; }
+          /* Anything genuinely too wide to wrap (a data table) scrolls inside
+             its own box rather than dragging the whole page sideways. */
+          [data-admin-main] table { display: block; width: 100%; overflow-x: auto; }
         }
       `}</style>
       <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>

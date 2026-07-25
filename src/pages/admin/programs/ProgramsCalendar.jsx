@@ -566,7 +566,13 @@ export default function ProgramsCalendar() {
             What's running this term, by day or by school. Live enrollment numbers.
           </div>
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        {/* flexWrap is load-bearing on a phone: Share + Add-to-website + New
+            program + the term picker is ~600px of non-shrinking controls, and
+            without wrapping this row sets the page's minimum width, pushing
+            EVERYTHING (including the enrollment numbers) off the right edge.
+            The outer container already wraps; this inner group has to as well
+            or the outer wrap can never take effect. */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           {org?.slug && (
             <ShareLink
               url={buildCatalogUrl(org.slug)}
