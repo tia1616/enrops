@@ -72,8 +72,14 @@ export default function ProgramsCalendar() {
   // rather than `!`: while the org is still loading, stripe_charges_enabled is
   // undefined, and the safe direction is to leave the buttons alone rather than
   // yank them from someone who IS connected.
+  //
+  // `uses_enrops_registration !== false` matches the class-schedule gate below:
+  // an org that takes registration OUTSIDE enrops will never connect Stripe
+  // here, so without this it gets a "Connect Stripe" prompt it can never clear.
   const cannotBePaidYet =
-    org?.instructor_pay_model === "enrops_platform" && org?.stripe_charges_enabled === false;
+    org?.instructor_pay_model === "enrops_platform" &&
+    org?.uses_enrops_registration !== false &&
+    org?.stripe_charges_enabled === false;
   const perm = getPermissions(orgMember?.role);
   // Term starts empty — we don't guess a hardcoded term. fetchOrgTerms picks
   // the org's default (in-progress today, else next starting, else most recent

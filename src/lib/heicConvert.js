@@ -48,7 +48,12 @@ export async function downscaleImage(file, { maxDim = 1600, quality = 0.82 } = {
   if (!file || !file.type?.startsWith('image/')) return file;
 
   try {
-    const bitmap = await createImageBitmap(file);
+    // 'from-image' applies the EXIF rotation while decoding. Without it a
+    // portrait phone photo (stored as a landscape sensor image plus a rotation
+    // flag) is redrawn unrotated and re-encoded as JPEG, which drops the EXIF -
+    // so the sideways version becomes the only version. Must stay in step with
+    // the drawImage below; the canvas has no orientation of its own.
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
     const { width, height } = bitmap;
     const longEdge = Math.max(width, height);
 
