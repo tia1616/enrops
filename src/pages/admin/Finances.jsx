@@ -543,32 +543,18 @@ export default function Finances() {
                 </div>
               </div>
 
-              <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${RULE}` }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-                  <div>
-                    <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
-                      Who pays the enrops platform fee?
-                    </div>
-                    <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
-                      {feePassThrough
-                        ? "Families cover the enrops platform fee as a separate line at checkout. (Stripe's processing fee still comes out of your payout.)"
-                        : "Your organization absorbs the enrops platform fee — families pay your base price. (Stripe's processing fee still applies.)"}
-                    </div>
-                  </div>
-                  {canManage ? (
-                    <Toggle
-                      checked={feePassThrough}
-                      onChange={(v) => togglePassThrough(v)}
-                      labelOn="Pass-through"
-                      labelOff="Absorbed"
-                    />
-                  ) : (
-                    <span style={{ color: MUTED, fontSize: 12 }}>
-                      Owner/admin only
-                    </span>
-                  )}
+              {/* For lean ops this control is hoisted OUT of "Manage setup" and
+                  rendered on the page (see the always-visible card below), so
+                  it isn't duplicated here. J2S keeps it in place. */}
+              {!isLean && (
+                <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${RULE}` }}>
+                  <FeePayerRow
+                    feePassThrough={feePassThrough}
+                    canManage={canManage}
+                    onToggle={togglePassThrough}
+                  />
                 </div>
-              </div>
+              )}
             </Section>
           </Card>
 
@@ -694,6 +680,23 @@ export default function Finances() {
           so the expanded "Manage setup" fee config sits under its own banner. */}
       {isActive && (
         <>
+          {/* Checklist: "Operator has a setting to absorb the fee instead — off
+              by default." It existed but was buried inside the collapsed
+              "Manage setup" panel, so an operator would never know it was a
+              choice. On the page now, for lean ops, where a pricing decision
+              belongs. Default stays families-pay (fee_pass_through=true from
+              provisioning) — absorbing is the opt-in. */}
+          {isLean && (
+            <Card>
+              <Section>
+                <FeePayerRow
+                  feePassThrough={feePassThrough}
+                  canManage={canManage}
+                  onToggle={togglePassThrough}
+                />
+              </Section>
+            </Card>
+          )}
           <AchAttention org={org} />
           {/* Invoices is school-billing, which a registration operator has no
               use for. Hidden for lean along with its tab, and `tab` is coerced
@@ -849,6 +852,40 @@ function SetupBanner({ accountId, chargesEnabled, payoutsEnabled, open, onToggle
           Manage setup {open ? "▴" : "▾"}
         </button>
       </div>
+    </div>
+  );
+}
+
+// Who pays the platform fee. Extracted so it can render in TWO places without
+// drifting: inline under "Manage setup" for J2S, and as an always-visible card
+// on the Payments page for registration operators — for whom "do families pay
+// the fee, or do I?" is a pricing decision they need to SEE, not an advanced
+// setting hidden behind a collapsed panel.
+function FeePayerRow({ feePassThrough, canManage, onToggle }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+      <div>
+        <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
+          Who pays the enrops platform fee?
+        </div>
+        <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
+          {feePassThrough
+            ? "Families cover the enrops platform fee as a separate line at checkout. (Stripe's processing fee still comes out of your payout.)"
+            : "Your organization absorbs the enrops platform fee — families pay your base price. (Stripe's processing fee still applies.)"}
+        </div>
+      </div>
+      {canManage ? (
+        <Toggle
+          checked={feePassThrough}
+          onChange={(v) => onToggle(v)}
+          labelOn="Pass-through"
+          labelOff="Absorbed"
+        />
+      ) : (
+        <span style={{ color: MUTED, fontSize: 12 }}>
+          Owner/admin only
+        </span>
+      )}
     </div>
   );
 }
