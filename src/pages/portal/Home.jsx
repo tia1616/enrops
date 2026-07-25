@@ -309,12 +309,26 @@ export default function Home() {
                     const timeStr = [p.start_time, p.end_time].filter(Boolean).join(' – ');
                     const meta = [`${p.day_of_week}s`, timeStr, p.program_locations?.name].filter(Boolean).join(' · ');
                     const hl = highlightProgram === p.id;
+                    // Optional program photo. alt="" because the class name sits
+                    // right beside it — announcing the file twice adds nothing.
+                    // No photo = the card renders exactly as it always has.
+                    const photo = p.photo_url ? (
+                      <img
+                        src={p.photo_url}
+                        alt=""
+                        loading="lazy"
+                        style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }}
+                      />
+                    ) : null;
                     if (p.runs_own_registration) {
                       return (
                         <div key={p.id} id={`program-card-${p.id}`} style={leanCard(hl)}>
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
-                            <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                            {photo}
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
+                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
+                            </div>
                           </div>
                           <a href={p.external_registration_url} target="_blank" rel="noopener noreferrer" style={leanBtn}>Register &#8599;</a>
                         </div>
@@ -322,10 +336,13 @@ export default function Home() {
                     }
                     return (
                       <div key={p.id} id={`program-card-${p.id}`} style={leanCard(hl)}>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
-                          <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
-                            {meta}{meta ? ' · ' : ''}<span style={{ fontWeight: 600, color: '#1a1a1a' }}>{formatMoney(p.price_cents)}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                          {photo}
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
+                            <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
+                              {meta}{meta ? ' · ' : ''}<span style={{ fontWeight: 600, color: '#1a1a1a' }}>{formatMoney(p.price_cents)}</span>
+                            </div>
                           </div>
                         </div>
                         <button onClick={() => startRegistration(p.id, false)} style={leanBtn}>Register</button>

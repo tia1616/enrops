@@ -20,6 +20,7 @@ import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import PlacesAutocomplete from "../../../components/PlacesAutocomplete.jsx";
+import { ensureBrowserSafeImage, extensionFor } from "../../../lib/heicConvert.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 const BRIGHT = "#5847C9";
@@ -82,6 +83,11 @@ export default function QuickProgramBuilder() {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
   const [createdId, setCreatedId] = useState(null);
+  // Photo (optional). Uploaded to the existing public org-assets bucket the
+  // moment it's picked, so the operator sees the real image before saving.
+  const [photoUrl, setPhotoUrl] = useState("");
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoErr, setPhotoErr] = useState("");
 
   // Is the org able to actually take money yet? The share link goes live the
   // moment a program is created, but Arielle's rule is "never a payment-less
@@ -171,6 +177,48 @@ export default function QuickProgramBuilder() {
   const firstDateWeekday = startDate ? WEEKDAY_NAMES[new Date(`${startDate}T00:00:00`).getDay()] : null;
   const dayMismatch = !!(day && firstDateWeekday && firstDateWeekday !== day);
 
+  // Upload the photo to org-assets. Mirrors BrandLogoSettings' logo/banner
+  // upload exactly: the <org id>/ path prefix is what satisfies the bucket's
+  // org_assets_org_admin_insert RLS policy. iPhone HEIC is converted first
+  // (heic2any lazy-loads, so it costs nothing unless a HEIC is actually picked)
+  // — operators building on a phone is the common case for this field.
+  async function handlePhotoPick(file) {
+    if (!file) return;
+    setPhotoErr("");
+    // Friendly pre-checks so the operator never sees a raw storage error.
+    // 2 MB is the bucket's own limit; check BEFORE the round trip.
+    const safe = await (async () => {
+      try {
+        return await ensureBrowserSafeImage(file);
+      } catch {
+        return file; // conversion failed — fall through to the type check below
+      }
+    })();
+    if (!["image/jpeg", "image/png", "image/webp"].includes(safe.type)) {
+      setPhotoErr("That file type isn't supported. Try a JPG, PNG, or WEBP.");
+      return;
+    }
+    if (safe.size > 2 * 1024 * 1024) {
+      setPhotoErr("That photo is over 2 MB. Try a smaller one.");
+      return;
+    }
+    setUploadingPhoto(true);
+    try {
+      const path = `${org.id}/program-photos/${Date.now()}.${extensionFor(safe)}`;
+      const { error: upErr } = await supabase.storage
+        .from("org-assets")
+        .upload(path, safe, { contentType: safe.type, upsert: false });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from("org-assets").getPublicUrl(path);
+      if (!pub?.publicUrl) throw new Error("Couldn't get the image URL.");
+      setPhotoUrl(pub.publicUrl);
+    } catch (e) {
+      setPhotoErr(e?.message ?? "Couldn't upload that photo.");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }
+
   async function handleCreate() {
     if (!valid || submitting) return;
     setSubmitting(true);
@@ -192,6 +240,7 @@ export default function QuickProgramBuilder() {
         max_capacity: spotsNum,
         price_cents: priceCents,
         program_type: "standard",
+        photo_url: photoUrl || null, // optional; NULL renders the no-image card
         runs_own_registration: false, // native enrops checkout
         status: "open", // live the moment it's created
       };
@@ -219,6 +268,8 @@ export default function QuickProgramBuilder() {
     setStartTime("");
     setEndTime("");
     setLocationId(locations.length === 1 ? locations[0].id : "");
+    setPhotoUrl("");
+    setPhotoErr("");
     setErr("");
     setCreatedId(null);
   }
@@ -342,6 +393,46 @@ export default function QuickProgramBuilder() {
               placeholder="18"
             />
           </div>
+        </div>
+
+        <div>
+          <label style={labelStyle} htmlFor="qpb-photo">Photo <span style={{ fontWeight: 400, color: "#6b6b6b" }}>(optional)</span></label>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            {photoUrl && (
+              <img
+                src={photoUrl}
+                alt="Program photo preview"
+                style={{ width: 84, height: 84, objectFit: "cover", borderRadius: 8, border: `1px solid ${RULE}` }}
+              />
+            )}
+            <div>
+              <input
+                id="qpb-photo"
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoPick(f); }}
+                disabled={uploadingPhoto}
+                style={{ fontSize: 14 }}
+              />
+              <div style={{ fontSize: 12, color: "#6b6b6b", marginTop: 4 }}>
+                {uploadingPhoto
+                  ? "Uploading…"
+                  : photoUrl
+                  ? "Looks good. Pick another to replace it."
+                  : "A photo makes your class stand out to families. JPG, PNG or WEBP, up to 2 MB."}
+              </div>
+              {photoUrl && !uploadingPhoto && (
+                <button
+                  type="button"
+                  onClick={() => { setPhotoUrl(""); setPhotoErr(""); }}
+                  style={{ marginTop: 6, background: "none", border: "none", color: BRIGHT, fontSize: 12, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                >
+                  Remove photo
+                </button>
+              )}
+            </div>
+          </div>
+          {photoErr && <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>{photoErr}</div>}
         </div>
 
         <div>
