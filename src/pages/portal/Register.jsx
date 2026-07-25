@@ -11,6 +11,7 @@ import StepWaivers from './register-steps/StepWaivers.jsx';
 import StepReview from './register-steps/StepReview.jsx';
 import StepPay from './register-steps/StepPay.jsx';
 import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFields.jsx';
+import { renderWaiverText } from '../../lib/waiverText.js';
 
 // Has the parent answered a custom question? (by field type)
 function hasAnswer(value, type) {
@@ -300,7 +301,10 @@ export default function Register() {
 
     setSchools(schoolsRes.data || []);
     setPrograms(programsRes.data || []);
-    setWaivers(waiversRes.data || []);
+    // Substitute the business name into the waiver text here, at the one place
+    // it is loaded, rather than in each component that displays it — a reader
+    // that forgot would show a family "{{org}}" in a contract.
+    setWaivers((waiversRes.data || []).map((w) => ({ ...w, content: renderWaiverText(w.content, org?.name) })));
     setRegFields(parseRegFields(regFieldsRes.data || []));
     setFeeConfig(feeRes?.data || { fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0 });
     // Thread the org's sibling % onto the cart so the review screen matches the

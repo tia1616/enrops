@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { getTenant } from '../../lib/tenants.js';
 import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
+import { renderWaiverText } from '../../lib/waiverText.js';
 import WaiverGate from './WaiverGate.jsx';
 import PickupInfoGate from './PickupInfoGate.jsx';
 
@@ -265,7 +266,13 @@ export default function Dashboard() {
         ]);
         const signed = new Set((sigs || []).map((s) => `${s.registration_id}:${s.waiver_id}`));
         needsWaivers = (wv || [])
-          .map((w) => ({ ...w, missingRegIds: regIds.filter((rid) => !signed.has(`${rid}:${w.id}`)) }))
+          // Business name substituted here, where the waivers are loaded, so
+          // WaiverGate both displays and snapshots the same rendered text.
+          .map((w) => ({
+            ...w,
+            content: renderWaiverText(w.content, org?.name),
+            missingRegIds: regIds.filter((rid) => !signed.has(`${rid}:${w.id}`)),
+          }))
           .filter((w) => w.missingRegIds.length > 0);
       }
       setUnsignedWaivers(needsWaivers);

@@ -23,6 +23,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { priceCart, validatePromo } from '../_shared/promoPricing.ts';
+import { renderWaiverText } from '../_shared/waiverText.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -74,7 +75,9 @@ serve(async (req) => {
     // --- Resolve organization ---
     const { data: org, error: orgErr } = await admin
       .from('organizations')
-      .select('id')
+      // name is needed to render {{org}} into the waiver text we snapshot
+      // against each signature.
+      .select('id, name')
       .eq('slug', organization_slug)
       .single();
     if (orgErr || !org) {
@@ -419,7 +422,12 @@ serve(async (req) => {
               signature_text:
                 child.waivers[w.id]?.signature_text ||
                 `I agree — ${parent.first_name} ${parent.last_name}`,
-              waiver_text_snapshot: w.content,
+              // Snapshot what the family actually READ, with the business name
+              // filled in — not the stored template with its {{org}} token. This
+              // column is the record of what was agreed to, so it has to match
+              // the words on screen, and it must stay fixed even if the operator
+              // later renames the business or edits the template.
+              waiver_text_snapshot: renderWaiverText(w.content, org.name),
               waiver_version: w.version || 1,
             });
           }

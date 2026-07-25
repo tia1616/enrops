@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
+import { renderWaiverText, hasOrgToken } from "../../lib/waiverText.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -294,7 +295,11 @@ export default function WaiverManager() {
                     {w.required ? <Badge bg="#fff7ed" border="#fed7aa" color="#9a3412">Required</Badge> : <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Optional</Badge>}
                     {!w.active && <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Archived</Badge>}
                   </div>
-                  <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>{w.content}</div>
+                  {/* The preview shows what a family will read, business name
+                      filled in. The EDITOR below deliberately keeps the raw
+                      {{org}} token — substituting there and saving would write
+                      the name back into the stored text and re-freeze it. */}
+                  <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>{renderWaiverText(w.content, org?.name)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button type="button" onClick={() => openWaiverEditor(w)} style={ghostBtn(false)}>Edit</button>
@@ -486,6 +491,18 @@ function WaiverEditor({ waiver, busy, saveError, onCancel, onSave }) {
         <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Liability Waiver & Agreement" style={input} disabled={busy} />
 
         <label style={{ ...lbl, marginTop: 16 }}>Text families read &amp; agree to</label>
+        {/* Explain the placeholder rather than hiding it. An operator who sees
+            {{org}} in their own waiver and doesn't know what it is will
+            "helpfully" type their business name over it — which is exactly the
+            freezing this is meant to prevent. Only shown when it's actually
+            there, so someone writing their own text never sees it. */}
+        {hasOrgToken(content) && (
+          <p style={{ margin: "0 0 8px", fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
+            Leave <strong>{"{{org}}"}</strong> where it is — families see your business
+            name there. Keeping it means your waivers update themselves if you ever
+            change your business name.
+          </p>
+        )}
         <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={12} placeholder="Paste or write the full waiver text…" style={{ ...input, resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }} disabled={busy} />
 
         <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, fontSize: 14, color: INK, cursor: "pointer" }}>
