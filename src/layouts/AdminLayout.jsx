@@ -326,6 +326,51 @@ export default function AdminLayout() {
 
   return (
     <div style={{ minHeight: "100vh", background: CREAM, fontFamily: "'Poppins', system-ui, sans-serif", color: INK }}>
+      {/* MOBILE ADMIN. The shell is a hard 240px sidebar + content grid, which on a
+          375px phone left ~135px for the page (minus 72px padding = ~63px usable)
+          — the admin was effectively unusable on a phone. Operators build programs
+          on their phones, so this matters as much as the parent flow.
+          Below 900px the sidebar becomes a horizontal, scrollable top bar and the
+          content takes the full width. Done in CSS with !important because every
+          style here is an inline style prop, which a normal rule can't override.
+          The active-item accent moves from a left border (meaningless in a row) to
+          the white pill + colour it already carries. */}
+      <style>{`
+        @media (max-width: 900px) {
+          [data-admin-grid] { grid-template-columns: 1fr !important; }
+          [data-admin-sidebar] {
+            position: static !important;
+            height: auto !important;
+            flex-direction: row !important;
+            align-items: center !important;
+            gap: 4px;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            -webkit-overflow-scrolling: touch;
+            padding: 8px 12px !important;
+            border-right: none !important;
+            border-bottom: 1px solid ${RULE} !important;
+          }
+          [data-admin-sidebar] > div:first-child {
+            border-bottom: none !important;
+            padding: 0 14px 0 0 !important;
+            flex: 0 0 auto;
+          }
+          [data-admin-sidebar] nav {
+            display: flex !important;
+            flex-direction: row !important;
+            flex: 0 0 auto !important;
+            padding: 0 !important;
+            gap: 4px;
+          }
+          [data-admin-sidebar] nav a {
+            white-space: nowrap;
+            margin: 0 !important;
+            border-left: none !important;
+          }
+          [data-admin-main] { padding: 16px 14px !important; max-width: 100% !important; }
+        }
+      `}</style>
       <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
         {/* Sidebar */}
         <aside data-admin-sidebar style={{
