@@ -8,7 +8,6 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
-import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
@@ -443,10 +442,9 @@ export default function AdminLayout() {
             })}
           </nav>
 
-          {/* Always-available feedback path for early partners. Lives here in the
-              sidebar (not a floating corner pill) so it never covers page action
-              bars like marketing's "Approve & schedule". */}
-          <FeedbackWidget org={org} />
+          {/* Feedback widget removed from the sidebar (Jessica, 2026-07-24).
+              The component still exists if we want it back on a specific
+              surface later. */}
 
           {/* Lifetime time-saved tally — every Director action contributes. */}
           {timeSavedTotal != null && timeSavedTotal > 0 && (
