@@ -390,12 +390,28 @@ export default function AdminLayout() {
              sets the page's minimum width and pushes everything else off the
              right edge — which is why enrollment numbers were disappearing.
              min-width:0 lets those children actually shrink so text wraps.
-             Applied only under 900px, so desktop layout is untouched. */
+             Applied only under 900px, so desktop layout is untouched.
+             The grid items THEMSELVES need it too, not just their contents:
+             a 1fr track can never be narrower than its item's min-content, so
+             main's own min-width:auto was sizing the column at 384px on a
+             375px phone and dragging the whole page 10px sideways. */
+          [data-admin-main], [data-admin-sidebar] { min-width: 0 !important; }
           [data-admin-main] * { min-width: 0; }
           [data-admin-main] img { max-width: 100%; height: auto; }
           /* Anything genuinely too wide to wrap (a data table) scrolls inside
              its own box rather than dragging the whole page sideways. */
           [data-admin-main] table { display: block; width: 100%; overflow-x: auto; }
+
+          /* iOS Safari zooms the entire page in when you focus a field whose
+             text is under 16px, and every admin control is styled inline at
+             13-14px — so editing a program on a phone lurched on every single
+             field (21 of them in one expanded panel). One rule beats chasing
+             the inline styles page by page, and it can't miss a page we
+             haven't looked at yet. Mobile only; desktop keeps its denser type.
+             Measured at 375px: no page gets wider from the larger text. */
+          [data-admin-main] input,
+          [data-admin-main] select,
+          [data-admin-main] textarea { font-size: 16px !important; }
         }
       `}</style>
       <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
