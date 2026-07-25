@@ -3,6 +3,7 @@ import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { getTenant } from '../../lib/tenants.js';
+import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import WaiverGate from './WaiverGate.jsx';
 import PickupInfoGate from './PickupInfoGate.jsx';
@@ -17,7 +18,9 @@ const TABS = [
   { key: 'settings', label: 'Settings' },
 ];
 
-const TERM_ORDER = ['SU26', 'FA26', 'WI27', 'SP27', 'SU27'];
+// TERM_LABELS is a display nicety only; formatTermLabel() handles anything not
+// listed (an org on its own term codes). The old TERM_ORDER season sequence is
+// gone with the "next term" guess that used it.
 const TERM_LABELS = {
   SU26: 'Summer 2026', FA26: 'Fall 2026', WI27: 'Winter 2027',
   SP27: 'Spring 2027', SU27: 'Summer 2027',
@@ -408,11 +411,10 @@ export default function Dashboard() {
   }
 
   const enrolledTerms = useMemo(() => new Set(enrollments.map((e) => e.term).filter(Boolean)), [enrollments]);
-  const nextTerm = useMemo(() => {
-    if (enrolledTerms.size === 0) return null;
-    const latestIdx = Math.max(...[...enrolledTerms].map((t) => TERM_ORDER.indexOf(t)).filter((i) => i >= 0));
-    return TERM_ORDER[latestIdx + 1] || null;
-  }, [enrolledTerms]);
+  // The term families can actually register for right now. Org config, not a
+  // guess from a hardcoded season order — an org running rolling or off-cycle
+  // terms has no "next" in TERM_ORDER, and the catalog only ever serves this one.
+  const openRegTerm = org?.active_registration_term || null;
   const todayClasses = useMemo(() => enrollments.filter((e) => e.sessionInfo?.state === 'today'), [enrollments]);
 
   /* ---- Render gates ---- */
@@ -482,11 +484,19 @@ export default function Dashboard() {
         </h1>
       </div>
 
-      {nextTerm && enrollments.length > 0 && (
+      {/* The ONE truth for what a family can register for is the org's
+          active_registration_term — the same term the catalog serves. This used
+          to advertise `nextTerm`, the term AFTER the parent's latest enrolment,
+          which is a J2S-era "upsell the next season" assumption: a Riverbend
+          parent enrolled in Fall was told "Winter 2027 registration is open" and
+          then landed on a page showing Fall classes. Promise what the link
+          actually delivers, and say nothing when they're already signed up for
+          the open term. */}
+      {openRegTerm && !enrolledTerms.has(openRegTerm) && enrollments.length > 0 && (
         <Link to={`/${org.slug}`} className="mb-4 block rounded-2xl bg-j2s-purple px-5 py-4 text-white shadow-lg transition hover:bg-j2s-purple-dark hover:shadow-xl">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-bold">{TERM_LABELS[nextTerm]} registration is open</p>
+              <p className="text-sm font-bold">{TERM_LABELS[openRegTerm] || formatTermLabel(openRegTerm)} registration is open</p>
               <p className="mt-0.5 text-xs text-white/70">Secure your spot for the upcoming term</p>
             </div>
             <span className="shrink-0 rounded-full bg-white px-3.5 py-1.5 text-xs font-bold text-j2s-purple">Register →</span>
