@@ -289,14 +289,20 @@ export default function Home() {
         {!isEmbed && (
         <div style={{ background: '#1C004F', color: '#fff', padding: '56px 20px 72px' }}>
           <div style={{ maxWidth: 820, margin: '0 auto' }}>
-            <span style={{ display: 'inline-block', background: 'rgba(38,214,135,0.14)', border: '1px solid rgba(38,214,135,0.35)', color: '#26D687', borderRadius: 100, padding: '5px 14px', fontSize: 12, fontWeight: 600 }}>
-              {termLabel ? `${termLabel} registration is open` : 'Registration is open'}
-            </span>
+            {/* Don't announce "registration is open" above a page that then says
+                it isn't — the hero and the body have to tell the same story. */}
+            {paymentsReady && (
+              <span style={{ display: 'inline-block', background: 'rgba(38,214,135,0.14)', border: '1px solid rgba(38,214,135,0.35)', color: '#26D687', borderRadius: 100, padding: '5px 14px', fontSize: 12, fontWeight: 600 }}>
+                {termLabel ? `${termLabel} registration is open` : 'Registration is open'}
+              </span>
+            )}
             <h1 style={{ fontSize: 38, fontWeight: 700, lineHeight: 1.12, margin: '18px 0 12px' }}>
               {branding?.hero_headline || org?.name || 'Register today'}
             </h1>
             <p style={{ fontSize: 17, lineHeight: 1.6, color: 'rgba(255,255,255,0.82)', maxWidth: 560, margin: 0 }}>
-              {branding?.hero_subtext || 'Pick a class below and sign your child up in under a minute.'}
+              {paymentsReady
+                ? (branding?.hero_subtext || 'Pick a class below and sign your child up in under a minute.')
+                : 'Classes are coming soon.'}
             </p>
           </div>
         </div>
