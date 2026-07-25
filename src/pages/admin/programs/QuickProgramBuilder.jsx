@@ -289,8 +289,14 @@ export default function QuickProgramBuilder() {
     const notConnected = chargesEnabled === false;
     return (
       <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
+        {/* Honest state: with Stripe not connected the page exists but can't take
+            money, so "live" overstates it — and it directly contradicted the
+            "One step left: connect Stripe" panel right below. Say "almost live"
+            until charges are enabled. `notConnected` is only true when we KNOW
+            charges are off (=== false), so an unresolved check never downgrades
+            the wording for an operator who is actually connected. */}
         <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
-          Your program is live.
+          {notConnected ? "Your program is almost live." : "Your program is live."}
         </div>
 
         {notConnected ? (
