@@ -312,6 +312,21 @@ serve(async (req) => {
       const orgId = regForOrg?.organization_id || null;
       const orgConfig = (regForOrg?.organizations ?? null) as ConnectOrgConfig | null;
       const orgTerm = (regForOrg?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
+
+      // Same payment gate as the one-time path below. The installments branch
+      // returns EARLY, so without this it would be a way around the block —
+      // and it's worse here: it also schedules two future off-session charges
+      // that would keep landing in the platform balance.
+      if (!orgConfig?.stripe_charges_enabled) {
+        console.warn(
+          `[create-checkout] BLOCKED (installments): org ${orgId ?? '(unknown)'} has no Stripe account accepting charges.`,
+        );
+        return json({
+          error: 'This provider is not set up to take payments yet. Please contact them directly.',
+          code: 'stripe_not_connected',
+        }, 409);
+      }
+
       const connectParams = buildConnectChargeParams(firstAmount, 'card', orgConfig, orgId);
 
       // Pass-through: add the 1% on installment 1's amount as a visible line.
@@ -445,6 +460,27 @@ serve(async (req) => {
     const orgIdStd = regForOrgStd?.organization_id || null;
     const orgConfigStd = (regForOrgStd?.organizations ?? null) as ConnectOrgConfig | null;
     const orgTermStd = (regForOrgStd?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
+
+    // ── PAYMENT GATE: no Stripe, no charge ────────────────────────────────
+    // Without a connected account buildConnectChargeParams returns {}, which is
+    // a PLAIN PLATFORM CHARGE — the family pays successfully and the money lands
+    // in the ENROPS balance, not the provider's, with no transfer and nothing
+    // linking it back to them. That is a silent mis-routing of someone else's
+    // revenue, so it is refused here rather than nudged.
+    //
+    // This is the AUTHORITATIVE check (the UI block is only a courtesy). It runs
+    // AFTER the org row is reloaded server-side, so a tampered client can't
+    // bypass it. Connected orgs (J2S and every live provider) are unaffected.
+    if (!orgConfigStd?.stripe_charges_enabled) {
+      console.warn(
+        `[create-checkout] BLOCKED: org ${orgIdStd ?? '(unknown)'} has no Stripe account accepting charges. ` +
+        `Refusing to route this payment to the platform balance.`,
+      );
+      return json({
+        error: 'This provider is not set up to take payments yet. Please contact them directly.',
+        code: 'stripe_not_connected',
+      }, 409);
+    }
 
     // The family picks card vs bank transfer BEFORE redirecting (passed as
     // payment_method), so we build a SINGLE-method Checkout Session and compute

@@ -33,6 +33,7 @@ const RULE = "#e2dfd5";
 const PANEL = "#fff";
 
 const AMBER = "#a16207";
+const ENROPS_GOLD = "#F8A638";  // brand warm accent (matches the email/brand palette)
 const OK_GREEN = "#3a7c3a";
 
 const DAYS_OF_WEEK = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -623,13 +624,17 @@ export default function ProgramsCalendar() {
           // an operator they're done when they aren't. Lean ops only; J2S is
           // connected and keeps the original banner exactly.
           org?.instructor_pay_model === "enrops_platform" && org?.stripe_charges_enabled === false ? (
-            <div style={{ ...registrationBanner, background: "#fff8ec", borderColor: "#f0dfb8", color: AMBER }}>
+            /* Enrops palette, not the generic amber used elsewhere on this page:
+               ENROPS_GOLD (#F8A638) is the brand's warm accent, on a soft tint of
+               itself, with brand purple text and the standard indigo primary
+               action. The old #a16207 read as rust and belongs to no palette. */
+            <div style={{ ...registrationBanner, background: "#FFF6E9", borderColor: ENROPS_GOLD, color: PURPLE }}>
               <span>
                 {formatTermLabel(term)} is open for registration, but you can't get paid yet — connect Stripe to start receiving payments.
               </span>
               <Link
                 to="/admin/finances"
-                style={{ background: AMBER, color: "#fff", borderRadius: 6, padding: "6px 12px", fontSize: 13, fontWeight: 600, textDecoration: "none", flexShrink: 0, whiteSpace: "nowrap" }}
+                style={{ background: BRIGHT, color: "#fff", borderRadius: 6, padding: "6px 12px", fontSize: 13, fontWeight: 600, textDecoration: "none", flexShrink: 0, whiteSpace: "nowrap" }}
               >
                 Connect Stripe →
               </Link>

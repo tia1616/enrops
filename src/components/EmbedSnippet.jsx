@@ -14,6 +14,7 @@ import { useState } from "react";
 const INK = "#1C004F";
 const MUTED = "#6b6b6b";
 const RULE = "#E7E4F5";
+const RULE_STRONG = "#C9C3EC";  // visible dashed edge — RULE alone reads as no border
 const BRIGHT = "#5847C9";
 
 export function buildEmbedSnippet(slug, orgName) {
@@ -69,15 +70,26 @@ export default function EmbedSnippet({ slug, orgName }) {
 
   return (
     <div style={{ position: "relative" }}>
+      {/* Visually distinct from "Share registration page" next to it. That one
+          hands out a LINK (an action you take once, outward); this one hands out
+          CODE for their own site. Same-looking outline buttons read as two
+          flavours of the same thing, so this is a quieter tertiary control with
+          a code glyph — different weight, different shape, different meaning. */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        title="Put your registration on your own website"
         style={{
-          padding: "9px 14px", borderRadius: 8, border: `1px solid ${BRIGHT}`,
-          background: "#fff", color: BRIGHT, fontSize: 14, fontWeight: 600,
+          display: "inline-flex", alignItems: "center", gap: 7,
+          padding: "9px 14px", borderRadius: 8,
+          border: `1px dashed ${RULE_STRONG}`,
+          background: "#FBFAFF", color: INK, fontSize: 14, fontWeight: 600,
           fontFamily: "inherit", cursor: "pointer", whiteSpace: "nowrap",
         }}
       >
+        <span aria-hidden="true" style={{ fontFamily: "ui-monospace, Menlo, Consolas, monospace", color: BRIGHT, fontWeight: 700 }}>
+          &lt;/&gt;
+        </span>
         Add to your website
       </button>
 

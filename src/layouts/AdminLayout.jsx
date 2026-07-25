@@ -530,30 +530,16 @@ export default function AdminLayout() {
               {activeTabSection.tabs.filter((t) => !t.gate || perm.can(t.gate)).map((t) => {
                 const tabActive =
                   location.pathname === t.to || location.pathname.startsWith(t.to + "/");
-                // Registration vs outside-registration tenant: disable (don't hide)
-                // the tab that doesn't apply, with a hover reason.
+                // A tab that can never apply to this tenant is HIDDEN, not shown
+                // greyed out. The old "disabled + hover reason" pattern meant an
+                // operator who runs registration through Enrops permanently saw a
+                // dead "Class schedule" tab (and vice versa) — a control that can
+                // never do anything is just noise, and the hover reason is
+                // invisible on a phone anyway. The PAGE and its route stay, so the
+                // tenants it does apply to are unaffected.
                 const usesReg = org?.uses_enrops_registration !== false; // default true
-                const disabled = (t.regOnly && !usesReg) || (t.outsideRegOnly && usesReg);
-                if (disabled) {
-                  return (
-                    <span
-                      key={t.to}
-                      title={t.offReason || ""}
-                      style={{
-                        padding: "8px 14px",
-                        borderBottom: "2px solid transparent",
-                        color: `${MUTED}80`,
-                        fontWeight: 500,
-                        fontSize: 13,
-                        position: "relative",
-                        top: 1,
-                        cursor: "not-allowed",
-                      }}
-                    >
-                      {t.label}
-                    </span>
-                  );
-                }
+                const notApplicable = (t.regOnly && !usesReg) || (t.outsideRegOnly && usesReg);
+                if (notApplicable) return null;
                 return (
                   <Link
                     key={t.to}

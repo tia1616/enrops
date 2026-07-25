@@ -415,6 +415,15 @@ export default function Register() {
   // a fresh user gesture, which is exactly what an escaped navigation needs.
   const isEmbed = searchParams.get('embed') === '1';
   const [paymentFallbackUrl, setPaymentFallbackUrl] = useState('');
+
+  // Only true when we POSITIVELY know the provider can't take payment. While the
+  // config is loading — or if the call failed, or an older org-fee-config that
+  // doesn't return the flag is deployed — this stays false and checkout proceeds
+  // as normal. Failing OPEN here is deliberate: create-checkout is the
+  // authoritative gate and refuses the charge server-side, so the worst case is
+  // a clear error one step later, whereas failing closed would block real paying
+  // families on a transient config hiccup.
+  const paymentsClosed = feeConfig ? feeConfig.stripe_charges_enabled === false : false;
   function goToPayment(url) {
     if (isEmbed && window.self !== window.top) {
       try {
@@ -678,14 +687,32 @@ export default function Register() {
             />
           )}
           {step === 4 && (
-            <StepPay
-              pricing={pricing}
-              submitting={submitting}
-              onCheckout={handleCheckout}
-              paymentPlan={cart.payment_plan}
-              installmentSchedule={installmentSchedule?.display || null}
-              org={{ ...org, ...(feeConfig || {}) }}
-            />
+            paymentsClosed ? (
+              /* The provider hasn't connected Stripe, so there is nowhere of
+                 THEIRS for this money to land. create-checkout refuses these
+                 server-side; showing it here means the family finds out before
+                 they hand over card details, not after. Deliberately blames
+                 nobody and gives them a way forward. */
+              <div className="rounded-xl border-2 border-j2s-purple/20 bg-white p-6 text-center">
+                <h2 className="text-xl font-bold text-j2s-purple-dark">
+                  {org?.name} isn&rsquo;t taking payments online just yet
+                </h2>
+                <p className="mx-auto mt-2 max-w-md text-sm text-j2s-ink/70">
+                  Their registration page is up, but online payment isn&rsquo;t switched on
+                  yet, so we can&rsquo;t complete checkout. Get in touch with them directly
+                  and they&rsquo;ll get you signed up.
+                </p>
+              </div>
+            ) : (
+              <StepPay
+                pricing={pricing}
+                submitting={submitting}
+                onCheckout={handleCheckout}
+                paymentPlan={cart.payment_plan}
+                installmentSchedule={installmentSchedule?.display || null}
+                org={{ ...org, ...(feeConfig || {}) }}
+              />
+            )
           )}
         </div>
 

@@ -45,7 +45,11 @@ serve(async (req) => {
 
     const { data, error } = await admin
       .from('organizations')
-      .select('fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents, sibling_discount_pct')
+      // stripe_charges_enabled rides along so the registration form can tell a
+      // family up front that this provider can't take payment yet, instead of
+      // letting them fill everything in and hit a wall at the Pay step. Not
+      // sensitive (it's a yes/no about whether the provider is open for money).
+      .select('fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents, sibling_discount_pct, stripe_charges_enabled')
       .eq('slug', slug)
       .eq('status', 'active')
       .single();
@@ -69,6 +73,10 @@ serve(async (req) => {
       // Sibling discount % so the review screen matches the server-authoritative
       // charge (create-registration reads the same org config). null = off.
       sibling_discount_pct: data.sibling_discount_pct == null ? null : Number(data.sibling_discount_pct),
+      // Can this provider actually take money? Used to stop a family before they
+      // fill the whole form. The AUTHORITATIVE block lives in create-checkout —
+      // this is only so the UI can say so early and kindly.
+      stripe_charges_enabled: !!data.stripe_charges_enabled,
     });
   } catch (err) {
     console.error('org-fee-config error:', err);
