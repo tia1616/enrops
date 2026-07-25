@@ -2629,7 +2629,7 @@ function wrapInShell(innerBody: string, brand: OrgBrand, unsubscribeUrl = ""): s
   // respect it — prevents the brand-color border from clashing against a
   // mail-client-inverted dark background.
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light"><title>${escapeHtml(brand.org_name)}</title></head>
-<body style="margin:0;padding:0;background:#fbfaf6;font-family:'Nunito Sans',Arial,sans-serif;color-scheme:light only;supported-color-schemes:light;">
+<body style="margin:0;padding:0;background:${brand.page_bg_color};font-family:${brand.font_family};color-scheme:light only;supported-color-schemes:light;">
 <div style="max-width:600px;margin:0 auto;background:#fff;">
 <div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
 <div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">

@@ -205,9 +205,14 @@ serve(async (req: Request) => {
     // verified enrops domain, with replies going to the enrops inbox — sourced
     // from the enrops org row (no hardcoded address). Tenant flows
     // (parent/instructor/onboarding) keep their own tenant sender (FROM_EMAIL).
+    // Keyed off the RESOLVED template, not the requested context. The template is
+    // re-derived above from what the recipient actually IS (an admin who signs in
+    // from a parent page still gets the admin email), so gating the sender on the
+    // requested context let an Enrops-branded "Sign in to Admin" email go out FROM
+    // the J2S sending domain — caught in a real send, invisible in the HTML.
     let fromLine = FROM_EMAIL;
     let replyTo: string | undefined = undefined;
-    if (isSignup || context === 'admin') {
+    if (template === 'signup' || template === 'admin') {
       const brand = await loadOrgBrand(supabase, null);
       fromLine = formatFromAddress(brand);
       replyTo = brand.reply_to;
