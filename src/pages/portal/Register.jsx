@@ -395,23 +395,35 @@ export default function Register() {
   // flag tells Home.jsx to skip its default clearCart.
   function handleAddAnotherChild() {
     addAnotherChild();
-    navigate(`/${ORG_SLUG}?keep=1`);
+    // Carry embed mode across the trip back to the catalog, or the operator's
+    // iframe would suddenly render our full header/hero/footer mid-flow (and the
+    // height reporter unmounts, freezing the frame at its old height).
+    navigate(`/${ORG_SLUG}?keep=1${isEmbed ? '&embed=1' : ''}`);
   }
 
   // Embedded in the operator's own website (iframe)? Stripe's hosted checkout
-  // REFUSES to be framed, so when we hand off to payment we must navigate the
-  // TOP-level window, not the iframe — otherwise the family gets a blank/refused
-  // frame at the exact moment they try to pay. `_top` works cross-origin given
-  // the click's user activation; fall back to a normal navigation if a sandbox
-  // blocks it (better a framed error than a dead button).
+  // REFUSES to be framed, so the hand-off has to navigate the TOP-level window.
+  //
+  // We ASSIGN window.top.location rather than window.open(url,'_top'): a blocked
+  // top navigation makes the assignment THROW SecurityError, whereas window.open
+  // fails SILENTLY. That difference matters enormously here — the Stripe session
+  // is already created and billed by this point, so a silent failure is a dead
+  // Pay button and a family who taps again and creates a second session.
+  // Blocking is real, not theoretical: hosts that sandbox their embed (several
+  // site builders do) and expired user activation after a slow session create.
+  // If it throws we surface a visible link instead of guessing — clicking it is
+  // a fresh user gesture, which is exactly what an escaped navigation needs.
   const isEmbed = searchParams.get('embed') === '1';
+  const [paymentFallbackUrl, setPaymentFallbackUrl] = useState('');
   function goToPayment(url) {
     if (isEmbed && window.self !== window.top) {
       try {
-        window.open(url, '_top');
+        window.top.location.href = url;
         return;
       } catch (_) {
-        /* fall through to same-frame navigation */
+        setPaymentFallbackUrl(url);
+        setSubmitting(false);
+        return;
       }
     }
     window.location.href = url;
@@ -543,8 +555,11 @@ export default function Register() {
         throw new Error(coData.error || 'Could not start checkout.');
       }
       if (coData.comp) {
-        // $0 scholarship — no payment. Go straight to the success page.
-        goToPayment(`/${ORG_SLUG}/register/success?comp=1`);
+        // $0 scholarship — no payment, no Stripe. This is OUR page and it frames
+        // fine, so navigate normally: breaking out to the top window here would
+        // replace the operator's whole website with a bare success page for no
+        // reason. Inside an embed the family stays on their site.
+        window.location.href = `/${ORG_SLUG}/register/success?comp=1${isEmbed ? '&embed=1' : ''}`;
         return;
       }
       if (coData.url) {
@@ -574,6 +589,30 @@ export default function Register() {
           <div className="mb-6 animate-fade-in rounded-xl border-2 border-j2s-orange-dark bg-j2s-orange/10 p-4">
             <p className="font-bold text-j2s-orange-dark">Heads up</p>
             <p className="mt-1 text-sm text-j2s-ink">{error}</p>
+          </div>
+        )}
+
+        {/* The embedded hand-off to Stripe was blocked (the operator's site
+            sandboxes this frame, or the click's activation expired while the
+            session was being created). The registration IS saved and the payment
+            page IS ready — so give them a real link rather than a button that
+            looks broken. The click is a fresh gesture, which is what an escaped
+            navigation needs. target=_top keeps them out of the framed-Stripe
+            dead end. */}
+        {paymentFallbackUrl && (
+          <div className="mb-6 rounded-xl border-2 border-j2s-purple bg-j2s-purple-soft p-4">
+            <p className="font-bold text-j2s-purple-dark">One more tap to pay</p>
+            <p className="mt-1 text-sm text-j2s-ink">
+              Your spot is saved. Your payment page is ready to open.
+            </p>
+            <a
+              href={paymentFallbackUrl}
+              target="_top"
+              rel="noopener"
+              className="btn-j2s-primary mt-3 inline-block"
+            >
+              Continue to secure payment →
+            </a>
           </div>
         )}
 

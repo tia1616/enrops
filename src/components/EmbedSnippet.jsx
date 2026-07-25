@@ -22,6 +22,11 @@ export function buildEmbedSnippet(slug, orgName) {
       ? window.location.origin
       : "https://enrops.com";
   const src = `${origin}/${slug}/embed`;
+  // We are writing code that runs on the OPERATOR'S site, so the listener is
+  // defensive: it checks the message origin and range-clamps the height. Without
+  // that, any other frame on their page (an ad tag, a chat widget) could post a
+  // matching message and blow the registration iframe up to 200,000px, wrecking
+  // their layout. Their site's stability is our responsibility here.
   // Comment carries the org name so an operator pasting into a page full of
   // other embeds can tell at a glance which block this is.
   return `<!-- ${orgName || "Registration"} — powered by enrops -->
@@ -33,9 +38,12 @@ export function buildEmbedSnippet(slug, orgName) {
 ></iframe>
 <script>
   window.addEventListener("message", function (e) {
+    if (e.origin !== "${origin}") return;
     if (!e.data || e.data.type !== "enrops:height") return;
+    var h = Number(e.data.height);
+    if (!(h > 0 && h < 20000)) return;
     var f = document.querySelector('iframe[src="${src}"]');
-    if (f) f.style.height = e.data.height + "px";
+    if (f) f.style.height = h + "px";
   });
 </script>`;
 }

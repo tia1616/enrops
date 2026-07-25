@@ -1,4 +1,4 @@
-﻿// PublicLayout â€” the parent-facing layout for any tenant.
+// PublicLayout — the parent-facing layout for any tenant.
 //
 // Replaces the J2S-hardcoded J2SLayout. Resolves the tenant from the URL slug
 // (`/:slug/*`), fetches the org, provides it to children via Outlet context,
@@ -6,7 +6,7 @@
 //   - When slug === 'j2s', use J2S brand (purple/orange, J2S name/contact/etc.)
 //     to keep the live J2S experience identical.
 //   - For any other tenant, render the Enrops base brand (clean platform shell).
-//     Per-tenant branding (logo, colors, copy) is queued as the next pass â€”
+//     Per-tenant branding (logo, colors, copy) is queued as the next pass —
 //     see the backlog item on multi-tenant public-site branding.
 //
 // If the slug doesn't resolve to an active org, render a "not found" message
@@ -61,7 +61,7 @@ export default function PublicLayout() {
   if (loadState === 'loading') {
     return (
       <div style={{ minHeight: '50vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b6b6b' }}>
-        Loadingâ€¦
+        Loading…
       </div>
     );
   }
@@ -74,7 +74,7 @@ export default function PublicLayout() {
           The link you followed may be old or the operator&rsquo;s URL may have changed.
         </p>
         <Link to="/" style={{ marginTop: 16, color: ENROPS_PURPLE, fontWeight: 600 }}>
-          Back to Enrops â†’
+          Back to Enrops →
         </Link>
       </div>
     );
@@ -85,12 +85,18 @@ export default function PublicLayout() {
   // transparent background that inherits their page. Applies to /{slug}/embed and
   // to any route carrying ?embed=1 (the registration steps the catalog links to),
   // so the whole flow looks native inside their site instead of a bolted-on app.
-  if (isEmbedContext(location)) {
+  // Gated to registration (enrops_platform) orgs — the tier the embed is sold to.
+  // Ungated, /j2s/embed and /j2s/register?embed=1 would be live, publicly
+  // frameable J2S pages that collect a child's details and take payment while
+  // showing no provider branding and no Privacy/Terms links at all. J2S runs its
+  // own site and has no use for an embed, so there's nothing to trade off.
+  const embedAllowed = org.instructor_pay_model === 'enrops_platform';
+  if (embedAllowed && isEmbedContext(location)) {
     return <EmbedShell org={org} />;
   }
 
   // J2S keeps its existing brand to avoid disturbing the live experience.
-  // Everyone else gets the Enrops base brand for now â€” per-tenant theming is
+  // Everyone else gets the Enrops base brand for now — per-tenant theming is
   // a separate backlog item.
   if (org.slug === 'j2s') {
     return <J2SBrandedShell org={org} user={user} signOut={signOut} location={location} policyTypes={policyTypes} />;
@@ -98,7 +104,7 @@ export default function PublicLayout() {
   return <EnropsBrandedShell org={org} user={user} signOut={signOut} location={location} policyTypes={policyTypes} />;
 }
 
-// â”€â”€â”€ J2S brand (unchanged behavior; lifted from the old J2SLayout) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── J2S brand (unchanged behavior; lifted from the old J2SLayout) ──────────
 // Checkout chrome: during the registration STEPS, drop the account controls
 // (sign in / portal switcher / my account / sign out). Registration is guest
 // checkout by design — a "Sign in" in the header reads as an account wall,
@@ -242,10 +248,10 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
               <h4 className="font-grotesk text-xs uppercase tracking-widest" style={{ color: '#8C88FF' }}>Powered by</h4>
               <a href="https://getenrops.com" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 transition hover:opacity-90" style={{ background: '#1C004F', color: '#FBFBFB' }}>
                 <span className="font-grotesk text-sm font-bold tracking-tight">enrops</span>
-                <span className="text-xs" style={{ color: '#8C88FF' }}>â†’</span>
+                <span className="text-xs" style={{ color: '#8C88FF' }}>→</span>
               </a>
               <p className="mt-2 text-xs text-white/50">The enrichment operations platform.</p>
-              {/* Platform legal â€” governs every account regardless of provider,
+              {/* Platform legal — governs every account regardless of provider,
                   so it sits with the "Powered by" badge, not mixed in with the
                   provider's own documents below. */}
               <div className="mt-3 flex items-center gap-3 text-xs text-white/40">
@@ -273,9 +279,9 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
   );
 }
 
-// â”€â”€â”€ Enrops base brand (used for every non-J2S tenant for now) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Enrops base brand (used for every non-J2S tenant for now) ──────────────
 // Intentionally clean and platform-neutral. Per-tenant branding (logos, colors,
-// custom copy) is the next pass â€” captured as a backlog item.
+// custom copy) is the next pass — captured as a backlog item.
 function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
   const inCheckout = isCheckoutPath(location);
   const home = `/${org.slug}`;
