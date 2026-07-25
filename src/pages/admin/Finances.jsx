@@ -595,6 +595,12 @@ export default function Finances() {
             </Section>
           </Card>
 
+          {/* Hidden for registration operators. The export is built around
+              registrations AND instructor payouts, and a registration-only
+              operator has no payouts — so half of what it promises doesn't
+              exist for them. Exporting is also on the paid track, so offering
+              it here would be promising something we intend to charge for. */}
+          {!isLean && (
           <Card>
             <Section>
               <Heading>Export your finances</Heading>
@@ -634,6 +640,7 @@ export default function Finances() {
               </div>
             </Section>
           </Card>
+          )}
 
           <Card>
             <Section>
