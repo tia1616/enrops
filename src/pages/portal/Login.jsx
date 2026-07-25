@@ -11,6 +11,9 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
+  // Shown after a send attempt so someone with no account isn't left waiting
+  // for an email that will never arrive. See the note in the submit handler.
+  const [showSignupHint, setShowSignupHint] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function handleGoogle() {
@@ -38,7 +41,18 @@ export default function Login() {
       });
       if (fnErr) throw fnErr;
       if (data?.error) throw new Error(data.error);
-      setMsg(`Check ${email} for your sign-in link.`);
+      // Deliberately conditional wording. This function NO-OPS on an email that
+      // has no account - anti-enumeration, so a stranger can't probe which
+      // addresses are registered - but it returns success either way. Saying
+      // "check your email" flatly meant anyone without an account was told a
+      // link was coming when none was, with nothing to do but wait. That is how
+      // a new operator who taps Sign in instead of Get started hits a dead end
+      // that claims to have worked.
+      //
+      // This phrasing still reveals nothing about whether the account exists,
+      // and gives the person with no account somewhere to go.
+      setMsg(`If ${email} has an account, the sign-in link is on its way.`);
+      setShowSignupHint(true);
     } catch (err) {
       setError(err.message || 'Could not send sign-in link. Please try again.');
     } finally {
@@ -89,6 +103,19 @@ export default function Login() {
           </button>
 
           {msg && <p className="rounded-lg bg-j2s-purple-soft p-3 text-sm">{msg}</p>}
+          {/* The existing "No account yet?" below sends people to the parent
+              catalog, which is right for a family and a dead end for someone
+              trying to set up a business. Surfaced only after a send attempt,
+              so it answers the question actually being asked: "I typed my
+              email and nothing came." */}
+          {showSignupHint && (
+            <p className="text-sm text-j2s-ink/70">
+              Setting up your own programs?{' '}
+              <Link to="/signup" className="font-semibold text-j2s-purple hover:underline">
+                Create your registration page →
+              </Link>
+            </p>
+          )}
           {error && <p className="error-text">{error}</p>}
         </div>
 
