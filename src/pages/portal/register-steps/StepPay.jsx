@@ -180,8 +180,9 @@ export default function StepPay({
         </p>
         <p className="flex items-start gap-2 text-sm text-j2s-ink/80">
           <span className="text-j2s-purple">✨</span>
-          After payment, we'll set up your account so re-enrollment next term is
-          one click.
+          {/* "re-enrollment next term" assumes a school-year term. Wrong for a
+              one-off workshop, and provider vocabulary either way. */}
+          After payment, we&rsquo;ll set up your account so signing up again is one click.
         </p>
       </div>
 
