@@ -708,9 +708,6 @@ export default function QuickProgramBuilder() {
                 Connect Stripe →
               </button>
             </div>
-            <p style={{ color: MUTED, fontSize: 13, lineHeight: 1.55, margin: "0 0 10px" }}>
-              Your registration link — share it once you're set up to get paid:
-            </p>
           </>
         ) : (
           <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
@@ -719,20 +716,31 @@ export default function QuickProgramBuilder() {
           </p>
         )}
 
-        <div style={{ marginBottom: 24, opacity: notConnected ? 0.6 : 1 }}>
-          <ShareProgram
-            slug={org.slug}
-            activeTerm={org.active_registration_term}
-            align="left"
-            program={{
-              id: createdId,
-              curriculum: name.trim(),
-              status: "open",
-              term: org.active_registration_term,
-              runs_own_registration: false,
-            }}
-          />
-        </div>
+        {/* No share panel until Stripe is connected.
+            It used to render dimmed to 60% with "share it once you're set up",
+            which is a control that looks disabled but isn't - the panel still
+            opened, and its dropdown landed on top of the buttons below it,
+            which is the mess Jessica photographed. A greyed-out control also
+            still reads as a feature you have.
+            Consistent with the Programs page, which withholds the same three
+            controls for the same reason: a link that can't take money is worth
+            nothing until it can. */}
+        {!notConnected && (
+          <div style={{ marginBottom: 24 }}>
+            <ShareProgram
+              slug={org.slug}
+              activeTerm={org.active_registration_term}
+              align="left"
+              program={{
+                id: createdId,
+                curriculum: name.trim(),
+                status: "open",
+                term: org.active_registration_term,
+                runs_own_registration: false,
+              }}
+            />
+          </div>
+        )}
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <button onClick={resetForAnother} style={primaryBtn}>
             Create another
