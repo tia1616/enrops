@@ -833,23 +833,42 @@ function SetupBanner({ accountId, chargesEnabled, payoutsEnabled, open, onToggle
         >
           Stripe Dashboard ↗
         </button>
+        {/* This was a 12px outline button with a bare ▾, which reads as
+            decoration rather than "there is more behind this" — the fee
+            settings inside it went unfound. Now a filled control with an
+            explicit verb and a real chevron, so it's obvious it opens. */}
         <button
           type="button"
           onClick={onToggle}
+          aria-expanded={open}
           style={{
-            padding: "5px 10px",
-            background: "transparent",
-            color: INK,
-            border: `1px solid ${RULE}`,
-            borderRadius: 5,
-            fontSize: 12,
-            fontWeight: 600,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "9px 14px",
+            background: open ? BRIGHT : "#EEEDFE",
+            color: open ? "#fff" : BRIGHT,
+            border: `1px solid ${open ? BRIGHT : "#CECBF6"}`,
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 700,
             fontFamily: "inherit",
             cursor: "pointer",
             whiteSpace: "nowrap",
           }}
         >
-          Manage setup {open ? "▴" : "▾"}
+          {open ? "Hide settings" : "Payment settings"}
+          <span
+            aria-hidden="true"
+            style={{
+              display: "inline-block",
+              fontSize: 11,
+              transform: open ? "rotate(180deg)" : "none",
+              transition: "transform 0.15s",
+            }}
+          >
+            ▼
+          </span>
         </button>
       </div>
     </div>
