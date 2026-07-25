@@ -374,7 +374,7 @@ function buildInstructorEmail(firstName: string, signInUrl: string): string {
 // logo (or its name when no logo), its primary color, and its support/reply-to.
 function buildParentEmail(firstName: string, signInUrl: string, brand: any): string {
   const orgName = brand?.org_name || 'enrops';
-  const support = brand?.reply_to || 'support@enrops.com';
+  const support = brand?.reply_to || 'jessica@enrops.com';
   const accent = brand?.primary_color || '#5847C9';
   const logoBlock = brand?.logo_url
     ? `<img src="${escapeAttr(brand.logo_url)}" alt="${escapeHtml(orgName)}" style="max-height:44px;width:auto;display:inline-block;" />`

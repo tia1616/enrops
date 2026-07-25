@@ -148,7 +148,7 @@ export default function Dashboard() {
   // backstop, not a fallback tenant.
   const slug = org?.slug || null;
   const tenant = slug ? getTenant(slug) : null;
-  const supportEmail = tenant?.supportEmail || 'support@enrops.com';
+  const supportEmail = tenant?.supportEmail || 'jessica@enrops.com';
 
   const [parent, setParent] = useState(null);
   const [enrollments, setEnrollments] = useState([]);

@@ -55,12 +55,22 @@ export interface OrgBrand {
 const ENROPS_DEFAULTS = {
   name: 'Enrops',
   sender_name: 'Enrops',
-  // Note: hello@enrops.com must be Resend-verified before this path actually
-  // ships email. Until then, expect Resend to reject and the email to fail
-  // gracefully (logged, not retried). Configure in Resend dashboard.
-  sender_email: 'hello@enrops.com',
-  reply_to: 'hello@enrops.com',
-  alert_email: 'alerts@enrops.com',
+  // SENDING and RECEIVING are different problems, and hello@enrops.com was
+  // wrong for both.
+  //
+  // sender_email must be on a Resend-VERIFIED domain or the send is rejected.
+  // enrops.com receives mail via Google Workspace; mail.enrops.com is the
+  // verified sending domain, which is what every tenant's default_sender_email
+  // already points at. So the platform fallback belongs there too.
+  //
+  // reply_to and alert_email must be real MAILBOXES, because a human is meant
+  // to read them. hello@ and alerts@ were never confirmed to exist, so anyone
+  // replying to a platform-sent email - or any alert we send ourselves - may
+  // have been going nowhere. jessica@enrops.com is the one address confirmed
+  // live.
+  sender_email: 'hello@mail.enrops.com',
+  reply_to: 'jessica@enrops.com',
+  alert_email: 'jessica@enrops.com',
   primary_color: '#1C004F',   // Enrops dark purple
   secondary_color: '#8C88FF', // Enrops violet
   accent_color: '#F8A638',    // warm gold
