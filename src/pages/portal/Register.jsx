@@ -285,7 +285,13 @@ export default function Register() {
         .eq('active', true),
       // customizable-registration: the org's enabled standard + active custom
       // questions (one-org reader; returns [] if nothing enabled → form unchanged).
-      supabase.rpc('get_active_registration_fields', { p_org_id: ORG_ID }),
+      // Per-program fields: pass the program being registered for so the family
+      // is asked ONLY what this class needs. Org-wide questions still come back
+      // for every program; a question scoped to another class never appears.
+      supabase.rpc('get_active_registration_fields', {
+        p_org_id: ORG_ID,
+        p_program_id: searchParams.get('program') || null,
+      }),
       // Fee-display config via edge fn (RBAC-safe path — the anon org view
       // intentionally excludes fee columns). Used to show the pass-through
       // "Platform fee" line on StepPay before redirecting to Stripe.
