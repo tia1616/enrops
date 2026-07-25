@@ -107,6 +107,9 @@ const blankDraft = () => ({
 
 export default function Discounts() {
   const { user, org } = useOutletContext();
+  // Registration-only operators: sibling discounts and promo codes, no
+  // term-wide early-bird pricing (later tier).
+  const isLean = org?.instructor_pay_model === "enrops_platform";
   const perm = usePermissions();
 
   const [codes, setCodes] = useState([]);
@@ -304,7 +307,9 @@ export default function Discounts() {
     <div style={{ maxWidth: 900 }}>
       <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700 }}>Discounts</h1>
       <p style={{ margin: "0 0 20px", color: MUTED, fontSize: 14 }}>
-        Codes families type at checkout, plus your automatic sibling and early-bird savings.
+        {isLean
+          ? "Codes families type at checkout, plus your automatic sibling savings."
+          : "Codes families type at checkout, plus your automatic sibling and early-bird savings."}
       </p>
 
       {error && <div style={{ marginBottom: 16, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
@@ -328,7 +333,11 @@ export default function Discounts() {
         </div>
       </div>
 
-      <EarlyBirdSection programs={programs} onApply={applyTermEarlyBird} />
+      {/* Early-bird is a later-tier feature. Registration operators keep sibling
+          discounts and promo codes; term-wide early-bird pricing is gated out
+          rather than shown as something they can set. Hidden, not disabled — a
+          greyed-out control still reads as a feature you have. */}
+      {!isLean && <EarlyBirdSection programs={programs} onApply={applyTermEarlyBird} />}
 
       {/* Promo codes */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -374,7 +383,9 @@ export default function Discounts() {
       )}
 
       <p style={{ marginTop: 12, fontSize: 12, color: MUTED }}>
-        Codes apply on top of sibling and early-bird savings.
+        {isLean
+          ? "Codes apply on top of sibling savings."
+          : "Codes apply on top of sibling and early-bird savings."}
       </p>
 
       {draft && (

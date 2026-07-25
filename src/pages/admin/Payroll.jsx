@@ -666,7 +666,7 @@ function PayRoutesCard({ org }) {
     const body =
       `Org: ${orgName}${orgSlug ? ` (${orgSlug})` : ''}\n\n` +
       `I want to use this option for paying my instructors. Please let me know what's needed to turn it on.`;
-    return `mailto:hello@enrops.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    return `mailto:jessica@enrops.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   }
 
   return (
@@ -759,8 +759,8 @@ function PayRoutesCard({ org }) {
           />
           <div style={{ color: MUTED, fontSize: 12, lineHeight: 1.5, paddingTop: 4 }}>
             Not sure which fits? Email{' '}
-            <a href="mailto:hello@enrops.com" style={{ color: VIOLET, fontWeight: 600 }}>
-              hello@enrops.com
+            <a href="mailto:jessica@enrops.com" style={{ color: VIOLET, fontWeight: 600 }}>
+              jessica@enrops.com
             </a>{' '}
             and we'll walk through it with you.
           </div>

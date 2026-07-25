@@ -14,6 +14,7 @@ import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
+import EmbedSnippet from "../../../components/EmbedSnippet.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
@@ -32,6 +33,7 @@ const RULE = "#e2dfd5";
 const PANEL = "#fff";
 
 const AMBER = "#a16207";
+const ENROPS_GOLD = "#F8A638";  // brand warm accent (matches the email/brand palette)
 const OK_GREEN = "#3a7c3a";
 
 const DAYS_OF_WEEK = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -65,6 +67,19 @@ function titleDay(d) {
 
 export default function ProgramsCalendar() {
   const { user, org, orgMember } = useOutletContext();
+  // A registration operator whose Stripe isn't connected can't be paid, so the
+  // share and embed controls are withheld until it is. Deliberately `=== false`
+  // rather than `!`: while the org is still loading, stripe_charges_enabled is
+  // undefined, and the safe direction is to leave the buttons alone rather than
+  // yank them from someone who IS connected.
+  //
+  // `uses_enrops_registration !== false` matches the class-schedule gate below:
+  // an org that takes registration OUTSIDE enrops will never connect Stripe
+  // here, so without this it gets a "Connect Stripe" prompt it can never clear.
+  const cannotBePaidYet =
+    org?.instructor_pay_model === "enrops_platform" &&
+    org?.uses_enrops_registration !== false &&
+    org?.stripe_charges_enabled === false;
   const perm = getPermissions(orgMember?.role);
   // Term starts empty — we don't guess a hardcoded term. fetchOrgTerms picks
   // the org's default (in-progress today, else next starting, else most recent
@@ -540,6 +555,23 @@ export default function ProgramsCalendar() {
 
   return (
     <div>
+      {/* MOBILE PROGRAM ROWS. Each row is a 6-column grid with 450px of FIXED
+          columns, so on a phone it overflowed horizontally and the cells at the
+          end — enrollment and the roster chevron — were pushed off-screen. This
+          page is now the lean operator's HOME, and enrollment is the number they
+          come here for, so it can't be the thing that gets clipped.
+          Under 900px the row reflows to "details | number" and wraps, keeping
+          every cell on screen. !important because the row styles are inline. */}
+      <style>{`
+        @media (max-width: 900px) {
+          [data-program-row] {
+            grid-template-columns: 1fr auto !important;
+            gap: 4px 12px !important;
+            padding: 12px 14px !important;
+            align-items: start !important;
+          }
+        }
+      `}</style>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Scheduled programs</h1>
@@ -547,8 +579,21 @@ export default function ProgramsCalendar() {
             What's running this term, by day or by school. Live enrollment numbers.
           </div>
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          {org?.slug && (
+        {/* flexWrap is load-bearing on a phone: Share + Add-to-website + New
+            program + the term picker is ~600px of non-shrinking controls, and
+            without wrapping this row sets the page's minimum width, pushing
+            EVERYTHING (including the enrollment numbers) off the right edge.
+            The outer container already wraps; this inner group has to as well
+            or the outer wrap can never take effect. */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          {/* Sharing is withheld until the operator can actually be paid.
+              Checkout is already blocked server-side when Stripe isn't
+              connected, so nothing breaks if a link does get out — but handing
+              someone a link that cannot take money, and letting them put it in
+              a flyer, wastes the one thing they can't get back: the first
+              families who click it. Only for registration operators; J2S and
+              anyone already connected are untouched. */}
+          {org?.slug && !cannotBePaidYet && (
             <ShareLink
               url={buildCatalogUrl(org.slug)}
               align="right"
@@ -557,6 +602,26 @@ export default function ProgramsCalendar() {
               description="One link to all your open programs — families pick a class and sign up. Put it in your bio, an email, or a flyer."
               qrFileBase="registration-page"
             />
+          )}
+          {cannotBePaidYet && (
+            <Link
+              to="/admin/finances"
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 8,
+                padding: "8px 14px", borderRadius: 8, fontSize: 13.5, fontWeight: 600,
+                textDecoration: "none", background: "#FDF6E3",
+                border: "1px solid #F0D48A", color: "#8a5a00",
+              }}
+            >
+              Connect Stripe to share your link →
+            </Link>
+          )}
+          {/* On-domain embed — the biggest differentiator vs Jumbula/Sawyer/
+              CourseStorm, whose widgets redirect off-site or slow the page.
+              Registration ops only; J2S runs its own site and doesn't need it.
+              Held back for the same reason as the share link. */}
+          {org?.slug && org?.instructor_pay_model === "enrops_platform" && !cannotBePaidYet && (
+            <EmbedSnippet slug={org.slug} orgName={org.name} />
           )}
           <Link
             // Lean registration operators (enrops_platform) get the curriculum-free
@@ -593,9 +658,32 @@ export default function ProgramsCalendar() {
 
       {term && termsLoaded && (
         activeTerm === term ? (
-          <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
-            ✓ {formatTermLabel(term)} is open for registration — this is what parents see.
-          </div>
+          // Honest state: a term can be "open for registration" while the org has
+          // no Stripe account connected — the page takes sign-ups but the money
+          // has nowhere of theirs to land. Saying a plain green "open" there tells
+          // an operator they're done when they aren't. Lean ops only; J2S is
+          // connected and keeps the original banner exactly.
+          org?.instructor_pay_model === "enrops_platform" && org?.stripe_charges_enabled === false ? (
+            /* Enrops palette, not the generic amber used elsewhere on this page:
+               ENROPS_GOLD (#F8A638) is the brand's warm accent, on a soft tint of
+               itself, with brand purple text and the standard indigo primary
+               action. The old #a16207 read as rust and belongs to no palette. */
+            <div style={{ ...registrationBanner, background: "#FFF6E9", borderColor: ENROPS_GOLD, color: PURPLE }}>
+              <span>
+                {formatTermLabel(term)} is open for registration, but you can't get paid yet — connect Stripe to start receiving payments.
+              </span>
+              <Link
+                to="/admin/finances"
+                style={{ background: BRIGHT, color: "#fff", borderRadius: 6, padding: "6px 12px", fontSize: 13, fontWeight: 600, textDecoration: "none", flexShrink: 0, whiteSpace: "nowrap" }}
+              >
+                Connect Stripe →
+              </Link>
+            </div>
+          ) : (
+            <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
+              ✓ {formatTermLabel(term)} is open for registration — this is what parents see.
+            </div>
+          )
         ) : (
           <div style={{ ...registrationBanner, background: "#fff8ec", borderColor: "#f0dfb8", color: AMBER }}>
             <span>
@@ -650,10 +738,20 @@ export default function ProgramsCalendar() {
       {!loading && !error && programs.length === 0 && (
         <div style={emptyState}>
           No programs scheduled{term ? ` for ${term}` : ""} yet.
-          <div style={{ marginTop: 8, fontSize: 13 }}>
-            Running ongoing classes instead of term registration?{" "}
-            <Link to="/admin/class-schedule" style={{ color: BRIGHT, fontWeight: 600 }}>Upload your class schedule →</Link>
-          </div>
+          {/* Uploading a weekly class schedule is a later tier, and the empty
+              state is the worst place to offer it: a brand-new operator with
+              zero programs sees it before anything else and follows it into a
+              surface they can't use.
+              NOT gated on lean alone — some enrops_platform orgs (Shoreview
+              Chess, Mrs. Richelle) run registration outside enrops, and the
+              class schedule is their actual home. Hide it only for operators
+              who take registrations HERE. */}
+          {!(org?.instructor_pay_model === "enrops_platform" && org?.uses_enrops_registration !== false) && (
+            <div style={{ marginTop: 8, fontSize: 13 }}>
+              Running ongoing classes instead of term registration?{" "}
+              <Link to="/admin/class-schedule" style={{ color: BRIGHT, fontWeight: 600 }}>Upload your class schedule →</Link>
+            </div>
+          )}
         </div>
       )}
 
@@ -999,7 +1097,12 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
 
   return (
     <>
-    <div style={{
+    <div data-program-row style={{
+      // 450px of FIXED columns before the flexible one, so on a phone the row
+      // overflowed and the enrollment + action cells were pushed off-screen.
+      // The mobile rule (in ProgramsCalendar's <style>) reflows this to two
+      // columns so enrollment stays visible — it's the number an operator opens
+      // this page for.
       display: "grid",
       gridTemplateColumns: "100px 1fr 110px 90px 80px 70px",
       gap: 14,
@@ -1747,6 +1850,21 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         })()}
         {savedFlash && <span style={{ color: OK_GREEN, fontWeight: 600, fontSize: 12 }}>✓ Saved</span>}
 
+        {/* Same rule as the page-level share: no link handed out until the
+            operator can be paid for it. */}
+        {isLean && panelOrg?.stripe_charges_enabled === false ? (
+          <Link
+            to="/admin/finances"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "7px 12px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+              textDecoration: "none", background: "#FDF6E3",
+              border: "1px solid #F0D48A", color: "#8a5a00",
+            }}
+          >
+            Connect Stripe to share this →
+          </Link>
+        ) : (
         <ShareProgram
           slug={orgSlug}
           activeTerm={orgActiveTerm}
@@ -1760,6 +1878,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             external_registration_url: program.external_registration_url,
           }}
         />
+        )}
 
         <div style={{ flex: 1 }} />
 

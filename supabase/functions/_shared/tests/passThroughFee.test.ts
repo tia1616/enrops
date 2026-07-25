@@ -59,15 +59,27 @@ Deno.test('reg model: $300 program parent-facing fee hits the $7.99 cap', () => 
   assertEquals(passThroughFeeCents(30000, 'card', REG), 799);
 });
 
-Deno.test('pass-through builds a "Platform fee" line item with the fee as unit_amount', () => {
-  assertEquals(passThroughLineItem(27500, 'card', PASS), {
+// The LABEL is asserted deliberately, not incidentally. Naming this charge
+// "enrops service fee" rather than any kind of "processing fee" is a legal
+// requirement, not a copy preference: surcharging a card cost to the customer is
+// prohibited in CT/ME/MA and constrained in CA, and "processing" is the word
+// that makes a platform fee read as a card surcharge. If someone renames this,
+// this test should fail and make them justify it.
+Deno.test('pass-through line item is labelled "enrops service fee", never a processing fee', () => {
+  const item = passThroughLineItem(27500, 'card', PASS);
+  assertEquals(item, {
     price_data: {
       currency: 'usd',
-      product_data: { name: 'Service fee', description: 'Registration service fee.' },
+      product_data: {
+        name: 'enrops service fee',
+        description: "enrops's service fee for running the platform. Not a card processing surcharge.",
+      },
       unit_amount: 275,
     },
     quantity: 1,
   });
+  const label = `${item?.price_data.product_data.name} ${item?.price_data.product_data.description}`;
+  assertEquals(/processing fee|convenience fee|platform fee/i.test(label.replace(/Not a card processing surcharge\./i, '')), false);
 });
 
 Deno.test('fee that rounds to 0 produces no line item (tiny base)', () => {

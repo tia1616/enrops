@@ -48,12 +48,19 @@ export function passThroughLineItem(
     price_data: {
       currency: 'usd',
       product_data: {
-        name: 'Service fee',
+        name: 'enrops service fee',
         // No hardcoded percentage: the effective rate varies once the floor/cap
         // apply, so a flat "X%" would be misleading. The exact charged amount is
-        // the unit_amount below. "Service fee" mirrors consumer-checkout norms
-        // (Eventbrite/Airbnb/Ticketmaster) — clearer to families than "platform fee".
-        description: 'Registration service fee.',
+        // the unit_amount below.
+        //
+        // Named "enrops service fee", never "processing fee". This is enrops's
+        // own charge, taken as a Stripe Connect application fee — NOT a markup
+        // on the card transaction. The distinction is legal, not cosmetic:
+        // surcharging a card cost to the customer is prohibited in CT, ME and MA
+        // and constrained in CA, and the word "processing" is what makes a
+        // reader file a platform fee under "card surcharge". Attributing it to
+        // enrops by name is the same approach Eventbrite uses.
+        description: "enrops's service fee for running the platform. Not a card processing surcharge.",
       },
       unit_amount: fee,
     },

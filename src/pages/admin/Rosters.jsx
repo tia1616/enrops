@@ -370,6 +370,7 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
 function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled, canManage }) {
   const [campers, setCampers] = useState(null); // null = loading
   const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts] }
+  const [customLabels, setCustomLabels] = useState({}); // { field_key: label } for the org's own questions
   const [editingId, setEditingId] = useState(null);
   const [justSavedId, setJustSavedId] = useState(null); // reg id to flash "Saved" + scroll into view
   const [err, setErr] = useState("");
@@ -425,6 +426,21 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
       for (const c of contacts ?? []) (byStudent[c.student_id] ||= []).push(c);
       setContactsByStudent(byStudent);
     }
+
+    // Labels for the operator's own questions. custom_field_values stores
+    // answers keyed by field_key, so without this map the roster can only show
+    // "guitar_own_instrument: yes" — or, as it did until now, nothing at all.
+    const orgId = (data ?? [])[0]?.organization_id;
+    if (orgId) {
+      const { data: fields } = await supabase
+        .from("custom_reg_fields")
+        .select("field_key, label")
+        .eq("organization_id", orgId)
+        .is("standard_key", null);
+      const map = {};
+      for (const f of fields ?? []) map[f.field_key] = f.label;
+      setCustomLabels(map);
+    }
   }
 
   useEffect(() => {
@@ -456,6 +472,7 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
               key={reg.id}
               registration={reg}
               contacts={contactsByStudent[reg.student?.id] || []}
+              customLabels={customLabels}
               isEditing={editingId === reg.id}
               onToggleEdit={() => setEditingId((cur) => (cur === reg.id ? null : reg.id))}
               orgId={orgId}
@@ -494,7 +511,7 @@ function TelLink({ phone }) {
   return <a href={`tel:${phone.replace(/[^0-9+]/g, "")}`} style={{ color: PURPLE, textDecoration: "underline" }}>{phone}</a>;
 }
 
-function CamperEditableRow({ registration, contacts = [], isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved, justSaved }) {
+function CamperEditableRow({ registration, contacts = [], customLabels = {}, isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved, justSaved }) {
   const s = registration.student;
   const [confirming, setConfirming] = useState(false);
   const [refunding, setRefunding] = useState(false);
@@ -511,6 +528,11 @@ function CamperEditableRow({ registration, contacts = [], isEditing, onToggleEdi
   const guardians = contacts.filter((c) => c.role === "guardian");
   const pickups = contacts.filter((c) => c.role === "authorized_pickup");
   const doNotRelease = contacts.filter((c) => c.role === "do_not_release");
+  // Answers to the operator's own questions, skipping anything blank so an
+  // unanswered optional question doesn't add an empty line to every row.
+  const customAnswers = Object.entries(registration.custom_field_values ?? {})
+    .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : v === true ? "Yes" : v === false ? "No" : v])
+    .filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== "");
   const displayName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "Unnamed";
   const hasAllergies = (s.allergies ?? "").trim().length > 0;
   const flagged = hasAllergies || s.epipen_required;
@@ -591,6 +613,22 @@ function CamperEditableRow({ registration, contacts = [], isEditing, onToggleEdi
                 {doNotRelease.length > 0 && (
                   <div><strong style={{ color: RED }}>Do NOT release:</strong> {doNotRelease.map(cFullName).filter(Boolean).join("; ")}</div>
                 )}
+              </div>
+            )}
+            {/* The operator's OWN questions. These were being collected at
+                registration and stored, but never shown anywhere in admin —
+                so an operator could add "does your child bring their own
+                guitar?", have every family answer it, and never see a single
+                reply. Labels come from custom_reg_fields; an answer whose
+                question was since deleted falls back to its key rather than
+                disappearing. */}
+            {customAnswers.length > 0 && (
+              <div style={{ fontSize: 11, color: MUTED, marginTop: 3, lineHeight: 1.55 }}>
+                {customAnswers.map(([k, v]) => (
+                  <div key={k}>
+                    <strong style={{ color: INK }}>{customLabels[k] || k}:</strong> {v}
+                  </div>
+                ))}
               </div>
             )}
           </div>

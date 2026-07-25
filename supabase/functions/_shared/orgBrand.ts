@@ -32,6 +32,8 @@ export interface OrgBrand {
   primary_color: string;
   secondary_color: string;
   accent_color: string;
+  // Email typeface stack. Tenant's org_branding.body_font, else Enrops Poppins.
+  font_family: string;
   page_bg_color: string;
   // Per-tenant email signature, shown above the footer of every outgoing email.
   // Tenant-specific ONLY — never cascades to the Enrops org (a tenant that hasn't
@@ -53,16 +55,35 @@ export interface OrgBrand {
 const ENROPS_DEFAULTS = {
   name: 'Enrops',
   sender_name: 'Enrops',
-  // Note: hello@enrops.com must be Resend-verified before this path actually
-  // ships email. Until then, expect Resend to reject and the email to fail
-  // gracefully (logged, not retried). Configure in Resend dashboard.
-  sender_email: 'hello@enrops.com',
-  reply_to: 'hello@enrops.com',
-  alert_email: 'alerts@enrops.com',
+  // SENDING and RECEIVING are different problems, and hello@enrops.com was
+  // wrong for both.
+  //
+  // sender_email must be on a Resend-VERIFIED domain or the send is rejected.
+  // enrops.com receives mail via Google Workspace; mail.enrops.com is the
+  // verified sending domain, which is what every tenant's default_sender_email
+  // already points at. So the platform fallback belongs there too.
+  //
+  // reply_to and alert_email must be real MAILBOXES, because a human is meant
+  // to read them. hello@ and alerts@ were never confirmed to exist, so anyone
+  // replying to a platform-sent email - or any alert we send ourselves - may
+  // have been going nowhere. jessica@enrops.com is the one address confirmed
+  // live.
+  sender_email: 'hello@mail.enrops.com',
+  reply_to: 'jessica@enrops.com',
+  alert_email: 'jessica@enrops.com',
   primary_color: '#1C004F',   // Enrops dark purple
   secondary_color: '#8C88FF', // Enrops violet
   accent_color: '#F8A638',    // warm gold
   page_bg_color: '#FBFBFB',   // Enrops cream
+  // Poppins is the Enrops typeface. Matches the available_fonts row's own
+  // fallback_stack, so a client that can't load the web font degrades exactly
+  // the way the rest of the product does.
+  font_name: 'Poppins',
+  font_family: "'Poppins','Avenir Next',Helvetica,sans-serif",
+  // The Enrops mark, used when a provider hasn't uploaded their own logo. Without
+  // this every self-serve operator's email went out with NO logo at all. Absolute
+  // URL on the prod site so it resolves from any environment and any inbox.
+  logo_url: 'https://enrops.com/pwa-192x192.png',
 };
 
 interface OrgRow {
@@ -85,6 +106,7 @@ interface BrandingRow {
   page_bg_color: string | null;
   email_from_name: string | null;
   email_reply_to: string | null;
+  body_font: string | null;
   logo_url: string | null;
   email_signature: string | null;
   email_signature_image_url: string | null;
@@ -111,10 +133,31 @@ async function fetchOrg(supabase: SupabaseClient, where: { id?: string; slug?: s
 async function fetchBranding(supabase: SupabaseClient, orgId: string): Promise<BrandingRow | null> {
   const { data } = await supabase
     .from('org_branding')
-    .select('primary_color, secondary_color, accent_color, page_bg_color, email_from_name, email_reply_to, logo_url, email_signature, email_signature_image_url, email_signature_image_mode')
+    .select('primary_color, secondary_color, accent_color, page_bg_color, email_from_name, email_reply_to, logo_url, email_signature, email_signature_image_url, email_signature_image_mode, body_font')
     .eq('organization_id', orgId)
     .maybeSingle();
   return data as BrandingRow | null;
+}
+
+// Compose the email CSS font stack from the SAME available_fonts row the rest of
+// the product uses, so an email matches the provider's site rather than being a
+// second, drifting definition of their typeface. body_font is a FK to
+// available_fonts(name), so the name alone isn't a usable CSS value —
+// fallback_stack has to be joined on. Any miss degrades to the Enrops stack.
+async function fetchFontStack(supabase: SupabaseClient, fontName: string | null): Promise<string | null> {
+  if (!fontName) return null;
+  try {
+    const { data } = await supabase
+      .from('available_fonts')
+      .select('name, fallback_stack')
+      .eq('name', fontName)
+      .maybeSingle();
+    if (!data?.name) return null;
+    const stack = (data as { name: string; fallback_stack: string | null });
+    return stack.fallback_stack ? `'${stack.name}',${stack.fallback_stack}` : `'${stack.name}',sans-serif`;
+  } catch (_) {
+    return null; // branding must never break a send
+  }
 }
 
 /**
@@ -140,6 +183,13 @@ export async function loadOrgBrand(
     }
     return null;
   };
+
+  // Resolve the typeface BEFORE building the brand object. Tenant's choice wins,
+  // then the Enrops org's, then the hardcoded Poppins stack.
+  const resolvedFontStack = await fetchFontStack(
+    supabase,
+    pick(tenantBranding?.body_font, enropsBranding?.body_font) ?? ENROPS_DEFAULTS.font_name,
+  );
 
   // Platform sending domain: one Resend-verified domain (e.g. mail.enrops.com)
   // that every tenant WITHOUT its own verified domain sends under, each with a
@@ -210,13 +260,17 @@ export async function loadOrgBrand(
     alert_email:
       pick(tenantOrg?.alert_email, enropsOrg?.alert_email) ?? ENROPS_DEFAULTS.alert_email,
 
+    // ?? ENROPS_DEFAULTS.logo_url is the important part: before it, a provider
+    // with no logo of their own AND an Enrops org row that has no logo set (the
+    // actual state — enrops.logo_email_url is null) produced NO logo at all, so
+    // every self-serve operator's email went out unbranded.
     logo_url:
       pick(
         tenantOrg?.logo_email_url,
         tenantBranding?.logo_url,
         enropsOrg?.logo_email_url,
         enropsBranding?.logo_url,
-      ),
+      ) ?? ENROPS_DEFAULTS.logo_url,
 
     // Signature is tenant-only: no cascade to Enrops (a tenant must never inherit
     // the platform's signature). Absent → null → no block renders.
@@ -236,6 +290,13 @@ export async function loadOrgBrand(
       pick(tenantBranding?.accent_color, enropsBranding?.accent_color) ?? ENROPS_DEFAULTS.accent_color,
     page_bg_color:
       pick(tenantBranding?.page_bg_color, enropsBranding?.page_bg_color) ?? ENROPS_DEFAULTS.page_bg_color,
+
+    // Typeface for email HTML. Config-driven, never keyed off a tenant slug:
+    // J2S carries 'Nunito Sans' in its own org_branding row so its emails stay
+    // byte-identical, and everyone else falls through to the Enrops Poppins
+    // stack. Previously the templates hardcoded Nunito, so EVERY provider's
+    // email went out in J2S's typeface.
+    font_family: resolvedFontStack ?? ENROPS_DEFAULTS.font_family,
   };
 }
 

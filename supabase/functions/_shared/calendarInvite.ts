@@ -214,7 +214,43 @@ export function googleCalendarUrl(ev: CalendarEvent): string | null {
   ];
   const location = locationFor(ev);
   if (location) parts.push(`location=${enc(location)}`);
+
+  // Add the WHOLE series, not just week 1. Google's template URL carries a
+  // single event, but it accepts an RFC-5545 recurrence rule (`recur`), which
+  // materialises as every occurrence — so a family taps once and gets all 8
+  // classes instead of one Thursday and a puzzle.
+  //
+  // ONLY when the real dates are a clean weekly cadence. Our dates are
+  // closure-aware, so a term with a no-school week has GAPS that FREQ=WEEKLY
+  // would silently paper over — it would put a class on a day the child
+  // shouldn't attend, which is worse than one correct event. In that case we
+  // fall back to the single first session; the .ics attachment always carries
+  // the exact, gap-accurate series for every calendar app.
+  const rule = weeklyRecurrenceRule(ev.sessionDates || []);
+  if (rule) parts.push(`recur=${enc(rule)}`);
+
   return `https://calendar.google.com/calendar/render?${parts.join('&')}`;
+}
+
+/**
+ * RRULE for a session list that is EXACTLY weekly (every date 7 days after the
+ * previous one). Returns null for a single session or any irregular spacing —
+ * caller then links only the first session.
+ */
+export function weeklyRecurrenceRule(sessionDates: string[]): string | null {
+  const days = (sessionDates || [])
+    .map((iso) => (typeof iso === 'string' ? iso.slice(0, 10) : ''))
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort();
+  if (days.length < 2) return null;
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+  for (let i = 1; i < days.length; i += 1) {
+    const prev = Date.parse(`${days[i - 1]}T00:00:00Z`);
+    const cur = Date.parse(`${days[i]}T00:00:00Z`);
+    if (!Number.isFinite(prev) || !Number.isFinite(cur)) return null;
+    if (cur - prev !== WEEK_MS) return null; // a closure or an irregular term
+  }
+  return `RRULE:FREQ=WEEKLY;COUNT=${days.length}`;
 }
 
 /** Shape of a registration row (as selected by the confirmation paths) we can

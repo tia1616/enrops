@@ -34,8 +34,10 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
         {childIndex === 0 ? 'About your student' : `About child ${childIndex + 1}`}
       </h1>
       <p className="mt-2 text-j2s-ink/70">
+        {/* Written to the PARENT. "Your roster" was the operator's word for it,
+            addressed to the wrong person entirely. */}
         {lean
-          ? 'We use this to build your roster and keep safety info on hand.'
+          ? 'We use this to save your child’s spot and keep their safety details on hand.'
           : 'We use this info for rosters, medical notes, and pickup.'}
       </p>
 

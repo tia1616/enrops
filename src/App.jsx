@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useOutletContext } from 'react-router-dom';
 import PublicLayout from './layouts/PublicLayout.jsx';
 import AdminLayout from './layouts/AdminLayout.jsx';
 import { CartProvider } from './context/CartContext.jsx';
@@ -93,6 +93,21 @@ const IS_STAGING =
   typeof window !== 'undefined' &&
   window.location.hostname.endsWith('enrops-staging.netlify.app');
 
+// Registration operators (enrops_platform) build programs in the lightweight
+// QuickProgramBuilder. The classic wizard at /admin/programs/new hard-gates on a
+// PUBLISHED CURRICULUM + a LOCATION (ProgramWizardNew's prereq empty-state) —
+// neither of which a lean org has, so reaching it by a direct URL or a stale
+// bookmark is an unresolvable dead end. Nothing links a lean op there, but the
+// route was reachable; send them to the builder they can actually finish.
+// org is loaded before AdminLayout renders <Outlet>, so this never flashes.
+function ProgramWizardRoute() {
+  const { org } = useOutletContext();
+  if (org?.instructor_pay_model === 'enrops_platform') {
+    return <Navigate to="/admin/programs/quick-new" replace />;
+  }
+  return <ProgramWizardNew />;
+}
+
 export default function App() {
   return (
     <>
@@ -137,6 +152,12 @@ export default function App() {
         }
       >
         <Route index element={<Home />} />
+        {/* Embeddable catalog for the operator's OWN website. Same component as
+            the public catalog (one source of truth for the query + cards); Home
+            renders a compact, chrome-less variant when it's in embed mode, and
+            PublicLayout drops its header/footer for /embed and any ?embed=1
+            route so the whole flow looks native inside the operator's page. */}
+        <Route path="embed" element={<Home />} />
         <Route path="register" element={<Register />} />
         <Route path="register/success" element={<RegisterSuccess />} />
         <Route path="login" element={<Login />} />
@@ -208,7 +229,7 @@ export default function App() {
         <Route path="curricula/:id/review" element={<CurriculumReview />} />
         <Route path="curricula/:id/edit" element={<CurriculumReview />} />
         <Route path="programs" element={<ProgramsCalendar />} />
-        <Route path="programs/new" element={<ProgramWizardNew />} />
+        <Route path="programs/new" element={<ProgramWizardRoute />} />
         <Route path="programs/quick-new" element={<QuickProgramBuilder />} />
         <Route path="programs/:programId/roster" element={<ProgramRoster />} />
         <Route path="schools" element={<SchoolsLocations />} />

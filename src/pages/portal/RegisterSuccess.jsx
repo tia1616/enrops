@@ -213,14 +213,18 @@ export default function RegisterSuccess() {
         </div>
       )}
 
+      {/* Points at the PROVIDER, not at us. A family with a question about their
+          child's class should reach the person teaching it - and "reach us at
+          support@enrops.com" sent them to the platform instead, contradicting
+          the confirmation email, whose reply-to is already the provider's own
+          address.
+          Deliberately not a mailto: the public org record doesn't carry the
+          provider's email, and inventing one risks a bounce. Replying to the
+          confirmation lands with them either way, which is the outcome that
+          matters. */}
       <p className="mt-8 text-center text-sm text-j2s-ink/60">
-        Questions? Reach us at{' '}
-        <a
-          href="mailto:support@enrops.com"
-          className="font-semibold text-j2s-purple hover:underline"
-        >
-          support@enrops.com
-        </a>
+        Questions? Just reply to your confirmation email
+        {org?.name ? <> and it goes straight to {org.name}</> : <> and it goes straight to your program provider</>}.
       </p>
 
       {/* Powered-by attribution + acquisition CTA (the getenrops loop). */}

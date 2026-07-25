@@ -23,6 +23,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { priceCart, validatePromo } from '../_shared/promoPricing.ts';
+import { renderWaiverText } from '../_shared/waiverText.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -74,7 +75,9 @@ serve(async (req) => {
     // --- Resolve organization ---
     const { data: org, error: orgErr } = await admin
       .from('organizations')
-      .select('id')
+      // name is needed to render {{org}} into the waiver text we snapshot
+      // against each signature.
+      .select('id, name')
       .eq('slug', organization_slug)
       .single();
     if (orgErr || !org) {
@@ -380,9 +383,17 @@ serve(async (req) => {
       );
 
       if (waiverIds.length) {
+        // Same-org enforcement on every referenced row. waiverIds arrives in
+        // the request body and this is a PUBLIC endpoint holding a service-role
+        // client, so without the organization_id filter a caller could name
+        // another org's waiver id and have that org's text stored as the
+        // agreement this family signed. Low value to steal, but the rule in
+        // this function is that nothing client-supplied is trusted without
+        // being re-scoped server-side, and this line was the exception.
         const { data: waiverRows } = await admin
           .from('waivers')
           .select('id, name, content, version')
+          .eq('organization_id', orgId)
           .in('id', waiverIds);
 
         // Create signature for each agreed waiver on each registration for this child.
@@ -401,10 +412,25 @@ serve(async (req) => {
         let programFitText = '';
 
         for (const w of waiverRows || []) {
-          const isJ2sWaiver = /waiver.*agreement|j2s.*waiver|waiver.*j2s/i.test(w.name);
+          // Photo consent is recorded from whichever document actually carries
+          // the photo clause. Two shapes exist and both must keep working:
+          //
+          //   - the LEGACY bundled agreement, where the photo clause is one
+          //     numbered line inside the liability text (J2S signs this today,
+          //     91 signatures deep) — matched by name, exactly as before;
+          //   - the SEPARATE photo release, which is its own optional document.
+          //
+          // Dropping the legacy match would silently stop recording consent for
+          // J2S; not adding the new one would silently stop recording it for
+          // every provider on the split templates. The split also makes the
+          // consent meaningful for the first time: a family can decline the
+          // photo release and still register, which is impossible while the
+          // clause is buried inside an agreement they must accept to enroll.
+          const isLegacyBundledWaiver = /waiver.*agreement|j2s.*waiver|waiver.*j2s/i.test(w.name);
+          const isPhotoRelease = /photo|media release/i.test(w.name);
           const isProgFit = /program fit|inclusivity/i.test(w.name);
 
-          if (isJ2sWaiver) photoReleaseTrue = true;
+          if (isLegacyBundledWaiver || isPhotoRelease) photoReleaseTrue = true;
           if (isProgFit) {
             programFitTrue = true;
             programFitText = child.waivers[w.id]?.comments || '';
@@ -419,7 +445,12 @@ serve(async (req) => {
               signature_text:
                 child.waivers[w.id]?.signature_text ||
                 `I agree — ${parent.first_name} ${parent.last_name}`,
-              waiver_text_snapshot: w.content,
+              // Snapshot what the family actually READ, with the business name
+              // filled in — not the stored template with its {{org}} token. This
+              // column is the record of what was agreed to, so it has to match
+              // the words on screen, and it must stay fixed even if the operator
+              // later renames the business or edits the template.
+              waiver_text_snapshot: renderWaiverText(w.content, org.name),
               waiver_version: w.version || 1,
             });
           }

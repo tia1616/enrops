@@ -60,6 +60,8 @@ function suggestStatementSuffix(orgName) {
 
 export default function Finances() {
   const { org, orgMember } = useOutletContext();
+  // Registration-only operators: no school invoicing, no instructor payroll.
+  const isLean = org?.instructor_pay_model === "enrops_platform";
   const [searchParams] = useSearchParams();
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -426,11 +428,18 @@ export default function Finances() {
 
   return (
     <PageShell>
+      {/* Heading and subtitle follow the nav. A registration operator's nav says
+          "Payments", so a page titled "Receivables" reads as a different screen —
+          and the old subtitle promised "invoices to schools", which they don't
+          have and can't get. Say what this page actually is for them. J2S keeps
+          the accounting language its nav still uses. */}
       <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700 }}>
-        Receivables
+        {isLean ? "Payments" : "Receivables"}
       </h1>
       <p style={{ margin: "0 0 24px", color: MUTED, fontSize: 14 }}>
-        Money coming in — parent payments, invoices to schools, refunds.
+        {isLean
+          ? "Money from families — what's come in, and anything you've refunded."
+          : "Money coming in — parent payments, invoices to schools, refunds."}
       </p>
 
       {stripeParam === "return" && (
@@ -510,13 +519,19 @@ export default function Finances() {
           <Card>
             <Section>
               <Heading>Fees on each payment</Heading>
+              {/* "service fee", never "processing fee", for OUR charge. It is
+                  enrops's own fee taken as a Stripe Connect application fee, not
+                  a markup on the card transaction — and surcharging a card cost
+                  to a customer is prohibited in CT/ME/MA and constrained in CA.
+                  Stripe's own fee below keeps the word "processing", because
+                  that is exactly what it is. The two must never read as one. */}
               <p style={{ color: MUTED, fontSize: 14, marginTop: 0 }}>
-                Two separate fees come out of each parent payment — enrops's platform
+                Two separate fees come out of each parent payment — the enrops service
                 fee and Stripe's processing fee. They're never bundled into one number.
               </p>
 
               <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, margin: "4px 0 8px" }}>
-                enrops platform fee
+                enrops service fee
               </div>
               <FeeReadout config={config} />
 
@@ -530,36 +545,22 @@ export default function Finances() {
                 </div>
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
                   Charged by Stripe and deducted from your payout. This is separate from
-                  the enrops platform fee above — not an enrops fee.
+                  the enrops service fee above — not an enrops fee.
                 </div>
               </div>
 
-              <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${RULE}` }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-                  <div>
-                    <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
-                      Who pays the enrops platform fee?
-                    </div>
-                    <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
-                      {feePassThrough
-                        ? "Families cover the enrops platform fee as a separate line at checkout. (Stripe's processing fee still comes out of your payout.)"
-                        : "Your organization absorbs the enrops platform fee — families pay your base price. (Stripe's processing fee still applies.)"}
-                    </div>
-                  </div>
-                  {canManage ? (
-                    <Toggle
-                      checked={feePassThrough}
-                      onChange={(v) => togglePassThrough(v)}
-                      labelOn="Pass-through"
-                      labelOff="Absorbed"
-                    />
-                  ) : (
-                    <span style={{ color: MUTED, fontSize: 12 }}>
-                      Owner/admin only
-                    </span>
-                  )}
+              {/* For lean ops this control is hoisted OUT of "Manage setup" and
+                  rendered on the page (see the always-visible card below), so
+                  it isn't duplicated here. J2S keeps it in place. */}
+              {!isLean && (
+                <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${RULE}` }}>
+                  <FeePayerRow
+                    feePassThrough={feePassThrough}
+                    canManage={canManage}
+                    onToggle={togglePassThrough}
+                  />
                 </div>
-              </div>
+              )}
             </Section>
           </Card>
 
@@ -600,6 +601,12 @@ export default function Finances() {
             </Section>
           </Card>
 
+          {/* Hidden for registration operators. The export is built around
+              registrations AND instructor payouts, and a registration-only
+              operator has no payouts — so half of what it promises doesn't
+              exist for them. Exporting is also on the paid track, so offering
+              it here would be promising something we intend to charge for. */}
+          {!isLean && (
           <Card>
             <Section>
               <Heading>Export your finances</Heading>
@@ -639,6 +646,7 @@ export default function Finances() {
               </div>
             </Section>
           </Card>
+          )}
 
           <Card>
             <Section>
@@ -685,10 +693,31 @@ export default function Finances() {
           so the expanded "Manage setup" fee config sits under its own banner. */}
       {isActive && (
         <>
+          {/* Checklist: "Operator has a setting to absorb the fee instead — off
+              by default." It existed but was buried inside the collapsed
+              "Manage setup" panel, so an operator would never know it was a
+              choice. On the page now, for lean ops, where a pricing decision
+              belongs. Default stays families-pay (fee_pass_through=true from
+              provisioning) — absorbing is the opt-in. */}
+          {isLean && (
+            <Card>
+              <Section>
+                <FeePayerRow
+                  feePassThrough={feePassThrough}
+                  canManage={canManage}
+                  onToggle={togglePassThrough}
+                />
+              </Section>
+            </Card>
+          )}
           <AchAttention org={org} />
-          <TabsNav tab={tab} onTab={setTab} />
-          {tab === "activity" && <ActivityTab org={org} />}
-          {tab === "invoices" && <InvoicesTab />}
+          {/* Invoices is school-billing, which a registration operator has no
+              use for. Hidden for lean along with its tab, and `tab` is coerced
+              back to activity so a stale "invoices" selection can't render an
+              empty screen with no way out. */}
+          <TabsNav tab={tab} onTab={setTab} hideInvoices={isLean} />
+          {(tab === "activity" || (isLean && tab === "invoices")) && <ActivityTab org={org} />}
+          {tab === "invoices" && !isLean && <InvoicesTab />}
           {tab === "refunds" && <RefundsTab />}
         </>
       )}
@@ -817,34 +846,89 @@ function SetupBanner({ accountId, chargesEnabled, payoutsEnabled, open, onToggle
         >
           Stripe Dashboard ↗
         </button>
+        {/* This was a 12px outline button with a bare ▾, which reads as
+            decoration rather than "there is more behind this" — the fee
+            settings inside it went unfound. Now a filled control with an
+            explicit verb and a real chevron, so it's obvious it opens. */}
         <button
           type="button"
           onClick={onToggle}
+          aria-expanded={open}
           style={{
-            padding: "5px 10px",
-            background: "transparent",
-            color: INK,
-            border: `1px solid ${RULE}`,
-            borderRadius: 5,
-            fontSize: 12,
-            fontWeight: 600,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "9px 14px",
+            background: open ? BRIGHT : "#EEEDFE",
+            color: open ? "#fff" : BRIGHT,
+            border: `1px solid ${open ? BRIGHT : "#CECBF6"}`,
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 700,
             fontFamily: "inherit",
             cursor: "pointer",
             whiteSpace: "nowrap",
           }}
         >
-          Manage setup {open ? "▴" : "▾"}
+          {open ? "Hide settings" : "Payment settings"}
+          <span
+            aria-hidden="true"
+            style={{
+              display: "inline-block",
+              fontSize: 11,
+              transform: open ? "rotate(180deg)" : "none",
+              transition: "transform 0.15s",
+            }}
+          >
+            ▼
+          </span>
         </button>
       </div>
     </div>
   );
 }
 
-// Horizontal tabs nav inside Receivables.
-function TabsNav({ tab, onTab }) {
+// Who pays the platform fee. Extracted so it can render in TWO places without
+// drifting: inline under "Manage setup" for J2S, and as an always-visible card
+// on the Payments page for registration operators — for whom "do families pay
+// the fee, or do I?" is a pricing decision they need to SEE, not an advanced
+// setting hidden behind a collapsed panel.
+function FeePayerRow({ feePassThrough, canManage, onToggle }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+      <div>
+        <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
+          Who pays the enrops service fee?
+        </div>
+        <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
+          {feePassThrough
+            ? "Families cover the enrops service fee as a separate line at checkout. (Stripe's processing fee still comes out of your payout.)"
+            : "Your organization absorbs the enrops service fee — families pay your base price. (Stripe's processing fee still applies.)"}
+        </div>
+      </div>
+      {canManage ? (
+        <Toggle
+          checked={feePassThrough}
+          onChange={(v) => onToggle(v)}
+          labelOn="Pass-through"
+          labelOff="Absorbed"
+        />
+      ) : (
+        <span style={{ color: MUTED, fontSize: 12 }}>
+          Owner/admin only
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Horizontal tabs nav inside the payments/receivables page.
+function TabsNav({ tab, onTab, hideInvoices = false }) {
   const items = [
     { key: "activity", label: "Activity" },
-    { key: "invoices", label: "Invoices" },
+    // Invoices = billing a partner school. A registration operator bills
+    // families through checkout and never raises one.
+    ...(hideInvoices ? [] : [{ key: "invoices", label: "Invoices" }]),
     { key: "refunds",  label: "Refunds" },
   ];
   return (
@@ -889,6 +973,10 @@ function TabsNav({ tab, onTab }) {
 const RA_PAGE = 25;
 
 function ActivityTab({ org }) {
+  // Which fee story to tell under the headline number. Registration operators
+  // see both fees named; J2S keeps its original wording.
+  const isLean = org?.instructor_pay_model === "enrops_platform";
+  const feeCfg = org;
   const [terms, setTerms] = useState([]);            // [{ term, anchor }]
   const [period, setPeriod] = useState(null);        // { kind:'term'|'30d'|'year'|'all', term?, label }
   const [summary, setSummary] = useState(null);      // null=loading, undefined=error
@@ -1071,7 +1159,9 @@ function ActivityTab({ org }) {
 
       {/* Summary band */}
       <div style={{ marginBottom: 6 }}>
-        <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>Collected through enrops</div>
+        <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
+          {isLean ? "Your class fees" : "Collected through enrops"}
+        </div>
         <div style={{ fontSize: 34, fontWeight: 800, color: PURPLE, lineHeight: 1.1, marginTop: 2 }}>{fmtCents(collected)}</div>
       </div>
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "12px 0 16px" }}>
@@ -1086,8 +1176,29 @@ function ActivityTab({ org }) {
         </div>
       )}
 
-      <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 18 }}>
-        Your actual bank deposits (after Stripe&rsquo;s processing fee) live in your Stripe dashboard.{" "}
+      {/* The headline is the sum of CLASS PRICES — not what families paid, and
+          not what lands in the bank. Two different fees sit between them and
+          only one of them was ever mentioned here, which made the number read
+          as "yours" when part of it isn't:
+            - the enrops service fee is paid by families ON TOP of the price
+              when pass-through is on, so it never comes out of this figure;
+            - Stripe's processing fee IS deducted before the money reaches the
+              provider's bank.
+          We don't store the exact Stripe fee per charge, so this says which
+          direction each fee moves and points at Stripe for the real deposit,
+          rather than printing an estimate as if it were a fact. */}
+      <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 18, lineHeight: 1.6 }}>
+        {isLean && (
+          <>
+            This is the total of your class prices.{" "}
+            {feeCfg?.fee_pass_through
+              ? <>The enrops service fee is added on top at checkout and paid by families, so it isn&rsquo;t taken out of this.</>
+              : <>You&rsquo;ve chosen to cover the enrops service fee, so it comes out of this.</>}{" "}
+            Stripe&rsquo;s processing fee is deducted before the money reaches your bank.{" "}
+          </>
+        )}
+        {!isLean && <>Your actual bank deposits (after Stripe&rsquo;s processing fee) live in your Stripe dashboard.{" "}</>}
+        {isLean && <>Your actual deposits live in your Stripe dashboard.{" "}</>}
         <button type="button" onClick={openStripe} disabled={stripeBusy}
           style={{ background: "none", border: "none", color: BRIGHT, fontWeight: 600, cursor: "pointer", padding: 0, fontFamily: "inherit", fontSize: 12.5 }}>
           {stripeBusy ? "Opening…" : "Open Stripe →"}

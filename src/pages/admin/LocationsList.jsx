@@ -78,6 +78,10 @@ const EMPTY_DRAFT = {
 // SchoolsList is a pure list). Standalone (default) keeps the full header.
 export default function LocationsList({ embedded = false }) {
   const { org } = useOutletContext() ?? {};
+  // Registration-only operators get the short form: the rest of this editor
+  // exists to brief instructors and invoice partner venues, neither of which
+  // they have.
+  const isLean = org?.instructor_pay_model === "enrops_platform";
   const [searchParams, setSearchParams] = useSearchParams();
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -397,11 +401,16 @@ export default function LocationsList({ embedded = false }) {
           <div>
             <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>Locations</h1>
             <div style={{ color: MUTED, marginTop: 4, fontSize: 14, maxWidth: 720 }}>
-              Locations where you run your classes. <strong>Address, room number, arrival
-              and dismissal instructions, food/drink policy, location contact, and
-              notes</strong> all show up in every offer, add-on offer, and reminder
-              email instructors get for a camp here — so write them with the instructor
-              in mind.
+              {isLean ? (
+                <>Where your classes run. Families see these when they pick a class, and
+                on their confirmation.</>
+              ) : (
+                <>Locations where you run your classes. <strong>Address, room number, arrival
+                and dismissal instructions, food/drink policy, location contact, and
+                notes</strong> all show up in every offer, add-on offer, and reminder
+                email instructors get for a camp here — so write them with the instructor
+                in mind.</>
+              )}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -440,7 +449,7 @@ export default function LocationsList({ embedded = false }) {
       ) : (
         locations.map((loc) => (
           <div key={loc.id} id={`location-row-${loc.id}`}>
-            <DisplayCard loc={loc} campCount={campCounts.get(loc.id) ?? 0} districtName={districtNameById.get(loc.district_id)} onEdit={() => startEdit(loc)} />
+            <DisplayCard loc={loc} campCount={campCounts.get(loc.id) ?? 0} districtName={districtNameById.get(loc.district_id)} onEdit={() => startEdit(loc)} isLean={isLean} />
           </div>
         ))
       )}
@@ -467,6 +476,7 @@ export default function LocationsList({ embedded = false }) {
               onSave={save}
               onCancel={cancelEdit}
               isNew={editingId === "new"}
+              isLean={isLean}
               inDrawer
             />
           </div>
@@ -476,16 +486,26 @@ export default function LocationsList({ embedded = false }) {
   );
 }
 
-function DisplayCard({ loc, campCount, districtName, onEdit }) {
-  const fieldsToShow = [
-    { label: "Address", value: loc.address, key: "address" },
-    { label: "Room", value: loc.room_number, key: "room_number" },
-    { label: "Arrival", value: loc.arrival_instructions, key: "arrival_instructions" },
-    { label: "Dismissal", value: loc.dismissal_instructions, key: "dismissal_instructions" },
-    { label: "Food/drink", value: loc.food_drink_policy, key: "food_drink_policy" },
-    { label: "Notes", value: loc.notes, key: "notes" },
-  ];
-  const contactBits = [loc.contact_name, loc.contact_phone, loc.contact_email].filter(Boolean);
+function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
+  // A registration-only operator has no instructors to brief, so the fields
+  // that exist to brief them aren't shown. Everything below the address is
+  // written for someone teaching at a venue they don't control - staff
+  // briefing, venue contacts, food policy - which is the shape of the paid
+  // tiers, not of taking registrations.
+  const fieldsToShow = isLean
+    ? [
+        { label: "Address", value: loc.address, key: "address" },
+        { label: "Room", value: loc.room_number, key: "room_number" },
+      ]
+    : [
+        { label: "Address", value: loc.address, key: "address" },
+        { label: "Room", value: loc.room_number, key: "room_number" },
+        { label: "Arrival", value: loc.arrival_instructions, key: "arrival_instructions" },
+        { label: "Dismissal", value: loc.dismissal_instructions, key: "dismissal_instructions" },
+        { label: "Food/drink", value: loc.food_drink_policy, key: "food_drink_policy" },
+        { label: "Notes", value: loc.notes, key: "notes" },
+      ];
+  const contactBits = isLean ? [] : [loc.contact_name, loc.contact_phone, loc.contact_email].filter(Boolean);
   const populatedFields = fieldsToShow.filter((f) => !!f.value);
   return (
     <div style={{
@@ -515,7 +535,9 @@ function DisplayCard({ loc, campCount, districtName, onEdit }) {
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
           {populatedFields.length === 0 && contactBits.length === 0 ? (
             <div style={{ fontSize: 13, color: CORAL, fontStyle: "italic" }}>
-              No details filled in yet — instructors won't see any extra info for this location.
+              {isLean
+                ? "No address yet — families won't see where this one is."
+                : "No details filled in yet — instructors won't see any extra info for this location."}
             </div>
           ) : (
             <>
@@ -542,7 +564,7 @@ function DisplayCard({ loc, campCount, districtName, onEdit }) {
   );
 }
 
-function EditCard({ title, draft, bind, applyPlace, partners, districts, error, saving, onSave, onCancel, isNew, inDrawer }) {
+function EditCard({ title, draft, bind, applyPlace, partners, districts, error, saving, onSave, onCancel, isNew, isLean = false, inDrawer }) {
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   return (
     <div style={{
@@ -558,9 +580,13 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
         <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>
           {isNew ? "New location" : `Editing ${title}`}
         </div>
-        <div style={{ fontSize: 11, color: MUTED }}>
-          Fields marked <span style={{ color: OK_GREEN, fontWeight: 600 }}>visible to instructors</span> show up in offer emails.
-        </div>
+        {/* The legend explains a badge that no longer appears for registration
+            operators, so it goes with it. */}
+        {!isLean && (
+          <div style={{ fontSize: 11, color: MUTED }}>
+            Fields marked <span style={{ color: OK_GREEN, fontWeight: 600 }}>visible to instructors</span> show up in offer emails.
+          </div>
+        )}
       </div>
 
       <Field
@@ -583,11 +609,16 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
         )}
       </Field>
 
-      <Field label="Address" instructorFacing>
+      <Field label="Address" instructorFacing={!isLean}>
         <input type="text" {...bind("address")} placeholder="e.g. 2037 Douglas St, Forest Grove, OR 97116" style={inputStyle} />
       </Field>
 
-      <Field label="Area" hint="The area this location is in (e.g. Portland, Hillsboro). Instructors rank areas in their availability survey, and instructor matching uses it. Defaults to the city from the address.">
+      <Field
+        label="Area"
+        hint={isLean
+          ? "The town or neighbourhood this location is in. Defaults to the city from the address."
+          : "The area this location is in (e.g. Portland, Hillsboro). Instructors rank areas in their availability survey, and instructor matching uses it. Defaults to the city from the address."}
+      >
         <input type="text" {...bind("area")} placeholder={parseCity(draft.address) ? `e.g. ${parseCity(draft.address)} (from address)` : "e.g. Portland"} style={inputStyle} />
         {!draft.area?.trim() && parseCity(draft.address) && (
           <button
@@ -602,7 +633,9 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
 
       <Field
         label="District"
-        hint="Group this school under a district (e.g. Portland Public Schools) so its academic calendar applies automatically. Set one up once, then attach every school in it. Not shown to instructors."
+        hint={isLean
+          ? "Optional. If you run inside a school district, attaching it here means their no-school days are skipped when your class dates are worked out."
+          : "Group this school under a district (e.g. Portland Public Schools) so its academic calendar applies automatically. Set one up once, then attach every school in it. Not shown to instructors."}
       >
         <select {...bind("district_id")} style={inputStyle}>
           <option value="">— no district —</option>
@@ -622,6 +655,19 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
         )}
       </Field>
 
+      {/* Everything from here down exists to brief someone who teaches at a
+          venue they don't control: staff arrival routines, door codes, venue
+          contacts, food policy, the partner org that owns the building. A
+          registration-only operator has no instructors to brief and no partner
+          to invoice, so asking for it is asking them to fill in fields that
+          feed nothing they can see. Kept in the schema and untouched for
+          everyone else — this is a paid-tier shape, not a deletion. */}
+      {isLean ? (
+        <Field label="Room number" hint="Optional. Shown to families if you set it.">
+          <input type="text" {...bind("room_number")} placeholder="e.g. Room 12 or Gym B" style={inputStyle} />
+        </Field>
+      ) : (
+      <>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <Field label="Room number" instructorFacing>
           <input type="text" {...bind("room_number")} placeholder="e.g. Room 12 or Gym B" style={inputStyle} />
@@ -680,6 +726,8 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
       <Field label="Notes" hint="Anything else worth telling the instructor about this location." instructorFacing>
         <textarea {...bind("notes")} placeholder="e.g. Air conditioning is unreliable on hot days — bring a fan." rows={2} style={textareaStyle} />
       </Field>
+      </>
+      )}
 
       {error && <div style={errorBanner}>{error}</div>}
 

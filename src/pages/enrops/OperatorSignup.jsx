@@ -94,7 +94,13 @@ export default function OperatorSignup() {
       });
       if (fnErr) throw fnErr;
       if (data?.error) throw new Error(data.error);
-      setMsg(`Check ${email} for your sign-in link, then you're one step from live.`);
+      // Names what is actually left instead of claiming "one step from live",
+      // which it never was — after the link there's the business name, the first
+      // class, and Stripe. Three small things read as fast on their own; the
+      // shortness of the list is the promise, so it doesn't need a time claim.
+      // Deliberately NOT "in under ten minutes": that is the target we are
+      // building toward, not a number anyone has measured yet.
+      setMsg(`Check ${email} for your sign-in link. Then it's three things: name your business, add your first class, and connect Stripe to get paid.`);
     } catch (err) {
       setError(friendly(err));
     } finally {
@@ -107,7 +113,15 @@ export default function OperatorSignup() {
     const name = businessName.trim();
     if (!name) { setError('Please enter your business name.'); return; }
     setLoading(true); setError('');
-    const { data, error: err } = await supabase.rpc('provision_operator_org', { p_business_name: name });
+    // Timezone, taken silently rather than asked. organizations.timezone defaults
+    // to America/Los_Angeles, so until now every operator outside the Pacific has
+    // been running on Pacific times without ever being told - class times,
+    // reminders, everything derived from them. The browser already knows, and an
+    // unrecognised value is ignored server-side, so this can only improve on the
+    // guess. Changeable later in Settings.
+    let tz = null;
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { tz = null; }
+    const { data, error: err } = await supabase.rpc('provision_operator_org', { p_business_name: name, p_timezone: tz });
     setLoading(false);
     if (err) {
       // Concurrent double-submit: the owner unique index
@@ -155,7 +169,10 @@ export default function OperatorSignup() {
           text-transform:uppercase; color:var(--lilac); margin-bottom:6px; }
         .enr-signup input {
           width:100%; padding:12px 14px; background:rgba(255,255,255,0.06); color:#fff;
-          border:1px solid rgba(255,255,255,0.18); border-radius:10px; font-size:15px;
+          /* 16px MINIMUM: iOS Safari auto-zooms the page when a focused input is
+             under 16px. This is the first screen a cold operator sees on a phone,
+             so a zoom-lurch here is the worst possible first impression. */
+          border:1px solid rgba(255,255,255,0.18); border-radius:10px; font-size:16px;
           font-family:inherit; box-sizing:border-box; margin-bottom:16px;
         }
         .enr-signup input::placeholder { color:rgba(255,255,255,0.35); }

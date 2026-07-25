@@ -11,6 +11,10 @@ function brandWith(sender_name: string, sender_email = 'sender@mail.enrops.com')
     primary_color: '#000', secondary_color: '#000', accent_color: '#000', page_bg_color: '#fff',
     email_signature: null, email_signature_image_url: null, email_signature_image_mode: null,
     mailing_address: null, sender_source: 'platform_shared',
+    // Added when OrgBrand gained a per-tenant email font. The stub wasn't
+    // updated, which broke type-checking for the WHOLE _shared suite - and it
+    // went unnoticed because the tests are normally run without --check.
+    font_family: 'Poppins, sans-serif',
   };
 }
 

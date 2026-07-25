@@ -41,7 +41,7 @@ export default function PublicLayout() {
       setLoadState('loading');
       const { data, error } = await supabase
         .from('public_org_directory')
-        .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model')
+        .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled')
         .eq('slug', slug)
         .maybeSingle();
       if (cancelled) return;
@@ -80,6 +80,21 @@ export default function PublicLayout() {
     );
   }
 
+  // EMBED: the operator has dropped this into an iframe on their OWN website, so
+  // we render NO header, footer, logo or account chrome — just the content, on a
+  // transparent background that inherits their page. Applies to /{slug}/embed and
+  // to any route carrying ?embed=1 (the registration steps the catalog links to),
+  // so the whole flow looks native inside their site instead of a bolted-on app.
+  // Gated to registration (enrops_platform) orgs — the tier the embed is sold to.
+  // Ungated, /j2s/embed and /j2s/register?embed=1 would be live, publicly
+  // frameable J2S pages that collect a child's details and take payment while
+  // showing no provider branding and no Privacy/Terms links at all. J2S runs its
+  // own site and has no use for an embed, so there's nothing to trade off.
+  const embedAllowed = org.instructor_pay_model === 'enrops_platform';
+  if (embedAllowed && isEmbedContext(location)) {
+    return <EmbedShell org={org} />;
+  }
+
   // J2S keeps its existing brand to avoid disturbing the live experience.
   // Everyone else gets the Enrops base brand for now — per-tenant theming is
   // a separate backlog item.
@@ -90,7 +105,92 @@ export default function PublicLayout() {
 }
 
 // ─── J2S brand (unchanged behavior; lifted from the old J2SLayout) ──────────
+// Checkout chrome: during the registration STEPS, drop the account controls
+// (sign in / portal switcher / my account / sign out). Registration is guest
+// checkout by design — a "Sign in" in the header reads as an account wall,
+// the biggest measured cause of checkout abandonment, and any header link is an
+// exit from a flow we want finished in under 90 seconds. The success page KEEPS
+// them: that's exactly where we want the parent to reach their account.
+// NOTE: computed per-shell, not in PublicLayout — these shells are SEPARATE
+// components that receive `location` as a prop, so a parent-scope const is not
+// visible here (that mistake white-screened the catalog once).
+// The embed shell: no header, no footer, no account chrome, transparent
+// background — just the content, so it reads as part of the operator's own page.
+//
+// It also reports its height to the host page. An iframe can't size itself, so
+// without this the operator would have to guess a fixed height and families
+// would get a scrollbar INSIDE their page (the thing that makes competitors'
+// embeds feel broken). We post on mount and on any content resize — stepping
+// through the registration steps changes the height a lot.
+//
+// postMessage targetOrigin is '*' deliberately: we don't know (and shouldn't
+// have to configure) the operator's domain, and the payload is a single layout
+// number with no personal data in it.
+function EmbedShell({ org }) {
+  useEffect(() => {
+    if (typeof window === 'undefined' || window.parent === window) return undefined;
+    let last = 0;
+    const post = () => {
+      const height = Math.ceil(
+        document.documentElement?.scrollHeight || document.body?.scrollHeight || 0,
+      );
+      // Only speak when the number actually changes — the host page shouldn't be
+      // spammed, and a no-op message can cause layout jitter on their side.
+      if (height > 0 && height !== last) {
+        last = height;
+        window.parent.postMessage({ type: 'enrops:height', height }, '*');
+      }
+    };
+    post();
+    // A short poll rather than ResizeObserver alone: observing document.body did
+    // NOT fire when the catalog finished loading (measured: posted 185 while the
+    // real height was 687), which would leave the operator's iframe clipping the
+    // classes. Height also changes on every registration step, on image load and
+    // on font swap, so a cheap "post only if changed" tick is the reliable
+    // mechanism. RO is kept as well for instant response when it does work.
+    const id = setInterval(post, 400);
+    let ro;
+    if (typeof ResizeObserver !== 'undefined' && document.documentElement) {
+      ro = new ResizeObserver(post);
+      ro.observe(document.documentElement);
+    }
+    window.addEventListener('load', post);
+    window.addEventListener('resize', post);
+    return () => {
+      clearInterval(id);
+      if (ro) ro.disconnect();
+      window.removeEventListener('load', post);
+      window.removeEventListener('resize', post);
+    };
+  }, []);
+
+  return (
+    <div
+      className={org.slug === 'j2s' ? 'brand-j2s' : 'brand-enrops-public'}
+      style={{ background: 'transparent', color: '#1a1a1a', fontFamily: 'inherit' }}
+    >
+      <Outlet context={{ org }} />
+    </div>
+  );
+}
+
+// True when we're rendering inside an operator's embedded iframe: either the
+// /{slug}/embed catalog itself, or a registration step it linked to carrying
+// ?embed=1. Module-level (not a component const) so both shells and the embed
+// branch can use it — see the scope note on isCheckoutPath below.
+export function isEmbedContext(location) {
+  const p = location?.pathname || '';
+  const q = location?.search || '';
+  return p.endsWith('/embed') || /[?&]embed=1(&|$)/.test(q);
+}
+
+function isCheckoutPath(location) {
+  const p = location?.pathname || '';
+  return p.includes('/register') && !p.includes('/register/success');
+}
+
 function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
+  const inCheckout = isCheckoutPath(location);
   const home = `/${org.slug}`;
   return (
     <div className="brand-j2s min-h-screen flex flex-col bg-white">
@@ -105,9 +205,9 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
           </Link>
           <nav className="flex items-center gap-2 text-sm font-semibold sm:gap-6">
             <PwaInstallButton />
-            {user ? (
+            {inCheckout ? null : user ? (
               <>
-                <PortalSwitcher current="family" slug={org.slug} />
+                <PortalSwitcher current="family" slug={org.slug} orgId={org.id} />
                 <NavLink to={`${home}/dashboard`} className={({ isActive }) => `rounded-lg px-3 py-2 transition ${isActive ? 'bg-j2s-purple-soft text-j2s-purple-dark' : 'text-j2s-ink hover:bg-j2s-purple-soft'}`}>
                   My account
                 </NavLink>
@@ -183,6 +283,7 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
 // Intentionally clean and platform-neutral. Per-tenant branding (logos, colors,
 // custom copy) is the next pass — captured as a backlog item.
 function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
+  const inCheckout = isCheckoutPath(location);
   const home = `/${org.slug}`;
   return (
     <div className="brand-enrops-public" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: ENROPS_CREAM, color: '#1a1a1a', fontFamily: 'inherit' }}>
@@ -197,9 +298,9 @@ function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
           </Link>
           <nav style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 14, fontWeight: 600 }}>
             <PwaInstallButton />
-            {user ? (
+            {inCheckout ? null : user ? (
               <>
-                <PortalSwitcher current="family" slug={org.slug} />
+                <PortalSwitcher current="family" slug={org.slug} orgId={org.id} />
                 <NavLink to={`${home}/dashboard`} style={({ isActive }) => ({ padding: '6px 12px', borderRadius: 6, color: isActive ? ENROPS_PURPLE : '#1a1a1a', textDecoration: 'none', background: isActive ? `${ENROPS_VIOLET}22` : 'transparent' })}>
                   My account
                 </NavLink>

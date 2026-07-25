@@ -15,6 +15,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { logPlatformEvent, FEATURE, ACTION } from '../_shared/logPlatformEvent.ts';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -63,6 +64,9 @@ serve(async (req: Request) => {
 
     // Verify the user exists in auth.users (paged lookup — see findUserByEmail).
     let user = await findUserByEmail(supabase, email);
+    // Onboarding funnel: was this signup attempt a brand-new account (a genuine
+    // top-of-funnel entry) or someone re-requesting a link? Logged below.
+    let createdNewAccount = false;
     if (!user) {
       if (needsInstructorLookup) {
         // For first-time instructor sign-in: if their email matches an active
@@ -99,6 +103,7 @@ serve(async (req: Request) => {
           throw new Error(`Couldn't create auth user: ${createErr?.message ?? 'unknown error'}`);
         }
         user = created.user;
+        createdNewAccount = true;
         console.log(`Auto-created auth user for operator signup ${email}`);
       } else {
         // Don't reveal whether email exists — always say "check your inbox"
@@ -200,9 +205,14 @@ serve(async (req: Request) => {
     // verified enrops domain, with replies going to the enrops inbox — sourced
     // from the enrops org row (no hardcoded address). Tenant flows
     // (parent/instructor/onboarding) keep their own tenant sender (FROM_EMAIL).
+    // Keyed off the RESOLVED template, not the requested context. The template is
+    // re-derived above from what the recipient actually IS (an admin who signs in
+    // from a parent page still gets the admin email), so gating the sender on the
+    // requested context let an Enrops-branded "Sign in to Admin" email go out FROM
+    // the J2S sending domain — caught in a real send, invisible in the HTML.
     let fromLine = FROM_EMAIL;
     let replyTo: string | undefined = undefined;
-    if (isSignup || context === 'admin') {
+    if (template === 'signup' || template === 'admin') {
       const brand = await loadOrgBrand(supabase, null);
       fromLine = formatFromAddress(brand);
       replyTo = brand.reply_to;
@@ -236,6 +246,27 @@ serve(async (req: Request) => {
     }
 
     console.log(`Magic link email sent to ${email} (${context || 'parent'})`);
+
+    // ONBOARDING FUNNEL — top of funnel, signup context only. This is the one
+    // step that leaves NO row behind when the operator abandons (they never
+    // create an org), so it cannot be reconstructed later. actor_user_id ties
+    // this attempt to the org they eventually create. NO EMAIL in metadata —
+    // the intelligence contract allows IDs + facts only, never PII.
+    // Fail-safe by contract: a telemetry failure can never break signup.
+    // NOTE: the Google OAuth signup path does NOT come through this function,
+    // so it is not counted here — see the funnel caveat in the memory notes.
+    if (isSignup) {
+      await logPlatformEvent(supabase, {
+        feature: FEATURE.ONBOARDING,
+        action: ACTION.SIGNUP_STARTED,
+        outcome: 'success',
+        organizationId: null, // no org exists yet — that is the point of this event
+        actorUserId: user?.id ?? null,
+        metadata: { method: 'magic_link', created_new_account: createdNewAccount },
+        dedupeKey: user?.id ? `signup_started:${user.id}` : null,
+      });
+    }
+
     return json({ sent: true });
   } catch (e) {
     console.error('auth-send-magic-link error:', (e as Error).message);
@@ -343,7 +374,7 @@ function buildInstructorEmail(firstName: string, signInUrl: string): string {
 // logo (or its name when no logo), its primary color, and its support/reply-to.
 function buildParentEmail(firstName: string, signInUrl: string, brand: any): string {
   const orgName = brand?.org_name || 'enrops';
-  const support = brand?.reply_to || 'support@enrops.com';
+  const support = brand?.reply_to || 'jessica@enrops.com';
   const accent = brand?.primary_color || '#5847C9';
   const logoBlock = brand?.logo_url
     ? `<img src="${escapeAttr(brand.logo_url)}" alt="${escapeHtml(orgName)}" style="max-height:44px;width:auto;display:inline-block;" />`

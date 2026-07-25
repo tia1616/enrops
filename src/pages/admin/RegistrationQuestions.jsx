@@ -107,6 +107,10 @@ export default function RegistrationQuestions() {
 
   const [rows, setRows] = useState(null);          // all custom_reg_fields rows for the org
   const [loading, setLoading] = useState(true);
+  // Programs a question can be scoped to, so a one-day workshop isn't forced to
+  // ask full-season questions. Current term only: scoping to a class families
+  // can no longer register for would just be noise in the picker.
+  const [programs, setPrograms] = useState([]);
   const [toast, setToast] = useState(null);        // { kind, message }
 
   // Staged state for the standard section (saved together).
@@ -134,6 +138,15 @@ export default function RegistrationQuestions() {
       return;
     }
     setRows(data ?? []);
+    // Best-effort: if this fails the scope picker just offers "Every program".
+    // It must never block the questions themselves from rendering.
+    supabase
+      .from("programs")
+      .select("id, curriculum, day_of_week")
+      .eq("organization_id", org.id)
+      .eq("term", org.active_registration_term || "")
+      .order("curriculum")
+      .then(({ data: progs }) => setPrograms(progs ?? []));
     // Seed the staged standard state from existing rows (or defaults).
     const byStd = {};
     for (const r of data ?? []) if (r.standard_key) byStd[r.standard_key] = r;
@@ -232,6 +245,14 @@ export default function RegistrationQuestions() {
     const label = (draft.label || "").trim();
     if (!label) return { error: "Give the question a label." };
 
+    // Scope: "" = ask on every program (the default, and what every existing row
+    // is). A program id limits the question to that one class.
+    // applies_to_value is text, so the id is stored as text.
+    const scopeProgramId = (draft.applies_to_program_id || "").trim();
+    const scopeCols = scopeProgramId
+      ? { applies_to: "program", applies_to_value: scopeProgramId }
+      : { applies_to: "all", applies_to_value: null };
+
     if (draft.id) {
       const { error } = await supabase
         .from("custom_reg_fields")
@@ -242,6 +263,7 @@ export default function RegistrationQuestions() {
           is_required: !!draft.is_required,
           help_text: (draft.help_text || "").trim() || null,
           is_active: draft.is_active !== false,
+          ...scopeCols,
         })
         .eq("id", draft.id);
       if (error) return { error: friendlyError(error) };
@@ -263,7 +285,7 @@ export default function RegistrationQuestions() {
         is_required: !!draft.is_required,
         help_text: (draft.help_text || "").trim() || null,
         is_active: draft.is_active !== false,
-        applies_to: "all",
+        ...scopeCols,
         sort_order: maxSort + 1,
       });
       if (error) return { error: friendlyError(error) };
@@ -380,6 +402,7 @@ export default function RegistrationQuestions() {
             {/* Custom questions */}
             <CustomSection
               customRows={customRows}
+              programs={programs}
               canEdit={canEdit}
               onSave={saveCustom}
               onDelete={deleteCustom}
@@ -453,7 +476,7 @@ function StandardRow({ field, state, canEdit, first, onChange }) {
   );
 }
 
-function CustomSection({ customRows, canEdit, onSave, onDelete, onMove }) {
+function CustomSection({ customRows, canEdit, programs = [], onSave, onDelete, onMove }) {
   const [editing, setEditing] = useState(null);   // draft being edited/added, or null
   const [pendingDelete, setPendingDelete] = useState(null);
 
@@ -489,12 +512,34 @@ function CustomSection({ customRows, canEdit, onSave, onDelete, onMove }) {
                   {FIELD_TYPES.find((t) => t.value === r.field_type)?.label || r.field_type}
                   {Array.isArray(r.options) && r.options.length > 0 && ` · ${r.options.length} option${r.options.length === 1 ? "" : "s"}`}
                 </div>
+                {/* Honest state: a question limited to one class must SAY so, or
+                    this list reads as "every family is asked all of these".
+                    Falls back to a neutral label if the program isn't in the
+                    current term, so the scope never renders blank. */}
+                {r.applies_to === "program" && (
+                  <div style={{ fontSize: 11, color: BRIGHT, fontWeight: 600, marginTop: 3 }}>
+                    Only on {programs.find((p) => p.id === r.applies_to_value)?.curriculum || "one program"}
+                  </div>
+                )}
               </div>
               {canEdit && (
                 <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                   <IconBtn label="Move up" disabled={i === 0} onClick={() => onMove(r.id, -1)}>↑</IconBtn>
                   <IconBtn label="Move down" disabled={i === customRows.length - 1} onClick={() => onMove(r.id, 1)}>↓</IconBtn>
-                  <button type="button" onClick={() => setEditing({ ...r, options: Array.isArray(r.options) ? r.options : [] })} style={linkBtn}>Edit</button>
+                  <button
+                    type="button"
+                    onClick={() => setEditing({
+                      ...r,
+                      options: Array.isArray(r.options) ? r.options : [],
+                      // Re-hydrate the scope picker from the stored columns, or
+                      // editing a program-scoped question would silently reset it
+                      // to "Every program" on save.
+                      applies_to_program_id: r.applies_to === "program" ? (r.applies_to_value || "") : "",
+                    })}
+                    style={linkBtn}
+                  >
+                    Edit
+                  </button>
                   <button type="button" onClick={() => setPendingDelete(r)} style={{ ...linkBtn, color: RED }}>Delete</button>
                 </div>
               )}
@@ -506,6 +551,7 @@ function CustomSection({ customRows, canEdit, onSave, onDelete, onMove }) {
       {editing && (
         <CustomEditor
           draft={editing}
+          programs={programs}
           onCancel={() => setEditing(null)}
           onSubmit={async (draft) => {
             const { error } = await onSave(draft);
@@ -528,10 +574,11 @@ function CustomSection({ customRows, canEdit, onSave, onDelete, onMove }) {
 }
 
 function blankDraft() {
-  return { id: null, label: "", field_type: "text", options: [], is_required: false, help_text: "", is_active: true };
+  // applies_to_program_id: "" = ask on every program (the default).
+  return { id: null, label: "", field_type: "text", options: [], is_required: false, help_text: "", is_active: true, applies_to_program_id: "" };
 }
 
-function CustomEditor({ draft, onCancel, onSubmit }) {
+function CustomEditor({ draft, programs = [], onCancel, onSubmit }) {
   const [d, setD] = useState(draft);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -574,6 +621,30 @@ function CustomEditor({ draft, onCancel, onSubmit }) {
       <label style={{ ...fieldLabel, marginTop: 12 }}>Helper text <span style={{ fontWeight: 400, color: MUTED }}>(optional)</span></label>
       <input type="text" value={d.help_text || ""} onChange={(e) => setD({ ...d, help_text: e.target.value })}
         placeholder="A short hint shown under the question" style={textInput} />
+
+      {/* Scope. Defaults to every program so nothing changes for questions
+          already in use. Picking one class stops a one-day workshop inheriting
+          questions that only make sense for a full season. */}
+      <label style={{ ...fieldLabel, marginTop: 12 }}>Ask this on</label>
+      <select
+        value={d.applies_to_program_id || ""}
+        onChange={(e) => setD({ ...d, applies_to_program_id: e.target.value })}
+        style={textInput}
+      >
+        <option value="">Every program</option>
+        {programs.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.curriculum}{p.day_of_week ? ` (${p.day_of_week}s)` : ""}
+          </option>
+        ))}
+      </select>
+      <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+        {d.applies_to_program_id
+          ? "Only families registering for that class will see this question."
+          : programs.length === 0
+          ? "Add a program to be able to ask a question on just one class."
+          : "Every family sees this question. Pick a class to ask it only there."}
+      </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 18, marginTop: 12 }}>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: INK }}>

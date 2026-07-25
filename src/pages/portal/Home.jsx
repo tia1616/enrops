@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { districtFullName } from '../../lib/tenants.js';
 import { useCart } from '../../context/CartContext.jsx';
+import { isEmbedContext } from '../../layouts/PublicLayout.jsx';
 import {
   formatMoney,
   formatEarlyBirdDate,
@@ -14,6 +15,7 @@ import {
   standardPriceFor,
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
+import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
 // provided by PublicLayout via Outlet context (from the public_org_directory
@@ -31,6 +33,10 @@ export default function Home() {
   const { org } = useOutletContext();
   const ORG_SLUG = org.slug;
   const navigate = useNavigate();
+  const embedLocation = useLocation();
+  // Embedded in the operator's own site (iframe): drop the big hero and the page
+  // background so the widget reads as part of THEIR page, not a framed app.
+  const isEmbed = isEmbedContext(embedLocation);
   const [searchParams] = useSearchParams();
   // ?keep=1 means we arrived here from the wizard's "Add another child" flow.
   // Skip clearCart so the in-progress sibling registration keeps its parent + child 1 state.
@@ -49,6 +55,12 @@ export default function Home() {
   const [weeklyClasses, setWeeklyClasses] = useState([]); // recurring class_schedule (outside-registration tenants), safe public view
   const [loading, setLoading] = useState(true);
   const [locationFilter, setLocationFilter] = useState('all'); // lean multi-location filter
+  // Fee config, so the class card can show what a family will actually pay.
+  // The doc's rule is "never a surprise at the end" - until now the service fee
+  // first appeared at the Pay step, after they had entered a child's details.
+  // null = not loaded yet, and until it loads we show the plain price rather
+  // than a total we can't stand behind.
+  const [feeConfig, setFeeConfig] = useState(null);
 
   // Labels for the term the catalog is serving, derived from the org's own
   // active term — never hardcoded to a season. termLabel: "Winter 2027";
@@ -142,6 +154,14 @@ export default function Home() {
       .select('id, title, day_of_week, start_time, end_time, location_text, age_min, age_max, capacity')
       .eq('organization_id', org.id);
 
+    // Same source the Pay step uses. Best-effort: if it fails the cards fall
+    // back to the plain price, which is the old behaviour, rather than showing
+    // a total that might be wrong.
+    supabase.functions
+      .invoke('org-fee-config', { body: { slug: org.slug } })
+      .then(({ data }) => setFeeConfig(data || null))
+      .catch(() => setFeeConfig(null));
+
     setSchools(sc || []);
     setPrograms(pg || []);
     setVipBundles(bundles);
@@ -230,6 +250,9 @@ export default function Home() {
     const params = new URLSearchParams({ school: selectedSchool });
     if (programId) params.set('program', programId);
     if (isVip) params.set('vip', '1');
+    // Carry embed mode into the registration steps so the family never sees our
+    // header/footer appear mid-flow inside the operator's own page.
+    if (isEmbed) params.set('embed', '1');
     navigate(`/${ORG_SLUG}/register?${params.toString()}`);
   }
 
@@ -238,6 +261,11 @@ export default function Home() {
   // open programs render as a simple list straight to checkout, so a location-less
   // program is reachable. J2S (legacy_own_platform) keeps its existing page below.
   const isLeanReg = org?.instructor_pay_model !== 'legacy_own_platform';
+  // Can this provider actually be paid? Only gates the LEAN catalog — J2S is
+  // connected and its page below is untouched. `!== false` so an older cached
+  // org row (before the view exposed the flag) still shows the catalog rather
+  // than blanking a working provider's page.
+  const paymentsReady = org?.stripe_charges_enabled !== false;
   if (isLeanReg) {
     const allOpen = programs || [];
     // Distinct locations among the open programs — drives the multi-location filter.
@@ -263,24 +291,63 @@ export default function Home() {
       fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'none', display: 'inline-block',
     };
     return (
-      <div style={{ minHeight: '100vh', background: '#F7F7FB', fontFamily: "'Poppins', system-ui, sans-serif", color: '#1a1a1a' }}>
+      <div style={{
+        minHeight: isEmbed ? 0 : '100vh',
+        background: isEmbed ? 'transparent' : '#F7F7FB',
+        fontFamily: "'Poppins', system-ui, sans-serif",
+        color: '#1a1a1a',
+      }}>
+        {/* The dark hero is the operator's PUBLIC page identity. Inside their own
+            website they've already got a header and their own branding above this
+            iframe, so repeating a big purple banner just looks like a bolted-on
+            widget. Embed mode goes straight to the classes. */}
+        {!isEmbed && (
         <div style={{ background: '#1C004F', color: '#fff', padding: '56px 20px 72px' }}>
           <div style={{ maxWidth: 820, margin: '0 auto' }}>
-            <span style={{ display: 'inline-block', background: 'rgba(38,214,135,0.14)', border: '1px solid rgba(38,214,135,0.35)', color: '#26D687', borderRadius: 100, padding: '5px 14px', fontSize: 12, fontWeight: 600 }}>
-              {termLabel ? `${termLabel} registration is open` : 'Registration is open'}
-            </span>
+            {/* Don't announce "registration is open" above a page that then says
+                it isn't — the hero and the body have to tell the same story. */}
+            {paymentsReady && (
+              <span style={{ display: 'inline-block', background: 'rgba(38,214,135,0.14)', border: '1px solid rgba(38,214,135,0.35)', color: '#26D687', borderRadius: 100, padding: '5px 14px', fontSize: 12, fontWeight: 600 }}>
+                {termLabel ? `${termLabel} registration is open` : 'Registration is open'}
+              </span>
+            )}
             <h1 style={{ fontSize: 38, fontWeight: 700, lineHeight: 1.12, margin: '18px 0 12px' }}>
               {branding?.hero_headline || org?.name || 'Register today'}
             </h1>
             <p style={{ fontSize: 17, lineHeight: 1.6, color: 'rgba(255,255,255,0.82)', maxWidth: 560, margin: 0 }}>
-              {branding?.hero_subtext || 'Pick a class below and sign your child up in under a minute.'}
+              {paymentsReady
+                ? (branding?.hero_subtext || 'Pick a class below and sign your child up in under a minute.')
+                : 'Classes are coming soon.'}
             </p>
           </div>
         </div>
-        <div style={{ maxWidth: 820, margin: '-40px auto 0', padding: '0 20px 64px' }}>
-          <div style={{ background: '#fff', border: '1px solid #e2dfd5', borderRadius: 20, padding: '24px 22px', boxShadow: '0 8px 30px rgba(28,0,79,0.06)' }}>
+        )}
+        <div style={{
+          maxWidth: 820,
+          margin: isEmbed ? '0 auto' : '-40px auto 0',
+          padding: isEmbed ? '0' : '0 20px 64px',
+        }}>
+          <div style={{
+            background: '#fff',
+            border: isEmbed ? 'none' : '1px solid #e2dfd5',
+            borderRadius: isEmbed ? 0 : 20,
+            padding: isEmbed ? '4px 0' : '24px 22px',
+            boxShadow: isEmbed ? 'none' : '0 8px 30px rgba(28,0,79,0.06)',
+          }}>
             {loading ? (
               <div style={{ color: '#6b6b6b', padding: '24px 0', textAlign: 'center' }}>Loading classes&hellip;</div>
+            ) : !paymentsReady ? (
+              /* No Stripe = no way to take money, so don't advertise classes at
+                 all. Listing them and blocking at the Pay step is a worse
+                 experience: a family picks a class, fills in their child's
+                 details, and only then finds out. Says nothing about Stripe —
+                 that's the provider's business, not the family's. */
+              <div style={{ color: '#6b6b6b', padding: '28px 0', textAlign: 'center' }}>
+                <div style={{ fontWeight: 600, color: '#1a1a1a', marginBottom: 4 }}>
+                  Registration isn&rsquo;t open yet
+                </div>
+                {org?.name} is still getting set up. Check back soon.
+              </div>
             ) : allOpen.length === 0 ? (
               <div style={{ color: '#6b6b6b', padding: '24px 0', textAlign: 'center' }}>No open programs yet. Check back soon.</div>
             ) : (
@@ -307,14 +374,41 @@ export default function Home() {
                 <div style={{ display: 'grid', gap: 12 }}>
                   {openPrograms.map((p) => {
                     const timeStr = [p.start_time, p.end_time].filter(Boolean).join(' – ');
-                    const meta = [`${p.day_of_week}s`, timeStr, p.program_locations?.name].filter(Boolean).join(' · ');
+                    // "Is my child old enough?" is the first thing a parent asks
+                    // and the most common reason they message the provider
+                    // instead of registering. Only shown when the operator has
+                    // actually said - never guessed from grades.
+                    const ageStr = p.age_min != null && p.age_max != null
+                      ? `Ages ${p.age_min}–${p.age_max}`
+                      : p.age_min != null
+                        ? `Ages ${p.age_min}+`
+                        : p.age_max != null
+                          ? `Up to age ${p.age_max}`
+                          : null;
+                    // A one-off workshop meets once, so "Mondays" would be wrong.
+                    const dayStr = p.session_count === 1 ? p.day_of_week : `${p.day_of_week}s`;
+                    const meta = [dayStr, timeStr, p.program_locations?.name, ageStr].filter(Boolean).join(' · ');
                     const hl = highlightProgram === p.id;
+                    // Optional program photo. alt="" because the class name sits
+                    // right beside it — announcing the file twice adds nothing.
+                    // No photo = the card renders exactly as it always has.
+                    const photo = p.photo_url ? (
+                      <img
+                        src={p.photo_url}
+                        alt=""
+                        loading="lazy"
+                        style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }}
+                      />
+                    ) : null;
                     if (p.runs_own_registration) {
                       return (
                         <div key={p.id} id={`program-card-${p.id}`} style={leanCard(hl)}>
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
-                            <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                            {photo}
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
+                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
+                            </div>
                           </div>
                           <a href={p.external_registration_url} target="_blank" rel="noopener noreferrer" style={leanBtn}>Register &#8599;</a>
                         </div>
@@ -322,10 +416,23 @@ export default function Home() {
                     }
                     return (
                       <div key={p.id} id={`program-card-${p.id}`} style={leanCard(hl)}>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
-                          <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
-                            {meta}{meta ? ' · ' : ''}<span style={{ fontWeight: 600, color: '#1a1a1a' }}>{formatMoney(p.price_cents)}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                          {photo}
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
+                            <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
+                              {meta}
+                            </div>
+                            {/* All-in price, stated here rather than at the Pay
+                                step. The breakdown sits underneath so the fee
+                                is never a reveal — a family sees the real
+                                number before they type anything. */}
+                            <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
+                              <span style={{ fontWeight: 600, color: '#1a1a1a' }}>{formatMoney(totalWithFee(p.price_cents, feeConfig))}</span>
+                              {feeOnCents(p.price_cents, feeConfig) > 0 && (
+                                <span> · {formatMoney(p.price_cents)} class + {formatMoney(feeOnCents(p.price_cents, feeConfig))} enrops service fee</span>
+                              )}
+                            </div>
                           </div>
                         </div>
                         <button onClick={() => startRegistration(p.id, false)} style={leanBtn}>Register</button>

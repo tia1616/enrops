@@ -20,12 +20,17 @@ export async function getUserRoles(userId) {
   const [{ data: p }, { data: i }, { data: m }] = await Promise.all([
     supabase.from('parents').select('id').eq('auth_id', userId).limit(1).maybeSingle(),
     supabase.from('instructors').select('id').eq('auth_user_id', userId).eq('is_active', true).limit(1).maybeSingle(),
-    supabase.from('org_members').select('id').eq('auth_user_id', userId).not('accepted_at', 'is', null).limit(1).maybeSingle(),
+    supabase.from('org_members').select('id, organization_id').eq('auth_user_id', userId).not('accepted_at', 'is', null).limit(1).maybeSingle(),
   ]);
   return {
     isParent: !!p,
     isInstructor: !!i,
     isAdmin: !!m,
+    // WHICH org they administer. isAdmin alone is org-agnostic, so a provider
+    // browsing ANOTHER provider's public page was offered an "Admin" chip that
+    // jumped to their OWN org — reads as a broken cross-tenant link. Callers
+    // that know the org being viewed pass it so the chip can be suppressed.
+    adminOrgId: m?.organization_id ?? null,
   };
 }
 

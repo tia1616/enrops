@@ -31,6 +31,10 @@ export const FEATURE = {
   WAIVERS: 'waivers',
   TEAM: 'team',
   ENNIE: 'ennie',
+  // Self-serve operator onboarding (signup -> build -> Stripe -> live link).
+  // These are the steps a COLD operator drops out of, so they are the ones the
+  // activation funnel is measured on.
+  ONBOARDING: 'onboarding',
 } as const;
 
 export const ACTION = {
@@ -57,6 +61,12 @@ export const ACTION = {
   PARTNERS_IMPORTED: 'partners_imported',
   // ennie
   ENNIE_USED: 'ennie_used',
+  // onboarding funnel — the ABANDONMENT points, which leave no row behind and so
+  // cannot be reconstructed after the fact. (The completed steps are already
+  // derivable: org -> organizations.onboarded_at, program -> the programs
+  // triggers below, connected -> stripe_charges_enabled, paid -> enrollment_events.)
+  SIGNUP_STARTED: 'signup_started',
+  STRIPE_CONNECT_STARTED: 'stripe_connect_started',
   // NOTE: programs (program_created/published) + payroll_approved are captured by
   // DB triggers, not here — they are pure client-side table writes.
 } as const;

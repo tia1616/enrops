@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
+import { renderWaiverText, hasOrgToken } from "../../lib/waiverText.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -89,6 +90,11 @@ export default function WaiverManager() {
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [org?.id]);
 
   const activeCount = useMemo(() => (waivers ?? []).filter((w) => w.active).length, [waivers]);
+  const retiredCount = useMemo(() => (waivers ?? []).filter((w) => !w.active).length, [waivers]);
+  // Documents taken out of registration stay in the database (a signature has to
+  // keep pointing at the thing that was signed) but are out of the way by
+  // default.
+  const [showRetired, setShowRetired] = useState(false);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 2200); }
 
@@ -135,7 +141,11 @@ export default function WaiverManager() {
     const { error: e } = await supabase.from("waivers")
       .update({ [field]: !w[field], updated_at: new Date().toISOString() }).eq("id", w.id);
     if (e) { setError(e.message); return; }
-    flash(field === "active" ? (!w.active ? "Waiver activated." : "Waiver archived.") : (!w.required ? "Marked required." : "Marked optional."));
+    flash(
+      field === "active"
+        ? (!w.active ? `${w.name} is back in your registration form.` : `${w.name} removed from your registration form.`)
+        : (!w.required ? `Families must now agree to ${w.name}.` : `Families can now decline ${w.name}.`),
+    );
     load();
   }
 
@@ -264,7 +274,8 @@ export default function WaiverManager() {
       <h2 style={{ margin: "24px 0 0", fontSize: 17, fontWeight: 700, color: INK }}>Waivers families sign</h2>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginTop: 4 }}>
         <p style={{ color: MUTED, fontSize: 13.5, margin: 0, lineHeight: 1.5, maxWidth: 560 }}>
-          Required ones must be signed before a family can see their program details in the portal.
+          Families read and sign these when they register. Ones marked <strong>Must agree</strong> have
+          to be accepted to enroll; a family can register without accepting the rest.
         </p>
         <button type="button" onClick={() => openWaiverEditor({ _new: true })} style={primaryBtn(false)}>+ Add a waiver</button>
       </div>
@@ -285,26 +296,64 @@ export default function WaiverManager() {
         </div>
       ) : (
         <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 12 }}>
-          {waivers.map((w) => (
+          {/* Only what's actually in use. Anything taken out of registration —
+              including documents an earlier version of the platform created —
+              lives behind the toggle at the bottom instead of padding the list
+              with names nobody recognises. */}
+          {waivers.filter((w) => w.active || showRetired).map((w) => (
             <div key={w.id} style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "14px 16px", opacity: w.active ? 1 : 0.6 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: INK, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     {w.name}
-                    {w.required ? <Badge bg="#fff7ed" border="#fed7aa" color="#9a3412">Required</Badge> : <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Optional</Badge>}
-                    {!w.active && <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Archived</Badge>}
+                    {/* State in the operator's terms, and only ONE of them.
+                        A document that isn't part of registration can't also be
+                        "Required" — showing both was the confusing bit. */}
+                    {!w.active
+                      ? <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Not in registration</Badge>
+                      : w.required
+                        ? <Badge bg="#fff7ed" border="#fed7aa" color="#9a3412">Must agree</Badge>
+                        : <Badge bg="#f3f4f6" border={RULE} color={MUTED}>Can decline</Badge>}
                   </div>
-                  <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>{w.content}</div>
+                  {/* The preview shows what a family will read, business name
+                      filled in. The EDITOR below deliberately keeps the raw
+                      {{org}} token — substituting there and saving would write
+                      the name back into the stored text and re-freeze it. */}
+                  <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>{renderWaiverText(w.content, org?.name)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button type="button" onClick={() => openWaiverEditor(w)} style={ghostBtn(false)}>Edit</button>
-                  <button type="button" onClick={() => toggle(w, "required")} style={ghostBtn(false)}>{w.required ? "Make optional" : "Make required"}</button>
-                  <button type="button" onClick={() => toggle(w, "active")} style={ghostBtn(false)}>{w.active ? "Archive" : "Restore"}</button>
+                  {/* Two different decisions, said as decisions rather than as
+                      states: whether families have to accept it, and whether it
+                      appears at all. "Archive" read like filing something away;
+                      what an operator is actually doing is taking it out of
+                      their registration form. */}
+                  {w.active && (
+                    <button type="button" onClick={() => toggle(w, "required")} style={ghostBtn(false)}>
+                      {w.required ? "Let families decline" : "Require agreement"}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => toggle(w, "active")} style={ghostBtn(false)}>
+                    {w.active ? "Remove from registration" : "Add back"}
+                  </button>
                 </div>
               </div>
             </div>
           ))}
-          <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{activeCount} active · families sign every <strong>required + active</strong> waiver.</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12, color: MUTED, marginTop: 2 }}>
+            <span>
+              {activeCount === 1 ? "1 waiver" : `${activeCount} waivers`} in your registration form.
+            </span>
+            {retiredCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowRetired((v) => !v)}
+                style={{ background: "none", border: "none", color: BRIGHT, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+              >
+                {showRetired ? "Hide" : `Show ${retiredCount} not in use`}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -313,6 +362,13 @@ export default function WaiverManager() {
         Your own privacy policy and terms, shown on your registration site. Until you publish one,
         its link stays off your site footer and anyone who visits the page is told you haven&rsquo;t
         published one yet — families are never shown another provider&rsquo;s policy.
+      </p>
+      {/* Publishing reads as one-way unless you say otherwise, so people either
+          stall on it or avoid it. It's editable forever, and this page is always
+          a click away in Settings. */}
+      <p style={{ color: MUTED, fontSize: 13, margin: "8px 0 0", lineHeight: 1.5, maxWidth: 620 }}>
+        Nothing here is final. You can edit and republish either one whenever you like, or skip
+        them for now and come back — they live in <strong>Settings &rarr; Waivers &amp; policies</strong>.
       </p>
 
       {policiesError && (
@@ -486,6 +542,18 @@ function WaiverEditor({ waiver, busy, saveError, onCancel, onSave }) {
         <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Liability Waiver & Agreement" style={input} disabled={busy} />
 
         <label style={{ ...lbl, marginTop: 16 }}>Text families read &amp; agree to</label>
+        {/* Explain the placeholder rather than hiding it. An operator who sees
+            {{org}} in their own waiver and doesn't know what it is will
+            "helpfully" type their business name over it — which is exactly the
+            freezing this is meant to prevent. Only shown when it's actually
+            there, so someone writing their own text never sees it. */}
+        {hasOrgToken(content) && (
+          <p style={{ margin: "0 0 8px", fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
+            Leave <strong>{"{{org}}"}</strong> where it is — families see your business
+            name there. Keeping it means your waivers update themselves if you ever
+            change your business name.
+          </p>
+        )}
         <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={12} placeholder="Paste or write the full waiver text…" style={{ ...input, resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }} disabled={busy} />
 
         <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, fontSize: 14, color: INK, cursor: "pointer" }}>

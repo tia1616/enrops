@@ -8,7 +8,6 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
-import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
@@ -112,6 +111,18 @@ const NAV = [
 function shapeNavForOrg(nav, org) {
   if (org?.instructor_pay_model !== "enrops_platform") return nav; // full nav (J2S etc.)
   const HIDE_TOP = new Set([
+    "/admin",                        // Overview/dashboard — the free tier is
+                                     // REGISTRATION ONLY ("nothing else lives
+                                     // here"), so there is no dashboard to give
+                                     // them. Programs is their home; /admin
+                                     // redirects there (see AdminOverview).
+    "/admin/team",                   // Extra admin seats. The checklist lists
+                                     // "full seats" as a PRO unlock, and free is
+                                     // registration + parent portal only — a
+                                     // solo operator has nobody to invite, so
+                                     // this is clutter until they upgrade. The
+                                     // ROUTE still works, so any org that
+                                     // already has a second admin keeps it.
     "/admin/schedule",               // Instructors (paid upgrade)
     "/admin/schools",                // Locations/Partners -> reachable via Settings
     "/admin/family-comms/contacts",  // Comms (paid upgrade)
@@ -166,13 +177,18 @@ export default function AdminLayout() {
   const [user, setUser] = useState(null);
   const [orgMember, setOrgMember] = useState(null);
   const [org, setOrg] = useState(null);
-  const [debugInfo, setDebugInfo] = useState(null);
   // Lifetime time-saved tally (rolling sum of time_saved_events for this org).
   // See project_enrops_time_saved memory: every Director action that completes
   // work for the operator inserts a row; this is the always-on receipt.
   const [timeSavedTotal, setTimeSavedTotal] = useState(null);
   const [timeSavedRecent, setTimeSavedRecent] = useState([]);
   const [tallyOpen, setTallyOpen] = useState(false);
+  // Mobile menu. Desktop ignores this entirely — the sidebar is always shown
+  // there and the button that toggles this is display:none above 900px.
+  const [navOpen, setNavOpen] = useState(false);
+  // Tapping a destination should take you there, not leave the menu covering
+  // the page you just asked for.
+  useEffect(() => { setNavOpen(false); }, [location.pathname]);
 
   useEffect(() => {
     let mounted = true;
@@ -198,7 +214,6 @@ export default function AdminLayout() {
         if (!mounted) return;
         if (memErr || !memberRow || !memberRow.accepted_at) {
           setAuthState("unauthorized");
-          setDebugInfo({ uid: session.user.id, memErr: memErr?.message, memberRow });
           return;
         }
         setOrgMember(memberRow);
@@ -206,7 +221,17 @@ export default function AdminLayout() {
         // Fetch org name + branding (display only — does not gate access)
         const { data: orgRow } = await supabase
           .from("organizations")
-          .select("id, name, slug, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model")
+          // stripe_charges_enabled rides along so any admin surface can tell the
+          // truth about whether this org can actually take money yet (a program
+          // can be "open for registration" while payments have nowhere to land).
+          // The onboarding answers ride along too: they decide which fields the
+          // program builder shows, so every surface that reads `org` from the
+          // outlet can adapt without its own query.
+          // fee_pass_through rides along so money screens can say which
+          // direction the service fee moves. Getting this wrong by defaulting
+          // would tell a provider they're absorbing a fee their families are
+          // actually paying, which is the opposite of the truth.
+          .select("id, name, slug, email, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;
@@ -295,14 +320,11 @@ export default function AdminLayout() {
             <Link to="/admin/login" style={btn(BRIGHT, "#fff")}>Sign in</Link>
             {user && <button onClick={signOut} style={btn("transparent", BRIGHT, true)}>Sign out</button>}
           </div>
-          {debugInfo && (
-            <div style={{ marginTop: 16, padding: 10, background: "#f7f6ef", borderRadius: 4, fontSize: 11, color: MUTED, wordBreak: "break-all" }}>
-              <strong>Debug (temporary):</strong><br />
-              uid: {debugInfo.uid}<br />
-              memErr: {debugInfo.memErr || "none"}<br />
-              memberRow: {JSON.stringify(debugInfo.memberRow)}
-            </div>
-          )}
+          {/* The raw "Debug (temporary)" panel that used to render here (uid,
+              memErr, memberRow JSON) was visible to ANYONE who reached /admin
+              without access — including a parent who just typed the URL. It
+              leaked a user UUID and internal error text and read as broken.
+              The same details still go to the console above for debugging. */}
         </div>
       </div>
     );
@@ -331,9 +353,128 @@ export default function AdminLayout() {
 
   return (
     <div style={{ minHeight: "100vh", background: CREAM, fontFamily: "'Poppins', system-ui, sans-serif", color: INK }}>
+      {/* MOBILE ADMIN. The shell is a hard 240px sidebar + content grid, which on a
+          375px phone left ~135px for the page (minus 72px padding = ~63px usable)
+          — the admin was effectively unusable on a phone. Operators build programs
+          on their phones, so this matters as much as the parent flow.
+          Below 900px the sidebar becomes a horizontal, scrollable top bar and the
+          content takes the full width. Done in CSS with !important because every
+          style here is an inline style prop, which a normal rule can't override.
+          The active-item accent moves from a left border (meaningless in a row) to
+          the white pill + colour it already carries. */}
+      <style>{`
+        /* Desktop keeps the sidebar; the mobile bar only exists under 900px. */
+        [data-admin-mobilebar] { display: none; }
+
+        @media (max-width: 900px) {
+          [data-admin-grid] { grid-template-columns: 1fr !important; }
+
+          /* A menu button, not a scrolling strip.
+             The first pass at mobile turned the sidebar into a horizontally
+             scrollable row of links, which fixed "unusable" but isn't how a
+             phone menu works — items sit off-screen with nothing to say they
+             exist, and you have to swipe a strip to find "Settings". Standard
+             behaviour is a menu button that opens the whole list, so that's
+             what this is. */
+          [data-admin-mobilebar] {
+            display: flex !important;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 14px;
+            background: ${LAVENDER};
+            border-bottom: 1px solid ${RULE};
+            position: sticky;
+            top: 0;
+            z-index: 40;
+          }
+
+          /* Closed by default; the button reveals it as a full-width panel. */
+          [data-admin-sidebar] {
+            display: none !important;
+          }
+          [data-admin-sidebar][data-open="true"] {
+            display: flex !important;
+            position: static !important;
+            height: auto !important;
+            padding: 8px 0 14px !important;
+            border-right: none !important;
+            border-bottom: 1px solid ${RULE} !important;
+          }
+          /* The wordmark and org name already sit in the bar above. */
+          [data-admin-sidebar] > div:first-child { display: none !important; }
+          [data-admin-sidebar] nav a { border-left: none !important; }
+
+          [data-admin-main] { padding: 16px 14px !important; max-width: 100% !important; }
+
+          /* ROOT CAUSE of admin pages being wider than the phone: a flex or grid
+             child defaults to min-width:auto, which refuses to shrink below its
+             own content. One long row of buttons or an unbreakable string then
+             sets the page's minimum width and pushes everything else off the
+             right edge — which is why enrollment numbers were disappearing.
+             min-width:0 lets those children actually shrink so text wraps.
+             Applied only under 900px, so desktop layout is untouched.
+             The grid items THEMSELVES need it too, not just their contents:
+             a 1fr track can never be narrower than its item's min-content, so
+             main's own min-width:auto was sizing the column at 384px on a
+             375px phone and dragging the whole page 10px sideways. */
+          [data-admin-main], [data-admin-sidebar] { min-width: 0 !important; }
+          [data-admin-main] * { min-width: 0; }
+          [data-admin-main] img { max-width: 100%; height: auto; }
+          /* Anything genuinely too wide to wrap (a data table) scrolls inside
+             its own box rather than dragging the whole page sideways. */
+          [data-admin-main] table { display: block; width: 100%; overflow-x: auto; }
+
+          /* iOS Safari zooms the entire page in when you focus a field whose
+             text is under 16px, and every admin control is styled inline at
+             13-14px — so editing a program on a phone lurched on every single
+             field (21 of them in one expanded panel). One rule beats chasing
+             the inline styles page by page, and it can't miss a page we
+             haven't looked at yet. Mobile only; desktop keeps its denser type.
+             Measured at 375px: no page gets wider from the larger text. */
+          [data-admin-main] input,
+          [data-admin-main] select,
+          [data-admin-main] textarea { font-size: 16px !important; }
+        }
+      `}</style>
+      {/* Mobile bar: wordmark, who you're signed in as, and the menu button.
+          Hidden entirely on desktop, where the sidebar is always visible. */}
+      <div data-admin-mobilebar>
+        <div style={{ minWidth: 0 }}>
+          <EnropsWordmark height={22} />
+          <div style={{ fontSize: 11.5, color: MUTED, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            Admin · {org?.name ?? "—"}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setNavOpen((v) => !v)}
+          aria-expanded={navOpen}
+          aria-controls="admin-nav"
+          aria-label={navOpen ? "Close menu" : "Open menu"}
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            background: navOpen ? BRIGHT : "#fff",
+            color: navOpen ? "#fff" : INK,
+            border: `1px solid ${navOpen ? BRIGHT : RULE}`,
+            borderRadius: 8, padding: "9px 13px", cursor: "pointer",
+            fontFamily: "inherit", fontSize: 14, fontWeight: 600,
+            // 44px is the minimum comfortable touch target.
+            minHeight: 44,
+          }}
+        >
+          <span aria-hidden="true" style={{ display: "inline-flex", flexDirection: "column", gap: 3.5 }}>
+            <span style={{ display: "block", width: 17, height: 2, borderRadius: 2, background: "currentColor" }} />
+            <span style={{ display: "block", width: 17, height: 2, borderRadius: 2, background: "currentColor" }} />
+            <span style={{ display: "block", width: 17, height: 2, borderRadius: 2, background: "currentColor" }} />
+          </span>
+          Menu
+        </button>
+      </div>
+
       <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
         {/* Sidebar */}
-        <aside data-admin-sidebar style={{
+        <aside data-admin-sidebar id="admin-nav" data-open={navOpen ? "true" : "false"} style={{
           background: LAVENDER,
           borderRight: `1px solid ${RULE}`,
           padding: "20px 0",
@@ -403,10 +544,9 @@ export default function AdminLayout() {
             })}
           </nav>
 
-          {/* Always-available feedback path for early partners. Lives here in the
-              sidebar (not a floating corner pill) so it never covers page action
-              bars like marketing's "Approve & schedule". */}
-          <FeedbackWidget org={org} />
+          {/* Feedback widget removed from the sidebar (Jessica, 2026-07-24).
+              The component still exists if we want it back on a specific
+              surface later. */}
 
           {/* Lifetime time-saved tally — every Director action contributes. */}
           {timeSavedTotal != null && timeSavedTotal > 0 && (
@@ -484,30 +624,16 @@ export default function AdminLayout() {
               {activeTabSection.tabs.filter((t) => !t.gate || perm.can(t.gate)).map((t) => {
                 const tabActive =
                   location.pathname === t.to || location.pathname.startsWith(t.to + "/");
-                // Registration vs outside-registration tenant: disable (don't hide)
-                // the tab that doesn't apply, with a hover reason.
+                // A tab that can never apply to this tenant is HIDDEN, not shown
+                // greyed out. The old "disabled + hover reason" pattern meant an
+                // operator who runs registration through Enrops permanently saw a
+                // dead "Class schedule" tab (and vice versa) — a control that can
+                // never do anything is just noise, and the hover reason is
+                // invisible on a phone anyway. The PAGE and its route stay, so the
+                // tenants it does apply to are unaffected.
                 const usesReg = org?.uses_enrops_registration !== false; // default true
-                const disabled = (t.regOnly && !usesReg) || (t.outsideRegOnly && usesReg);
-                if (disabled) {
-                  return (
-                    <span
-                      key={t.to}
-                      title={t.offReason || ""}
-                      style={{
-                        padding: "8px 14px",
-                        borderBottom: "2px solid transparent",
-                        color: `${MUTED}80`,
-                        fontWeight: 500,
-                        fontSize: 13,
-                        position: "relative",
-                        top: 1,
-                        cursor: "not-allowed",
-                      }}
-                    >
-                      {t.label}
-                    </span>
-                  );
-                }
+                const notApplicable = (t.regOnly && !usesReg) || (t.outsideRegOnly && usesReg);
+                if (notApplicable) return null;
                 return (
                   <Link
                     key={t.to}
@@ -534,7 +660,13 @@ export default function AdminLayout() {
               the next page's chunk downloads — without it the app-level
               boundary would blank the whole shell on every nav click. */}
           <Suspense fallback={<RouteFallback />}>
-            <Outlet context={{ user, org, orgMember }} />
+            {/* setOrg is exposed so a page that CHANGES the org can correct the
+                shell's copy immediately. Without it, renaming the page address
+                left every other surface — the share link, the embed snippet —
+                handing out the old address until a full reload, and a second
+                rename in the same session did nothing at all because the page
+                still believed the old slug was current. */}
+            <Outlet context={{ user, org, orgMember, setOrg }} />
           </Suspense>
           </>
           )}

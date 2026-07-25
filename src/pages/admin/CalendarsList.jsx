@@ -58,6 +58,7 @@ function formatRelativeDate(iso) {
 
 export default function CalendarsList() {
   const { org } = useOutletContext() ?? {};
+  const isLean = org?.instructor_pay_model === "enrops_platform";
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
   const [districts, setDistricts] = useState([]); // merged rows: [{ key, label, districtId, calendarKey, location_count }]
   const [calendars, setCalendars] = useState([]); // district_calendars rows for current school year
@@ -185,10 +186,13 @@ export default function CalendarsList() {
       }}>
         <div>
           <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>School calendars</h1>
+          {/* Registration operators get the plain version: what it does for
+              them, no facility-booking references (not part of this release)
+              and no vendor names. */}
           <div style={{ color: MUTED, marginTop: 4, fontSize: 14, maxWidth: 720 }}>
-            One calendar per district per school year. No-school dates feed every
-            program's session schedule — what parents see, what shows up on
-            instructor calendars, and which days you book on Facilitron / Mazevo.
+            {isLean
+              ? <>One calendar per district per school year. Your class dates skip that district&rsquo;s no-school and early-release days automatically.</>
+              : <>One calendar per district per school year. No-school and early-release dates feed every program&rsquo;s session schedule — what parents see and what shows up on instructor calendars.</>}
           </div>
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>

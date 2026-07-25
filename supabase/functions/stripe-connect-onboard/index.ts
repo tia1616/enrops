@@ -25,6 +25,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+import { logPlatformEvent, FEATURE, ACTION } from '../_shared/logPlatformEvent.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -275,6 +276,21 @@ serve(async (req: Request) => {
       console.error('[connect-onboard] stripe.accountLinks.create failed:', err);
       return json({ error: 'stripe_link_create_failed' }, 502);
     }
+
+    // ONBOARDING FUNNEL — the operator has been handed Stripe's hosted URL, i.e.
+    // they STARTED the Stripe step (the WOW moment, and the drop-off Arielle
+    // called out). Pairs with the existing stripe_connected signal to measure
+    // started-vs-finished. Deliberately NOT deduped: a repeat click is a real
+    // friction signal (count DISTINCT organization_id for unique operators).
+    // Fail-safe: telemetry can never block handing back the onboarding URL.
+    await logPlatformEvent(supabase, {
+      feature: FEATURE.ONBOARDING,
+      action: ACTION.STRIPE_CONNECT_STARTED,
+      outcome: 'success',
+      organizationId: org.id,
+      actorUserId: callerAuthId,
+      metadata: { reconnect: org.stripe_account_status === 'disconnected', caller_role: callerRole },
+    });
 
     return json({
       onboarding_url: link.url,

@@ -23,7 +23,7 @@ const GOOGLE_OAUTH_CLIENT_ID = import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID || ""
 const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
 export default function AdminSettings() {
-  const { org, user } = useOutletContext();
+  const { org, user, setOrg } = useOutletContext();
   const [connection, setConnection] = useState(null); // { id, google_email, scopes, user_id } | null
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -151,6 +151,23 @@ export default function AdminSettings() {
         </div>
       )}
 
+      {/* Signup promises this twice ("you can change this address anytime in
+          Settings") and until now there was nowhere to do it. Registration
+          operators only — changing an established tenant's address would break
+          every link they have ever handed out. */}
+      {org?.instructor_pay_model === "enrops_platform" && (
+        <PageAddressSection
+          org={org}
+          onSaved={(slug) => {
+            // Correct the shell's copy straight away: every other surface reads
+            // org.slug for share links and the embed snippet, and the address
+            // field itself compares against it to know what "changed" means.
+            setOrg?.((o) => (o ? { ...o, slug } : o));
+            setToast({ kind: "success", message: `Your page address is now ${slug}.` });
+          }}
+        />
+      )}
+
       <section style={{ marginTop: 12 }}>
         <h2 style={sectionTitle}>Waivers &amp; policies</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -210,6 +227,10 @@ export default function AdminSettings() {
       </section>
       )}
 
+      {/* Branding is hidden for registration operators: registration is
+          enrops-branded in v1, so offering a logo-and-colours screen that
+          barely shows up anywhere promises something we don't deliver yet. */}
+      {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Branding</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -222,14 +243,23 @@ export default function AdminSettings() {
           <Link to="/admin/branding" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
+      )}
 
+      {/* Reply-to is the one exception to "no provider branding in v1", because
+          without it a family's reply goes to us instead of to them. The copy is
+          narrowed for registration operators so it doesn't advertise the
+          signature and sender-name controls that branding covers. */}
       <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Email sender</h2>
+        <h2 style={sectionTitle}>Email replies</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>How your emails show up</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>
+              {org?.instructor_pay_model === "enrops_platform" ? "Where family replies go" : "How your emails show up"}
+            </div>
             <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Set the sender name, reply-to address, email signature, and mailing address that show on your invites, waivers, and reminders. We handle the sending domain — no DNS setup.
+              {org?.instructor_pay_model === "enrops_platform"
+                ? <>When a family replies to a confirmation or reminder, it goes to <strong>{org?.email || "your email"}</strong>. Change it here if replies should go somewhere else.</>
+                : "Set the sender name, reply-to address, email signature, and mailing address that show on your invites, waivers, and reminders. We handle the sending domain — no DNS setup."}
             </div>
           </div>
           <Link to="/admin/email-sender" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
@@ -281,6 +311,10 @@ export default function AdminSettings() {
       </section>
       )}
 
+      {/* Google Drive is for importing curriculum documents — a J2S workflow
+          that has no counterpart for a registration operator. Hidden rather
+          than left as a card that leads somewhere they'd never use. */}
+      {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Connections</h2>
 
@@ -318,7 +352,112 @@ export default function AdminSettings() {
           </div>
         </div>
       </section>
+      )}
     </div>
+  );
+}
+
+// Change the public web address of the registration page.
+//
+// Goes through the rename_org_slug function rather than updating the row
+// directly: RLS only lets an operator see their own organisation, so the
+// browser cannot tell whether an address is already taken, and a plain update
+// would surface a raw duplicate-key error. The function owns the uniqueness
+// check and the reserved-word list, which is the same list provisioning uses.
+function PageAddressSection({ org, onSaved }) {
+  const [value, setValue] = useState(org?.slug ?? "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [savedSlug, setSavedSlug] = useState("");
+  const current = org?.slug ?? "";
+  const cleaned = value.trim().toLowerCase();
+  const changed = cleaned !== current;
+
+  const MESSAGES = {
+    invalid: "Use lowercase letters, numbers, and hyphens only — no spaces.",
+    length: "Pick something between 3 and 40 characters.",
+    reserved: "That one's reserved by the platform. Try another.",
+    taken: "Another business already has that address. Try another.",
+    forbidden: "You don't have permission to change this.",
+    not_authenticated: "Your sign-in expired — please sign in again.",
+  };
+
+  async function save() {
+    if (!changed || saving) return;
+    setSaving(true);
+    setErr("");
+    try {
+      // The org id is passed explicitly and authorized server-side. The function
+      // used to infer it from the caller's oldest membership, which renames the
+      // WRONG organisation for anyone who administers two - and on prod the
+      // oldest membership is the J2S ownership.
+      const { data, error } = await supabase.rpc("rename_org_slug", { p_org_id: org.id, p_slug: cleaned });
+      if (error) throw error;
+      if (!data?.ok) {
+        setErr(MESSAGES[data?.code] || "That didn't work. Please try another address.");
+        return;
+      }
+      setSavedSlug(data.slug);
+      onSaved?.(data.slug);
+    } catch (e) {
+      setErr("That didn't save. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section style={{ marginTop: 12 }}>
+      <h2 style={sectionTitle}>Your page address</h2>
+      <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Where families find you</div>
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+          This is the web address of your registration page. Change it whenever you like.
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          <span style={{ fontSize: 14, color: MUTED, whiteSpace: "nowrap" }}>enrops.com/</span>
+          <input
+            value={value}
+            onChange={(e) => { setValue(e.target.value.replace(/[^a-zA-Z0-9-]/g, "").toLowerCase()); setErr(""); setSavedSlug(""); }}
+            maxLength={40}
+            aria-label="Your page address"
+            style={{
+              flex: "1 1 200px", minWidth: 0, boxSizing: "border-box", padding: "10px 12px",
+              fontSize: 16, border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit", background: "#fff",
+            }}
+          />
+          <button
+            type="button"
+            onClick={save}
+            disabled={!changed || saving || cleaned.length < 3}
+            style={{
+              flexShrink: 0, padding: "10px 18px", background: BRIGHT, color: "#fff", border: "none",
+              borderRadius: 8, fontSize: 14, fontWeight: 600, fontFamily: "inherit",
+              cursor: !changed || saving || cleaned.length < 3 ? "not-allowed" : "pointer",
+              opacity: !changed || saving || cleaned.length < 3 ? 0.5 : 1,
+            }}
+          >
+            {saving ? "Saving…" : "Save address"}
+          </button>
+        </div>
+
+        {/* Said before they press the button, not after. Anyone who has already
+            shared their link is about to break it. */}
+        {changed && !err && !savedSlug && (
+          <div style={{ fontSize: 12.5, color: "#8a5a00", background: "#FDF6E3", border: "1px solid #F0D48A", borderRadius: 8, padding: "9px 11px", marginTop: 10, lineHeight: 1.5 }}>
+            Heads up: any link you&rsquo;ve already shared uses <strong>enrops.com/{current}</strong> and
+            will stop working. If families already have your old link, share the new one.
+          </div>
+        )}
+        {err && <div style={{ color: "#b53737", fontSize: 12.5, marginTop: 10 }}>{err}</div>}
+        {savedSlug && (
+          <div style={{ color: GREEN, fontSize: 12.5, marginTop: 10 }}>
+            Saved. Your page is now at enrops.com/{savedSlug}.
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

@@ -11,6 +11,7 @@ import StepWaivers from './register-steps/StepWaivers.jsx';
 import StepReview from './register-steps/StepReview.jsx';
 import StepPay from './register-steps/StepPay.jsx';
 import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFields.jsx';
+import { renderWaiverText } from '../../lib/waiverText.js';
 
 // Has the parent answered a custom question? (by field type)
 function hasAnswer(value, type) {
@@ -285,7 +286,13 @@ export default function Register() {
         .eq('active', true),
       // customizable-registration: the org's enabled standard + active custom
       // questions (one-org reader; returns [] if nothing enabled → form unchanged).
-      supabase.rpc('get_active_registration_fields', { p_org_id: ORG_ID }),
+      // Per-program fields: pass the program being registered for so the family
+      // is asked ONLY what this class needs. Org-wide questions still come back
+      // for every program; a question scoped to another class never appears.
+      supabase.rpc('get_active_registration_fields', {
+        p_org_id: ORG_ID,
+        p_program_id: searchParams.get('program') || null,
+      }),
       // Fee-display config via edge fn (RBAC-safe path — the anon org view
       // intentionally excludes fee columns). Used to show the pass-through
       // "Platform fee" line on StepPay before redirecting to Stripe.
@@ -294,7 +301,10 @@ export default function Register() {
 
     setSchools(schoolsRes.data || []);
     setPrograms(programsRes.data || []);
-    setWaivers(waiversRes.data || []);
+    // Substitute the business name into the waiver text here, at the one place
+    // it is loaded, rather than in each component that displays it — a reader
+    // that forgot would show a family "{{org}}" in a contract.
+    setWaivers((waiversRes.data || []).map((w) => ({ ...w, content: renderWaiverText(w.content, org?.name) })));
     setRegFields(parseRegFields(regFieldsRes.data || []));
     setFeeConfig(feeRes?.data || { fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0 });
     // Thread the org's sibling % onto the cart so the review screen matches the
@@ -389,7 +399,47 @@ export default function Register() {
   // flag tells Home.jsx to skip its default clearCart.
   function handleAddAnotherChild() {
     addAnotherChild();
-    navigate(`/${ORG_SLUG}?keep=1`);
+    // Carry embed mode across the trip back to the catalog, or the operator's
+    // iframe would suddenly render our full header/hero/footer mid-flow (and the
+    // height reporter unmounts, freezing the frame at its old height).
+    navigate(`/${ORG_SLUG}?keep=1${isEmbed ? '&embed=1' : ''}`);
+  }
+
+  // Embedded in the operator's own website (iframe)? Stripe's hosted checkout
+  // REFUSES to be framed, so the hand-off has to navigate the TOP-level window.
+  //
+  // We ASSIGN window.top.location rather than window.open(url,'_top'): a blocked
+  // top navigation makes the assignment THROW SecurityError, whereas window.open
+  // fails SILENTLY. That difference matters enormously here — the Stripe session
+  // is already created and billed by this point, so a silent failure is a dead
+  // Pay button and a family who taps again and creates a second session.
+  // Blocking is real, not theoretical: hosts that sandbox their embed (several
+  // site builders do) and expired user activation after a slow session create.
+  // If it throws we surface a visible link instead of guessing — clicking it is
+  // a fresh user gesture, which is exactly what an escaped navigation needs.
+  const isEmbed = searchParams.get('embed') === '1';
+  const [paymentFallbackUrl, setPaymentFallbackUrl] = useState('');
+
+  // Only true when we POSITIVELY know the provider can't take payment. While the
+  // config is loading — or if the call failed, or an older org-fee-config that
+  // doesn't return the flag is deployed — this stays false and checkout proceeds
+  // as normal. Failing OPEN here is deliberate: create-checkout is the
+  // authoritative gate and refuses the charge server-side, so the worst case is
+  // a clear error one step later, whereas failing closed would block real paying
+  // families on a transient config hiccup.
+  const paymentsClosed = feeConfig ? feeConfig.stripe_charges_enabled === false : false;
+  function goToPayment(url) {
+    if (isEmbed && window.self !== window.top) {
+      try {
+        window.top.location.href = url;
+        return;
+      } catch (_) {
+        setPaymentFallbackUrl(url);
+        setSubmitting(false);
+        return;
+      }
+    }
+    window.location.href = url;
   }
 
   // paymentMethod: 'card' | 'us_bank_account', chosen on StepPay. Passed to
@@ -518,12 +568,15 @@ export default function Register() {
         throw new Error(coData.error || 'Could not start checkout.');
       }
       if (coData.comp) {
-        // $0 scholarship — no payment. Go straight to the success page.
-        window.location.href = `/${ORG_SLUG}/register/success?comp=1`;
+        // $0 scholarship — no payment, no Stripe. This is OUR page and it frames
+        // fine, so navigate normally: breaking out to the top window here would
+        // replace the operator's whole website with a bare success page for no
+        // reason. Inside an embed the family stays on their site.
+        window.location.href = `/${ORG_SLUG}/register/success?comp=1${isEmbed ? '&embed=1' : ''}`;
         return;
       }
       if (coData.url) {
-        window.location.href = coData.url;
+        goToPayment(coData.url);
       } else {
         throw new Error('Checkout session missing URL.');
       }
@@ -549,6 +602,30 @@ export default function Register() {
           <div className="mb-6 animate-fade-in rounded-xl border-2 border-j2s-orange-dark bg-j2s-orange/10 p-4">
             <p className="font-bold text-j2s-orange-dark">Heads up</p>
             <p className="mt-1 text-sm text-j2s-ink">{error}</p>
+          </div>
+        )}
+
+        {/* The embedded hand-off to Stripe was blocked (the operator's site
+            sandboxes this frame, or the click's activation expired while the
+            session was being created). The registration IS saved and the payment
+            page IS ready — so give them a real link rather than a button that
+            looks broken. The click is a fresh gesture, which is what an escaped
+            navigation needs. target=_top keeps them out of the framed-Stripe
+            dead end. */}
+        {paymentFallbackUrl && (
+          <div className="mb-6 rounded-xl border-2 border-j2s-purple bg-j2s-purple-soft p-4">
+            <p className="font-bold text-j2s-purple-dark">One more tap to pay</p>
+            <p className="mt-1 text-sm text-j2s-ink">
+              Your spot is saved. Your payment page is ready to open.
+            </p>
+            <a
+              href={paymentFallbackUrl}
+              target="_top"
+              rel="noopener"
+              className="btn-j2s-primary mt-3 inline-block"
+            >
+              Continue to secure payment →
+            </a>
           </div>
         )}
 
@@ -614,14 +691,32 @@ export default function Register() {
             />
           )}
           {step === 4 && (
-            <StepPay
-              pricing={pricing}
-              submitting={submitting}
-              onCheckout={handleCheckout}
-              paymentPlan={cart.payment_plan}
-              installmentSchedule={installmentSchedule?.display || null}
-              org={{ ...org, ...(feeConfig || {}) }}
-            />
+            paymentsClosed ? (
+              /* The provider hasn't connected Stripe, so there is nowhere of
+                 THEIRS for this money to land. create-checkout refuses these
+                 server-side; showing it here means the family finds out before
+                 they hand over card details, not after. Deliberately blames
+                 nobody and gives them a way forward. */
+              <div className="rounded-xl border-2 border-j2s-purple/20 bg-white p-6 text-center">
+                <h2 className="text-xl font-bold text-j2s-purple-dark">
+                  {org?.name} isn&rsquo;t taking payments online just yet
+                </h2>
+                <p className="mx-auto mt-2 max-w-md text-sm text-j2s-ink/70">
+                  Their registration page is up, but online payment isn&rsquo;t switched on
+                  yet, so we can&rsquo;t complete checkout. Get in touch with them directly
+                  and they&rsquo;ll get you signed up.
+                </p>
+              </div>
+            ) : (
+              <StepPay
+                pricing={pricing}
+                submitting={submitting}
+                onCheckout={handleCheckout}
+                paymentPlan={cart.payment_plan}
+                installmentSchedule={installmentSchedule?.display || null}
+                org={{ ...org, ...(feeConfig || {}) }}
+              />
+            )
           )}
         </div>
 

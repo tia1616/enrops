@@ -16,7 +16,13 @@ import { useUserRoles } from '../lib/useUserRoles.js';
 
 const LABELS = { family: 'Family', instructor: 'Instructor', admin: 'Admin' };
 
-export default function PortalSwitcher({ current, slug = 'j2s', block = false, label }) {
+// orgId (optional): the org whose page we're rendering on. When supplied, the
+// Admin chip is shown ONLY if the user administers THAT org — a switcher is for
+// swapping ROLES within the provider you're looking at, never for jumping to a
+// different provider's admin. Without it the chip appeared on every tenant's
+// public page and linked to the viewer's own org, which reads as a broken link.
+// Callers that omit orgId (instructor Shell, admin sidebar) keep prior behavior.
+export default function PortalSwitcher({ current, slug = 'j2s', block = false, label, orgId }) {
   const roles = useUserRoles();
   if (!roles) return null;
 
@@ -24,7 +30,8 @@ export default function PortalSwitcher({ current, slug = 'j2s', block = false, l
   if (roles.isParent && current !== 'family') dests.push({ key: 'family', to: `/${slug}/dashboard` });
   if (roles.isInstructor && current !== 'instructor') dests.push({ key: 'instructor', to: `/${slug}/instructor` });
   // Admin is served at the canonical tenant-less /admin route.
-  if (roles.isAdmin && current !== 'admin') dests.push({ key: 'admin', to: '/admin' });
+  const adminsThisOrg = orgId ? roles.adminOrgId === orgId : true;
+  if (roles.isAdmin && adminsThisOrg && current !== 'admin') dests.push({ key: 'admin', to: '/admin' });
   if (dests.length === 0) return null;
 
   // Filled indigo chips so the control reads as an obvious, clickable
