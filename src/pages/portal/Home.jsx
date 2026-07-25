@@ -15,6 +15,7 @@ import {
   standardPriceFor,
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
+import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
 // provided by PublicLayout via Outlet context (from the public_org_directory
@@ -54,6 +55,12 @@ export default function Home() {
   const [weeklyClasses, setWeeklyClasses] = useState([]); // recurring class_schedule (outside-registration tenants), safe public view
   const [loading, setLoading] = useState(true);
   const [locationFilter, setLocationFilter] = useState('all'); // lean multi-location filter
+  // Fee config, so the class card can show what a family will actually pay.
+  // The doc's rule is "never a surprise at the end" - until now the service fee
+  // first appeared at the Pay step, after they had entered a child's details.
+  // null = not loaded yet, and until it loads we show the plain price rather
+  // than a total we can't stand behind.
+  const [feeConfig, setFeeConfig] = useState(null);
 
   // Labels for the term the catalog is serving, derived from the org's own
   // active term — never hardcoded to a season. termLabel: "Winter 2027";
@@ -146,6 +153,14 @@ export default function Home() {
       .from('class_schedule_public')
       .select('id, title, day_of_week, start_time, end_time, location_text, age_min, age_max, capacity')
       .eq('organization_id', org.id);
+
+    // Same source the Pay step uses. Best-effort: if it fails the cards fall
+    // back to the plain price, which is the old behaviour, rather than showing
+    // a total that might be wrong.
+    supabase.functions
+      .invoke('org-fee-config', { body: { slug: org.slug } })
+      .then(({ data }) => setFeeConfig(data || null))
+      .catch(() => setFeeConfig(null));
 
     setSchools(sc || []);
     setPrograms(pg || []);
@@ -406,7 +421,17 @@ export default function Home() {
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
-                              {meta}{meta ? ' · ' : ''}<span style={{ fontWeight: 600, color: '#1a1a1a' }}>{formatMoney(p.price_cents)}</span>
+                              {meta}
+                            </div>
+                            {/* All-in price, stated here rather than at the Pay
+                                step. The breakdown sits underneath so the fee
+                                is never a reveal — a family sees the real
+                                number before they type anything. */}
+                            <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
+                              <span style={{ fontWeight: 600, color: '#1a1a1a' }}>{formatMoney(totalWithFee(p.price_cents, feeConfig))}</span>
+                              {feeOnCents(p.price_cents, feeConfig) > 0 && (
+                                <span> · {formatMoney(p.price_cents)} class + {formatMoney(feeOnCents(p.price_cents, feeConfig))} service fee</span>
+                              )}
                             </div>
                           </div>
                         </div>

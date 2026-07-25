@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { formatMoney } from '../../../lib/pricing.js';
+import { feeOnCents } from '../../../lib/platformFee.js';
 
 export default function StepPay({
   pricing,
@@ -31,20 +32,10 @@ export default function StepPay({
   // what Stripe charges — using the SAME method the family selected. org fee
   // config comes from the org-fee-config edge fn (the anon org view intentionally
   // excludes fee columns). Absorb orgs add 0.
-  const passThrough = !!org?.fee_pass_through;
-  const feeRate = isBank
-    ? Number(org?.platform_fee_ach_pct) || 0
-    : Number(org?.platform_fee_card_pct) || 0;
-  const feeCap = Number(org?.platform_fee_cap_cents) || Infinity;
-  // Min fee per transaction (null/0 = none). Mirror computePlatformFee EXACTLY —
-  // clamp(round(amount*rate), floor, cap), only when a rate is set and the amount
-  // is positive — so this pre-redirect number equals what Stripe charges, even on
-  // small amounts where the floor lifts the fee.
-  const feeFloor = Number(org?.platform_fee_floor_cents) || 0;
-  const feeOn = (cents) =>
-    passThrough && feeRate > 0 && cents > 0
-      ? Math.min(Math.max(Math.round(cents * feeRate), feeFloor), feeCap)
-      : 0;
+  // Same helper the class card uses, so the figure a family saw before they
+  // started is the figure they're asked to pay. See src/lib/platformFee.js —
+  // it mirrors the server's computePlatformFee clamp exactly.
+  const feeOn = (cents) => feeOnCents(cents, org, { isBank });
   const charged = (cents) => cents + feeOn(cents);
 
   const feeToday = feeOn(displayAmount);
