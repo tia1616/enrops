@@ -1,4 +1,4 @@
-// PublicLayout — the parent-facing layout for any tenant.
+﻿// PublicLayout â€” the parent-facing layout for any tenant.
 //
 // Replaces the J2S-hardcoded J2SLayout. Resolves the tenant from the URL slug
 // (`/:slug/*`), fetches the org, provides it to children via Outlet context,
@@ -6,7 +6,7 @@
 //   - When slug === 'j2s', use J2S brand (purple/orange, J2S name/contact/etc.)
 //     to keep the live J2S experience identical.
 //   - For any other tenant, render the Enrops base brand (clean platform shell).
-//     Per-tenant branding (logo, colors, copy) is queued as the next pass —
+//     Per-tenant branding (logo, colors, copy) is queued as the next pass â€”
 //     see the backlog item on multi-tenant public-site branding.
 //
 // If the slug doesn't resolve to an active org, render a "not found" message
@@ -28,6 +28,15 @@ export default function PublicLayout() {
   const { slug } = useParams();
   const { user, signOut } = useAuth();
   const location = useLocation();
+  // Checkout chrome: during the registration STEPS, drop the account controls
+  // (sign in / portal switcher / my account / sign out). Registration is guest
+  // checkout by design — a "Sign in" in the header reads as an account wall,
+  // which is the single biggest measured cause of checkout abandonment, and any
+  // header link is an exit from a flow we want finished in under 90 seconds.
+  // The success page KEEPS them: that's exactly where we want the parent to
+  // reach their account. Mirrors the existing "hide Sign in on /login" rule.
+  const inCheckout =
+    location.pathname.includes('/register') && !location.pathname.includes('/register/success');
   const [org, setOrg] = useState(null);
   const [loadState, setLoadState] = useState('loading'); // loading | ok | not_found
   // Which legal docs THIS provider has published. Most have none, so the footer
@@ -61,7 +70,7 @@ export default function PublicLayout() {
   if (loadState === 'loading') {
     return (
       <div style={{ minHeight: '50vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b6b6b' }}>
-        Loading…
+        Loadingâ€¦
       </div>
     );
   }
@@ -74,14 +83,14 @@ export default function PublicLayout() {
           The link you followed may be old or the operator&rsquo;s URL may have changed.
         </p>
         <Link to="/" style={{ marginTop: 16, color: ENROPS_PURPLE, fontWeight: 600 }}>
-          Back to Enrops →
+          Back to Enrops â†’
         </Link>
       </div>
     );
   }
 
   // J2S keeps its existing brand to avoid disturbing the live experience.
-  // Everyone else gets the Enrops base brand for now — per-tenant theming is
+  // Everyone else gets the Enrops base brand for now â€” per-tenant theming is
   // a separate backlog item.
   if (org.slug === 'j2s') {
     return <J2SBrandedShell org={org} user={user} signOut={signOut} location={location} policyTypes={policyTypes} />;
@@ -89,7 +98,7 @@ export default function PublicLayout() {
   return <EnropsBrandedShell org={org} user={user} signOut={signOut} location={location} policyTypes={policyTypes} />;
 }
 
-// ─── J2S brand (unchanged behavior; lifted from the old J2SLayout) ──────────
+// â”€â”€â”€ J2S brand (unchanged behavior; lifted from the old J2SLayout) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
   const home = `/${org.slug}`;
   return (
@@ -105,9 +114,9 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
           </Link>
           <nav className="flex items-center gap-2 text-sm font-semibold sm:gap-6">
             <PwaInstallButton />
-            {user ? (
+            {inCheckout ? null : user ? (
               <>
-                <PortalSwitcher current="family" slug={org.slug} />
+                <PortalSwitcher current="family" slug={org.slug} orgId={org.id} />
                 <NavLink to={`${home}/dashboard`} className={({ isActive }) => `rounded-lg px-3 py-2 transition ${isActive ? 'bg-j2s-purple-soft text-j2s-purple-dark' : 'text-j2s-ink hover:bg-j2s-purple-soft'}`}>
                   My account
                 </NavLink>
@@ -148,10 +157,10 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
               <h4 className="font-grotesk text-xs uppercase tracking-widest" style={{ color: '#8C88FF' }}>Powered by</h4>
               <a href="https://getenrops.com" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 transition hover:opacity-90" style={{ background: '#1C004F', color: '#FBFBFB' }}>
                 <span className="font-grotesk text-sm font-bold tracking-tight">enrops</span>
-                <span className="text-xs" style={{ color: '#8C88FF' }}>→</span>
+                <span className="text-xs" style={{ color: '#8C88FF' }}>â†’</span>
               </a>
               <p className="mt-2 text-xs text-white/50">The enrichment operations platform.</p>
-              {/* Platform legal — governs every account regardless of provider,
+              {/* Platform legal â€” governs every account regardless of provider,
                   so it sits with the "Powered by" badge, not mixed in with the
                   provider's own documents below. */}
               <div className="mt-3 flex items-center gap-3 text-xs text-white/40">
@@ -179,9 +188,9 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
   );
 }
 
-// ─── Enrops base brand (used for every non-J2S tenant for now) ──────────────
+// â”€â”€â”€ Enrops base brand (used for every non-J2S tenant for now) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Intentionally clean and platform-neutral. Per-tenant branding (logos, colors,
-// custom copy) is the next pass — captured as a backlog item.
+// custom copy) is the next pass â€” captured as a backlog item.
 function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
   const home = `/${org.slug}`;
   return (
@@ -197,9 +206,9 @@ function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
           </Link>
           <nav style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 14, fontWeight: 600 }}>
             <PwaInstallButton />
-            {user ? (
+            {inCheckout ? null : user ? (
               <>
-                <PortalSwitcher current="family" slug={org.slug} />
+                <PortalSwitcher current="family" slug={org.slug} orgId={org.id} />
                 <NavLink to={`${home}/dashboard`} style={({ isActive }) => ({ padding: '6px 12px', borderRadius: 6, color: isActive ? ENROPS_PURPLE : '#1a1a1a', textDecoration: 'none', background: isActive ? `${ENROPS_VIOLET}22` : 'transparent' })}>
                   My account
                 </NavLink>

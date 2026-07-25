@@ -166,7 +166,6 @@ export default function AdminLayout() {
   const [user, setUser] = useState(null);
   const [orgMember, setOrgMember] = useState(null);
   const [org, setOrg] = useState(null);
-  const [debugInfo, setDebugInfo] = useState(null);
   // Lifetime time-saved tally (rolling sum of time_saved_events for this org).
   // See project_enrops_time_saved memory: every Director action that completes
   // work for the operator inserts a row; this is the always-on receipt.
@@ -198,7 +197,6 @@ export default function AdminLayout() {
         if (!mounted) return;
         if (memErr || !memberRow || !memberRow.accepted_at) {
           setAuthState("unauthorized");
-          setDebugInfo({ uid: session.user.id, memErr: memErr?.message, memberRow });
           return;
         }
         setOrgMember(memberRow);
@@ -295,14 +293,11 @@ export default function AdminLayout() {
             <Link to="/admin/login" style={btn(BRIGHT, "#fff")}>Sign in</Link>
             {user && <button onClick={signOut} style={btn("transparent", BRIGHT, true)}>Sign out</button>}
           </div>
-          {debugInfo && (
-            <div style={{ marginTop: 16, padding: 10, background: "#f7f6ef", borderRadius: 4, fontSize: 11, color: MUTED, wordBreak: "break-all" }}>
-              <strong>Debug (temporary):</strong><br />
-              uid: {debugInfo.uid}<br />
-              memErr: {debugInfo.memErr || "none"}<br />
-              memberRow: {JSON.stringify(debugInfo.memberRow)}
-            </div>
-          )}
+          {/* The raw "Debug (temporary)" panel that used to render here (uid,
+              memErr, memberRow JSON) was visible to ANYONE who reached /admin
+              without access — including a parent who just typed the URL. It
+              leaked a user UUID and internal error text and read as broken.
+              The same details still go to the console above for debugging. */}
         </div>
       </div>
     );
