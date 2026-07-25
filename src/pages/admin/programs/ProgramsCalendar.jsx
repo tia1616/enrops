@@ -704,10 +704,20 @@ export default function ProgramsCalendar() {
       {!loading && !error && programs.length === 0 && (
         <div style={emptyState}>
           No programs scheduled{term ? ` for ${term}` : ""} yet.
-          <div style={{ marginTop: 8, fontSize: 13 }}>
-            Running ongoing classes instead of term registration?{" "}
-            <Link to="/admin/class-schedule" style={{ color: BRIGHT, fontWeight: 600 }}>Upload your class schedule →</Link>
-          </div>
+          {/* Uploading a weekly class schedule is a later tier, and the empty
+              state is the worst place to offer it: a brand-new operator with
+              zero programs sees it before anything else and follows it into a
+              surface they can't use.
+              NOT gated on lean alone — some enrops_platform orgs (Shoreview
+              Chess, Mrs. Richelle) run registration outside enrops, and the
+              class schedule is their actual home. Hide it only for operators
+              who take registrations HERE. */}
+          {!(org?.instructor_pay_model === "enrops_platform" && org?.uses_enrops_registration !== false) && (
+            <div style={{ marginTop: 8, fontSize: 13 }}>
+              Running ongoing classes instead of term registration?{" "}
+              <Link to="/admin/class-schedule" style={{ color: BRIGHT, fontWeight: 600 }}>Upload your class schedule →</Link>
+            </div>
+          )}
         </div>
       )}
 
