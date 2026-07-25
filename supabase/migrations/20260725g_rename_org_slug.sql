@@ -94,7 +94,17 @@ $function$;
 -- SECURITY DEFINER: signed-in admins only. The revoke from anon is not
 -- redundant - Supabase's default privileges grant EXECUTE on new functions to
 -- anon, and this one writes.
-revoke all on function public.rename_org_slug(text) from public;
-revoke all on function public.rename_org_slug(text) from anon;
-grant execute on function public.rename_org_slug(text) to authenticated;
-grant execute on function public.rename_org_slug(text) to service_role;
+--
+-- These four lines named the OLD 1-arg signature (text) while the function above
+-- is (uuid, text). On staging that silently worked because the 1-arg function
+-- still existed to be revoked, and the correct grants on the 2-arg version were
+-- applied out-of-band afterwards - so the live state was right and the file was
+-- wrong. On prod, where rename_org_slug does not exist in ANY signature, REVOKE
+-- on a missing function is a hard ERROR and the whole migration aborts; and had
+-- it not, the new SECURITY DEFINER function - one that WRITES organizations.slug
+-- - would have kept Supabase's default anon EXECUTE. Corrected to the real
+-- signature so the file reproduces staging's proven state on a clean database.
+revoke all on function public.rename_org_slug(uuid, text) from public;
+revoke all on function public.rename_org_slug(uuid, text) from anon;
+grant execute on function public.rename_org_slug(uuid, text) to authenticated;
+grant execute on function public.rename_org_slug(uuid, text) to service_role;
