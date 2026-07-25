@@ -20,7 +20,7 @@ import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import PlacesAutocomplete from "../../../components/PlacesAutocomplete.jsx";
-import { ensureBrowserSafeImage, extensionFor } from "../../../lib/heicConvert.js";
+import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
 import { renderWaiverText } from "../../../lib/waiverText.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
@@ -382,22 +382,33 @@ export default function QuickProgramBuilder() {
     setPhotoErr("");
     // Friendly pre-checks so the operator never sees a raw storage error.
     // 2 MB is the bucket's own limit; check BEFORE the round trip.
+    setUploadingPhoto(true); // resizing happens before the network call, but it
+                             // is the same wait from the operator's side
     const safe = await (async () => {
       try {
-        return await ensureBrowserSafeImage(file);
+        // HEIC first (iPhone default), then shrink. Phone photos are routinely
+        // 3-5 MB and far larger than anything we render, so without this the
+        // 2 MB bucket cap rejects most of a camera roll and asks the operator
+        // to go and resize a photo by hand.
+        const browserSafe = await ensureBrowserSafeImage(file);
+        return await downscaleImage(browserSafe);
       } catch {
-        return file; // conversion failed — fall through to the type check below
+        return file; // conversion failed — fall through to the checks below
       }
     })();
     if (!["image/jpeg", "image/png", "image/webp"].includes(safe.type)) {
+      setUploadingPhoto(false);
       setPhotoErr("That file type isn't supported. Try a JPG, PNG, or WEBP.");
       return;
     }
+    // Should now be unreachable for ordinary photos — kept as a real backstop
+    // for the cases downscaling bails on (canvas blocked, decode failure).
     if (safe.size > 2 * 1024 * 1024) {
-      setPhotoErr("That photo is over 2 MB. Try a smaller one.");
+      setUploadingPhoto(false);
+      setPhotoErr("We couldn't shrink that one enough. Try a different photo.");
       return;
     }
-    setUploadingPhoto(true);
+    // already true from the resize step above
     try {
       const path = `${org.id}/program-photos/${Date.now()}.${extensionFor(safe)}`;
       const { error: upErr } = await supabase.storage
@@ -853,10 +864,10 @@ export default function QuickProgramBuilder() {
               />
               <div style={{ fontSize: 12, color: "#6b6b6b", marginTop: 4 }}>
                 {uploadingPhoto
-                  ? "Uploading…"
+                  ? "Adding your photo…"
                   : photoUrl
                   ? "Looks good. Pick another to replace it."
-                  : "A photo makes your class stand out to families. JPG, PNG or WEBP, up to 2 MB."}
+                  : "A photo makes your class stand out to families. Straight from your camera roll is fine — we'll resize it."}
               </div>
               {photoUrl && !uploadingPhoto && (
                 <button
