@@ -292,6 +292,9 @@ export default function QuickProgramBuilder() {
           .select("id, name, required, content")
           .eq("organization_id", org.id)
           .eq("active", true)
+          // Required first, so the one families can DECLINE doesn't lead a list
+          // headed "They sign". Same order the waiver manager uses.
+          .order("required", { ascending: false })
           .order("created_at"),
         supabase
           .from("custom_reg_fields")
@@ -791,7 +794,32 @@ export default function QuickProgramBuilder() {
                 {waivers.length > 0 && (
                   <div style={{ marginTop: 4 }}>
                     <strong style={{ color: INK }}>They sign</strong>{" "}
-                    {waivers.map((w) => w.name).join(", ")}.
+                    {waivers.map((w) => w.name).join(", ")}.{" "}
+                    {/* Naming the documents without letting anyone read them is
+                        half an answer - same expander as the first-run card,
+                        and it opens in place for the same reason. */}
+                    <button
+                      type="button"
+                      onClick={() => setOpenWaiverId((id) => (id === "inherited" ? null : "inherited"))}
+                      aria-expanded={openWaiverId === "inherited"}
+                      style={{ background: "none", border: "none", color: BRIGHT, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                    >
+                      {openWaiverId === "inherited" ? "Hide the wording" : "Read the wording"}
+                    </button>
+                  </div>
+                )}
+                {openWaiverId === "inherited" && (
+                  <div style={{ marginTop: 8, display: "grid", gap: 10 }}>
+                    {waivers.map((w) => (
+                      <div key={w.id}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: INK, marginBottom: 4 }}>
+                          {w.name}{w.required === false ? " (families can decline this one)" : ""}
+                        </div>
+                        <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff", padding: 10, fontSize: 12, color: MUTED, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
+                          {renderWaiverText(w.content, org?.name)}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
                 <div style={{ marginTop: 6, color: MUTED }}>
