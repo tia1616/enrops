@@ -23,7 +23,7 @@ const GOOGLE_OAUTH_CLIENT_ID = import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID || ""
 const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
 export default function AdminSettings() {
-  const { org, user } = useOutletContext();
+  const { org, user, setOrg } = useOutletContext();
   const [connection, setConnection] = useState(null); // { id, google_email, scopes, user_id } | null
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -156,7 +156,16 @@ export default function AdminSettings() {
           operators only — changing an established tenant's address would break
           every link they have ever handed out. */}
       {org?.instructor_pay_model === "enrops_platform" && (
-        <PageAddressSection org={org} onSaved={(slug) => setToast({ kind: "success", message: `Your page address is now ${slug}.` })} />
+        <PageAddressSection
+          org={org}
+          onSaved={(slug) => {
+            // Correct the shell's copy straight away: every other surface reads
+            // org.slug for share links and the embed snippet, and the address
+            // field itself compares against it to know what "changed" means.
+            setOrg?.((o) => (o ? { ...o, slug } : o));
+            setToast({ kind: "success", message: `Your page address is now ${slug}.` });
+          }}
+        />
       )}
 
       <section style={{ marginTop: 12 }}>

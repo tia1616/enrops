@@ -656,7 +656,13 @@ export default function AdminLayout() {
               the next page's chunk downloads — without it the app-level
               boundary would blank the whole shell on every nav click. */}
           <Suspense fallback={<RouteFallback />}>
-            <Outlet context={{ user, org, orgMember }} />
+            {/* setOrg is exposed so a page that CHANGES the org can correct the
+                shell's copy immediately. Without it, renaming the page address
+                left every other surface — the share link, the embed snippet —
+                handing out the old address until a full reload, and a second
+                rename in the same session did nothing at all because the page
+                still believed the old slug was current. */}
+            <Outlet context={{ user, org, orgMember, setOrg }} />
           </Suspense>
           </>
           )}
