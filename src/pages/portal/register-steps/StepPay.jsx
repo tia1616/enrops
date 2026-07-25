@@ -36,10 +36,25 @@ export default function StepPay({
   // started is the figure they're asked to pay. See src/lib/platformFee.js —
   // it mirrors the server's computePlatformFee clamp exactly.
   const feeOn = (cents) => feeOnCents(cents, org, { isBank });
+
+  // ACH is presented as a DISCOUNT off the standard price, never as a cheaper
+  // fee for a different payment method.
+  //
+  // The distinction is legal, not cosmetic. Charging more because someone used a
+  // card is a surcharge, which is restricted by card-network rules and by state
+  // law. Offering a discount for paying another way is expressly permitted — and
+  // it is the same money either way. So the CARD fee is the standard fee, always
+  // shown as such, and choosing bank shows what it saves you.
+  const standardFeeOn = (cents) => feeOnCents(cents, org, { isBank: false });
   const charged = (cents) => cents + feeOn(cents);
 
   const feeToday = feeOn(displayAmount);
   const chargedToday = charged(displayAmount);
+  // The standard (card) fee, and what paying by bank takes off it. Never
+  // negative: if a config ever made ACH the dearer method, we show no discount
+  // rather than inventing a card penalty.
+  const standardFeeToday = standardFeeOn(displayAmount);
+  const bankDiscountToday = Math.max(0, standardFeeToday - feeToday);
   const grandTotal = useInstallments
     ? installmentSchedule.reduce((s, i) => s + charged(i.amount_cents), 0)
     : chargedToday;
@@ -69,7 +84,14 @@ export default function StepPay({
         </p>
         {feeToday > 0 && (
           <p className="mt-2 text-sm text-white/90">
-            {formatMoney(displayAmount)} + {formatMoney(feeToday)} enrops service fee
+            {/* Standard fee first, then the discount as its own subtraction, so
+                the breakdown always sums to the amount charged above. */}
+            {formatMoney(displayAmount)} + {formatMoney(standardFeeToday)} enrops service fee
+          </p>
+        )}
+        {bankDiscountToday > 0 && (
+          <p className="mt-1 text-sm font-bold text-white">
+            &minus; {formatMoney(bankDiscountToday)} bank payment discount
           </p>
         )}
         <p className="mt-3 text-white/80">
@@ -155,6 +177,14 @@ export default function StepPay({
               <span>
                 <span className="block font-bold text-j2s-ink">Bank transfer (ACH)</span>
                 <span className="block text-xs text-j2s-ink/60">1–3 business days — spot held meanwhile</span>
+                {/* Stated as a saving on THIS option, not as a penalty on the
+                    card option. Computed from the same figures as the total, so
+                    it can never promise a discount that doesn't materialise. */}
+                {standardFeeOn(displayAmount) - feeOnCents(displayAmount, org, { isBank: true }) > 0 && (
+                  <span className="mt-1 block text-xs font-bold text-j2s-purple">
+                    Save {formatMoney(standardFeeOn(displayAmount) - feeOnCents(displayAmount, org, { isBank: true }))}
+                  </span>
+                )}
               </span>
             </button>
           </div>
