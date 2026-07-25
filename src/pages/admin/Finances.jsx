@@ -967,6 +967,10 @@ function TabsNav({ tab, onTab, hideInvoices = false }) {
 const RA_PAGE = 25;
 
 function ActivityTab({ org }) {
+  // Which fee story to tell under the headline number. Registration operators
+  // see both fees named; J2S keeps its original wording.
+  const isLean = org?.instructor_pay_model === "enrops_platform";
+  const feeCfg = org;
   const [terms, setTerms] = useState([]);            // [{ term, anchor }]
   const [period, setPeriod] = useState(null);        // { kind:'term'|'30d'|'year'|'all', term?, label }
   const [summary, setSummary] = useState(null);      // null=loading, undefined=error
@@ -1149,7 +1153,9 @@ function ActivityTab({ org }) {
 
       {/* Summary band */}
       <div style={{ marginBottom: 6 }}>
-        <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>Collected through enrops</div>
+        <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
+          {isLean ? "Your class fees" : "Collected through enrops"}
+        </div>
         <div style={{ fontSize: 34, fontWeight: 800, color: PURPLE, lineHeight: 1.1, marginTop: 2 }}>{fmtCents(collected)}</div>
       </div>
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "12px 0 16px" }}>
@@ -1164,8 +1170,29 @@ function ActivityTab({ org }) {
         </div>
       )}
 
-      <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 18 }}>
-        Your actual bank deposits (after Stripe&rsquo;s processing fee) live in your Stripe dashboard.{" "}
+      {/* The headline is the sum of CLASS PRICES — not what families paid, and
+          not what lands in the bank. Two different fees sit between them and
+          only one of them was ever mentioned here, which made the number read
+          as "yours" when part of it isn't:
+            - the enrops service fee is paid by families ON TOP of the price
+              when pass-through is on, so it never comes out of this figure;
+            - Stripe's processing fee IS deducted before the money reaches the
+              provider's bank.
+          We don't store the exact Stripe fee per charge, so this says which
+          direction each fee moves and points at Stripe for the real deposit,
+          rather than printing an estimate as if it were a fact. */}
+      <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 18, lineHeight: 1.6 }}>
+        {isLean && (
+          <>
+            This is the total of your class prices.{" "}
+            {feeCfg?.fee_pass_through
+              ? <>The enrops service fee is added on top at checkout and paid by families, so it isn&rsquo;t taken out of this.</>
+              : <>You&rsquo;ve chosen to cover the enrops service fee, so it comes out of this.</>}{" "}
+            Stripe&rsquo;s processing fee is deducted before the money reaches your bank.{" "}
+          </>
+        )}
+        {!isLean && <>Your actual bank deposits (after Stripe&rsquo;s processing fee) live in your Stripe dashboard.{" "}</>}
+        {isLean && <>Your actual deposits live in your Stripe dashboard.{" "}</>}
         <button type="button" onClick={openStripe} disabled={stripeBusy}
           style={{ background: "none", border: "none", color: BRIGHT, fontWeight: 600, cursor: "pointer", padding: 0, fontFamily: "inherit", fontSize: 12.5 }}>
           {stripeBusy ? "Opening…" : "Open Stripe →"}

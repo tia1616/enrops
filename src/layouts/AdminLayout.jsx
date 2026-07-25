@@ -227,7 +227,11 @@ export default function AdminLayout() {
           // The onboarding answers ride along too: they decide which fields the
           // program builder shows, so every surface that reads `org` from the
           // outlet can adapt without its own query.
-          .select("id, name, slug, email, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, stripe_charges_enabled, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
+          // fee_pass_through rides along so money screens can say which
+          // direction the service fee moves. Getting this wrong by defaulting
+          // would tell a provider they're absorbing a fee their families are
+          // actually paying, which is the opposite of the truth.
+          .select("id, name, slug, email, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;
