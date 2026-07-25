@@ -123,22 +123,38 @@ export default function PublicLayout() {
 function EmbedShell({ org }) {
   useEffect(() => {
     if (typeof window === 'undefined' || window.parent === window) return undefined;
+    let last = 0;
     const post = () => {
       const height = Math.ceil(
         document.documentElement?.scrollHeight || document.body?.scrollHeight || 0,
       );
-      if (height > 0) window.parent.postMessage({ type: 'enrops:height', height }, '*');
+      // Only speak when the number actually changes — the host page shouldn't be
+      // spammed, and a no-op message can cause layout jitter on their side.
+      if (height > 0 && height !== last) {
+        last = height;
+        window.parent.postMessage({ type: 'enrops:height', height }, '*');
+      }
     };
     post();
+    // A short poll rather than ResizeObserver alone: observing document.body did
+    // NOT fire when the catalog finished loading (measured: posted 185 while the
+    // real height was 687), which would leave the operator's iframe clipping the
+    // classes. Height also changes on every registration step, on image load and
+    // on font swap, so a cheap "post only if changed" tick is the reliable
+    // mechanism. RO is kept as well for instant response when it does work.
+    const id = setInterval(post, 400);
     let ro;
-    if (typeof ResizeObserver !== 'undefined' && document.body) {
+    if (typeof ResizeObserver !== 'undefined' && document.documentElement) {
       ro = new ResizeObserver(post);
-      ro.observe(document.body);
+      ro.observe(document.documentElement);
     }
     window.addEventListener('load', post);
+    window.addEventListener('resize', post);
     return () => {
+      clearInterval(id);
       if (ro) ro.disconnect();
       window.removeEventListener('load', post);
+      window.removeEventListener('resize', post);
     };
   }, []);
 
