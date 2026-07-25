@@ -33,7 +33,17 @@ export function renderWaiverText(content, orgName) {
   return content.replace(ORG_TOKEN, name || 'the program provider');
 }
 
-/** True if this content still carries a token - used to explain the editor. */
+/**
+ * True if this content still carries a token - used to explain the editor.
+ *
+ * Deliberately NOT the module-level /g regex: `test` on a global regex advances
+ * and remembers lastIndex, so repeated calls with the same string alternate
+ * true/false. The waiver editor calls this on every render, i.e. every
+ * keystroke, so sharing the global one made the "leave {{org}} alone" note blink
+ * in and out - an unreliable note being exactly what makes someone type over the
+ * token it is warning them about. `replace` above is unaffected; it resets
+ * lastIndex per spec.
+ */
 export function hasOrgToken(content) {
-  return typeof content === 'string' && ORG_TOKEN.test(content);
+  return typeof content === 'string' && /\{\{\s*org\s*\}\}/.test(content);
 }

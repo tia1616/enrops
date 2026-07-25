@@ -22,7 +22,21 @@
 -- own organisation - the org id is looked up from the caller, never accepted as
 -- an argument.
 
-create or replace function public.rename_org_slug(p_slug text)
+-- p_org_id is an ARGUMENT, authorized with can_admin_org, rather than inferred
+-- from the caller's memberships.
+--
+-- The first version picked `order by created_at limit 1` across the caller's
+-- owner/admin rows. That silently renames the WRONG organisation for anyone who
+-- administers two: the oldest membership wins regardless of which org's Settings
+-- page they are standing on. On prod the oldest row is the J2S ownership, so the
+-- day that account is added as an admin to a tenant org for support, renaming
+-- from THAT tenant's Settings would rename j2s and break every live J2S link.
+-- Nobody holds two memberships today (verified in both environments), which is
+-- the only reason this was latent rather than live.
+--
+-- Taking the org id and authorizing it is the same shape seed_default_waivers
+-- uses, and it makes the function say what it does.
+create or replace function public.rename_org_slug(p_org_id uuid, p_slug text)
 returns jsonb
 language plpgsql
 security definer
@@ -39,23 +53,14 @@ begin
     return jsonb_build_object('ok', false, 'code', 'not_authenticated');
   end if;
 
-  -- accepted_at must be checked HERE, not only inside can_admin_org. Without it
-  -- an older UNACCEPTED admin invite to org A sorts first, becomes v_org, and
-  -- then fails can_admin_org - permanently blocking the caller from renaming the
-  -- org they actually own. Fails closed, so it's a lockout rather than a hole,
-  -- but it locks out the wrong person.
-  select m.organization_id, o.slug into v_org, v_current
-  from public.org_members m
-  join public.organizations o on o.id = m.organization_id
-  where m.auth_user_id = v_uid
-    and m.role in ('owner', 'admin')
-    and m.accepted_at is not null
-  order by m.created_at
-  limit 1;
-
-  if v_org is null or not public.can_admin_org(v_org) then
+  -- Authorize the org the caller actually named. can_admin_org already requires
+  -- an accepted owner/admin membership for THIS user on THIS org, so it is both
+  -- the authorization and the "which org" answer.
+  if p_org_id is null or not public.can_admin_org(p_org_id) then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
   end if;
+  v_org := p_org_id;
+  select o.slug into v_current from public.organizations o where o.id = v_org;
 
   -- Same shape provisioning generates: lowercase letters, numbers, hyphens.
   if v_slug !~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' then

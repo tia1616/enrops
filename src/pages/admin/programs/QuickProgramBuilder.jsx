@@ -21,6 +21,7 @@ import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import PlacesAutocomplete from "../../../components/PlacesAutocomplete.jsx";
 import { ensureBrowserSafeImage, extensionFor } from "../../../lib/heicConvert.js";
+import { renderWaiverText } from "../../../lib/waiverText.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 const BRIGHT = "#5847C9";
@@ -71,7 +72,15 @@ const inputStyle = {
 const helpStyle = { fontSize: 12, color: MUTED, marginTop: 4 };
 
 export default function QuickProgramBuilder() {
-  const { org } = useOutletContext();
+  // setOrg matters here: saving the onboarding answers writes to the DB and to
+  // local state, but AdminLayout fetches `org` once per mount. Without telling
+  // the shell, org.onboarding_completed_at stays null for the rest of the
+  // session, so navigating away and clicking "New class" re-mounts this
+  // component, re-seeds from the stale org, and asks the three questions all
+  // over again - with the answers blank and the guardian/pickup checkboxes back
+  // at their defaults, quietly switching on a question the operator had turned
+  // off.
+  const { org, setOrg } = useOutletContext();
   const navigate = useNavigate();
 
   const [name, setName] = useState("");
@@ -339,6 +348,8 @@ export default function QuickProgramBuilder() {
       }
 
       setProfile((p) => ({ ...p, ...patch }));
+      // Correct the shell's copy too, so the card doesn't come back.
+      setOrg?.((o) => (o ? { ...o, ...patch } : o));
     } catch (e) {
       setProfileErr(e?.message ?? "Couldn't save that. Please try again.");
     } finally {
