@@ -155,7 +155,10 @@ export default function OperatorSignup() {
           text-transform:uppercase; color:var(--lilac); margin-bottom:6px; }
         .enr-signup input {
           width:100%; padding:12px 14px; background:rgba(255,255,255,0.06); color:#fff;
-          border:1px solid rgba(255,255,255,0.18); border-radius:10px; font-size:15px;
+          /* 16px MINIMUM: iOS Safari auto-zooms the page when a focused input is
+             under 16px. This is the first screen a cold operator sees on a phone,
+             so a zoom-lurch here is the worst possible first impression. */
+          border:1px solid rgba(255,255,255,0.18); border-radius:10px; font-size:16px;
           font-family:inherit; box-sizing:border-box; margin-bottom:16px;
         }
         .enr-signup input::placeholder { color:rgba(255,255,255,0.35); }

@@ -59,7 +59,10 @@ const inputStyle = {
   width: "100%",
   boxSizing: "border-box",
   padding: "10px 12px",
-  fontSize: 15,
+  // 16px MINIMUM: iOS Safari auto-zooms the page when a focused input is under
+  // 16px. Operators build programs on their phones, so anything smaller makes
+  // the builder lurch on every field tap.
+  fontSize: 16,
   border: `1px solid ${RULE}`,
   borderRadius: 8,
   fontFamily: "inherit",
