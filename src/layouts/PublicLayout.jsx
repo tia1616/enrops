@@ -28,15 +28,6 @@ export default function PublicLayout() {
   const { slug } = useParams();
   const { user, signOut } = useAuth();
   const location = useLocation();
-  // Checkout chrome: during the registration STEPS, drop the account controls
-  // (sign in / portal switcher / my account / sign out). Registration is guest
-  // checkout by design — a "Sign in" in the header reads as an account wall,
-  // which is the single biggest measured cause of checkout abandonment, and any
-  // header link is an exit from a flow we want finished in under 90 seconds.
-  // The success page KEEPS them: that's exactly where we want the parent to
-  // reach their account. Mirrors the existing "hide Sign in on /login" rule.
-  const inCheckout =
-    location.pathname.includes('/register') && !location.pathname.includes('/register/success');
   const [org, setOrg] = useState(null);
   const [loadState, setLoadState] = useState('loading'); // loading | ok | not_found
   // Which legal docs THIS provider has published. Most have none, so the footer
@@ -99,7 +90,22 @@ export default function PublicLayout() {
 }
 
 // â”€â”€â”€ J2S brand (unchanged behavior; lifted from the old J2SLayout) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Checkout chrome: during the registration STEPS, drop the account controls
+// (sign in / portal switcher / my account / sign out). Registration is guest
+// checkout by design — a "Sign in" in the header reads as an account wall,
+// the biggest measured cause of checkout abandonment, and any header link is an
+// exit from a flow we want finished in under 90 seconds. The success page KEEPS
+// them: that's exactly where we want the parent to reach their account.
+// NOTE: computed per-shell, not in PublicLayout — these shells are SEPARATE
+// components that receive `location` as a prop, so a parent-scope const is not
+// visible here (that mistake white-screened the catalog once).
+function isCheckoutPath(location) {
+  const p = location?.pathname || '';
+  return p.includes('/register') && !p.includes('/register/success');
+}
+
 function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
+  const inCheckout = isCheckoutPath(location);
   const home = `/${org.slug}`;
   return (
     <div className="brand-j2s min-h-screen flex flex-col bg-white">
@@ -192,6 +198,7 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
 // Intentionally clean and platform-neutral. Per-tenant branding (logos, colors,
 // custom copy) is the next pass â€” captured as a backlog item.
 function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
+  const inCheckout = isCheckoutPath(location);
   const home = `/${org.slug}`;
   return (
     <div className="brand-enrops-public" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: ENROPS_CREAM, color: '#1a1a1a', fontFamily: 'inherit' }}>
