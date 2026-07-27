@@ -92,7 +92,7 @@ serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   try {
-    const { session_id, org_slug } = await req.json();
+    const { session_id } = await req.json();
     if (!session_id || typeof session_id !== 'string') return json({ error: 'Missing session_id' }, 400);
 
     // Phase 2: a DIRECT org's Checkout Session lives on its connected account,
@@ -100,29 +100,33 @@ serve(async (req) => {
     // to {paid:true}, which would show a family a success page for a payment
     // that never settled. Resolve the right scope before retrieving.
     //
-    // org_slug is a HINT, never authorization: we look the slug up ourselves and
-    // read stripe_account_id from OUR row, so a client can't point this at an
-    // arbitrary Stripe account. The gate is unchanged — possession of the
-    // session_id. A wrong slug just means the retrieve fails.
-    // Destination orgs (J2S) resolve to {} and take the identical platform call.
-    // undefined, never {} — stripe-node treats an empty options object as a
-    // stray argument and throws "Unknown arguments".
+    // The scope comes from OUR OWN row: create-checkout stamped
+    // stripe_checkout_session_id + stripe_charge_account_id on the registrations
+    // before redirecting the family. No client input is involved, and it is the
+    // account THIS session was created on rather than whatever model the org is
+    // set to now — an operator who moves to direct charges gets a brand-new
+    // connected account, and their older sessions stay on the platform.
+    //
+    // Not found (every registration created before this shipped, and any $0 comp
+    // flow) → undefined → the platform-scoped retrieve, which is exactly right
+    // for all of them. undefined, never {}: stripe-node treats an empty options
+    // object as a stray argument and throws "Unknown arguments".
     let sessionScope: { stripeAccount: string } | undefined = undefined;
-    if (org_slug && typeof org_slug === 'string') {
-      try {
-        const scopeAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-        const { data: orgRow } = await scopeAdmin
-          .from('organizations')
-          .select('stripe_charge_model, stripe_account_id')
-          .eq('slug', org_slug)
-          .maybeSingle();
-        if (orgRow?.stripe_charge_model === 'direct' && orgRow?.stripe_account_id) {
-          sessionScope = { stripeAccount: orgRow.stripe_account_id as string };
-        }
-      } catch (scopeErr) {
-        // Non-fatal: fall through to the platform-scoped retrieve below.
-        console.error('checkout-session-status scope lookup failed:', scopeErr);
+    try {
+      const scopeAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+      const { data: regRow } = await scopeAdmin
+        .from('registrations')
+        .select('stripe_charge_account_id')
+        .eq('stripe_checkout_session_id', session_id)
+        .not('stripe_charge_account_id', 'is', null)
+        .limit(1)
+        .maybeSingle();
+      if (regRow?.stripe_charge_account_id) {
+        sessionScope = { stripeAccount: regRow.stripe_charge_account_id as string };
       }
+    } catch (scopeErr) {
+      // Non-fatal: fall through to the platform-scoped retrieve below.
+      console.error('checkout-session-status scope lookup failed:', scopeErr);
     }
 
     const session = await stripe.checkout.sessions.retrieve(session_id, sessionScope);

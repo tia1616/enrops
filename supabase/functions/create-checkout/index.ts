@@ -404,6 +404,25 @@ serve(async (req) => {
         },
       }, acct);
 
+      // Record WHERE this charge lives, before the family is redirected.
+      // stripe_charge_account_id is NULL for a destination org (the charge is on
+      // the platform) and the connected account id for a direct org. Written now
+      // rather than derived later from the org's CURRENT stripe_charge_model,
+      // because an org that moves to direct charges gets a brand-new connected
+      // account and its older sessions/PIs stay on the platform forever.
+      // Non-fatal: the session is already live, and every reader falls back to
+      // platform scope, which is what a missing row would have meant anyway.
+      const { error: chargeRefErr } = await admin
+        .from('registrations')
+        .update({
+          stripe_checkout_session_id: session.id,
+          stripe_charge_account_id: acct?.stripeAccount ?? null,
+        })
+        .in('id', registration_ids);
+      if (chargeRefErr) {
+        console.error('[create-checkout] failed to record charge account (installments):', chargeRefErr);
+      }
+
       // Persist the per-line schedule to checkout_schedules — webhook reads it after payment
       const { error: scheduleErr } = await admin.from('checkout_schedules').insert({
         stripe_session_id: session.id,
@@ -584,6 +603,20 @@ serve(async (req) => {
       },
       payment_intent_data: piData,
     }, acctStd);
+
+    // Record WHERE this charge lives, before the family is redirected. See the
+    // installments branch above for why this is written now instead of being
+    // derived later from the org's current stripe_charge_model.
+    const { error: chargeRefErrStd } = await adminStd
+      .from('registrations')
+      .update({
+        stripe_checkout_session_id: session.id,
+        stripe_charge_account_id: acctStd?.stripeAccount ?? null,
+      })
+      .in('id', registration_ids);
+    if (chargeRefErrStd) {
+      console.error('[create-checkout] failed to record charge account:', chargeRefErrStd);
+    }
 
     // intelligence: log enrollment initiated (one per registration; fail-safe, never blocks)
     for (const regId of registration_ids) {

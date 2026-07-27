@@ -167,6 +167,12 @@ serve(async (req) => {
         payment_status: settlement.payment_status,
         ach_payment_state: settlement.ach_payment_state,
         stripe_payment_intent_id: session.payment_intent as string,
+        // Where this charge actually lives. event.account is set exactly when
+        // the event came from a connected account (a direct charge) and null
+        // for a platform/destination charge — so this is the authoritative
+        // record, better than create-checkout's write, which only knew what it
+        // intended. Refunds read this instead of the org's current charge model.
+        stripe_charge_account_id: (event.account as string | null) ?? null,
       }).in('id', regIds);
 
       // Count a promo redemption once, when funds actually settle (chunk 6).
@@ -284,6 +290,13 @@ serve(async (req) => {
                     // split across N children in our DB.
                     stripe_payment_intent_id: isPaid ? (session.payment_intent as string) : null,
                     paid_at: isPaid ? new Date().toISOString() : null,
+                    // Which Stripe account this plan lives on: null = platform
+                    // (destination), the connected account id = direct. Stamped
+                    // on the PENDING rows too, because that is where the saved
+                    // Customer and card live — process-installments must charge
+                    // 2 and 3 against the same account, and refunds of charge 1
+                    // must be scoped there as well.
+                    stripe_charge_account_id: (event.account as string | null) ?? null,
                   };
                 });
 
@@ -313,8 +326,8 @@ serve(async (req) => {
               const inst3RegId = meta.installment_3_registration_id || regIds[0];
 
               const installmentRows = [
-                { registration_id: inst2RegId, installment_number: 2, amount_cents: parseInt(meta.installment_2_amount_cents, 10), due_date: meta.installment_2_due_date, status: 'pending', stripe_customer_id: customerId, stripe_payment_method_id: paymentMethodId, organization_id: orgId },
-                { registration_id: inst3RegId, installment_number: 3, amount_cents: parseInt(meta.installment_3_amount_cents, 10), due_date: meta.installment_3_due_date, status: 'pending', stripe_customer_id: customerId, stripe_payment_method_id: paymentMethodId, organization_id: orgId },
+                { registration_id: inst2RegId, installment_number: 2, amount_cents: parseInt(meta.installment_2_amount_cents, 10), due_date: meta.installment_2_due_date, status: 'pending', stripe_customer_id: customerId, stripe_payment_method_id: paymentMethodId, organization_id: orgId, stripe_charge_account_id: (event.account as string | null) ?? null },
+                { registration_id: inst3RegId, installment_number: 3, amount_cents: parseInt(meta.installment_3_amount_cents, 10), due_date: meta.installment_3_due_date, status: 'pending', stripe_customer_id: customerId, stripe_payment_method_id: paymentMethodId, organization_id: orgId, stripe_charge_account_id: (event.account as string | null) ?? null },
               ];
 
               const { error: insertError } = await admin.from('installments').insert(installmentRows);
@@ -336,6 +349,7 @@ serve(async (req) => {
                   status: 'paid', stripe_customer_id: customerId, stripe_payment_method_id: paymentMethodId,
                   stripe_payment_intent_id: session.payment_intent as string,
                   paid_at: new Date().toISOString(), organization_id: orgId,
+                  stripe_charge_account_id: (event.account as string | null) ?? null,
                 });
               }
             }

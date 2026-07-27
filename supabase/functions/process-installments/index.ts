@@ -103,6 +103,8 @@ interface InstallmentRow {
   stripe_payment_method_id: string;
   organization_id: string;
   parent_notified_failed_at: string | null;
+  /** Stripe account this plan's charges live on. null = the platform. */
+  stripe_charge_account_id: string | null;
 }
 
 interface ProgramRow {
@@ -425,10 +427,56 @@ async function processGroup(
   //     always made.
   //   direct org: margin-only fee, and the PaymentIntent is created ON the
   //     connected account, where the saved Customer + payment method live.
+  // The PLAN's own history wins over the org's CURRENT stripe_charge_model.
+  // stripe_charge_account_id was stamped on every row when charge 1 completed:
+  // null = the plan lives on the platform (destination), non-null = it lives on
+  // that connected account. This matters because the saved Customer and card
+  // are on whichever account charge 1 used, and an operator who moves to direct
+  // charges gets a BRAND NEW connected account (controller.fees.payer can never
+  // be changed on an existing one). Routing charges 2 and 3 by the org's current
+  // model would aim them at an account that has never seen this card.
+  const recordedAcct = activeRows[0].stripe_charge_account_id ?? null;
+  const orgIsDirect = orgConfig?.stripe_charge_model === 'direct';
+
+  if (orgIsDirect && !recordedAcct) {
+    // The org is on direct charges but this plan was started on the platform,
+    // i.e. it predates the switch. We cannot safely guess: charging it as
+    // 'direct' would use the new account (no card there), and charging it as
+    // 'destination' would transfer to the new account rather than wherever the
+    // original charge settled. A human has to decide. Fail closed.
+    const why = `org ${activeRows[0].organization_id} is now stripe_charge_model=direct but this installment plan was started on the platform (no stripe_charge_account_id) - it predates the switch`;
+    console.error(`[process-installments] BLOCKED: ${why}`);
+    await admin.from('installments').update({
+      status: 'paused_card_failed',
+      failure_reason: `charge blocked: ${why}`,
+      last_attempt_at: new Date().toISOString(),
+    }).in('id', activeRows.map((r) => r.id).sort());
+    summary.paused_card_failed_groups++;
+    summary.paused_card_failed_rows += activeRows.length;
+    summary.details.push(`BLOCKED group (pre-switch plan): ${activeRows.length} rows`);
+    await sendOperatorAlert({
+      brand,
+      to: alertEmail,
+      subject: `Installment charge needs review — payment setup changed mid-plan`,
+      body: `${activeRows.length} installment row(s) were NOT charged and are now paused.\n\nThis family's payment plan was set up before this provider's Stripe payment setup changed, so their saved card is on the previous account. Charging it automatically could send the money to the wrong place, so we stopped and are asking a human.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
+    });
+    return;
+  }
+
+  // Route by the recorded account, not the org's current model. For a plan on
+  // the platform this is byte-for-byte the destination path (J2S included).
+  const routingOrg: ConnectOrgConfig | null = orgConfig
+    ? {
+      ...orgConfig,
+      stripe_charge_model: recordedAcct ? 'direct' : 'destination',
+      ...(recordedAcct ? { stripe_account_id: recordedAcct } : {}),
+    }
+    : null;
+
   const routing = buildChargeRouting(
     totalAmount,
     'card',
-    orgConfig,
+    routingOrg,
     activeRows[0].organization_id,
   );
 
@@ -553,6 +601,9 @@ async function processGroup(
       stripe_payment_intent_id: paymentIntent.id,
       paid_at: new Date().toISOString(),
       last_attempt_at: new Date().toISOString(),
+      // Re-stamp where this PI actually landed, so a refund of installment 2 or
+      // 3 scopes itself correctly without consulting the org's current model.
+      stripe_charge_account_id: recordedAcct,
     }).in('id', sortedRowIds);
 
     summary.charged_groups++;

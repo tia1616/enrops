@@ -32,10 +32,17 @@
 //     reverse_transfer: true             // pull money back from the connected account
 //     ...created on the PLATFORM (no Stripe-Account header).
 //
-//   DIRECT org (Phase 2, controller-based accounts):
+//   DIRECT charge (Phase 2, controller-based accounts):
 //     created ON the connected account (Stripe-Account header).
 //     refund_application_fee: true       // always — the app fee is clean margin
 //     reverse_transfer                   // OMITTED — no transfer exists to reverse
+//
+// Which of the two applies is decided PER PAYMENT INTENT from the
+// stripe_charge_account_id recorded when that charge was made (null = platform),
+// never from the org's CURRENT stripe_charge_model. An operator moving to direct
+// charges gets a brand-new connected account, so their older PaymentIntents stay
+// on the platform forever; scoping by the current model would break every
+// historical refund.
 //
 // NOT changed here: the destination-org refund POLICY (whether refunding the
 // uplifted application fee makes Enrops eat Stripe's unrecoverable fee). That
@@ -75,6 +82,8 @@ interface RegistrationRow {
   parent_id: string | null;
   program_id: string | null;
   camp_session_id: string | null;
+  /** Stripe account this charge was created on. null = the platform. */
+  stripe_charge_account_id: string | null;
 }
 
 interface InstallmentRow {
@@ -84,6 +93,8 @@ interface InstallmentRow {
   status: string;
   stripe_payment_intent_id: string | null;
   paid_at: string | null;
+  /** Stripe account this installment's PI was created on. null = the platform. */
+  stripe_charge_account_id: string | null;
 }
 
 interface RefundedAgg {
@@ -129,7 +140,7 @@ serve(async (req: Request) => {
     // ── load registration ─────────────────────────────────────────────────
     const { data: regData, error: regErr } = await supabase
       .from('registrations')
-      .select('id, organization_id, status, payment_status, stripe_payment_intent_id, amount_cents, student_id, parent_id, program_id, camp_session_id')
+      .select('id, organization_id, status, payment_status, stripe_payment_intent_id, amount_cents, student_id, parent_id, program_id, camp_session_id, stripe_charge_account_id')
       .eq('id', registrationId)
       .maybeSingle();
     if (regErr) {
@@ -162,14 +173,10 @@ serve(async (req: Request) => {
     // prior behavior (false) — their app fee is internal, so this is unchanged.
     const { data: orgFeeRow } = await supabase
       .from('organizations')
-      .select('stripe_fee_payer, stripe_charge_model, stripe_account_id')
+      .select('stripe_fee_payer')
       .eq('id', reg.organization_id)
       .maybeSingle();
-    const orgFee = orgFeeRow as {
-      stripe_fee_payer?: string;
-      stripe_charge_model?: string;
-      stripe_account_id?: string | null;
-    } | null;
+    const orgFee = orgFeeRow as { stripe_fee_payer?: string } | null;
 
     // ── Phase 2: which account the refund is created on ───────────────────
     // DIRECT orgs: the charge lives on the connected account, so per Stripe's
@@ -188,28 +195,27 @@ serve(async (req: Request) => {
     // DESTINATION orgs (J2S and every pre-existing org): completely unchanged —
     // same reverse_transfer:true, same stripe_fee_payer-driven flag, same
     // platform-scoped call.
-    const isDirect = orgFee?.stripe_charge_model === 'direct';
-    if (isDirect && !orgFee?.stripe_account_id) {
-      // Nothing to refund against; refusing beats guessing at the platform.
-      console.error(`[refund] org ${reg.organization_id} is charge_model=direct but has no stripe_account_id`);
-      return json({ error: 'provider_stripe_not_connected' }, 409);
-    }
-    // Spread into an options object that always carries an idempotencyKey, so
-    // {} would happen to be harmless here — but keep it undefined for
-    // consistency with every other scope in this migration, where {} throws.
-    const refundScope: { stripeAccount: string } | undefined = isDirect
-      ? { stripeAccount: orgFee!.stripe_account_id! }
-      : undefined;
-    const refundApplicationFee = isDirect
-      ? true
-      : orgFee?.stripe_fee_payer === 'tenant';
+    // Scope is decided PER PAYMENT INTENT, from stripe_charge_account_id
+    // recorded when that charge was made — NOT from the org's current
+    // stripe_charge_model. An operator who moves to direct charges gets a brand
+    // new connected account (controller.fees.payer can never be changed on an
+    // existing one), so their pre-move PaymentIntents stay on the platform
+    // forever. Deciding by the current model would scope those refunds to an
+    // account where the pi_... does not exist, and every historical refund would
+    // fail. null = platform, which is correct for every row that predates this.
+    const refundScopeFor = (chargeAccountId: string | null): { stripeAccount: string } | undefined =>
+      chargeAccountId ? { stripeAccount: chargeAccountId } : undefined;
+    // A direct charge's application fee is clean margin, so it always goes back.
+    // A destination charge keeps the existing stripe_fee_payer-driven policy.
+    const refundApplicationFeeFor = (chargeAccountId: string | null): boolean =>
+      chargeAccountId ? true : orgFee?.stripe_fee_payer === 'tenant';
 
     // ── collect paid PIs for this registration ────────────────────────────
     // Pattern: installments table is the primary source. If no installments
     // rows exist (single-pay registration), fall back to registrations.
     const { data: instData } = await supabase
       .from('installments')
-      .select('id, installment_number, amount_cents, status, stripe_payment_intent_id, paid_at')
+      .select('id, installment_number, amount_cents, status, stripe_payment_intent_id, paid_at, stripe_charge_account_id')
       .eq('registration_id', registrationId);
     const installments = (instData as InstallmentRow[] | null) ?? [];
     const paidInstallments = installments.filter(
@@ -217,7 +223,9 @@ serve(async (req: Request) => {
     );
 
     // Build PI list: each entry = (pi_id, amount_for_this_reg, sort_key).
-    type PiSlot = { pi: string; amount: number; sortKey: number };
+    // chargeAccountId travels with the slot: each PaymentIntent is refunded on
+    // the account it was actually created on.
+    type PiSlot = { pi: string; amount: number; sortKey: number; chargeAccountId: string | null };
     const piSlots: PiSlot[] = [];
 
     if (paidInstallments.length > 0) {
@@ -226,6 +234,7 @@ serve(async (req: Request) => {
           pi: inst.stripe_payment_intent_id!,
           amount: inst.amount_cents,
           sortKey: inst.installment_number, // newest installment first
+          chargeAccountId: inst.stripe_charge_account_id ?? null,
         });
       }
     } else if (reg.payment_status === 'paid' && reg.stripe_payment_intent_id) {
@@ -233,6 +242,7 @@ serve(async (req: Request) => {
         pi: reg.stripe_payment_intent_id,
         amount: reg.amount_cents ?? 0,
         sortKey: 1,
+        chargeAccountId: reg.stripe_charge_account_id ?? null,
       });
     }
 
@@ -317,12 +327,12 @@ serve(async (req: Request) => {
             // refunds the (uplifted) application fee proportionally so the
             // provider nets $0 on the refunded portion; Enrops absorbs the
             // unrecoverable Stripe fee. Legacy own-platform orgs keep false.
-            refund_application_fee: refundApplicationFee,
+            refund_application_fee: refundApplicationFeeFor(slot.chargeAccountId),
             // Destination charges only: pull the refunded share back from the
             // operator's connected account, or the refund comes out of the
             // platform balance alone. A DIRECT charge has no transfer to
             // reverse — sending this would fail the call — so it is omitted.
-            ...(isDirect ? {} : { reverse_transfer: true }),
+            ...(slot.chargeAccountId ? {} : { reverse_transfer: true }),
             reason: 'requested_by_customer',
             metadata: {
               enrops_refund_id: refundRowId,
@@ -331,9 +341,9 @@ serve(async (req: Request) => {
               ...(reason ? { enrops_reason: reason.slice(0, 200) } : {}),
             },
           },
-          // refundScope is undefined for destination orgs, so spreading it here
-          // leaves the unchanged platform-scoped call.
-          { idempotencyKey: `refund_${refundRowId}`, ...refundScope },
+          // undefined for a platform charge, so spreading it here leaves the
+          // unchanged platform-scoped call.
+          { idempotencyKey: `refund_${refundRowId}`, ...refundScopeFor(slot.chargeAccountId) },
         );
 
         const succeededAt = new Date().toISOString();
