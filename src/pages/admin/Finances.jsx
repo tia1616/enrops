@@ -1421,7 +1421,7 @@ function NotConnectedBody(props) {
   return (
     <StripeHero
       title="Get paid straight to your bank"
-      subtitle="Connect Stripe once. Parents pay, and the money lands in your account. Stripe hosts the setup and asks for your details on the next screen."
+      subtitle="Connect Stripe once and families' payments land in your account. Already use Stripe? Sign in on the next screen and pick that account — you'll keep using the one you have."
     >
       <ConnectButton {...props} label="Connect Stripe" />
       <TrustChips />
@@ -1492,7 +1492,9 @@ function TrustChips() {
     <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 16, marginTop: 14 }}>
       <span style={chip}>
         <SIcon size={16}><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 1.5" /></SIcon>
-        About 5 minutes
+        {/* Two numbers, not one: an operator who already has Stripe is done in
+            about 2 minutes, and quoting a flat "5 minutes" undersells that. */}
+        2 min if you have Stripe, 5–10 if not
       </span>
       <span style={chip}>
         <SIcon size={16}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></SIcon>
@@ -1506,12 +1508,24 @@ function TrustChips() {
   );
 }
 
-// The KYC/bank specifics some operators want before they start — collapsed by
-// default so the screen isn't a wall of text. Tenant-agnostic, no J2S strings.
+// What actually happens on the next screen, split by the ONE thing that changes
+// the answer: whether the operator already has Stripe.
+//
+// This used to say "Already have a Stripe account? This creates a separate one
+// just for enrops. Your existing account stays untouched." That was true of the
+// old Express accounts. It is now the opposite: with controller-based accounts
+// Stripe asks you to SIGN IN and use the account you already have — which is
+// faster, but is a nasty surprise if the screen just told you the reverse and
+// then asks for a password. Rewritten 2026-07-27 after exactly that happened.
+//
+// Open by default: this is the screen where operators stall, so the answer
+// should not be behind a click. Tenant-agnostic, no J2S strings.
 function WhatYouWillNeed() {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const item = { fontSize: 13, color: INK, lineHeight: 1.55, marginBottom: 6 };
   const lbl = { fontWeight: 600, color: PURPLE };
+  const pathTitle = { fontSize: 13.5, fontWeight: 700, color: PURPLE, marginBottom: 4 };
+  const pathTime = { fontSize: 12, color: MUTED, fontWeight: 600 };
   return (
     <div style={{ maxWidth: 460, margin: "16px auto 0", textAlign: "left" }}>
       <button
@@ -1527,18 +1541,43 @@ function WhatYouWillNeed() {
         <span style={{ display: "inline-flex", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}>
           <SIcon size={16}><path d="M6 9l6 6 6-6" /></SIcon>
         </span>
-        What you'll need
+        What happens next
       </button>
       {open && (
         <div style={{ marginTop: 10, background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: "12px 14px" }}>
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
-            <li style={item}><span style={lbl}>Email and phone</span> — where Stripe sends verification codes.</li>
-            <li style={item}><span style={lbl}>Business details</span> — legal name, EIN, address.</li>
-            <li style={item}><span style={lbl}>Your ID</span> — name, date of birth, last 4 of SSN. Stripe needs this to verify you; it isn't stored on our side.</li>
-            <li style={{ ...item, marginBottom: 0 }}><span style={lbl}>Bank account</span> — routing and account number, or connect via Plaid. This is where your money lands.</li>
-          </ul>
-          <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED, lineHeight: 1.55 }}>
-            Already have a Stripe account? This creates a separate one just for enrops. Your existing account stays untouched.
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={pathTitle}>
+              If you already use Stripe <span style={pathTime}>· about 2 minutes</span>
+            </div>
+            <p style={{ ...item, marginBottom: 0 }}>
+              Sign in with your usual Stripe login and choose that account. You'll
+              use the account you already have — nothing new is created, and the
+              payments you take outside enrops carry on exactly as they do now.
+              Stripe already has your business and bank details, so there's
+              nothing to re-enter.
+            </p>
+          </div>
+
+          <div style={{ paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
+            <div style={pathTitle}>
+              If you're new to Stripe <span style={pathTime}>· about 5–10 minutes</span>
+            </div>
+            <p style={{ ...item, marginBottom: 8 }}>
+              You'll create your Stripe account on the next screen. Have these ready:
+            </p>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              <li style={item}><span style={lbl}>Email and phone</span> — where Stripe sends verification codes.</li>
+              <li style={item}><span style={lbl}>Business details</span> — legal name, EIN, address.</li>
+              <li style={item}><span style={lbl}>Your ID</span> — name, date of birth, last 4 of SSN. Stripe needs this to verify you; it isn't stored on our side.</li>
+              <li style={{ ...item, marginBottom: 0 }}><span style={lbl}>Bank account</span> — routing and account number, or connect via Plaid. This is where your money lands.</li>
+            </ul>
+          </div>
+
+          <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED, lineHeight: 1.55 }}>
+            Either way, when you come back Stripe may spend a minute or two
+            checking your details before payments switch on. That's normal and
+            there's nothing for you to do while it finishes.
           </div>
         </div>
       )}
