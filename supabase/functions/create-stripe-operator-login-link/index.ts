@@ -101,7 +101,37 @@ serve(async (req: Request) => {
       return json({ error: 'no_stripe_account' }, 409);
     }
 
-    // ── mint a fresh login link ───────────────────────────────────────────
+    // ── which dashboard does this account even have? ──────────────────────
+    // createLoginLink mints an EXPRESS dashboard link and works ONLY for
+    // accounts whose controller.stripe_dashboard.type is 'express'. The
+    // controller-based accounts Phase 1 mints have type 'full': the operator
+    // owns a real Stripe account and signs in with their own credentials.
+    // Calling createLoginLink on one fails with "Cannot create an edit link for
+    // the account ..., which does not have access to the Express Dashboard"
+    // (verified against a real controller account 2026-07-27), which is a 502
+    // and a dead button on the operator's own money screen.
+    //
+    // Read the type from Stripe rather than inferring it from
+    // stripe_charge_model: the account is the authority on its own dashboard,
+    // and orphan-adopted accounts can be Express while the org row says
+    // otherwise.
+    let dashboardType: string | null = null;
+    try {
+      const acct = await stripe.accounts.retrieve(accountId);
+      dashboardType =
+        (acct as unknown as { controller?: { stripe_dashboard?: { type?: string } } })
+          .controller?.stripe_dashboard?.type ?? null;
+    } catch (err) {
+      console.warn('[connect-login-link] account retrieve failed, assuming express:', err);
+    }
+
+    if (dashboardType && dashboardType !== 'express') {
+      // Full (or 'none') dashboard: there is no link to mint. Send them to
+      // Stripe's own sign-in, which is where their account actually lives.
+      return json({ url: 'https://dashboard.stripe.com/', dashboard_type: dashboardType });
+    }
+
+    // ── mint a fresh login link (Express accounts only) ───────────────────
     let link;
     try {
       link = await stripe.accounts.createLoginLink(accountId);
@@ -117,7 +147,7 @@ serve(async (req: Request) => {
       }, 502);
     }
 
-    return json({ url: link.url });
+    return json({ url: link.url, dashboard_type: 'express' });
   } catch (err) {
     console.error('[connect-login-link] fatal:', err);
     return json({ error: 'internal_error' }, 500);

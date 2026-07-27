@@ -156,6 +156,21 @@ serve(async (req) => {
         });
       }
 
+      case 'login_link': {
+        // Does createLoginLink work on a controller account? It is documented
+        // for Express-type dashboards; controller accounts use type 'full'.
+        // create-stripe-operator-login-link calls exactly this, so if it fails
+        // here the operator's "view your Stripe dashboard" button is broken for
+        // every direct org. Creates a short-lived URL; no money implication.
+        try {
+          const link = await stripe.accounts.createLoginLink(id);
+          return json({ ok: true, url_prefix: link.url.slice(0, 40) });
+        } catch (e) {
+          const err = e as { message?: string; raw?: { message?: string; code?: string } };
+          return json({ ok: false, code: err.raw?.code, message: err.raw?.message ?? err.message });
+        }
+      }
+
       case 'make_test_account': {
         // Hard stop: never in live mode. A live controller account cannot be
         // deleted and its fee payer can never be changed.
