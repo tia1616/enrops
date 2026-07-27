@@ -16,6 +16,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { findAuthUserByEmail } from '../_shared/findAuthUserByEmail.ts';
 
 interface AdminInviteBody {
   email?: string;
@@ -103,10 +104,10 @@ serve(async (req: Request) => {
     });
     if (createErr) {
       if (/already.+registered|exists/i.test(createErr.message ?? '')) {
-        const { data: usersList } = await supabase.auth.admin.listUsers();
-        const existing = usersList?.users?.find(
-          (u) => u.email?.toLowerCase() === email,
-        );
+        // Paged lookup: a bare listUsers() only searches the 50 newest accounts,
+        // so inviting someone whose account is older than that found nothing and
+        // fell through to the 500 below -- the invite failed instead of linking.
+        const existing = await findAuthUserByEmail(supabase, email);
         if (existing) {
           authUserId = existing.id;
         } else {

@@ -16,6 +16,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 import { loadOrgBrand, renderSignatureBlock, encodeDisplayName } from '../_shared/orgBrand.ts';
+import { findAuthUserByEmail } from '../_shared/findAuthUserByEmail.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so the onboarding link points at staging, not prod. Defaults to prod.
@@ -99,10 +100,11 @@ serve(async (req: Request) => {
         // Email may already be in use by another auth.users row (e.g., they
         // registered as a parent). Try to look that up and link.
         if (/already.+registered|exists/i.test(createErr.message ?? '')) {
-          const { data: usersList } = await supabase.auth.admin.listUsers();
-          const existing = usersList?.users?.find(
-            (u) => u.email?.toLowerCase() === instructorRow.email!.toLowerCase(),
-          );
+          // Paged lookup: a bare listUsers() only searches the 50 newest
+          // accounts, so an instructor who already had an account (e.g. they
+          // registered as a parent first) was not found and the invite failed
+          // with the 500 below instead of linking to it.
+          const existing = await findAuthUserByEmail(supabase, instructorRow.email!);
           if (existing) {
             authUserId = existing.id;
           } else {
