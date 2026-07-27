@@ -188,12 +188,31 @@ export default function Dashboard() {
       setError(null);
 
       // 1. Parent
-      const { data: p, error: pErr } = await supabase
+      let { data: p, error: pErr } = await supabase
         .from('parents')
         .select('id, first_name, last_name, communication_preferences')
         .eq('auth_id', user.id)
         .maybeSingle();
       if (pErr) { setError('fetch_failed'); setLoading(false); return; }
+
+      // A family that already had an enrops account before they registered has a
+      // parents row with no auth_id, because the auth.users trigger only links
+      // when the ACCOUNT is the new side. They land here and see nothing. Being
+      // signed in means they received mail at this address, which is the proof
+      // that makes claiming the row safe -- so claim it now and re-read.
+      // Returns null when there is nothing to claim, which is the ordinary case.
+      if (!p) {
+        const { data: claimedId } = await supabase.rpc('claim_parent_record');
+        if (claimedId) {
+          const { data: claimed } = await supabase
+            .from('parents')
+            .select('id, first_name, last_name, communication_preferences')
+            .eq('id', claimedId)
+            .maybeSingle();
+          if (claimed) p = claimed;
+        }
+      }
+
       if (!p) {
         // No family record for this user. The header "My account" link and the
         // family login both funnel everyone to this dashboard, so an instructor

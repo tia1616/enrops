@@ -503,20 +503,12 @@ async function autoCreateParentAccount(
 
   if (existing) {
     console.log(`Auth user already exists for ${email}, sending dashboard link email`);
-    // Self-heal, mirroring invite-parents: the auth.users trigger links
-    // parents.auth_id only when the ACCOUNT is the new side, so a parent row
-    // created against a pre-existing account can be left unlinked and the
-    // portal cannot resolve the family. 20260727a closes this at insert time
-    // for every writer; this stays as the second layer for rows that predate it
-    // or arrive by some path the trigger did not see. Only ever fills a NULL,
-    // so it can neither steal a correct link nor collide with idx_parents_auth.
-    const { error: linkErr } = await admin
-      .from('parents')
-      .update({ auth_id: existing.id })
-      .eq('email', email.toLowerCase().trim())
-      .is('auth_id', null);
-    if (linkErr) console.error(`Failed to link parents.auth_id for ${email}:`, linkErr.message);
-
+    // DELIBERATELY does not link parents.auth_id here. The address is whatever
+    // was typed into guest checkout and nobody has proven control of it, so
+    // linking on it would hand a family's records to the real owner of a
+    // mistyped address. The link happens in claim_parent_record() (20260727b)
+    // when they sign in, which is the moment that proof exists -- and the email
+    // below is exactly what carries them there.
     await sendAccountReadyEmail(admin, brand, email, name, orgSlug, false);
     return;
   }
