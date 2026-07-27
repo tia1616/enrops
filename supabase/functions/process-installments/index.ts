@@ -1,4 +1,14 @@
-// process-installments v6 — daily cron worker that charges due installments off-session.
+// process-installments v7 — daily cron worker that charges due installments off-session.
+//
+// v7 CHANGE (2026-07-27): Stripe direct charges (migration Phase 2).
+//   Routing now comes from buildChargeRouting(organizations.stripe_charge_model):
+//     'destination' (J2S + every pre-existing org) — UNCHANGED: same overlay,
+//        same platform-scoped paymentIntents.create.
+//     'direct' — the PaymentIntent is created ON the connected account, which is
+//        where the saved Customer + card live (create-checkout put them there),
+//        and application_fee_amount is margin only with no Stripe-fee uplift.
+//   A direct org whose account isn't chargeable now PAUSES the rows and alerts,
+//   instead of falling through to a platform charge.
 //
 // v6 CHANGE (2026-05-27): Stripe Connect destination charges.
 //   When the org has an active connected account, each PaymentIntent now
@@ -52,7 +62,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { buildConnectChargeParams, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
+import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
 import { passThroughFeeCents } from '../_shared/passThroughFee.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 
@@ -184,7 +194,7 @@ serve(async (req) => {
         stripe_account_id, stripe_charges_enabled,
         statement_descriptor_suffix,
         platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents,
-        fee_pass_through, stripe_fee_payer, instructor_pay_model
+        fee_pass_through, stripe_fee_payer, instructor_pay_model, stripe_charge_model
       `)
       .in('id', orgIds);
 
@@ -204,6 +214,7 @@ serve(async (req) => {
         fee_pass_through: org.fee_pass_through,
         stripe_fee_payer: org.stripe_fee_payer,
         instructor_pay_model: org.instructor_pay_model,
+        stripe_charge_model: org.stripe_charge_model,
       });
     }
 
@@ -369,17 +380,47 @@ async function processGroup(
     return `${stu?.first_name || 'child'} (${prog?.curriculum || 'program'})`;
   }).join(', ');
 
-  // v6: Connect destination charge overlay (application_fee_amount,
-  // transfer_data.destination, statement_descriptor_suffix). Spreads into
-  // top-level paymentIntents.create params (NOT under payment_intent_data —
-  // that nesting only applies to Checkout Sessions). Empty {} when the org
-  // is not connected, leaving direct-charge behavior intact.
-  const connectParams = buildConnectChargeParams(
+  // v7 (Phase 2): charge routing. Spreads into top-level paymentIntents.create
+  // params (NOT under payment_intent_data — that nesting only applies to
+  // Checkout Sessions).
+  //   destination org (J2S + all pre-existing): the same overlay as v6
+  //     (application_fee_amount + transfer_data + descriptor suffix), and
+  //     `acct` is {} — the platform-scoped call this cron always made.
+  //   direct org: margin-only fee, and the PaymentIntent is created ON the
+  //     connected account, where the saved Customer + payment method live.
+  const routing = buildChargeRouting(
     totalAmount,
     'card',
     orgConfig,
     activeRows[0].organization_id,
   );
+
+  // Fail closed for direct orgs with no usable account. Charging anyway would
+  // create a plain platform PaymentIntent against a customer id that doesn't
+  // exist on the platform — it would fail confusingly, or worse, succeed and
+  // put the operator's money in the Enrops balance. Pause and alert instead.
+  // (Never set for destination orgs, so J2S can't reach this branch.)
+  if (routing.blocked) {
+    console.error(`[process-installments] BLOCKED: ${routing.blocked}`);
+    await admin.from('installments').update({
+      status: 'paused_card_failed',
+      failure_reason: `charge blocked: ${routing.blocked}`,
+      last_attempt_at: new Date().toISOString(),
+    }).in('id', activeRows.map((r) => r.id).sort());
+    summary.paused_card_failed_groups++;
+    summary.paused_card_failed_rows += activeRows.length;
+    summary.details.push(`BLOCKED group: ${routing.blocked}`);
+    await sendOperatorAlert({
+      brand,
+      to: alertEmail,
+      subject: `Installment charge blocked — Stripe account not ready`,
+      body: `${routing.blocked}\n\n${activeRows.length} installment row(s) were NOT charged and are now paused. Finish Stripe onboarding, then flip the rows back to status=pending to retry.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
+    });
+    return;
+  }
+
+  const connectParams = routing.params;
+  const acct = routing.requestOptions;
 
   // Pass-through: if the operator passes the fee to families, this installment
   // charges its base amount PLUS the proportional 1% (application_fee above is
@@ -404,7 +445,10 @@ async function processGroup(
         },
         ...connectParams,
       },
-      { idempotencyKey },
+      // acct is {} for destination orgs, so this is the unchanged call there.
+      // Idempotency keys are scoped per account, which is what we want: a
+      // direct org's retry key can't collide with a platform-scoped one.
+      { idempotencyKey, ...acct },
     );
   } catch (err) {
     const stripeErr = err as Stripe.errors.StripeError;
@@ -437,6 +481,7 @@ async function processGroup(
         failureReason,
         totalAmount,
         customerId,
+        connectedAccountId: routing.direct ? (orgConfig?.stripe_account_id ?? null) : null,
       }),
     });
 
@@ -499,6 +544,7 @@ async function processGroup(
 
 function buildDeclineAlertBody({
   rows, regDataById, parent, declineCode, failureReason, totalAmount, customerId,
+  connectedAccountId,
 }: {
   rows: InstallmentRow[];
   regDataById: Map<string, any>;
@@ -507,6 +553,9 @@ function buildDeclineAlertBody({
   failureReason: string;
   totalAmount: number;
   customerId: string;
+  /** Set only for direct-charge orgs, whose Customers live on the connected
+   *  account — a platform dashboard URL would 404 for them. */
+  connectedAccountId?: string | null;
 }) {
   const parentName = parent ? `${parent.first_name} ${parent.last_name}` : 'parent';
   const parentEmail = parent?.email || 'unknown email';
@@ -533,7 +582,9 @@ function buildDeclineAlertBody({
     `Decline reason: ${declineCode}`,
     `Stripe message: ${failureReason}`,
     ``,
-    `Customer: https://dashboard.stripe.com/customers/${customerId}`,
+    `Customer: ${connectedAccountId
+      ? `https://dashboard.stripe.com/${connectedAccountId}/customers/${customerId}`
+      : `https://dashboard.stripe.com/customers/${customerId}`}`,
     ``,
     `All ${rows.length} installment row${rows.length > 1 ? 's are' : ' is'} now status=paused_card_failed. Future charges will not be retried automatically. Reach out to the parent to update their card, then manually flip rows back to status=pending if you want to re-attempt.`,
     ``,

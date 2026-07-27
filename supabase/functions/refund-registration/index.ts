@@ -22,13 +22,26 @@
 //   3. Walk newest-first, refunding from each until amount_cents is consumed.
 //   4. If we run out before consuming amount_cents, return 400 'amount_exceeds_eligible'.
 //
-// Stripe flags per refund call:
-//   refund_application_fee: <dynamic>  // true when the provider bears Stripe's
-//     fee (stripe_fee_payer='tenant') so the provider is made whole; false for
-//     legacy own-platform orgs. See the refund-policy block below.
-//   reverse_transfer: true             // pull money back from the connected account
-// These have to be set explicitly — Stripe defaults are the opposite for
-// destination charges.
+// Stripe flags per refund call — these differ by organizations.stripe_charge_model
+// and have to be set explicitly, because Stripe's defaults are wrong for both:
+//
+//   DESTINATION org (J2S + every pre-existing org) — UNCHANGED by Phase 2:
+//     refund_application_fee: <dynamic>  // true when the provider bears Stripe's
+//       fee (stripe_fee_payer='tenant') so the provider is made whole; false for
+//       legacy own-platform orgs. See the refund-policy block below.
+//     reverse_transfer: true             // pull money back from the connected account
+//     ...created on the PLATFORM (no Stripe-Account header).
+//
+//   DIRECT org (Phase 2, controller-based accounts):
+//     created ON the connected account (Stripe-Account header).
+//     refund_application_fee: true       // always — the app fee is clean margin
+//     reverse_transfer                   // OMITTED — no transfer exists to reverse
+//
+// NOT changed here: the destination-org refund POLICY (whether refunding the
+// uplifted application fee makes Enrops eat Stripe's unrecoverable fee). That
+// is the open question _shared/refundFeeSplit.ts was written for, parked
+// pending Arielle. Phase 2 only makes direct-charge refunds possible at all —
+// without the changes above a direct org's refund would fail on reverse_transfer.
 //
 // Idempotency: each refunds row gets a fresh ID; the Stripe call uses the
 // row ID as the idempotency key so re-running this fn for the same Stripe
@@ -149,11 +162,47 @@ serve(async (req: Request) => {
     // prior behavior (false) — their app fee is internal, so this is unchanged.
     const { data: orgFeeRow } = await supabase
       .from('organizations')
-      .select('stripe_fee_payer')
+      .select('stripe_fee_payer, stripe_charge_model, stripe_account_id')
       .eq('id', reg.organization_id)
       .maybeSingle();
-    const refundApplicationFee =
-      (orgFeeRow as { stripe_fee_payer?: string } | null)?.stripe_fee_payer === 'tenant';
+    const orgFee = orgFeeRow as {
+      stripe_fee_payer?: string;
+      stripe_charge_model?: string;
+      stripe_account_id?: string | null;
+    } | null;
+
+    // ── Phase 2: which account the refund is created on ───────────────────
+    // DIRECT orgs: the charge lives on the connected account, so per Stripe's
+    // direct-charges docs the refund is created "using your platform's secret
+    // key while authenticated as the connected account". Two further
+    // consequences, both load-bearing:
+    //   - reverse_transfer is meaningless and INVALID here: there is no transfer
+    //     to reverse (the funds never left the operator's account). Sending it
+    //     would fail the refund outright.
+    //   - refund_application_fee must be true. Stripe: "Application fees aren't
+    //     automatically refunded ... Your platform must explicitly refund the
+    //     application fee or the connected account ... loses that amount."
+    //     Under direct charges the application fee is clean margin (no Stripe-fee
+    //     uplift), so refunding it in full is exactly "Enrops earns nothing on a
+    //     cancelled registration" — no arithmetic needed.
+    // DESTINATION orgs (J2S and every pre-existing org): completely unchanged —
+    // same reverse_transfer:true, same stripe_fee_payer-driven flag, same
+    // platform-scoped call.
+    const isDirect = orgFee?.stripe_charge_model === 'direct';
+    if (isDirect && !orgFee?.stripe_account_id) {
+      // Nothing to refund against; refusing beats guessing at the platform.
+      console.error(`[refund] org ${reg.organization_id} is charge_model=direct but has no stripe_account_id`);
+      return json({ error: 'provider_stripe_not_connected' }, 409);
+    }
+    // Spread into the options object below, which always carries an
+    // idempotencyKey, so {} would be harmless here — but keep it undefined for
+    // consistency with every other scope in this migration.
+    const refundScope: { stripeAccount: string } | undefined = isDirect
+      ? { stripeAccount: orgFee!.stripe_account_id! }
+      : undefined;
+    const refundApplicationFee = isDirect
+      ? true
+      : orgFee?.stripe_fee_payer === 'tenant';
 
     // ── collect paid PIs for this registration ────────────────────────────
     // Pattern: installments table is the primary source. If no installments
@@ -269,9 +318,11 @@ serve(async (req: Request) => {
             // provider nets $0 on the refunded portion; Enrops absorbs the
             // unrecoverable Stripe fee. Legacy own-platform orgs keep false.
             refund_application_fee: refundApplicationFee,
-            // Pull the refunded share back from the operator's connected
-            // account. Without this, refund comes out of platform balance only.
-            reverse_transfer: true,
+            // Destination charges only: pull the refunded share back from the
+            // operator's connected account, or the refund comes out of the
+            // platform balance alone. A DIRECT charge has no transfer to
+            // reverse — sending this would fail the call — so it is omitted.
+            ...(isDirect ? {} : { reverse_transfer: true }),
             reason: 'requested_by_customer',
             metadata: {
               enrops_refund_id: refundRowId,
@@ -280,7 +331,8 @@ serve(async (req: Request) => {
               ...(reason ? { enrops_reason: reason.slice(0, 200) } : {}),
             },
           },
-          { idempotencyKey: `refund_${refundRowId}` },
+          // refundScope is {} for destination orgs — the unchanged platform call.
+          { idempotencyKey: `refund_${refundRowId}`, ...refundScope },
         );
 
         const succeededAt = new Date().toISOString();

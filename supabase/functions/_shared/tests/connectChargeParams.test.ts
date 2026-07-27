@@ -1,4 +1,4 @@
-// Tests for buildConnectChargeParams — the function that decides where the
+﻿// Tests for buildConnectChargeParams — the function that decides where the
 // money lands (operator's Connect account vs. platform), how big Enrops's
 // cut is, and what the parent sees on their bank statement.
 //
@@ -6,7 +6,7 @@
 // Run: deno test supabase/functions/_shared/tests/connectChargeParams.test.ts
 
 import { assertEquals } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
-import { buildConnectChargeParams, ConnectOrgConfig } from '../connectChargeParams.ts';
+import { buildChargeRouting, buildConnectChargeParams, ConnectOrgConfig } from '../connectChargeParams.ts';
 
 // J2S-style free-tier config, fully connected and enabled.
 const HAPPY_ORG: ConnectOrgConfig = {
@@ -230,4 +230,131 @@ Deno.test("reg model + stripe_fee_payer='tenant': floor is on the MARGIN, Stripe
   // $4 charge: margin floored to 199; Stripe est = round(400*0.029)+30 = 42; total = 241.
   const result = buildConnectChargeParams(400, 'card', { ...REG_ORG, stripe_fee_payer: 'tenant' }, 'org-id');
   assertEquals(result.application_fee_amount, 241);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// buildChargeRouting — direct vs destination (Stripe migration Phase 2)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The J2S-safety contract, asserted rather than argued: for every org that is
+// not explicitly stripe_charge_model='direct', buildChargeRouting must return
+// EXACTLY what buildConnectChargeParams returns, with no Stripe-Account header
+// and no block. J2S is 'destination' permanently — 80 open programs, 91 real
+// paid registrations, mid-FA26 — so these are the tests that have to hold.
+
+const DIRECT_ORG: ConnectOrgConfig = {
+  ...TENANT_ORG,
+  instructor_pay_model: 'enrops_platform',
+  stripe_charge_model: 'direct',
+};
+
+Deno.test('J2S SAFETY: destination org routes identically to buildConnectChargeParams', () => {
+  const j2sish: ConnectOrgConfig = { ...HAPPY_ORG, stripe_charge_model: 'destination' };
+  const routing = buildChargeRouting(20000, 'card', j2sish, 'org-id');
+  assertEquals(routing.params, buildConnectChargeParams(20000, 'card', j2sish, 'org-id'));
+  assertEquals(routing.direct, false);
+  assertEquals(routing.requestOptions, undefined);   // no Stripe-Account header
+  assertEquals(routing.blocked, null);        // never blocked
+});
+
+Deno.test('J2S SAFETY: UNSET charge model behaves as destination (pre-Phase-1 orgs)', () => {
+  // Every org that existed before migration 20260727c has NULL here.
+  const routing = buildChargeRouting(20000, 'card', TENANT_ORG, 'org-id');
+  assertEquals(routing.params, buildConnectChargeParams(20000, 'card', TENANT_ORG, 'org-id'));
+  assertEquals(routing.direct, false);
+  assertEquals(routing.requestOptions, undefined);
+  // The uplift MUST survive here — dropping it on a destination charge makes
+  // Enrops eat Stripe's fee (~$2/charge). Same number as the uplift tests above.
+  assertEquals(routing.params.application_fee_amount, 810);
+});
+
+Deno.test('J2S SAFETY: an unrecognised charge model falls back to destination, not direct', () => {
+  const weird: ConnectOrgConfig = { ...TENANT_ORG, stripe_charge_model: 'DIRECT' }; // wrong case
+  const routing = buildChargeRouting(20000, 'card', weird, 'org-id');
+  assertEquals(routing.direct, false);
+  assertEquals(routing.requestOptions, undefined);
+});
+
+Deno.test('direct org → Stripe-Account header is the org connected account', () => {
+  const routing = buildChargeRouting(20000, 'card', DIRECT_ORG, 'org-id');
+  assertEquals(routing.direct, true);
+  assertEquals(routing.requestOptions, { stripeAccount: 'acct_1ABCDEF' });
+  assertEquals(routing.blocked, null);
+});
+
+Deno.test('direct org → NO uplift: application fee is clean margin', () => {
+  // Same org shape as the destination case that yields 810 (200 margin + 610
+  // Stripe recovery). Direct must be the 200 alone — the connected account pays
+  // Stripe natively, so recovering it again would double-charge the operator.
+  const routing = buildChargeRouting(20000, 'card', DIRECT_ORG, 'org-id');
+  assertEquals(routing.params.application_fee_amount, 200);
+});
+
+Deno.test('direct org ACH → margin only, no ACH Stripe-fee recovery', () => {
+  const routing = buildChargeRouting(20000, 'us_bank_account', DIRECT_ORG, 'org-id');
+  assertEquals(routing.params.application_fee_amount, 200); // not 360
+});
+
+Deno.test('direct org → no transfer_data, no on_behalf_of, no statement suffix', () => {
+  // All three are destination-charge concepts. transfer_data and on_behalf_of
+  // are invalid on a direct charge; the connected account's own descriptor governs.
+  const routing = buildChargeRouting(20000, 'card', DIRECT_ORG, 'org-id');
+  assertEquals(routing.params.transfer_data, undefined);
+  assertEquals(routing.params.on_behalf_of, undefined);
+  assertEquals(routing.params.statement_descriptor_suffix, undefined);
+});
+
+Deno.test('direct org: application fee is omitted rather than sent as 0', () => {
+  // Stripe: application_fee_amount "must be positive". A 0%-fee direct org must
+  // omit the key entirely or the whole charge is rejected.
+  const zeroFee: ConnectOrgConfig = { ...DIRECT_ORG, platform_fee_card_pct: 0 };
+  const routing = buildChargeRouting(20000, 'card', zeroFee, 'org-id');
+  assertEquals(routing.params.application_fee_amount, undefined);
+  assertEquals(routing.blocked, null); // still a perfectly valid charge
+});
+
+Deno.test('direct org: fee is held strictly BELOW the charge amount', () => {
+  // Stripe: "must be positive and less than the amount of the charge."
+  // $2.00 charge with a $1.99 floor and 3% rate → floor wins at 199, which is
+  // less than 200, so it survives. Push the floor past the charge and it clamps.
+  const tiny: ConnectOrgConfig = {
+    ...DIRECT_ORG, platform_fee_card_pct: 0.03,
+    platform_fee_floor_cents: 500, platform_fee_cap_cents: 799,
+  };
+  const routing = buildChargeRouting(200, 'card', tiny, 'org-id');
+  assertEquals(routing.params.application_fee_amount, 199); // 200 - 1, not 500
+});
+
+Deno.test('direct org with no stripe_account_id → BLOCKED, never a platform charge', () => {
+  const orphan: ConnectOrgConfig = { ...DIRECT_ORG, stripe_account_id: null };
+  const routing = buildChargeRouting(20000, 'card', orphan, 'org-id');
+  assertEquals(routing.blocked !== null, true);
+  assertEquals(routing.params, {});
+  assertEquals(routing.requestOptions, undefined);
+});
+
+Deno.test('direct org with charges_enabled=false → BLOCKED', () => {
+  const notReady: ConnectOrgConfig = { ...DIRECT_ORG, stripe_charges_enabled: false };
+  const routing = buildChargeRouting(20000, 'card', notReady, 'org-id');
+  assertEquals(routing.blocked !== null, true);
+  assertEquals(routing.requestOptions, undefined);
+});
+
+Deno.test('BLOCK ASYMMETRY: a destination org is never blocked, however broken', () => {
+  // Destination orgs keep their historical fall-through ({} → platform charge),
+  // gated separately in create-checkout. Phase 2 must not change that, or J2S
+  // gains a new failure mode it never had.
+  const broken: ConnectOrgConfig = {
+    ...HAPPY_ORG, stripe_account_id: null, stripe_charges_enabled: false,
+  };
+  const routing = buildChargeRouting(20000, 'card', broken, 'org-id');
+  assertEquals(routing.blocked, null);
+  assertEquals(routing.params, {});
+});
+
+Deno.test('null org → destination fall-through, not blocked', () => {
+  const routing = buildChargeRouting(20000, 'card', null, 'org-id');
+  assertEquals(routing.direct, false);
+  assertEquals(routing.params, {});
+  assertEquals(routing.blocked, null);
 });

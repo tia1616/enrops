@@ -1,4 +1,23 @@
-// stripe-webhook v19 — PATCH 12 (2026-05-29)
+// stripe-webhook v20 — PATCH 13 (2026-07-27)
+// v20: Stripe direct charges (migration Phase 2).
+//      A direct charge is created ON the connected account, so ALL of its
+//      events — including checkout.session.completed — are CONNECTED-ACCOUNT
+//      events. Two consequences:
+//        1. CONFIG, NOT CODE: the "Connected accounts" webhook destination must
+//           subscribe to checkout.session.completed (and the async_payment_*
+//           events). It was created for account.updated only. If it doesn't,
+//           a direct org's families are charged and their registrations are
+//           NEVER marked paid — no confirmation email, no installment rows,
+//           and nothing in this function ever runs to tell us. Verified by a
+//           real staging charge, not by reading the dashboard.
+//        2. Any Stripe API call made while handling such an event must be
+//           scoped with {stripeAccount: event.account}. event.account is set
+//           only for connected-account events, so destination orgs (J2S) keep
+//           the platform-scoped call unchanged.
+//      No DB writes changed: registration/installment rows are ours and are
+//      keyed the same way regardless of charge model.
+//
+// v19 — PATCH 12 (2026-05-29)
 // v19: Enrops-as-platform path for instructor pay.
 //      - account.updated: if the connected-account ID doesn't match an
 //        operator (organizations.stripe_account_id), try matching it to an
@@ -202,7 +221,16 @@ serve(async (req) => {
 
       if (isPaid && useInstallments) {
         try {
-          const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent as string);
+          // Phase 2: a DIRECT charge's PaymentIntent lives on the connected
+          // account, not the platform, so an unscoped retrieve 404s. Stripe puts
+          // the account on the EVENT (event.account), which is present exactly
+          // when the event came from a connected account — so this is self-
+          // scoping and needs no org lookup. For a destination org event.account
+          // is null and this is the unchanged platform-scoped call.
+          // undefined, never {} — stripe-node treats an empty options object as
+          // a stray argument and throws "Unknown arguments".
+          const piScope = event.account ? { stripeAccount: event.account as string } : undefined;
+          const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent as string, piScope);
 
           const customerId = (session.customer as string) || (paymentIntent.customer as string);
           const paymentMethodId = paymentIntent.payment_method as string;

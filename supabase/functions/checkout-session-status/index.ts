@@ -92,10 +92,40 @@ serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   try {
-    const { session_id } = await req.json();
+    const { session_id, org_slug } = await req.json();
     if (!session_id || typeof session_id !== 'string') return json({ error: 'Missing session_id' }, 400);
 
-    const session = await stripe.checkout.sessions.retrieve(session_id);
+    // Phase 2: a DIRECT org's Checkout Session lives on its connected account,
+    // so an unscoped retrieve 404s — and this function's catch-all fails OPEN
+    // to {paid:true}, which would show a family a success page for a payment
+    // that never settled. Resolve the right scope before retrieving.
+    //
+    // org_slug is a HINT, never authorization: we look the slug up ourselves and
+    // read stripe_account_id from OUR row, so a client can't point this at an
+    // arbitrary Stripe account. The gate is unchanged — possession of the
+    // session_id. A wrong slug just means the retrieve fails.
+    // Destination orgs (J2S) resolve to {} and take the identical platform call.
+    // undefined, never {} — stripe-node treats an empty options object as a
+    // stray argument and throws "Unknown arguments".
+    let sessionScope: { stripeAccount: string } | undefined = undefined;
+    if (org_slug && typeof org_slug === 'string') {
+      try {
+        const scopeAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+        const { data: orgRow } = await scopeAdmin
+          .from('organizations')
+          .select('stripe_charge_model, stripe_account_id')
+          .eq('slug', org_slug)
+          .maybeSingle();
+        if (orgRow?.stripe_charge_model === 'direct' && orgRow?.stripe_account_id) {
+          sessionScope = { stripeAccount: orgRow.stripe_account_id as string };
+        }
+      } catch (scopeErr) {
+        // Non-fatal: fall through to the platform-scoped retrieve below.
+        console.error('checkout-session-status scope lookup failed:', scopeErr);
+      }
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(session_id, sessionScope);
     // Card: payment_status === 'paid' on completion. ACH: session completes but
     // payment_status stays 'unpaid' until the bank transfer clears (days later).
     const paid = session.payment_status === 'paid';
@@ -111,9 +141,15 @@ serve(async (req) => {
 
     return json({ paid, processing, calendar });
   } catch (err) {
-    console.error('checkout-session-status error:', err);
     // Fail safe: assume settled so we never alarm a card payer with a false
     // "processing" note. ACH families also saw the 1-3 day note at StepPay.
+    //
+    // Logged at error level with the session id BECAUSE this path is silent to
+    // the family: if a direct org ever lands here it means the scope lookup
+    // above didn't resolve (stale client not sending org_slug), and we are
+    // showing "paid" without having confirmed it. That is the one thing worth
+    // grepping the logs for after any direct-charge deploy.
+    console.error('checkout-session-status error (FAILING OPEN to paid=true):', err);
     return json({ paid: true, processing: false, calendar: null });
   }
 });

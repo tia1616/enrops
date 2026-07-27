@@ -36,14 +36,17 @@ export default function RegisterSuccess() {
     let cancelled = false;
     (async () => {
       const { data } = await supabase.functions.invoke('checkout-session-status', {
-        body: { session_id: sessionId },
+        // org_slug lets the function scope the Stripe lookup to this operator's
+        // connected account when they're on direct charges. Without it the
+        // lookup 404s and the function fails open to "paid".
+        body: { session_id: sessionId, org_slug: ORG_SLUG },
       });
       if (cancelled) return;
       if (data?.processing) setProcessing(true);
       if (data?.calendar?.ics) setCalendar(data.calendar);
     })();
     return () => { cancelled = true; };
-  }, [sessionId]);
+  }, [sessionId, ORG_SLUG]);
 
   function downloadIcs() {
     if (!calendar?.ics) return;
