@@ -156,6 +156,22 @@ serve(async (req) => {
         });
       }
 
+      case 'run_installments_cron': {
+        // Invoke process-installments with the CRON_SECRET that already lives
+        // in this environment, so the secret is never returned or handled
+        // outside Supabase. Only safe because the caller verified FIRST that
+        // exactly one installment row is due and it is the intended test row -
+        // this charges real (test-mode) cards for every due row it finds.
+        const secret = Deno.env.get('CRON_SECRET') || '';
+        const resp = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/process-installments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Cron-Secret': secret },
+          body: '{}',
+        });
+        const text = await resp.text();
+        return json({ status: resp.status, body: text.slice(0, 4000) });
+      }
+
       case 'login_link': {
         // Does createLoginLink work on a controller account? It is documented
         // for Express-type dashboards; controller accounts use type 'full'.
