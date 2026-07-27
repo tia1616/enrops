@@ -14,6 +14,7 @@
 // Enrops admin chrome only — mounted in AdminLayout. Tokens match the shell.
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "../../lib/supabase";
 
 const PURPLE = "#1C004F";
@@ -133,7 +134,17 @@ export default function FeedbackWidget({ org }) {
         </button>
       </div>
 
-      {open && (
+      {/* PORTALLED TO <body> ON PURPOSE — do not inline this back.
+          This widget is mounted inside AdminLayout's <aside>, which is
+          position:sticky, and sticky ALWAYS creates a stacking context. That
+          traps the overlay's z-index inside the sidebar's context, where it
+          competes at the aside's own level (auto) rather than at 1001. Any
+          positioned page content with a z-index — ProgramsCalendar's sticky day
+          headers are z-index 1 — then paints straight through the modal. That
+          is exactly what happened: the modal opened with program rows drawn
+          across it. A portal escapes the ancestor context entirely, so the
+          z-index means what it says regardless of what page is underneath. */}
+      {open && createPortal(
         <div
           onMouseDown={(e) => { if (e.target === e.currentTarget && status !== "sending") close(); }}
           style={{
@@ -255,7 +266,8 @@ export default function FeedbackWidget({ org }) {
               </>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

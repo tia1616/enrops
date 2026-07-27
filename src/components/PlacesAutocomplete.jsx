@@ -105,12 +105,25 @@ export default function PlacesAutocomplete({
   disabled,
   autoFocus,
   id,
+  // Called with true when the lookup cannot run, so the CALLER can say so.
+  // Optional: callers that omit it behave exactly as before.
+  //
+  // Why this exists: the component degrades to a plain <input> on any failure
+  // (no key configured, referrer not allowed on this domain, quota, offline)
+  // and used to do it with nothing but a console.warn. To an operator that is
+  // indistinguishable from a broken feature -- they type a real school and no
+  // address appears, with no clue whether it is loading, wrong, or off. Silent
+  // fallback is the "looks dead" bug class; the field still works for typing,
+  // but we have to SAY the lookup is unavailable.
+  onLookupUnavailable,
 }) {
   const inputRef = useRef(null);
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
   useEffect(() => {
-    if (!apiKey || !inputRef.current) return undefined;
+    // No key configured for this environment. Previously returned in silence.
+    if (!apiKey) { onLookupUnavailable?.(true); return undefined; }
+    if (!inputRef.current) return undefined;
     ensurePacCss();
     let autocomplete;
     let listener;
@@ -123,6 +136,7 @@ export default function PlacesAutocomplete({
           componentRestrictions: { country: 'us' },
           fields: ['name', 'formatted_address'],
         });
+        onLookupUnavailable?.(false);
         listener = autocomplete.addListener('place_changed', () => {
           const place = autocomplete.getPlace();
           if (!place) return;
@@ -137,6 +151,9 @@ export default function PlacesAutocomplete({
       })
       .catch((err) => {
         if (typeof console !== 'undefined') console.warn('[PlacesAutocomplete] disabled:', err?.message ?? err);
+        // Google refused (referrer not allowed for this domain is the usual one
+        // on a non-production host), or the script could not load. Tell the caller.
+        if (!cancelled) onLookupUnavailable?.(true);
       });
     return () => {
       cancelled = true;

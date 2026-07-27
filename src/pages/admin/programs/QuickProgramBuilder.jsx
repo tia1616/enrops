@@ -167,6 +167,12 @@ export default function QuickProgramBuilder() {
   // none = location-less (still valid — location is optional).
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState("");
+  // Does this org already have programs? Decides whether the first-class
+  // questions are appropriate. null = not counted yet (never assume either way).
+  const [programCount, setProgramCount] = useState(null);
+  // Whether the Google address lookup could actually start. Drives honest copy
+  // under the field instead of a box that silently does nothing.
+  const [lookupDown, setLookupDown] = useState(false);
   useEffect(() => {
     if (!org?.id) return;
     let cancelled = false;
@@ -180,6 +186,12 @@ export default function QuickProgramBuilder() {
       const locs = data ?? [];
       setLocations(locs);
       if (locs.length === 1) setLocationId(locs[0].id);
+
+      const { count } = await supabase
+        .from("programs")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", org.id);
+      if (!cancelled) setProgramCount(count ?? 0);
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
@@ -262,7 +274,16 @@ export default function QuickProgramBuilder() {
   // directly underneath it. Only ever shown to registration operators, and only
   // until they answer.
   const isLean = org?.instructor_pay_model === "enrops_platform";
-  const needsOnboarding = isLean && !profile.onboarding_completed_at;
+  // An org that already has programs is demonstrably not setting up its FIRST
+  // class, whatever onboarding_completed_at says. That column only landed in
+  // 20260725d, so every org created before it is NULL forever and was being
+  // asked the first-class questions on every single visit to the builder --
+  // Riverbend has 3 live programs and still got "Let's set up your first class".
+  // programCount is null until counted, so we show neither screen prematurely.
+  const needsOnboarding =
+    isLean && !profile.onboarding_completed_at && programCount === 0;
+  const countPending =
+    isLean && !profile.onboarding_completed_at && programCount === null;
 
   const [ansVenue, setAnsVenue] = useState(profile.venue_answer ?? "");
   const [ansCadence, setAnsCadence] = useState(profile.program_cadence ?? "");
@@ -381,6 +402,11 @@ export default function QuickProgramBuilder() {
       setProfile((p) => ({ ...p, ...patch }));
       // Correct the shell's copy too, so the card doesn't come back.
       setOrg?.((o) => (o ? { ...o, ...patch } : o));
+      // Answering swaps the questions for the (longer) builder form in place, so
+      // the browser keeps whatever scroll offset the questions left behind and
+      // drops the operator into the MIDDLE of a form they have not seen the top
+      // of. Put them at the start of it.
+      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "auto" });
     } catch (e) {
       setProfileErr(e?.message ?? "Couldn't save that. Please try again.");
     } finally {
@@ -515,6 +541,12 @@ export default function QuickProgramBuilder() {
 
   // Guard: outlet not ready yet.
   if (!org) {
+    return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
+  }
+
+  // Still counting this org's programs. Showing either screen now risks flashing
+  // the wrong one and yanking the page out from under whoever is reading it.
+  if (countPending && !createdId) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
   }
 
@@ -954,6 +986,7 @@ export default function QuickProgramBuilder() {
                   value={newLocName}
                   onChange={setNewLocName}
                   onSelect={applyPlace}
+                  onLookupUnavailable={setLookupDown}
                   placeholder="Location name (e.g. Downtown Studio)"
                   style={{ ...inputStyle, marginBottom: 4 }}
                 />
@@ -967,11 +1000,12 @@ export default function QuickProgramBuilder() {
                   autoFocus
                 />
               )}
-              {/* Only promise the autofill when Maps is actually configured. */}
-              <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
-                {placesEnabled
-                  ? "Start typing — we'll find the place and fill in the address for you. Or just type the name."
-                  : "The name families will see for this location."}
+              {/* Three honest states, never a box that silently does nothing:
+                  lookup working, lookup unavailable, lookup not configured. */}
+              <div style={{ fontSize: 12, color: lookupDown ? "#8a6d1f" : MUTED, marginBottom: 8 }}>
+                {!placesEnabled || lookupDown
+                  ? "Address lookup isn't available right now — type the name and address in yourself."
+                  : "Start typing — we'll find the place and fill in the address for you. Or just type the name."}
               </div>
               <input
                 style={inputStyle}
@@ -995,10 +1029,23 @@ export default function QuickProgramBuilder() {
                 <option value="">No specific location</option>
                 {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
-              <div style={{ marginTop: 6 }}>
-                <span onClick={() => setAddingLocation(true)} style={{ color: BRIGHT, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
-                  {profile.venue_answer === "goes_to_sites" || profile.venue_answer === "both" ? "+ Add a site" : "+ Add a location"}
-                </span>
+              {/* Was a 13px <span onClick> — no button semantics, no tap target,
+                  invisible as an action on a phone. A real button at 44px, the
+                  minimum touch size the mobile audit holds every control to. */}
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setAddingLocation(true)}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    minHeight: 44, padding: "10px 16px",
+                    background: "#fff", color: BRIGHT,
+                    border: `1px solid ${BRIGHT}`, borderRadius: 8,
+                    fontSize: 14, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  + {profile.venue_answer === "goes_to_sites" || profile.venue_answer === "both" ? "Add a site" : "Add a location"}
+                </button>
               </div>
               {locations.length === 0 && profile.venue_answer === "own_space" && (
                 <div style={helpStyle}>
