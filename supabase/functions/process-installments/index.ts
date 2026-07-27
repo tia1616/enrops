@@ -428,11 +428,11 @@ async function processGroup(
   //     always made.
   //   direct org: margin-only fee, and the PaymentIntent is created ON the
   //     connected account, where the saved Customer + payment method live.
-  // ── registration-level fee, split across installments ───────────────────
-  // The platform fee is capped PER REGISTRATION, not per charge (Jessica
-  // 2026-07-27). Recomputing it from THIS charge's amount would let a $500
-  // program collect the cap three times. So rebuild each registration's full
-  // schedule, apply the org's rate/floor/cap ONCE to its total, and take this
+  // ── cart-level fee, split across installments ───────────────────────────
+  // The platform fee is capped once per checkout, not per charge (Jessica
+  // 2026-07-27: "$7.99 per reg"). Recomputing it from THIS charge's amount
+  // would let a $500 program collect the cap three times. So rebuild the full
+  // schedule, apply the org's rate/floor/cap ONCE to the total, and take this
   // installment's share. Below the cap the numbers are identical to before.
   const groupRegIds = [...new Set(activeRows.map((r) => r.registration_id))];
   const { data: allInstRows } = await admin
@@ -440,21 +440,26 @@ async function processGroup(
     .select('id, registration_id, installment_number, amount_cents')
     .in('registration_id', groupRegIds);
 
-  // registration_id -> installment_number -> allocated fee share
-  const shareByRow = new Map<string, number>();
-  const byReg = new Map<string, Array<{ id: string; installment_number: number; amount_cents: number }>>();
+  // Cap across the WHOLE CART, not per registration — because that is what the
+  // single pay-in-full charge does (create-checkout hands computePlatformFee
+  // the cart's total_cents) and what create-checkout's installment allocation
+  // does. Capping per registration here instead would make charge 1 and charges
+  // 2/3 disagree on a multi-child cart: 2 children at $240 would pay $2.67 on
+  // charge 1 and $4.80 on each of the next two.
+  //
+  // A cart's registrations share a Stripe Customer, so they land in this same
+  // group; groupRegIds IS the cart. Rows are ordered by installment number then
+  // registration so the leftover cent lands on charge 1, matching checkout.
   type FeeRow = { id: string; registration_id: string; installment_number: number; amount_cents: number };
-  for (const row of ((allInstRows ?? []) as unknown) as FeeRow[]) {
-    if (!byReg.has(row.registration_id)) byReg.set(row.registration_id, []);
-    byReg.get(row.registration_id)!.push(row);
-  }
-  for (const [, rows] of byReg) {
-    rows.sort((a, b) => a.installment_number - b.installment_number);
-    const regTotal = rows.reduce((s, r) => s + r.amount_cents, 0);
-    const regFee = orgConfig ? computePlatformFee(regTotal, 'card', orgConfig) : 0;
-    const shares = allocateFeeAcrossInstallments(regFee, rows.map((r) => r.amount_cents));
-    rows.forEach((r, i) => shareByRow.set(r.id, shares[i]));
-  }
+  const cartRows = (((allInstRows ?? []) as unknown) as FeeRow[]).slice().sort(
+    (a, b) => a.installment_number - b.installment_number ||
+      a.registration_id.localeCompare(b.registration_id),
+  );
+  const cartTotal = cartRows.reduce((s, r) => s + r.amount_cents, 0);
+  const cartFee = orgConfig ? computePlatformFee(cartTotal, 'card', orgConfig) : 0;
+  const cartShares = allocateFeeAcrossInstallments(cartFee, cartRows.map((r) => r.amount_cents));
+  const shareByRow = new Map<string, number>();
+  cartRows.forEach((r, i) => shareByRow.set(r.id, cartShares[i]));
 
   // This charge's margin = the sum of the shares of the rows it covers. If a
   // row is somehow missing from the reload, fall back to computing on its own

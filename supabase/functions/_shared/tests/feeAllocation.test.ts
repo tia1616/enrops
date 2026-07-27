@@ -113,3 +113,44 @@ Deno.test('degenerate schedule of zeros puts the fee on charge 1 rather than dro
 Deno.test('empty schedule returns empty (no crash)', () => {
   assertEquals(allocateFeeAcrossInstallments(799, []), []);
 });
+
+// ── charge 1 and charges 2/3 must agree on the unit they cap over ──────────
+// create-checkout allocates over the CART's three aggregated installments;
+// process-installments allocates over every row of that cart. If the two used
+// different units (cart vs per registration) a two-child cart would pay one fee
+// at checkout and a different one on the off-session charges. This pins the
+// equivalence that keeps them consistent.
+Deno.test('SEAM: allocating per-row and per-installment give the same total', () => {
+  // Two children, $240 each, split three ways: 6 rows, cart total $480.
+  const perChild = [8000, 8000, 8000];
+  const rows = [
+    perChild[0], perChild[0], // installment 1, child A + B
+    perChild[1], perChild[1], // installment 2
+    perChild[2], perChild[2], // installment 3
+  ];
+  const cartTotal = rows.reduce((s, v) => s + v, 0);
+  assertEquals(cartTotal, 48000);
+
+  const cartFee = computePlatformFee(cartTotal, 'card', REG); // 3% = 1440 -> capped 799
+  assertEquals(cartFee, 799);
+
+  const rowShares = allocateFeeAcrossInstallments(cartFee, rows);
+  assertEquals(rowShares.reduce((s, v) => s + v, 0), 799);
+
+  // The aggregated view create-checkout uses: three slots of $160 each.
+  const aggregated = [16000, 16000, 16000];
+  const aggShares = allocateFeeAcrossInstallments(cartFee, aggregated);
+  assertEquals(aggShares.reduce((s, v) => s + v, 0), 799);
+
+  // Charge 1's slice matches between the two views (the pairing that broke
+  // when process-installments capped per registration instead of per cart).
+  assertEquals(rowShares[0] + rowShares[1], aggShares[0]);
+});
+
+Deno.test('SEAM: capping per registration would overcharge a multi-child cart', () => {
+  // The bug this guards against: two $240 registrations capped separately.
+  const perRegFee = computePlatformFee(24000, 'card', REG); // 720 each
+  assertEquals(perRegFee * 2, 1440);
+  // Capped across the cart instead — which is what pay-in-full already does.
+  assertEquals(computePlatformFee(48000, 'card', REG), 799);
+});
