@@ -137,9 +137,18 @@ serve(async (req: Request) => {
     const detailsSubmitted = account.details_submitted === true;
     const disabledReason = account.requirements?.disabled_reason || null;
 
-    let nextStatus: 'active' | 'restricted' | 'onboarding';
+    // 'verifying': everything submitted, Stripe reviewing, nothing owed by the
+    // operator. Must match stripe-webhook exactly (see the lockstep note above)
+    // — this is the path behind the "Already finished? Check status" button, so
+    // a mismatch here is what an operator sees the instant they click it.
+    const PENDING_REVIEW_REASONS = ['requirements.pending_verification', 'under_review'];
+    const isPendingReview = disabledReason !== null && PENDING_REVIEW_REASONS.includes(disabledReason);
+
+    let nextStatus: 'active' | 'restricted' | 'verifying' | 'onboarding';
     if (chargesEnabled && payoutsEnabled) {
       nextStatus = 'active';
+    } else if (detailsSubmitted && isPendingReview) {
+      nextStatus = 'verifying';
     } else if (detailsSubmitted && !chargesEnabled && disabledReason) {
       nextStatus = 'restricted';
     } else {

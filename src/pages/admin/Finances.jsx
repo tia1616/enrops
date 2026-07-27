@@ -275,7 +275,12 @@ export default function Finances() {
   const status = config?.stripe_account_status || "not_connected";
   const accountId = config?.stripe_account_id;
   const isActive = status === "active";
+  // 'verifying' is deliberately NOT lumped in here. It means Stripe is
+  // reviewing and the operator owes nothing, so it must not render the
+  // "finish your setup" body — that told an operator who had done everything
+  // to go supply information Stripe wasn't asking for.
   const isOnboardingOrRestricted = status === "onboarding" || status === "restricted";
+  const isVerifying = status === "verifying";
   const isDisconnected = status === "disconnected";
 
   // ── actions ─────────────────────────────────────────────────────────────
@@ -496,6 +501,14 @@ export default function Finances() {
                 canManage={canManage}
                 chargesEnabled={!!config?.stripe_charges_enabled}
                 payoutsEnabled={!!config?.stripe_payouts_enabled}
+              />
+            )}
+
+            {isVerifying && (
+              <VerifyingBody
+                onCheckStatus={checkStripeStatus}
+                checking={checkingStatus}
+                canManage={canManage}
               />
             )}
 
@@ -1552,6 +1565,32 @@ function ConnectButton({ onConnect, onReconnect, busy, canManage, label }) {
     >
       {busy ? "Starting…" : label}
     </button>
+  );
+}
+
+// Stripe has everything and is reviewing. The operator owes NOTHING, so this
+// body deliberately has no "Continue setup" button — offering one would send
+// someone who finished correctly back into a completed form looking for a
+// field that isn't there. Observed 2026-07-27: it cleared on its own in about
+// a minute, which is what the copy now says.
+function VerifyingBody({ onCheckStatus, checking, canManage }) {
+  return (
+    <StripeHero
+      title="Stripe is reviewing your details"
+      subtitle="Everything's submitted — there's nothing more for you to do. This usually finishes within a couple of minutes, and payments switch on automatically."
+    >
+      {canManage && (
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <button
+            onClick={onCheckStatus}
+            disabled={checking}
+            style={btn("transparent", BRIGHT, true, checking)}
+          >
+            {checking ? "Checking…" : "Check again"}
+          </button>
+        </div>
+      )}
+    </StripeHero>
   );
 }
 

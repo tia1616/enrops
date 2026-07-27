@@ -936,11 +936,13 @@ async function handleAccountUpdated(
     return;
   }
 
-  // Map Stripe state to our enum. 5 buckets:
+  // Map Stripe state to our enum. 6 buckets:
   //   active        — charges + payouts both enabled
-  //   restricted    — submitted details but Stripe has disabled with a reason
-  //   onboarding    — submitted details, still verifying (no disabled_reason)
-  //                   OR hasn't completed onboarding form yet
+  //   verifying     — everything submitted, Stripe is REVIEWING, nothing is
+  //                   required from the operator
+  //   restricted    — Stripe disabled the account for a reason the operator
+  //                   must actually act on
+  //   onboarding    — hasn't completed the onboarding form yet
   //   disconnected  — operator disconnected (handled by deauthorize, not here)
   //   not_connected — never connected (handled at insert time, not here)
   const chargesEnabled = account.charges_enabled === true;
@@ -949,9 +951,20 @@ async function handleAccountUpdated(
   const disabledReason = account.requirements?.disabled_reason || null;
   const wasActive = org.stripe_account_status === 'active';
 
-  let nextStatus: 'active' | 'restricted' | 'onboarding';
+  // Not every disabled_reason is the operator's problem. These two mean the
+  // opposite of "we need something from you" — the form is done,
+  // requirements.currently_due is empty, and Stripe is just reviewing (usually
+  // for well under a minute). Collapsing them into 'restricted' made the
+  // Finances screen tell an operator who had done everything correctly to go
+  // supply information Stripe wasn't asking for. Observed live 2026-07-27.
+  const PENDING_REVIEW_REASONS = ['requirements.pending_verification', 'under_review'];
+  const isPendingReview = disabledReason !== null && PENDING_REVIEW_REASONS.includes(disabledReason);
+
+  let nextStatus: 'active' | 'restricted' | 'verifying' | 'onboarding';
   if (chargesEnabled && payoutsEnabled) {
     nextStatus = 'active';
+  } else if (detailsSubmitted && isPendingReview) {
+    nextStatus = 'verifying';
   } else if (detailsSubmitted && !chargesEnabled && disabledReason) {
     nextStatus = 'restricted';
   } else {

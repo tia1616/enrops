@@ -1,4 +1,4 @@
-# Supabase project config — primarily codifies per-function verify_jwt so
+﻿# Supabase project config — primarily codifies per-function verify_jwt so
 # deploys can't silently flip a webhook to require-JWT (which breaks Stripe/
 # Checkr) or expose an authed endpoint. Values mirror PROD's live settings
 # (verified 2026-06-08). Functions not listed default to verify_jwt = true.
@@ -15,6 +15,14 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.create-registration]
+verify_jwt = false
+
+[functions.sync-operator-stripe-status]
+# Mirrors PROD, which has this as verify_jwt = false. The function does its own
+# auth: it reads the caller's Bearer token and checks org membership, and the
+# only caller (Finances.jsx "Check status") always sends a real user JWT. Listed
+# here because it was previously assumed to be prod-only and absent from the
+# repo — it is not, and a deploy without --no-verify-jwt silently tightens it.
 verify_jwt = false
 
 [functions.process-installments]
@@ -67,6 +75,7 @@ verify_jwt = false
 [functions.platform-intelligence-digest]
 verify_jwt = false
 
-# Note: prod also has admin-convert-logo, sync-operator-stripe-status,
+# Note: prod also has admin-convert-logo and
 # dev-seed-designer-access as verify_jwt=false, but those are NOT in this
 # repo (prod-only / legacy), so they're intentionally omitted here.
+
