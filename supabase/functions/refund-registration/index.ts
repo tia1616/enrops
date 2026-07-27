@@ -58,6 +58,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
+import { computeMarginRefund } from '../_shared/refundFeeSplit.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -69,6 +70,8 @@ interface Body {
   amount_cents?: number;
   reason?: string;
   cancel_registration?: boolean;
+  /** true = return eligibility only, refund nothing. */
+  preview?: boolean;
 }
 
 interface RegistrationRow {
@@ -132,8 +135,13 @@ serve(async (req: Request) => {
     const reason = (body.reason || '').toString().slice(0, 500) || null;
     const cancelRegistration = body.cancel_registration === true;
 
+    // preview: compute and return eligibility, refund nothing. Same auth, same
+    // maths, no side effects — so the drawer can show a ceiling it knows the
+    // server will honour instead of deriving its own.
+    const preview = body.preview === true;
+
     if (!registrationId) return json({ error: 'missing_registration_id' }, 400);
-    if (!Number.isFinite(amountCents) || amountCents <= 0) {
+    if (!preview && (!Number.isFinite(amountCents) || amountCents <= 0)) {
       return json({ error: 'invalid_amount' }, 400);
     }
 
@@ -205,10 +213,35 @@ serve(async (req: Request) => {
     // fail. null = platform, which is correct for every row that predates this.
     const refundScopeFor = (chargeAccountId: string | null): { stripeAccount: string } | undefined =>
       chargeAccountId ? { stripeAccount: chargeAccountId } : undefined;
-    // A direct charge's application fee is clean margin, so it always goes back.
-    // A destination charge keeps the existing stripe_fee_payer-driven policy.
+    // ── how much of the application fee goes back ─────────────────────────
+    //
+    // DIRECT charge: the fee is clean margin (Stripe took its cut from the
+    // operator's own balance, never from ours), so the whole thing goes back
+    // via refund_application_fee:true. Nothing to apportion.
+    //
+    // DESTINATION charge: the application fee is deliberately LARGER than the
+    // margin — it is margin + estimateStripeFee whenever the provider bears
+    // Stripe's fee. Those two halves must be treated differently on a refund,
+    // which a boolean cannot express:
+    //   - the MARGIN half goes back. Enrops earned no margin on a cancelled
+    //     registration.
+    //   - the STRIPE-FEE half does NOT, because Stripe keeps its processing fee
+    //     on a refund. Handing it back means Enrops pays Stripe out of pocket
+    //     every time an operator refunds someone.
+    // So refund_application_fee is FALSE and the margin is refunded explicitly
+    // via applicationFees.createRefund — the split Jessica decided on
+    // 2026-07-25, superseding "Enrops absorbs it". See _shared/refundFeeSplit.ts.
+    //
+    // Outcome on a fully refunded charge: family whole, provider bears Stripe's
+    // real fee, Enrops nets zero. Nobody profits from a cancellation and nobody
+    // quietly subsidises it.
+    //
+    // Legacy own-platform orgs (stripe_fee_payer != 'tenant') never carried an
+    // uplift, so there is nothing to hold back and nothing to refund separately
+    // — they keep refund_application_fee:false exactly as before.
+    const providerBearsStripeFee = orgFee?.stripe_fee_payer === 'tenant';
     const refundApplicationFeeFor = (chargeAccountId: string | null): boolean =>
-      chargeAccountId ? true : orgFee?.stripe_fee_payer === 'tenant';
+      chargeAccountId ? true : false;
 
     // ── collect paid PIs for this registration ────────────────────────────
     // Pattern: installments table is the primary source. If no installments
@@ -250,6 +283,67 @@ serve(async (req: Request) => {
       return json({ error: 'nothing_paid' }, 400);
     }
 
+    // ── raise each slot's ceiling to what the FAMILY ACTUALLY PAID ────────
+    //
+    // amount_cents is the BASE price. When the operator passes the platform fee
+    // to families, the card was charged base + fee, and the eligibility ceiling
+    // was silently the base — so a family who paid $276.74 could only ever be
+    // refunded $274.00. Arielle's checklist §2 forbids exactly that: "Parent's
+    // refund amount = whatever the operator's own stated cancellation policy
+    // promises. Never reduce it to cover Stripe's or Enrops' fees — card
+    // network rules prohibit shorting the cardholder."
+    //
+    // The charge is the authoritative record of what was taken, so the ceiling
+    // is read from Stripe rather than recomputed from today's fee config (which
+    // may have changed since). A PaymentIntent can cover several registrations
+    // (a multi-child cart, or an aggregated installment charge), so this
+    // registration gets its PROPORTIONAL share of the real charge, split by the
+    // base amounts that made it up.
+    //
+    // Absorb orgs (fee_pass_through=false — including J2S on prod) charged base
+    // only, so the share equals amount_cents and nothing changes for them.
+    for (const slot of piSlots) {
+      try {
+        const pi = await stripe.paymentIntents.retrieve(
+          slot.pi,
+          undefined,
+          slot.chargeAccountId ? { stripeAccount: slot.chargeAccountId } : undefined,
+        );
+        const chargedTotal = pi.amount ?? 0;
+        if (chargedTotal <= 0) continue;
+
+        // Which base amounts made up this PI? Rows sharing the PI across ALL
+        // registrations, not just this one.
+        const { data: sharers } = await supabase
+          .from('installments')
+          .select('amount_cents')
+          .eq('stripe_payment_intent_id', slot.pi);
+        const sharerRows = ((sharers ?? []) as unknown) as Array<{ amount_cents: number }>;
+        let baseOnPi = sharerRows.reduce((s, r) => s + (r.amount_cents || 0), 0);
+
+        if (baseOnPi <= 0) {
+          // Single-pay: the PI's base is the sum of every registration that
+          // shared this checkout, not just this one.
+          const { data: regSharers } = await supabase
+            .from('registrations')
+            .select('amount_cents')
+            .eq('stripe_payment_intent_id', slot.pi);
+          const regRows = ((regSharers ?? []) as unknown) as Array<{ amount_cents: number | null }>;
+          baseOnPi = regRows.reduce((s, r) => s + (r.amount_cents || 0), 0);
+        }
+        if (baseOnPi <= 0) continue;
+
+        // Never LOWER a ceiling: if the maths ever disagrees, keep the base.
+        const share = Math.round((chargedTotal * slot.amount) / baseOnPi);
+        if (share > slot.amount) slot.amount = share;
+      } catch (ceilErr) {
+        // Non-fatal: fall back to the base amount, which is the pre-existing
+        // behaviour. It can under-refund a pass-through family, so it is worth
+        // seeing in the logs, but it must not block a refund entirely.
+        console.error('[refund] could not read the charged total for', slot.pi, ceilErr);
+      }
+    }
+
     // ── compute already-refunded per PI for this registration ─────────────
     const { data: refundedData } = await supabase
       .from('refunds')
@@ -266,6 +360,21 @@ serve(async (req: Request) => {
     const totalPaid = piSlots.reduce((s, p) => s + p.amount, 0);
     const totalRefunded = Object.values(refundedAgg).reduce((s, v) => s + v, 0);
     const eligible = totalPaid - totalRefunded;
+
+    // PREVIEW: return the numbers and refund nothing. The drawer used to
+    // recompute this from installments/registrations itself, which meant the
+    // ceiling existed in two places and they drifted — the UI inherited the
+    // same fee shortfall as the server. Now there is ONE implementation and the
+    // UI displays what the server will actually allow.
+    if (preview) {
+      return json({
+        preview: true,
+        eligible_cents: eligible,
+        total_paid_cents: totalPaid,
+        total_refunded_cents: totalRefunded,
+      });
+    }
+
     if (amountCents > eligible) {
       return json({
         error: 'amount_exceeds_eligible',
@@ -317,6 +426,56 @@ serve(async (req: Request) => {
       }
       const refundRowId = (rowData as { id: string }).id;
 
+      // ── read the REAL numbers off the charge, never recompute them ───────
+      // A provider's rates can change between the charge and the refund; the
+      // charge is the authoritative record of what was actually taken. Only
+      // needed on the destination path, where the margin has to be separated
+      // from the Stripe-fee uplift.
+      let marginRefundCents = 0;
+      let applicationFeeId: string | null = null;
+      if (!slot.chargeAccountId && providerBearsStripeFee) {
+        try {
+          const pi = await stripe.paymentIntents.retrieve(slot.pi, {
+            expand: ['latest_charge.balance_transaction', 'latest_charge.application_fee'],
+          });
+          const charge = (pi as unknown as {
+            latest_charge?: {
+              amount?: number;
+              application_fee_amount?: number | null;
+              application_fee?: { id?: string; amount_refunded?: number } | string | null;
+              balance_transaction?: { fee?: number } | string | null;
+            } | null;
+          }).latest_charge ?? null;
+
+          const appFee = typeof charge?.application_fee === 'object' ? charge?.application_fee : null;
+          applicationFeeId = appFee?.id ?? (typeof charge?.application_fee === 'string' ? charge?.application_fee : null);
+          const bt = typeof charge?.balance_transaction === 'object' ? charge?.balance_transaction : null;
+
+          marginRefundCents = computeMarginRefund({
+            applicationFeeCents: charge?.application_fee_amount ?? 0,
+            // Stripe's REAL fee on this charge, off the balance transaction —
+            // not estimateStripeFee, which is only ever an estimate made at
+            // charge time and is what the uplift was sized from.
+            stripeFeeCents: bt?.fee ?? 0,
+            chargeAmountCents: charge?.amount ?? 0,
+            refundAmountCents: refundThisPi,
+            alreadyRefundedFeeCents: appFee?.amount_refunded ?? 0,
+          });
+        } catch (feeErr) {
+          // Refuse rather than guess: refunding the family without returning
+          // the operator's margin, or returning the wrong amount, are both
+          // worse than making a human look. Nothing has been refunded yet.
+          console.error('[refund] could not read charge fee details:', feeErr);
+          await supabase.from('refunds')
+            .update({ status: 'failed', failure_reason: 'could not read the charge fee details from Stripe' })
+            .eq('id', refundRowId);
+          return json({
+            error: 'fee_lookup_failed',
+            partial: refundsCreated.length > 0 ? refundsCreated : undefined,
+          }, 502);
+        }
+      }
+
       try {
         const stripeRefund = await stripe.refunds.create(
           {
@@ -346,6 +505,46 @@ serve(async (req: Request) => {
           { idempotencyKey: `refund_${refundRowId}`, ...refundScopeFor(slot.chargeAccountId) },
         );
 
+        // ── return the MARGIN half of the application fee ──────────────────
+        // Destination charges only. Separate call because refund_application_fee
+        // is all-or-nothing and we deliberately hold back the Stripe-fee half.
+        // Its own idempotency key, so a retry of this function cannot double-
+        // refund the fee even though the charge refund above already succeeded.
+        let marginRefundApplied = 0;
+        if (marginRefundCents > 0 && applicationFeeId) {
+          try {
+            const feeRefund = await stripe.applicationFees.createRefund(
+              applicationFeeId,
+              { amount: marginRefundCents },
+              { idempotencyKey: `appfee_${refundRowId}` },
+            );
+            marginRefundApplied = feeRefund.amount ?? marginRefundCents;
+          } catch (feeRefundErr) {
+            // The family HAS been refunded. The operator has NOT had the margin
+            // returned. Never swallow this — it is money owed to the operator,
+            // and it is invisible unless we say so.
+            const m = (feeRefundErr as { raw?: { message?: string }; message?: string });
+            const msg = m.raw?.message ?? m.message ?? 'unknown';
+            console.error('[refund] charge refunded but application-fee refund FAILED:', msg);
+            await supabase.from('refunds')
+              .update({
+                stripe_refund_id: stripeRefund.id,
+                status: 'succeeded',
+                succeeded_at: new Date().toISOString(),
+                failure_reason: `family refunded, but returning the provider's ${marginRefundCents}c margin failed: ${msg}`,
+              })
+              .eq('id', refundRowId);
+            return json({
+              error: 'margin_refund_failed',
+              detail: 'The family was refunded, but the provider has not been credited back the platform margin. This needs a manual application-fee refund in Stripe.',
+              stripe_refund_id: stripeRefund.id,
+              application_fee_id: applicationFeeId,
+              margin_owed_cents: marginRefundCents,
+              refunds: refundsCreated,
+            }, 502);
+          }
+        }
+
         const succeededAt = new Date().toISOString();
         const { error: updErr } = await supabase
           .from('refunds')
@@ -353,6 +552,7 @@ serve(async (req: Request) => {
             stripe_refund_id: stripeRefund.id,
             status: 'succeeded',
             succeeded_at: succeededAt,
+            platform_fee_refunded_cents: marginRefundApplied,
           })
           .eq('id', refundRowId);
         if (updErr) {

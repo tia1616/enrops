@@ -71,7 +71,16 @@ export function passThroughLineItemForAmount(feeCents: number): StripeLineItem |
         // and constrained in CA, and the word "processing" is what makes a
         // reader file a platform fee under "card surcharge". Attributing it to
         // enrops by name is the same approach Eventbrite uses.
-        description: "enrops's service fee for running the platform. Not a card processing surcharge.",
+        //
+        // Rewritten 2026-07-27 (Jessica picked this wording). The old line read
+        // "enrops's service fee for running the platform. Not a card processing
+        // surcharge." — it repeated the line title, described the product in our
+        // words rather than a parent's, and denied a term most families have
+        // never heard, which only plants it. "not a bank charge" does the same
+        // legal work in words a parent reads once. Keep the two jobs if this is
+        // ever edited again: say what the money buys, and separate it from both
+        // the provider and the card networks.
+        description: "Covers online registration and secure payments. This is enrops's fee, not a bank charge.",
       },
       unit_amount: fee,
     },
