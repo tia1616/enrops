@@ -5,7 +5,8 @@
 //   organizations.stripe_charge_model:
 //     'destination' (J2S + every pre-existing org) — UNCHANGED. Session is
 //        created on the platform with transfer_data/on_behalf_of/uplift exactly
-//        as before; the request options are {}.
+//        as before, and NO request-options argument at all (undefined — passing
+//        {} makes stripe-node throw "Unknown arguments").
 //     'direct' — the Session is created ON the connected account (Stripe-Account
 //        header), application_fee_amount is clean Enrops margin with no Stripe-fee
 //        uplift (the operator's account pays Stripe natively), and no transfer_data
@@ -322,7 +323,10 @@ serve(async (req) => {
       }
       const connectParams = routing.params;
       // Every Stripe call in this branch is scoped by this. On a destination org
-      // it is {} — the exact platform-scoped call this function always made.
+      // it is UNDEFINED — the exact platform-scoped call this function always
+      // made. It must not be {}: stripe-node identifies an options object by its
+      // known keys, so an empty one is read as a stray argument and the call
+      // throws "Unknown arguments ([object Object])".
       const acct = routing.requestOptions;
 
       // Customer lookup/creation is scoped to `acct`, so a direct org's families
@@ -534,7 +538,8 @@ serve(async (req) => {
       }, 409);
     }
     const connectParamsStd = routingStd.params;
-    // {} for a destination org — the platform-scoped call this always made.
+    // undefined (never {}) for a destination org — the platform-scoped call
+    // this always made. See the installments branch above for why {} breaks.
     const acctStd = routingStd.requestOptions;
 
     // Pass-through: when the operator opts in (fee_pass_through), add the platform

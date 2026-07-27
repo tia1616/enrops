@@ -1,4 +1,16 @@
-// process-installments v7 — daily cron worker that charges due installments off-session.
+// process-installments v8 — daily cron worker that charges due installments off-session.
+//
+// v8 CHANGE (2026-07-27): organization_id is part of the grouping key.
+//   A Stripe Customer is NOT unique per org — for destination orgs
+//   create-checkout dedupes customers platform-wide by email, so one parent
+//   using the same email with two operators gets the SAME cus_... on both orgs'
+//   installment rows. The old (customer, installment_number) key merged them
+//   into one group and charged the total with groupRows[0]'s Connect routing,
+//   sending the second operator's revenue to the first operator's account.
+//   Verified 2026-07-27 that NO such rows exist in staging or prod, so this is
+//   preventative, not a repair. A parent enrolled with two operators now sees
+//   one charge per operator per installment, which is correct — they are two
+//   different merchants.
 //
 // v7 CHANGE (2026-07-27): Stripe direct charges (migration Phase 2).
 //   Routing now comes from buildChargeRouting(organizations.stripe_charge_model):
@@ -31,7 +43,8 @@
 // (stripe_customer_id, installment_number) — IGNORING due_date — and charge them
 // together on the earliest due_date in the group. This means parents always see
 // exactly 3 charges total regardless of how many children or how staggered their
-// program dates are.
+// program dates are. (v8 narrows this to 3 charges PER OPERATOR: the key now
+// includes organization_id, because two operators are two merchants.)
 //
 // Trigger logic: when ANY row in a group has due_date <= today, the WHOLE group
 // is charged together. We collect slightly earlier than the latest published
@@ -47,7 +60,7 @@
 // 2. For each row in the trigger set, pull ALL pending sibling rows from the
 //    same parent + same installment_number (across all due_dates) — these are
 //    the rows that will be charged TOGETHER.
-// 3. Group by (stripe_customer_id, installment_number).
+// 3. Group by (organization_id, stripe_customer_id, installment_number).
 // 4. For each group:
 //    a. Fetch program statuses for all rows. Pause any rows whose program is cancelled.
 //    b. If the active subset is empty, skip. Otherwise charge the SUM of active rows
@@ -153,12 +166,29 @@ serve(async (req) => {
       return jsonResp({ ok: true, summary });
     }
 
-    // STEP 2: For each (customer_id, installment_number) in the trigger set, pull
-    // ALL pending sibling rows from that group — even ones with due_date > today.
-    // These get charged together. (v5 earliest-date grouping.)
+    // STEP 2: For each (org, customer_id, installment_number) in the trigger set,
+    // pull ALL pending sibling rows from that group — even ones with
+    // due_date > today. These get charged together. (v5 earliest-date grouping.)
+    //
+    // v8: organization_id is part of the key. It has to be, because a Stripe
+    // Customer is NOT unique per org: for destination orgs create-checkout
+    // dedupes customers PLATFORM-WIDE by email (stripe.customers.list({email})
+    // with no account scope), so one parent registering the same email with two
+    // different operators gets the SAME cus_... written into both orgs'
+    // installment rows. Without organization_id in the key those rows merged
+    // into a single group and were charged as ONE PaymentIntent using
+    // groupRows[0]'s org config — routing the second operator's revenue into
+    // the first operator's connected account. A group must never span orgs.
+    //
+    // Consequence, and it is the correct one: a parent enrolled with two
+    // operators now sees one charge per operator per installment. They are two
+    // different merchants; a single combined charge was never right.
+    const installmentGroupKey = (r: InstallmentRow) =>
+      `${r.organization_id}__${r.stripe_customer_id}__${r.installment_number}`;
+
     const triggerKeys = new Set<string>();
     for (const row of triggerSet as InstallmentRow[]) {
-      triggerKeys.add(`${row.stripe_customer_id}__${row.installment_number}`);
+      triggerKeys.add(installmentGroupKey(row));
     }
 
     // Build OR filter to fetch all sibling rows — pull rows whose
@@ -178,10 +208,13 @@ serve(async (req) => {
       return jsonResp({ error: candidateErr.message }, 500);
     }
 
-    // Filter down to only rows whose (customer, instNum) is in triggerKeys
-    // (the .in() above is a Cartesian product across customers and inst-nums)
+    // Filter down to only rows whose (org, customer, instNum) is in triggerKeys
+    // (the .in() above is a Cartesian product across customers and inst-nums).
+    // This is also what keeps another org's rows out: the .in() query is not
+    // org-scoped, so a shared platform customer id pulls in the sibling org's
+    // pending rows, and only this filter drops them.
     const dueInstallments = (allCandidateRows as InstallmentRow[]).filter((r) =>
-      triggerKeys.has(`${r.stripe_customer_id}__${r.installment_number}`),
+      triggerKeys.has(installmentGroupKey(r)),
     );
 
     console.log(`Expanded to ${dueInstallments.length} rows including future-dated siblings`);
@@ -218,11 +251,14 @@ serve(async (req) => {
       });
     }
 
-    // STEP 3: Group by (stripe_customer_id, installment_number) — NOT including due_date.
-    // This is the v5 change: rows with different due_dates can land in the same group.
+    // STEP 3: Group by (organization_id, stripe_customer_id, installment_number)
+    // — NOT including due_date. That is the v5 change: rows with different
+    // due_dates can land in the same group. The org component is v8 (see the
+    // installmentGroupKey comment above): every row in a group must belong to ONE org,
+    // because the whole group is charged with that org's Connect routing.
     const groupMap = new Map<string, InstallmentRow[]>();
     for (const row of dueInstallments) {
-      const key = `${row.stripe_customer_id}__${row.installment_number}`;
+      const key = installmentGroupKey(row);
       if (!groupMap.has(key)) groupMap.set(key, []);
       groupMap.get(key)!.push(row);
     }
@@ -385,7 +421,8 @@ async function processGroup(
   // Checkout Sessions).
   //   destination org (J2S + all pre-existing): the same overlay as v6
   //     (application_fee_amount + transfer_data + descriptor suffix), and
-  //     `acct` is {} — the platform-scoped call this cron always made.
+  //     `acct` is undefined (never {}) — the platform-scoped call this cron
+  //     always made.
   //   direct org: margin-only fee, and the PaymentIntent is created ON the
   //     connected account, where the saved Customer + payment method live.
   const routing = buildChargeRouting(
@@ -445,9 +482,11 @@ async function processGroup(
         },
         ...connectParams,
       },
-      // acct is {} for destination orgs, so this is the unchanged call there.
-      // Idempotency keys are scoped per account, which is what we want: a
-      // direct org's retry key can't collide with a platform-scoped one.
+      // acct is UNDEFINED for destination orgs (never {} — stripe-node throws
+      // "Unknown arguments" on an empty options object), so spreading it here
+      // leaves the unchanged platform-scoped call. Idempotency keys are scoped
+      // per account, which is what we want: a direct org's retry key can't
+      // collide with a platform-scoped one.
       { idempotencyKey, ...acct },
     );
   } catch (err) {

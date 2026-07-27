@@ -194,9 +194,9 @@ serve(async (req: Request) => {
       console.error(`[refund] org ${reg.organization_id} is charge_model=direct but has no stripe_account_id`);
       return json({ error: 'provider_stripe_not_connected' }, 409);
     }
-    // Spread into the options object below, which always carries an
-    // idempotencyKey, so {} would be harmless here — but keep it undefined for
-    // consistency with every other scope in this migration.
+    // Spread into an options object that always carries an idempotencyKey, so
+    // {} would happen to be harmless here — but keep it undefined for
+    // consistency with every other scope in this migration, where {} throws.
     const refundScope: { stripeAccount: string } | undefined = isDirect
       ? { stripeAccount: orgFee!.stripe_account_id! }
       : undefined;
@@ -331,7 +331,8 @@ serve(async (req: Request) => {
               ...(reason ? { enrops_reason: reason.slice(0, 200) } : {}),
             },
           },
-          // refundScope is {} for destination orgs — the unchanged platform call.
+          // refundScope is undefined for destination orgs, so spreading it here
+          // leaves the unchanged platform-scoped call.
           { idempotencyKey: `refund_${refundRowId}`, ...refundScope },
         );
 
