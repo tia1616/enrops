@@ -179,16 +179,30 @@ export function buildChargeRouting(
   paymentMethod: PaymentMethodType,
   org: ConnectOrgConfig | null,
   orgIdForLog: string | null,
+  /**
+   * This charge's share of a fee that was capped across the WHOLE registration
+   * (see _shared/feeAllocation.ts). Pass it only on the installments path;
+   * omit it for pay-in-full, where one charge already means one cap.
+   *
+   * It replaces the MARGIN component only. On a destination charge the
+   * Stripe-fee uplift stays per-charge, because Stripe really does take its fee
+   * on each charge — capping that would just make Enrops eat the difference.
+   */
+  marginOverrideCents?: number,
 ): ChargeRouting {
   const isDirect = org?.stripe_charge_model === 'direct';
 
   if (!isDirect) {
-    return {
-      direct: false,
-      params: buildConnectChargeParams(amountCents, paymentMethod, org, orgIdForLog),
-      requestOptions: undefined,
-      blocked: null,
-    };
+    const params = buildConnectChargeParams(amountCents, paymentMethod, org, orgIdForLog);
+    // Shift ONLY the margin, leaving the uplift buildConnectChargeParams
+    // computed. With no override this block never runs, so J2S and every
+    // pay-in-full charge are byte-for-byte unchanged.
+    if (marginOverrideCents !== undefined && params.application_fee_amount !== undefined && org) {
+      const baseMargin = computePlatformFee(amountCents, paymentMethod, org);
+      const shifted = params.application_fee_amount + (marginOverrideCents - baseMargin);
+      params.application_fee_amount = Math.max(0, Math.min(shifted, amountCents));
+    }
+    return { direct: false, params, requestOptions: undefined, blocked: null };
   }
 
   // --- direct charge ---
@@ -208,7 +222,9 @@ export function buildChargeRouting(
   }
 
   // Margin only - NO estimateStripeFee uplift. The operator pays Stripe natively.
-  const margin = computePlatformFee(amountCents, paymentMethod, org!);
+  const margin = marginOverrideCents !== undefined
+    ? marginOverrideCents
+    : computePlatformFee(amountCents, paymentMethod, org!);
 
   const params: ConnectChargeParams = {};
   // Stripe: "The value of application_fee_amount must be positive and less than

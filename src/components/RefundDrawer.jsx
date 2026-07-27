@@ -8,9 +8,15 @@
 // refunds to show accurate "refundable" math, plus the org's configured
 // withdrawal admin fee (Finances → Settings) for the quick-fill. It then
 // POSTs to the refund-registration edge function, which does the Stripe
-// refund (reverse_transfer + Enrops keeps its fee), records the refund,
-// advances payment_status, and — only if the operator chooses to withdraw —
-// cancels the registration and frees the seat.
+// refund, records it, advances payment_status, and — only if the operator
+// chooses to withdraw — cancels the registration and frees the seat.
+//
+// The Stripe flags are the edge function's business, not this drawer's, and
+// they are no longer one fixed pair: each PaymentIntent is refunded on the
+// account it was actually created on (recorded in
+// registrations/installments.stripe_charge_account_id), with reverse_transfer
+// only on the destination-charge path. This UI is unchanged by any of that —
+// it still sends registration_id + amount_cents and shows what came back.
 //
 // Money-safe by construction: the edge fn re-authorizes owner/admin, guards
 // eligibility server-side, and is idempotent. This UI never decides money on

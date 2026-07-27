@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { formatMoney } from '../../../lib/pricing.js';
-import { feeOnCents } from '../../../lib/platformFee.js';
+import { feeOnCents, installmentFeeShares } from '../../../lib/platformFee.js';
 
 export default function StepPay({
   pricing,
@@ -48,15 +48,27 @@ export default function StepPay({
   const standardFeeOn = (cents) => feeOnCents(cents, org, { isBank: false });
   const charged = (cents) => cents + feeOn(cents);
 
-  const feeToday = feeOn(displayAmount);
-  const chargedToday = charged(displayAmount);
+  // Payment plans: the fee is capped per REGISTRATION, so it is computed once
+  // against the whole total and split across the three charges — never
+  // recomputed per installment, which would collect the cap up to three times.
+  // Same allocation the server uses, so these figures are the figures Stripe
+  // charges. Installments are card-only, hence no isBank here.
+  const planShares = useInstallments
+    ? installmentFeeShares(installmentSchedule.map((i) => i.amount_cents), org)
+    : [];
+  const planStandardShares = planShares; // card-only; standard === effective
+  const feeForIndex = (i) => (useInstallments ? planShares[i] : 0);
+  const chargedForIndex = (i) => installmentSchedule[i].amount_cents + feeForIndex(i);
+
+  const feeToday = useInstallments ? feeForIndex(0) : feeOn(displayAmount);
+  const chargedToday = useInstallments ? chargedForIndex(0) : charged(displayAmount);
   // The standard (card) fee, and what paying by bank takes off it. Never
   // negative: if a config ever made ACH the dearer method, we show no discount
   // rather than inventing a card penalty.
-  const standardFeeToday = standardFeeOn(displayAmount);
+  const standardFeeToday = useInstallments ? planStandardShares[0] : standardFeeOn(displayAmount);
   const bankDiscountToday = Math.max(0, standardFeeToday - feeToday);
   const grandTotal = useInstallments
-    ? installmentSchedule.reduce((s, i) => s + charged(i.amount_cents), 0)
+    ? installmentSchedule.reduce((s, i, idx) => s + i.amount_cents + feeForIndex(idx), 0)
     : chargedToday;
 
   const fmtDate = (iso) =>
@@ -113,7 +125,7 @@ export default function StepPay({
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
               <p className="text-xs uppercase tracking-wider text-j2s-purple-dark">Today</p>
               <p className="font-titan text-lg text-j2s-ink">
-                {formatMoney(charged(installmentSchedule[0].amount_cents))}
+                {formatMoney(chargedForIndex(0))}
               </p>
             </div>
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
@@ -121,7 +133,7 @@ export default function StepPay({
                 {fmtDate(installmentSchedule[1].due_date)}
               </p>
               <p className="font-titan text-lg text-j2s-ink">
-                {formatMoney(charged(installmentSchedule[1].amount_cents))}
+                {formatMoney(chargedForIndex(1))}
               </p>
             </div>
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
@@ -129,7 +141,7 @@ export default function StepPay({
                 {fmtDate(installmentSchedule[2].due_date)}
               </p>
               <p className="font-titan text-lg text-j2s-ink">
-                {formatMoney(charged(installmentSchedule[2].amount_cents))}
+                {formatMoney(chargedForIndex(2))}
               </p>
             </div>
           </div>

@@ -51,7 +51,9 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
-import { passThroughLineItem } from '../_shared/passThroughFee.ts';
+import { passThroughLineItem, passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
+import { computePlatformFee } from '../_shared/computePlatformFee.ts';
+import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -310,10 +312,24 @@ serve(async (req) => {
         }, 409);
       }
 
-      // Connect overlay + which account the API calls are made against. Fee is
-      // computed against installment 1's amount only — installments 2 and 3
-      // compute their own when process-installments fires.
-      const routing = buildChargeRouting(firstAmount, 'card', orgConfig, orgId);
+      // The platform fee is capped PER REGISTRATION, not per charge: compute it
+      // once against the whole total, then split it across the three
+      // installments. Otherwise a $500 program split three ways costs the
+      // family 3 x the per-charge fee while paying up front hits the single
+      // $7.99 cap — penalising exactly the families who need the plan.
+      // Below the cap this changes nothing (3% of $240 = 3 x 3% of $80).
+      const installmentFeeShares = orgConfig
+        ? allocateFeeAcrossInstallments(
+          computePlatformFee(total_cents, 'card', orgConfig),
+          [c1.amount_cents, c2.amount_cents, c3.amount_cents],
+        )
+        : [0, 0, 0];
+      const firstFeeShare = installmentFeeShares[0];
+
+      // Connect overlay + which account the API calls are made against. The
+      // margin is installment 1's SHARE of the registration-level fee;
+      // installments 2 and 3 take theirs when process-installments fires.
+      const routing = buildChargeRouting(firstAmount, 'card', orgConfig, orgId, firstFeeShare);
       if (routing.blocked) {
         console.warn(`[create-checkout] BLOCKED (installments, direct): ${routing.blocked}`);
         return json({
@@ -365,9 +381,13 @@ serve(async (req) => {
         quantity: 1,
       };
 
-      // Pass-through: add the 1% on installment 1's amount as a visible line.
-      // Installments 2 & 3 add their own proportional fee in process-installments.
-      const feeLineInst = orgConfig ? passThroughLineItem(firstAmount, 'card', orgConfig) : null;
+      // Pass-through: installment 1's SHARE of the registration-level fee as a
+      // visible line. Uses the same allocated share as application_fee_amount
+      // above, so what the family is charged and what the platform keeps always
+      // agree. Installments 2 & 3 take their shares in process-installments.
+      const feeLineInst = orgConfig?.fee_pass_through && firstFeeShare > 0
+        ? passThroughLineItemForAmount(firstFeeShare)
+        : null;
       const installmentLineItems = feeLineInst
         ? [installmentLineItem, feeLineInst]
         : [installmentLineItem];

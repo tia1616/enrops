@@ -44,6 +44,17 @@ export function passThroughLineItem(
 ): StripeLineItem | null {
   const fee = passThroughFeeCents(baseCents, paymentMethod, org);
   if (fee <= 0) return null;
+  return passThroughLineItemForAmount(fee)!;
+}
+
+// Same line, for a fee amount the caller already worked out. Used by the
+// installments path, where the fee is capped across the whole registration and
+// then split, so it cannot be re-derived from this charge's amount alone.
+// Kept here, next to passThroughLineItem, so the family-facing wording and the
+// legal note below live in exactly ONE place.
+export function passThroughLineItemForAmount(feeCents: number): StripeLineItem | null {
+  const fee = Math.round(feeCents);
+  if (fee <= 0) return null;
   return {
     price_data: {
       currency: 'usd',

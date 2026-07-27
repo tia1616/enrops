@@ -76,7 +76,8 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
-import { passThroughFeeCents } from '../_shared/passThroughFee.ts';
+import { computePlatformFee } from '../_shared/computePlatformFee.ts';
+import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -427,6 +428,42 @@ async function processGroup(
   //     always made.
   //   direct org: margin-only fee, and the PaymentIntent is created ON the
   //     connected account, where the saved Customer + payment method live.
+  // ── registration-level fee, split across installments ───────────────────
+  // The platform fee is capped PER REGISTRATION, not per charge (Jessica
+  // 2026-07-27). Recomputing it from THIS charge's amount would let a $500
+  // program collect the cap three times. So rebuild each registration's full
+  // schedule, apply the org's rate/floor/cap ONCE to its total, and take this
+  // installment's share. Below the cap the numbers are identical to before.
+  const groupRegIds = [...new Set(activeRows.map((r) => r.registration_id))];
+  const { data: allInstRows } = await admin
+    .from('installments')
+    .select('id, registration_id, installment_number, amount_cents')
+    .in('registration_id', groupRegIds);
+
+  // registration_id -> installment_number -> allocated fee share
+  const shareByRow = new Map<string, number>();
+  const byReg = new Map<string, Array<{ id: string; installment_number: number; amount_cents: number }>>();
+  type FeeRow = { id: string; registration_id: string; installment_number: number; amount_cents: number };
+  for (const row of ((allInstRows ?? []) as unknown) as FeeRow[]) {
+    if (!byReg.has(row.registration_id)) byReg.set(row.registration_id, []);
+    byReg.get(row.registration_id)!.push(row);
+  }
+  for (const [, rows] of byReg) {
+    rows.sort((a, b) => a.installment_number - b.installment_number);
+    const regTotal = rows.reduce((s, r) => s + r.amount_cents, 0);
+    const regFee = orgConfig ? computePlatformFee(regTotal, 'card', orgConfig) : 0;
+    const shares = allocateFeeAcrossInstallments(regFee, rows.map((r) => r.amount_cents));
+    rows.forEach((r, i) => shareByRow.set(r.id, shares[i]));
+  }
+
+  // This charge's margin = the sum of the shares of the rows it covers. If a
+  // row is somehow missing from the reload, fall back to computing on its own
+  // amount rather than silently charging no fee.
+  const groupMargin = activeRows.reduce(
+    (s, r) => s + (shareByRow.get(r.id) ?? (orgConfig ? computePlatformFee(r.amount_cents, 'card', orgConfig) : 0)),
+    0,
+  );
+
   // The PLAN's own history wins over the org's CURRENT stripe_charge_model.
   // stripe_charge_account_id was stamped on every row when charge 1 completed:
   // null = the plan lives on the platform (destination), non-null = it lives on
@@ -478,6 +515,7 @@ async function processGroup(
     'card',
     routingOrg,
     activeRows[0].organization_id,
+    groupMargin,
   );
 
   // Fail closed for direct orgs with no usable account. Charging anyway would
@@ -508,9 +546,11 @@ async function processGroup(
   const acct = routing.requestOptions;
 
   // Pass-through: if the operator passes the fee to families, this installment
-  // charges its base amount PLUS the proportional 1% (application_fee above is
-  // unchanged at 1% of base, so the operator nets the full installment).
-  const passFee = orgConfig ? passThroughFeeCents(totalAmount, 'card', orgConfig) : 0;
+  // charges its base amount PLUS this charge's SHARE of the registration-level
+  // fee — the exact same groupMargin used for application_fee_amount above, so
+  // what the family pays and what the platform keeps always agree, and the
+  // three installments together never exceed the org's per-registration cap.
+  const passFee = orgConfig?.fee_pass_through ? groupMargin : 0;
 
   let paymentIntent: Stripe.PaymentIntent;
   try {
