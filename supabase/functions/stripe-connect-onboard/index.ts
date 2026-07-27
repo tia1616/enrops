@@ -174,7 +174,40 @@ serve(async (req: Request) => {
       // onboarding. See docs.stripe.com/api/accounts/create (both optional).
       try {
         const accountParams: Stripe.AccountCreateParams = {
-          type: 'express',
+          // CONTROLLER, NOT `type` — and these three values can NEVER be changed
+          // on an account once it exists, so they are the whole ballgame.
+          //
+          // Stripe's API reference: "The `type` parameter is deprecated. Use
+          // `controller` instead to configure dashboard access, fee payer, loss
+          // liability, and requirement collection." The two cannot both be sent.
+          //
+          // These are set EXPLICITLY rather than left to Stripe's defaults (which
+          // happen to match) so the intent is auditable and a future default
+          // change can't silently alter who pays what.
+          //
+          //   fees.payer = 'account'      the OPERATOR pays Stripe's 2.9% + 30c
+          //                               directly. This is what makes the uplift
+          //                               unnecessary instead of load-bearing.
+          //   losses.payments = 'stripe'  the operator, not Enrops, carries
+          //                               disputes and negative balances. Under
+          //                               the old Express + destination setup
+          //                               Stripe debited OUR balance for every
+          //                               dispute plus the ~$15 fee, "with or
+          //                               without on_behalf_of".
+          //   stripe_dashboard = 'full'   the operator gets a real Stripe
+          //                               dashboard. Load-bearing for Arielle's
+          //                               spec, which assumes they can refund
+          //                               from inside Stripe directly (and which
+          //                               is why we owe a charge.refunded
+          //                               handler in Phase 3).
+          //   requirement_collection      Stripe collects KYC, same hosted
+          //     = 'stripe'                onboarding we already hand them.
+          controller: {
+            fees: { payer: 'account' },
+            losses: { payments: 'stripe' },
+            stripe_dashboard: { type: 'full' },
+            requirement_collection: 'stripe',
+          },
           country: org.stripe_country || 'US',
           ...(org.stripe_business_type
             ? { business_type: org.stripe_business_type as Stripe.AccountCreateParams.BusinessType }
@@ -210,6 +243,15 @@ serve(async (req: Request) => {
         const account = await stripe.accounts.create(accountParams);
         accountId = account.id;
         justCreated = true;
+        // Read back what Stripe ACTUALLY assigned rather than assuming our
+        // request was honoured. These values are immutable once the account
+        // exists, so the first one we create is the only cheap chance to catch
+        // a mismatch between what we asked for and what we got.
+        console.log('[connect-onboard] created account controller:', JSON.stringify({
+          id: account.id,
+          type: (account as unknown as { type?: string }).type ?? null,
+          controller: (account as unknown as { controller?: unknown }).controller ?? null,
+        }));
       } catch (err) {
         const stripeErr = err as {
           message?: string;
@@ -235,6 +277,13 @@ serve(async (req: Request) => {
         .update({
           stripe_account_id: accountId,
           stripe_account_status: 'onboarding',
+          // Only an account WE just minted is known to be controller-based.
+          // The orphan-recovery branch above adopts a pre-existing Stripe
+          // account, which may well be a legacy Express one — marking that
+          // 'direct' would route its charges the wrong way and make the
+          // operator pay a Stripe fee we are also still recovering via the
+          // uplift. Leave those on the 'destination' default.
+          ...(justCreated ? { stripe_charge_model: 'direct' } : {}),
         })
         .eq('id', org.id);
       if (updErr) {
@@ -263,6 +312,25 @@ serve(async (req: Request) => {
     const returnUrl = `${origin}/admin/finances?stripe=return`;
     const refreshUrl = `${origin}/admin/finances?stripe=refresh`;
     void slug; // reserved for future per-tenant routes if we adopt them
+
+    // What did Stripe ACTUALLY assign? controller.fees.payer / losses.payments /
+    // stripe_dashboard.type are immutable once the account exists, so knowing
+    // them is the difference between "we think the operator pays Stripe" and
+    // "we know". Returned so the admin surface can show the truth rather than
+    // infer it from our own column. Never fatal - a failed read must not block
+    // handing back the onboarding URL.
+    let assignedController: unknown = null;
+    try {
+      const acct = await stripe.accounts.retrieve(accountId!);
+      assignedController = (acct as unknown as { controller?: unknown }).controller ?? null;
+      console.log('[connect-onboard] stripe-assigned controller:', JSON.stringify({
+        id: acct.id,
+        type: (acct as unknown as { type?: string }).type ?? null,
+        controller: assignedController,
+      }));
+    } catch (err) {
+      console.warn('[connect-onboard] accounts.retrieve failed (non-fatal):', err);
+    }
 
     let link;
     try {
@@ -295,6 +363,7 @@ serve(async (req: Request) => {
     return json({
       onboarding_url: link.url,
       account_id: accountId,
+      account_controller: assignedController,
       caller_role: callerRole,
     });
   } catch (err) {
