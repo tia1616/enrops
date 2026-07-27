@@ -435,10 +435,68 @@ async function processGroup(
   // schedule, apply the org's rate/floor/cap ONCE to the total, and take this
   // installment's share. Below the cap the numbers are identical to before.
   const groupRegIds = [...new Set(activeRows.map((r) => r.registration_id))];
-  const { data: allInstRows } = await admin
+
+  // The cart is every registration that went through the SAME checkout session,
+  // not just the ones with a row due today. Deriving it from activeRows alone
+  // made the cap base shrink whenever part of a cart stopped being chargeable
+  // (a cancelled sibling program), so charges 2/3 capped over a smaller total
+  // than charge 1 was quoted against. registrations.stripe_checkout_session_id
+  // is the authoritative link. Legacy rows predate that column and fall back to
+  // the group, which is what they always were.
+  const { data: sessionRows, error: sessionErr } = await admin
+    .from('registrations')
+    .select('stripe_checkout_session_id')
+    .in('id', groupRegIds);
+  const sessionIds = [...new Set(
+    (((sessionRows ?? []) as unknown) as Array<{ stripe_checkout_session_id: string | null }>)
+      .map((r) => r.stripe_checkout_session_id)
+      .filter((s): s is string => !!s),
+  )];
+
+  let cartRegIds = groupRegIds;
+  let siblingErr: unknown = null;
+  if (sessionIds.length) {
+    const { data: siblingRows, error: sErr } = await admin
+      .from('registrations')
+      .select('id')
+      .in('stripe_checkout_session_id', sessionIds);
+    siblingErr = sErr;
+    cartRegIds = [...new Set([
+      ...groupRegIds,
+      ...(((siblingRows ?? []) as unknown) as Array<{ id: string }>).map((r) => r.id),
+    ])];
+  }
+
+  const { data: allInstRows, error: instErr } = await admin
     .from('installments')
     .select('id, registration_id, installment_number, amount_cents')
-    .in('registration_id', groupRegIds);
+    .in('registration_id', cartRegIds);
+
+  // Fail CLOSED on any of the three reads. Without them the fee can only be
+  // rebuilt from this charge's own amount, which is exactly the per-charge
+  // clamping this design removed - a $500 plan would quietly bill $5.00 instead
+  // of its allocated ~$2.67, and pass it on to the family. A paused row that a
+  // human retries beats a silent overcharge.
+  if (sessionErr || siblingErr || instErr || !allInstRows) {
+    const why = `could not rebuild the fee schedule (${(instErr as { message?: string } | null)?.message ?? (sessionErr as { message?: string } | null)?.message ?? (siblingErr as { message?: string } | null)?.message ?? 'no rows returned'})`;
+    console.error(`[process-installments] BLOCKED: ${why}`);
+    await admin.from('installments').update({
+      status: 'paused_card_failed',
+      failure_reason: `charge blocked: ${why}`,
+      last_attempt_at: new Date().toISOString(),
+    }).in('id', activeRows.map((r) => r.id).sort());
+    summary.paused_card_failed_groups++;
+    summary.paused_card_failed_rows += activeRows.length;
+    summary.errors++;
+    summary.details.push(`BLOCKED group (fee schedule unreadable): ${activeRows.length} rows`);
+    await sendOperatorAlert({
+      brand,
+      to: alertEmail,
+      subject: 'Installment charge held — could not confirm the fee',
+      body: `${activeRows.length} installment row(s) were NOT charged and are now paused.\n\nWe could not read the full payment plan to work out the correct service fee, and we will not guess at a number a family already agreed to. Nothing was charged.\n\nThis is usually temporary — set the rows back to pending to retry.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
+    });
+    return;
+  }
 
   // Cap across the WHOLE CART, not per registration — because that is what the
   // single pay-in-full charge does (create-checkout hands computePlatformFee
@@ -461,13 +519,34 @@ async function processGroup(
   const shareByRow = new Map<string, number>();
   cartRows.forEach((r, i) => shareByRow.set(r.id, cartShares[i]));
 
-  // This charge's margin = the sum of the shares of the rows it covers. If a
-  // row is somehow missing from the reload, fall back to computing on its own
-  // amount rather than silently charging no fee.
-  const groupMargin = activeRows.reduce(
-    (s, r) => s + (shareByRow.get(r.id) ?? (orgConfig ? computePlatformFee(r.amount_cents, 'card', orgConfig) : 0)),
-    0,
-  );
+  // This charge's margin = the sum of the shares of the rows it covers. Every
+  // active row MUST be in shareByRow: the reload selected by registration id,
+  // and these rows have those ids. There is deliberately NO per-row fallback —
+  // the obvious one (recompute on this row's amount) is the per-charge clamping
+  // this design exists to remove, so it would silently reintroduce the bug.
+  const missingShare = activeRows.filter((r) => !shareByRow.has(r.id));
+  if (missingShare.length) {
+    const why = `fee schedule is missing ${missingShare.length} of the ${activeRows.length} row(s) being charged`;
+    console.error(`[process-installments] BLOCKED: ${why}`, missingShare.map((r) => r.id));
+    await admin.from('installments').update({
+      status: 'paused_card_failed',
+      failure_reason: `charge blocked: ${why}`,
+      last_attempt_at: new Date().toISOString(),
+    }).in('id', activeRows.map((r) => r.id).sort());
+    summary.paused_card_failed_groups++;
+    summary.paused_card_failed_rows += activeRows.length;
+    summary.errors++;
+    summary.details.push(`BLOCKED group (incomplete fee schedule): ${activeRows.length} rows`);
+    await sendOperatorAlert({
+      brand,
+      to: alertEmail,
+      subject: 'Installment charge held — could not confirm the fee',
+      body: `${activeRows.length} installment row(s) were NOT charged and are now paused.\n\nWe could not work out the correct service fee for part of this payment plan, and we will not guess at a number a family already agreed to. Nothing was charged.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
+    });
+    return;
+  }
+
+  const groupMargin = activeRows.reduce((s, r) => s + (shareByRow.get(r.id) as number), 0);
 
   // The PLAN's own history wins over the org's CURRENT stripe_charge_model.
   // stripe_charge_account_id was stamped on every row when charge 1 completed:

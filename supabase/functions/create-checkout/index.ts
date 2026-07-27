@@ -440,7 +440,19 @@ serve(async (req) => {
         })
         .in('id', registration_ids);
       if (chargeRefErr) {
+        // Do NOT let the family pay against a session we failed to record.
+        // For a direct org this row is the only thing checkout-session-status
+        // can use to scope its Stripe lookup, and its catch-all fails OPEN to
+        // paid:true — so proceeding means an ACH payer whose transfer is still
+        // clearing gets shown a settled success page. Expire the session and
+        // make them retry, exactly as the schedule-persist failure below does.
         console.error('[create-checkout] failed to record charge account (installments):', chargeRefErr);
+        try {
+          await stripe.checkout.sessions.expire(session.id, acct);
+        } catch (expireErr) {
+          console.error('Failed to expire unrecorded session:', expireErr);
+        }
+        return json({ error: 'Could not start checkout. Please try again.' }, 500);
       }
 
       // Persist the per-line schedule to checkout_schedules — webhook reads it after payment
@@ -635,7 +647,16 @@ serve(async (req) => {
       })
       .in('id', registration_ids);
     if (chargeRefErrStd) {
+      // Same reasoning as the installments branch: an unrecorded session leaves
+      // checkout-session-status unable to scope a direct org's lookup, and it
+      // fails OPEN to paid:true. Expire and make them retry.
       console.error('[create-checkout] failed to record charge account:', chargeRefErrStd);
+      try {
+        await stripe.checkout.sessions.expire(session.id, acctStd);
+      } catch (expireErr) {
+        console.error('Failed to expire unrecorded session:', expireErr);
+      }
+      return json({ error: 'Could not start checkout. Please try again.' }, 500);
     }
 
     // intelligence: log enrollment initiated (one per registration; fail-safe, never blocks)
