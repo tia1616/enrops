@@ -162,7 +162,15 @@ serve(async (req) => {
       // marker distinguishes an ACH-in-flight 'unpaid' from a plain unpaid.
       const settlement = settlementForCheckoutCompleted(session.payment_status);
       const isPaid = settlement.fundsSettled;
-      await admin.from('registrations').update({
+      // This is THE write that turns a payment into an enrolment. It was
+      // unchecked, and on 2026-07-27 that hid a real failure: a CHECK
+      // constraint (photo_release_required_when_confirmed) rejected the row for
+      // any family who declined the now-optional photo release, so they were
+      // charged and left pending/unpaid with nothing surfacing it. The
+      // constraint is gone (20260727f), but an unchecked write on the money
+      // path is the actual defect - anything else that ever rejects this row
+      // must be loud, not silent.
+      const { error: confirmErr } = await admin.from('registrations').update({
         status: 'confirmed',
         payment_status: settlement.payment_status,
         ach_payment_state: settlement.ach_payment_state,
@@ -174,6 +182,29 @@ serve(async (req) => {
         // intended. Refunds read this instead of the org's current charge model.
         stripe_charge_account_id: (event.account as string | null) ?? null,
       }).in('id', regIds);
+
+      if (confirmErr) {
+        // The family HAS paid. Do not swallow this: alert loudly with
+        // everything a human needs to fix it by hand, and keep going so the
+        // rest of the handler (installments, promo, emails) still runs.
+        console.error('[stripe-webhook] FAILED to confirm paid registrations:', confirmErr);
+        await sendOperatorAlert({
+          brand,
+          to: alertEmail,
+          subject: 'PAID but NOT confirmed — manual fix needed',
+          body: [
+            `A family completed payment but their registration could not be marked confirmed.`,
+            `They have been charged. Their spot is NOT recorded.`,
+            ``,
+            `Registration IDs: ${regIds.join(', ')}`,
+            `Stripe session: ${session.id}`,
+            `Payment intent: ${session.payment_intent}`,
+            `Database error: ${confirmErr.message}`,
+            ``,
+            `Fix the underlying cause, then set these registrations to confirmed/paid manually.`,
+          ].join('\n'),
+        });
+      }
 
       // Count a promo redemption once, when funds actually settle (chunk 6).
       // The redemption ledger is the source of truth for usage limits; the
