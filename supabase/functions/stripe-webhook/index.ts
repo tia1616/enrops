@@ -46,6 +46,7 @@ import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
 import { handleTransferReversed as sharedHandleTransferReversed } from '../_shared/handleTransferReversed.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
+import { findAuthUserByEmail } from '../_shared/findAuthUserByEmail.ts';
 import {
   settlementForCheckoutCompleted,
   SETTLEMENT_ON_ASYNC_SUCCESS,
@@ -484,29 +485,6 @@ serve(async (req) => {
     return new Response(`Error: ${(err as Error).message}`, { status: 500 });
   }
 });
-
-// Find an auth user by email across ALL pages. perPage matches invite-parents
-// and admin-list-members; MAX_PAGES is a defensive runaway cap, and we return
-// as soon as the address is found so the common case reads one page.
-async function findAuthUserByEmail(admin: SupabaseClient, email: string) {
-  const target = email.toLowerCase().trim();
-  const PER_PAGE = 1000;
-  const MAX_PAGES = 50;
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: PER_PAGE });
-    if (error) {
-      // Fall through to createUser, which fails safe: an existing address comes
-      // back as "already been registered" and lands on the same branch.
-      console.error('listUsers failed:', error.message);
-      return null;
-    }
-    const users = data?.users ?? [];
-    const hit = users.find((u) => u.email?.toLowerCase() === target);
-    if (hit) return hit;
-    if (users.length < PER_PAGE) return null;
-  }
-  return null;
-}
 
 async function autoCreateParentAccount(
   admin: SupabaseClient,
