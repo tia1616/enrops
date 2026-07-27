@@ -485,6 +485,29 @@ serve(async (req) => {
   }
 });
 
+// Find an auth user by email across ALL pages. perPage matches invite-parents
+// and admin-list-members; MAX_PAGES is a defensive runaway cap, and we return
+// as soon as the address is found so the common case reads one page.
+async function findAuthUserByEmail(admin: SupabaseClient, email: string) {
+  const target = email.toLowerCase().trim();
+  const PER_PAGE = 1000;
+  const MAX_PAGES = 50;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: PER_PAGE });
+    if (error) {
+      // Fall through to createUser, which fails safe: an existing address comes
+      // back as "already been registered" and lands on the same branch.
+      console.error('listUsers failed:', error.message);
+      return null;
+    }
+    const users = data?.users ?? [];
+    const hit = users.find((u) => u.email?.toLowerCase() === target);
+    if (hit) return hit;
+    if (users.length < PER_PAGE) return null;
+  }
+  return null;
+}
+
 async function autoCreateParentAccount(
   admin: SupabaseClient,
   brand: OrgBrand,
@@ -493,13 +516,29 @@ async function autoCreateParentAccount(
   orgSlug: string,
   alertEmail: string,
 ) {
-  const { data: existingUsers } = await admin.auth.admin.listUsers();
-  const alreadyExists = existingUsers?.users?.some(
-    (u) => u.email?.toLowerCase() === email.toLowerCase(),
-  );
+  // Paginate through ALL auth users. A bare listUsers() returns only the first
+  // page (default 50), so past that the existence check reads FALSE for parents
+  // who do have an account -- we then attempt createUser on every checkout and
+  // rely on it throwing "already been registered" to reach the right branch.
+  // Same fix, same shape, as invite-parents.
+  const existing = await findAuthUserByEmail(admin, email);
 
-  if (alreadyExists) {
+  if (existing) {
     console.log(`Auth user already exists for ${email}, sending dashboard link email`);
+    // Self-heal, mirroring invite-parents: the auth.users trigger links
+    // parents.auth_id only when the ACCOUNT is the new side, so a parent row
+    // created against a pre-existing account can be left unlinked and the
+    // portal cannot resolve the family. 20260727a closes this at insert time
+    // for every writer; this stays as the second layer for rows that predate it
+    // or arrive by some path the trigger did not see. Only ever fills a NULL,
+    // so it can neither steal a correct link nor collide with idx_parents_auth.
+    const { error: linkErr } = await admin
+      .from('parents')
+      .update({ auth_id: existing.id })
+      .eq('email', email.toLowerCase().trim())
+      .is('auth_id', null);
+    if (linkErr) console.error(`Failed to link parents.auth_id for ${email}:`, linkErr.message);
+
     await sendAccountReadyEmail(admin, brand, email, name, orgSlug, false);
     return;
   }
