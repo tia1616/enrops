@@ -192,6 +192,19 @@ export default function QuickProgramBuilder() {
   const [savingLoc, setSavingLoc] = useState(false);
   const [locErr, setLocErr] = useState("");
 
+  // Same gate the other location surfaces use: without a Maps key the widget
+  // degrades to a plain input, so don't offer to fill in an address we can't find.
+  const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+  // Called when the operator picks a place from the dropdown. Fills the canonical
+  // name and the address — but never clobbers an address they already typed
+  // themselves (they may have pasted it before clicking the suggestion). Mirrors
+  // applyPlace in LocationsList so the two screens behave identically.
+  function applyPlace({ name, address }) {
+    if (name) setNewLocName(name);
+    setNewLocAddress((prev) => (prev && prev.trim() ? prev : (address || prev)));
+  }
+
   async function saveNewLocation() {
     const nm = newLocName.trim();
     if (!nm || savingLoc) return;
@@ -930,20 +943,41 @@ export default function QuickProgramBuilder() {
           </label>
           {addingLocation ? (
             <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, background: "#FBFBFB" }}>
+              {/* The lookup belongs on the NAME field, not the address field —
+                  an operator types where they teach, not its street address, and
+                  expects the address to appear. This mirrors LocationsList and
+                  AddSchoolModal, which both put PlacesAutocomplete on the name;
+                  this screen had it on the address alone, so typing a venue name
+                  produced no suggestions and nothing ever autofilled. */}
+              {placesEnabled ? (
+                <PlacesAutocomplete
+                  value={newLocName}
+                  onChange={setNewLocName}
+                  onSelect={applyPlace}
+                  placeholder="Location name (e.g. Downtown Studio)"
+                  style={{ ...inputStyle, marginBottom: 4 }}
+                />
+              ) : (
+                <input
+                  style={{ ...inputStyle, marginBottom: 4 }}
+                  value={newLocName}
+                  onChange={(e) => setNewLocName(e.target.value)}
+                  placeholder="Location name (e.g. Downtown Studio)"
+                  maxLength={80}
+                  autoFocus
+                />
+              )}
+              {/* Only promise the autofill when Maps is actually configured. */}
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
+                {placesEnabled
+                  ? "Start typing — we'll find the place and fill in the address for you. Or just type the name."
+                  : "The name families will see for this location."}
+              </div>
               <input
-                style={{ ...inputStyle, marginBottom: 8 }}
-                value={newLocName}
-                onChange={(e) => setNewLocName(e.target.value)}
-                placeholder="Location name (e.g. Downtown Studio)"
-                maxLength={80}
-                autoFocus
-              />
-              <PlacesAutocomplete
-                value={newLocAddress}
-                onChange={setNewLocAddress}
-                onSelect={({ name, address }) => { if (!newLocName.trim()) setNewLocName(name); setNewLocAddress(address); }}
-                placeholder="Address (optional)"
                 style={inputStyle}
+                value={newLocAddress}
+                onChange={(e) => setNewLocAddress(e.target.value)}
+                placeholder="Address (optional)"
               />
               {locErr && <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>{locErr}</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
