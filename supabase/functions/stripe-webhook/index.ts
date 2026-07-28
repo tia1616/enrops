@@ -637,9 +637,22 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
   // falling back to single-pay registrations.
   const { data: instRows } = await admin
     .from('installments')
-    .select('registration_id, amount_cents')
+    .select('registration_id, amount_cents, status')
     .eq('stripe_payment_intent_id', piId);
-  let slices = ((instRows ?? []) as Array<{ registration_id: string; amount_cents: number }>).map((r) => ({
+  const allInst = ((instRows ?? []) as Array<{ registration_id: string; amount_cents: number; status: string }>);
+  // Only PAID rows contributed money to this charge, and only they should get a
+  // share of the refund — same rule as refund-registration, which builds its PI
+  // slots from status='paid'. A failed or paused installment that kept its
+  // payment_intent_id would otherwise dilute the split and under-attribute the
+  // refund to the registration that actually paid.
+  // Fall back to every row on the PI if none are marked paid: mis-attributing a
+  // refund is bad, but silently not recording it at all is worse.
+  const paidInst = allInst.filter((r) => r.status === 'paid');
+  const instForSplit = paidInst.length > 0 ? paidInst : allInst;
+  if (paidInst.length === 0 && allInst.length > 0) {
+    console.warn(`[charge.refunded] no paid installments on ${piId}; attributing across all ${allInst.length} rows`);
+  }
+  let slices = instForSplit.map((r) => ({
     registrationId: r.registration_id,
     baseCents: r.amount_cents || 0,
   }));
@@ -676,7 +689,32 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
     console.error('[charge.refunded] could not list refunds, falling back to the event payload:', listErr);
     refundObjects = (charge.refunds?.data ?? []) as Stripe.Refund[];
   }
-  const succeeded = refundObjects.filter((r) => r.status === 'succeeded' || r.status === 'pending');
+  // A refund is only MONEY once Stripe says 'succeeded'. The other two states
+  // both matter but must not be treated as final:
+  //   pending — recorded so it is visible, but no fee refund and no
+  //     payment_status change until it settles. get_revenue_summary and
+  //     get_revenue_activity both filter status='succeeded', so a pending row
+  //     stays out of the operator's numbers until it is real.
+  //   failed  — an earlier pending row must be marked failed, or a refund that
+  //     bounced at the bank would sit in our records looking successful.
+  const relevant = refundObjects.filter(
+    (r) => r.status === 'succeeded' || r.status === 'pending' || r.status === 'failed',
+  );
+  if (relevant.length === 0) return;
+
+  // Refunds that FAILED: settle any row we already wrote for them, then drop
+  // them from the main loop — there is nothing to attribute or refund.
+  const failedIds = relevant.filter((r) => r.status === 'failed').map((r) => r.id);
+  if (failedIds.length > 0) {
+    const { error: failErr } = await admin
+      .from('refunds')
+      .update({ status: 'failed', failure_reason: 'Stripe reports this refund failed', succeeded_at: null })
+      .in('stripe_refund_id', failedIds)
+      .neq('status', 'failed');
+    if (failErr) console.error('[charge.refunded] could not mark failed refunds:', failErr);
+  }
+
+  const succeeded = relevant.filter((r) => r.status !== 'failed');
   if (succeeded.length === 0) return;
 
   // "Known" means FULLY handled, not merely recorded. Recording the refund and
@@ -697,6 +735,49 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
   );
 
   for (const refund of succeeded) {
+    // ── is this OUR refund? ────────────────────────────────────────────────
+    // refund-registration stamps the refunds row id onto the Stripe refund's
+    // metadata when it creates it. That is the ONLY signal available at this
+    // instant: it writes refunds.stripe_refund_id only AFTER the refund exists
+    // in Stripe and after its own applicationFees.createRefund round-trip, so a
+    // charge.refunded delivered inside that window finds no row by refund id.
+    //
+    // Matching on the row id instead closes a real double-spend: without it the
+    // webhook treats an in-app partial refund as external and issues a SECOND
+    // application-fee refund (a 50% refund would return 100% of the margin),
+    // and then refund-registration's own write trips the (stripe_refund_id,
+    // registration_id) unique index and leaves its row stuck at 'pending'.
+    //
+    // The in-app path owns these end to end — it reports a fee-refund failure
+    // straight back to the operator — so this path only heals the row id and
+    // never touches money.
+    const ownRowId = (refund.metadata ?? {}).enrops_refund_id;
+    if (ownRowId) {
+      const { data: ownRow } = await admin
+        .from('refunds')
+        .select('id, stripe_refund_id')
+        .eq('id', ownRowId)
+        .maybeSingle();
+      const own = ownRow as { id: string; stripe_refund_id: string | null } | null;
+      if (own) {
+        if (!own.stripe_refund_id) {
+          // Writing the same value refund-registration is about to write is
+          // idempotent; doing it here means an in-app call that died between
+          // creating the refund and recording its id still leaves a linked row.
+          const { error: healErr } = await admin
+            .from('refunds')
+            .update({ stripe_refund_id: refund.id })
+            .eq('id', own.id)
+            .is('stripe_refund_id', null);
+          if (healErr && (healErr as { code?: string }).code !== '23505') {
+            console.error('[charge.refunded] could not link the in-app refund row:', healErr);
+          }
+        }
+        continue; // Enrops-initiated. refund-registration owns the fee refund.
+      }
+      console.warn(`[charge.refunded] ${refund.id} claims refunds row ${ownRowId}, which does not exist; treating as external`);
+    }
+
     const allocation = allocateRefundAcrossRegistrations(refund.amount ?? 0, slices);
     const unrecorded = allocation.filter((a) => !known.has(`${refund.id}:${a.registrationId}`));
     if (unrecorded.length === 0) continue; // already handled — Enrops-initiated, or a replay
@@ -726,6 +807,10 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
         succeededAt: refund.created
           ? new Date(refund.created * 1000).toISOString()
           : new Date().toISOString(),
+        // Only a 'succeeded' refund is money. A pending one is recorded so it
+        // is visible, but returns no fee and moves no payment_status until it
+        // settles — see the status filter above.
+        settled: refund.status === 'succeeded',
       });
     }
   }
@@ -749,6 +834,7 @@ async function recordExternalRefund(
     chargeAccountId: string | null;
     reason: string | null;
     succeededAt: string;
+    settled: boolean;
   },
 ) {
   const { data: regData } = await admin
@@ -803,13 +889,15 @@ async function recordExternalRefund(
       // Stripe dashboard. That is the flag reporting uses to tell the two
       // origins apart.
       refunded_by_user_id: null,
-      status: 'succeeded',
-      succeeded_at: input.succeededAt,
+      status: input.settled ? 'succeeded' : 'pending',
+      succeeded_at: input.settled ? input.succeededAt : null,
     })
     .select('id')
     .single();
 
   let refundRowId: string;
+  // Null unless we adopt a row somebody else created; see the enrollment event.
+  let refundedByUserId: string | null = null;
   if (insErr) {
     if ((insErr as { code?: string }).code === '23505') {
       // Already recorded, but we only get here when the fee was NOT settled
@@ -818,23 +906,45 @@ async function recordExternalRefund(
       // refund. Deliberately does NOT re-record or re-refund the family.
       const { data: existing } = await admin
         .from('refunds')
-        .select('id')
+        .select('id, refunded_by_user_id')
         .eq('stripe_refund_id', input.stripeRefundId)
         .eq('registration_id', reg.id)
         .maybeSingle();
-      const found = (existing as { id: string } | null)?.id;
+      const existingRow = existing as { id: string; refunded_by_user_id: string | null } | null;
+      const found = existingRow?.id;
+      refundedByUserId = existingRow?.refunded_by_user_id ?? null;
       if (!found) {
         console.error(`[charge.refunded] 23505 but no row found for ${input.stripeRefundId}/${reg.id}`);
         return;
       }
       console.log(`[charge.refunded] resuming a half-finished refund ${input.stripeRefundId} for ${reg.id}`);
       refundRowId = found;
+      // A row first written while the refund was pending must be promoted the
+      // moment Stripe settles it, or it stays invisible to get_revenue_summary
+      // (which filters status='succeeded') forever.
+      if (input.settled) {
+        await admin
+          .from('refunds')
+          .update({ status: 'succeeded', succeeded_at: input.succeededAt, failure_reason: null })
+          .eq('id', found)
+          .neq('status', 'succeeded');
+      }
     } else {
       console.error('[charge.refunded] failed to record the refund row:', insErr);
       return;
     }
   } else {
     refundRowId = (rowData as { id: string }).id;
+  }
+
+  // Not settled yet: the row exists and is visible, but nothing else may
+  // happen. Returning our fee — or moving payment_status — for a refund that
+  // can still bounce at the bank would leave the fee paid out and the family
+  // marked refunded with no way back. platform_fee_refunded_cents stays NULL,
+  // which is exactly what makes the next delivery pick this up and finish it.
+  if (!input.settled) {
+    console.log(`[charge.refunded] ${input.stripeRefundId} is still pending; recorded, no fee refund yet`);
+    return;
   }
 
   // ── fire the prorated application-fee refund (v4 section 2 + 3) ───────────
@@ -954,14 +1064,62 @@ async function recordExternalRefund(
 
     const { data: instPaid } = await admin
       .from('installments')
-      .select('amount_cents')
+      .select('amount_cents, stripe_payment_intent_id, stripe_charge_account_id')
       .eq('registration_id', reg.id)
       .eq('status', 'paid');
-    const instTotal = ((instPaid ?? []) as Array<{ amount_cents: number }>)
-      .reduce((s, r) => s + (r.amount_cents || 0), 0);
+    const instRowsPaid = ((instPaid ?? []) as Array<{
+      amount_cents: number; stripe_payment_intent_id: string | null; stripe_charge_account_id: string | null;
+    }>);
+    const instTotal = instRowsPaid.reduce((s, r) => s + (r.amount_cents || 0), 0);
     const { data: regAmt } = await admin
       .from('registrations').select('amount_cents').eq('id', reg.id).maybeSingle();
-    const totalPaid = instTotal > 0 ? instTotal : ((regAmt as { amount_cents?: number } | null)?.amount_cents ?? 0);
+    const basePaid = instTotal > 0 ? instTotal : ((regAmt as { amount_cents?: number } | null)?.amount_cents ?? 0);
+
+    // COMPARE LIKE WITH LIKE. refunds.amount_cents is what the card was actually
+    // credited — base PLUS any platform fee passed through to the family —
+    // whereas installments/registrations.amount_cents is the BASE price only.
+    // Comparing the two directly marks a registration fully 'refunded' as soon
+    // as the base is covered, while the family is still owed the fee portion,
+    // and disagrees with refund-registration, which raises its ceiling to the
+    // real charged amount for exactly this reason.
+    //
+    // Absorb orgs charged base only, so the ceiling is unchanged for them; the
+    // reads are cheap and only happen on a refund.
+    const piScopes = new Map<string, string | null>();
+    for (const r of instRowsPaid) {
+      if (r.stripe_payment_intent_id) piScopes.set(r.stripe_payment_intent_id, r.stripe_charge_account_id ?? null);
+    }
+    if (piScopes.size === 0) piScopes.set(input.paymentIntentId, input.chargeAccountId);
+
+    let chargedPaid = 0;
+    for (const [pi, acct] of piScopes) {
+      try {
+        const facts = await readChargeFeeFacts(stripe, pi, acct);
+        // This registration's share of that charge, split by the base amounts
+        // that made it up — a PI can cover a multi-child cart.
+        const { data: sharers } = await admin
+          .from('installments').select('amount_cents').eq('stripe_payment_intent_id', pi);
+        let baseOnPi = ((sharers ?? []) as Array<{ amount_cents: number }>)
+          .reduce((s, r) => s + (r.amount_cents || 0), 0);
+        if (baseOnPi <= 0) {
+          const { data: regSharers } = await admin
+            .from('registrations').select('amount_cents').eq('stripe_payment_intent_id', pi);
+          baseOnPi = ((regSharers ?? []) as Array<{ amount_cents: number | null }>)
+            .reduce((s, r) => s + (r.amount_cents || 0), 0);
+        }
+        const mine = instRowsPaid
+          .filter((r) => r.stripe_payment_intent_id === pi)
+          .reduce((s, r) => s + (r.amount_cents || 0), 0)
+          || basePaid;
+        chargedPaid += baseOnPi > 0 ? Math.round((facts.chargeAmountCents * mine) / baseOnPi) : mine;
+      } catch (ceilErr) {
+        console.error(`[charge.refunded] could not read the charged total for ${pi}; using base`, ceilErr);
+        chargedPaid = 0; // fall back below rather than under-count
+        break;
+      }
+    }
+    // Never LOWER the ceiling: if the maths disagrees, keep the base.
+    const totalPaid = Math.max(basePaid, chargedPaid);
 
     const newStatus = totalPaid > 0 && totalRefunded >= totalPaid ? 'refunded'
       : totalRefunded > 0 ? 'partial'
@@ -986,7 +1144,12 @@ async function recordExternalRefund(
     metadata: {
       amount_refunded_cents: input.amountCents,
       platform_fee_refunded_cents: feeRefunded,
-      origin: 'stripe_dashboard',
+      // Read the origin off the row rather than asserting it. This function
+      // also runs on the adopt path, which can be repairing a row somebody
+      // created in Enrops; hardcoding the label would quietly file those under
+      // "operator refunded in Stripe" and make any origin reporting wrong for
+      // exactly the failure cases.
+      origin: refundedByUserId ? 'enrops' : 'stripe_dashboard',
     },
     dedupeKey: `refunded:${input.stripeRefundId}:${reg.id}`,
   });
