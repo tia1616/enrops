@@ -69,6 +69,13 @@ $$;
 
 REVOKE ALL ON FUNCTION public.seed_default_cancellation_policy(uuid) FROM public;
 REVOKE ALL ON FUNCTION public.seed_default_cancellation_policy(uuid) FROM anon;
+-- REVOKING `authenticated` IS NOT THE SAME AS NOT GRANTING IT. Supabase applies
+-- project-level DEFAULT PRIVILEGES that grant EXECUTE on every newly created
+-- function to anon/authenticated/service_role. So simply omitting the GRANT
+-- leaves `authenticated=X` on the function anyway. Applying this file to prod
+-- proved it: the ACL came back with authenticated still present, even though
+-- the file never granted it. Same class as the staging_acl_reconcile problem.
+REVOKE ALL ON FUNCTION public.seed_default_cancellation_policy(uuid) FROM authenticated;
 -- NOT granted to `authenticated`, which is where this DEPARTS from its sibling.
 -- seed_default_waivers is called from the browser by WaiverManager, so it needs
 -- that grant. Nothing in the app calls this one: the only caller is
