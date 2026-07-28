@@ -177,21 +177,33 @@ export default function QuickProgramBuilder() {
     if (!org?.id) return;
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
-        .from("program_locations")
-        .select("id, name")
-        .eq("organization_id", org.id)
-        .order("name");
-      if (cancelled) return;
-      const locs = data ?? [];
-      setLocations(locs);
-      if (locs.length === 1) setLocationId(locs[0].id);
+      try {
+        const { data } = await supabase
+          .from("program_locations")
+          .select("id, name")
+          .eq("organization_id", org.id)
+          .order("name");
+        if (cancelled) return;
+        const locs = data ?? [];
+        setLocations(locs);
+        if (locs.length === 1) setLocationId(locs[0].id);
 
-      const { count } = await supabase
-        .from("programs")
-        .select("id", { count: "exact", head: true })
-        .eq("organization_id", org.id);
-      if (!cancelled) setProgramCount(count ?? 0);
+        const { count } = await supabase
+          .from("programs")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", org.id);
+        if (!cancelled) setProgramCount(count ?? 0);
+      } catch {
+        // supabase-js RESOLVES query errors into { data, error }, so the only
+        // way we land here is a genuine network rejection (offline, DNS, CORS).
+        // That used to leave programCount null forever -- and countPending
+        // renders a bare "Loading..." off null, so the builder would sit on a
+        // spinner that never resolves and never says why. Same dead-feature
+        // class as the address lookup this change is fixing. Fall back to the
+        // pre-count behaviour (0 = treat as a first program) so the page always
+        // renders something the operator can act on.
+        if (!cancelled) setProgramCount((c) => (c === null ? 0 : c));
+      }
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
