@@ -15,7 +15,7 @@
 
 import { useState } from "react";
 import { supabase } from "../../../lib/supabase";
-import PlacesAutocomplete from "../../../components/PlacesAutocomplete";
+import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
 
 const BRIGHT = "#5847C9";
 const INK = "#1a1a1a";
@@ -56,6 +56,9 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
   const [error, setError] = useState("");
 
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+  // Whether the Google lookup actually started. Without this the field degrades
+  // to a plain box on failure and says nothing, which reads as broken.
+  const [lookupDown, setLookupDown] = useState(false);
 
   function applyPlace({ name: placeName, address: placeAddr }) {
     if (placeName) setName(placeName);
@@ -189,12 +192,18 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
                 value={name}
                 onChange={(v) => setName(v)}
                 onSelect={applyPlace}
+                onLookupUnavailable={setLookupDown}
                 placeholder="e.g. Ainsworth Elementary, Portland"
                 style={inputStyle}
               />
             ) : (
               <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ainsworth Elementary" style={inputStyle} disabled={busy} />
             )}
+            {/* This modal has no hint slot, so the status line goes directly
+                under the field the operator is typing into. */}
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+              <PlacesLookupHint enabled={placesEnabled} down={lookupDown} />
+            </div>
           </label>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>

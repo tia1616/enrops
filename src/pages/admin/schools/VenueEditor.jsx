@@ -15,7 +15,7 @@
 
 import { useState } from "react";
 import { supabase } from "../../../lib/supabase";
-import PlacesAutocomplete from "../../../components/PlacesAutocomplete";
+import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
 
 const BRIGHT = "#5847C9";
 const OK_GREEN = "#3a7c3a";
@@ -105,6 +105,9 @@ export default function VenueEditor({
   const [error, setError] = useState(null);
 
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+  // Whether the Google lookup actually started. Without this the field degrades
+  // to a plain box on failure and says nothing, which reads as broken.
+  const [lookupDown, setLookupDown] = useState(false);
 
   function bind(field) {
     return {
@@ -195,9 +198,7 @@ export default function VenueEditor({
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <Field
         label="Venue name *"
-        hint={placesEnabled
-          ? "Start typing — we'll find the school or venue and fill in the address for you. Or just type the name."
-          : "The human-readable label that shows on the calendar and in emails."}
+        hint={<PlacesLookupHint enabled={placesEnabled} down={lookupDown} />}
         instructorFacing
       >
         {placesEnabled ? (
@@ -205,6 +206,7 @@ export default function VenueEditor({
             value={draft.name ?? ""}
             onChange={(v) => bind("name").onChange({ target: { value: v } })}
             onSelect={applyPlace}
+            onLookupUnavailable={setLookupDown}
             placeholder="e.g. Ainsworth Elementary, Portland"
             style={inputStyle}
           />

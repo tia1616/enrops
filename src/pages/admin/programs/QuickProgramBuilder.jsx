@@ -19,7 +19,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
-import PlacesAutocomplete from "../../../components/PlacesAutocomplete.jsx";
+import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete.jsx";
 import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
 import { renderWaiverText } from "../../../lib/waiverText.js";
 
@@ -167,19 +167,53 @@ export default function QuickProgramBuilder() {
   // none = location-less (still valid — location is optional).
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState("");
+  // Does this org already have programs? Decides whether the first-class
+  // questions are appropriate. null = not counted yet (never assume either way).
+  const [programCount, setProgramCount] = useState(null);
+  // The count could not be established at all (network rejection). Kept separate
+  // from the count itself so the failure does not have to masquerade as a value.
+  const [countFailed, setCountFailed] = useState(false);
+  // Whether the Google address lookup could actually start. Drives honest copy
+  // under the field instead of a box that silently does nothing.
+  const [lookupDown, setLookupDown] = useState(false);
   useEffect(() => {
     if (!org?.id) return;
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
-        .from("program_locations")
-        .select("id, name")
-        .eq("organization_id", org.id)
-        .order("name");
-      if (cancelled) return;
-      const locs = data ?? [];
-      setLocations(locs);
-      if (locs.length === 1) setLocationId(locs[0].id);
+      // Re-arm for this org: a failure recorded for a previous org.id must not
+      // decide what this one sees.
+      setCountFailed(false);
+      try {
+        const { data } = await supabase
+          .from("program_locations")
+          .select("id, name")
+          .eq("organization_id", org.id)
+          .order("name");
+        if (cancelled) return;
+        const locs = data ?? [];
+        setLocations(locs);
+        if (locs.length === 1) setLocationId(locs[0].id);
+
+        const { count } = await supabase
+          .from("programs")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", org.id);
+        if (!cancelled) setProgramCount(count ?? 0);
+      } catch {
+        // supabase-js RESOLVES query errors into { data, error }, so the only
+        // way we land here is a genuine network rejection (offline, DNS, CORS).
+        // Left alone this leaves programCount null forever, and countPending
+        // renders a bare "Loading..." off null -- a spinner that never resolves
+        // and never says why, the same dead-feature class as the address lookup.
+        //
+        // Fall FORWARD to the builder, not back to the questions. Falling back
+        // to 0 would mean a transient blip re-asks an established org to "set up
+        // your first class" -- precisely the complaint this count exists to fix,
+        // and Riverbend has 3 live programs. Skipping the questions for a
+        // genuinely new org is the cheaper mistake: onboarding_completed_at is
+        // still unset, so they get asked on the next load.
+        if (!cancelled) setCountFailed(true);
+      }
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
@@ -191,6 +225,19 @@ export default function QuickProgramBuilder() {
   const [newLocAddress, setNewLocAddress] = useState("");
   const [savingLoc, setSavingLoc] = useState(false);
   const [locErr, setLocErr] = useState("");
+
+  // Same gate the other location surfaces use: without a Maps key the widget
+  // degrades to a plain input, so don't offer to fill in an address we can't find.
+  const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+  // Called when the operator picks a place from the dropdown. Fills the canonical
+  // name and the address — but never clobbers an address they already typed
+  // themselves (they may have pasted it before clicking the suggestion). Mirrors
+  // applyPlace in LocationsList so the two screens behave identically.
+  function applyPlace({ name, address }) {
+    if (name) setNewLocName(name);
+    setNewLocAddress((prev) => (prev && prev.trim() ? prev : (address || prev)));
+  }
 
   async function saveNewLocation() {
     const nm = newLocName.trim();
@@ -249,7 +296,19 @@ export default function QuickProgramBuilder() {
   // directly underneath it. Only ever shown to registration operators, and only
   // until they answer.
   const isLean = org?.instructor_pay_model === "enrops_platform";
-  const needsOnboarding = isLean && !profile.onboarding_completed_at;
+  // An org that already has programs is demonstrably not setting up its FIRST
+  // class, whatever onboarding_completed_at says. That column only landed in
+  // 20260725d, so every org created before it is NULL forever and was being
+  // asked the first-class questions on every single visit to the builder --
+  // Riverbend has 3 live programs and still got "Let's set up your first class".
+  // programCount is null until counted, so we show neither screen prematurely.
+  const needsOnboarding =
+    isLean && !profile.onboarding_completed_at && programCount === 0;
+  // Still counting. If the count FAILED we stop waiting and fall through to the
+  // builder (programCount stays null, so needsOnboarding is false) rather than
+  // holding the operator on a spinner we know will never resolve.
+  const countPending =
+    isLean && !profile.onboarding_completed_at && programCount === null && !countFailed;
 
   const [ansVenue, setAnsVenue] = useState(profile.venue_answer ?? "");
   const [ansCadence, setAnsCadence] = useState(profile.program_cadence ?? "");
@@ -368,6 +427,11 @@ export default function QuickProgramBuilder() {
       setProfile((p) => ({ ...p, ...patch }));
       // Correct the shell's copy too, so the card doesn't come back.
       setOrg?.((o) => (o ? { ...o, ...patch } : o));
+      // Answering swaps the questions for the (longer) builder form in place, so
+      // the browser keeps whatever scroll offset the questions left behind and
+      // drops the operator into the MIDDLE of a form they have not seen the top
+      // of. Put them at the start of it.
+      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "auto" });
     } catch (e) {
       setProfileErr(e?.message ?? "Couldn't save that. Please try again.");
     } finally {
@@ -502,6 +566,12 @@ export default function QuickProgramBuilder() {
 
   // Guard: outlet not ready yet.
   if (!org) {
+    return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
+  }
+
+  // Still counting this org's programs. Showing either screen now risks flashing
+  // the wrong one and yanking the page out from under whoever is reading it.
+  if (countPending && !createdId) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
   }
 
@@ -930,20 +1000,49 @@ export default function QuickProgramBuilder() {
           </label>
           {addingLocation ? (
             <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, background: "#FBFBFB" }}>
+              {/* The lookup belongs on the NAME field, not the address field —
+                  an operator types where they teach, not its street address, and
+                  expects the address to appear. This mirrors LocationsList and
+                  AddSchoolModal, which both put PlacesAutocomplete on the name;
+                  this screen had it on the address alone, so typing a venue name
+                  produced no suggestions and nothing ever autofilled. */}
+              {placesEnabled ? (
+                <PlacesAutocomplete
+                  value={newLocName}
+                  onChange={setNewLocName}
+                  onSelect={applyPlace}
+                  onLookupUnavailable={setLookupDown}
+                  placeholder="Location name (e.g. Downtown Studio)"
+                  style={{ ...inputStyle, marginBottom: 4 }}
+                  // Both of these existed on the plain <input> this replaced and
+                  // were lost in the swap: without maxLength the name is
+                  // unbounded into a `text` column, and without autoFocus the
+                  // operator has to click again into the very field the form was
+                  // opened for.
+                  maxLength={80}
+                  autoFocus
+                />
+              ) : (
+                <input
+                  style={{ ...inputStyle, marginBottom: 4 }}
+                  value={newLocName}
+                  onChange={(e) => setNewLocName(e.target.value)}
+                  placeholder="Location name (e.g. Downtown Studio)"
+                  maxLength={80}
+                  autoFocus
+                />
+              )}
+              {/* Never a box that silently does nothing: say whether the lookup
+                  is working. Copy lives in PlacesAutocomplete so all four
+                  surfaces say the same thing. */}
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
+                <PlacesLookupHint enabled={placesEnabled} down={lookupDown} />
+              </div>
               <input
-                style={{ ...inputStyle, marginBottom: 8 }}
-                value={newLocName}
-                onChange={(e) => setNewLocName(e.target.value)}
-                placeholder="Location name (e.g. Downtown Studio)"
-                maxLength={80}
-                autoFocus
-              />
-              <PlacesAutocomplete
-                value={newLocAddress}
-                onChange={setNewLocAddress}
-                onSelect={({ name, address }) => { if (!newLocName.trim()) setNewLocName(name); setNewLocAddress(address); }}
-                placeholder="Address (optional)"
                 style={inputStyle}
+                value={newLocAddress}
+                onChange={(e) => setNewLocAddress(e.target.value)}
+                placeholder="Address (optional)"
               />
               {locErr && <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>{locErr}</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
@@ -961,10 +1060,23 @@ export default function QuickProgramBuilder() {
                 <option value="">No specific location</option>
                 {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
-              <div style={{ marginTop: 6 }}>
-                <span onClick={() => setAddingLocation(true)} style={{ color: BRIGHT, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
-                  {profile.venue_answer === "goes_to_sites" || profile.venue_answer === "both" ? "+ Add a site" : "+ Add a location"}
-                </span>
+              {/* Was a 13px <span onClick> — no button semantics, no tap target,
+                  invisible as an action on a phone. A real button at 44px, the
+                  minimum touch size the mobile audit holds every control to. */}
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setAddingLocation(true)}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    minHeight: 44, padding: "10px 16px",
+                    background: "#fff", color: BRIGHT,
+                    border: `1px solid ${BRIGHT}`, borderRadius: 8,
+                    fontSize: 14, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  + {profile.venue_answer === "goes_to_sites" || profile.venue_answer === "both" ? "Add a site" : "Add a location"}
+                </button>
               </div>
               {locations.length === 0 && profile.venue_answer === "own_space" && (
                 <div style={helpStyle}>
