@@ -1759,13 +1759,28 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             style={expandInputStyle}
           />
         </ExpandField>
-        <ExpandField label="Location">
+        <ExpandField label="Location *">
           <select value={draft.program_location_id ?? ""} onChange={(e) => set("program_location_id", e.target.value)} style={expandInputStyle}>
-            <option value="">— pick a location —</option>
+            {/* A prompt, not a choice. Location is required, so this option
+                exists only to represent "not chosen yet" for the handful of
+                legacy rows that predate the rule -- Save is blocked while it is
+                selected. It is also the state Jessica hit: an empty picker with
+                nothing to pick, which is why the message below names the fix
+                instead of leaving the operator to guess. */}
+            <option value="">
+              {(locations ?? []).length === 0 ? "No locations yet" : "— pick a location —"}
+            </option>
             {(locations ?? []).map((l) => (
               <option key={l.id} value={l.id}>{l.name}{l.district ? ` (${l.district})` : ""}</option>
             ))}
           </select>
+          {!draft.program_location_id && (
+            <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4 }}>
+              {(locations ?? []).length === 0
+                ? "Add one under Programs → Locations, then pick it here."
+                : "Every class needs a location — pick one to save."}
+            </div>
+          )}
         </ExpandField>
         <ExpandField label="Room">
           <input type="text" value={draft.room ?? ""} onChange={(e) => set("room", e.target.value)} placeholder="e.g. Room 12" style={expandInputStyle} />
@@ -1834,16 +1849,23 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${RULE}` }}>
         {(() => {
           const rangeBusy = draft.schedule_mode === "range" && rangeLoading;
-          const disabled = saving || rangeBusy;
+          // Location is required. Blocking Save is what makes the rule real --
+          // the message under the picker would otherwise be advice the form does
+          // not enforce, and the DB (program_location_id NOT NULL) would reject
+          // the write with a constraint error nobody can read.
+          const noLocation = !draft.program_location_id;
+          const disabled = saving || rangeBusy || noLocation;
           return (
             <button
               type="button"
               onClick={handleSave}
               disabled={disabled}
+              title={noLocation ? "Pick a location first — every class needs one." : undefined}
               style={{
                 background: BRIGHT, color: "#fff", border: "none", padding: "8px 16px",
                 borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit",
-                cursor: disabled ? "wait" : "pointer", opacity: disabled ? 0.6 : 1,
+                cursor: disabled ? (noLocation ? "not-allowed" : "wait") : "pointer",
+                opacity: disabled ? 0.6 : 1,
               }}
             >{saving ? "Saving…" : rangeBusy ? "Calculating…" : "Save changes"}</button>
           );

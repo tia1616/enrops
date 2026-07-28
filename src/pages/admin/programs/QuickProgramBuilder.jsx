@@ -12,7 +12,7 @@
 //   - term   = org.active_registration_term  (catalog + share link gate on this)
 //   - status = 'open'                         (live immediately)
 //   - runs_own_registration = false           (native enrops checkout)
-//   - curriculum_id / program_location_id = null (no curriculum, location optional)
+//   - curriculum_id = null (no curriculum); program_location_id is REQUIRED
 // The operator never sees "term" — it's enrichment-provider vocabulary, not theirs.
 
 import { useEffect, useState } from "react";
@@ -162,7 +162,7 @@ export default function QuickProgramBuilder() {
     return () => { cancelled = true; };
   }, [org?.id]);
 
-  // Locations the operator has set up (Settings -> Locations). One location
+  // Locations the operator has set up (Programs -> Locations). One location
   // auto-selects (no need to pick when there's only one); 2+ shows a picker;
   // none = location-less (still valid — location is optional).
   const [locations, setLocations] = useState([]);
@@ -219,7 +219,9 @@ export default function QuickProgramBuilder() {
   }, [org?.id]);
 
   // Inline "add a location" so a new op can set their venue right here instead
-  // of detouring to Settings. Writes to program_locations, then selects it.
+  // of detouring to the Locations tab. Writes to program_locations, then selects
+  // it. Load-bearing now that location is required: this is what makes the
+  // requirement always satisfiable without leaving the form.
   const [addingLocation, setAddingLocation] = useState(false);
   const [newLocName, setNewLocName] = useState("");
   const [newLocAddress, setNewLocAddress] = useState("");
@@ -285,9 +287,16 @@ export default function QuickProgramBuilder() {
   const ageMaxNum = ageMax === "" ? null : parseInt(ageMax, 10);
   const ageRangeBackwards = ageMinNum != null && ageMaxNum != null && ageMinNum > ageMaxNum;
 
+  // Location is REQUIRED, not optional. Every program families can register for
+  // happens somewhere, and "somewhere" is on the receipt, the reminder and the
+  // parent's calendar. Optional meant the picker could sit empty with nothing to
+  // pick and no explanation -- a dead end we would otherwise have to paper over
+  // with a coaching tooltip. Requiring it deletes that state instead of
+  // explaining it. Always satisfiable: "+ Add a location" is right here, so an
+  // operator with none can create one without leaving this form.
   const valid =
     name.trim() !== "" && priceValid && spotsNum >= 1 && !ageRangeBackwards &&
-    (isOneOff ? !!startDate : !!day);
+    (isOneOff ? !!startDate : !!day) && !!locationId;
 
   // ---- First-program onboarding ----------------------------------------
   //
@@ -996,7 +1005,7 @@ export default function QuickProgramBuilder() {
               thinks "where we teach", one who drives to schools thinks "which
               site". Same field, their vocabulary. */}
           <label style={labelStyle} htmlFor="qpb-location">
-            {profile.venue_answer === "goes_to_sites" ? "Which site?" : "Location"}
+            {profile.venue_answer === "goes_to_sites" ? "Which site? *" : "Location *"}
           </label>
           {addingLocation ? (
             <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, background: "#FBFBFB" }}>
@@ -1056,8 +1065,11 @@ export default function QuickProgramBuilder() {
             </div>
           ) : (
             <>
+              {/* "No specific location" is gone: it was the opt-out that let a
+                  program go live with nowhere to be. The remaining empty option
+                  is a prompt, not a choice -- it cannot be submitted. */}
               <select id="qpb-location" style={inputStyle} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                <option value="">No specific location</option>
+                <option value="">{locations.length === 0 ? "No locations yet — add one below" : "Choose where this class runs"}</option>
                 {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
               {/* Was a 13px <span onClick> — no button semantics, no tap target,
@@ -1078,6 +1090,9 @@ export default function QuickProgramBuilder() {
                   + {profile.venue_answer === "goes_to_sites" || profile.venue_answer === "both" ? "Add a site" : "Add a location"}
                 </button>
               </div>
+              {/* Three states, three sentences. Every class needs a location, so
+                  the "nothing to say" state is the one that most needs saying:
+                  locations exist but none is picked yet. */}
               {locations.length === 0 && profile.venue_answer === "own_space" && (
                 <div style={helpStyle}>
                   Add your space once and every class you build will use it.
@@ -1086,6 +1101,11 @@ export default function QuickProgramBuilder() {
               {locations.length === 0 && (profile.venue_answer === "goes_to_sites" || profile.venue_answer === "both") && (
                 <div style={helpStyle}>
                   Add each school or site you teach at — families pick from these when they register.
+                </div>
+              )}
+              {locations.length > 0 && !locationId && (
+                <div style={helpStyle}>
+                  Pick where this class runs — families see it when they register.
                 </div>
               )}
             </>
