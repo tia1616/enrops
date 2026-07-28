@@ -112,7 +112,19 @@ export default function StarterPolicyNotice({ org }) {
   //
   // Read from the RPC, not from the browser's `org`, so the sentence and the
   // fact it rests on come from the same place.
-  const usesEnropsRegistration = notice.uses_enrops_registration !== false;
+  //
+  // `=== true`, NOT `!== false`. The key only exists once 20260728s is applied,
+  // and this frontend can reach an environment where 20260728p has landed but s
+  // has not - the file ships with git, the migrations do not. With `!== false`,
+  // an absent key reads as undefined, undefined !== false is TRUE, and every
+  // operator silently gets the "families read this at checkout" wording again -
+  // reintroducing the exact bug this branch was added to fix, invisibly, on
+  // somebody else's deploy timing.
+  //
+  // Failing to the public-page wording instead is safe because that sentence is
+  // true in BOTH states: the policy really is published publicly under their
+  // name either way. It is less specific, never wrong.
+  const usesEnropsRegistration = notice.uses_enrops_registration === true;
 
   return (
     <div
