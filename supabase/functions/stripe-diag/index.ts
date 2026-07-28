@@ -22,6 +22,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
+import { isEmailAllowed, emailGuardActive } from '../_shared/emailGuard.ts';
 
 const KEY = Deno.env.get('STRIPE_SECRET_KEY') ?? '';
 const DIAG_TOKEN = Deno.env.get('DIAG_TOKEN') ?? '';
@@ -131,6 +132,49 @@ serve(async (req: Request) => {
           scope,
         );
         return json({ id: r.id, amount: r.amount, status: r.status, charge: r.charge });
+      }
+
+      // Stripe test mode ships payment methods that force a dispute the moment
+      // the charge settles (pm_card_createDispute). That is the ONLY way to
+      // exercise the charge.dispute.* path without waiting for a real
+      // chargeback, which in production takes days and cannot be summoned.
+      // Creates a direct charge on the connected account, matching how a real
+      // operator's charge is made.
+      case 'create_disputed_charge': {
+        const pi = await stripe.paymentIntents.create(
+          {
+            amount: Number(body.amount ?? 2500),
+            currency: 'usd',
+            payment_method: String(body.pm ?? 'pm_card_createDispute'),
+            confirm: true,
+            ...(body.application_fee ? { application_fee_amount: Number(body.application_fee) } : {}),
+            automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+            description: 'stripe-diag dispute test',
+          },
+          scope,
+        );
+        return json({ payment_intent: pi.id, status: pi.status, amount: pi.amount });
+      }
+
+      case 'disputes_list': {
+        const d = await stripe.disputes.list({ limit: Number(body.limit ?? 5) }, scope);
+        return json(d.data.map((x: Stripe.Dispute) => ({
+          id: x.id, status: x.status, amount: x.amount, reason: x.reason, charge: x.charge,
+        })));
+      }
+
+      // Why did an email not arrive? Two candidates and no way to tell them
+      // apart from the outside: the staging recipient allowlist silently
+      // dropping it, or Resend rejecting the send. This answers the first
+      // without exposing the allowlist's contents.
+      case 'email_guard': {
+        const addr = String(body.email ?? '');
+        return json({
+          guard_active: emailGuardActive(),
+          address: addr,
+          allowed: isEmailAllowed(addr),
+          resend_key_present: (Deno.env.get('RESEND_API_KEY') ?? '').length > 0,
+        });
       }
 
       default:
