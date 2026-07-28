@@ -80,6 +80,7 @@ import { readChargeFeeFacts } from '../_shared/chargeFeeFacts.ts';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
+import { maybeSendOperatorGrowthAsk } from '../_shared/operatorGrowthAsks.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') ?? '';
 
@@ -806,6 +807,16 @@ serve(async (req: Request) => {
       console.error('[refund] receipt failed (refund itself is fine):', receiptErr);
       receipt = { sent: false, reason: (receiptErr as Error).message };
     }
+
+    // ── v4 section 8 items 3-4: the growth asks, at most once per operator ──
+    // Off by default and skipped entirely for an operator flagged under section
+    // 4. Runs last and swallows its own errors: nothing about a marketing ask
+    // may affect a refund that has already moved money.
+    await maybeSendOperatorGrowthAsk(supabase, {
+      organizationId: reg.organization_id,
+      resendApiKey: RESEND_API_KEY,
+      isAllowed: isEmailAllowed,
+    });
 
     return json({
       success: true,

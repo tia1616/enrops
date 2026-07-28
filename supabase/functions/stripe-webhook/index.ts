@@ -86,6 +86,7 @@ import { readChargeFeeFacts, FEE_REFUND_SOURCE_KEY, FEE_REFUND_REGISTRATION_KEY 
 import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
+import { maybeSendOperatorGrowthAsk } from '../_shared/operatorGrowthAsks.ts';
 import {
   settlementForCheckoutCompleted,
   SETTLEMENT_ON_ASYNC_SUCCESS,
@@ -1191,6 +1192,15 @@ async function recordExternalRefund(
   } catch (receiptErr) {
     console.error('[charge.refunded] receipt failed (refund itself is recorded):', receiptErr);
   }
+
+  // v4 section 8 items 3-4. Same call as the in-app path, so a growth ask does
+  // not depend on where the operator clicked either. Off by default, skipped for
+  // flagged operators, and at most once per operator forever.
+  await maybeSendOperatorGrowthAsk(admin, {
+    organizationId: reg.organization_id,
+    resendApiKey: RESEND_API_KEY,
+    isAllowed: isEmailAllowed,
+  });
 
   // Same churn signal the in-app path logs, so reporting does not depend on
   // where the refund was started.
