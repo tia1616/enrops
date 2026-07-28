@@ -10,6 +10,7 @@ import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
 import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
+import StarterPolicyNotice from "../components/StarterPolicyNotice.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
 import PortalSwitcher from "../components/PortalSwitcher.jsx";
@@ -609,6 +610,13 @@ export default function AdminLayout() {
         {/* Main */}
         <main data-admin-main style={{ padding: "28px 36px", maxWidth: 1200 }}>
           <AnnouncementBanner />
+          {/* Sits in the SHELL, not on the dashboard, and outside the
+              `blockedItem` branch below — a lean registration-only tenant never
+              lands on /admin (AdminOverview sends them to /admin/programs), and
+              those are precisely the self-serve operators who had a refund
+              promise published under their name without being told. Anywhere
+              else and the people it is for would never see it. */}
+          <StarterPolicyNotice org={org} />
           {blockedItem ? (
             <div style={{ maxWidth: 460, margin: "40px auto 0", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, textAlign: "center" }}>
               <div style={{ fontSize: 18, fontWeight: 700, color: PURPLE, marginBottom: 8 }}>
