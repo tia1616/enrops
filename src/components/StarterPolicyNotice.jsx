@@ -146,9 +146,13 @@ export default function StarterPolicyNotice({ org }) {
             h1: ({ node, ...props }) => <div style={{ fontSize: 14.5, fontWeight: 700, color: PURPLE, margin: "0 0 6px" }} {...props} />,
             h2: ({ node, ...props }) => <div style={{ fontSize: 14.5, fontWeight: 700, color: PURPLE, margin: "0 0 6px" }} {...props} />,
             h3: ({ node, ...props }) => <div style={{ fontSize: 13.5, fontWeight: 700, color: PURPLE, margin: "12px 0 4px" }} {...props} />,
-            p: ({ node, ...props }) => <p style={{ margin: "8px 0 0" }} {...props} />,
+            p: ({ node, children, ...props }) => (
+              <p style={{ margin: "8px 0 0" }} {...props}>{boldOrgName(children, org?.name)}</p>
+            ),
             ul: ({ node, ...props }) => <ul style={{ margin: "8px 0 0", paddingLeft: 20 }} {...props} />,
-            li: ({ node, ...props }) => <li style={{ margin: "4px 0 0" }} {...props} />,
+            li: ({ node, children, ...props }) => (
+              <li style={{ margin: "4px 0 0" }} {...props}>{boldOrgName(children, org?.name)}</li>
+            ),
             strong: ({ node, ...props }) => <strong style={{ fontWeight: 700, color: PURPLE }} {...props} />,
             // Links inside a policy open away from the admin shell.
             a: ({ node, ...props }) => <a style={{ color: BRIGHT }} target="_blank" rel="noopener noreferrer" {...props} />,
@@ -202,6 +206,31 @@ export default function StarterPolicyNotice({ org }) {
       </div>
     </div>
   );
+}
+
+// Draw the operator's business name bold wherever it appears in the policy, so
+// the point lands without being argued: this is THEIR document, with THEIR name
+// on it, promising THEIR families a refund.
+//
+// Done on the RENDERED children rather than by rewriting the markdown source.
+// Wrapping the name in ** before parsing looks like one line of code, but a
+// business name containing *, _, [ or ` would corrupt the document, and the
+// operators most likely to hit that are the ones with punctuation in their name
+// - exactly the people this is meant to reassure. Working on the output means
+// the source is never touched and nothing can be mis-parsed.
+function boldOrgName(children, name) {
+  if (!name) return children;
+  const arr = Array.isArray(children) ? children : [children];
+  return arr.map((child, ci) => {
+    if (typeof child !== "string" || !child.includes(name)) return child;
+    const parts = child.split(name);
+    return parts.map((part, i) => (
+      <span key={`${ci}-${i}`}>
+        {i > 0 && <strong style={{ color: PURPLE, fontWeight: 700 }}>{name}</strong>}
+        {part}
+      </span>
+    ));
+  });
 }
 
 function primaryBtn(disabled) {

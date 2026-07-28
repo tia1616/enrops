@@ -21,7 +21,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
-import { renderWaiverText, hasOrgToken } from "../../lib/waiverText.js";
+import { splitOnOrgToken, hasOrgToken } from "../../lib/waiverText.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -374,6 +374,21 @@ export default function WaiverManager() {
         </div>
       </div>
 
+      {/* Sits above BOTH sections because it is true of both: the waivers and
+          the starter cancellation policy are all documents we drafted. Said in
+          plain words rather than legal ones - "these materials are provided for
+          informational purposes and do not constitute legal advice" is the
+          phrasing people skip. It names who is responsible without being
+          alarming, because the honest position is that they are a sensible
+          starting point, not that they are dangerous. */}
+      <div style={{ marginTop: 18, padding: "12px 14px", background: CREAM, border: `1px solid ${RULE}`, borderRadius: 10, fontSize: 12.5, color: MUTED, lineHeight: 1.6, maxWidth: 680 }}>
+        <strong style={{ color: INK, fontWeight: 600 }}>A quick note:</strong> we wrote the starter
+        wording here to give you something solid to begin with, but it isn&rsquo;t legal advice and
+        no lawyer has checked it against the rules where you run your programs. Everything on this
+        page is published under your business name, so it&rsquo;s yours to edit &mdash; and if a
+        document really matters to you, it&rsquo;s worth having a lawyer read it first.
+      </div>
+
       <h2 style={{ margin: "24px 0 0", fontSize: 17, fontWeight: 700, color: INK }}>Waivers families sign</h2>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginTop: 4 }}>
         <p style={{ color: MUTED, fontSize: 13.5, margin: 0, lineHeight: 1.5, maxWidth: 560 }}>
@@ -422,7 +437,9 @@ export default function WaiverManager() {
                       filled in. The EDITOR below deliberately keeps the raw
                       {{org}} token — substituting there and saving would write
                       the name back into the stored text and re-freeze it. */}
-                  <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>{renderWaiverText(w.content, org?.name)}</div>
+                  <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>
+                    <OrgName content={w.content} orgName={org?.name} />
+                  </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button type="button" onClick={() => openWaiverEditor(w)} style={ghostBtn(false)}>Edit</button>
@@ -697,6 +714,32 @@ function WaiverEditor({ waiver, busy, saveError, onCancel, onSave }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// The operator's own business name, drawn bold inside the waiver preview, so a
+// page of boilerplate reads at a glance as THEIR document rather than a generic
+// template we handed them.
+//
+// Bold only here, on the operator's review surface. The text a family reads and
+// signs still renders through renderWaiverText as a plain string, and
+// waiver_text_snapshot - the record of what was actually agreed to - must never
+// contain markup.
+function OrgName({ content, orgName }) {
+  const name = typeof orgName === "string" ? orgName.trim() : "";
+  const segments = splitOnOrgToken(content);
+  // Same fallback as renderWaiverText: a legal document must never show a raw
+  // token, and it must never borrow another provider's name.
+  const shown = name || "the program provider";
+  return (
+    <>
+      {segments.map((seg, i) => (
+        <span key={i}>
+          {i > 0 && <strong style={{ color: INK, fontWeight: 700 }}>{shown}</strong>}
+          {seg}
+        </span>
+      ))}
+    </>
   );
 }
 
