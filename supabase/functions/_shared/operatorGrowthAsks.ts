@@ -26,7 +26,11 @@
 //   - Off by default. `enabled` starts false so nothing reaches a real operator
 //     until Jessica turns it on.
 //
-// NO EM DASHES. Standing rule on anything Jessica's name goes out on.
+// Signed by Arielle, Founder of enrops - these are the platform writing to an
+// operator, not an operator writing to a family, so the sender is a person at
+// enrops rather than the tenant's brand.
+//
+// NO EM DASHES. Standing rule on anything that goes out over a founder's name.
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from './orgBrand.ts';
@@ -67,8 +71,8 @@ export function renderAsk(ask: AskKey, orgName: string, cleanRefunds: number): A
       '',
       'And if any of it felt clunky, reply to this instead. That is worth more to us than the review.',
       '',
-      'Jessica',
-      'enrops',
+      'Arielle',
+      'Founder, enrops',
     ];
     return {
       subject: 'That refund went through cleanly',
@@ -79,7 +83,7 @@ export function renderAsk(ask: AskKey, orgName: string, cleanRefunds: number): A
          <p>That is the part of the software nobody thinks about until it goes wrong, so if it felt easy, would you tell someone? A short review is the single most useful thing you can do for us right now.</p>
          <p><a href="https://www.capterra.com/" style="color:#674EE8;font-weight:600;">Leave a review</a></p>
          <p>And if any of it felt clunky, reply to this instead. That is worth more to us than the review.</p>
-         <p>Jessica<br>enrops</p>`,
+         <p>Arielle<br>Founder, enrops</p>`,
       ),
     };
   }
@@ -95,8 +99,8 @@ export function renderAsk(ask: AskKey, orgName: string, cleanRefunds: number): A
     '',
     'Thank you for building this with us.',
     '',
-    'Jessica',
-    'enrops',
+    'Arielle',
+    'Founder, enrops',
   ];
   return {
     subject: 'Know another program owner?',
@@ -107,7 +111,7 @@ export function renderAsk(ask: AskKey, orgName: string, cleanRefunds: number): A
        <p>If you know another program owner still doing refunds by hand, would you point them at us? One introduction from someone already using it is worth more than anything we could write ourselves.</p>
        <p>Forward this, or send them to <a href="https://getenrops.com" style="color:#674EE8;font-weight:600;">getenrops.com</a></p>
        <p>Thank you for building this with us.</p>
-       <p>Jessica<br>enrops</p>`,
+       <p>Arielle<br>Founder, enrops</p>`,
     ),
   };
 }

@@ -25,6 +25,19 @@ Deno.test('POLICY: no em dashes in either ask', () => {
   }
 });
 
+// Both asks come from enrops the platform, not from the tenant's brand, so
+// they are signed by a person at enrops. If a future edit drops the signature
+// the email reads as though the operator's own software is asking.
+Deno.test('both asks are signed by Arielle as founder of enrops', () => {
+  for (const ask of ['review', 'referral'] as const) {
+    const a = renderAsk(ask, 'Onboard test', 3);
+    assertEquals(a.text.includes('Arielle'), true, `${ask} text unsigned`);
+    assertEquals(a.text.includes('Founder, enrops'), true, `${ask} text missing the title`);
+    assertEquals(a.html.includes('Arielle'), true, `${ask} html unsigned`);
+    assertEquals(a.text.includes('Jessica'), false, `${ask} still signed Jessica`);
+  }
+});
+
 Deno.test('POLICY: brand is lowercase enrops everywhere', () => {
   for (const ask of ['review', 'referral'] as const) {
     const a = renderAsk(ask, 'Onboard test', 3);
