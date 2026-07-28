@@ -89,11 +89,14 @@ export default function StarterPolicyNotice({ org }) {
 
   async function handleEdit() {
     if (busy) return;
-    // Navigate regardless of whether the record saved. They asked to go edit it,
-    // and a failed write means the notice simply reappears next time — which is
-    // the safe direction to fail in.
-    await acknowledge("editing");
-    setNotice(null);
+    const ok = await acknowledge("editing");
+    // Navigate either way — they asked to go edit it, and refusing to move
+    // because a bookkeeping write failed would be punishing them for our
+    // problem. But only HIDE the card when the write landed: dismissing it on
+    // failure would swallow the error message with it, and the destination is
+    // the page this card is already on, so leaving it up costs nothing and
+    // keeps the failure visible right where they clicked.
+    if (ok) setNotice(null);
     navigate("/admin/waivers");
   }
 
