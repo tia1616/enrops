@@ -70,9 +70,14 @@ serve(async (req) => {
     if (!preview && note.backfilled) return json({ ok: true, skipped: 'backfilled' }, 200);
 
     if (!preview && !FOUNDER_EMAILS.length) {
-      // Fail LOUD in the log but do not mark sent - so configuring the env var
-      // later and re-dispatching still delivers.
+      // Do NOT mark sent - setting the env var later and re-dispatching must still
+      // deliver. But record WHY on the row: without this, "the secret was never set"
+      // and "the HTTP call never arrived" look identical (dispatched_at set, sent_at
+      // null, send_error null), and the only difference lives in logs that expire.
       console.error('[founder-notify] FOUNDER_ALERT_EMAIL is not set; nothing sent');
+      await supabase.from('founder_notifications')
+        .update({ send_error: 'FOUNDER_ALERT_EMAIL not configured on this environment' })
+        .eq('id', note.id);
       return json({ error: 'FOUNDER_ALERT_EMAIL not configured' }, 500);
     }
 
@@ -242,6 +247,35 @@ serve(async (req) => {
       });
     }
 
+    // CLAIM THE SEND BEFORE SENDING.
+    //
+    // Marking sent_at *after* a successful send looks natural and is wrong: if that
+    // write fails, the send already happened but the row still reads unsent, and
+    // retry_unsent_founder_notifications() re-dispatches it every 15 minutes for a
+    // day. One dropped UPDATE becomes ~96 identical emails.
+    //
+    // So the claim is the conditional UPDATE itself. `.is('sent_at', null)` means
+    // only one caller can ever win; a second dispatch (sweep racing the live send,
+    // or pg_net delivering twice) updates zero rows and backs off. If the send then
+    // fails we put the row back, so a genuine failure stays retriable.
+    const nowIso = new Date().toISOString();
+    const { data: claimed, error: claimErr } = await supabase
+      .from('founder_notifications')
+      .update({ sent_at: nowIso, send_error: null })
+      .eq('id', note.id)
+      .is('sent_at', null)
+      .select('id');
+
+    if (claimErr) {
+      // Nothing was sent. Leave the row untouched so the sweep can retry it.
+      console.error('[founder-notify] could not claim send:', claimErr.message);
+      return json({ error: 'claim failed' }, 500);
+    }
+    if (!claimed?.length) {
+      // Someone else already owns this send. Never send a second copy.
+      return json({ ok: true, skipped: 'already_claimed' }, 200);
+    }
+
     const brand = await loadOrgBrand(supabase, null); // Enrops platform sender
 
     const resp = await fetch('https://api.resend.com/emails', {
@@ -259,16 +293,19 @@ serve(async (req) => {
     if (!resp.ok) {
       const errText = await resp.text();
       console.error('[founder-notify] Resend failed:', resp.status, errText);
-      // Record the failure but leave sent_at null so it stays visibly unsent.
-      await supabase.from('founder_notifications')
-        .update({ send_error: `${resp.status}: ${errText}`.slice(0, 500) })
+      // Release the claim so the sweep can try again, and say why on the row itself.
+      const { error: releaseErr } = await supabase.from('founder_notifications')
+        .update({ sent_at: null, send_error: `${resp.status}: ${errText}`.slice(0, 500) })
         .eq('id', note.id);
+      if (releaseErr) {
+        // The row now reads sent when nothing was sent. That is a MISSED email, not a
+        // duplicated one, which is the safer way to fail - but it is invisible in the
+        // table, so it has to be loud here.
+        console.error('[founder-notify] STUCK: claimed but not sent, and the release failed for',
+          note.id, releaseErr.message);
+      }
       return json({ error: 'send failed' }, 502);
     }
-
-    await supabase.from('founder_notifications')
-      .update({ sent_at: new Date().toISOString(), send_error: null })
-      .eq('id', note.id);
 
     return json({ ok: true, sent_to: FOUNDER_EMAILS.length }, 200);
   } catch (e) {
