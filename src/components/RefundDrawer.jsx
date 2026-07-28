@@ -182,6 +182,14 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
 
   const showKeepFee = adminFeeCents > 0 && refundableCents > adminFeeCents;
 
+  // One link, three sentences. Defined once so the three branches below cannot
+  // drift apart in styling or destination.
+  const payLink = (
+    <Link to="/admin/finances" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>
+      Payments&nbsp;&#8599;
+    </Link>
+  );
+
   return (
     <div
       onClick={busy ? undefined : onClose}
@@ -240,20 +248,26 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                     </button>
                   )}
                 </div>
-                {/* The amount is the operator's to set, either way. When a fee
-                    is configured, say where it came from so nobody assumes the
-                    number is fixed by us; when it isn't, say the option exists
-                    at all, because a hidden chip teaches nothing.
+                {/* Whether a fee EXISTS and whether we can offer the shortcut are
+                    two different questions, and this copy must answer the first.
+                    Branching on showKeepFee told an operator with a $35 fee that
+                    they had none, whenever the refundable amount was under $35 -
+                    the exact opposite of the truth, in the line written to tell
+                    them the truth.
 
                     NEW TAB, deliberately. This link lives inside the drawer, so
                     navigating in place would unmount it and silently bin a
                     half-typed refund amount and the spot choice. Nobody expects
                     "where do I change this?" to throw away what they were doing. */}
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
-                  {showKeepFee ? (
-                    <>Your admin fee. Change it in <Link to="/admin/finances" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Payments&nbsp;&#8599;</Link>, or just type a different amount here.</>
+                  {adminFeeCents <= 0 ? (
+                    <>You can set a standard admin fee to keep on withdrawals in {payLink}.</>
+                  ) : showKeepFee ? (
+                    <>Your admin fee. Change it in {payLink}, or just type a different amount here.</>
                   ) : (
-                    <>You can set a standard admin fee to keep on withdrawals in <Link to="/admin/finances" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Payments&nbsp;&#8599;</Link>.</>
+                    // Fee set, but it's >= everything left to refund, so the
+                    // shortcut is hidden. Say why rather than going quiet.
+                    <>Your {fmtCents(adminFeeCents)} admin fee is more than what's refundable here, so there's no shortcut to apply. Change it in {payLink}.</>
                   )}
                 </div>
                 {overMax && (

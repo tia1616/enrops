@@ -191,7 +191,11 @@ serve(async (req: Request) => {
         const res = await maybeAlertOperatorFlagged(admin, {
           organizationId: String(body.org),
           resendApiKey: Deno.env.get('RESEND_API_KEY') ?? '',
-          siteUrl: (Deno.env.get('PUBLIC_SITE_URL') ?? '').replace(/\/+$/, ''),
+          // SAME fallback as the two real call sites. A verification tool whose
+          // only job is to prove what production sends must not be able to
+          // produce a different email than production would: falling back to ''
+          // here would emit a host-less, unclickable link and still report sent.
+          siteUrl: (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, ''),
           isAllowed: isEmailAllowed,
         });
         return json(res);

@@ -122,10 +122,25 @@ export async function maybeAlertOperatorFlagged(
 
     // Claim the month FIRST. The unique index is the throttle, so two refunds
     // landing at once cannot produce two emails.
+    //
+    // `context` records WHY we alerted, at the moment we decided to. The rate is
+    // a rolling window, so by the time anyone opens Refund Watch to investigate,
+    // the refunds that triggered this may have aged out and the screen will read
+    // lower. Without this the alert becomes unfalsifiable after a few weeks.
     const now = args.now ?? new Date();
     const { error: claimErr } = await admin
       .from('operator_flag_alerts')
-      .insert({ organization_id: args.organizationId, period: periodKey(now) });
+      .insert({
+        organization_id: args.organizationId,
+        period: periodKey(now),
+        context: {
+          transactions: Number(rate.transactions),
+          refunded: Number(rate.refunded),
+          rate_pct: Number(rate.rate_pct),
+          rate_threshold_pct: Number(rate.rate_threshold_pct),
+          window_days: Number(rate.window_days),
+        },
+      });
     if (claimErr) {
       if ((claimErr as { code?: string }).code === '23505') return { sent: false, reason: 'already alerted this month' };
       console.error('[flag alert] could not claim:', claimErr);
@@ -147,23 +162,38 @@ export async function maybeAlertOperatorFlagged(
       siteUrl: args.siteUrl,
     });
 
-    const resp = await fetch('https://api.resend.com/emails', {
+    const body = JSON.stringify({
+      from: formatFromAddress(platform),
+      to,
+      subject,
+      text,
+      tags: [{ name: 'type', value: 'refund_watch_alert' }],
+    });
+    const send = () => fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${args.resendApiKey}` },
-      body: JSON.stringify({
-        from: formatFromAddress(platform),
-        to,
-        subject,
-        text,
-        tags: [{ name: 'type', value: 'refund_watch_alert' }],
-      }),
+      body,
     });
+
+    // RETRY BEFORE RELEASING, because releasing does not undo the damage. A
+    // concurrent invocation that already bounced off the unique index returned
+    // "already alerted this month" and will not try again, so by the time we
+    // release, its chance is gone. If this was the operator's last refund of the
+    // month, the crossing is simply never announced. One inline retry turns a
+    // transient blip from "no alert at all" into "a slightly slower alert".
+    let resp = await send();
+    if (!resp.ok && resp.status >= 500) {
+      console.warn(`[flag alert] resend ${resp.status}, retrying once before giving up the month`);
+      await new Promise((r) => setTimeout(r, 1000));
+      resp = await send();
+    }
     if (!resp.ok) {
-      // Release the month so a transient failure does not silently swallow the
-      // only warning we were going to give.
+      // Release the month so the NEXT refund can try again. Strictly better than
+      // holding a claim we never honoured, even though it cannot help an
+      // operator who has no next refund this month.
       await admin.from('operator_flag_alerts')
         .delete().eq('organization_id', args.organizationId).eq('period', periodKey(now));
-      console.error('[flag alert] send failed:', resp.status, await resp.text());
+      console.error('[flag alert] send failed after retry:', resp.status, await resp.text());
       return { sent: false, reason: `resend ${resp.status}` };
     }
 
