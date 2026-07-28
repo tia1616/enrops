@@ -81,6 +81,11 @@ import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
 import { maybeSendOperatorGrowthAsk } from '../_shared/operatorGrowthAsks.ts';
+import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
+
+// Per-environment site origin, same convention as the webhook. Only used to
+// link the refund watch screen in the internal alert.
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') ?? '';
 
@@ -815,6 +820,16 @@ serve(async (req: Request) => {
     await maybeSendOperatorGrowthAsk(supabase, {
       organizationId: reg.organization_id,
       resendApiKey: RESEND_API_KEY,
+      isAllowed: isEmailAllowed,
+    });
+
+    // v4 section 4: tell the platform team when this operator crosses the
+    // refund-rate threshold. Internal only, once per operator per month, and
+    // like the ask above it can never affect the refund.
+    await maybeAlertOperatorFlagged(supabase, {
+      organizationId: reg.organization_id,
+      resendApiKey: RESEND_API_KEY,
+      siteUrl: PUBLIC_SITE_URL,
       isAllowed: isEmailAllowed,
     });
 

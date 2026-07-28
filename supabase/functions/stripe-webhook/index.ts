@@ -87,6 +87,7 @@ import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.t
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { maybeSendOperatorGrowthAsk } from '../_shared/operatorGrowthAsks.ts';
+import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
 import {
   settlementForCheckoutCompleted,
   SETTLEMENT_ON_ASYNC_SUCCESS,
@@ -1209,6 +1210,16 @@ async function recordExternalRefund(
   await maybeSendOperatorGrowthAsk(admin, {
     organizationId: reg.organization_id,
     resendApiKey: RESEND_API_KEY,
+    isAllowed: isEmailAllowed,
+  });
+
+  // v4 section 4: a flag nobody is told about is a flag nobody sees. Internal
+  // heads-up only, throttled to once per operator per month, and it can never
+  // affect the refund that just happened.
+  await maybeAlertOperatorFlagged(admin, {
+    organizationId: reg.organization_id,
+    resendApiKey: RESEND_API_KEY,
+    siteUrl: PUBLIC_SITE_URL,
     isAllowed: isEmailAllowed,
   });
 

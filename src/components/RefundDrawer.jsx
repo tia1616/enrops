@@ -29,9 +29,11 @@
 //   onDone():    a refund succeeded — caller should reload
 
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -236,6 +238,17 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                     <button type="button" onClick={setKeepFee} disabled={busy} style={chip}>
                       Keep {fmtCents(adminFeeCents)} admin fee
                     </button>
+                  )}
+                </div>
+                {/* The amount is the operator's to set, either way. When a fee
+                    is configured, say where it came from so nobody assumes the
+                    number is fixed by us; when it isn't, say the option exists
+                    at all, because a hidden chip teaches nothing. */}
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+                  {showKeepFee ? (
+                    <>Your admin fee. Change it in <Link to="/admin/finances" style={{ color: BRIGHT, textDecoration: "none" }}>Payments</Link>, or just type a different amount here.</>
+                  ) : (
+                    <>You can set a standard admin fee to keep on withdrawals in <Link to="/admin/finances" style={{ color: BRIGHT, textDecoration: "none" }}>Payments</Link>.</>
                   )}
                 </div>
                 {overMax && (

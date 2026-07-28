@@ -22,7 +22,9 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { isEmailAllowed, emailGuardActive } from '../_shared/emailGuard.ts';
+import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
 
 const KEY = Deno.env.get('STRIPE_SECRET_KEY') ?? '';
 const DIAG_TOKEN = Deno.env.get('DIAG_TOKEN') ?? '';
@@ -175,6 +177,24 @@ serve(async (req: Request) => {
           allowed: isEmailAllowed(addr),
           resend_key_present: (Deno.env.get('RESEND_API_KEY') ?? '').length > 0,
         });
+      }
+
+      // v4 section 4. The alert only fires from inside a refund, so the only
+      // other way to prove it works would be to move money again just to watch
+      // an email leave. This calls the real module against the real database
+      // and the real Resend key: same code path, no synthetic refund.
+      case 'flag_alert': {
+        const admin = createClient(
+          Deno.env.get('SUPABASE_URL') ?? '',
+          Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+        );
+        const res = await maybeAlertOperatorFlagged(admin, {
+          organizationId: String(body.org),
+          resendApiKey: Deno.env.get('RESEND_API_KEY') ?? '',
+          siteUrl: (Deno.env.get('PUBLIC_SITE_URL') ?? '').replace(/\/+$/, ''),
+          isAllowed: isEmailAllowed,
+        });
+        return json(res);
       }
 
       default:
