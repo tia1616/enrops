@@ -23,6 +23,9 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+// Formatting lives in lib.ts so it is unit-tested. Do NOT re-inline these here:
+// a second copy is a copy the tests do not cover.
+import { cityStateFrom, fmtWhen, fmtDate, fmtMoney, esc, pickOperatorName } from './lib.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -33,52 +36,6 @@ const FOUNDER_EMAILS = (Deno.env.get('FOUNDER_ALERT_EMAIL') ?? '')
 
 function json(obj: unknown, status: number): Response {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
-}
-function esc(s: unknown): string {
-  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-/**
- * Pull "City, ST" out of a Google-Places-formatted address such as
- * "SE Morrison St, Gresham, OR 97030, USA". There is no city/state COLUMN anywhere
- * in the schema (checked: organizations has neither; mailing_address is null for
- * every self-serve org), so this string is the only place the location lives.
- * Returns null rather than guessing - a blank line beats a wrong town.
- */
-function cityStateFrom(address: string | null | undefined): string | null {
-  if (!address) return null;
-  const parts = address.split(',').map((p) => p.trim()).filter(Boolean);
-  for (let i = 0; i < parts.length; i++) {
-    const m = parts[i].match(/^([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?$/);
-    if (m && i > 0) return `${parts[i - 1]}, ${m[1]}`;
-  }
-  return null;
-}
-
-function fmtWhen(iso: string, tz: string): string {
-  try {
-    return new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, dateStyle: 'medium', timeStyle: 'short',
-    }).format(new Date(iso));
-  } catch {
-    return new Date(iso).toISOString();
-  }
-}
-
-function fmtDate(d: string | null): string | null {
-  if (!d) return null;
-  try {
-    return new Intl.DateTimeFormat('en-US', {
-      timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
-    }).format(new Date(`${d}T00:00:00Z`));
-  } catch {
-    return d;
-  }
-}
-
-function fmtMoney(cents: number | null): string | null {
-  if (cents == null) return null;
-  return `$${(cents / 100).toFixed(2)}`;
 }
 
 serve(async (req) => {
@@ -139,26 +96,28 @@ serve(async (req) => {
       .order('created_at', { ascending: true });
 
     const owner = (members ?? []).find((m: any) => m.role === 'owner') ?? (members ?? [])[0] ?? null;
-    let operatorName: string | null = owner?.name || null;
     const contactEmail = owner?.email || org.email || null;
+
+    let authFullName: string | null = null;
+    let authName: string | null = null;
 
     // org_members.name is null for HALF the real operators (7 of 14 on prod), but
     // the name they typed at signup survives on the auth user. Checked against live
     // data, this recovers a real name for two more operators that would otherwise
     // print as nameless. Skip values that are just the business name repeated -
     // that is already the headline.
-    if (!operatorName && owner?.auth_user_id) {
+    if (!(owner?.name ?? '').trim() && owner?.auth_user_id) {
       try {
         const { data: authUser } = await supabase.auth.admin.getUserById(owner.auth_user_id);
         const meta = (authUser?.user?.user_metadata ?? {}) as Record<string, unknown>;
-        const candidate = String(meta.full_name ?? meta.name ?? '').trim();
-        if (candidate && candidate.toLowerCase() !== String(org.name ?? '').trim().toLowerCase()) {
-          operatorName = candidate;
-        }
+        authFullName = meta.full_name ? String(meta.full_name) : null;
+        authName = meta.name ? String(meta.name) : null;
       } catch (_) {
         // Never let a name lookup cost us the whole notification.
       }
     }
+
+    const operatorName = pickOperatorName(owner?.name, authFullName, authName, org.name);
 
     // --- Trigger-specific facts ---
     const facts: Array<[string, string]> = [];
