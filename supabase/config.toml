@@ -1,4 +1,4 @@
-﻿# Supabase project config — primarily codifies per-function verify_jwt so
+# Supabase project config — primarily codifies per-function verify_jwt so
 # deploys can't silently flip a webhook to require-JWT (which breaks Stripe/
 # Checkr) or expose an authed endpoint. Values mirror PROD's live settings
 # (verified 2026-06-08). Functions not listed default to verify_jwt = true.
@@ -6,12 +6,6 @@ project_id = "enrops"
 
 # ── verify_jwt = false (public / webhook / cron entrypoints) ──
 [functions.stripe-webhook]
-verify_jwt = false
-
-# TEMPORARY, STAGING ONLY — delete at close-out along with the function and the
-# DIAG_TOKEN secret. Carries its own bearer token instead of a JWT, and refuses
-# to run without DIAG_TOKEN (unset on prod) or against a live Stripe key.
-[functions.stripe-diag]
 verify_jwt = false
 
 [functions.org-fee-config]
@@ -24,12 +18,21 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.sync-operator-stripe-status]
-# Mirrors PROD, which has this as verify_jwt = false. The function does its own
+# CORRECTED 2026-07-28. The note below claimed PROD had this as verify_jwt =
+# false. It does not: prod is TRUE, staging is false, and the two have drifted.
+# Deploying from this file as written would have silently LOOSENED auth on prod,
+# which is the exact failure the deploy-edge-fn skill exists to prevent. True is
+# both correct and stricter, and the function works under it on prod today: the
+# only caller (Finances.jsx "Check status") always sends a real user JWT.
+# Staging is the anomaly and should be tightened to match, in its own change.
+#
+# Superseded note, kept so the mistake is legible: it read
+# "Mirrors PROD, which has this as verify_jwt = false. The function does its own
 # auth: it reads the caller's Bearer token and checks org membership, and the
 # only caller (Finances.jsx "Check status") always sends a real user JWT. Listed
 # here because it was previously assumed to be prod-only and absent from the
-# repo — it is not, and a deploy without --no-verify-jwt silently tightens it.
-verify_jwt = false
+# repo — it is not, and a deploy without --no-verify-jwt silently tightens it."
+verify_jwt = true
 
 [functions.process-installments]
 verify_jwt = false
