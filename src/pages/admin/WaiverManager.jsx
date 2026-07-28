@@ -75,24 +75,49 @@ const POLICY_KINDS = [
 //
 // The link target is written once here rather than per branch, so the two
 // cannot drift apart.
+// THREE states, three sentences. A new tenant provisions with the fee at 0, so
+// "no fee set" is the DEFAULT — and that is the moment worth advising, not an
+// edge case. Reusing one sentence across all three would tell an operator who
+// has already set $35 that they could set a fee, which is the bug class that
+// bit the refund drawer.
+//
+// It RECOMMENDS rather than just pointing, because the setting is invisible
+// otherwise. The reasoning is stated in plain bottom-line terms and
+// deliberately carries NO percentage: we have no withdrawal data yet, and an
+// invented number is worse than none.
 const FINANCES_PATH = "/admin/finances";
-function adminFeeNote(stripeActive) {
+// WHAT IS TRUE and WHERE THEY CAN GO are answered separately and deliberately.
+// Deciding the sentence from `stripeActive` alone would tell an operator who set
+// a $35 fee and later disconnected Stripe that they have no fee — reusing a
+// can-we-offer-this condition to state a fact is precisely how the refund drawer
+// ended up telling an operator the opposite of the truth.
+function adminFeeNote(stripeActive, feeCents) {
+  // ?setup=1 opens the "Manage setup" panel on arrival. It only exists when
+  // Stripe is active, so anyone else is sent to the page's own front door.
+  const dest = stripeActive
+    ? { linkTo: `${FINANCES_PATH}?setup=1`, linkLabel: "Payments → Manage setup" }
+    : { linkTo: FINANCES_PATH, linkLabel: "connect Stripe to get paid" };
+
+  // Why a fee is worth charging, said once so the two "no fee yet" branches
+  // cannot drift apart. No percentage: we have no withdrawal data, and an
+  // invented number would be worse than none.
+  const WHY = "Most of what a withdrawal costs you is the seat you may not refill, plus the time to process it — a small fee covers that and still reads as fair to families.";
+
+  if (feeCents > 0) {
+    const has = `You keep a ${formatMoney(feeCents)} admin fee when a family withdraws, and the wording above should say so — an amount families were never told about is the one that gets disputed.`;
+    return stripeActive
+      ? { ...dest, text: `${has} Change it under`, after: "any time." }
+      : { ...dest, text: `${has} You can change the amount once you`, after: "again." };
+  }
+
   return stripeActive
-    ? {
-        text: "Charging an admin fee when a family withdraws? Set the amount under",
-        // ?setup=1 opens the "Manage setup" panel on arrival. Without it the
-        // panel is collapsed by default and the operator lands on a page where
-        // the thing they were just sent to find is invisible.
-        linkTo: `${FINANCES_PATH}?setup=1`,
-        linkLabel: "Payments → Manage setup",
-        after: "so it matches what you say here.",
-      }
-    : {
-        text: "Planning to keep an admin fee when a family withdraws? You can set the amount once you",
-        linkTo: FINANCES_PATH,
-        linkLabel: "connect Stripe to get paid",
-        after: "— then come back and make sure this wording matches it.",
-      };
+    ? { ...dest, text: `You don’t charge an admin fee when a family withdraws. ${WHY} Set one under`, after: "and say so in the wording above." }
+    : { ...dest, text: `You don’t charge an admin fee when a family withdraws. ${WHY} You can set one once you`, after: "— then come back and say so in the wording above." };
+}
+
+function formatMoney(cents) {
+  const d = (cents || 0) / 100;
+  return `$${d % 1 === 0 ? d.toFixed(0) : d.toFixed(2)}`;
 }
 
 export default function WaiverManager() {
@@ -116,6 +141,9 @@ export default function WaiverManager() {
   // field renders (Finances gates it on stripe_account_status === 'active'), or
   // it will confidently point at a control that isn't there.
   const [stripeActive, setStripeActive] = useState(null); // null = unknown
+  // The fee itself, so the note can say what they actually charge instead of
+  // asking a question it already knows the answer to.
+  const [adminFeeCents, setAdminFeeCents] = useState(0);
 
   async function load() {
     if (!org?.id) return;
@@ -135,7 +163,7 @@ export default function WaiverManager() {
         .eq("organization_id", org.id),
       supabase
         .from("organizations")
-        .select("stripe_account_status")
+        .select("stripe_account_status, withdrawal_admin_fee_cents")
         .eq("id", org.id)
         .maybeSingle(),
     ]);
@@ -146,6 +174,7 @@ export default function WaiverManager() {
     setStripeActive(
       sRes.error || !sRes.data ? null : sRes.data.stripe_account_status === "active",
     );
+    setAdminFeeCents(sRes.data?.withdrawal_admin_fee_cents || 0);
     setWaivers(wRes.data ?? []);
     // Policies are secondary — a failure here shouldn't blank the waivers list.
     // But it must NOT render as "Not published" either: that reads as a settled
@@ -497,7 +526,7 @@ export default function WaiverManager() {
                       control that isn't there or tell them to connect Stripe
                       they may already have connected. */}
                   {kind.hasAdminFeeNote && stripeActive !== null && (() => {
-                    const note = adminFeeNote(stripeActive);
+                    const note = adminFeeNote(stripeActive, adminFeeCents);
                     return (
                       <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560 }}>
                         {note.text}{" "}
