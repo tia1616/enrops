@@ -243,12 +243,17 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                 {/* The amount is the operator's to set, either way. When a fee
                     is configured, say where it came from so nobody assumes the
                     number is fixed by us; when it isn't, say the option exists
-                    at all, because a hidden chip teaches nothing. */}
+                    at all, because a hidden chip teaches nothing.
+
+                    NEW TAB, deliberately. This link lives inside the drawer, so
+                    navigating in place would unmount it and silently bin a
+                    half-typed refund amount and the spot choice. Nobody expects
+                    "where do I change this?" to throw away what they were doing. */}
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
                   {showKeepFee ? (
-                    <>Your admin fee. Change it in <Link to="/admin/finances" style={{ color: BRIGHT, textDecoration: "none" }}>Payments</Link>, or just type a different amount here.</>
+                    <>Your admin fee. Change it in <Link to="/admin/finances" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Payments&nbsp;&#8599;</Link>, or just type a different amount here.</>
                   ) : (
-                    <>You can set a standard admin fee to keep on withdrawals in <Link to="/admin/finances" style={{ color: BRIGHT, textDecoration: "none" }}>Payments</Link>.</>
+                    <>You can set a standard admin fee to keep on withdrawals in <Link to="/admin/finances" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Payments&nbsp;&#8599;</Link>.</>
                   )}
                 </div>
                 {overMax && (

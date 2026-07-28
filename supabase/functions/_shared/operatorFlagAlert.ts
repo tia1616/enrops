@@ -83,12 +83,24 @@ export async function maybeAlertOperatorFlagged(
     const cfg = ((cfgRow as { value?: Record<string, unknown> } | null)?.value ?? {}) as Record<string, unknown>;
     if (cfg.enabled !== true) return { sent: false, reason: 'flag alerts are off' };
 
+    // The three ways this feature can be alive but deliver nothing are all
+    // MISCONFIGURATION, and each one is louder than the silence it would
+    // otherwise produce. A guard that drops quietly is indistinguishable from a
+    // feature that does not work: that is exactly how the staging allowlist ate
+    // every refund receipt while the code, the tests and the logs looked fine.
+    // "Not flagged" is deliberately NOT logged - that is the normal case.
     const to = String(cfg.to ?? '').trim();
-    if (!to) return { sent: false, reason: 'no recipient configured' };
+    if (!to) {
+      console.error('[flag alert] MISCONFIGURED: refund_watch_alerts is enabled but has no recipient. No alert will ever send.');
+      return { sent: false, reason: 'no recipient configured' };
+    }
     // Checked BEFORE the claim below. If we claimed the month and then found we
     // could not send, this operator would go unalerted until next month for a
     // reason that has nothing to do with their refund rate.
-    if (!args.isAllowed(to)) return { sent: false, reason: `recipient not allowed in this environment: ${to}` };
+    if (!args.isAllowed(to)) {
+      console.warn(`[flag alert] HELD BACK by this environment's email allowlist: ${to}. Expected on staging; on prod it means the alert is dead.`);
+      return { sent: false, reason: `recipient not allowed in this environment: ${to}` };
+    }
 
     // ONE source for the numbers. This module used to recompute the rate in
     // TypeScript, and it got a different answer than the flag did: for j2s on

@@ -69,7 +69,14 @@ $$;
 
 REVOKE ALL ON FUNCTION public.seed_default_cancellation_policy(uuid) FROM public;
 REVOKE ALL ON FUNCTION public.seed_default_cancellation_policy(uuid) FROM anon;
-GRANT EXECUTE ON FUNCTION public.seed_default_cancellation_policy(uuid) TO authenticated;
+-- NOT granted to `authenticated`, which is where this DEPARTS from its sibling.
+-- seed_default_waivers is called from the browser by WaiverManager, so it needs
+-- that grant. Nothing in the app calls this one: the only caller is
+-- provision_operator_org, which is itself SECURITY DEFINER and so reaches this
+-- regardless. Granting `authenticated` anyway would expose a DEFINER function
+-- taking a tenant id over /rest/v1/rpc for no reason at all. Least privilege
+-- beats symmetry with the sibling when the need genuinely differs.
+-- Caught by Supabase's security advisors during the pre-push gauntlet.
 GRANT EXECUTE ON FUNCTION public.seed_default_cancellation_policy(uuid) TO service_role;
 
 COMMENT ON FUNCTION public.seed_default_cancellation_policy(uuid) IS
