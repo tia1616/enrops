@@ -105,3 +105,9 @@ verify_jwt = false
 # dev-seed-designer-access as verify_jwt=false, but those are NOT in this
 # repo (prod-only / legacy), so they're intentionally omitted here.
 
+
+# Founder milestone notifications. Called by pg_net straight from a DB trigger
+# (see 20260728c_founder_notifications.sql), so there is no user JWT to present;
+# it authenticates the caller itself against the founder_notify_secret gate.
+[functions.founder-notify]
+verify_jwt = false
