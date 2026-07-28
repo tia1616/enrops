@@ -77,6 +77,11 @@ import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollment
 import { computeMarginRefund } from '../_shared/refundFeeSplit.ts';
 import { loadProration } from '../_shared/refundFeeProration.ts';
 import { readChargeFeeFacts } from '../_shared/chargeFeeFacts.ts';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { isEmailAllowed } from '../_shared/emailGuard.ts';
+import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
+
+const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') ?? '';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -729,11 +734,88 @@ serve(async (req: Request) => {
       });
     }
 
+    // ── tell the family (v4 section 8) ───────────────────────────────────
+    // Sent AFTER the money has moved and after the records are settled, so the
+    // email can never describe a refund that did not happen. Fail-safe: a
+    // bounced receipt must not turn a successful refund into an error, so the
+    // outcome is reported in the response rather than thrown.
+    // The webhook deliberately does NOT also send for these: it recognises
+    // Enrops-initiated refunds by metadata and skips them entirely, so the
+    // family gets exactly one receipt.
+    let receipt: { sent: boolean; reason?: string } = { sent: false, reason: 'not attempted' };
+    try {
+      const { data: parentRow } = await supabase
+        .from('parents')
+        .select('email, first_name, last_name')
+        .eq('id', reg.parent_id)
+        .maybeSingle();
+      const parent = parentRow as { email?: string; first_name?: string; last_name?: string } | null;
+
+      if (parent?.email) {
+        const brand = await loadOrgBrand(supabase, reg.organization_id);
+        const { data: studentRow } = await supabase
+          .from('students').select('first_name').eq('id', reg.student_id).maybeSingle();
+
+        let programName: string | null = null;
+        if (reg.program_id) {
+          const { data: p } = await supabase
+            .from('programs').select('curriculum').eq('id', reg.program_id).maybeSingle();
+          programName = (p as { curriculum?: string } | null)?.curriculum ?? null;
+        } else if (reg.camp_session_id) {
+          const { data: c } = await supabase
+            .from('camp_sessions').select('curriculum_name').eq('id', reg.camp_session_id).maybeSingle();
+          programName = (c as { curriculum_name?: string } | null)?.curriculum_name ?? null;
+        }
+
+        // The enrops fee the FAMILY paid is the gap between what the card was
+        // charged and the base price. Derived this way it is correct on both
+        // charge models: on direct the fee IS the application fee, but on a
+        // destination charge the application fee also carries the Stripe-fee
+        // uplift, which the family never paid and must never be told about.
+        // Null when it cannot be derived, which makes the receipt stay silent
+        // about the fee rather than guess.
+        const baseTotal = paidInstallments.length > 0
+          ? paidInstallments.reduce((s, i) => s + (i.amount_cents || 0), 0)
+          : (reg.amount_cents ?? 0);
+        const familyFeeOnCharge = totalPaid > baseTotal ? totalPaid - baseTotal : null;
+
+        receipt = await sendRefundReceipt({
+          to: parent.email,
+          from: formatFromAddress(brand),
+          replyTo: brand.reply_to,
+          resendApiKey: RESEND_API_KEY,
+          isAllowed: isEmailAllowed,
+          origin: 'enrops',
+          parentName: `${parent.first_name ?? ''} ${parent.last_name ?? ''}`.trim(),
+          childName: (studentRow as { first_name?: string } | null)?.first_name ?? null,
+          programName,
+          orgName: brand.org_name,
+          refundedCents: refundedThisCall,
+          chargedCents: totalPaid,
+          familyFeeCents: familyFeeOnCharge,
+          withdrawn: cancelRegistration,
+          accentColor: brand.accent_color,
+        });
+        if (!receipt.sent) {
+          console.warn(`[refund] receipt not sent to ${parent.email}: ${receipt.reason}`);
+        }
+      } else {
+        receipt = { sent: false, reason: 'no parent email on file' };
+      }
+    } catch (receiptErr) {
+      console.error('[refund] receipt failed (refund itself is fine):', receiptErr);
+      receipt = { sent: false, reason: (receiptErr as Error).message };
+    }
+
     return json({
       success: true,
       refunds: refundsCreated,
       total_refunded_cents: refundedThisCall,
       cancelled: cancelRegistration,
+      // Surfaced so the drawer can say "refunded, but we could not email them"
+      // instead of implying the family was told.
+      receipt_sent: receipt.sent,
+      receipt_reason: receipt.sent ? undefined : receipt.reason,
     });
   } catch (err) {
     console.error('[refund] fatal:', err);

@@ -84,6 +84,8 @@ import { computeMarginRefund } from '../_shared/refundFeeSplit.ts';
 import { loadProration } from '../_shared/refundFeeProration.ts';
 import { readChargeFeeFacts, FEE_REFUND_SOURCE_KEY, FEE_REFUND_REGISTRATION_KEY } from '../_shared/chargeFeeFacts.ts';
 import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.ts';
+import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
+import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import {
   settlementForCheckoutCompleted,
   SETTLEMENT_ON_ASYNC_SUCCESS,
@@ -1053,6 +1055,11 @@ async function recordExternalRefund(
   }
 
   // ── advance payment_status, same rule as refund-registration ──────────────
+  // chargedForReg is hoisted because the receipt below needs the same number:
+  // whether the family got their WHOLE charge back decides what we may tell
+  // them about the enrops fee.
+  let chargedForReg = 0;
+  let baseForReg = 0;
   try {
     const { data: paidRows } = await admin
       .from('refunds')
@@ -1120,6 +1127,8 @@ async function recordExternalRefund(
     }
     // Never LOWER the ceiling: if the maths disagrees, keep the base.
     const totalPaid = Math.max(basePaid, chargedPaid);
+    chargedForReg = totalPaid;
+    baseForReg = basePaid;
 
     const newStatus = totalPaid > 0 && totalRefunded >= totalPaid ? 'refunded'
       : totalRefunded > 0 ? 'partial'
@@ -1129,6 +1138,58 @@ async function recordExternalRefund(
     }
   } catch (statusErr) {
     console.error('[charge.refunded] payment_status update failed (non-fatal):', statusErr);
+  }
+
+  // ── tell the family (v4 section 8) ─────────────────────────────────────
+  // The operator refunded inside their own Stripe, so Stripe sent them its own
+  // terse notice and nothing explained it. This is the same receipt the in-app
+  // path sends, from the same renderer, so the family cannot get different copy
+  // depending on where the operator clicked. Only reached for genuinely
+  // external refunds: Enrops-initiated ones are recognised by metadata and
+  // skipped long before here, so there is no double send.
+  try {
+    const { data: parentRow } = await admin
+      .from('parents').select('email, first_name, last_name').eq('id', reg.parent_id).maybeSingle();
+    const parent = parentRow as { email?: string; first_name?: string; last_name?: string } | null;
+    if (parent?.email) {
+      const brand = await loadOrgBrand(admin, reg.organization_id);
+      const { data: studentRow } = await admin
+        .from('students').select('first_name').eq('id', reg.student_id).maybeSingle();
+      let programName: string | null = null;
+      if (reg.program_id) {
+        const { data: p } = await admin
+          .from('programs').select('curriculum').eq('id', reg.program_id).maybeSingle();
+        programName = (p as { curriculum?: string } | null)?.curriculum ?? null;
+      } else if (reg.camp_session_id) {
+        const { data: c } = await admin
+          .from('camp_sessions').select('curriculum_name').eq('id', reg.camp_session_id).maybeSingle();
+        programName = (c as { curriculum_name?: string } | null)?.curriculum_name ?? null;
+      }
+      const familyFee = chargedForReg > baseForReg ? chargedForReg - baseForReg : null;
+      const r = await sendRefundReceipt({
+        to: parent.email,
+        from: formatFromAddress(brand),
+        replyTo: brand.reply_to,
+        resendApiKey: RESEND_API_KEY,
+        isAllowed: isEmailAllowed,
+        origin: 'stripe_dashboard',
+        parentName: `${parent.first_name ?? ''} ${parent.last_name ?? ''}`.trim(),
+        childName: (studentRow as { first_name?: string } | null)?.first_name ?? null,
+        programName,
+        orgName: brand.org_name,
+        refundedCents: input.amountCents,
+        chargedCents: chargedForReg || null,
+        familyFeeCents: familyFee,
+        // Stripe tells us money moved, not what the operator decided about the
+        // roster. Null omits the sentence entirely rather than assert "still on
+        // the roster" after a full refund, which would often be wrong.
+        withdrawn: null,
+        accentColor: brand.accent_color,
+      });
+      if (!r.sent) console.warn(`[charge.refunded] receipt not sent to ${parent.email}: ${r.reason}`);
+    }
+  } catch (receiptErr) {
+    console.error('[charge.refunded] receipt failed (refund itself is recorded):', receiptErr);
   }
 
   // Same churn signal the in-app path logs, so reporting does not depend on
