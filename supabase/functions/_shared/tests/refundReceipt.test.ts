@@ -1,5 +1,6 @@
 import { assertEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
 import { renderRefundReceipt, refundCoversWholeCharge } from '../refundReceipt.ts';
+import { PLATFORM_FOOTER_TEXT } from '../platformFooter.ts';
 
 const BASE = {
   parentName: 'Jessica Vorster',
@@ -82,13 +83,29 @@ Deno.test('POLICY: no em dashes anywhere in the copy', () => {
   assertEquals(r.html.includes('—'), false, 'html has an em dash');
 });
 
-Deno.test('carries the Powered by enrops line and a tagged link (v4 section 8)', () => {
+// v4 section 8 wants the platform line on the refund receipt. The WORDING is
+// not ours: it comes from _shared/platformFooter.ts, which owns the approved
+// copy and the ?src= vocabulary. Asserting the module's output here rather than
+// a literal string means a future copy change lands in one place.
+Deno.test('carries the shared platform footer line, not hand-rolled copy (v4 section 8)', () => {
   const r = renderRefundReceipt(FULL);
-  assertEquals(r.text.includes('Powered by enrops'), true);
-  assertEquals(r.html.includes('Powered by enrops'), true);
-  assertEquals(r.html.includes('utm_source=refund_receipt'), true, 'link must be attributable');
+  assertEquals(r.text.includes(PLATFORM_FOOTER_TEXT), true);
+  assertEquals(r.html.includes(PLATFORM_FOOTER_TEXT), true);
+  assertEquals(r.html.includes('src=receipt'), true, 'link must carry the receipt surface');
   // Lowercase brand, always.
   assertEquals(/Enrops/.test(r.text.replace(/getenrops/gi, '')), false, 'brand is lowercase enrops');
+});
+
+// POLICY, LOCKED. These exact phrases were retired on 2026-07-26. A receipt is a
+// brand-new surface, so it is exactly where retired copy sneaks back in.
+Deno.test('POLICY: none of the retired footer copy appears', () => {
+  const r = renderRefundReceipt(FULL);
+  const blob = `${r.subject} ${r.text} ${r.html}`;
+  for (const dead of ['Powered by enrops', 'start your own program free', 'Try enrops free']) {
+    assertEquals(blob.toLowerCase().includes(dead.toLowerCase()), false, `retired copy present: ${dead}`);
+  }
+  // The retired UTM tagging went with it; the standard is ?src=<surface>.
+  assertEquals(blob.includes('utm_source'), false, 'UTM params were retired in favour of ?src=');
 });
 
 Deno.test('speaks as the PROVIDER, never as enrops, in the body', () => {

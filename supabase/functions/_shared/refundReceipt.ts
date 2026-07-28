@@ -27,6 +27,15 @@
 //
 // NO EM DASHES anywhere in this file's copy. Standing rule on anything that
 // reaches a family.
+//
+// The platform attribution line is NOT written here. It comes from
+// _shared/platformFooter.ts, which owns the approved wording, the lowercase
+// brand, the one-line rule and the `?src=<surface>` vocabulary. This file used
+// to hand-roll "Powered by enrops. Start your own program free" with UTM
+// parameters; both the copy and the tracking were retired on 2026-07-26.
+// A refund receipt is surface 'receipt', same as a payment receipt.
+
+import { renderPlatformFooterHtml, renderPlatformFooterText } from './platformFooter.ts';
 
 export interface RefundReceiptInput {
   /** Family's display name, for the greeting. Falls back to a neutral hello. */
@@ -135,7 +144,7 @@ export function renderRefundReceipt(input: RefundReceiptInput): RenderedReceipt 
     '',
     `${org}`,
     '',
-    'Powered by enrops. Start your own program free at https://getenrops.com',
+    renderPlatformFooterText('receipt'),
   ].filter((l) => l !== null && l !== undefined).join('\n').replace(/\n{3,}/g, '\n\n');
 
   const html = `<!-- refund receipt -->
@@ -160,11 +169,9 @@ export function renderRefundReceipt(input: RefundReceiptInput): RenderedReceipt 
 
   <p style="margin:24px 0 0;font-size:14px;">${escapeHtml(org)}</p>
 
-  <p style="margin:20px 0 0;padding-top:14px;border-top:1px solid #e2dfd5;font-size:12px;color:#8b8194;">
-    Powered by enrops.
-    <a href="https://getenrops.com?utm_source=refund_receipt&utm_medium=email&utm_campaign=powered_by"
-       style="color:#6B3FA0;">Start your own program free</a>.
-  </p>
+  <div style="margin:20px 0 0;padding-top:14px;border-top:1px solid #e2dfd5;">
+    ${renderPlatformFooterHtml('receipt')}
+  </div>
 </div>`;
 
   return { subject, html, text };
