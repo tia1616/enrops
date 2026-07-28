@@ -338,7 +338,11 @@ begin
     select id from public.founder_notifications
      where sent_at is null
        and not backfilled
-       and created_at < now() - interval '5 minutes'
+       -- Back off from the LAST ATTEMPT, not from row creation. created_at never
+       -- changes, so it only answers "how old is this row" - a row created 20
+       -- minutes ago whose send is still in flight would pass a created_at guard
+       -- and get dispatched a second time.
+       and coalesce(dispatched_at, created_at) < now() - interval '5 minutes'
        -- Give up after a day rather than retrying a doomed row forever; it stays
        -- in the table, visibly unsent, which is the honest end state.
        and created_at > now() - interval '1 day'

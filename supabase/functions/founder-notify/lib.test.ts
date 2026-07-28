@@ -80,9 +80,21 @@ Deno.test('fmtMoney omits itself rather than printing garbage', () => {
 
 Deno.test('esc neutralises HTML in operator-supplied text', () => {
   assertEquals(esc('<script>alert(1)</script>'), '&lt;script&gt;alert(1)&lt;/script&gt;');
-  assertEquals(esc('Ben & Jerry\'s STEAM'), 'Ben &amp; Jerry\'s STEAM');
+  assertEquals(esc('Ben & Jerry\'s STEAM'), 'Ben &amp; Jerry&#39;s STEAM');
   assertEquals(esc(null), '');
   assertEquals(esc(undefined), '');
+});
+
+// esc() output goes inside href="...". A slug carrying a double quote would
+// otherwise close the attribute and inject its own. organizations.slug has no
+// CHECK constraint, so this cannot be assumed away at the database layer.
+Deno.test('esc cannot break out of an HTML attribute', () => {
+  const evil = 'a" onmouseover="steal()';
+  const escaped = esc(evil);
+  assertEquals(escaped.includes('"'), false);
+  assertEquals(escaped, 'a&quot; onmouseover=&quot;steal()');
+  // The rendered attribute stays a single attribute.
+  assertEquals(`href="${escaped}"`, 'href="a&quot; onmouseover=&quot;steal()"');
 });
 
 // ---------------------------------------------------------------------------
