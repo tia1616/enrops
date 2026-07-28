@@ -164,8 +164,13 @@ export default function QuickProgramBuilder() {
 
   // Locations the operator has set up (Programs -> Locations). One location
   // auto-selects (no need to pick when there's only one); 2+ shows a picker;
-  // none = location-less (still valid — location is optional).
+  // none means they must add one before this class can be created -- location
+  // is REQUIRED, so an empty list is a blocker to clear, not a valid answer.
   const [locations, setLocations] = useState([]);
+  // Whether that list could be READ at all. Kept apart from `locations.length`
+  // because "you have none" and "we could not find out" are different facts,
+  // and we say the first one out loud to the operator.
+  const [locationsFailed, setLocationsFailed] = useState(false);
   const [locationId, setLocationId] = useState("");
   // Does this org already have programs? Decides whether the first-class
   // questions are appropriate. null = not counted yet (never assume either way).
@@ -183,25 +188,46 @@ export default function QuickProgramBuilder() {
       // Re-arm for this org: a failure recorded for a previous org.id must not
       // decide what this one sees.
       setCountFailed(false);
+      setLocationsFailed(false);
+
+      // The two reads get their own try blocks on purpose. Sharing one meant a
+      // failure of EITHER was recorded as the same state, so a dead count made
+      // the locations list look empty and vice versa -- and "empty" is a claim
+      // we put in front of the operator ("No locations yet"), not just an
+      // internal flag. Note both previously destructured only `data`/`count`
+      // and dropped `error` on the floor: supabase-js RESOLVES query errors, so
+      // an RLS denial or a bad column never reached the catch at all and simply
+      // read as "this org has nothing".
       try {
-        const { data } = await supabase
+        const { data, error: locErr } = await supabase
           .from("program_locations")
           .select("id, name")
           .eq("organization_id", org.id)
           .order("name");
         if (cancelled) return;
-        const locs = data ?? [];
-        setLocations(locs);
-        if (locs.length === 1) setLocationId(locs[0].id);
+        if (locErr) {
+          setLocationsFailed(true);
+        } else {
+          const locs = data ?? [];
+          setLocations(locs);
+          if (locs.length === 1) setLocationId(locs[0].id);
+        }
+      } catch {
+        if (!cancelled) setLocationsFailed(true);
+      }
 
-        const { count } = await supabase
+      try {
+        const { count, error: cntErr } = await supabase
           .from("programs")
           .select("id", { count: "exact", head: true })
           .eq("organization_id", org.id);
-        if (!cancelled) setProgramCount(count ?? 0);
+        if (cancelled) return;
+        if (cntErr) setCountFailed(true);
+        else setProgramCount(count ?? 0);
       } catch {
-        // supabase-js RESOLVES query errors into { data, error }, so the only
-        // way we land here is a genuine network rejection (offline, DNS, CORS).
+        // Query errors arrive as cntErr above; reaching here means a genuine
+        // network rejection (offline, DNS, CORS). Either way the count is
+        // unknown, and both must land on the same state.
         // Left alone this leaves programCount null forever, and countPending
         // renders a bare "Loading..." off null -- a spinner that never resolves
         // and never says why, the same dead-feature class as the address lookup.
@@ -1068,8 +1094,19 @@ export default function QuickProgramBuilder() {
               {/* "No specific location" is gone: it was the opt-out that let a
                   program go live with nowhere to be. The remaining empty option
                   is a prompt, not a choice -- it cannot be submitted. */}
+              {/* "No specific location" is gone: it was the opt-out that let a
+                  program go live with nowhere to be. The remaining empty option
+                  is a prompt, not a choice -- it cannot be submitted. Never
+                  claim "none" when the read failed: the operator would believe
+                  it and add a venue they already have. */}
               <select id="qpb-location" style={inputStyle} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                <option value="">{locations.length === 0 ? "No locations yet — add one below" : "Choose where this class runs"}</option>
+                <option value="">
+                  {locationsFailed
+                    ? "Couldn't load your locations"
+                    : locations.length === 0
+                      ? "No locations yet — add one below"
+                      : "Choose where this class runs"}
+                </option>
                 {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
               {/* Was a 13px <span onClick> — no button semantics, no tap target,
@@ -1090,20 +1127,26 @@ export default function QuickProgramBuilder() {
                   + {profile.venue_answer === "goes_to_sites" || profile.venue_answer === "both" ? "Add a site" : "Add a location"}
                 </button>
               </div>
-              {/* Three states, three sentences. Every class needs a location, so
-                  the "nothing to say" state is the one that most needs saying:
-                  locations exist but none is picked yet. */}
-              {locations.length === 0 && profile.venue_answer === "own_space" && (
+              {/* Four states, four sentences, and the load-failure one comes
+                  first because it is the only one where we do NOT know what the
+                  operator has. Telling them to "add one" here would have them
+                  create a duplicate of a venue that already exists. */}
+              {locationsFailed && (
+                <div style={{ ...helpStyle, color: "#8a6d1f" }}>
+                  Couldn't load your locations just now. Refresh the page before adding one, so you don't end up with a duplicate.
+                </div>
+              )}
+              {!locationsFailed && locations.length === 0 && profile.venue_answer === "own_space" && (
                 <div style={helpStyle}>
                   Add your space once and every class you build will use it.
                 </div>
               )}
-              {locations.length === 0 && (profile.venue_answer === "goes_to_sites" || profile.venue_answer === "both") && (
+              {!locationsFailed && locations.length === 0 && (profile.venue_answer === "goes_to_sites" || profile.venue_answer === "both") && (
                 <div style={helpStyle}>
                   Add each school or site you teach at — families pick from these when they register.
                 </div>
               )}
-              {locations.length > 0 && !locationId && (
+              {!locationsFailed && locations.length > 0 && !locationId && (
                 <div style={helpStyle}>
                   Pick where this class runs — families see it when they register.
                 </div>

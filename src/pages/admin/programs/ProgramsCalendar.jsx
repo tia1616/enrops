@@ -338,12 +338,18 @@ export default function ProgramsCalendar() {
     if (!org?.id) return;
     let alive = true;
     (async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("program_locations")
         .select("id, name, district")
         .eq("organization_id", org.id)
         .order("name");
-      if (alive) setLocationsForPicker(data ?? []);
+      // null means "could not read", [] means "genuinely none". The picker puts
+      // that distinction in front of the operator ("No locations yet"), so a
+      // dropped error must not masquerade as an empty org -- this previously
+      // destructured only `data`, and supabase-js RESOLVES query errors, so an
+      // RLS denial read as "this org has no venues". Every consumer of this
+      // prop already guards with `?? []`, so null is safe to pass down.
+      if (alive) setLocationsForPicker(error ? null : (data ?? []));
     })();
     return () => { alive = false; };
   }, [org?.id]);
@@ -1762,21 +1768,34 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         <ExpandField label="Location *">
           <select value={draft.program_location_id ?? ""} onChange={(e) => set("program_location_id", e.target.value)} style={expandInputStyle}>
             {/* A prompt, not a choice. Location is required, so this option
-                exists only to represent "not chosen yet" for the handful of
-                legacy rows that predate the rule -- Save is blocked while it is
-                selected. It is also the state Jessica hit: an empty picker with
-                nothing to pick, which is why the message below names the fix
-                instead of leaving the operator to guess. */}
+                exists only to represent "not chosen yet" -- Save is blocked
+                while it is selected. `locations === null` means the list could
+                not be READ, which is not the same as the org having none: on a
+                failed read the program's own location is still set, so the
+                picker would otherwise render blank and silently look like the
+                location had been lost. */}
             <option value="">
-              {(locations ?? []).length === 0 ? "No locations yet" : "— pick a location —"}
+              {locations === null
+                ? "Couldn't load locations"
+                : locations.length === 0
+                  ? "No locations yet"
+                  : "— pick a location —"}
             </option>
             {(locations ?? []).map((l) => (
               <option key={l.id} value={l.id}>{l.name}{l.district ? ` (${l.district})` : ""}</option>
             ))}
           </select>
-          {!draft.program_location_id && (
+          {/* Warn on a failed read even when a location IS set, because that is
+              exactly when the control misrepresents itself: the saved value has
+              no matching <option>, so the field renders empty and an operator
+              could "correct" it into something else. */}
+          {locations === null ? (
             <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4 }}>
-              {(locations ?? []).length === 0
+              Couldn't load this org's locations — refresh before changing this field.
+            </div>
+          ) : !draft.program_location_id && (
+            <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4 }}>
+              {locations.length === 0
                 ? "Add one under Programs → Locations, then pick it here."
                 : "Every class needs a location — pick one to save."}
             </div>
