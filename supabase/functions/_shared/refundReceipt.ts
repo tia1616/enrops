@@ -120,11 +120,18 @@ export function renderRefundReceipt(input: RefundReceiptInput): RenderedReceipt 
     ? `That includes the ${money(fee)} enrops service fee you paid, so you are not out of pocket for it.`
     : '';
 
+  // FAMILY WORDS, NOT OPERATOR WORDS (Jessica, 2026-07-28, reading a real
+  // receipt on prod). This said "has been taken off the roster and the spot is
+  // free for someone else". Two problems: "roster" is operator vocabulary, and
+  // what happens to the spot afterwards is the operator's business, not the
+  // family's. A parent needs exactly one fact here - is my child still in this
+  // class or not - and telling them their place has been handed on reads cold
+  // at the moment they have just cancelled.
   const spotLine = input.withdrawn === null || input.withdrawn === undefined
     ? ''
     : input.withdrawn
-      ? `${child || 'Your child'} has been taken off the roster and the spot is free for someone else.`
-      : `${child || 'Your child'} is still on the roster.`;
+      ? `${child || 'Your child'} is no longer enrolled in this class.`
+      : `${child || 'Your child'} is still enrolled.`;
 
   const timingLine =
     'Refunds usually land back on your card within 5 to 10 business days, depending on your bank.';
