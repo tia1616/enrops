@@ -103,6 +103,16 @@ export default function StarterPolicyNotice({ org }) {
   if (!notice) return null;
 
   const waivers = notice.active_waiver_count ?? 0;
+  // Where the promise actually reaches a family. A tenant who brings their own
+  // registration has no Enrops checkout and no Enrops registration form, so both
+  // of those sentences would be false for them — and two of the real prospects
+  // on prod are in exactly that state. What stays true either way is that the
+  // policy is published publicly under their business name, which is the part
+  // that made this notice necessary in the first place.
+  //
+  // Read from the RPC, not from the browser's `org`, so the sentence and the
+  // fact it rests on come from the same place.
+  const usesEnropsRegistration = notice.uses_enrops_registration !== false;
 
   return (
     <div
@@ -119,10 +129,17 @@ export default function StarterPolicyNotice({ org }) {
       <div style={{ fontSize: 16, fontWeight: 700, color: PURPLE }}>
         A cancellation &amp; refund policy is live under your business name
       </div>
+      {/* Only the FIRST sentence differs. The rest — that the wording is ours,
+          that it promises money, and that they can change it — is the whole
+          point of the notice and is identical in both states, so it is written
+          once here rather than duplicated into two branches that could drift. */}
       <p style={{ fontSize: 13.5, color: INK, lineHeight: 1.55, margin: "6px 0 0", maxWidth: 680 }}>
-        Families read this on the payment step before they pay. We published a starter version so
-        your checkout wasn&rsquo;t missing one &mdash; these are our words, not yours, and they make
-        promises about refunds. Read them below and change anything you don&rsquo;t agree with.
+        {usesEnropsRegistration
+          ? "Families read this on the payment step before they pay."
+          : "It’s published on your public page, where any family can read it."}{" "}
+        We published a starter version so your page wasn&rsquo;t missing one &mdash; these are our
+        words, not yours, and they make promises about refunds. Read them below and change anything
+        you don&rsquo;t agree with.
       </p>
 
       <div
@@ -167,11 +184,17 @@ export default function StarterPolicyNotice({ org }) {
         <a href={notice.public_path} target="_blank" rel="noopener noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>
           {notice.public_path} &#8599;
         </a>
-        {/* Stated as a plain count of what families sign, because that is true
-            whoever wrote them. "We added 4 waivers for you" would be false for a
-            tenant who wrote their own. */}
+        {/* A plain count, because that is true whoever wrote them — "we added 4
+            waivers for you" would be false for a tenant who wrote their own.
+            The claim about WHERE they are shown is separate: a tenant who brings
+            their own registration has no Enrops registration form to put them
+            in, so they are only told the waivers exist and where to find them. */}
         {waivers > 0 && (
-          <> &middot; your registration form also includes {waivers} {waivers === 1 ? "waiver" : "waivers"} families sign, on the same page.</>
+          usesEnropsRegistration ? (
+            <> &middot; your registration form also includes {waivers} {waivers === 1 ? "waiver" : "waivers"} families sign, on the same page.</>
+          ) : (
+            <> &middot; you also have {waivers} {waivers === 1 ? "waiver" : "waivers"} on the same page.</>
+          )
         )}
       </p>
 
@@ -223,7 +246,8 @@ function boldOrgName(children, name) {
   const arr = Array.isArray(children) ? children : [children];
   return arr.map((child, ci) => {
     if (typeof child !== "string" || !child.includes(name)) return child;
-    const parts = child.split(name);
+    const parts = splitOnWholeName(child, name);
+    if (parts.length === 1) return child; // only substring hits, nothing to bold
     return parts.map((part, i) => (
       <span key={`${ci}-${i}`}>
         {i > 0 && <strong style={{ color: PURPLE, fontWeight: 700 }}>{name}</strong>}
@@ -231,6 +255,42 @@ function boldOrgName(children, name) {
       </span>
     ));
   });
+}
+
+// Split text on STANDALONE occurrences of the business name, returning the
+// segments between them (length = occurrences + 1, same contract as
+// splitOnOrgToken).
+//
+// A plain String.split(name) bolds any substring hit, so an operator called
+// "Play" would see the fragment lit up inside "Playgrounds" — a rendering
+// glitch on the one screen whose job is to make the document feel carefully
+// theirs. Business names are operator-supplied free text, so short ones are a
+// matter of time.
+//
+// Boundaries are checked by inspecting the neighbouring characters rather than
+// with a \b regex: the name is untrusted text that would have to be escaped,
+// and \b is defined against word characters, so it behaves wrongly for a name
+// that begins or ends with punctuation ("Mrs. Richelle", "Acme Inc."). Matching
+// is case-sensitive on purpose — the stored policy carries the name exactly as
+// substituted, and loosening it would bold unrelated words.
+function splitOnWholeName(text, name) {
+  const isWordChar = (ch) => ch !== undefined && /[A-Za-z0-9]/.test(ch);
+  const parts = [];
+  let segmentStart = 0; // start of the plain text run being accumulated
+  let searchFrom = 0;   // independent cursor, so a rejected hit still advances
+  for (;;) {
+    const at = text.indexOf(name, searchFrom);
+    if (at === -1) break;
+    const standalone =
+      !isWordChar(text[at - 1]) && !isWordChar(text[at + name.length]);
+    if (standalone) {
+      parts.push(text.slice(segmentStart, at));
+      segmentStart = at + name.length;
+    }
+    searchFrom = at + name.length;
+  }
+  parts.push(text.slice(segmentStart));
+  return parts;
 }
 
 function primaryBtn(disabled) {
