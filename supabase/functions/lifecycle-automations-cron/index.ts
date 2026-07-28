@@ -44,6 +44,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
+import { renderPlatformFooterHtml, surfaceForAutomation } from "../_shared/platformFooter.ts";
 import {
   parseEmailAttachments,
   loadCommsAttachments,
@@ -100,6 +101,9 @@ interface TemplateRow {
   default_timing: Record<string, unknown>;
   time_saved_minutes_per_send: number;
   is_v1_enabled: boolean;
+  // Who the automation is addressed to. Drives whether the platform
+  // attribution line renders (parents/partners yes, instructors no).
+  audience: string | null;
 }
 
 interface AutomationRow {
@@ -297,7 +301,8 @@ serve(async (req) => {
       id, organization_id, template_id, enabled, subject_override, body_override, timing_override, enabled_at, email_attachments,
       template:automation_templates!inner (
         id, key, display_name, trigger_type, applies_to_program_type, mailing_type,
-        default_subject, default_body, default_timing, time_saved_minutes_per_send, is_v1_enabled
+        default_subject, default_body, default_timing, time_saved_minutes_per_send, is_v1_enabled,
+        audience
       ),
       org:organizations!inner ( id, slug, name )
     `)
@@ -545,7 +550,12 @@ async function sendOne(
     console.error("[lifecycle-automations-cron] marketing send skipped — no unsubscribe URL (MARKETING_UNSUBSCRIBE_SECRET unset)");
     return "failed";
   }
-  const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl);
+  const fullHtml = wrapInShell(
+    innerBody,
+    brand,
+    unsubscribeUrl,
+    surfaceForAutomation(a.template?.key, a.template?.audience),
+  );
   const plainBody = htmlToPlainText(renderedHtml) + downloadButtonsText;
   const plainText = unsubscribeUrl
     ? `${plainBody}\n\nUnsubscribe: ${unsubscribeUrl}`
@@ -825,7 +835,12 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
   const unsubscribeUrl = template.mailing_type === "marketing"
     ? (input.to_email ? await computeUnsubscribeUrl(input.to_email, org.id) : "#")
     : "";
-  const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl);
+  const fullHtml = wrapInShell(
+    innerBody,
+    brand,
+    unsubscribeUrl,
+    surfaceForAutomation(template?.key, template?.audience),
+  );
 
   return { ok: true, subject, html: fullHtml, brand, template_key: template.key, used_real_data: usedRealData, resend_attachments: resendAttachments };
 }
@@ -2601,7 +2616,11 @@ async function hmacToken(email: string, orgId: string): Promise<string> {
 // footer then renders EXACTLY as before, so those emails are byte-for-byte
 // unchanged. It's non-empty only for promotional (marketing) sends, adding a
 // CAN-SPAM unsubscribe line under the footer credit.
-function wrapInShell(innerBody: string, brand: OrgBrand, unsubscribeUrl = ""): string {
+// `surface` is the platform-attribution surface for this send (see
+// _shared/platformFooter.ts). null renders NO line, which is what instructor
+// automations get — the checklist scopes the line to parents and partners — so
+// those emails stay byte-for-byte unchanged.
+function wrapInShell(innerBody: string, brand: OrgBrand, unsubscribeUrl = "", surface: string | null = null): string {
   // White-background shell with the tenant logo on top — no generic gradient
   // banner. Every provider will brand differently and a hardcoded purple
   // bleeds platform color into their identity. Wordmark fallback only when
@@ -2637,7 +2656,8 @@ ${innerBody}
 ${renderSignatureBlock(brand)}
 </div>
 <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
-${escapeHtml(brand.org_name)} · Powered by Enrops · ${new Date().getFullYear()}${addressBlock}${unsubBlock}
+${escapeHtml(brand.org_name)} · ${new Date().getFullYear()}${addressBlock}${unsubBlock}
+${renderPlatformFooterHtml(surface)}
 </div>
 </div>
 </body></html>`;

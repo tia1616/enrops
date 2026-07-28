@@ -21,7 +21,11 @@ import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
-const FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || 'Journey to STEAM <hello@updates.journeytosteam.com>';
+// No FROM_EMAIL constant on purpose. Every template now resolves its sender
+// through loadOrgBrand/formatFromAddress, so the FROM always belongs to the
+// org the email is actually about. The previous
+// `RESEND_FROM_EMAIL || 'Journey to STEAM <hello@updates.journeytosteam.com>'`
+// meant an env miss sent EVERY tenant's sign-in mail as the first tenant.
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -144,7 +148,7 @@ serve(async (req: Request) => {
     // contractor's auth user may have just been created and their instructors
     // row isn't linked to it yet (linking happens later in the portal).
     const [{ data: instructorRow }, { data: adminRow }, { data: parentRow }] = await Promise.all([
-      supabase.from('instructors').select('id, first_name').ilike('email', email).eq('is_active', true).limit(1).maybeSingle(),
+      supabase.from('instructors').select('id, first_name, organization_id').ilike('email', email).eq('is_active', true).limit(1).maybeSingle(),
       supabase.from('org_members').select('id').eq('auth_user_id', user.id).not('accepted_at', 'is', null).limit(1).maybeSingle(),
       supabase.from('parents').select('first_name').eq('auth_id', user.id).limit(1).maybeSingle(),
     ]);
@@ -179,48 +183,59 @@ serve(async (req: Request) => {
     if (instructorRow?.first_name) firstName = instructorRow.first_name;
     else if (parentRow?.first_name) firstName = parentRow.first_name;
 
-    // Parent (family) sign-in emails are tenant-branded from the org the family
-    // registered with (org_id passed by the caller). Fall back to the ENROPS
-    // brand — NEVER J2S — when no org is passed; loadOrgBrand's FROM also falls
-    // back to the verified enrops domain, so new orgs with no sender still deliver.
-    const parentBrand = template === 'parent'
-      ? await loadOrgBrand(supabase, org_id ?? null)
+    // Tenant-branded sign-in emails. Parents, instructors and mid-onboarding
+    // contractors all belong to a specific operator, so the email has to speak
+    // as THAT operator. Instructor and onboarding used to hardcode "Journey to
+    // STEAM" in the header, subject and FROM, which meant every tenant's
+    // contractors got a sign-in email branded as the first tenant.
+    //
+    // Org precedence: the caller-passed org_id wins, because the login page
+    // knows which tenant's portal the person is actually on — that is also the
+    // correct disambiguator if one email ever exists as an instructor at two
+    // operators (none do today in staging or prod, but nothing prevents it).
+    // Then the instructor's own organization_id. Failing both, loadOrgBrand
+    // returns the ENROPS brand — never J2S.
+    //
+    // Unchanged for parents: that branch is only reached when instructorRow is
+    // null, so the resolved org is still exactly `org_id ?? null`.
+    const tenantBrand = (template === 'parent' || template === 'instructor' || template === 'onboarding')
+      ? await loadOrgBrand(supabase, org_id ?? instructorRow?.organization_id ?? null)
       : null;
 
     const subject =
       template === 'signup' ? 'Finish setting up your enrops page'
       : template === 'admin' ? 'Sign in to Enrops Admin'
-      : template === 'onboarding' ? 'Continue your Journey to STEAM onboarding'
+      : template === 'onboarding' ? `Continue your ${tenantBrand?.org_name ?? 'enrops'} onboarding`
       : template === 'instructor' ? 'Sign in to view your schedule'
-      : `Sign in to ${parentBrand?.org_name ?? 'enrops'}`;
+      : `Sign in to ${tenantBrand?.org_name ?? 'enrops'}`;
 
     const html =
       template === 'signup' ? buildSignupEmail(signInUrl)
       : template === 'admin' ? buildAdminEmail(firstName, signInUrl)
-      : template === 'onboarding' ? buildOnboardingEmail(firstName, signInUrl)
-      : template === 'instructor' ? buildInstructorEmail(firstName, signInUrl)
-      : buildParentEmail(firstName, signInUrl, parentBrand);
+      : template === 'onboarding' ? buildOnboardingEmail(firstName, signInUrl, tenantBrand)
+      : template === 'instructor' ? buildInstructorEmail(firstName, signInUrl, tenantBrand)
+      : buildParentEmail(firstName, signInUrl, tenantBrand);
 
     // Operator-facing auth emails (signup + admin) send AS enrops from the
     // verified enrops domain, with replies going to the enrops inbox — sourced
     // from the enrops org row (no hardcoded address). Tenant flows
-    // (parent/instructor/onboarding) keep their own tenant sender (FROM_EMAIL).
+    // (parent/instructor/onboarding) send as their OWN operator.
     // Keyed off the RESOLVED template, not the requested context. The template is
     // re-derived above from what the recipient actually IS (an admin who signs in
     // from a parent page still gets the admin email), so gating the sender on the
     // requested context let an Enrops-branded "Sign in to Admin" email go out FROM
     // the J2S sending domain — caught in a real send, invisible in the HTML.
-    let fromLine = FROM_EMAIL;
-    let replyTo: string | undefined = undefined;
-    if (template === 'signup' || template === 'admin') {
-      const brand = await loadOrgBrand(supabase, null);
-      fromLine = formatFromAddress(brand);
-      replyTo = brand.reply_to;
-    } else if (parentBrand) {
-      // Parent email sends from the tenant's own (or enrops-fallback) sender.
-      fromLine = formatFromAddress(parentBrand);
-      replyTo = parentBrand.reply_to;
-    }
+    //
+    // Every branch now resolves a brand, so there is no unbranded fallback left:
+    // the old `RESEND_FROM_EMAIL || 'Journey to STEAM <...>'` default is gone.
+    // It was the last path that could send a tenant's mail under J2S's name.
+    // loadOrgBrand only returns a tenant's own address when its domain is that
+    // tenant's VERIFIED sending domain, so this cannot break deliverability.
+    const senderBrand = (template === 'signup' || template === 'admin')
+      ? await loadOrgBrand(supabase, null)
+      : (tenantBrand ?? await loadOrgBrand(supabase, null));
+    const fromLine = formatFromAddress(senderBrand);
+    const replyTo: string | undefined = senderBrand.reply_to;
 
     // Send via Resend
     const resp = await fetch('https://api.resend.com/emails', {
@@ -321,21 +336,29 @@ function buildSignupEmail(signInUrl: string): string {
 </body></html>`;
 }
 
-function buildOnboardingEmail(firstName: string, signInUrl: string): string {
+// Contractor onboarding sign-in email, tenant-branded. `brand` comes from
+// loadOrgBrand (the contractor's own operator, or the enrops fallback — never
+// J2S). Mirrors buildParentEmail: operator's logo, or its name when it has none.
+function buildOnboardingEmail(firstName: string, signInUrl: string, brand: any): string {
+  const orgName = brand?.org_name || 'enrops';
+  const accent = brand?.primary_color || '#1C004F';
+  const logoBlock = brand?.logo_url
+    ? `<img src="${escapeAttr(brand.logo_url)}" alt="${escapeAttr(orgName)}" style="max-height:44px;width:auto;display:inline-block;" />`
+    : `<div style="color:#8C88FF;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(orgName)}</div>`;
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#FBFBFB;font-family:'Poppins',system-ui,sans-serif;">
 <div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
-  <div style="background:#1C004F;padding:32px 28px;text-align:center;">
-    <div style="color:#8C88FF;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Journey to STEAM</div>
+  <div style="background:${escapeAttr(accent)};padding:32px 28px;text-align:center;">
+    ${logoBlock}
     <h1 style="color:#fff;margin:8px 0 0;font-size:24px;font-weight:700;">Continue your onboarding</h1>
   </div>
   <div style="padding:28px;">
-    <p style="margin:0 0 16px;font-size:15px;color:#1a1a1a;">Hi ${firstName},</p>
+    <p style="margin:0 0 16px;font-size:15px;color:#1a1a1a;">Hi ${escapeHtml(firstName)},</p>
     <p style="margin:0 0 24px;font-size:15px;color:#1a1a1a;line-height:1.6;">
       Pick up right where you left off — your progress is saved.
     </p>
     <div style="text-align:center;margin:28px 0;">
-      <a href="${signInUrl}" style="display:inline-block;background:#1C004F;color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
+      <a href="${escapeAttr(signInUrl)}" style="display:inline-block;background:${escapeAttr(accent)};color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
         Open my onboarding
       </a>
     </div>
@@ -345,21 +368,29 @@ function buildOnboardingEmail(firstName: string, signInUrl: string): string {
 </body></html>`;
 }
 
-function buildInstructorEmail(firstName: string, signInUrl: string): string {
+// Instructor sign-in email, tenant-branded. Same contract as buildParentEmail
+// and buildOnboardingEmail: the operator's own logo/name and colour, never the
+// first tenant's.
+function buildInstructorEmail(firstName: string, signInUrl: string, brand: any): string {
+  const orgName = brand?.org_name || 'enrops';
+  const accent = brand?.primary_color || '#1C004F';
+  const logoBlock = brand?.logo_url
+    ? `<img src="${escapeAttr(brand.logo_url)}" alt="${escapeAttr(orgName)}" style="max-height:44px;width:auto;display:inline-block;" />`
+    : `<div style="color:#8C88FF;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(orgName)}</div>`;
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#FBFBFB;font-family:'Poppins',system-ui,sans-serif;">
 <div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
-  <div style="background:#1C004F;padding:32px 28px;text-align:center;">
-    <div style="color:#8C88FF;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Journey to STEAM</div>
+  <div style="background:${escapeAttr(accent)};padding:32px 28px;text-align:center;">
+    ${logoBlock}
     <h1 style="color:#fff;margin:8px 0 0;font-size:24px;font-weight:700;">Sign in</h1>
   </div>
   <div style="padding:28px;">
-    <p style="margin:0 0 16px;font-size:15px;color:#1a1a1a;">Hi ${firstName},</p>
+    <p style="margin:0 0 16px;font-size:15px;color:#1a1a1a;">Hi ${escapeHtml(firstName)},</p>
     <p style="margin:0 0 24px;font-size:15px;color:#1a1a1a;line-height:1.6;">
       Tap the button below to view your schedule, accept your camps, or request changes.
     </p>
     <div style="text-align:center;margin:28px 0;">
-      <a href="${signInUrl}" style="display:inline-block;background:#1C004F;color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
+      <a href="${escapeAttr(signInUrl)}" style="display:inline-block;background:${escapeAttr(accent)};color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
         Open my schedule
       </a>
     </div>
