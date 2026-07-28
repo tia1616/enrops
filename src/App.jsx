@@ -170,6 +170,8 @@ export default function App() {
             further up, which pass orgSlug="enrops" explicitly. */}
         <Route path="privacy" element={<PolicyPage policyType="privacy" />} />
         <Route path="terms" element={<PolicyPage policyType="terms" />} />
+        {/* Linked from the pay step, so it must exist before checkout offers it. */}
+        <Route path="cancellation" element={<PolicyPage policyType="cancellation" />} />
       </Route>
       <Route path="/j2s/instructor" element={<InstructorPortal />} />
       {/* /:slug/instructor for multi-tenant — currently J2S only but the

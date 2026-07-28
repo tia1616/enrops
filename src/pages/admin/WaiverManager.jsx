@@ -8,11 +8,15 @@
 // Owner/admin only (reached from the settings-gated nav). Both tables are
 // org-scoped via RLS. Brand-neutral copy — no tenant strings.
 //
-// Only privacy + terms are offered. `org_policies.policy_type` also permits
-// dpa / cookies / data-retention / subprocessors / acceptable-use, but those
-// are PLATFORM documents (published under the `enrops` org) and have no
-// per-provider public route — offering them here would let an operator write a
-// document no family could ever reach.
+// Only privacy + terms + cancellation are offered. `org_policies.policy_type`
+// also permits dpa / cookies / data-retention / subprocessors / acceptable-use,
+// but those are PLATFORM documents (published under the `enrops` org) and have
+// no per-provider public route — offering them here would let an operator write
+// a document no family could ever reach.
+//
+// The cancellation policy is the one families are shown at CHECKOUT, on the pay
+// step, before any money is taken. Publishing it is what makes that block
+// appear; unpublished means the pay step simply shows nothing there.
 
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
@@ -42,6 +46,12 @@ const POLICY_KINDS = [
     type: "terms",
     label: "Terms of Service",
     blurb: "The terms families agree to when they register with you.",
+  },
+  {
+    type: "cancellation",
+    label: "Cancellation & Refund Policy",
+    blurb:
+      "What happens when a family cancels or asks for a refund. Families see this on the payment step, before they pay.",
   },
 ];
 

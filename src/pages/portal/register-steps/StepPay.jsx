@@ -9,7 +9,18 @@ export default function StepPay({
   paymentPlan,
   installmentSchedule,
   org,
+  cancellationPolicy,
 }) {
+  // The policy is authored as markdown and rendered properly on its own page.
+  // Here it is an inline preview inside a checkout step, so the few markers a
+  // provider is likely to use are stripped rather than shown raw - a family
+  // reading "## Refunds" and "**14 days**" reads it as broken, not as policy.
+  const cancellationText = (cancellationPolicy || '')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/^\s*[-*]\s+/gm, '• ')
+    .trim();
   // Display amount reflects the choice made on the Review step:
   // - If paymentPlan checkbox was clicked AND we have a valid schedule, show first-charge amount
   // - Otherwise show full total
@@ -200,6 +211,32 @@ export default function StepPay({
               </span>
             </button>
           </div>
+        </div>
+      )}
+
+      {/* v4 section 6: the provider's cancellation and refund policy, shown
+          BEFORE money is taken rather than buried in a Terms page. Omitted
+          entirely when the provider has not published one - showing a made-up
+          policy would be far worse than showing none. */}
+      {cancellationText && (
+        <div className="mt-8 rounded-2xl border border-j2s-purple/15 bg-white p-5">
+          <p className="mb-2 text-sm font-bold uppercase tracking-widest text-j2s-purple-dark">
+            Cancellation and refunds
+          </p>
+          <div
+            className="max-h-44 overflow-y-auto whitespace-pre-line text-sm leading-relaxed text-j2s-ink/80"
+            tabIndex={0}
+          >
+            {cancellationText}
+          </div>
+          <a
+            href={`/${org?.slug}/cancellation`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-3 inline-block text-sm font-bold text-j2s-purple underline"
+          >
+            Read the full policy
+          </a>
         </div>
       )}
 

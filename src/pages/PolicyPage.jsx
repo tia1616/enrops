@@ -24,6 +24,7 @@ import { supabase } from '../lib/supabase.js';
 const POLICY_TITLES = {
   privacy: 'Privacy Policy',
   terms: 'Terms of Service',
+  cancellation: 'Cancellation & Refund Policy',
   'acceptable-use': 'Acceptable Use Policy',
   cookies: 'Cookie & Tracking Technologies Disclosure',
   'data-retention': 'Data Retention & Deletion Policy',

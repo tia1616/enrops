@@ -60,6 +60,9 @@ export default function Register() {
   // Empty {std:{},custom:[]} = today's behavior (no extra fields render).
   const [regFields, setRegFields] = useState({ std: {}, custom: [] });
   const [feeConfig, setFeeConfig] = useState(null); // {fee_pass_through, platform_fee_card_pct, platform_fee_cap_cents}
+  // This provider's published cancellation/refund policy, shown on the pay step
+  // before any money is taken (v4 section 6). null = none published.
+  const [cancellationPolicy, setCancellationPolicy] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -262,7 +265,7 @@ export default function Register() {
   }, [programs, schools]);
 
   async function load() {
-    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes] = await Promise.all([
+    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes, cancelPolicyRes] = await Promise.all([
       supabase
         .from('program_locations')
         .select('id, name, district, address')
@@ -297,6 +300,18 @@ export default function Register() {
       // intentionally excludes fee columns). Used to show the pass-through
       // "Platform fee" line on StepPay before redirecting to Stripe.
       supabase.functions.invoke('org-fee-config', { body: { slug: ORG_SLUG } }),
+      // v4 section 6: the family must see this provider's cancellation and
+      // refund policy BEFORE they pay, not buried in a Terms page they would
+      // have to go looking for. Published rows only — a hidden draft must not
+      // reach a family. org_policies allows public SELECT, so this works for
+      // guest checkout with no session.
+      supabase
+        .from('org_policies')
+        .select('content_markdown')
+        .eq('organization_id', ORG_ID)
+        .eq('policy_type', 'cancellation')
+        .eq('published', true)
+        .maybeSingle(),
     ]);
 
     setSchools(schoolsRes.data || []);
@@ -307,6 +322,10 @@ export default function Register() {
     setWaivers((waiversRes.data || []).map((w) => ({ ...w, content: renderWaiverText(w.content, org?.name) })));
     setRegFields(parseRegFields(regFieldsRes.data || []));
     setFeeConfig(feeRes?.data || { fee_pass_through: false, platform_fee_card_pct: 0, platform_fee_ach_pct: 0, platform_fee_cap_cents: 0 });
+    // Absent is the normal case today: no provider has published one yet. The
+    // pay step simply omits the block rather than inventing a policy, because a
+    // made-up cancellation term is far worse than none.
+    setCancellationPolicy(cancelPolicyRes?.data?.content_markdown || null);
     // Thread the org's sibling % onto the cart so the review screen matches the
     // server charge. undefined (older org-fee-config) -> pricing.js keeps the 10% default.
     setSiblingPct(feeRes?.data?.sibling_discount_pct);
@@ -715,6 +734,7 @@ export default function Register() {
                 paymentPlan={cart.payment_plan}
                 installmentSchedule={installmentSchedule?.display || null}
                 org={{ ...org, ...(feeConfig || {}) }}
+                cancellationPolicy={cancellationPolicy}
               />
             )
           )}
