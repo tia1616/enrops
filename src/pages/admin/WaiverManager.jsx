@@ -8,11 +8,15 @@
 // Owner/admin only (reached from the settings-gated nav). Both tables are
 // org-scoped via RLS. Brand-neutral copy — no tenant strings.
 //
-// Only privacy + terms are offered. `org_policies.policy_type` also permits
-// dpa / cookies / data-retention / subprocessors / acceptable-use, but those
-// are PLATFORM documents (published under the `enrops` org) and have no
-// per-provider public route — offering them here would let an operator write a
-// document no family could ever reach.
+// Only privacy + terms + cancellation are offered. `org_policies.policy_type`
+// also permits dpa / cookies / data-retention / subprocessors / acceptable-use,
+// but those are PLATFORM documents (published under the `enrops` org) and have
+// no per-provider public route — offering them here would let an operator write
+// a document no family could ever reach.
+//
+// The cancellation policy is the one families are shown at CHECKOUT, on the pay
+// step, before any money is taken. Publishing it is what makes that block
+// appear; unpublished means the pay step simply shows nothing there.
 
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
@@ -42,6 +46,23 @@ const POLICY_KINDS = [
     type: "terms",
     label: "Terms of Service",
     blurb: "The terms families agree to when they register with you.",
+  },
+  {
+    type: "cancellation",
+    label: "Cancellation & Refund Policy",
+    blurb:
+      "What happens when a family cancels or asks for a refund. Families see this on the payment step, before they pay.",
+    // The admin fee is a separate, easy-to-miss setting on the Payments page.
+    // An operator writing their cancellation wording is exactly the person who
+    // needs to know it exists and is theirs to change — otherwise they either
+    // promise something the refund screen won't do, or never realise they can
+    // keep a fee at all.
+    note: {
+      text: "Charging an admin fee when a family withdraws? Set the amount under",
+      linkTo: "/admin/finances",
+      linkLabel: "Payments → Manage setup",
+      after: "so it matches what you say here.",
+    },
   },
 ];
 
@@ -413,6 +434,18 @@ export default function WaiverManager() {
                       <>Saved {formatStamp(row.last_updated)}, kept as a draft. Not shown on your site until you publish it.</>
                     ) : kind.blurb}
                   </div>
+                  {/* Shown in every state, not just the empty one: an operator
+                      who already published a policy is the most likely to have
+                      never seen the admin fee setting. */}
+                  {kind.note && (
+                    <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560 }}>
+                      {kind.note.text}{" "}
+                      <Link to={kind.note.linkTo} style={{ color: BRIGHT, textDecoration: "none" }}>
+                        {kind.note.linkLabel}
+                      </Link>{" "}
+                      {kind.note.after}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {isDraft && (

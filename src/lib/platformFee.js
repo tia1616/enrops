@@ -44,3 +44,36 @@ export function feeOnCents(cents, cfg, opts = {}) {
 export function totalWithFee(cents, cfg, opts = {}) {
   return cents + feeOnCents(cents, cfg, opts);
 }
+
+/**
+ * Per-installment fee shares for a payment plan.
+ *
+ * The fee is capped per REGISTRATION, not per charge, so it is computed once
+ * against the whole total and then split. Computing it per installment would
+ * let a $500 program collect the $7.99 cap three times, and the payment plan
+ * is chosen by the families least able to absorb that.
+ *
+ * Mirrors supabase/functions/_shared/feeAllocation.ts exactly, including
+ * pushing the leftover cent onto charge 1: the family consents to charge 1 on
+ * screen, so it is the only one allowed to be a cent higher than a clean third.
+ * If this and the server ever disagree, the family sees one number here and a
+ * different one on their statement.
+ *
+ * @param {number[]} amounts  installment amounts in cents, in order
+ * @param {object}   cfg      org fee config from org-fee-config
+ * @param {object}   [opts]
+ * @returns {number[]} fee per installment, summing exactly to the total fee
+ */
+export function installmentFeeShares(amounts, cfg, opts = {}) {
+  if (!Array.isArray(amounts) || !amounts.length) return [];
+  const total = amounts.reduce((s, a) => s + Math.max(0, Number(a) || 0), 0);
+  const totalFee = feeOnCents(total, cfg, opts);
+  if (!(totalFee > 0)) return amounts.map(() => 0);
+  if (total <= 0) return amounts.map((_, i) => (i === 0 ? totalFee : 0));
+
+  const shares = amounts.map((a) =>
+    Math.floor((totalFee * Math.max(0, Number(a) || 0)) / total),
+  );
+  shares[0] += totalFee - shares.reduce((s, v) => s + v, 0);
+  return shares;
+}

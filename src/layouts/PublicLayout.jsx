@@ -271,6 +271,9 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
               {policyTypes?.has('terms') && (
                 <Link to={`${home}/terms`} className="hover:text-white">Terms of Service</Link>
               )}
+              {policyTypes?.has('cancellation') && (
+                <Link to={`${home}/cancellation`} className="hover:text-white">Cancellation &amp; Refunds</Link>
+              )}
             </div>
           </div>
         </div>
@@ -339,6 +342,9 @@ function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
               )}
               {policyTypes?.has('terms') && (
                 <Link to={`${home}/terms`} style={{ color: 'rgba(255,255,255,0.7)', textDecoration: 'none' }}>Terms</Link>
+              )}
+              {policyTypes?.has('cancellation') && (
+                <Link to={`${home}/cancellation`} style={{ color: 'rgba(255,255,255,0.7)', textDecoration: 'none' }}>Cancellation</Link>
               )}
               {PLATFORM_LEGAL_LINKS.map((l) => (
                 <Link key={l.to} to={l.to} style={{ color: 'rgba(255,255,255,0.45)', textDecoration: 'none' }}>{l.label}</Link>

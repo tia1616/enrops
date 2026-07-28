@@ -8,9 +8,15 @@
 // refunds to show accurate "refundable" math, plus the org's configured
 // withdrawal admin fee (Finances → Settings) for the quick-fill. It then
 // POSTs to the refund-registration edge function, which does the Stripe
-// refund (reverse_transfer + Enrops keeps its fee), records the refund,
-// advances payment_status, and — only if the operator chooses to withdraw —
-// cancels the registration and frees the seat.
+// refund, records it, advances payment_status, and — only if the operator
+// chooses to withdraw — cancels the registration and frees the seat.
+//
+// The Stripe flags are the edge function's business, not this drawer's, and
+// they are no longer one fixed pair: each PaymentIntent is refunded on the
+// account it was actually created on (recorded in
+// registrations/installments.stripe_charge_account_id), with reverse_transfer
+// only on the destination-charge path. This UI is unchanged by any of that —
+// it still sends registration_id + amount_cents and shows what came back.
 //
 // Money-safe by construction: the edge fn re-authorizes owner/admin, guards
 // eligibility server-side, and is idempotent. This UI never decides money on
@@ -23,9 +29,11 @@
 //   onDone():    a refund succeeded — caller should reload
 
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 const PURPLE = "#1C004F";
+const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -82,25 +90,34 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
       setLoading(true);
       setLoadErr("");
       try {
-        const [{ data: inst }, { data: refs }, { data: orgRow }] = await Promise.all([
-          supabase.from("installments").select("amount_cents, status").eq("registration_id", reg.id),
-          supabase.from("refunds").select("amount_cents, status").eq("registration_id", reg.id).eq("status", "succeeded"),
+        // Eligibility comes from the edge function in preview mode, NOT from a
+        // local recomputation. It used to be derived here from installments /
+        // registrations, which meant the ceiling lived in two places — and both
+        // used amount_cents, the BASE price. When the operator passes the fee to
+        // families the card was charged base + fee, so a family who paid $276.74
+        // could only be offered $274.00 back. The server now reads the real
+        // charged total from Stripe; asking it is the only way this UI can be
+        // sure it is showing a number the server will honour.
+        const [{ data: elig, error: eligErr }, { data: orgRow }] = await Promise.all([
+          supabase.functions.invoke("refund-registration", {
+            body: { registration_id: reg.id, preview: true },
+          }),
           supabase.from("organizations").select("withdrawal_admin_fee_cents").eq("id", reg.organization_id).maybeSingle(),
         ]);
         if (!alive) return;
-        const paidInst = (inst ?? []).filter((i) => i.status === "paid");
-        // Mirror the edge fn's eligibility exactly: a single-pay registration
-        // is only refundable if it actually carries a Stripe PaymentIntent.
-        // (Seeded/imported "paid" rows without a PI are NOT refundable.)
-        const paid = paidInst.length > 0
-          ? paidInst.reduce((s, i) => s + (i.amount_cents || 0), 0)
-          : (reg.payment_status === "paid" && reg.stripe_payment_intent_id ? (reg.amount_cents || 0) : 0);
-        const refunded = (refs ?? []).reduce((s, r) => s + (r.amount_cents || 0), 0);
+        if (eligErr || !elig || typeof elig.eligible_cents !== "number") {
+          // Do NOT fall back to a locally-computed number: a wrong ceiling here
+          // either blocks a legitimate refund or invites one the server will
+          // reject. Say so instead.
+          throw eligErr || new Error("no eligibility returned");
+        }
+        const paid = elig.total_paid_cents || 0;
+        const refunded = elig.total_refunded_cents || 0;
         setPaidCents(paid);
         setRefundedCents(refunded);
         setAdminFeeCents(orgRow?.withdrawal_admin_fee_cents || 0);
         // Default the field to the full refundable amount.
-        setAmountStr(((Math.max(0, paid - refunded)) / 100).toFixed(2));
+        setAmountStr(((Math.max(0, elig.eligible_cents)) / 100).toFixed(2));
       } catch (e) {
         if (alive) setLoadErr("Couldn't load this registration's payment details. Close and try again.");
         console.error("[RefundDrawer] load failed", e);
@@ -165,6 +182,14 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
 
   const showKeepFee = adminFeeCents > 0 && refundableCents > adminFeeCents;
 
+  // One link, three sentences. Defined once so the three branches below cannot
+  // drift apart in styling or destination.
+  const payLink = (
+    <Link to="/admin/finances" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>
+      Payments&nbsp;&#8599;
+    </Link>
+  );
+
   return (
     <div
       onClick={busy ? undefined : onClose}
@@ -221,6 +246,28 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                     <button type="button" onClick={setKeepFee} disabled={busy} style={chip}>
                       Keep {fmtCents(adminFeeCents)} admin fee
                     </button>
+                  )}
+                </div>
+                {/* Whether a fee EXISTS and whether we can offer the shortcut are
+                    two different questions, and this copy must answer the first.
+                    Branching on showKeepFee told an operator with a $35 fee that
+                    they had none, whenever the refundable amount was under $35 -
+                    the exact opposite of the truth, in the line written to tell
+                    them the truth.
+
+                    NEW TAB, deliberately. This link lives inside the drawer, so
+                    navigating in place would unmount it and silently bin a
+                    half-typed refund amount and the spot choice. Nobody expects
+                    "where do I change this?" to throw away what they were doing. */}
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+                  {adminFeeCents <= 0 ? (
+                    <>You can set a standard admin fee to keep on withdrawals in {payLink}.</>
+                  ) : showKeepFee ? (
+                    <>Your admin fee. Change it in {payLink}, or just type a different amount here.</>
+                  ) : (
+                    // Fee set, but it's >= everything left to refund, so the
+                    // shortcut is hidden. Say why rather than going quiet.
+                    <>Your {fmtCents(adminFeeCents)} admin fee is more than what's refundable here, so there's no shortcut to apply. Change it in {payLink}.</>
                   )}
                 </div>
                 {overMax && (

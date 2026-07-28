@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { formatMoney } from '../../../lib/pricing.js';
-import { feeOnCents } from '../../../lib/platformFee.js';
+import { feeOnCents, installmentFeeShares } from '../../../lib/platformFee.js';
 
 export default function StepPay({
   pricing,
@@ -9,7 +9,18 @@ export default function StepPay({
   paymentPlan,
   installmentSchedule,
   org,
+  cancellationPolicy,
 }) {
+  // The policy is authored as markdown and rendered properly on its own page.
+  // Here it is an inline preview inside a checkout step, so the few markers a
+  // provider is likely to use are stripped rather than shown raw - a family
+  // reading "## Refunds" and "**14 days**" reads it as broken, not as policy.
+  const cancellationText = (cancellationPolicy || '')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/^\s*[-*]\s+/gm, '• ')
+    .trim();
   // Display amount reflects the choice made on the Review step:
   // - If paymentPlan checkbox was clicked AND we have a valid schedule, show first-charge amount
   // - Otherwise show full total
@@ -48,15 +59,27 @@ export default function StepPay({
   const standardFeeOn = (cents) => feeOnCents(cents, org, { isBank: false });
   const charged = (cents) => cents + feeOn(cents);
 
-  const feeToday = feeOn(displayAmount);
-  const chargedToday = charged(displayAmount);
+  // Payment plans: the fee is capped per REGISTRATION, so it is computed once
+  // against the whole total and split across the three charges — never
+  // recomputed per installment, which would collect the cap up to three times.
+  // Same allocation the server uses, so these figures are the figures Stripe
+  // charges. Installments are card-only, hence no isBank here.
+  const planShares = useInstallments
+    ? installmentFeeShares(installmentSchedule.map((i) => i.amount_cents), org)
+    : [];
+  const planStandardShares = planShares; // card-only; standard === effective
+  const feeForIndex = (i) => (useInstallments ? planShares[i] : 0);
+  const chargedForIndex = (i) => installmentSchedule[i].amount_cents + feeForIndex(i);
+
+  const feeToday = useInstallments ? feeForIndex(0) : feeOn(displayAmount);
+  const chargedToday = useInstallments ? chargedForIndex(0) : charged(displayAmount);
   // The standard (card) fee, and what paying by bank takes off it. Never
   // negative: if a config ever made ACH the dearer method, we show no discount
   // rather than inventing a card penalty.
-  const standardFeeToday = standardFeeOn(displayAmount);
+  const standardFeeToday = useInstallments ? planStandardShares[0] : standardFeeOn(displayAmount);
   const bankDiscountToday = Math.max(0, standardFeeToday - feeToday);
   const grandTotal = useInstallments
-    ? installmentSchedule.reduce((s, i) => s + charged(i.amount_cents), 0)
+    ? installmentSchedule.reduce((s, i, idx) => s + i.amount_cents + feeForIndex(idx), 0)
     : chargedToday;
 
   const fmtDate = (iso) =>
@@ -113,7 +136,7 @@ export default function StepPay({
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
               <p className="text-xs uppercase tracking-wider text-j2s-purple-dark">Today</p>
               <p className="font-titan text-lg text-j2s-ink">
-                {formatMoney(charged(installmentSchedule[0].amount_cents))}
+                {formatMoney(chargedForIndex(0))}
               </p>
             </div>
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
@@ -121,7 +144,7 @@ export default function StepPay({
                 {fmtDate(installmentSchedule[1].due_date)}
               </p>
               <p className="font-titan text-lg text-j2s-ink">
-                {formatMoney(charged(installmentSchedule[1].amount_cents))}
+                {formatMoney(chargedForIndex(1))}
               </p>
             </div>
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
@@ -129,7 +152,7 @@ export default function StepPay({
                 {fmtDate(installmentSchedule[2].due_date)}
               </p>
               <p className="font-titan text-lg text-j2s-ink">
-                {formatMoney(charged(installmentSchedule[2].amount_cents))}
+                {formatMoney(chargedForIndex(2))}
               </p>
             </div>
           </div>
@@ -188,6 +211,32 @@ export default function StepPay({
               </span>
             </button>
           </div>
+        </div>
+      )}
+
+      {/* v4 section 6: the provider's cancellation and refund policy, shown
+          BEFORE money is taken rather than buried in a Terms page. Omitted
+          entirely when the provider has not published one - showing a made-up
+          policy would be far worse than showing none. */}
+      {cancellationText && (
+        <div className="mt-8 rounded-2xl border border-j2s-purple/15 bg-white p-5">
+          <p className="mb-2 text-sm font-bold uppercase tracking-widest text-j2s-purple-dark">
+            Cancellation and refunds
+          </p>
+          <div
+            className="max-h-44 overflow-y-auto whitespace-pre-line text-sm leading-relaxed text-j2s-ink/80"
+            tabIndex={0}
+          >
+            {cancellationText}
+          </div>
+          <a
+            href={`/${org?.slug}/cancellation`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-3 inline-block text-sm font-bold text-j2s-purple underline"
+          >
+            Read the full policy
+          </a>
         </div>
       )}
 

@@ -275,7 +275,12 @@ export default function Finances() {
   const status = config?.stripe_account_status || "not_connected";
   const accountId = config?.stripe_account_id;
   const isActive = status === "active";
+  // 'verifying' is deliberately NOT lumped in here. It means Stripe is
+  // reviewing and the operator owes nothing, so it must not render the
+  // "finish your setup" body — that told an operator who had done everything
+  // to go supply information Stripe wasn't asking for.
   const isOnboardingOrRestricted = status === "onboarding" || status === "restricted";
+  const isVerifying = status === "verifying";
   const isDisconnected = status === "disconnected";
 
   // ── actions ─────────────────────────────────────────────────────────────
@@ -499,6 +504,14 @@ export default function Finances() {
               />
             )}
 
+            {isVerifying && (
+              <VerifyingBody
+                onCheckStatus={checkStripeStatus}
+                checking={checkingStatus}
+                canManage={canManage}
+              />
+            )}
+
             {isDisconnected && (
               <DisconnectedBody
                 onReconnect={startOnboarding}
@@ -718,7 +731,14 @@ export default function Finances() {
           <TabsNav tab={tab} onTab={setTab} hideInvoices={isLean} />
           {(tab === "activity" || (isLean && tab === "invoices")) && <ActivityTab org={org} />}
           {tab === "invoices" && !isLean && <InvoicesTab />}
-          {tab === "refunds" && <RefundsTab />}
+          {tab === "refunds" && (
+            <>
+              <RefundsTab org={org} />
+              {/* v4 section 5: disputes live next to refunds because they are the
+                  same question for an operator - money going back out. */}
+              <DisputesPanel org={org} />
+            </>
+          )}
         </>
       )}
     </PageShell>
@@ -1275,9 +1295,123 @@ function InvoicesTab() {
   );
 }
 
-// Read-only refund history. Refunds are issued from Rosters (row → Refund…);
-// this is the money-side record of what happened. RLS scopes rows to the org.
-function RefundsTab() {
+// Read-only dispute mirror (v4 section 5). Enrops never responds to or decides
+// a dispute; Stripe does. This exists so an operator is not the last to know
+// because they were not watching a second dashboard.
+//
+// It states WHO BEARS IT rather than assuming. On a direct charge Stripe debits
+// the operator, which is what the checklist assumes throughout. On a destination
+// charge Stripe debits the PLATFORM, so Enrops carries J2S's disputes for as
+// long as J2S stays on destination charges, which is permanently. Telling a
+// legacy operator "this came out of your balance" would be false.
+function DisputesPanel({ org }) {
+  const [rows, setRows] = useState(null); // null = loading
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("disputes")
+        .select("id, amount_cents, reason, status, borne_by, opened_at, evidence_due_at, registration:registrations(student:students(first_name, last_name))")
+        .eq("organization_id", org.id)
+        .order("opened_at", { ascending: false })
+        .limit(100);
+      if (!alive) return;
+      if (error) {
+        console.error("[DisputesPanel] load failed", error);
+        setErr("Couldn't load disputes. Refresh to try again.");
+        setRows([]);
+        return;
+      }
+      setRows(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [org.id]);
+
+  // Stripe's status vocabulary in plain English. Unknown values fall through
+  // rather than being swallowed, so a new Stripe status is visible not hidden.
+  const STATUS = {
+    warning_needs_response: "Early warning — response needed",
+    warning_under_review: "Early warning — under review",
+    warning_closed: "Early warning — closed",
+    needs_response: "Response needed",
+    under_review: "Under review with the bank",
+    won: "Resolved in your favour",
+    lost: "Lost",
+    charge_refunded: "Refunded instead",
+  };
+  const URGENT = new Set(["needs_response", "warning_needs_response"]);
+
+  const fmtWhen = (iso) =>
+    iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+
+  if (rows !== null && rows.length === 0 && !err) {
+    return (
+      <Card>
+        <h2 style={{ margin: "0 0 4px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Disputes</h2>
+        <p style={{ margin: 0, color: MUTED, fontSize: 13 }}>
+          No disputes. If a family ever challenges a charge with their bank, it will appear here so you don't
+          have to watch your Stripe dashboard for it.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <h2 style={{ margin: "0 0 4px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Disputes</h2>
+      <p style={{ margin: "0 0 16px", color: MUTED, fontSize: 13 }}>
+        When a family challenges a charge with their bank. You respond in Stripe, not here — this is so you
+        know about it.
+      </p>
+
+      {err && (
+        <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 12 }}>{err}</div>
+      )}
+      {rows === null && <div style={{ color: MUTED, fontSize: 13, padding: "8px 0" }}>Loading…</div>}
+
+      {rows !== null && rows.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {rows.map((d) => {
+            const s = d.registration?.student;
+            const who = s ? `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() : "";
+            const urgent = URGENT.has(d.status);
+            return (
+              <div key={d.id} style={{ border: `1px solid ${urgent ? RED : RULE}`, borderRadius: 6, padding: "10px 12px", fontSize: 13 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+                  <span style={{ fontWeight: 600, color: INK }}>{who || "A family"}</span>
+                  <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{fmtCents(d.amount_cents)}</span>
+                </div>
+                <div style={{ color: urgent ? RED : MUTED, fontSize: 12, marginTop: 2, fontWeight: urgent ? 700 : 400 }}>
+                  {STATUS[d.status] ?? d.status}
+                  {d.evidence_due_at && urgent && ` · respond by ${fmtWhen(d.evidence_due_at)}`}
+                </div>
+                <div style={{ color: MUTED, fontSize: 11.5, marginTop: 2 }}>
+                  Opened {fmtWhen(d.opened_at)}
+                  {d.borne_by === "operator" && " · comes out of your Stripe balance"}
+                  {d.borne_by === "platform" && " · enrops covers this one"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// Read-only refund history. Refunds are issued from Rosters (row → Refund);
+// this is the money-side record of what happened.
+//
+// SCOPED EXPLICITLY TO THIS ORG. It used to rely on RLS alone, which was wrong:
+// the refunds policy is `can_handle_money(organization_id) OR is_platform_admin()`,
+// so the moment an Enrops platform admin opened their own operator dashboard they
+// saw EVERY tenant's refunds sitting in their Finances page. Found by Jessica on
+// staging with 9 of another operator's refunds on screen. Platform-wide views
+// belong on a platform surface, never on an operator one — so this filters by
+// org.id and does not depend on the policy being narrow enough.
+function RefundsTab({ org }) {
   const [rows, setRows] = useState(null); // null = loading
   const [err, setErr] = useState("");
 
@@ -1286,7 +1420,8 @@ function RefundsTab() {
     (async () => {
       const { data, error } = await supabase
         .from("refunds")
-        .select("id, amount_cents, reason, status, cancelled_registration, created_at, succeeded_at, registration:registrations(student:students(first_name, last_name))")
+        .select("id, amount_cents, reason, status, cancelled_registration, created_at, succeeded_at, refunded_by_user_id, platform_fee_refunded_cents, registration:registrations(student:students(first_name, last_name))")
+        .eq("organization_id", org.id)
         .order("created_at", { ascending: false })
         .limit(200);
       if (!alive) return;
@@ -1307,12 +1442,28 @@ function RefundsTab() {
     const s = r.registration?.student;
     return s ? `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "—" : "—";
   };
+  // A refund with no Enrops user behind it came from the operator's own Stripe
+  // dashboard. Without saying so, a refund nobody here issued just appears in
+  // this list with no explanation.
+  const originOf = (r) => (r.refunded_by_user_id ? "In Enrops" : "Stripe dashboard");
+  // Stripe's reason is an API enum. Show plain English, not the raw token.
+  const STRIPE_REASONS = {
+    requested_by_customer: "Requested by the family",
+    duplicate: "Duplicate charge",
+    fraudulent: "Marked fraudulent",
+    expired_uncaptured_charge: "Payment expired",
+  };
+  const reasonOf = (r) => {
+    const raw = (r.reason ?? "").trim();
+    if (!raw) return "—";
+    return STRIPE_REASONS[raw] ?? raw;
+  };
 
   return (
     <Card>
       <h2 style={{ margin: "0 0 4px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Refund history</h2>
       <p style={{ margin: "0 0 16px", color: MUTED, fontSize: 13 }}>
-        Issue a refund from <a href="/admin/rosters" style={{ color: PURPLE }}>Rosters</a> → a family's row → <strong>Refund…</strong>. Every refund is recorded here.
+        Issue a refund from <a href="/admin/rosters" style={{ color: PURPLE }}>Rosters</a> → a family's row → <strong>Refund</strong>. Refunds you make directly in Stripe show up here too, marked <strong>Stripe dashboard</strong>.
       </p>
 
       {err && (
@@ -1339,7 +1490,13 @@ function RefundsTab() {
                 {r.cancelled_registration && <span style={{ marginLeft: 8, fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${RULE}`, borderRadius: 4, padding: "1px 5px" }}>Withdrew</span>}
                 {r.status === "failed" && <span style={{ marginLeft: 8, fontSize: 10, color: RED, fontWeight: 700, textTransform: "uppercase" }}>Failed</span>}
                 {r.status === "pending" && <span style={{ marginLeft: 8, fontSize: 10, color: AMBER, fontWeight: 700, textTransform: "uppercase" }}>Pending</span>}
-                {r.reason && <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>{r.reason}</span>}
+                {!r.refunded_by_user_id && <span style={{ marginLeft: 8, fontSize: 10, color: PURPLE, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${PURPLE}`, borderRadius: 4, padding: "1px 5px" }}>Stripe dashboard</span>}
+                {r.reason && <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>{reasonOf(r)}</span>}
+                {r.status === "succeeded" && r.platform_fee_refunded_cents > 0 && (
+                  <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>
+                    {fmtCents(r.platform_fee_refunded_cents)} of the enrops fee returned to you
+                  </span>
+                )}
               </span>
               <span style={{ fontWeight: 600, color: r.status === "succeeded" ? OK : MUTED, whiteSpace: "nowrap" }}>{fmtCents(r.amount_cents)}</span>
               <span style={{ color: MUTED, whiteSpace: "nowrap" }}>{fmtWhen(r.succeeded_at || r.created_at)}</span>
@@ -1408,7 +1565,7 @@ function NotConnectedBody(props) {
   return (
     <StripeHero
       title="Get paid straight to your bank"
-      subtitle="Connect Stripe once. Parents pay, and the money lands in your account. Stripe hosts the setup and asks for your details on the next screen."
+      subtitle="Connect Stripe once and families' payments land in your account. Already use Stripe? Sign in on the next screen and pick that account — you'll keep using the one you have."
     >
       <ConnectButton {...props} label="Connect Stripe" />
       <TrustChips />
@@ -1479,7 +1636,9 @@ function TrustChips() {
     <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 16, marginTop: 14 }}>
       <span style={chip}>
         <SIcon size={16}><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 1.5" /></SIcon>
-        About 5 minutes
+        {/* Two numbers, not one: an operator who already has Stripe is done in
+            about 2 minutes, and quoting a flat "5 minutes" undersells that. */}
+        2 min if you have Stripe, 5–10 if not
       </span>
       <span style={chip}>
         <SIcon size={16}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></SIcon>
@@ -1493,12 +1652,24 @@ function TrustChips() {
   );
 }
 
-// The KYC/bank specifics some operators want before they start — collapsed by
-// default so the screen isn't a wall of text. Tenant-agnostic, no J2S strings.
+// What actually happens on the next screen, split by the ONE thing that changes
+// the answer: whether the operator already has Stripe.
+//
+// This used to say "Already have a Stripe account? This creates a separate one
+// just for enrops. Your existing account stays untouched." That was true of the
+// old Express accounts. It is now the opposite: with controller-based accounts
+// Stripe asks you to SIGN IN and use the account you already have — which is
+// faster, but is a nasty surprise if the screen just told you the reverse and
+// then asks for a password. Rewritten 2026-07-27 after exactly that happened.
+//
+// Open by default: this is the screen where operators stall, so the answer
+// should not be behind a click. Tenant-agnostic, no J2S strings.
 function WhatYouWillNeed() {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const item = { fontSize: 13, color: INK, lineHeight: 1.55, marginBottom: 6 };
   const lbl = { fontWeight: 600, color: PURPLE };
+  const pathTitle = { fontSize: 13.5, fontWeight: 700, color: PURPLE, marginBottom: 4 };
+  const pathTime = { fontSize: 12, color: MUTED, fontWeight: 600 };
   return (
     <div style={{ maxWidth: 460, margin: "16px auto 0", textAlign: "left" }}>
       <button
@@ -1514,18 +1685,43 @@ function WhatYouWillNeed() {
         <span style={{ display: "inline-flex", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}>
           <SIcon size={16}><path d="M6 9l6 6 6-6" /></SIcon>
         </span>
-        What you'll need
+        What happens next
       </button>
       {open && (
         <div style={{ marginTop: 10, background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: "12px 14px" }}>
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
-            <li style={item}><span style={lbl}>Email and phone</span> — where Stripe sends verification codes.</li>
-            <li style={item}><span style={lbl}>Business details</span> — legal name, EIN, address.</li>
-            <li style={item}><span style={lbl}>Your ID</span> — name, date of birth, last 4 of SSN. Stripe needs this to verify you; it isn't stored on our side.</li>
-            <li style={{ ...item, marginBottom: 0 }}><span style={lbl}>Bank account</span> — routing and account number, or connect via Plaid. This is where your money lands.</li>
-          </ul>
-          <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED, lineHeight: 1.55 }}>
-            Already have a Stripe account? This creates a separate one just for enrops. Your existing account stays untouched.
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={pathTitle}>
+              If you already use Stripe <span style={pathTime}>· about 2 minutes</span>
+            </div>
+            <p style={{ ...item, marginBottom: 0 }}>
+              Sign in with your usual Stripe login and choose that account. You'll
+              use the account you already have — nothing new is created, and the
+              payments you take outside enrops carry on exactly as they do now.
+              Stripe already has your business and bank details, so there's
+              nothing to re-enter.
+            </p>
+          </div>
+
+          <div style={{ paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
+            <div style={pathTitle}>
+              If you're new to Stripe <span style={pathTime}>· about 5–10 minutes</span>
+            </div>
+            <p style={{ ...item, marginBottom: 8 }}>
+              You'll create your Stripe account on the next screen. Have these ready:
+            </p>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              <li style={item}><span style={lbl}>Email and phone</span> — where Stripe sends verification codes.</li>
+              <li style={item}><span style={lbl}>Business details</span> — legal name, EIN, address.</li>
+              <li style={item}><span style={lbl}>Your ID</span> — name, date of birth, last 4 of SSN. Stripe needs this to verify you; it isn't stored on our side.</li>
+              <li style={{ ...item, marginBottom: 0 }}><span style={lbl}>Bank account</span> — routing and account number, or connect via Plaid. This is where your money lands.</li>
+            </ul>
+          </div>
+
+          <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED, lineHeight: 1.55 }}>
+            Either way, when you come back Stripe may spend a minute or two
+            checking your details before payments switch on. That's normal and
+            there's nothing for you to do while it finishes.
           </div>
         </div>
       )}
@@ -1552,6 +1748,32 @@ function ConnectButton({ onConnect, onReconnect, busy, canManage, label }) {
     >
       {busy ? "Starting…" : label}
     </button>
+  );
+}
+
+// Stripe has everything and is reviewing. The operator owes NOTHING, so this
+// body deliberately has no "Continue setup" button — offering one would send
+// someone who finished correctly back into a completed form looking for a
+// field that isn't there. Observed 2026-07-27: it cleared on its own in about
+// a minute, which is what the copy now says.
+function VerifyingBody({ onCheckStatus, checking, canManage }) {
+  return (
+    <StripeHero
+      title="Stripe is reviewing your details"
+      subtitle="Everything's submitted — there's nothing more for you to do. This usually finishes within a couple of minutes, and payments switch on automatically."
+    >
+      {canManage && (
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <button
+            onClick={onCheckStatus}
+            disabled={checking}
+            style={btn("transparent", BRIGHT, true, checking)}
+          >
+            {checking ? "Checking…" : "Check again"}
+          </button>
+        </div>
+      )}
+    </StripeHero>
   );
 }
 
