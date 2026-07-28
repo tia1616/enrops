@@ -111,3 +111,8 @@ verify_jwt = false
 # it authenticates the caller itself against the founder_notify_secret gate.
 [functions.founder-notify]
 verify_jwt = false
+
+# Day 1 welcome letter to a new provider. Called by pg_net from a DB trigger when
+# onboarding completes, so there is no user JWT; it checks operator_welcome_secret itself.
+[functions.operator-welcome]
+verify_jwt = false
