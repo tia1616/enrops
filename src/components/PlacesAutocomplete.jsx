@@ -49,7 +49,13 @@ function ensurePacCss() {
 // .catch runs, and the field sits there promising "we'll find the place"
 // forever while doing nothing -- the same looks-dead failure this component was
 // fixed for, just a slower door.
-const LOOKUP_TIMEOUT_MS = 8000;
+//
+// 15s, not 8s: the Maps bootstrap plus importLibrary('places') can genuinely
+// exceed 8s on congested wifi or 3G, and a timeout that fires while the load is
+// still healthy turns a slow success into a reported failure. The caller also
+// retries once (see the component below), so a late arrival still gets picked
+// up rather than being lost for the life of the mount.
+const LOOKUP_TIMEOUT_MS = 15000;
 
 let loaderPromise = null;
 export function loadGoogleMaps(apiKey) {
@@ -103,7 +109,12 @@ export function loadGoogleMaps(apiKey) {
         afterScriptLoad();
       } else {
         existing.addEventListener('load', afterScriptLoad, { once: true });
-        existing.addEventListener('error', () => reject(new Error('gmaps load failed')), { once: true });
+        existing.addEventListener('error', () => {
+          // Genuinely dead: `error` has fired, so this tag will never fire
+          // either event again and a later attempt must not wait on it.
+          existing.remove();
+          reject(new Error('gmaps load failed'));
+        }, { once: true });
       }
       return;
     }
@@ -113,7 +124,13 @@ export function loadGoogleMaps(apiKey) {
     script.defer = true;
     script.dataset.enropsGmaps = 'true';
     script.onload = afterScriptLoad;
-    script.onerror = () => reject(new Error('gmaps load failed'));
+    script.onerror = () => {
+      // Same reasoning as the `existing` branch: a tag that has fired `error`
+      // is a corpse, so take it out of the DOM here -- at the one moment we
+      // know the fetch is over -- rather than blindly on any failure.
+      script.remove();
+      reject(new Error('gmaps load failed'));
+    };
     document.head.appendChild(script);
   });
   // A failed load used to be cached for the life of the page: loaderPromise
@@ -121,18 +138,16 @@ export function loadGoogleMaps(apiKey) {
   // bulk-address modal failed instantly even after the network came back, with
   // no way short of a reload. Drop the cache on failure so the next attempt
   // genuinely retries.
-  loaderPromise.catch(() => {
-    loaderPromise = null;
-    // And drop the dead <script> with it. A tag that already fired `error` (or
-    // hung) will never fire either event again, so leaving it in the DOM sends
-    // the retry down the `existing` branch to wait on a corpse -- it would burn
-    // the full timeout and fail every time, making the retry cosmetic. If the
-    // script did load and the failure came later, window.google is already set
-    // and the early-return above short-circuits before we ever look for a tag.
-    if (typeof document !== 'undefined') {
-      document.querySelector('script[data-enrops-gmaps]')?.remove();
-    }
-  });
+  // Deliberately does NOT touch the <script> tag. Removing an element does not
+  // abort a fetch that has already begun, so tearing it down on a TIMEOUT left
+  // a live request running with nothing pointing at it: the next attempt found
+  // no tag, injected a second Maps bootstrap, and both eventually executed --
+  // "You have included the Google Maps JavaScript API multiple times on this
+  // page." Leaving a timed-out tag alone is strictly better, because the retry
+  // takes the `existing` branch and its listeners catch the late arrival. Only
+  // the two `error` handlers above remove a tag, and only once its fetch is
+  // provably finished.
+  loaderPromise.catch(() => { loaderPromise = null; });
   return loaderPromise;
 }
 
@@ -166,6 +181,10 @@ export default function PlacesAutocomplete({
   disabled,
   autoFocus,
   id,
+  // Forwarded to the underlying input. Exists because swapping a plain <input>
+  // for this component silently dropped a caller's maxLength, leaving a field
+  // that used to be capped writing unbounded values to a `text` column.
+  maxLength,
   // Called with true when the lookup cannot run, so the CALLER can say so.
   // Optional: callers that omit it behave exactly as before.
   //
@@ -192,33 +211,45 @@ export default function PlacesAutocomplete({
     // No timer here on purpose: loadGoogleMaps owns the timeout, so a hang
     // arrives as a rejection in .catch below like any other failure, and every
     // consumer of the loader gets the same behaviour from one place.
-    loadGoogleMaps(apiKey)
-      .then((google) => {
-        if (cancelled || !inputRef.current) return;
-        autocomplete = new google.maps.places.Autocomplete(inputRef.current, {
-          types: ['establishment', 'geocode'],
-          componentRestrictions: { country: 'us' },
-          fields: ['name', 'formatted_address'],
-        });
-        onLookupUnavailable?.(false);
-        listener = autocomplete.addListener('place_changed', () => {
-          const place = autocomplete.getPlace();
-          if (!place) return;
-          const name = place.name || (inputRef.current?.value ?? '');
-          const address = place.formatted_address || '';
-          if (!address) return;
-          // Read latest handlers via the ref so we don't have to rebuild
-          // Autocomplete every render.
-          const { onSelect: latestOnSelect } = handlersRef.current;
-          latestOnSelect?.({ name, address });
-        });
-      })
+    const attach = (google) => {
+      if (cancelled || !inputRef.current) return;
+      autocomplete = new google.maps.places.Autocomplete(inputRef.current, {
+        types: ['establishment', 'geocode'],
+        componentRestrictions: { country: 'us' },
+        fields: ['name', 'formatted_address'],
+      });
+      onLookupUnavailable?.(false);
+      listener = autocomplete.addListener('place_changed', () => {
+        const place = autocomplete.getPlace();
+        if (!place) return;
+        const name = place.name || (inputRef.current?.value ?? '');
+        const address = place.formatted_address || '';
+        if (!address) return;
+        // Read latest handlers via the ref so we don't have to rebuild
+        // Autocomplete every render.
+        const { onSelect: latestOnSelect } = handlersRef.current;
+        latestOnSelect?.({ name, address });
+      });
+    };
+
+    const tryLoad = (isRetry) => loadGoogleMaps(apiKey)
+      .then(attach)
       .catch((err) => {
+        if (cancelled) return undefined;
         if (typeof console !== 'undefined') console.warn('[PlacesAutocomplete] disabled:', err?.message ?? err);
         // Google refused (referrer not allowed for this domain is the usual one
         // on a non-production host), or the script could not load. Tell the caller.
-        if (!cancelled) onLookupUnavailable?.(true);
+        onLookupUnavailable?.(true);
+        // A TIMEOUT is the one failure where the work may still be in flight:
+        // loadGoogleMaps left the <script> in the DOM and dropped its cache, so
+        // a second attempt attaches to that same tag and resolves when it lands.
+        // Without this the operator keeps a plain box for the life of the mount
+        // even though Google arrived a second later; with it, attach() runs and
+        // flips the hint back to ready. Once only -- a real outage must settle.
+        if (!isRetry && /timed out/i.test(err?.message ?? '')) return tryLoad(true);
+        return undefined;
       });
+    tryLoad(false);
     return () => {
       cancelled = true;
       try { listener?.remove(); } catch (_e) { /* noop */ }
@@ -243,6 +274,7 @@ export default function PlacesAutocomplete({
       placeholder={placeholder}
       disabled={disabled}
       autoFocus={autoFocus}
+      maxLength={maxLength}
       autoComplete="off"
       style={style}
     />

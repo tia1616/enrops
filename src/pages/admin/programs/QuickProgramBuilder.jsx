@@ -170,6 +170,9 @@ export default function QuickProgramBuilder() {
   // Does this org already have programs? Decides whether the first-class
   // questions are appropriate. null = not counted yet (never assume either way).
   const [programCount, setProgramCount] = useState(null);
+  // The count could not be established at all (network rejection). Kept separate
+  // from the count itself so the failure does not have to masquerade as a value.
+  const [countFailed, setCountFailed] = useState(false);
   // Whether the Google address lookup could actually start. Drives honest copy
   // under the field instead of a box that silently does nothing.
   const [lookupDown, setLookupDown] = useState(false);
@@ -177,6 +180,9 @@ export default function QuickProgramBuilder() {
     if (!org?.id) return;
     let cancelled = false;
     (async () => {
+      // Re-arm for this org: a failure recorded for a previous org.id must not
+      // decide what this one sees.
+      setCountFailed(false);
       try {
         const { data } = await supabase
           .from("program_locations")
@@ -196,13 +202,17 @@ export default function QuickProgramBuilder() {
       } catch {
         // supabase-js RESOLVES query errors into { data, error }, so the only
         // way we land here is a genuine network rejection (offline, DNS, CORS).
-        // That used to leave programCount null forever -- and countPending
-        // renders a bare "Loading..." off null, so the builder would sit on a
-        // spinner that never resolves and never says why. Same dead-feature
-        // class as the address lookup this change is fixing. Fall back to the
-        // pre-count behaviour (0 = treat as a first program) so the page always
-        // renders something the operator can act on.
-        if (!cancelled) setProgramCount((c) => (c === null ? 0 : c));
+        // Left alone this leaves programCount null forever, and countPending
+        // renders a bare "Loading..." off null -- a spinner that never resolves
+        // and never says why, the same dead-feature class as the address lookup.
+        //
+        // Fall FORWARD to the builder, not back to the questions. Falling back
+        // to 0 would mean a transient blip re-asks an established org to "set up
+        // your first class" -- precisely the complaint this count exists to fix,
+        // and Riverbend has 3 live programs. Skipping the questions for a
+        // genuinely new org is the cheaper mistake: onboarding_completed_at is
+        // still unset, so they get asked on the next load.
+        if (!cancelled) setCountFailed(true);
       }
     })();
     return () => { cancelled = true; };
@@ -294,8 +304,11 @@ export default function QuickProgramBuilder() {
   // programCount is null until counted, so we show neither screen prematurely.
   const needsOnboarding =
     isLean && !profile.onboarding_completed_at && programCount === 0;
+  // Still counting. If the count FAILED we stop waiting and fall through to the
+  // builder (programCount stays null, so needsOnboarding is false) rather than
+  // holding the operator on a spinner we know will never resolve.
   const countPending =
-    isLean && !profile.onboarding_completed_at && programCount === null;
+    isLean && !profile.onboarding_completed_at && programCount === null && !countFailed;
 
   const [ansVenue, setAnsVenue] = useState(profile.venue_answer ?? "");
   const [ansCadence, setAnsCadence] = useState(profile.program_cadence ?? "");
@@ -1001,6 +1014,13 @@ export default function QuickProgramBuilder() {
                   onLookupUnavailable={setLookupDown}
                   placeholder="Location name (e.g. Downtown Studio)"
                   style={{ ...inputStyle, marginBottom: 4 }}
+                  // Both of these existed on the plain <input> this replaced and
+                  // were lost in the swap: without maxLength the name is
+                  // unbounded into a `text` column, and without autoFocus the
+                  // operator has to click again into the very field the form was
+                  // opened for.
+                  maxLength={80}
+                  autoFocus
                 />
               ) : (
                 <input
