@@ -57,19 +57,34 @@ Deno.test('refundCoversWholeCharge is false when the charge is unknown', () => {
 
 Deno.test('withdrawn vs kept spot say different, accurate things', () => {
   const kept = renderRefundReceipt(FULL);
-  assertEquals(kept.text.includes('still on the roster'), true);
+  assertEquals(kept.text.includes('still enrolled'), true);
   const gone = renderRefundReceipt({ ...FULL, withdrawn: true });
-  assertEquals(gone.text.includes('taken off the roster'), true);
-  assertEquals(gone.text.includes('still on the roster'), false);
+  assertEquals(gone.text.includes('no longer enrolled'), true);
+  assertEquals(gone.text.includes('still enrolled'), false);
+});
+
+// POLICY, LOCKED (Jessica, 2026-07-28, reading a real receipt on prod).
+// "Roster" is operator vocabulary, and what happens to the spot after a family
+// cancels is the operator's business, not theirs. The old line read "has been
+// taken off the roster and the spot is free for someone else", which is both
+// jargon and cold at the worst possible moment.
+Deno.test('POLICY: the family receipt never says "roster" or offers their spot on', () => {
+  for (const w of [true, false, null]) {
+    const r = renderRefundReceipt({ ...FULL, withdrawn: w });
+    const blob = `${r.subject} ${r.text} ${r.html}`;
+    assertEquals(/roster/i.test(blob), false, `withdrawn=${w} still says roster`);
+    assertEquals(/free for someone else/i.test(blob), false, `withdrawn=${w} offers the spot on`);
+  }
 });
 
 // POLICY, LOCKED. A refund made in the operator's own Stripe tells us money
-// moved and nothing about the roster. Claiming "still on the roster" after a
-// full refund would be a guess that reads as a promise. Say nothing instead.
-Deno.test('POLICY: unknown roster state says NOTHING about the spot', () => {
+// moved and nothing about whether the child was withdrawn. Claiming "still
+// enrolled" after a full refund would be a guess that reads as a promise. Say
+// nothing instead.
+Deno.test('POLICY: unknown enrolment state says NOTHING about the spot', () => {
   const unknown = renderRefundReceipt({ ...FULL, withdrawn: null });
-  assertEquals(unknown.text.includes('roster'), false);
-  assertEquals(unknown.html.includes('roster'), false);
+  assertEquals(unknown.text.includes('enrolled'), false);
+  assertEquals(unknown.html.includes('enrolled'), false);
   // The rest of the receipt still stands on its own.
   assertEquals(unknown.text.includes('$247.20'), true);
   assertEquals(unknown.text.includes('business days'), true);
