@@ -154,7 +154,42 @@ revoke all on function public.claim_founder_notification(uuid, text, text, uuid)
 grant execute on function public.claim_founder_notification(uuid, text, text, uuid) to service_role;
 
 -- ---------------------------------------------------------------------------
+-- 4b. Does this operator run registration through enrops AT ALL?
+--
+--     There are TWO independent flags and missing the org-level one is a live
+--     bug, not a hypothetical: shoreview-chess and mrs-richelle both carry
+--     organizations.uses_enrops_registration = false on prod today. They use
+--     enrops for scheduling and payroll and run registration elsewhere. Because
+--     programs.runs_own_registration defaults to FALSE, gating on the program
+--     flag alone would fire "First registration!" the first time either of them
+--     published anything.
+--
+--     Matches the app's own reading of this flag (null/absent means true - see
+--     AdminLayout.jsx and ProgramsCalendar.jsx, which both use
+--     `uses_enrops_registration !== false`).
+-- ---------------------------------------------------------------------------
+create or replace function public.org_registers_through_enrops(p_org uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(
+    (select o.uses_enrops_registration from public.organizations o where o.id = p_org),
+    true
+  );
+$$;
+
+revoke all on function public.org_registers_through_enrops(uuid) from public, anon, authenticated;
+grant execute on function public.org_registers_through_enrops(uuid) to service_role;
+
+-- ---------------------------------------------------------------------------
 -- 5. Trigger 1 - FIRST REGISTRATION PUBLISHED.
+--
+--    NOTE: first_transaction deliberately does NOT take this gate. A
+--    payment_completed event only exists because enrops processed the money, so
+--    the event is its own proof - even for an operator who registers elsewhere.
 --
 --    "Published" is table-specific, verified against live data:
 --      programs      - status 'open'   (draft -> open is the publish; 12 draft / 86 open)
@@ -177,6 +212,7 @@ begin
   if new.status = 'open'
      and (tg_op = 'INSERT' or old.status is distinct from 'open')
      and new.runs_own_registration is not true
+     and public.org_registers_through_enrops(new.organization_id)
   then
     v_id := public.claim_founder_notification(new.organization_id, 'first_registration', 'programs', new.id);
     if v_id is not null then
@@ -211,6 +247,7 @@ begin
   if new.status = 'active'
      and (tg_op = 'INSERT' or old.status is distinct from 'active')
      and new.runs_own_registration is not true
+     and public.org_registers_through_enrops(new.organization_id)
   then
     v_id := public.claim_founder_notification(new.organization_id, 'first_registration', 'camp_sessions', new.id);
     if v_id is not null then
@@ -270,6 +307,58 @@ create trigger trg_founder_first_payment
   for each row execute function public.tg_founder_first_payment();
 
 -- ---------------------------------------------------------------------------
+-- 6b. RETRY SWEEP - the safety net for a dispatch that never landed.
+--
+--     The primary path stays real-time; this is NOT a digest. It exists because
+--     a transient failure (edge fn cold-start timeout, Resend blip, secrets not
+--     yet configured on a fresh environment) otherwise leaves the claim row
+--     unsent FOREVER with nothing watching it. Verified by injecting a dead
+--     endpoint: the operator's publish still succeeded and the claim survived,
+--     but nothing would ever have retried it.
+--
+--     Only re-dispatches claims older than 5 minutes, so it can never race the
+--     live send that is still in flight. Idempotent by construction: the edge fn
+--     no-ops on a row whose sent_at is already set.
+--
+--     Schedule per environment (values differ, so not committed here):
+--       select cron.schedule('founder-notify-retry', '*/15 * * * *',
+--         $job$ select public.retry_unsent_founder_notifications() $job$);
+-- ---------------------------------------------------------------------------
+create or replace function public.retry_unsent_founder_notifications()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row   record;
+  v_count integer := 0;
+begin
+  for v_row in
+    select id from public.founder_notifications
+     where sent_at is null
+       and not backfilled
+       and created_at < now() - interval '5 minutes'
+       -- Give up after a day rather than retrying a doomed row forever; it stays
+       -- in the table, visibly unsent, which is the honest end state.
+       and created_at > now() - interval '1 day'
+     order by created_at
+     limit 50
+  loop
+    perform public.dispatch_founder_notification(v_row.id);
+    v_count := v_count + 1;
+  end loop;
+  return v_count;
+end;
+$$;
+
+revoke all on function public.retry_unsent_founder_notifications() from public, anon, authenticated;
+grant execute on function public.retry_unsent_founder_notifications() to service_role;
+
+comment on function public.retry_unsent_founder_notifications() is
+  'Safety net: re-dispatches founder notification claims that were never delivered. Not a digest - the primary path is the real-time trigger.';
+
+-- ---------------------------------------------------------------------------
 -- 7. BACKFILL - the step that makes "first" honest.
 --
 --    Without this, every org that ALREADY publishes and already takes money
@@ -291,6 +380,12 @@ from (
     from public.camp_sessions
    where status = 'active' and runs_own_registration is not true and organization_id is not null
 ) s
+-- Same gate as the trigger, and it matters in BOTH directions. Seeding a
+-- suppression row for an operator who does not register through enrops today
+-- would permanently silence them if they adopt enrops registration later - the
+-- exact moment worth knowing about. Leaving them out costs nothing now (the
+-- trigger already declines to fire for them) and keeps that future first real.
+where public.org_registers_through_enrops(s.organization_id)
 order by s.organization_id, s.at
 on conflict (organization_id, trigger_key) do nothing;
 
