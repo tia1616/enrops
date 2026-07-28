@@ -1,4 +1,19 @@
-// create-checkout v13 — creates a Stripe Checkout session for already-written registrations.
+// create-checkout v14 — creates a Stripe Checkout session for already-written registrations.
+//
+// PATCH 9 (2026-07-27): Stripe direct charges (migration Phase 2).
+//   Charge routing now comes from buildChargeRouting(), which reads
+//   organizations.stripe_charge_model:
+//     'destination' (J2S + every pre-existing org) — UNCHANGED. Session is
+//        created on the platform with transfer_data/on_behalf_of/uplift exactly
+//        as before, and NO request-options argument at all (undefined — passing
+//        {} makes stripe-node throw "Unknown arguments").
+//     'direct' — the Session is created ON the connected account (Stripe-Account
+//        header), application_fee_amount is clean Enrops margin with no Stripe-fee
+//        uplift (the operator's account pays Stripe natively), and no transfer_data
+//        / on_behalf_of / statement_descriptor_suffix is sent.
+//   The installments branch also moved its org lookup ABOVE Customer creation:
+//   on a direct charge the Customer and its saved card must live on the SAME
+//   connected account that will re-charge them off-session.
 //
 // PATCH 8 (2026-07-03): pay-in-full is now a SINGLE payment method per session,
 //   chosen by the family up front (request `payment_method`: 'card' |
@@ -35,8 +50,10 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { buildConnectChargeParams, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
-import { passThroughLineItem } from '../_shared/passThroughFee.ts';
+import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
+import { passThroughLineItem, passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
+import { computePlatformFee } from '../_shared/computePlatformFee.ts';
+import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -247,8 +264,91 @@ serve(async (req) => {
       const c3 = aggregated.find((a) => a.installment_number === 3)!;
       const firstAmount = c1.amount_cents;
 
+      // v14 (Phase 2): the org lookup + charge routing must happen BEFORE the
+      // Customer is created. On a direct charge the Customer, its saved payment
+      // method, and the PaymentIntent all have to live on the SAME connected
+      // account — a platform Customer cannot be used in a direct charge, and
+      // installments 2 and 3 later re-charge that saved method off-session.
+      const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { data: regForOrg } = await admin
+        .from('registrations')
+        .select(`
+          organization_id,
+          organizations:organization_id (
+            stripe_account_id,
+            stripe_charges_enabled,
+            statement_descriptor_suffix,
+            name,
+            platform_fee_card_pct,
+            platform_fee_ach_pct,
+            platform_fee_cap_cents,
+            platform_fee_floor_cents,
+            fee_pass_through,
+            stripe_fee_payer,
+            active_registration_term,
+            instructor_pay_model,
+            stripe_charge_model
+          )
+        `)
+        .eq('id', registration_ids[0])
+        .single();
+      const orgId = regForOrg?.organization_id || null;
+      const orgConfig = (regForOrg?.organizations ?? null) as ConnectOrgConfig | null;
+      const orgTerm = (regForOrg?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
+
+      // Same payment gate as the one-time path below. The installments branch
+      // returns EARLY, so without this it would be a way around the block —
+      // and it's worse here: it also schedules two future off-session charges
+      // that would keep landing in the platform balance.
+      if (!orgConfig?.stripe_charges_enabled) {
+        console.warn(
+          `[create-checkout] BLOCKED (installments): org ${orgId ?? '(unknown)'} has no Stripe account accepting charges.`,
+        );
+        return json({
+          error: 'This provider is not set up to take payments yet. Please contact them directly.',
+          code: 'stripe_not_connected',
+        }, 409);
+      }
+
+      // The platform fee is capped PER REGISTRATION, not per charge: compute it
+      // once against the whole total, then split it across the three
+      // installments. Otherwise a $500 program split three ways costs the
+      // family 3 x the per-charge fee while paying up front hits the single
+      // $7.99 cap — penalising exactly the families who need the plan.
+      // Below the cap this changes nothing (3% of $240 = 3 x 3% of $80).
+      const installmentFeeShares = orgConfig
+        ? allocateFeeAcrossInstallments(
+          computePlatformFee(total_cents, 'card', orgConfig),
+          [c1.amount_cents, c2.amount_cents, c3.amount_cents],
+        )
+        : [0, 0, 0];
+      const firstFeeShare = installmentFeeShares[0];
+
+      // Connect overlay + which account the API calls are made against. The
+      // margin is installment 1's SHARE of the registration-level fee;
+      // installments 2 and 3 take theirs when process-installments fires.
+      const routing = buildChargeRouting(firstAmount, 'card', orgConfig, orgId, firstFeeShare);
+      if (routing.blocked) {
+        console.warn(`[create-checkout] BLOCKED (installments, direct): ${routing.blocked}`);
+        return json({
+          error: 'This provider is not set up to take payments yet. Please contact them directly.',
+          code: 'stripe_not_connected',
+        }, 409);
+      }
+      const connectParams = routing.params;
+      // Every Stripe call in this branch is scoped by this. On a destination org
+      // it is UNDEFINED — the exact platform-scoped call this function always
+      // made. It must not be {}: stripe-node identifies an options object by its
+      // known keys, so an empty one is read as a stray argument and the call
+      // throws "Unknown arguments ([object Object])".
+      const acct = routing.requestOptions;
+
+      // Customer lookup/creation is scoped to `acct`, so a direct org's families
+      // are Customers on THAT operator's account and never on the platform.
       let customerId: string;
-      const existingCustomers = await stripe.customers.list({ email: parent_email, limit: 1 });
+      const existingCustomers = await stripe.customers.list({ email: parent_email, limit: 1 }, acct);
       if (existingCustomers.data.length > 0) {
         customerId = existingCustomers.data[0].id;
       } else {
@@ -256,7 +356,7 @@ serve(async (req) => {
           email: parent_email,
           name: parent_name || undefined,
           metadata: { source: 'enrops-installments' },
-        });
+        }, acct);
         customerId = customer.id;
       }
 
@@ -281,57 +381,13 @@ serve(async (req) => {
         quantity: 1,
       };
 
-      // Look up organization_id + Connect config for the first registration.
-      // Connect overlay (application_fee_amount + transfer_data + descriptor
-      // suffix) is computed against installment 1's amount only — installments
-      // 2 and 3 compute their own fees when process-installments fires.
-      const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      });
-      const { data: regForOrg } = await admin
-        .from('registrations')
-        .select(`
-          organization_id,
-          organizations:organization_id (
-            stripe_account_id,
-            stripe_charges_enabled,
-            statement_descriptor_suffix,
-            name,
-            platform_fee_card_pct,
-            platform_fee_ach_pct,
-            platform_fee_cap_cents,
-            platform_fee_floor_cents,
-            fee_pass_through,
-            stripe_fee_payer,
-            active_registration_term,
-            instructor_pay_model
-          )
-        `)
-        .eq('id', registration_ids[0])
-        .single();
-      const orgId = regForOrg?.organization_id || null;
-      const orgConfig = (regForOrg?.organizations ?? null) as ConnectOrgConfig | null;
-      const orgTerm = (regForOrg?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
-
-      // Same payment gate as the one-time path below. The installments branch
-      // returns EARLY, so without this it would be a way around the block —
-      // and it's worse here: it also schedules two future off-session charges
-      // that would keep landing in the platform balance.
-      if (!orgConfig?.stripe_charges_enabled) {
-        console.warn(
-          `[create-checkout] BLOCKED (installments): org ${orgId ?? '(unknown)'} has no Stripe account accepting charges.`,
-        );
-        return json({
-          error: 'This provider is not set up to take payments yet. Please contact them directly.',
-          code: 'stripe_not_connected',
-        }, 409);
-      }
-
-      const connectParams = buildConnectChargeParams(firstAmount, 'card', orgConfig, orgId);
-
-      // Pass-through: add the 1% on installment 1's amount as a visible line.
-      // Installments 2 & 3 add their own proportional fee in process-installments.
-      const feeLineInst = orgConfig ? passThroughLineItem(firstAmount, 'card', orgConfig) : null;
+      // Pass-through: installment 1's SHARE of the registration-level fee as a
+      // visible line. Uses the same allocated share as application_fee_amount
+      // above, so what the family is charged and what the platform keeps always
+      // agree. Installments 2 & 3 take their shares in process-installments.
+      const feeLineInst = orgConfig?.fee_pass_through && firstFeeShare > 0
+        ? passThroughLineItemForAmount(firstFeeShare)
+        : null;
       const installmentLineItems = feeLineInst
         ? [installmentLineItem, feeLineInst]
         : [installmentLineItem];
@@ -366,7 +422,38 @@ serve(async (req) => {
           installment_2_due_date: c2.due_date,
           installment_3_due_date: c3.due_date,
         },
-      });
+      }, acct);
+
+      // Record WHERE this charge lives, before the family is redirected.
+      // stripe_charge_account_id is NULL for a destination org (the charge is on
+      // the platform) and the connected account id for a direct org. Written now
+      // rather than derived later from the org's CURRENT stripe_charge_model,
+      // because an org that moves to direct charges gets a brand-new connected
+      // account and its older sessions/PIs stay on the platform forever.
+      // Non-fatal: the session is already live, and every reader falls back to
+      // platform scope, which is what a missing row would have meant anyway.
+      const { error: chargeRefErr } = await admin
+        .from('registrations')
+        .update({
+          stripe_checkout_session_id: session.id,
+          stripe_charge_account_id: acct?.stripeAccount ?? null,
+        })
+        .in('id', registration_ids);
+      if (chargeRefErr) {
+        // Do NOT let the family pay against a session we failed to record.
+        // For a direct org this row is the only thing checkout-session-status
+        // can use to scope its Stripe lookup, and its catch-all fails OPEN to
+        // paid:true — so proceeding means an ACH payer whose transfer is still
+        // clearing gets shown a settled success page. Expire the session and
+        // make them retry, exactly as the schedule-persist failure below does.
+        console.error('[create-checkout] failed to record charge account (installments):', chargeRefErr);
+        try {
+          await stripe.checkout.sessions.expire(session.id, acct);
+        } catch (expireErr) {
+          console.error('Failed to expire unrecorded session:', expireErr);
+        }
+        return json({ error: 'Could not start checkout. Please try again.' }, 500);
+      }
 
       // Persist the per-line schedule to checkout_schedules — webhook reads it after payment
       const { error: scheduleErr } = await admin.from('checkout_schedules').insert({
@@ -380,7 +467,7 @@ serve(async (req) => {
         // session and return an error so the frontend can retry safely.
         console.error('Failed to persist checkout schedule:', scheduleErr);
         try {
-          await stripe.checkout.sessions.expire(session.id);
+          await stripe.checkout.sessions.expire(session.id, acct);
         } catch (expireErr) {
           console.error('Failed to expire orphaned session:', expireErr);
         }
@@ -452,7 +539,8 @@ serve(async (req) => {
           fee_pass_through,
           stripe_fee_payer,
           active_registration_term,
-          instructor_pay_model
+          instructor_pay_model,
+          stripe_charge_model
         )
       `)
       .eq('id', registration_ids[0])
@@ -492,7 +580,18 @@ serve(async (req) => {
     // are always card-only (handled above, off-session ACH debits out of scope).
     const selectedMethod: 'card' | 'us_bank_account' =
       payment_method === 'us_bank_account' ? 'us_bank_account' : 'card';
-    const connectParamsStd = buildConnectChargeParams(total_cents, selectedMethod, orgConfigStd, orgIdStd);
+    const routingStd = buildChargeRouting(total_cents, selectedMethod, orgConfigStd, orgIdStd);
+    if (routingStd.blocked) {
+      console.warn(`[create-checkout] BLOCKED (direct): ${routingStd.blocked}`);
+      return json({
+        error: 'This provider is not set up to take payments yet. Please contact them directly.',
+        code: 'stripe_not_connected',
+      }, 409);
+    }
+    const connectParamsStd = routingStd.params;
+    // undefined (never {}) for a destination org — the platform-scoped call
+    // this always made. See the installments branch above for why {} breaks.
+    const acctStd = routingStd.requestOptions;
 
     // Pass-through: when the operator opts in (fee_pass_through), add the platform
     // fee as a visible "Platform fee" line so the family covers it — computed for
@@ -535,7 +634,30 @@ serve(async (req) => {
         parent_name: parent_name || '',
       },
       payment_intent_data: piData,
-    });
+    }, acctStd);
+
+    // Record WHERE this charge lives, before the family is redirected. See the
+    // installments branch above for why this is written now instead of being
+    // derived later from the org's current stripe_charge_model.
+    const { error: chargeRefErrStd } = await adminStd
+      .from('registrations')
+      .update({
+        stripe_checkout_session_id: session.id,
+        stripe_charge_account_id: acctStd?.stripeAccount ?? null,
+      })
+      .in('id', registration_ids);
+    if (chargeRefErrStd) {
+      // Same reasoning as the installments branch: an unrecorded session leaves
+      // checkout-session-status unable to scope a direct org's lookup, and it
+      // fails OPEN to paid:true. Expire and make them retry.
+      console.error('[create-checkout] failed to record charge account:', chargeRefErrStd);
+      try {
+        await stripe.checkout.sessions.expire(session.id, acctStd);
+      } catch (expireErr) {
+        console.error('Failed to expire unrecorded session:', expireErr);
+      }
+      return json({ error: 'Could not start checkout. Please try again.' }, 500);
+    }
 
     // intelligence: log enrollment initiated (one per registration; fail-safe, never blocks)
     for (const regId of registration_ids) {

@@ -1,0 +1,32 @@
+-- 20260727f — drop photo_release_required_when_confirmed.
+--
+-- CHECK ((status <> 'confirmed') OR (photo_release_consent = true))
+--
+-- This encoded "a family must consent to photography to be enrolled". Migration
+-- 20260725f deliberately REVERSED that product decision - the whole point of
+-- splitting the waiver library was Jessica's "photo release should be its own.
+-- i'm not sure everyone requires it like we do", and Photo & media release
+-- shipped as the one OPTIONAL waiver. Nothing removed this constraint.
+--
+-- The result is a silent trap. stripe-webhook confirms a paid registration with
+--   update({ status: 'confirmed', payment_status: 'paid', ... })
+-- and does not check the error. For any family who declines the optional photo
+-- release, that UPDATE violates this CHECK and fails: they are charged, and
+-- their registration sits at pending/unpaid forever. No confirmation email, no
+-- roster spot, money taken. Nothing surfaces it.
+--
+-- Reproduced end to end on staging 2026-07-27: a real card payment on a
+-- registration with photo_release_consent = false left the row pending/unpaid
+-- while its installment rows were correctly marked paid.
+--
+-- Prod exposure at the time of writing: the optional Photo & media release
+-- waiver is active on all 10 prod organisations, and 0 of 518 prod
+-- registrations have declined it - so the trap is armed but has not yet fired.
+--
+-- Dropping a CHECK only ever PERMITS more rows, so it cannot invalidate
+-- existing data and needs no backfill. Photo consent remains recorded on the
+-- registration and honoured by anything that reads it; it simply no longer
+-- blocks enrolment, which is what the waiver library already decided.
+
+ALTER TABLE public.registrations
+  DROP CONSTRAINT IF EXISTS photo_release_required_when_confirmed;

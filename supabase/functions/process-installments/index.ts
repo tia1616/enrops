@@ -1,4 +1,26 @@
-// process-installments v6 — daily cron worker that charges due installments off-session.
+// process-installments v8 — daily cron worker that charges due installments off-session.
+//
+// v8 CHANGE (2026-07-27): organization_id is part of the grouping key.
+//   A Stripe Customer is NOT unique per org — for destination orgs
+//   create-checkout dedupes customers platform-wide by email, so one parent
+//   using the same email with two operators gets the SAME cus_... on both orgs'
+//   installment rows. The old (customer, installment_number) key merged them
+//   into one group and charged the total with groupRows[0]'s Connect routing,
+//   sending the second operator's revenue to the first operator's account.
+//   Verified 2026-07-27 that NO such rows exist in staging or prod, so this is
+//   preventative, not a repair. A parent enrolled with two operators now sees
+//   one charge per operator per installment, which is correct — they are two
+//   different merchants.
+//
+// v7 CHANGE (2026-07-27): Stripe direct charges (migration Phase 2).
+//   Routing now comes from buildChargeRouting(organizations.stripe_charge_model):
+//     'destination' (J2S + every pre-existing org) — UNCHANGED: same overlay,
+//        same platform-scoped paymentIntents.create.
+//     'direct' — the PaymentIntent is created ON the connected account, which is
+//        where the saved Customer + card live (create-checkout put them there),
+//        and application_fee_amount is margin only with no Stripe-fee uplift.
+//   A direct org whose account isn't chargeable now PAUSES the rows and alerts,
+//   instead of falling through to a platform charge.
 //
 // v6 CHANGE (2026-05-27): Stripe Connect destination charges.
 //   When the org has an active connected account, each PaymentIntent now
@@ -21,7 +43,8 @@
 // (stripe_customer_id, installment_number) — IGNORING due_date — and charge them
 // together on the earliest due_date in the group. This means parents always see
 // exactly 3 charges total regardless of how many children or how staggered their
-// program dates are.
+// program dates are. (v8 narrows this to 3 charges PER OPERATOR: the key now
+// includes organization_id, because two operators are two merchants.)
 //
 // Trigger logic: when ANY row in a group has due_date <= today, the WHOLE group
 // is charged together. We collect slightly earlier than the latest published
@@ -37,7 +60,7 @@
 // 2. For each row in the trigger set, pull ALL pending sibling rows from the
 //    same parent + same installment_number (across all due_dates) — these are
 //    the rows that will be charged TOGETHER.
-// 3. Group by (stripe_customer_id, installment_number).
+// 3. Group by (organization_id, stripe_customer_id, installment_number).
 // 4. For each group:
 //    a. Fetch program statuses for all rows. Pause any rows whose program is cancelled.
 //    b. If the active subset is empty, skip. Otherwise charge the SUM of active rows
@@ -52,8 +75,9 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { buildConnectChargeParams, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
-import { passThroughFeeCents } from '../_shared/passThroughFee.ts';
+import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
+import { computePlatformFee } from '../_shared/computePlatformFee.ts';
+import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -80,6 +104,8 @@ interface InstallmentRow {
   stripe_payment_method_id: string;
   organization_id: string;
   parent_notified_failed_at: string | null;
+  /** Stripe account this plan's charges live on. null = the platform. */
+  stripe_charge_account_id: string | null;
 }
 
 interface ProgramRow {
@@ -143,12 +169,29 @@ serve(async (req) => {
       return jsonResp({ ok: true, summary });
     }
 
-    // STEP 2: For each (customer_id, installment_number) in the trigger set, pull
-    // ALL pending sibling rows from that group — even ones with due_date > today.
-    // These get charged together. (v5 earliest-date grouping.)
+    // STEP 2: For each (org, customer_id, installment_number) in the trigger set,
+    // pull ALL pending sibling rows from that group — even ones with
+    // due_date > today. These get charged together. (v5 earliest-date grouping.)
+    //
+    // v8: organization_id is part of the key. It has to be, because a Stripe
+    // Customer is NOT unique per org: for destination orgs create-checkout
+    // dedupes customers PLATFORM-WIDE by email (stripe.customers.list({email})
+    // with no account scope), so one parent registering the same email with two
+    // different operators gets the SAME cus_... written into both orgs'
+    // installment rows. Without organization_id in the key those rows merged
+    // into a single group and were charged as ONE PaymentIntent using
+    // groupRows[0]'s org config — routing the second operator's revenue into
+    // the first operator's connected account. A group must never span orgs.
+    //
+    // Consequence, and it is the correct one: a parent enrolled with two
+    // operators now sees one charge per operator per installment. They are two
+    // different merchants; a single combined charge was never right.
+    const installmentGroupKey = (r: InstallmentRow) =>
+      `${r.organization_id}__${r.stripe_customer_id}__${r.installment_number}`;
+
     const triggerKeys = new Set<string>();
     for (const row of triggerSet as InstallmentRow[]) {
-      triggerKeys.add(`${row.stripe_customer_id}__${row.installment_number}`);
+      triggerKeys.add(installmentGroupKey(row));
     }
 
     // Build OR filter to fetch all sibling rows — pull rows whose
@@ -168,10 +211,13 @@ serve(async (req) => {
       return jsonResp({ error: candidateErr.message }, 500);
     }
 
-    // Filter down to only rows whose (customer, instNum) is in triggerKeys
-    // (the .in() above is a Cartesian product across customers and inst-nums)
+    // Filter down to only rows whose (org, customer, instNum) is in triggerKeys
+    // (the .in() above is a Cartesian product across customers and inst-nums).
+    // This is also what keeps another org's rows out: the .in() query is not
+    // org-scoped, so a shared platform customer id pulls in the sibling org's
+    // pending rows, and only this filter drops them.
     const dueInstallments = (allCandidateRows as InstallmentRow[]).filter((r) =>
-      triggerKeys.has(`${r.stripe_customer_id}__${r.installment_number}`),
+      triggerKeys.has(installmentGroupKey(r)),
     );
 
     console.log(`Expanded to ${dueInstallments.length} rows including future-dated siblings`);
@@ -184,7 +230,7 @@ serve(async (req) => {
         stripe_account_id, stripe_charges_enabled,
         statement_descriptor_suffix,
         platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents,
-        fee_pass_through, stripe_fee_payer, instructor_pay_model
+        fee_pass_through, stripe_fee_payer, instructor_pay_model, stripe_charge_model
       `)
       .in('id', orgIds);
 
@@ -204,14 +250,18 @@ serve(async (req) => {
         fee_pass_through: org.fee_pass_through,
         stripe_fee_payer: org.stripe_fee_payer,
         instructor_pay_model: org.instructor_pay_model,
+        stripe_charge_model: org.stripe_charge_model,
       });
     }
 
-    // STEP 3: Group by (stripe_customer_id, installment_number) — NOT including due_date.
-    // This is the v5 change: rows with different due_dates can land in the same group.
+    // STEP 3: Group by (organization_id, stripe_customer_id, installment_number)
+    // — NOT including due_date. That is the v5 change: rows with different
+    // due_dates can land in the same group. The org component is v8 (see the
+    // installmentGroupKey comment above): every row in a group must belong to ONE org,
+    // because the whole group is charged with that org's Connect routing.
     const groupMap = new Map<string, InstallmentRow[]>();
     for (const row of dueInstallments) {
-      const key = `${row.stripe_customer_id}__${row.installment_number}`;
+      const key = installmentGroupKey(row);
       if (!groupMap.has(key)) groupMap.set(key, []);
       groupMap.get(key)!.push(row);
     }
@@ -369,22 +419,222 @@ async function processGroup(
     return `${stu?.first_name || 'child'} (${prog?.curriculum || 'program'})`;
   }).join(', ');
 
-  // v6: Connect destination charge overlay (application_fee_amount,
-  // transfer_data.destination, statement_descriptor_suffix). Spreads into
-  // top-level paymentIntents.create params (NOT under payment_intent_data —
-  // that nesting only applies to Checkout Sessions). Empty {} when the org
-  // is not connected, leaving direct-charge behavior intact.
-  const connectParams = buildConnectChargeParams(
+  // v7 (Phase 2): charge routing. Spreads into top-level paymentIntents.create
+  // params (NOT under payment_intent_data — that nesting only applies to
+  // Checkout Sessions).
+  //   destination org (J2S + all pre-existing): the same overlay as v6
+  //     (application_fee_amount + transfer_data + descriptor suffix), and
+  //     `acct` is undefined (never {}) — the platform-scoped call this cron
+  //     always made.
+  //   direct org: margin-only fee, and the PaymentIntent is created ON the
+  //     connected account, where the saved Customer + payment method live.
+  // ── cart-level fee, split across installments ───────────────────────────
+  // The platform fee is capped once per checkout, not per charge (Jessica
+  // 2026-07-27: "$7.99 per reg"). Recomputing it from THIS charge's amount
+  // would let a $500 program collect the cap three times. So rebuild the full
+  // schedule, apply the org's rate/floor/cap ONCE to the total, and take this
+  // installment's share. Below the cap the numbers are identical to before.
+  const groupRegIds = [...new Set(activeRows.map((r) => r.registration_id))];
+
+  // The cart is every registration that went through the SAME checkout session,
+  // not just the ones with a row due today. Deriving it from activeRows alone
+  // made the cap base shrink whenever part of a cart stopped being chargeable
+  // (a cancelled sibling program), so charges 2/3 capped over a smaller total
+  // than charge 1 was quoted against. registrations.stripe_checkout_session_id
+  // is the authoritative link. Legacy rows predate that column and fall back to
+  // the group, which is what they always were.
+  const { data: sessionRows, error: sessionErr } = await admin
+    .from('registrations')
+    .select('stripe_checkout_session_id')
+    .in('id', groupRegIds);
+  const sessionIds = [...new Set(
+    (((sessionRows ?? []) as unknown) as Array<{ stripe_checkout_session_id: string | null }>)
+      .map((r) => r.stripe_checkout_session_id)
+      .filter((s): s is string => !!s),
+  )];
+
+  let cartRegIds = groupRegIds;
+  let siblingErr: unknown = null;
+  if (sessionIds.length) {
+    const { data: siblingRows, error: sErr } = await admin
+      .from('registrations')
+      .select('id')
+      .in('stripe_checkout_session_id', sessionIds);
+    siblingErr = sErr;
+    cartRegIds = [...new Set([
+      ...groupRegIds,
+      ...(((siblingRows ?? []) as unknown) as Array<{ id: string }>).map((r) => r.id),
+    ])];
+  }
+
+  const { data: allInstRows, error: instErr } = await admin
+    .from('installments')
+    .select('id, registration_id, installment_number, amount_cents')
+    .in('registration_id', cartRegIds);
+
+  // Fail CLOSED on any of the three reads. Without them the fee can only be
+  // rebuilt from this charge's own amount, which is exactly the per-charge
+  // clamping this design removed - a $500 plan would quietly bill $5.00 instead
+  // of its allocated ~$2.67, and pass it on to the family. A paused row that a
+  // human retries beats a silent overcharge.
+  if (sessionErr || siblingErr || instErr || !allInstRows) {
+    const why = `could not rebuild the fee schedule (${(instErr as { message?: string } | null)?.message ?? (sessionErr as { message?: string } | null)?.message ?? (siblingErr as { message?: string } | null)?.message ?? 'no rows returned'})`;
+    console.error(`[process-installments] BLOCKED: ${why}`);
+    await admin.from('installments').update({
+      status: 'paused_card_failed',
+      failure_reason: `charge blocked: ${why}`,
+      last_attempt_at: new Date().toISOString(),
+    }).in('id', activeRows.map((r) => r.id).sort());
+    summary.paused_card_failed_groups++;
+    summary.paused_card_failed_rows += activeRows.length;
+    summary.errors++;
+    summary.details.push(`BLOCKED group (fee schedule unreadable): ${activeRows.length} rows`);
+    await sendOperatorAlert({
+      brand,
+      to: alertEmail,
+      subject: 'Installment charge held — could not confirm the fee',
+      body: `${activeRows.length} installment row(s) were NOT charged and are now paused.\n\nWe could not read the full payment plan to work out the correct service fee, and we will not guess at a number a family already agreed to. Nothing was charged.\n\nThis is usually temporary — set the rows back to pending to retry.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
+    });
+    return;
+  }
+
+  // Cap across the WHOLE CART, not per registration — because that is what the
+  // single pay-in-full charge does (create-checkout hands computePlatformFee
+  // the cart's total_cents) and what create-checkout's installment allocation
+  // does. Capping per registration here instead would make charge 1 and charges
+  // 2/3 disagree on a multi-child cart: 2 children at $240 would pay $2.67 on
+  // charge 1 and $4.80 on each of the next two.
+  //
+  // A cart's registrations share a Stripe Customer, so they land in this same
+  // group; groupRegIds IS the cart. Rows are ordered by installment number then
+  // registration so the leftover cent lands on charge 1, matching checkout.
+  type FeeRow = { id: string; registration_id: string; installment_number: number; amount_cents: number };
+  const cartRows = (((allInstRows ?? []) as unknown) as FeeRow[]).slice().sort(
+    (a, b) => a.installment_number - b.installment_number ||
+      a.registration_id.localeCompare(b.registration_id),
+  );
+  const cartTotal = cartRows.reduce((s, r) => s + r.amount_cents, 0);
+  const cartFee = orgConfig ? computePlatformFee(cartTotal, 'card', orgConfig) : 0;
+  const cartShares = allocateFeeAcrossInstallments(cartFee, cartRows.map((r) => r.amount_cents));
+  const shareByRow = new Map<string, number>();
+  cartRows.forEach((r, i) => shareByRow.set(r.id, cartShares[i]));
+
+  // This charge's margin = the sum of the shares of the rows it covers. Every
+  // active row MUST be in shareByRow: the reload selected by registration id,
+  // and these rows have those ids. There is deliberately NO per-row fallback —
+  // the obvious one (recompute on this row's amount) is the per-charge clamping
+  // this design exists to remove, so it would silently reintroduce the bug.
+  const missingShare = activeRows.filter((r) => !shareByRow.has(r.id));
+  if (missingShare.length) {
+    const why = `fee schedule is missing ${missingShare.length} of the ${activeRows.length} row(s) being charged`;
+    console.error(`[process-installments] BLOCKED: ${why}`, missingShare.map((r) => r.id));
+    await admin.from('installments').update({
+      status: 'paused_card_failed',
+      failure_reason: `charge blocked: ${why}`,
+      last_attempt_at: new Date().toISOString(),
+    }).in('id', activeRows.map((r) => r.id).sort());
+    summary.paused_card_failed_groups++;
+    summary.paused_card_failed_rows += activeRows.length;
+    summary.errors++;
+    summary.details.push(`BLOCKED group (incomplete fee schedule): ${activeRows.length} rows`);
+    await sendOperatorAlert({
+      brand,
+      to: alertEmail,
+      subject: 'Installment charge held — could not confirm the fee',
+      body: `${activeRows.length} installment row(s) were NOT charged and are now paused.\n\nWe could not work out the correct service fee for part of this payment plan, and we will not guess at a number a family already agreed to. Nothing was charged.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
+    });
+    return;
+  }
+
+  const groupMargin = activeRows.reduce((s, r) => s + (shareByRow.get(r.id) as number), 0);
+
+  // The PLAN's own history wins over the org's CURRENT stripe_charge_model.
+  // stripe_charge_account_id was stamped on every row when charge 1 completed:
+  // null = the plan lives on the platform (destination), non-null = it lives on
+  // that connected account. This matters because the saved Customer and card
+  // are on whichever account charge 1 used, and an operator who moves to direct
+  // charges gets a BRAND NEW connected account (controller.fees.payer can never
+  // be changed on an existing one). Routing charges 2 and 3 by the org's current
+  // model would aim them at an account that has never seen this card.
+  const recordedAcct = activeRows[0].stripe_charge_account_id ?? null;
+  const orgIsDirect = orgConfig?.stripe_charge_model === 'direct';
+
+  if (orgIsDirect && !recordedAcct) {
+    // The org is on direct charges but this plan was started on the platform,
+    // i.e. it predates the switch. We cannot safely guess: charging it as
+    // 'direct' would use the new account (no card there), and charging it as
+    // 'destination' would transfer to the new account rather than wherever the
+    // original charge settled. A human has to decide. Fail closed.
+    const why = `org ${activeRows[0].organization_id} is now stripe_charge_model=direct but this installment plan was started on the platform (no stripe_charge_account_id) - it predates the switch`;
+    console.error(`[process-installments] BLOCKED: ${why}`);
+    await admin.from('installments').update({
+      status: 'paused_card_failed',
+      failure_reason: `charge blocked: ${why}`,
+      last_attempt_at: new Date().toISOString(),
+    }).in('id', activeRows.map((r) => r.id).sort());
+    summary.paused_card_failed_groups++;
+    summary.paused_card_failed_rows += activeRows.length;
+    summary.details.push(`BLOCKED group (pre-switch plan): ${activeRows.length} rows`);
+    await sendOperatorAlert({
+      brand,
+      to: alertEmail,
+      subject: `Installment charge needs review — payment setup changed mid-plan`,
+      body: `${activeRows.length} installment row(s) were NOT charged and are now paused.\n\nThis family's payment plan was set up before this provider's Stripe payment setup changed, so their saved card is on the previous account. Charging it automatically could send the money to the wrong place, so we stopped and are asking a human.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
+    });
+    return;
+  }
+
+  // Route by the recorded account, not the org's current model. For a plan on
+  // the platform this is byte-for-byte the destination path (J2S included).
+  const routingOrg: ConnectOrgConfig | null = orgConfig
+    ? {
+      ...orgConfig,
+      stripe_charge_model: recordedAcct ? 'direct' : 'destination',
+      ...(recordedAcct ? { stripe_account_id: recordedAcct } : {}),
+    }
+    : null;
+
+  const routing = buildChargeRouting(
     totalAmount,
     'card',
-    orgConfig,
+    routingOrg,
     activeRows[0].organization_id,
+    groupMargin,
   );
 
+  // Fail closed for direct orgs with no usable account. Charging anyway would
+  // create a plain platform PaymentIntent against a customer id that doesn't
+  // exist on the platform — it would fail confusingly, or worse, succeed and
+  // put the operator's money in the Enrops balance. Pause and alert instead.
+  // (Never set for destination orgs, so J2S can't reach this branch.)
+  if (routing.blocked) {
+    console.error(`[process-installments] BLOCKED: ${routing.blocked}`);
+    await admin.from('installments').update({
+      status: 'paused_card_failed',
+      failure_reason: `charge blocked: ${routing.blocked}`,
+      last_attempt_at: new Date().toISOString(),
+    }).in('id', activeRows.map((r) => r.id).sort());
+    summary.paused_card_failed_groups++;
+    summary.paused_card_failed_rows += activeRows.length;
+    summary.details.push(`BLOCKED group: ${routing.blocked}`);
+    await sendOperatorAlert({
+      brand,
+      to: alertEmail,
+      subject: `Installment charge blocked — Stripe account not ready`,
+      body: `${routing.blocked}\n\n${activeRows.length} installment row(s) were NOT charged and are now paused. Finish Stripe onboarding, then flip the rows back to status=pending to retry.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
+    });
+    return;
+  }
+
+  const connectParams = routing.params;
+  const acct = routing.requestOptions;
+
   // Pass-through: if the operator passes the fee to families, this installment
-  // charges its base amount PLUS the proportional 1% (application_fee above is
-  // unchanged at 1% of base, so the operator nets the full installment).
-  const passFee = orgConfig ? passThroughFeeCents(totalAmount, 'card', orgConfig) : 0;
+  // charges its base amount PLUS this charge's SHARE of the registration-level
+  // fee — the exact same groupMargin used for application_fee_amount above, so
+  // what the family pays and what the platform keeps always agree, and the
+  // three installments together never exceed the org's per-registration cap.
+  const passFee = orgConfig?.fee_pass_through ? groupMargin : 0;
 
   let paymentIntent: Stripe.PaymentIntent;
   try {
@@ -404,7 +654,12 @@ async function processGroup(
         },
         ...connectParams,
       },
-      { idempotencyKey },
+      // acct is UNDEFINED for destination orgs (never {} — stripe-node throws
+      // "Unknown arguments" on an empty options object), so spreading it here
+      // leaves the unchanged platform-scoped call. Idempotency keys are scoped
+      // per account, which is what we want: a direct org's retry key can't
+      // collide with a platform-scoped one.
+      { idempotencyKey, ...acct },
     );
   } catch (err) {
     const stripeErr = err as Stripe.errors.StripeError;
@@ -437,6 +692,7 @@ async function processGroup(
         failureReason,
         totalAmount,
         customerId,
+        connectedAccountId: routing.direct ? (orgConfig?.stripe_account_id ?? null) : null,
       }),
     });
 
@@ -469,6 +725,9 @@ async function processGroup(
       stripe_payment_intent_id: paymentIntent.id,
       paid_at: new Date().toISOString(),
       last_attempt_at: new Date().toISOString(),
+      // Re-stamp where this PI actually landed, so a refund of installment 2 or
+      // 3 scopes itself correctly without consulting the org's current model.
+      stripe_charge_account_id: recordedAcct,
     }).in('id', sortedRowIds);
 
     summary.charged_groups++;
@@ -499,6 +758,7 @@ async function processGroup(
 
 function buildDeclineAlertBody({
   rows, regDataById, parent, declineCode, failureReason, totalAmount, customerId,
+  connectedAccountId,
 }: {
   rows: InstallmentRow[];
   regDataById: Map<string, any>;
@@ -507,6 +767,9 @@ function buildDeclineAlertBody({
   failureReason: string;
   totalAmount: number;
   customerId: string;
+  /** Set only for direct-charge orgs, whose Customers live on the connected
+   *  account — a platform dashboard URL would 404 for them. */
+  connectedAccountId?: string | null;
 }) {
   const parentName = parent ? `${parent.first_name} ${parent.last_name}` : 'parent';
   const parentEmail = parent?.email || 'unknown email';
@@ -533,7 +796,9 @@ function buildDeclineAlertBody({
     `Decline reason: ${declineCode}`,
     `Stripe message: ${failureReason}`,
     ``,
-    `Customer: https://dashboard.stripe.com/customers/${customerId}`,
+    `Customer: ${connectedAccountId
+      ? `https://dashboard.stripe.com/${connectedAccountId}/customers/${customerId}`
+      : `https://dashboard.stripe.com/customers/${customerId}`}`,
     ``,
     `All ${rows.length} installment row${rows.length > 1 ? 's are' : ' is'} now status=paused_card_failed. Future charges will not be retried automatically. Reach out to the parent to update their card, then manually flip rows back to status=pending if you want to re-attempt.`,
     ``,

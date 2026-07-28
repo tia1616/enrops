@@ -44,6 +44,17 @@ export function passThroughLineItem(
 ): StripeLineItem | null {
   const fee = passThroughFeeCents(baseCents, paymentMethod, org);
   if (fee <= 0) return null;
+  return passThroughLineItemForAmount(fee)!;
+}
+
+// Same line, for a fee amount the caller already worked out. Used by the
+// installments path, where the fee is capped across the whole registration and
+// then split, so it cannot be re-derived from this charge's amount alone.
+// Kept here, next to passThroughLineItem, so the family-facing wording and the
+// legal note below live in exactly ONE place.
+export function passThroughLineItemForAmount(feeCents: number): StripeLineItem | null {
+  const fee = Math.round(feeCents);
+  if (fee <= 0) return null;
   return {
     price_data: {
       currency: 'usd',
@@ -60,7 +71,24 @@ export function passThroughLineItem(
         // and constrained in CA, and the word "processing" is what makes a
         // reader file a platform fee under "card surcharge". Attributing it to
         // enrops by name is the same approach Eventbrite uses.
-        description: "enrops's service fee for running the platform. Not a card processing surcharge.",
+        //
+        // Rewritten 2026-07-27 (Jessica picked this wording). The old line read
+        // "enrops's service fee for running the platform. Not a card processing
+        // surcharge." — it repeated the line title, described the product in our
+        // words rather than a parent's, and denied a term most families have
+        // never heard, which only plants it. "not a bank charge" does the same
+        // legal work in words a parent reads once. Keep the two jobs if this is
+        // ever edited again: say what the money buys, and separate it from both
+        // the provider and the card networks.
+        //
+        // Shortened 2026-07-28 (Jessica: "need to simplify that copy"). Two
+        // changes. It no longer repeats "enrops's fee" — the line item is
+        // already titled "enrops service fee", and the comment above warns
+        // against exactly that repetition. And it drops "and secure payments":
+        // Stripe's processing fee is separate and comes out of the OPERATOR's
+        // side, so this fee does not buy the family payment processing and
+        // saying so oversold it.
+        description: "Covers your online registration. Not a bank charge.",
       },
       unit_amount: fee,
     },

@@ -17,6 +17,23 @@ verify_jwt = false
 [functions.create-registration]
 verify_jwt = false
 
+[functions.sync-operator-stripe-status]
+# CORRECTED 2026-07-28. The note below claimed PROD had this as verify_jwt =
+# false. It does not: prod is TRUE, staging is false, and the two have drifted.
+# Deploying from this file as written would have silently LOOSENED auth on prod,
+# which is the exact failure the deploy-edge-fn skill exists to prevent. True is
+# both correct and stricter, and the function works under it on prod today: the
+# only caller (Finances.jsx "Check status") always sends a real user JWT.
+# Staging is the anomaly and should be tightened to match, in its own change.
+#
+# Superseded note, kept so the mistake is legible: it read
+# "Mirrors PROD, which has this as verify_jwt = false. The function does its own
+# auth: it reads the caller's Bearer token and checks org membership, and the
+# only caller (Finances.jsx "Check status") always sends a real user JWT. Listed
+# here because it was previously assumed to be prod-only and absent from the
+# repo — it is not, and a deploy without --no-verify-jwt silently tightens it."
+verify_jwt = true
+
 [functions.process-installments]
 verify_jwt = false
 
@@ -67,6 +84,7 @@ verify_jwt = false
 [functions.platform-intelligence-digest]
 verify_jwt = false
 
-# Note: prod also has admin-convert-logo, sync-operator-stripe-status,
+# Note: prod also has admin-convert-logo and
 # dev-seed-designer-access as verify_jwt=false, but those are NOT in this
 # repo (prod-only / legacy), so they're intentionally omitted here.
+

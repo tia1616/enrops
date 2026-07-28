@@ -72,14 +72,37 @@ Deno.test('pass-through line item is labelled "enrops service fee", never a proc
       currency: 'usd',
       product_data: {
         name: 'enrops service fee',
-        description: "enrops's service fee for running the platform. Not a card processing surcharge.",
+        // Shortened 2026-07-28. Drops the repetition of the line-item title and
+        // the "secure payments" claim (Stripe's fee is separate and comes out of
+        // the operator's side, so this fee does not buy the family processing).
+        description: "Covers your online registration. Not a bank charge.",
       },
       unit_amount: 275,
     },
     quantity: 1,
   });
   const label = `${item?.price_data.product_data.name} ${item?.price_data.product_data.description}`;
-  assertEquals(/processing fee|convenience fee|platform fee/i.test(label.replace(/Not a card processing surcharge\./i, '')), false);
+  // No exclusion needed any more: the copy no longer contains the banned words
+  // even in a denial, so this can assert the raw string.
+  assertEquals(/processing fee|convenience fee|platform fee|surcharge/i.test(label), false);
+});
+
+// The two jobs the description has to keep doing, asserted separately from the
+// exact wording so a future copy edit can change the sentence without being
+// free to drop what makes it lawful: attribute the fee to enrops by name, and
+// separate it from the customer's card costs.
+Deno.test('fee line still attributes to enrops and separates it from card costs', () => {
+  // Asserted on the NAME AND DESCRIPTION TOGETHER, because that is what the
+  // family actually reads on the Stripe page — the two render as one block.
+  // Previously this checked the description alone, which forced the word
+  // "enrops" into a sentence sitting directly under a line titled "enrops
+  // service fee". Attribution is still mandatory; it just doesn't have to be
+  // said twice. If a future edit renames the line item, this still fails.
+  const pd = passThroughLineItem(27500, 'card', PASS)!.price_data.product_data;
+  const label = `${pd.name} ${pd.description}`;
+  assertEquals(/enrops/i.test(label), true, 'must name enrops as the charging party');
+  assertEquals(/not a bank charge|not a card|not a charge from/i.test(label), true,
+    'must distinguish the fee from the customer\'s card/bank costs');
 });
 
 Deno.test('fee that rounds to 0 produces no line item (tiny base)', () => {
