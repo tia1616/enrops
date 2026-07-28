@@ -731,7 +731,7 @@ export default function Finances() {
           <TabsNav tab={tab} onTab={setTab} hideInvoices={isLean} />
           {(tab === "activity" || (isLean && tab === "invoices")) && <ActivityTab org={org} />}
           {tab === "invoices" && !isLean && <InvoicesTab />}
-          {tab === "refunds" && <RefundsTab />}
+          {tab === "refunds" && <RefundsTab org={org} />}
         </>
       )}
     </PageShell>
@@ -1288,9 +1288,17 @@ function InvoicesTab() {
   );
 }
 
-// Read-only refund history. Refunds are issued from Rosters (row → Refund…);
-// this is the money-side record of what happened. RLS scopes rows to the org.
-function RefundsTab() {
+// Read-only refund history. Refunds are issued from Rosters (row → Refund);
+// this is the money-side record of what happened.
+//
+// SCOPED EXPLICITLY TO THIS ORG. It used to rely on RLS alone, which was wrong:
+// the refunds policy is `can_handle_money(organization_id) OR is_platform_admin()`,
+// so the moment an Enrops platform admin opened their own operator dashboard they
+// saw EVERY tenant's refunds sitting in their Finances page. Found by Jessica on
+// staging with 9 of another operator's refunds on screen. Platform-wide views
+// belong on a platform surface, never on an operator one — so this filters by
+// org.id and does not depend on the policy being narrow enough.
+function RefundsTab({ org }) {
   const [rows, setRows] = useState(null); // null = loading
   const [err, setErr] = useState("");
 
@@ -1300,6 +1308,7 @@ function RefundsTab() {
       const { data, error } = await supabase
         .from("refunds")
         .select("id, amount_cents, reason, status, cancelled_registration, created_at, succeeded_at, refunded_by_user_id, platform_fee_refunded_cents, registration:registrations(student:students(first_name, last_name))")
+        .eq("organization_id", org.id)
         .order("created_at", { ascending: false })
         .limit(200);
       if (!alive) return;
@@ -1341,7 +1350,7 @@ function RefundsTab() {
     <Card>
       <h2 style={{ margin: "0 0 4px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Refund history</h2>
       <p style={{ margin: "0 0 16px", color: MUTED, fontSize: 13 }}>
-        Issue a refund from <a href="/admin/rosters" style={{ color: PURPLE }}>Rosters</a> → a family's row → <strong>Refund…</strong>. Refunds you make directly in Stripe show up here too, marked <strong>Stripe dashboard</strong>.
+        Issue a refund from <a href="/admin/rosters" style={{ color: PURPLE }}>Rosters</a> → a family's row → <strong>Refund</strong>. Refunds you make directly in Stripe show up here too, marked <strong>Stripe dashboard</strong>.
       </p>
 
       {err && (

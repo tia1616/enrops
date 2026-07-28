@@ -669,7 +669,7 @@ function CamperEditableRow({ registration, contacts = [], customLabels = {}, isE
                 }}
                 title="Refund this family's payment (and optionally free their spot)"
               >
-                Refund…
+                Refund
               </button>
             )}
             {canManage && !hasPayment && (
