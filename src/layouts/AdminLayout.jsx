@@ -104,9 +104,10 @@ const NAV = [
 // Lean registration operators (instructor_pay_model === 'enrops_platform') run a
 // registration-only surface — no instructors, curriculum library, or comms yet.
 // Trim the sidebar to Home . Programs . Finances . Discounts . Settings and hide
-// the paid / curriculum surfaces. Locations (the Partners surface) moves under
-// Settings for lean ops — they set a venue inline in the program builder, so a
-// top-level manager is noise. Any legacy_own_platform tenant (J2S) keeps the
+// the paid / curriculum surfaces. Locations (the Partners surface) is a TAB
+// under Programs for lean ops — they pick a venue every time they build a class,
+// so it belongs beside the programs it serves and not in Settings, where it
+// briefly lived. Any legacy_own_platform tenant (J2S) keeps the
 // full nav — this returns the SAME array reference for them, so their path is
 // unchanged. Empirically safe: every enrops_platform tenant on prod has zero
 // instructors and zero programs, so nothing they use is being hidden.
@@ -126,7 +127,9 @@ function shapeNavForOrg(nav, org) {
                                      // ROUTE still works, so any org that
                                      // already has a second admin keeps it.
     "/admin/schedule",               // Instructors (paid upgrade)
-    "/admin/schools",                // Locations/Partners -> reachable via Settings
+    "/admin/schools",                // Locations/Partners -> now a tab under
+                                     // Programs (see the tabs block below), so
+                                     // it stays off the top-level sidebar.
     "/admin/family-comms/contacts",  // Comms (paid upgrade)
     "/admin/community",              // Community (coming soon)
   ]);
@@ -134,10 +137,20 @@ function shapeNavForOrg(nav, org) {
   for (const item of nav) {
     if (HIDE_TOP.has(item.to)) continue;
     if (item.to === "/admin/programs" && item.tabs) {
-      // Drop the curriculum "Offerings" library and the afterschool custody log.
+      // Drop the curriculum "Offerings" library and the afterschool custody log,
+      // then add the venue surface as a tab. Locations/Calendars used to sit
+      // under Settings for lean ops, which is where you put things you configure
+      // once -- but a registration operator picks a location every time they
+      // build a class, so it belongs beside the programs it serves, not in a
+      // settings drawer. Calendars stays an inner tab of that page (it has no
+      // route of its own; /admin/calendars just redirects to ?tab=calendars).
+      // Label mirrors the page's own reframing, same rule as the sidebar item.
       out.push({
         ...item,
-        tabs: item.tabs.filter((t) => t.to !== "/admin/curricula" && t.to !== "/admin/class-reports"),
+        tabs: [
+          ...item.tabs.filter((t) => t.to !== "/admin/curricula" && t.to !== "/admin/class-reports"),
+          { to: "/admin/schools", label: org?.venue_model === "own_venue" ? "Locations" : "Partners" },
+        ],
       });
       continue;
     }
@@ -152,12 +165,10 @@ function shapeNavForOrg(nav, org) {
       out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
       continue;
     }
-    if (item.to === "/admin/settings") {
-      // Locations lives under Settings for lean ops, so keep Settings lit when
-      // they're on the /admin/schools (or calendars) page reached from there.
-      out.push({ ...item, match: [...(item.match || [item.to]), "/admin/schools", "/admin/calendars"] });
-      continue;
-    }
+    // NOTE: Settings no longer claims /admin/schools in its `match` list. That
+    // existed only to keep Settings lit while the venue surface was reached
+    // from there; now it is a Programs tab, so Programs owns the highlight and
+    // two nav items lighting at once would be a lie about where you are.
     out.push(item);
   }
   return out;
