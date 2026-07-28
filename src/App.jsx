@@ -48,6 +48,7 @@ const Schedule = lazy(() => import('./pages/admin/Schedule.jsx'));
 const SchedulePrint = lazy(() => import('./pages/admin/SchedulePrint.jsx'));
 const ClassSchedule = lazy(() => import('./pages/admin/ClassSchedule.jsx'));
 const ExtractionTest = lazy(() => import('./pages/admin/dev/ExtractionTest.jsx'));
+const RefundWatch = lazy(() => import('./pages/admin/dev/RefundWatch.jsx'));
 const CurriculaList = lazy(() => import('./pages/admin/curricula/CurriculaList.jsx'));
 const CurriculumNew = lazy(() => import('./pages/admin/curricula/CurriculumNew.jsx'));
 const CurriculumExtracting = lazy(() => import('./pages/admin/curricula/CurriculumExtracting.jsx'));
@@ -260,6 +261,7 @@ export default function App() {
         <Route path="training" element={<TrainingSettings />} />
         <Route path="branding" element={<BrandLogoSettings />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />
+        <Route path="dev/refund-watch" element={<RefundWatch />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
