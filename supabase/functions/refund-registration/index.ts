@@ -22,20 +22,26 @@
 //   3. Walk newest-first, refunding from each until amount_cents is consumed.
 //   4. If we run out before consuming amount_cents, return 400 'amount_exceeds_eligible'.
 //
-// Stripe flags per refund call — these differ by organizations.stripe_charge_model
-// and have to be set explicitly, because Stripe's defaults are wrong for both:
+// Stripe flags per refund call — these have to be set explicitly, because
+// Stripe's defaults are wrong for both models:
 //
-//   DESTINATION org (J2S + every pre-existing org) — UNCHANGED by Phase 2:
-//     refund_application_fee: <dynamic>  // true when the provider bears Stripe's
-//       fee (stripe_fee_payer='tenant') so the provider is made whole; false for
-//       legacy own-platform orgs. See the refund-policy block below.
+//   DESTINATION org (J2S + every pre-existing org):
+//     refund_application_fee: false      // see below — always, on both models
 //     reverse_transfer: true             // pull money back from the connected account
 //     ...created on the PLATFORM (no Stripe-Account header).
 //
 //   DIRECT charge (Phase 2, controller-based accounts):
 //     created ON the connected account (Stripe-Account header).
-//     refund_application_fee: true       // always — the app fee is clean margin
+//     refund_application_fee: false      // see below — always, on both models
 //     reverse_transfer                   // OMITTED — no transfer exists to reverse
+//
+// refund_application_fee is FALSE on both models and the fee refund is issued
+// explicitly via applicationFees.createRefund, because Arielle's v4 section 2
+// prorates our fee to SESSIONS REMAINING and Stripe's boolean cannot express
+// that — it prorates to the charge. Stripe documents this exact alternative:
+// "provide a refund_application_fee value of false and refund the application
+// fee separately". The ApplicationFee is a platform object on both models, so
+// that second call is platform-scoped even for a direct charge.
 //
 // Which of the two applies is decided PER PAYMENT INTENT from the
 // stripe_charge_account_id recorded when that charge was made (null = platform),
@@ -44,11 +50,21 @@
 // on the platform forever; scoping by the current model would break every
 // historical refund.
 //
-// NOT changed here: the destination-org refund POLICY (whether refunding the
-// uplifted application fee makes Enrops eat Stripe's unrecoverable fee). That
-// is the open question _shared/refundFeeSplit.ts was written for, parked
-// pending Arielle. Phase 2 only makes direct-charge refunds possible at all —
-// without the changes above a direct org's refund would fail on reverse_transfer.
+// How much of our fee comes back, on both models:
+//   base      = the part of the application fee that is actually ours to give
+//               back (_shared/refundFeeSplit.ts — the whole fee on a direct
+//               charge, fee minus Stripe's real fee on a destination charge)
+//   x share   = this registration's share of the charge being refunded
+//   x % left  = sessions remaining / total sessions
+//               (_shared/refundFeeProration.ts — Arielle's v4 section 2)
+// Nothing here can reduce what the FAMILY gets back. v4 section 2: "Never
+// reduce it to cover Stripe's or Enrops' fees — card network rules prohibit
+// shorting the cardholder."
+//
+// This function is only ONE of the two entry points. An operator with a full
+// Stripe dashboard can refund there instead, and v4 section 3 requires that to
+// come out the same — stripe-webhook's charge.refunded handler reuses the same
+// two shared modules for exactly that reason.
 //
 // Idempotency: each refunds row gets a fresh ID; the Stripe call uses the
 // row ID as the idempotency key so re-running this fn for the same Stripe
@@ -59,6 +75,8 @@ import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 import { computeMarginRefund } from '../_shared/refundFeeSplit.ts';
+import { loadProration } from '../_shared/refundFeeProration.ts';
+import { readChargeFeeFacts } from '../_shared/chargeFeeFacts.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -240,8 +258,38 @@ serve(async (req: Request) => {
     // uplift, so there is nothing to hold back and nothing to refund separately
     // — they keep refund_application_fee:false exactly as before.
     const providerBearsStripeFee = orgFee?.stripe_fee_payer === 'tenant';
-    const refundApplicationFeeFor = (chargeAccountId: string | null): boolean =>
-      chargeAccountId ? true : false;
+
+    // ── v4 section 2: our fee comes back prorated to sessions REMAINING ────
+    // "Set Enrops' fee refund = application_fee x % remaining." Resolved once
+    // per call, from the registration's own schedule. loadProration never
+    // throws and falls back to 1 (refund our whole margin) when the schedule
+    // cannot be resolved, so a missing calendar can never make Enrops keep a
+    // fee it has not justified.
+    const proration = await loadProration(supabase, {
+      organization_id: reg.organization_id,
+      program_id: reg.program_id,
+      camp_session_id: reg.camp_session_id,
+    });
+    if (proration.source === 'unknown') {
+      console.warn(
+        `[refund] no schedule resolved for registration ${registrationId}; refunding the full margin (fraction 1)`,
+      );
+    }
+
+    // ── refund_application_fee is now ALWAYS false, on BOTH charge models ──
+    // Stripe's boolean cannot express v4's proration. Its own docs: "If the
+    // refund results in the entire charge being refunded, the entire
+    // application fee is refunded. Otherwise, a proportional amount of the
+    // application fee is refunded" - proportional to the CHARGE, not to
+    // sessions remaining. And on a destination charge it would also hand back
+    // the Stripe-fee uplift that Stripe never returns to us.
+    // So both models take the documented alternative: "provide a
+    // refund_application_fee value of false and refund the application fee
+    // separately" (docs.stripe.com/connect/direct-charges).
+    //
+    // CHANGED FOR DIRECT ORGS: this was true (whole fee, automatic). It is now
+    // false + an explicit prorated fee refund. Same money on a full pre-start
+    // refund; less of our fee returned once sessions have been delivered.
 
     // ── collect paid PIs for this registration ────────────────────────────
     // Pattern: installments table is the primary source. If no installments
@@ -372,6 +420,14 @@ serve(async (req: Request) => {
         eligible_cents: eligible,
         total_paid_cents: totalPaid,
         total_refunded_cents: totalRefunded,
+        // v4 section 2 / section 8: the drawer and the refund receipt both need
+        // to say WHY our fee refund is the size it is. DB-only, so preview stays
+        // a cheap call - the Stripe read that turns this into cents happens on
+        // the real refund.
+        sessions_total: proration.sessionDates.length || null,
+        sessions_remaining: proration.sessionDates.filter((d) => d >= proration.asOf).length || 0,
+        platform_fee_remaining_fraction: proration.fraction,
+        schedule_source: proration.source,
       });
     }
 
@@ -433,33 +489,28 @@ serve(async (req: Request) => {
       // from the Stripe-fee uplift.
       let marginRefundCents = 0;
       let applicationFeeId: string | null = null;
-      if (!slot.chargeAccountId && providerBearsStripeFee) {
+      // Both charge models now take this path. The only org shape that skips it
+      // is a legacy own-platform destination org (stripe_fee_payer != 'tenant'),
+      // whose application fee is internal bookkeeping between Enrops and itself
+      // — there is no uplift to hold back and no third party to make whole, so
+      // it keeps its pre-existing no-fee-refund behaviour. No org on staging or
+      // prod is in that shape today (all are 'tenant'), so this is a guard
+      // against a config regression, not a live branch.
+      const feeRefundApplies = slot.chargeAccountId !== null || providerBearsStripeFee;
+      if (feeRefundApplies) {
         try {
-          const pi = await stripe.paymentIntents.retrieve(slot.pi, {
-            expand: ['latest_charge.balance_transaction', 'latest_charge.application_fee'],
-          });
-          const charge = (pi as unknown as {
-            latest_charge?: {
-              amount?: number;
-              application_fee_amount?: number | null;
-              application_fee?: { id?: string; amount_refunded?: number } | string | null;
-              balance_transaction?: { fee?: number } | string | null;
-            } | null;
-          }).latest_charge ?? null;
-
-          const appFee = typeof charge?.application_fee === 'object' ? charge?.application_fee : null;
-          applicationFeeId = appFee?.id ?? (typeof charge?.application_fee === 'string' ? charge?.application_fee : null);
-          const bt = typeof charge?.balance_transaction === 'object' ? charge?.balance_transaction : null;
+          const facts = await readChargeFeeFacts(stripe, slot.pi, slot.chargeAccountId);
+          applicationFeeId = facts.applicationFeeId;
 
           marginRefundCents = computeMarginRefund({
-            applicationFeeCents: charge?.application_fee_amount ?? 0,
-            // Stripe's REAL fee on this charge, off the balance transaction —
-            // not estimateStripeFee, which is only ever an estimate made at
-            // charge time and is what the uplift was sized from.
-            stripeFeeCents: bt?.fee ?? 0,
-            chargeAmountCents: charge?.amount ?? 0,
+            applicationFeeCents: facts.applicationFeeCents,
+            // 0 on a direct charge: Stripe billed the OPERATOR, not us.
+            stripeFeeCents: facts.stripeFeeCents,
+            chargeAmountCents: facts.chargeAmountCents,
             refundAmountCents: refundThisPi,
-            alreadyRefundedFeeCents: appFee?.amount_refunded ?? 0,
+            alreadyRefundedFeeCents: facts.alreadyRefundedFeeCents,
+            // v4 section 2.
+            remainingFraction: proration.fraction,
           });
         } catch (feeErr) {
           // Refuse rather than guess: refunding the family without returning
@@ -481,12 +532,9 @@ serve(async (req: Request) => {
           {
             payment_intent: slot.pi,
             amount: refundThisPi,
-            // Make the provider whole on refunds when they bear Stripe's fee
-            // (see refundApplicationFee above). For provider-bears-fee orgs this
-            // refunds the (uplifted) application fee proportionally so the
-            // provider nets $0 on the refunded portion; Enrops absorbs the
-            // unrecoverable Stripe fee. Legacy own-platform orgs keep false.
-            refund_application_fee: refundApplicationFeeFor(slot.chargeAccountId),
+            // Always false on both models — the prorated fee refund is issued
+            // explicitly below. See the block above refundScopeFor.
+            refund_application_fee: false,
             // Destination charges only: pull the refunded share back from the
             // operator's connected account, or the refund comes out of the
             // platform balance alone. A DIRECT charge has no transfer to
@@ -505,9 +553,13 @@ serve(async (req: Request) => {
           { idempotencyKey: `refund_${refundRowId}`, ...refundScopeFor(slot.chargeAccountId) },
         );
 
-        // ── return the MARGIN half of the application fee ──────────────────
-        // Destination charges only. Separate call because refund_application_fee
-        // is all-or-nothing and we deliberately hold back the Stripe-fee half.
+        // ── return the unearned part of the application fee ────────────────
+        // BOTH charge models. Separate call because Stripe's
+        // refund_application_fee boolean is all-or-nothing and prorates to the
+        // CHARGE, not to sessions remaining — and on a destination charge it
+        // would also push back the Stripe-fee uplift Stripe never returns.
+        // Platform-scoped with NO Stripe-Account header even for a direct
+        // charge: the ApplicationFee belongs to the platform on both models.
         // Its own idempotency key, so a retry of this function cannot double-
         // refund the fee even though the charge refund above already succeeded.
         let marginRefundApplied = 0;

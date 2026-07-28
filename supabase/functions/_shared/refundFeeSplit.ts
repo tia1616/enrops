@@ -38,6 +38,21 @@ export interface MarginRefundInput {
   refundAmountCents: number;
   /** Application fee already refunded on earlier partial refunds, in cents. */
   alreadyRefundedFeeCents?: number;
+  /**
+   * Fraction of the program still undelivered, 0..1, from
+   * _shared/refundFeeProration.ts. Arielle's v4 section 2: "Set Enrops' fee
+   * refund = application_fee x % remaining" - 100% before the program starts,
+   * straight-line by sessions remaining mid-program, 0% once it has ended.
+   *
+   * Defaults to 1, which is the pre-proration behaviour: refund the whole
+   * recoverable margin. Every caller that cannot resolve a schedule leaves it
+   * at 1 rather than guessing, so an unknown calendar can never make Enrops
+   * KEEP a fee it has not justified.
+   *
+   * Applied ONLY to our fee. It can never reduce what the family gets back -
+   * card network rules prohibit shorting the cardholder (v4 section 2).
+   */
+  remainingFraction?: number;
 }
 
 /**
@@ -52,7 +67,14 @@ export function computeMarginRefund(input: MarginRefundInput): number {
     chargeAmountCents,
     refundAmountCents,
     alreadyRefundedFeeCents = 0,
+    remainingFraction = 1,
   } = input;
+
+  // Clamp rather than trust: a fraction outside 0..1 (or NaN from a bad date)
+  // must not turn into a negative refund or an over-refund.
+  const fraction = Number.isFinite(remainingFraction)
+    ? Math.min(1, Math.max(0, remainingFraction))
+    : 1;
 
   // Nothing to give back if no fee was taken, or the refund is empty/invalid.
   if (!(applicationFeeCents > 0)) return 0;
@@ -69,9 +91,16 @@ export function computeMarginRefund(input: MarginRefundInput): number {
   // Computing this proportionally would drift by a cent on odd amounts, and
   // "refund everything" must mean everything.
   const isFullRefund = refundAmountCents >= chargeAmountCents;
-  const wanted = isFullRefund
+  const marginForThisRefund = isFullRefund
     ? marginTotal
     : Math.round((marginTotal * refundAmountCents) / chargeAmountCents);
+
+  // v4 section 2: our fee comes back in proportion to the program NOT delivered.
+  // Composed with the share above, so a half refund of a half-delivered program
+  // returns a quarter of the margin. Both of v4's stated endpoints still hold
+  // exactly: a full refund before the first session returns 100%, and any refund
+  // after the last session returns 0%.
+  const wanted = Math.round(marginForThisRefund * fraction);
 
   // Never refund more margin than is left. Two ceilings apply: what remains of
   // the margin, and what remains of the application fee overall (Stripe rejects

@@ -1,3 +1,17 @@
+// stripe-webhook v21 — PATCH 14 (2026-07-28)
+// v21: charge.refunded — Arielle's v4 section 3. Catches refunds an operator
+//      issues in their OWN Stripe dashboard, which were previously invisible:
+//      the registration stayed 'paid' and Enrops kept a platform fee on a
+//      program the family no longer had. Records the refund, fires the
+//      session-prorated application-fee refund, advances payment_status, and
+//      logs the operator's reason for reporting only. See handleChargeRefunded.
+//
+//      CONFIG, NOT CODE (same shape as the v20 note below): charge.refunded
+//      must be added to BOTH webhook destinations — the platform one for
+//      destination orgs, and the Connected-accounts one for direct orgs, whose
+//      charges live on the connected account. Subscribing to only one silently
+//      covers only half the operators.
+//
 // stripe-webhook v20 — PATCH 13 (2026-07-27)
 // v20: Stripe direct charges (migration Phase 2).
 //      A direct charge is created ON the connected account, so ALL of its
@@ -66,6 +80,10 @@ import { runGateCheck } from '../_shared/gateCheck.ts';
 import { handleTransferReversed as sharedHandleTransferReversed } from '../_shared/handleTransferReversed.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 import { findAuthUserByEmail } from '../_shared/findAuthUserByEmail.ts';
+import { computeMarginRefund } from '../_shared/refundFeeSplit.ts';
+import { loadProration } from '../_shared/refundFeeProration.ts';
+import { readChargeFeeFacts } from '../_shared/chargeFeeFacts.ts';
+import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.ts';
 import {
   settlementForCheckoutCompleted,
   SETTLEMENT_ON_ASYNC_SUCCESS,
@@ -542,6 +560,9 @@ serve(async (req) => {
       await handleAccountUpdated(admin, event);
     } else if (event.type === 'account.application.deauthorized') {
       await handleAccountDeauthorized(admin, event);
+    } else if (event.type === 'charge.refunded') {
+      // Arielle's v4 section 3. See handleChargeRefunded.
+      await handleChargeRefunded(admin, event);
     } else if (event.type === 'transfer.reversed') {
       // Fires when a Stripe transfer to a connected account is reversed.
       // For Enrops-platform-routed instructor payouts (operator's stripeAccount
@@ -558,6 +579,318 @@ serve(async (req) => {
     return new Response(`Error: ${(err as Error).message}`, { status: 500 });
   }
 });
+
+// ── charge.refunded — Arielle's v4 section 3 ────────────────────────────────
+//
+// THE GAP THIS CLOSES. Operators on direct charges have a FULL Stripe dashboard
+// (controller.stripe_dashboard.type='full'), so they can refund a family without
+// ever opening Enrops. v4 calls this "Standard's biggest gap" and section 7 calls
+// it "the scenario most likely to be missed". Before this handler, such a refund
+// was completely invisible to us: the registration still read paid, the roster
+// still counted the child, and Enrops kept a platform fee on a program the family
+// no longer has. Stripe is explicit that the fee does NOT come back on its own —
+// "Application fees aren't automatically refunded when issuing a refund. Your
+// platform must explicitly refund the application fee."
+//
+// v4: "Treat Stripe's charge.refunded webhook as the source of truth, not a
+// button-click inside Enrops" and "automatically fire the proportional
+// application_fee refund from Section 2, regardless of whether the refund was
+// started in Enrops or directly in Stripe."
+//
+// SAME MATHS AS THE IN-APP PATH, deliberately: both call readChargeFeeFacts +
+// computeMarginRefund + loadProration. Two implementations would be two answers
+// to "how much of our fee comes back", and the whole point of section 3 is that
+// the answer does not depend on where the operator clicked.
+//
+// NO REVIEW STEP, BY DESIGN. v4: "Do not build a 'legit vs. not legit' review
+// screen anywhere — the formula in Section 2 is the only gate needed." The
+// operator's reason is recorded for reporting and never gates anything.
+//
+// IDEMPOTENT THREE WAYS, because Stripe retries and charge.refunded fires again
+// on every subsequent partial refund of the same charge:
+//   1. refunds (stripe_refund_id, registration_id) is UNIQUE (20260728a) — a
+//      refund already recorded is skipped, which also means refunds WE issued
+//      from refund-registration are never double-handled here.
+//   2. the application-fee refund carries a stable idempotency key derived from
+//      the Stripe refund id.
+//   3. computeMarginRefund is capped by the fee already refunded, read live off
+//      the ApplicationFee, so even a lost idempotency key cannot over-refund.
+//
+// SCOPE. event.account is set only for connected-account events, i.e. direct
+// charges. Destination charges (J2S and every pre-existing org) arrive
+// platform-scoped with event.account undefined, and their refunds are read and
+// recorded exactly the same way — the only difference is which account the
+// charge is read from, which readChargeFeeFacts handles.
+async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) {
+  const charge = event.data.object as Stripe.Charge;
+  // Connected-account event => the charge lives on that account (direct model).
+  const chargeAccountId = (event as unknown as { account?: string }).account ?? null;
+  const piId = typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id ?? null;
+
+  if (!piId) {
+    console.log('[charge.refunded] no payment_intent on the charge; nothing to map');
+    return;
+  }
+
+  // ── which registrations did this charge pay for? ──────────────────────────
+  // Installments first (the primary source, same order as refund-registration),
+  // falling back to single-pay registrations.
+  const { data: instRows } = await admin
+    .from('installments')
+    .select('registration_id, amount_cents')
+    .eq('stripe_payment_intent_id', piId);
+  let slices = ((instRows ?? []) as Array<{ registration_id: string; amount_cents: number }>).map((r) => ({
+    registrationId: r.registration_id,
+    baseCents: r.amount_cents || 0,
+  }));
+
+  if (slices.length === 0) {
+    const { data: regRows } = await admin
+      .from('registrations')
+      .select('id, amount_cents')
+      .eq('stripe_payment_intent_id', piId);
+    slices = ((regRows ?? []) as Array<{ id: string; amount_cents: number | null }>).map((r) => ({
+      registrationId: r.id,
+      baseCents: r.amount_cents || 0,
+    }));
+  }
+
+  if (slices.length === 0) {
+    // A charge from outside our registration flow (or one we never recorded).
+    // Not an error — 200 and move on.
+    console.log(`[charge.refunded] no registrations found for ${piId}; ignoring`);
+    return;
+  }
+
+  // ── which refunds on this charge have we not recorded yet? ────────────────
+  // charge.refunds on the event payload is a truncated list. Re-list from the
+  // API so a charge with many partial refunds cannot silently drop the oldest.
+  let refundObjects: Stripe.Refund[] = [];
+  try {
+    const listed = await stripe.refunds.list(
+      { charge: charge.id, limit: 100 },
+      chargeAccountId ? { stripeAccount: chargeAccountId } : undefined,
+    );
+    refundObjects = listed.data ?? [];
+  } catch (listErr) {
+    console.error('[charge.refunded] could not list refunds, falling back to the event payload:', listErr);
+    refundObjects = (charge.refunds?.data ?? []) as Stripe.Refund[];
+  }
+  const succeeded = refundObjects.filter((r) => r.status === 'succeeded' || r.status === 'pending');
+  if (succeeded.length === 0) return;
+
+  const { data: knownRows } = await admin
+    .from('refunds')
+    .select('stripe_refund_id, registration_id')
+    .in('stripe_refund_id', succeeded.map((r) => r.id));
+  const known = new Set(
+    ((knownRows ?? []) as Array<{ stripe_refund_id: string; registration_id: string }>)
+      .map((r) => `${r.stripe_refund_id}:${r.registration_id}`),
+  );
+
+  for (const refund of succeeded) {
+    const allocation = allocateRefundAcrossRegistrations(refund.amount ?? 0, slices);
+    const unrecorded = allocation.filter((a) => !known.has(`${refund.id}:${a.registrationId}`));
+    if (unrecorded.length === 0) continue; // already handled — Enrops-initiated, or a replay
+
+    console.log(
+      `[charge.refunded] recording ${refund.id} (${refund.amount}c) against ${unrecorded.length} registration(s)`,
+    );
+
+    // The operator's stated reason, for reporting only. v4: "Log the operator's
+    // stated refund reason for reporting only, when available. It should never
+    // block or delay processing."
+    const statedReason = [refund.reason, (refund.metadata ?? {}).reason]
+      .filter(Boolean).join(' / ').slice(0, 500) || null;
+
+    for (const slice of unrecorded) {
+      await recordExternalRefund(admin, {
+        registrationId: slice.registrationId,
+        amountCents: slice.amountCents,
+        paymentIntentId: piId,
+        stripeRefundId: refund.id,
+        chargeAccountId,
+        reason: statedReason,
+      });
+    }
+  }
+}
+
+/**
+ * Record ONE registration's share of a refund that was issued outside Enrops,
+ * and return the unearned part of our fee.
+ *
+ * Fail-soft per registration on purpose: with a multi-child cart, one child's
+ * bookkeeping failing must not stop the others being recorded. Anything that
+ * goes wrong is logged loudly, because it is money.
+ */
+async function recordExternalRefund(
+  admin: SupabaseClient,
+  input: {
+    registrationId: string;
+    amountCents: number;
+    paymentIntentId: string;
+    stripeRefundId: string;
+    chargeAccountId: string | null;
+    reason: string | null;
+  },
+) {
+  const { data: regData } = await admin
+    .from('registrations')
+    .select('id, organization_id, program_id, camp_session_id, parent_id, student_id, payment_status')
+    .eq('id', input.registrationId)
+    .maybeSingle();
+  const reg = regData as {
+    id: string; organization_id: string; program_id: string | null; camp_session_id: string | null;
+    parent_id: string | null; student_id: string | null; payment_status: string | null;
+  } | null;
+  if (!reg) {
+    console.error(`[charge.refunded] registration ${input.registrationId} vanished; skipping`);
+    return;
+  }
+
+  // Insert first, so the UNIQUE (stripe_refund_id, registration_id) is what
+  // decides whether this is a replay — not a read we did earlier that could
+  // have raced another delivery of the same event.
+  const { data: rowData, error: insErr } = await admin
+    .from('refunds')
+    .insert({
+      registration_id: reg.id,
+      organization_id: reg.organization_id,
+      stripe_payment_intent_id: input.paymentIntentId,
+      stripe_refund_id: input.stripeRefundId,
+      amount_cents: input.amountCents,
+      reason: input.reason,
+      // NULL = nobody in Enrops did this; it came from the operator's own
+      // Stripe dashboard. That is the flag reporting uses to tell the two
+      // origins apart.
+      refunded_by_user_id: null,
+      status: 'succeeded',
+      succeeded_at: new Date().toISOString(),
+    })
+    .select('id')
+    .single();
+
+  if (insErr) {
+    // 23505 = we already recorded this (registration, refund). Expected on any
+    // replay; not an error.
+    if ((insErr as { code?: string }).code === '23505') return;
+    console.error('[charge.refunded] failed to record the refund row:', insErr);
+    return;
+  }
+  const refundRowId = (rowData as { id: string }).id;
+
+  // ── fire the prorated application-fee refund (v4 section 2 + 3) ───────────
+  let feeRefunded = 0;
+  try {
+    const proration = await loadProration(admin, {
+      organization_id: reg.organization_id,
+      program_id: reg.program_id,
+      camp_session_id: reg.camp_session_id,
+    });
+    const facts = await readChargeFeeFacts(stripe, input.paymentIntentId, input.chargeAccountId);
+
+    // Legacy own-platform destination orgs (stripe_fee_payer != 'tenant') carry
+    // no uplift and no third party to make whole, so they get no fee refund —
+    // same guard as refund-registration, so the two paths cannot diverge.
+    const { data: orgRow } = await admin
+      .from('organizations')
+      .select('stripe_fee_payer')
+      .eq('id', reg.organization_id)
+      .maybeSingle();
+    const feeRefundApplies =
+      input.chargeAccountId !== null || (orgRow as { stripe_fee_payer?: string } | null)?.stripe_fee_payer === 'tenant';
+
+    const owed = feeRefundApplies
+      ? computeMarginRefund({
+          applicationFeeCents: facts.applicationFeeCents,
+          stripeFeeCents: facts.stripeFeeCents,
+          chargeAmountCents: facts.chargeAmountCents,
+          refundAmountCents: input.amountCents,
+          alreadyRefundedFeeCents: facts.alreadyRefundedFeeCents,
+          remainingFraction: proration.fraction,
+        })
+      : 0;
+
+    if (owed > 0 && facts.applicationFeeId) {
+      // Platform-scoped even for a direct charge: the ApplicationFee belongs to
+      // the platform on both charge models. Keyed off the Stripe refund id AND
+      // the registration, so a multi-child charge issues one fee refund per
+      // child and a replay issues none.
+      const feeRefund = await stripe.applicationFees.createRefund(
+        facts.applicationFeeId,
+        { amount: owed },
+        { idempotencyKey: `appfee_ext_${input.stripeRefundId}_${reg.id}` },
+      );
+      feeRefunded = feeRefund.amount ?? owed;
+    }
+
+    await admin.from('refunds')
+      .update({ platform_fee_refunded_cents: feeRefunded })
+      .eq('id', refundRowId);
+  } catch (feeErr) {
+    // The family already has their money — Stripe did that before telling us.
+    // What may not have happened is returning our fee. Never swallow it: this
+    // is money owed to the operator and it is invisible unless we say so.
+    const m = feeErr as { raw?: { message?: string }; message?: string };
+    const msg = m.raw?.message ?? m.message ?? 'unknown';
+    console.error(
+      `[charge.refunded] recorded ${input.stripeRefundId} but the platform-fee refund FAILED for registration ${reg.id}: ${msg}`,
+    );
+    await admin.from('refunds')
+      .update({ failure_reason: `refund recorded from Stripe, but returning the platform fee failed: ${msg}` })
+      .eq('id', refundRowId);
+  }
+
+  // ── advance payment_status, same rule as refund-registration ──────────────
+  try {
+    const { data: paidRows } = await admin
+      .from('refunds')
+      .select('amount_cents')
+      .eq('registration_id', reg.id)
+      .eq('status', 'succeeded');
+    const totalRefunded = ((paidRows ?? []) as Array<{ amount_cents: number }>)
+      .reduce((s, r) => s + (r.amount_cents || 0), 0);
+
+    const { data: instPaid } = await admin
+      .from('installments')
+      .select('amount_cents')
+      .eq('registration_id', reg.id)
+      .eq('status', 'paid');
+    const instTotal = ((instPaid ?? []) as Array<{ amount_cents: number }>)
+      .reduce((s, r) => s + (r.amount_cents || 0), 0);
+    const { data: regAmt } = await admin
+      .from('registrations').select('amount_cents').eq('id', reg.id).maybeSingle();
+    const totalPaid = instTotal > 0 ? instTotal : ((regAmt as { amount_cents?: number } | null)?.amount_cents ?? 0);
+
+    const newStatus = totalPaid > 0 && totalRefunded >= totalPaid ? 'refunded'
+      : totalRefunded > 0 ? 'partial'
+      : null;
+    if (newStatus && newStatus !== reg.payment_status) {
+      await admin.from('registrations').update({ payment_status: newStatus }).eq('id', reg.id);
+    }
+  } catch (statusErr) {
+    console.error('[charge.refunded] payment_status update failed (non-fatal):', statusErr);
+  }
+
+  // Same churn signal the in-app path logs, so reporting does not depend on
+  // where the refund was started.
+  await logEnrollmentEvent(admin, {
+    organizationId: reg.organization_id,
+    parentId: reg.parent_id,
+    studentId: reg.student_id,
+    programId: reg.program_id,
+    campSessionId: reg.camp_session_id,
+    registrationId: reg.id,
+    actionType: ENROLLMENT_ACTIONS.REFUNDED,
+    metadata: {
+      amount_refunded_cents: input.amountCents,
+      platform_fee_refunded_cents: feeRefunded,
+      origin: 'stripe_dashboard',
+    },
+    dedupeKey: `refunded:${input.stripeRefundId}:${reg.id}`,
+  });
+}
 
 async function autoCreateParentAccount(
   admin: SupabaseClient,

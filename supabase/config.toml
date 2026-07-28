@@ -8,6 +8,12 @@ project_id = "enrops"
 [functions.stripe-webhook]
 verify_jwt = false
 
+# TEMPORARY, STAGING ONLY — delete at close-out along with the function and the
+# DIAG_TOKEN secret. Carries its own bearer token instead of a JWT, and refuses
+# to run without DIAG_TOKEN (unset on prod) or against a live Stripe key.
+[functions.stripe-diag]
+verify_jwt = false
+
 [functions.org-fee-config]
 verify_jwt = false
 

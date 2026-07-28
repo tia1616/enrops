@@ -31,6 +31,74 @@ Deno.test('half refund returns half the margin', () => {
   assertEquals(got, 150);
 });
 
+// ── v4 section 2: proration by sessions remaining ─────────────────────────
+
+// The direct-charge shape: no uplift, so the whole application fee is margin
+// and Stripe's fee came out of the OPERATOR's balance, never ours.
+const DIRECT_60 = {
+  applicationFeeCents: 199,
+  stripeFeeCents: 0,
+  chargeAmountCents: 6199,
+};
+
+Deno.test('v4: full refund before the program starts returns the whole margin', () => {
+  const got = computeMarginRefund({ ...DIRECT_60, refundAmountCents: 6199, remainingFraction: 1 });
+  assertEquals(got, 199);
+});
+
+Deno.test('v4: full refund after the program ends returns nothing', () => {
+  const got = computeMarginRefund({ ...DIRECT_60, refundAmountCents: 6199, remainingFraction: 0 });
+  assertEquals(got, 0);
+});
+
+Deno.test('v4: full refund at the halfway point returns half the margin', () => {
+  const got = computeMarginRefund({ ...DIRECT_60, refundAmountCents: 6199, remainingFraction: 0.5 });
+  assertEquals(got, 100); // 199 * 0.5 = 99.5, rounded
+});
+
+Deno.test('proration composes with the destination margin split', () => {
+  // $100 class: margin 300 of a 629 application fee. 4 of 8 sessions left.
+  const got = computeMarginRefund({ ...CLASS_100, refundAmountCents: 10300, remainingFraction: 0.5 });
+  assertEquals(got, 150);
+  // Never the whole fee, and never the Stripe half, at any fraction.
+  assertEquals(got < CLASS_100.applicationFeeCents - CLASS_100.stripeFeeCents + 1, true);
+});
+
+Deno.test('a partial refund of a part-delivered program compounds both shares', () => {
+  // Half the charge refunded, three quarters of the program left.
+  const got = computeMarginRefund({ ...CLASS_100, refundAmountCents: 5150, remainingFraction: 0.75 });
+  assertEquals(got, 113); // 300 * 0.5 = 150, * 0.75 = 112.5, rounded
+});
+
+// POLICY, LOCKED. An omitted fraction must behave exactly as before proration
+// existed. Every caller that cannot resolve a schedule leaves it unset, and
+// that has to mean "refund our whole margin", not "refund nothing".
+Deno.test('POLICY: an omitted remainingFraction refunds the full margin', () => {
+  const withOut = computeMarginRefund({ ...CLASS_100, refundAmountCents: 10300 });
+  const withOne = computeMarginRefund({ ...CLASS_100, refundAmountCents: 10300, remainingFraction: 1 });
+  assertEquals(withOut, 300);
+  assertEquals(withOut, withOne);
+});
+
+Deno.test('a nonsense fraction is clamped, never trusted', () => {
+  const high = computeMarginRefund({ ...CLASS_100, refundAmountCents: 10300, remainingFraction: 4 });
+  const low = computeMarginRefund({ ...CLASS_100, refundAmountCents: 10300, remainingFraction: -2 });
+  const nan = computeMarginRefund({ ...CLASS_100, refundAmountCents: 10300, remainingFraction: NaN });
+  assertEquals(high, 300); // clamped to 1, never more than the margin
+  assertEquals(low, 0);
+  assertEquals(nan, 300); // unparseable -> treated as "unknown" -> full margin
+});
+
+Deno.test('proration still respects the already-refunded ceiling', () => {
+  const got = computeMarginRefund({
+    ...CLASS_100,
+    refundAmountCents: 10300,
+    remainingFraction: 1,
+    alreadyRefundedFeeCents: 250,
+  });
+  assertEquals(got, 50); // only 50 of the 300 margin is left
+});
+
 Deno.test('partial refunds across several calls never exceed the margin', () => {
   let refunded = 0;
   for (let i = 0; i < 4; i++) {
