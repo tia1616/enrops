@@ -80,7 +80,15 @@ export function passThroughLineItemForAmount(feeCents: number): StripeLineItem |
         // legal work in words a parent reads once. Keep the two jobs if this is
         // ever edited again: say what the money buys, and separate it from both
         // the provider and the card networks.
-        description: "Covers online registration and secure payments. This is enrops's fee, not a bank charge.",
+        //
+        // Shortened 2026-07-28 (Jessica: "need to simplify that copy"). Two
+        // changes. It no longer repeats "enrops's fee" — the line item is
+        // already titled "enrops service fee", and the comment above warns
+        // against exactly that repetition. And it drops "and secure payments":
+        // Stripe's processing fee is separate and comes out of the OPERATOR's
+        // side, so this fee does not buy the family payment processing and
+        // saying so oversold it.
+        description: "Covers your online registration. Not a bank charge.",
       },
       unit_amount: fee,
     },
