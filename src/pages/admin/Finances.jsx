@@ -731,7 +731,14 @@ export default function Finances() {
           <TabsNav tab={tab} onTab={setTab} hideInvoices={isLean} />
           {(tab === "activity" || (isLean && tab === "invoices")) && <ActivityTab org={org} />}
           {tab === "invoices" && !isLean && <InvoicesTab />}
-          {tab === "refunds" && <RefundsTab org={org} />}
+          {tab === "refunds" && (
+            <>
+              <RefundsTab org={org} />
+              {/* v4 section 5: disputes live next to refunds because they are the
+                  same question for an operator - money going back out. */}
+              <DisputesPanel org={org} />
+            </>
+          )}
         </>
       )}
     </PageShell>
@@ -1284,6 +1291,112 @@ function InvoicesTab() {
           Coming next — Stripe Invoicing with ACH support.
         </div>
       </div>
+    </Card>
+  );
+}
+
+// Read-only dispute mirror (v4 section 5). Enrops never responds to or decides
+// a dispute; Stripe does. This exists so an operator is not the last to know
+// because they were not watching a second dashboard.
+//
+// It states WHO BEARS IT rather than assuming. On a direct charge Stripe debits
+// the operator, which is what the checklist assumes throughout. On a destination
+// charge Stripe debits the PLATFORM, so Enrops carries J2S's disputes for as
+// long as J2S stays on destination charges, which is permanently. Telling a
+// legacy operator "this came out of your balance" would be false.
+function DisputesPanel({ org }) {
+  const [rows, setRows] = useState(null); // null = loading
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("disputes")
+        .select("id, amount_cents, reason, status, borne_by, opened_at, evidence_due_at, registration:registrations(student:students(first_name, last_name))")
+        .eq("organization_id", org.id)
+        .order("opened_at", { ascending: false })
+        .limit(100);
+      if (!alive) return;
+      if (error) {
+        console.error("[DisputesPanel] load failed", error);
+        setErr("Couldn't load disputes. Refresh to try again.");
+        setRows([]);
+        return;
+      }
+      setRows(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [org.id]);
+
+  // Stripe's status vocabulary in plain English. Unknown values fall through
+  // rather than being swallowed, so a new Stripe status is visible not hidden.
+  const STATUS = {
+    warning_needs_response: "Early warning — response needed",
+    warning_under_review: "Early warning — under review",
+    warning_closed: "Early warning — closed",
+    needs_response: "Response needed",
+    under_review: "Under review with the bank",
+    won: "Resolved in your favour",
+    lost: "Lost",
+    charge_refunded: "Refunded instead",
+  };
+  const URGENT = new Set(["needs_response", "warning_needs_response"]);
+
+  const fmtWhen = (iso) =>
+    iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+
+  if (rows !== null && rows.length === 0 && !err) {
+    return (
+      <Card>
+        <h2 style={{ margin: "0 0 4px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Disputes</h2>
+        <p style={{ margin: 0, color: MUTED, fontSize: 13 }}>
+          No disputes. If a family ever challenges a charge with their bank, it will appear here so you don't
+          have to watch your Stripe dashboard for it.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <h2 style={{ margin: "0 0 4px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Disputes</h2>
+      <p style={{ margin: "0 0 16px", color: MUTED, fontSize: 13 }}>
+        When a family challenges a charge with their bank. You respond in Stripe, not here — this is so you
+        know about it.
+      </p>
+
+      {err && (
+        <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 12 }}>{err}</div>
+      )}
+      {rows === null && <div style={{ color: MUTED, fontSize: 13, padding: "8px 0" }}>Loading…</div>}
+
+      {rows !== null && rows.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {rows.map((d) => {
+            const s = d.registration?.student;
+            const who = s ? `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() : "";
+            const urgent = URGENT.has(d.status);
+            return (
+              <div key={d.id} style={{ border: `1px solid ${urgent ? RED : RULE}`, borderRadius: 6, padding: "10px 12px", fontSize: 13 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+                  <span style={{ fontWeight: 600, color: INK }}>{who || "A family"}</span>
+                  <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{fmtCents(d.amount_cents)}</span>
+                </div>
+                <div style={{ color: urgent ? RED : MUTED, fontSize: 12, marginTop: 2, fontWeight: urgent ? 700 : 400 }}>
+                  {STATUS[d.status] ?? d.status}
+                  {d.evidence_due_at && urgent && ` · respond by ${fmtWhen(d.evidence_due_at)}`}
+                </div>
+                <div style={{ color: MUTED, fontSize: 11.5, marginTop: 2 }}>
+                  Opened {fmtWhen(d.opened_at)}
+                  {d.borne_by === "operator" && " · comes out of your Stripe balance"}
+                  {d.borne_by === "platform" && " · enrops covers this one"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </Card>
   );
 }

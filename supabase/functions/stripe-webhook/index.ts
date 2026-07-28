@@ -566,6 +566,16 @@ serve(async (req) => {
     } else if (event.type === 'charge.refunded') {
       // Arielle's v4 section 3. See handleChargeRefunded.
       await handleChargeRefunded(admin, event);
+    } else if (
+      event.type === 'charge.dispute.created' ||
+      event.type === 'charge.dispute.updated' ||
+      event.type === 'charge.dispute.closed' ||
+      event.type === 'charge.dispute.funds_withdrawn' ||
+      event.type === 'charge.dispute.funds_reinstated'
+    ) {
+      // v4 section 5: mirror disputes so an operator does not have to watch a
+      // second dashboard. READ-ONLY - we never respond to or decide a dispute.
+      await handleDispute(admin, event);
     } else if (event.type === 'transfer.reversed') {
       // Fires when a Stripe transfer to a connected account is reversed.
       // For Enrops-platform-routed instructor payouts (operator's stripeAccount
@@ -1224,6 +1234,103 @@ async function recordExternalRefund(
     },
     dedupeKey: `refunded:${input.stripeRefundId}:${reg.id}`,
   });
+}
+
+// ── charge.dispute.* — Arielle's v4 section 5 ──────────────────────────────
+//
+// "Optionally surface dispute status inside the Enrops dashboard (read-only)
+// so operators don't have to check two places."
+//
+// STRICTLY A MIRROR. Enrops never responds to a dispute, never uploads
+// evidence and never decides one. Stripe (and, on a direct charge, the
+// operator's own dashboard) remains the place that happens. All this does is
+// stop an operator finding out late because they were not watching a second
+// dashboard.
+//
+// WHOSE MONEY: recorded per dispute rather than assumed. On a DIRECT charge
+// Stripe debits the operator, which is what section 5 assumes throughout. On a
+// DESTINATION charge Stripe debits the PLATFORM "with or without on_behalf_of",
+// so Enrops carries J2S's disputes permanently. Storing borne_by means the UI
+// can tell the truth instead of repeating the checklist's assumption.
+async function handleDispute(admin: SupabaseClient, event: Stripe.Event) {
+  const dispute = event.data.object as Stripe.Dispute;
+  const chargeAccountId = (event as unknown as { account?: string }).account ?? null;
+  const chargeId = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id ?? null;
+  const piId = typeof dispute.payment_intent === 'string'
+    ? dispute.payment_intent
+    : dispute.payment_intent?.id ?? null;
+
+  // Find the org via the charge we already recorded. A dispute we cannot map to
+  // a registration is not an error worth failing the webhook over, but it IS
+  // worth logging: it means money is being clawed back on a charge we have no
+  // record of.
+  let organizationId: string | null = null;
+  let registrationId: string | null = null;
+  if (piId) {
+    const { data: instRow } = await admin
+      .from('installments').select('organization_id, registration_id')
+      .eq('stripe_payment_intent_id', piId).limit(1).maybeSingle();
+    const inst = instRow as { organization_id: string; registration_id: string } | null;
+    if (inst) {
+      organizationId = inst.organization_id;
+      registrationId = inst.registration_id;
+    } else {
+      const { data: regRow } = await admin
+        .from('registrations').select('id, organization_id')
+        .eq('stripe_payment_intent_id', piId).limit(1).maybeSingle();
+      const reg = regRow as { id: string; organization_id: string } | null;
+      if (reg) {
+        organizationId = reg.organization_id;
+        registrationId = reg.id;
+      }
+    }
+  }
+  // Fall back to the connected account when the charge predates our records.
+  if (!organizationId && chargeAccountId) {
+    const { data: orgRow } = await admin
+      .from('organizations').select('id').eq('stripe_account_id', chargeAccountId).maybeSingle();
+    organizationId = (orgRow as { id: string } | null)?.id ?? null;
+  }
+  if (!organizationId) {
+    console.error(
+      `[dispute] ${dispute.id} could not be mapped to an org (pi=${piId}, acct=${chargeAccountId}); not recording`,
+    );
+    return;
+  }
+
+  const row = {
+    organization_id: organizationId,
+    stripe_dispute_id: dispute.id,
+    stripe_charge_id: chargeId,
+    stripe_payment_intent_id: piId,
+    stripe_charge_account_id: chargeAccountId,
+    registration_id: registrationId,
+    amount_cents: dispute.amount ?? 0,
+    currency: dispute.currency ?? 'usd',
+    reason: dispute.reason ?? null,
+    status: dispute.status,
+    // Direct = the operator's balance. Platform-scoped = ours.
+    borne_by: chargeAccountId ? 'operator' : 'platform',
+    evidence_due_at: dispute.evidence_details?.due_by
+      ? new Date(dispute.evidence_details.due_by * 1000).toISOString()
+      : null,
+    opened_at: dispute.created ? new Date(dispute.created * 1000).toISOString() : null,
+    closed_at: (dispute.status === 'won' || dispute.status === 'lost')
+      ? new Date().toISOString()
+      : null,
+    updated_at: new Date().toISOString(),
+  };
+
+  // Upsert on the dispute id: Stripe sends several events for one dispute as it
+  // moves through its lifecycle, and each should update the same row rather
+  // than stack duplicates. onConflict targets the UNIQUE(stripe_dispute_id)
+  // index; the table has no UPDATE policy but this runs as the service role.
+  const { error } = await admin.from('disputes').upsert(row, { onConflict: 'stripe_dispute_id' });
+  if (error) {
+    console.error('[dispute] could not record:', error);
+    return;
+  }
+  console.log(`[dispute] ${dispute.id} ${dispute.status} (${row.borne_by} bears it) for org ${organizationId}`);
 }
 
 async function autoCreateParentAccount(
