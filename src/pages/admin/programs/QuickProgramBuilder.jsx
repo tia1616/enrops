@@ -19,7 +19,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
-import PlacesAutocomplete from "../../../components/PlacesAutocomplete.jsx";
+import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete.jsx";
 import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
 import { renderWaiverText } from "../../../lib/waiverText.js";
 
@@ -1012,12 +1012,11 @@ export default function QuickProgramBuilder() {
                   autoFocus
                 />
               )}
-              {/* Three honest states, never a box that silently does nothing:
-                  lookup working, lookup unavailable, lookup not configured. */}
-              <div style={{ fontSize: 12, color: lookupDown ? "#8a6d1f" : MUTED, marginBottom: 8 }}>
-                {!placesEnabled || lookupDown
-                  ? "Address lookup isn't available right now — type the name and address in yourself."
-                  : "Start typing — we'll find the place and fill in the address for you. Or just type the name."}
+              {/* Never a box that silently does nothing: say whether the lookup
+                  is working. Copy lives in PlacesAutocomplete so all four
+                  surfaces say the same thing. */}
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
+                <PlacesLookupHint enabled={placesEnabled} down={lookupDown} />
               </div>
               <input
                 style={inputStyle}

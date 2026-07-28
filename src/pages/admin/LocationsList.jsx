@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
-import PlacesAutocomplete from "../../components/PlacesAutocomplete";
+import PlacesAutocomplete, { PlacesLookupHint } from "../../components/PlacesAutocomplete";
 import FindMissingAddressesModal from "./FindMissingAddressesModal";
 
 const PURPLE = "#1C004F";
@@ -566,6 +566,9 @@ function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
 
 function EditCard({ title, draft, bind, applyPlace, partners, districts, error, saving, onSave, onCancel, isNew, isLean = false, inDrawer }) {
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+  // Whether the Google lookup actually started. Without this the field degrades
+  // to a plain box on failure and says nothing, which reads as broken.
+  const [lookupDown, setLookupDown] = useState(false);
   return (
     <div style={{
       background: "#fff",
@@ -591,9 +594,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
 
       <Field
         label="Location name *"
-        hint={placesEnabled
-          ? "Start typing — we'll find the place and fill in the address for you. Or just type the name."
-          : "The human-readable label that shows on the calendar and in emails."}
+        hint={<PlacesLookupHint enabled={placesEnabled} down={lookupDown} />}
         instructorFacing
       >
         {placesEnabled ? (
@@ -601,6 +602,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
             value={draft.name ?? ""}
             onChange={(v) => bind("name").onChange({ target: { value: v } })}
             onSelect={applyPlace}
+            onLookupUnavailable={setLookupDown}
             placeholder="e.g. Ainsworth Elementary, Portland"
             style={inputStyle}
           />

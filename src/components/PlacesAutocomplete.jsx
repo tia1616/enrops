@@ -42,6 +42,15 @@ function ensurePacCss() {
   cssInjected = true;
 }
 
+// How long we wait for Google before treating the load as failed. The failure
+// this closes: the loader only settles on script `load` or `error`. A request
+// that HANGS (captive portal, a proxy that black-holes maps.googleapis.com, a
+// dead tunnel) fires neither, so the promise never settles, neither .then nor
+// .catch runs, and the field sits there promising "we'll find the place"
+// forever while doing nothing -- the same looks-dead failure this component was
+// fixed for, just a slower door.
+const LOOKUP_TIMEOUT_MS = 8000;
+
 let loaderPromise = null;
 export function loadGoogleMaps(apiKey) {
   if (loaderPromise) return loaderPromise;
@@ -49,7 +58,21 @@ export function loadGoogleMaps(apiKey) {
     loaderPromise = Promise.resolve(window.google);
     return loaderPromise;
   }
-  loaderPromise = new Promise((resolve, reject) => {
+  loaderPromise = new Promise((rawResolve, rawReject) => {
+    // Settle guard + timeout. Everything below settles through these two so a
+    // request that HANGS (captive portal, a proxy that black-holes
+    // maps.googleapis.com) still ends -- script.onload/onerror never fire in
+    // that case, so without this the promise never settles and every consumer
+    // waits forever: the typeahead keeps promising "we'll find the place", and
+    // FindMissingAddressesModal sits on its elapsed counter with no end.
+    let settled = false;
+    let timer = setTimeout(() => {
+      timer = null;
+      if (!settled) { settled = true; rawReject(new Error('gmaps load timed out')); }
+    }, LOOKUP_TIMEOUT_MS);
+    const clearTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    const resolve = (v) => { if (settled) return; settled = true; clearTimer(); rawResolve(v); };
+    const reject = (e) => { if (settled) return; settled = true; clearTimer(); rawReject(e); };
     if (typeof document === 'undefined') return reject(new Error('no document'));
     // Helper: wait for the places library to actually be ready. With
     // loading=async (Google's new recommended pattern), `script.onload`
@@ -93,7 +116,45 @@ export function loadGoogleMaps(apiKey) {
     script.onerror = () => reject(new Error('gmaps load failed'));
     document.head.appendChild(script);
   });
+  // A failed load used to be cached for the life of the page: loaderPromise
+  // stayed a rejected promise, so every later mount and every reopen of the
+  // bulk-address modal failed instantly even after the network came back, with
+  // no way short of a reload. Drop the cache on failure so the next attempt
+  // genuinely retries.
+  loaderPromise.catch(() => {
+    loaderPromise = null;
+    // And drop the dead <script> with it. A tag that already fired `error` (or
+    // hung) will never fire either event again, so leaving it in the DOM sends
+    // the retry down the `existing` branch to wait on a corpse -- it would burn
+    // the full timeout and fail every time, making the retry cosmetic. If the
+    // script did load and the failure came later, window.google is already set
+    // and the early-return above short-circuits before we ever look for a tag.
+    if (typeof document !== 'undefined') {
+      document.querySelector('script[data-enrops-gmaps]')?.remove();
+    }
+  });
   return loaderPromise;
+}
+
+// ONE definition of what we say about the lookup, imported by all four
+// surfaces. They had already drifted -- VenueEditor said "the school or venue"
+// while LocationsList and QuickProgramBuilder said "the place" -- which is how
+// four screens end up describing the same feature four ways.
+export const PLACES_HINT_READY =
+  "Start typing — we'll find the place and fill in the address for you. Or just type the name.";
+export const PLACES_HINT_UNAVAILABLE =
+  "Address lookup isn't available right now — type the name and address in yourself.";
+
+// Both branches are stated for the state that selects them: `unavailable` is
+// true only when there is no key or Google actually refused/timed out, and in
+// that state the field genuinely is a plain text box the operator must fill in.
+export function PlacesLookupHint({ enabled = true, down = false, style }) {
+  const unavailable = !enabled || down;
+  return (
+    <span style={{ color: unavailable ? '#8a6d1f' : undefined, ...style }}>
+      {unavailable ? PLACES_HINT_UNAVAILABLE : PLACES_HINT_READY}
+    </span>
+  );
 }
 
 export default function PlacesAutocomplete({
@@ -128,6 +189,9 @@ export default function PlacesAutocomplete({
     let autocomplete;
     let listener;
     let cancelled = false;
+    // No timer here on purpose: loadGoogleMaps owns the timeout, so a hang
+    // arrives as a rejection in .catch below like any other failure, and every
+    // consumer of the loader gets the same behaviour from one place.
     loadGoogleMaps(apiKey)
       .then((google) => {
         if (cancelled || !inputRef.current) return;
