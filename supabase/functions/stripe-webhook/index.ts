@@ -82,7 +82,7 @@ import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollment
 import { findAuthUserByEmail } from '../_shared/findAuthUserByEmail.ts';
 import { computeMarginRefund } from '../_shared/refundFeeSplit.ts';
 import { loadProration } from '../_shared/refundFeeProration.ts';
-import { readChargeFeeFacts } from '../_shared/chargeFeeFacts.ts';
+import { readChargeFeeFacts, FEE_REFUND_SOURCE_KEY, FEE_REFUND_REGISTRATION_KEY } from '../_shared/chargeFeeFacts.ts';
 import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.ts';
 import {
   settlementForCheckoutCompleted,
@@ -679,12 +679,20 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
   const succeeded = refundObjects.filter((r) => r.status === 'succeeded' || r.status === 'pending');
   if (succeeded.length === 0) return;
 
+  // "Known" means FULLY handled, not merely recorded. Recording the refund and
+  // returning our fee are two writes against two systems and cannot be one
+  // transaction: if the row lands and the fee refund then fails, a retry that
+  // treated the row alone as proof would skip forever and the operator would
+  // never be paid back — silently, which is the worst version of it.
+  // platform_fee_refunded_cents IS NOT NULL is the completion marker, and the
+  // fee refund carries a stable idempotency key so re-running it is safe.
   const { data: knownRows } = await admin
     .from('refunds')
-    .select('stripe_refund_id, registration_id')
+    .select('stripe_refund_id, registration_id, platform_fee_refunded_cents')
     .in('stripe_refund_id', succeeded.map((r) => r.id));
   const known = new Set(
-    ((knownRows ?? []) as Array<{ stripe_refund_id: string; registration_id: string }>)
+    ((knownRows ?? []) as Array<{ stripe_refund_id: string; registration_id: string; platform_fee_refunded_cents: number | null }>)
+      .filter((r) => r.platform_fee_refunded_cents !== null)
       .map((r) => `${r.stripe_refund_id}:${r.registration_id}`),
   );
 
@@ -711,6 +719,13 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
         stripeRefundId: refund.id,
         chargeAccountId,
         reason: statedReason,
+        // Stripe's own timestamp for the refund, NOT "when this webhook ran".
+        // get_revenue_summary and get_revenue_activity both bucket refunds by
+        // succeeded_at, so a retry delivered days later — or a replay — would
+        // otherwise drop the money into the wrong reporting period.
+        succeededAt: refund.created
+          ? new Date(refund.created * 1000).toISOString()
+          : new Date().toISOString(),
       });
     }
   }
@@ -733,6 +748,7 @@ async function recordExternalRefund(
     stripeRefundId: string;
     chargeAccountId: string | null;
     reason: string | null;
+    succeededAt: string;
   },
 ) {
   const { data: regData } = await admin
@@ -746,6 +762,28 @@ async function recordExternalRefund(
   } | null;
   if (!reg) {
     console.error(`[charge.refunded] registration ${input.registrationId} vanished; skipping`);
+    return;
+  }
+
+  const { data: orgRow } = await admin
+    .from('organizations')
+    .select('stripe_fee_payer, stripe_account_id')
+    .eq('id', reg.organization_id)
+    .maybeSingle();
+  const org = orgRow as { stripe_fee_payer?: string; stripe_account_id?: string | null } | null;
+
+  // SAME-ORG GUARD. This handler runs with the service role, so RLS is not
+  // protecting anything here — the only thing tying this charge to this
+  // registration is a payment_intent id we looked up. For a connected-account
+  // event, assert that the registration's org really owns the account the
+  // charge lived on before moving any money. Refusing costs us a log line;
+  // guessing wrong refunds one operator's fee out of another's balance.
+  if (input.chargeAccountId && org?.stripe_account_id !== input.chargeAccountId) {
+    console.error(
+      `[charge.refunded] REFUSING ${input.stripeRefundId}: registration ${reg.id} belongs to org ` +
+      `${reg.organization_id} (account ${org?.stripe_account_id ?? 'none'}), but the charge lived on ` +
+      `${input.chargeAccountId}. Not recording and not refunding any fee.`,
+    );
     return;
   }
 
@@ -766,19 +804,38 @@ async function recordExternalRefund(
       // origins apart.
       refunded_by_user_id: null,
       status: 'succeeded',
-      succeeded_at: new Date().toISOString(),
+      succeeded_at: input.succeededAt,
     })
     .select('id')
     .single();
 
+  let refundRowId: string;
   if (insErr) {
-    // 23505 = we already recorded this (registration, refund). Expected on any
-    // replay; not an error.
-    if ((insErr as { code?: string }).code === '23505') return;
-    console.error('[charge.refunded] failed to record the refund row:', insErr);
-    return;
+    if ((insErr as { code?: string }).code === '23505') {
+      // Already recorded, but we only get here when the fee was NOT settled
+      // (see the `known` filter). Adopt the existing row and finish the job
+      // rather than returning — this is the retry that repairs a half-done
+      // refund. Deliberately does NOT re-record or re-refund the family.
+      const { data: existing } = await admin
+        .from('refunds')
+        .select('id')
+        .eq('stripe_refund_id', input.stripeRefundId)
+        .eq('registration_id', reg.id)
+        .maybeSingle();
+      const found = (existing as { id: string } | null)?.id;
+      if (!found) {
+        console.error(`[charge.refunded] 23505 but no row found for ${input.stripeRefundId}/${reg.id}`);
+        return;
+      }
+      console.log(`[charge.refunded] resuming a half-finished refund ${input.stripeRefundId} for ${reg.id}`);
+      refundRowId = found;
+    } else {
+      console.error('[charge.refunded] failed to record the refund row:', insErr);
+      return;
+    }
+  } else {
+    refundRowId = (rowData as { id: string }).id;
   }
-  const refundRowId = (rowData as { id: string }).id;
 
   // ── fire the prorated application-fee refund (v4 section 2 + 3) ───────────
   let feeRefunded = 0;
@@ -793,13 +850,7 @@ async function recordExternalRefund(
     // Legacy own-platform destination orgs (stripe_fee_payer != 'tenant') carry
     // no uplift and no third party to make whole, so they get no fee refund —
     // same guard as refund-registration, so the two paths cannot diverge.
-    const { data: orgRow } = await admin
-      .from('organizations')
-      .select('stripe_fee_payer')
-      .eq('id', reg.organization_id)
-      .maybeSingle();
-    const feeRefundApplies =
-      input.chargeAccountId !== null || (orgRow as { stripe_fee_payer?: string } | null)?.stripe_fee_payer === 'tenant';
+    const feeRefundApplies = input.chargeAccountId !== null || org?.stripe_fee_payer === 'tenant';
 
     const owed = feeRefundApplies
       ? computeMarginRefund({
@@ -812,17 +863,66 @@ async function recordExternalRefund(
         })
       : 0;
 
-    if (owed > 0 && facts.applicationFeeId) {
-      // Platform-scoped even for a direct charge: the ApplicationFee belongs to
-      // the platform on both charge models. Keyed off the Stripe refund id AND
-      // the registration, so a multi-child charge issues one fee refund per
-      // child and a replay issues none.
-      const feeRefund = await stripe.applicationFees.createRefund(
-        facts.applicationFeeId,
-        { amount: owed },
-        { idempotencyKey: `appfee_ext_${input.stripeRefundId}_${reg.id}` },
+    // ALREADY DONE? Ask Stripe, don't infer. A fee refund we issued carries the
+    // Stripe refund id and registration it covered, so a retry can see its own
+    // earlier work directly. This is what makes the resume path safe: without
+    // it, a retry either skips forever (operator never paid) or re-refunds
+    // (paid twice), and an idempotency key cannot break the tie because the
+    // recomputed amount legitimately shifts as other refunds land on the same
+    // charge.
+    const existingFeeRefund = facts.feeRefunds.find(
+      (fr) =>
+        fr.metadata[FEE_REFUND_SOURCE_KEY] === input.stripeRefundId &&
+        fr.metadata[FEE_REFUND_REGISTRATION_KEY] === reg.id,
+    );
+
+    if (existingFeeRefund) {
+      feeRefunded = existingFeeRefund.amount;
+      console.log(
+        `[charge.refunded] fee for ${input.stripeRefundId}/${reg.id} was already returned (${feeRefunded}c); recording only`,
       );
-      feeRefunded = feeRefund.amount ?? owed;
+    } else if (owed > 0 && facts.applicationFeeId) {
+      // Platform-scoped even for a direct charge: the ApplicationFee belongs to
+      // the platform on both charge models. The idempotency key still guards
+      // two deliveries racing within the same instant; the metadata check above
+      // is what guards a retry minutes or hours later.
+      try {
+        const feeRefund = await stripe.applicationFees.createRefund(
+          facts.applicationFeeId,
+          {
+            amount: owed,
+            metadata: {
+              [FEE_REFUND_SOURCE_KEY]: input.stripeRefundId,
+              [FEE_REFUND_REGISTRATION_KEY]: reg.id,
+            },
+          },
+          { idempotencyKey: `appfee_ext_${input.stripeRefundId}_${reg.id}` },
+        );
+        feeRefunded = feeRefund.amount ?? owed;
+      } catch (keyErr) {
+        // An idempotency-key conflict is PROOF that a call with this exact key
+        // already went through - only the amount has since drifted, because
+        // other refunds landed on the same charge in between. That can only
+        // happen for a fee refund issued before we started tagging them.
+        // Without this branch the row stays unsettled and retries forever.
+        // Untagged refunds cannot occur going forward (prod has none, and every
+        // new one is tagged at creation), so this is a terminator, not a path.
+        const code = (keyErr as { raw?: { type?: string; code?: string } }).raw;
+        const isKeyConflict = code?.type === 'idempotency_error' || code?.code === 'idempotency_key_in_use';
+        if (!isKeyConflict) throw keyErr;
+        // The fee WAS returned - but by how much, we cannot know: the amount has
+        // drifted since, and the original call carries no tag to read it off.
+        // Deliberately do NOT write a guess into a money column. Leave the row
+        // unsettled and loudly flagged so a human reconciles it. Nothing is
+        // stuck: the handler still returns 200, so Stripe does not retry, and
+        // no money is at risk - only this one record is incomplete.
+        // Unreachable for anything created after tagging shipped, and prod has
+        // no pre-tagging refunds at all.
+        throw new Error(
+          `the platform fee was already returned by an untagged earlier call, so its exact amount ` +
+          `could not be attributed to this refund. Reconcile ${facts.applicationFeeId} by hand.`,
+        );
+      }
     }
 
     await admin.from('refunds')

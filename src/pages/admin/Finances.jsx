@@ -1299,7 +1299,7 @@ function RefundsTab() {
     (async () => {
       const { data, error } = await supabase
         .from("refunds")
-        .select("id, amount_cents, reason, status, cancelled_registration, created_at, succeeded_at, registration:registrations(student:students(first_name, last_name))")
+        .select("id, amount_cents, reason, status, cancelled_registration, created_at, succeeded_at, refunded_by_user_id, platform_fee_refunded_cents, registration:registrations(student:students(first_name, last_name))")
         .order("created_at", { ascending: false })
         .limit(200);
       if (!alive) return;
@@ -1320,12 +1320,28 @@ function RefundsTab() {
     const s = r.registration?.student;
     return s ? `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "—" : "—";
   };
+  // A refund with no Enrops user behind it came from the operator's own Stripe
+  // dashboard. Without saying so, a refund nobody here issued just appears in
+  // this list with no explanation.
+  const originOf = (r) => (r.refunded_by_user_id ? "In Enrops" : "Stripe dashboard");
+  // Stripe's reason is an API enum. Show plain English, not the raw token.
+  const STRIPE_REASONS = {
+    requested_by_customer: "Requested by the family",
+    duplicate: "Duplicate charge",
+    fraudulent: "Marked fraudulent",
+    expired_uncaptured_charge: "Payment expired",
+  };
+  const reasonOf = (r) => {
+    const raw = (r.reason ?? "").trim();
+    if (!raw) return "—";
+    return STRIPE_REASONS[raw] ?? raw;
+  };
 
   return (
     <Card>
       <h2 style={{ margin: "0 0 4px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Refund history</h2>
       <p style={{ margin: "0 0 16px", color: MUTED, fontSize: 13 }}>
-        Issue a refund from <a href="/admin/rosters" style={{ color: PURPLE }}>Rosters</a> → a family's row → <strong>Refund…</strong>. Every refund is recorded here.
+        Issue a refund from <a href="/admin/rosters" style={{ color: PURPLE }}>Rosters</a> → a family's row → <strong>Refund…</strong>. Refunds you make directly in Stripe show up here too, marked <strong>Stripe dashboard</strong>.
       </p>
 
       {err && (
@@ -1352,7 +1368,13 @@ function RefundsTab() {
                 {r.cancelled_registration && <span style={{ marginLeft: 8, fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${RULE}`, borderRadius: 4, padding: "1px 5px" }}>Withdrew</span>}
                 {r.status === "failed" && <span style={{ marginLeft: 8, fontSize: 10, color: RED, fontWeight: 700, textTransform: "uppercase" }}>Failed</span>}
                 {r.status === "pending" && <span style={{ marginLeft: 8, fontSize: 10, color: AMBER, fontWeight: 700, textTransform: "uppercase" }}>Pending</span>}
-                {r.reason && <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>{r.reason}</span>}
+                {!r.refunded_by_user_id && <span style={{ marginLeft: 8, fontSize: 10, color: PURPLE, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${PURPLE}`, borderRadius: 4, padding: "1px 5px" }}>Stripe dashboard</span>}
+                {r.reason && <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>{reasonOf(r)}</span>}
+                {r.status === "succeeded" && r.platform_fee_refunded_cents > 0 && (
+                  <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>
+                    {fmtCents(r.platform_fee_refunded_cents)} of the enrops fee returned to you
+                  </span>
+                )}
               </span>
               <span style={{ fontWeight: 600, color: r.status === "succeeded" ? OK : MUTED, whiteSpace: "nowrap" }}>{fmtCents(r.amount_cents)}</span>
               <span style={{ color: MUTED, whiteSpace: "nowrap" }}>{fmtWhen(r.succeeded_at || r.created_at)}</span>

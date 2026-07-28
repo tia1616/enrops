@@ -61,7 +61,23 @@ export interface ChargeFeeFacts {
   stripeFeeCents: number;
   /** Application fee already refunded, in cents - the idempotency ceiling. */
   alreadyRefundedFeeCents: number;
+  /**
+   * Fee refunds already issued against this ApplicationFee, with their metadata.
+   *
+   * This is what makes "did we already return our fee for THIS Stripe refund?"
+   * an observable fact instead of an inference. Recording a refund and
+   * returning the fee are two writes against two systems, so a retry has to be
+   * able to tell a half-finished job from a finished one - and a Stripe
+   * idempotency key cannot answer that, because the same key errors out
+   * whenever the recomputed amount differs even slightly.
+   */
+  feeRefunds: Array<{ id: string; amount: number; metadata: Record<string, string> }>;
 }
+
+/** Metadata key tagging a fee refund with the Stripe refund that caused it. */
+export const FEE_REFUND_SOURCE_KEY = 'enrops_source_refund_id';
+/** Metadata key tagging which registration's share it covered. */
+export const FEE_REFUND_REGISTRATION_KEY = 'enrops_registration_id';
 
 /**
  * Read the fee facts for one PaymentIntent.
@@ -108,11 +124,21 @@ export async function readChargeFeeFacts(
   const bt = typeof charge?.balance_transaction === 'object' ? charge?.balance_transaction : null;
 
   let alreadyRefundedFeeCents = 0;
+  let feeRefunds: ChargeFeeFacts['feeRefunds'] = [];
   if (applicationFeeId) {
     // Platform-scoped on purpose - see the header. Passing the connected
     // account here would 404 on a resource that is not theirs.
-    const fee = await stripe.applicationFees.retrieve(applicationFeeId);
-    alreadyRefundedFeeCents = (fee as { amount_refunded?: number }).amount_refunded ?? 0;
+    const fee = await stripe.applicationFees.retrieve(applicationFeeId, { expand: ['refunds'] });
+    const f = fee as {
+      amount_refunded?: number;
+      refunds?: { data?: Array<{ id: string; amount?: number; metadata?: Record<string, string> }> };
+    };
+    alreadyRefundedFeeCents = f.amount_refunded ?? 0;
+    feeRefunds = (f.refunds?.data ?? []).map((r) => ({
+      id: r.id,
+      amount: r.amount ?? 0,
+      metadata: r.metadata ?? {},
+    }));
   }
 
   return {
@@ -122,5 +148,6 @@ export async function readChargeFeeFacts(
     // Direct: Stripe's fee hit the OPERATOR, not us. Never subtract it.
     stripeFeeCents: chargeAccountId ? 0 : (bt?.fee ?? 0),
     alreadyRefundedFeeCents,
+    feeRefunds,
   };
 }
