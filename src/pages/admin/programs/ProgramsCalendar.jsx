@@ -340,7 +340,10 @@ export default function ProgramsCalendar() {
     (async () => {
       const { data, error } = await supabase
         .from("program_locations")
-        .select("id, name, district")
+        // address comes back so the edit panel can SHOW where the class runs.
+        // Without it the picker displayed a bare name, so an operator could not
+        // confirm which venue a program was actually attached to.
+        .select("id, name, district, address")
         .eq("organization_id", org.id)
         .order("name");
       // null means "could not read", [] means "genuinely none". The picker puts
@@ -1793,13 +1796,27 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4 }}>
               Couldn't load this org's locations — refresh before changing this field.
             </div>
-          ) : !draft.program_location_id && (
+          ) : !draft.program_location_id ? (
             <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4 }}>
               {locations.length === 0
                 ? "Add one under Programs → Locations, then pick it here."
                 : "Every class needs a location — pick one to save."}
             </div>
-          )}
+          ) : (() => {
+            // A location IS picked: show its address so the operator can confirm
+            // the right venue is attached. The <option> only carries a name, and
+            // two venues can share one. Blank would read as "we lost it", so the
+            // address-less case says so instead.
+            const picked = locations.find((l) => l.id === draft.program_location_id);
+            if (!picked) return null;
+            return picked.address?.trim() ? (
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>📍 {picked.address}</div>
+            ) : (
+              <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4 }}>
+                No address saved for this location yet — families won't see one.
+              </div>
+            );
+          })()}
         </ExpandField>
         <ExpandField label="Room">
           <input type="text" value={draft.room ?? ""} onChange={(e) => set("room", e.target.value)} placeholder="e.g. Room 12" style={expandInputStyle} />

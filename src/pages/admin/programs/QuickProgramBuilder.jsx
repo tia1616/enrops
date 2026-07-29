@@ -200,8 +200,10 @@ export default function QuickProgramBuilder() {
       // read as "this org has nothing".
       try {
         const { data, error: locErr } = await supabase
-          .from("program_locations")
-          .select("id, name")
+          // address comes back so the picker can SHOW where the class actually
+          // is. Selecting only id+name is why an operator who had just looked
+          // an address up could not see it again anywhere on this screen.
+          .select("id, name, address")
           .eq("organization_id", org.id)
           .order("name");
         if (cancelled) return;
@@ -280,10 +282,12 @@ export default function QuickProgramBuilder() {
       const { data, error } = await supabase
         .from("program_locations")
         .insert({ organization_id: org.id, name: nm, address: newLocAddress.trim() || null, slug })
-        .select("id, name")
+        // Read the address back too, so the just-added location shows its
+        // address immediately instead of only after a page reload.
+        .select("id, name, address")
         .single();
       if (error) throw error;
-      setLocations((ls) => [...ls, { id: data.id, name: data.name }].sort((a, b) => a.name.localeCompare(b.name)));
+      setLocations((ls) => [...ls, { id: data.id, name: data.name, address: data.address }].sort((a, b) => a.name.localeCompare(b.name)));
       setLocationId(data.id);
       setAddingLocation(false);
       setNewLocName("");
@@ -312,6 +316,10 @@ export default function QuickProgramBuilder() {
   const ageMinNum = ageMin === "" ? null : parseInt(ageMin, 10);
   const ageMaxNum = ageMax === "" ? null : parseInt(ageMax, 10);
   const ageRangeBackwards = ageMinNum != null && ageMaxNum != null && ageMinNum > ageMaxNum;
+
+  // The row behind the current pick, so the field can show its address rather
+  // than just the name the <option> already carries.
+  const selectedLocation = locations.find((l) => l.id === locationId) ?? null;
 
   // Location is REQUIRED, not optional. Every program families can register for
   // happens somewhere, and "somewhere" is on the receipt, the reminder and the
@@ -1150,6 +1158,20 @@ export default function QuickProgramBuilder() {
                 <div style={helpStyle}>
                   Pick where this class runs — families see it when they register.
                 </div>
+              )}
+              {/* Once something IS picked, show its address. The picker only
+                  ever showed a name, so an operator who had just looked an
+                  address up had no way to confirm it was attached to the venue
+                  they chose. Two states, because 2 of 66 prod locations have no
+                  address and a blank line would read as "we lost it". */}
+              {!locationsFailed && selectedLocation && (
+                selectedLocation.address?.trim() ? (
+                  <div style={helpStyle}>📍 {selectedLocation.address}</div>
+                ) : (
+                  <div style={{ ...helpStyle, color: "#8a6d1f" }}>
+                    No address saved for this location yet — families won't see one. Add it under Programs → Locations.
+                  </div>
+                )
               )}
             </>
           )}
