@@ -215,11 +215,18 @@ export default function AdminLayout() {
         }
         setUser(session.user);
 
-        // Look up org_members row for this auth user
-        const { data: memberRow, error: memErr } = await supabase
+        // Look up org_members row for this auth user.
+        // If the URL carries ?org=<id> (e.g. after an OAuth redirect), filter to
+        // that org so a multi-org user lands on the right one. .limit(1) prevents
+        // the bare .maybeSingle() from erroring when multiple rows match.
+        const orgParam = new URLSearchParams(location.search).get("org");
+        let membersQuery = supabase
           .from("org_members")
           .select("id, role, organization_id, accepted_at")
-          .eq("auth_user_id", session.user.id)
+          .eq("auth_user_id", session.user.id);
+        if (orgParam) membersQuery = membersQuery.eq("organization_id", orgParam);
+        const { data: memberRow, error: memErr } = await membersQuery
+          .limit(1)
           .maybeSingle();
 
         console.log("org_members query:", { memberRow, memErr, uid: session.user.id });

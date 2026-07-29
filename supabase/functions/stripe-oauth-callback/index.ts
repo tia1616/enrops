@@ -34,7 +34,8 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 /** Bounce the operator back to Finances with a result they can read. */
-function back(origin: string, params: Record<string, string>): Response {
+function back(origin: string, params: Record<string, string>, orgId?: string): Response {
+  if (orgId) params.org = orgId;
   const qs = new URLSearchParams(params).toString();
   return new Response(null, {
     status: 302,
@@ -100,12 +101,12 @@ serve(async (req: Request) => {
     // outcome, not a failure, and it must not look like one.
     if (oauthError) {
       console.log(`[oauth-callback] operator declined: ${oauthError} ${oauthErrorDesc ?? ''}`);
-      return back(origin, { stripe: 'cancelled' });
+      return back(origin, { stripe: 'cancelled' }, row.organization_id);
     }
 
     if (!code) {
       console.warn('[oauth-callback] no code and no error on the request');
-      return back(origin, { stripe: 'error', reason: 'missing_code' });
+      return back(origin, { stripe: 'error', reason: 'missing_code' }, row.organization_id);
     }
 
     // ── exchange the code for the connected account ───────────────────────
@@ -128,7 +129,7 @@ serve(async (req: Request) => {
       const e = err as { message?: string; raw?: { message?: string; error_description?: string } };
       const msg = e.raw?.error_description ?? e.raw?.message ?? e.message ?? 'unknown';
       console.error('[oauth-callback] token exchange failed:', msg);
-      return back(origin, { stripe: 'error', reason: 'exchange_failed' });
+      return back(origin, { stripe: 'error', reason: 'exchange_failed' }, row.organization_id);
     }
 
     // ── refuse an account already serving a different org ─────────────────
@@ -153,13 +154,13 @@ serve(async (req: Request) => {
         `[oauth-callback] could not verify whether ${connectedAccountId} is already in use; refusing to attach it:`,
         existingErr.message,
       );
-      return back(origin, { stripe: 'error', reason: 'account_in_use' });
+      return back(origin, { stripe: 'error', reason: 'account_in_use' }, row.organization_id);
     }
     if (existing) {
       console.error(
         `[oauth-callback] account ${connectedAccountId} is already on org ${(existing as { id: string }).id}; refusing to attach it to ${row.organization_id}`,
       );
-      return back(origin, { stripe: 'error', reason: 'account_in_use' });
+      return back(origin, { stripe: 'error', reason: 'account_in_use' }, row.organization_id);
     }
 
     // ── read the account back rather than assuming what we connected ──────
@@ -172,7 +173,7 @@ serve(async (req: Request) => {
       // id without its state would leave the org looking connected while
       // stripe_charges_enabled stayed false, which reads as a broken checkout to
       // every family. Better to fail the whole thing and let them retry.
-      return back(origin, { stripe: 'error', reason: 'account_unreadable' });
+      return back(origin, { stripe: 'error', reason: 'account_unreadable' }, row.organization_id);
     }
 
     const mapped = mapOperatorAccountStatus(account);
@@ -248,16 +249,16 @@ serve(async (req: Request) => {
         console.error(
           `[oauth-callback] ${connectedAccountId} was claimed by another org between the check and the write; refusing to attach it to ${row.organization_id}`,
         );
-        return back(origin, { stripe: 'error', reason: 'account_in_use' });
+        return back(origin, { stripe: 'error', reason: 'account_in_use' }, row.organization_id);
       }
       console.error('[oauth-callback] org update failed:', updErr);
-      return back(origin, { stripe: 'error', reason: 'persist_failed' });
+      return back(origin, { stripe: 'error', reason: 'persist_failed' }, row.organization_id);
     }
     if (!written) {
       console.error(
         `[oauth-callback] org ${row.organization_id} already had a different Stripe account by the time this callback landed; refusing to overwrite it with ${connectedAccountId}`,
       );
-      return back(origin, { stripe: 'error', reason: 'already_connected' });
+      return back(origin, { stripe: 'error', reason: 'already_connected' }, row.organization_id);
     }
 
     // Record which account was picked, for support and audit. Non-fatal, but the
@@ -279,10 +280,10 @@ serve(async (req: Request) => {
         `connected ${connectedAccountId}, but the account did not confirm the operator bears Stripe fees ` +
         `(type=${acctType}, fees.payer=${feesPayer}). Charge model set to 'destination', NOT 'direct'.`,
       );
-      return back(origin, { stripe: 'connected', review: 'fee_model' });
+      return back(origin, { stripe: 'connected', review: 'fee_model' }, row.organization_id);
     }
 
-    return back(origin, { stripe: 'connected' });
+    return back(origin, { stripe: 'connected' }, row.organization_id);
   } catch (err) {
     console.error('[oauth-callback] fatal:', err);
     return back(FALLBACK_ORIGIN, { stripe: 'error', reason: 'internal' });
