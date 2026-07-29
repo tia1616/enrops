@@ -47,7 +47,7 @@
 // Selection fires `gmp-select` carrying `placePrediction`; `.toPlace()` +
 // `fetchFields` gives displayName / formattedAddress.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 // The element renders its dropdown inside its own shadow root rather than
 // appending `.pac-container` to document.body the way the legacy widget did,
@@ -262,6 +262,11 @@ export default function PlacesAutocomplete({
   const valueRef = useRef(value);
   useEffect(() => { valueRef.current = value; }, [value]);
 
+  // attach() owns the positioning closure (it needs `el`), but the layout
+  // effect below has to call it after React makes the host visible. This ref is
+  // the handoff between them.
+  const positionRef = useRef(null);
+
   useEffect(() => {
     // No key configured for this environment. Previously returned in silence.
     if (!apiKey) { onLookupUnavailable?.(true); return undefined; }
@@ -294,22 +299,49 @@ export default function PlacesAutocomplete({
       el.value = fallbackRef.current?.value || (valueRef.current ?? '');
 
       // ::part() can restyle the prediction list but cannot know where the host
-      // is, so feed it coordinates. Kept in sync on the three things that move
-      // it: typing (the list opens), any ancestor scrolling, and a resize.
+      // is, so feed it coordinates.
       const positionList = () => {
         const r = el.getBoundingClientRect();
+        // NEVER write coordinates measured while hidden. The host is
+        // display:none until elementReady flips, and a display:none element
+        // reports all zeros -- writing those pinned the fixed-position list to
+        // the top-left corner of the viewport at zero width. Bail instead, and
+        // let the layout effect below position it once it is actually visible.
+        if (r.width === 0 && r.height === 0) return;
         el.style.setProperty('--enrops-pac-top', `${r.bottom}px`);
         el.style.setProperty('--enrops-pac-left', `${r.left}px`);
         el.style.setProperty('--enrops-pac-width', `${r.width}px`);
       };
-      positionList();
-      // Capture phase: the scroll happens on the modal/drawer, not on window,
-      // and non-capturing window listeners never see those.
-      window.addEventListener('scroll', positionList, true);
-      window.addEventListener('resize', positionList);
-      cleanupPosition = () => {
+      positionRef.current = positionList;
+
+      // The list can only be open while the field has focus, so the scroll and
+      // resize listeners only need to exist then. Previously they were added at
+      // mount and lived for the life of the component, forcing a synchronous
+      // layout (getBoundingClientRect) on EVERY scroll anywhere in the app --
+      // wasted on every scroll of a long Programs list, and multiplied by each
+      // mounted instance.
+      //
+      // focusin/focusout rather than focus/blur: the real focus lands on an
+      // input inside a CLOSED shadow root, and only the bubbling pair is
+      // guaranteed to surface it on the host.
+      const onFocusIn = () => {
+        positionList();
+        // Capture phase: the scroll happens on the modal/drawer, not on window,
+        // and non-capturing window listeners never see those.
+        window.addEventListener('scroll', positionList, true);
+        window.addEventListener('resize', positionList);
+      };
+      const onFocusOut = () => {
         window.removeEventListener('scroll', positionList, true);
         window.removeEventListener('resize', positionList);
+      };
+      el.addEventListener('focusin', onFocusIn);
+      el.addEventListener('focusout', onFocusOut);
+      cleanupPosition = () => {
+        onFocusOut();
+        el.removeEventListener('focusin', onFocusIn);
+        el.removeEventListener('focusout', onFocusOut);
+        positionRef.current = null;
       };
 
       el.addEventListener('input', () => {
@@ -378,6 +410,16 @@ export default function PlacesAutocomplete({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
+
+  // Position the dropdown the moment the host actually becomes visible.
+  // useLayoutEffect, not useEffect: it runs after React has swapped the host
+  // out of display:none but BEFORE the browser paints, so the first frame the
+  // list could appear in already has real coordinates. attach() cannot do this
+  // itself -- it runs while the host is still hidden, which is exactly how the
+  // list ended up pinned to 0,0 at zero width.
+  useLayoutEffect(() => {
+    if (elementReady) positionRef.current?.();
+  }, [elementReady]);
 
   // Push caller-driven value changes into the element (e.g. applyPlace filling
   // the name after a selection, or a form reset). Guarded on inequality so we
