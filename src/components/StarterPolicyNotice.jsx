@@ -99,6 +99,18 @@ export default function StarterPolicyNotice({ org }) {
     // contradict at any time.
   }, [org?.id, location.pathname, settled]);
 
+  // An error belongs to the click that caused it, not to the session. Without
+  // this, a failed acknowledgement on /admin/programs kept rendering inside the
+  // card on Payments, Discounts and everywhere else the operator went next -
+  // stale feedback presented as current, on pages they had clicked nothing on,
+  // complete with a raw Postgres message. Proved by revoking EXECUTE on the RPC
+  // and walking the sidebar.
+  //
+  // Safe to clear on navigation only because handleEdit no longer moves the
+  // operator when the write fails; nothing needs the message to survive a route
+  // change any more.
+  useEffect(() => { setError(""); }, [location.pathname]);
+
   const acknowledge = useCallback(async (response) => {
     setBusy(true);
     setError("");
