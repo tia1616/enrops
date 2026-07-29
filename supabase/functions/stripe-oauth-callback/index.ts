@@ -134,12 +134,27 @@ serve(async (req: Request) => {
     // ── refuse an account already serving a different org ─────────────────
     // Two orgs sharing one Stripe account would make every refund, payout and
     // 1099 ambiguous, and our per-charge account scoping assumes one owner.
-    const { data: existing } = await admin
+    // FAIL CLOSED. The error is checked, not just the data: .maybeSingle()
+    // returns an ERROR rather than a row when more than one matches, so if two
+    // orgs somehow already shared this account, ignoring the error would leave
+    // `existing` null and wave a third org straight through the one guard that
+    // exists to prevent it. Same for any transient failure - a check we could
+    // not complete is not a check that passed.
+    // (The database also enforces this now; see 20260729b. This stays as the
+    // path that produces a readable outcome instead of a raw 23505.)
+    const { data: existing, error: existingErr } = await admin
       .from('organizations')
       .select('id')
       .eq('stripe_account_id', connectedAccountId)
       .neq('id', row.organization_id)
       .maybeSingle();
+    if (existingErr) {
+      console.error(
+        `[oauth-callback] could not verify whether ${connectedAccountId} is already in use; refusing to attach it:`,
+        existingErr.message,
+      );
+      return back(origin, { stripe: 'error', reason: 'account_in_use' });
+    }
     if (existing) {
       console.error(
         `[oauth-callback] account ${connectedAccountId} is already on org ${(existing as { id: string }).id}; refusing to attach it to ${row.organization_id}`,
@@ -186,7 +201,10 @@ serve(async (req: Request) => {
       `[oauth-callback] connected ${connectedAccountId} for org ${row.organization_id}: ` +
       `type=${acctType ?? 'none'} fees.payer=${feesPayer ?? 'none'} ` +
       `charges=${mapped.chargesEnabled} payouts=${mapped.payoutsEnabled} status=${mapped.status} ` +
-      `-> charge_model=${operatorBearsStripeFees ? 'direct' : 'UNSET (left as-is)'}`,
+      // Say what is actually written. The column is set on BOTH branches - a log
+      // claiming it was left alone would send the next person debugging a
+      // destination-routed operator looking anywhere but here.
+      `-> charge_model=${operatorBearsStripeFees ? 'direct' : 'destination (unconfirmed fee model)'}`,
     );
 
     // ── write it ──────────────────────────────────────────────────────────
@@ -222,6 +240,16 @@ serve(async (req: Request) => {
       .select('id')
       .maybeSingle();
     if (updErr) {
+      // 23505 here is the unique index from 20260729b firing: another org
+      // claimed this exact Stripe account between our check above and this
+      // write. That is the race the index exists to close, and it deserves the
+      // truthful reason rather than a generic failure.
+      if ((updErr as { code?: string }).code === '23505') {
+        console.error(
+          `[oauth-callback] ${connectedAccountId} was claimed by another org between the check and the write; refusing to attach it to ${row.organization_id}`,
+        );
+        return back(origin, { stripe: 'error', reason: 'account_in_use' });
+      }
       console.error('[oauth-callback] org update failed:', updErr);
       return back(origin, { stripe: 'error', reason: 'persist_failed' });
     }
