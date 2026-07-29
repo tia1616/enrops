@@ -26,7 +26,7 @@
 // bug as no notice.
 
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "../lib/supabase";
 
@@ -37,8 +37,22 @@ const MUTED = "#6b6b6b";
 const BG = "#F2F0FF";
 const BORDER = "#cfc8f5";
 
+// Waivers & policies is the one admin page where this card is redundant: the
+// cancellation policy is already listed there, published-badged, with Edit and
+// Unpublish beside it. Showing the card on top of that made the same policy
+// appear twice on one screen and read as though it lived in two places
+// (Jessica, 2026-07-28).
+//
+// Suppressing it here is safe rather than a hole in the disclosure. The card
+// still renders on every OTHER admin page, and nobody arrives at /admin/waivers
+// first — a lean tenant lands on /admin/programs, everyone else on /admin — so
+// the notice is always seen before this page is reached. "Edit it now" also
+// lands here, having already recorded the acknowledgement on its way.
+const SUPPRESS_ON = "/admin/waivers";
+
 export default function StarterPolicyNotice({ org }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [notice, setNotice] = useState(null); // null = nothing owed / not loaded yet
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -101,6 +115,17 @@ export default function StarterPolicyNotice({ org }) {
   }
 
   if (!notice) return null;
+  // Checked at RENDER, not in the fetch, so the acknowledgement state stays
+  // loaded — navigating away from Waivers & policies brings the card straight
+  // back without a refetch.
+  //
+  // `&& !error` is load-bearing. "Edit it now" navigates HERE, and on a failed
+  // write it deliberately keeps the card up to show why. Suppressing
+  // unconditionally would have hidden the card and its error message together
+  // on arrival — the operator clicks, lands on this page, and nothing tells
+  // them the acknowledgement never saved. Redundancy is worth avoiding; a
+  // silent failure is not.
+  if (location.pathname === SUPPRESS_ON && !error) return null;
 
   const waivers = notice.active_waiver_count ?? 0;
   // Where the promise actually reaches a family. A tenant who brings their own

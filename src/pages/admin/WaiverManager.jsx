@@ -368,25 +368,17 @@ export default function WaiverManager() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginTop: 8 }}>
         <div>
           <h1 style={{ margin: 0, color: PURPLE, fontSize: 24, fontWeight: 700 }}>Waivers &amp; policies</h1>
-          <p style={{ color: MUTED, fontSize: 14, marginTop: 4, lineHeight: 1.5, maxWidth: 560 }}>
-            The agreements families sign to enroll, and the privacy policy and terms you publish on your registration site.
+          {/* The legal-advice line lives HERE and nowhere else. It used to also
+              sit inside the policy editor, which meant an operator met it again
+              every time they edited anything — a warning repeated on every
+              document stops being read. Said once, as part of what this page
+              is. */}
+          <p style={{ color: MUTED, fontSize: 14, marginTop: 4, lineHeight: 1.5, maxWidth: 620 }}>
+            The agreements families sign to enroll, and the privacy policy and terms you publish on
+            your registration site. Our starter wording is a helpful beginning, not legal advice
+            &mdash; it&rsquo;s worth having a lawyer read anything that really matters to your business.
           </p>
         </div>
-      </div>
-
-      {/* Sits above BOTH sections because it is true of both: the waivers and
-          the starter cancellation policy are all documents we drafted. Said in
-          plain words rather than legal ones - "these materials are provided for
-          informational purposes and do not constitute legal advice" is the
-          phrasing people skip. It names who is responsible without being
-          alarming, because the honest position is that they are a sensible
-          starting point, not that they are dangerous. */}
-      <div style={{ marginTop: 18, padding: "12px 14px", background: CREAM, border: `1px solid ${RULE}`, borderRadius: 10, fontSize: 12.5, color: MUTED, lineHeight: 1.6, maxWidth: 680 }}>
-        <strong style={{ color: INK, fontWeight: 600 }}>A quick note:</strong> we wrote the starter
-        wording here to give you something solid to begin with, but it isn&rsquo;t legal advice and
-        no lawyer has checked it against the rules where you run your programs. Everything on this
-        page is published under your business name, so it&rsquo;s yours to edit &mdash; and if a
-        document really matters to you, it&rsquo;s worth having a lawyer read it first.
       </div>
 
       <h2 style={{ margin: "24px 0 0", fontSize: 17, fontWeight: 700, color: INK }}>Waivers families sign</h2>
@@ -624,9 +616,15 @@ function PolicyEditor({ kind, busy, saveError, onCancel, onSave }) {
         <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} style={{ ...input, maxWidth: 220 }} disabled={busy} />
 
         <label style={{ ...lbl, marginTop: 16 }}>Policy text</label>
+        {/* No Markdown syntax here on purpose. An operator pasting their real
+            policy does not want to learn "##" and "**" to publish it, and the
+            old note taught the syntax before saying the thing that actually
+            matters: plain text is fine. The one instruction kept is the one
+            that changes the output — a blank line is what separates
+            paragraphs. */}
         <p style={{ margin: "0 0 8px", fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
-          Paste your policy here. Plain text works. If you use Markdown, <strong>## Heading</strong> makes a
-          section heading, <strong>- item</strong> makes a bullet, and <strong>**bold**</strong> bolds text.
+          Paste or type your policy here. Plain writing is fine &mdash; leave a blank line between
+          paragraphs and families will see it laid out the way you wrote it.
         </p>
         <textarea
           value={content}
@@ -637,11 +635,10 @@ function PolicyEditor({ kind, busy, saveError, onCancel, onSave }) {
           disabled={busy}
         />
 
-        <div style={{ marginTop: 14, padding: "10px 12px", background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
-          This is your own legal document. Enrops publishes separate platform policies covering the
-          registration software itself — yours doesn&rsquo;t need to repeat them.
-        </div>
-
+        {/* The "this is your own legal document" note was removed from here
+            (Jessica, 2026-07-28). It rendered inside EVERY policy editor, so
+            the same caution was met three times over and stopped being read.
+            It now appears once, in the page subtitle. */}
         {saveError && (
           <div style={{ marginTop: 14, padding: "10px 12px", background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 8, color: "#991b1b", fontSize: 13, lineHeight: 1.5 }}>
             That didn&rsquo;t save, so nothing changed for families. ({saveError})
