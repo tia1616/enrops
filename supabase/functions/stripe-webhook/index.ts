@@ -76,6 +76,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, OrgBrand } from '../_shared/orgBrand.ts';
 import { buildIcs, googleCalendarUrl, toBase64, calendarEventsFromRegistrations } from '../_shared/calendarInvite.ts';
 import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
+import { mapOperatorAccountStatus } from '../_shared/operatorAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
 import { handleTransferReversed as sharedHandleTransferReversed } from '../_shared/handleTransferReversed.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
@@ -1752,40 +1753,24 @@ async function handleAccountUpdated(
     return;
   }
 
-  // Map Stripe state to our enum. 6 buckets:
-  //   active        — charges + payouts both enabled
-  //   verifying     — everything submitted, Stripe is REVIEWING, nothing is
-  //                   required from the operator
-  //   restricted    — Stripe disabled the account for a reason the operator
-  //                   must actually act on
-  //   onboarding    — hasn't completed the onboarding form yet
-  //   disconnected  — operator disconnected (handled by deauthorize, not here)
-  //   not_connected — never connected (handled at insert time, not here)
-  const chargesEnabled = account.charges_enabled === true;
-  const payoutsEnabled = account.payouts_enabled === true;
-  const detailsSubmitted = account.details_submitted === true;
-  const disabledReason = account.requirements?.disabled_reason || null;
+  // Map Stripe state to our enum. ONE implementation, shared with
+  // sync-operator-stripe-status and stripe-oauth-callback
+  // (_shared/operatorAccountStatus.ts) - see that file for the four buckets it
+  // decides and the two ('disconnected', 'not_connected') that are set
+  // elsewhere and which it must never return.
+  //
+  // The guards below stay HERE and are deliberately not folded into the shared
+  // mapper: wasActive/regressed drives the alert email, and the event-id
+  // idempotency above is specific to being event-driven.
   const wasActive = org.stripe_account_status === 'active';
 
-  // Not every disabled_reason is the operator's problem. These two mean the
-  // opposite of "we need something from you" — the form is done,
-  // requirements.currently_due is empty, and Stripe is just reviewing (usually
-  // for well under a minute). Collapsing them into 'restricted' made the
-  // Finances screen tell an operator who had done everything correctly to go
-  // supply information Stripe wasn't asking for. Observed live 2026-07-27.
-  const PENDING_REVIEW_REASONS = ['requirements.pending_verification', 'under_review'];
-  const isPendingReview = disabledReason !== null && PENDING_REVIEW_REASONS.includes(disabledReason);
-
-  let nextStatus: 'active' | 'restricted' | 'verifying' | 'onboarding';
-  if (chargesEnabled && payoutsEnabled) {
-    nextStatus = 'active';
-  } else if (detailsSubmitted && isPendingReview) {
-    nextStatus = 'verifying';
-  } else if (detailsSubmitted && !chargesEnabled && disabledReason) {
-    nextStatus = 'restricted';
-  } else {
-    nextStatus = 'onboarding';
-  }
+  const {
+    status: nextStatus,
+    chargesEnabled,
+    payoutsEnabled,
+    detailsSubmitted,
+    disabledReason,
+  } = mapOperatorAccountStatus(account);
 
   const regressed = wasActive && nextStatus !== 'active';
 

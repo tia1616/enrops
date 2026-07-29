@@ -8,6 +8,16 @@ project_id = "enrops"
 [functions.stripe-webhook]
 verify_jwt = false
 
+[functions.stripe-oauth-callback]
+# MUST stay false. This is the redirect target Stripe sends the operator's
+# BROWSER to after they pick an account; it carries no Supabase JWT and never
+# can. Its security comes from the single-use row in stripe_oauth_states, not
+# from auth. Deploying it with verify_jwt = true would make every connect
+# attempt 401 after the operator had already authorised at Stripe.
+# (stripe-oauth-start is NOT listed: it takes an operator's JWT and defaults to
+# verify_jwt = true, which is what it needs.)
+verify_jwt = false
+
 [functions.org-fee-config]
 verify_jwt = false
 

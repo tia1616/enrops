@@ -30,6 +30,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { mapOperatorAccountStatus } from '../_shared/operatorAccountStatus.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -130,30 +131,20 @@ serve(async (req: Request) => {
       return json({ error: 'stripe_unreachable' }, 502);
     }
 
-    // ── map Stripe state to our enum — IDENTICAL to handleAccountUpdated ───
-    // (stripe-webhook/index.ts). Keep these two in lockstep.
-    const chargesEnabled = account.charges_enabled === true;
-    const payoutsEnabled = account.payouts_enabled === true;
-    const detailsSubmitted = account.details_submitted === true;
-    const disabledReason = account.requirements?.disabled_reason || null;
-
-    // 'verifying': everything submitted, Stripe reviewing, nothing owed by the
-    // operator. Must match stripe-webhook exactly (see the lockstep note above)
-    // — this is the path behind the "Already finished? Check status" button, so
-    // a mismatch here is what an operator sees the instant they click it.
-    const PENDING_REVIEW_REASONS = ['requirements.pending_verification', 'under_review'];
-    const isPendingReview = disabledReason !== null && PENDING_REVIEW_REASONS.includes(disabledReason);
-
-    let nextStatus: 'active' | 'restricted' | 'verifying' | 'onboarding';
-    if (chargesEnabled && payoutsEnabled) {
-      nextStatus = 'active';
-    } else if (detailsSubmitted && isPendingReview) {
-      nextStatus = 'verifying';
-    } else if (detailsSubmitted && !chargesEnabled && disabledReason) {
-      nextStatus = 'restricted';
-    } else {
-      nextStatus = 'onboarding';
-    }
+    // ── map Stripe state to our enum ──────────────────────────────────────
+    // ONE implementation, shared with stripe-webhook's handleAccountUpdated and
+    // stripe-oauth-callback (_shared/operatorAccountStatus.ts). This was a
+    // hand-copied duplicate carrying a "keep these two in lockstep" comment,
+    // which is the same bug shape as a number computed in two places: this is
+    // the path behind the "Already finished? Check status" button, so a drift
+    // between the copies is what an operator sees the instant they click it.
+    const {
+      status: nextStatus,
+      chargesEnabled,
+      payoutsEnabled,
+      detailsSubmitted,
+      disabledReason,
+    } = mapOperatorAccountStatus(account);
 
     const changed =
       org.stripe_account_status !== nextStatus;
