@@ -47,7 +47,7 @@
 // Selection fires `gmp-select` carrying `placePrediction`; `.toPlace()` +
 // `fetchFields` gives displayName / formattedAddress.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 // The element renders its dropdown inside its own shadow root rather than
 // appending `.pac-container` to document.body the way the legacy widget did,
@@ -66,8 +66,19 @@ function ensurePacCss() {
     'gmp-place-autocomplete[data-enrops]::part(input){',
     'width:100%;box-sizing:border-box;border:none;outline:none;background:transparent;',
     'font:inherit;color:inherit;padding:0;margin:0;min-width:0;}',
-    // The dropdown itself has to clear the modal backdrop too.
-    'gmp-place-autocomplete[data-enrops]::part(prediction-list){z-index:10002;}',
+    // Take the prediction list OUT OF FLOW. Measured, not guessed: mounting the
+    // element inside a 200px `overflow-y:auto` panel (the shape of
+    // AddSchoolModal and the LocationsList drawer) and typing "Ainsworth" grew
+    // that panel's scrollHeight by 292px while the host stayed 48px -- the list
+    // renders in-flow, so inside those two surfaces it would be clipped at the
+    // panel edge and scroll the modal instead of overlaying it. The legacy
+    // widget avoided this by appending .pac-container to document.body; this
+    // element has no such escape hatch, and z-index cannot defeat an ancestor's
+    // overflow clip. position:fixed can, with the coordinates fed in from JS
+    // (see positionList) because ::part cannot read the host's geometry itself.
+    'gmp-place-autocomplete[data-enrops]::part(prediction-list){',
+    'position:fixed;z-index:10002;',
+    'top:var(--enrops-pac-top,auto);left:var(--enrops-pac-left,auto);width:var(--enrops-pac-width,auto);}',
   ].join('');
   document.head.appendChild(style);
   cssInjected = true;
@@ -230,7 +241,11 @@ export default function PlacesAutocomplete({
 }) {
   const hostRef = useRef(null);   // wrapper we mount the web component into
   const elRef = useRef(null);     // the <gmp-place-autocomplete> itself
+  const fallbackRef = useRef(null); // the plain input shown until it mounts
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+  // Whether the web component is actually in the DOM and usable. Until it is,
+  // the operator gets a real <input> -- see the render for why that matters.
+  const [elementReady, setElementReady] = useState(false);
 
   // Refresh the captured onSelect/onChange without rebuilding the element —
   // stored on a ref so the listener closures read the latest values.
@@ -239,6 +254,14 @@ export default function PlacesAutocomplete({
     handlersRef.current = { onChange, onSelect };
   }, [onChange, onSelect]);
 
+  // The LATEST value, for the mount path to seed from. The mount effect only
+  // runs on [apiKey], so reading `value` from its closure meant a change that
+  // landed while Google was still loading (up to 15s on a cold load) was
+  // silently discarded -- switching which location you were editing mid-load
+  // left the old name in the box while the draft held the new one.
+  const valueRef = useRef(value);
+  useEffect(() => { valueRef.current = value; }, [value]);
+
   useEffect(() => {
     // No key configured for this environment. Previously returned in silence.
     if (!apiKey) { onLookupUnavailable?.(true); return undefined; }
@@ -246,6 +269,7 @@ export default function PlacesAutocomplete({
     ensurePacCss();
     let cancelled = false;
     let el = null;
+    let cleanupPosition = null;
 
     const attach = async (google) => {
       // The element ships in the `places` library; importLibrary is the only
@@ -265,9 +289,31 @@ export default function PlacesAutocomplete({
       if (id) el.id = id;
       if (placeholder) el.placeholder = placeholder;
       if (disabled) el.disabled = true;
-      el.value = value ?? '';
+      // Seed from the ref, not the closure, and carry over anything the
+      // operator already typed into the fallback input while Google loaded.
+      el.value = fallbackRef.current?.value || (valueRef.current ?? '');
+
+      // ::part() can restyle the prediction list but cannot know where the host
+      // is, so feed it coordinates. Kept in sync on the three things that move
+      // it: typing (the list opens), any ancestor scrolling, and a resize.
+      const positionList = () => {
+        const r = el.getBoundingClientRect();
+        el.style.setProperty('--enrops-pac-top', `${r.bottom}px`);
+        el.style.setProperty('--enrops-pac-left', `${r.left}px`);
+        el.style.setProperty('--enrops-pac-width', `${r.width}px`);
+      };
+      positionList();
+      // Capture phase: the scroll happens on the modal/drawer, not on window,
+      // and non-capturing window listeners never see those.
+      window.addEventListener('scroll', positionList, true);
+      window.addEventListener('resize', positionList);
+      cleanupPosition = () => {
+        window.removeEventListener('scroll', positionList, true);
+        window.removeEventListener('resize', positionList);
+      };
 
       el.addEventListener('input', () => {
+        positionList();
         // Composed event: it crosses the closed shadow boundary, so this is how
         // the caller's controlled `value` keeps up with typing. Load-bearing —
         // QuickProgramBuilder gates its Save button on the typed name.
@@ -291,7 +337,16 @@ export default function PlacesAutocomplete({
 
       hostRef.current.appendChild(el);
       elRef.current = el;
-      if (autoFocus) { try { el.focus(); } catch (_e) { /* noop */ } }
+      setElementReady(true);
+      // Only take focus if the operator has not moved on. This runs after an
+      // async load that can take 15s, so an unconditional focus() could yank
+      // the caret out of the Address field mid-word. Focusing the fallback
+      // input counts as "still here" -- that IS this field.
+      if (autoFocus) {
+        const active = typeof document !== 'undefined' ? document.activeElement : null;
+        const stillHere = !active || active === document.body || active === fallbackRef.current;
+        if (stillHere) { try { el.focus(); } catch (_e) { /* noop */ } }
+      }
       onLookupUnavailable?.(false);
     };
 
@@ -316,8 +371,10 @@ export default function PlacesAutocomplete({
 
     return () => {
       cancelled = true;
+      try { cleanupPosition?.(); } catch (_e) { /* noop */ }
       try { el?.remove(); } catch (_e) { /* noop */ }
       elRef.current = null;
+      setElementReady(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
@@ -338,28 +395,46 @@ export default function PlacesAutocomplete({
     el.disabled = !!disabled;
   }, [placeholder, disabled]);
 
-  // Without a key there is no element to mount, so fall back to a plain field.
-  // The four call sites already gate on the key and render their own input, so
-  // this is belt-and-braces rather than a path they exercise.
-  if (!apiKey) {
-    return (
-      <input
-        id={id}
-        type="text"
-        value={value ?? ''}
-        onChange={(e) => onChange?.(e.target.value)}
-        placeholder={placeholder}
-        disabled={disabled}
-        autoFocus={autoFocus}
-        maxLength={maxLength}
-        autoComplete="off"
-        style={style}
-      />
-    );
-  }
+  // THERE IS ALWAYS A TYPEABLE FIELD. The first cut of this migration rendered
+  // only the host div when a key was present, so any Google failure -- offline,
+  // referrer refused, quota, or our own 15s timeout -- left an EMPTY BOX the
+  // operator could not type into, while all four surfaces told them to "type
+  // the name and address in yourself". The legacy widget never had that hole:
+  // it was a real <input> that merely lost its typeahead. With a location now
+  // REQUIRED to create a program, that regression could have stopped a lean
+  // operator from creating a class by any route at all.
+  //
+  // So the plain input renders until the element is confirmed mounted, and the
+  // host div renders ALWAYS -- attach() has nowhere to append otherwise. Only
+  // one of them is visible at a time.
+  const showFallback = !apiKey || !elementReady;
 
-  // The caller's `style` goes on the HOST: the element's own input is stripped
-  // bare by ::part(input) above, so the border/padding/radius the four surfaces
-  // pass is what the operator sees, unchanged from the legacy widget.
-  return <div ref={hostRef} style={style} />;
+  return (
+    <>
+      {apiKey && (
+        // The caller's `style` goes on the HOST: the element's own input is
+        // stripped bare by ::part(input), so the border/padding/radius the four
+        // surfaces pass is what the operator sees, as with the legacy widget.
+        <div ref={hostRef} style={showFallback ? { display: 'none' } : style} />
+      )}
+      {showFallback && (
+        <input
+          ref={fallbackRef}
+          // Safe to carry the id: showFallback is false the moment the element
+          // mounts, so the two never exist at once and a <label htmlFor> always
+          // has exactly one target.
+          id={id}
+          type="text"
+          value={value ?? ''}
+          onChange={(e) => onChange?.(e.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+          autoFocus={autoFocus}
+          maxLength={maxLength}
+          autoComplete="off"
+          style={style}
+        />
+      )}
+    </>
+  );
 }
