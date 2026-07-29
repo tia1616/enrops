@@ -54,11 +54,16 @@ export default function StarterPolicyNotice({ org }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [notice, setNotice] = useState(null); // null = nothing owed / not loaded yet
+  // Once the database says nothing is owed, that answer is permanent: an
+  // acknowledgement is never deleted (the table has no DELETE policy) and
+  // seeded_by_platform only ever goes true -> false. So we stop asking, and only
+  // operators who genuinely still owe an acknowledgement keep revalidating.
+  const [settled, setSettled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!org?.id) return;
+    if (!org?.id || settled) return;
     let mounted = true;
     (async () => {
       // The DATABASE decides whether this is owed, not the browser. Fetching the
@@ -68,14 +73,31 @@ export default function StarterPolicyNotice({ org }) {
       // actually been told.
       const { data, error: err } = await supabase.rpc("starter_policy_notice", { p_org_id: org.id });
       if (!mounted) return;
-      // Fail CLOSED on a read error: showing a consent notice we couldn't verify
-      // is owed would tell an operator who wrote their own policy that we
-      // published one for them, which is simply false.
-      if (err || !data?.needs_notice) return;
+      // A read error is transient and says nothing about what is owed. Leave
+      // whatever we already knew in place and re-ask on the next navigation
+      // rather than inventing an answer in either direction.
+      if (err) return;
+      if (!data?.needs_notice) {
+        // CLEARING THIS IS THE POINT. AdminLayout never unmounts, so `notice`
+        // survives every in-app navigation. Before this, an operator who
+        // replaced the policy with their own wording (which clears
+        // seeded_by_platform) kept seeing the card on other pages, still showing
+        // the OLD seeded text and still claiming we published it for them -
+        // exactly the false statement this feature exists to prevent. It
+        // self-corrected only on a full page reload, which is why every earlier
+        // check missed it: they all reloaded.
+        setNotice(null);
+        setSettled(true);
+        return;
+      }
       setNotice(data);
     })();
     return () => { mounted = false; };
-  }, [org?.id]);
+    // Revalidates on every admin navigation while an acknowledgement is still
+    // outstanding. That is a cheap STABLE call, it stops the moment the operator
+    // acts, and the alternative is trusting state that the database can
+    // contradict at any time.
+  }, [org?.id, location.pathname, settled]);
 
   const acknowledge = useCallback(async (response) => {
     setBusy(true);
@@ -98,34 +120,35 @@ export default function StarterPolicyNotice({ org }) {
     // Only dismiss on a CONFIRMED write. Hiding the card on a failed
     // acknowledgement would leave us believing this operator had been told when
     // no record of it exists — the exact failure this whole feature is fixing.
-    if (ok) setNotice(null);
+    if (!ok) return;
+    setNotice(null);
+    setSettled(true);
   }
 
   async function handleEdit() {
     if (busy) return;
     const ok = await acknowledge("editing");
-    // Navigate either way — they asked to go edit it, and refusing to move
-    // because a bookkeeping write failed would be punishing them for our
-    // problem. But only HIDE the card when the write landed: dismissing it on
-    // failure would swallow the error message with it, and the destination is
-    // the page this card is already on, so leaving it up costs nothing and
-    // keeps the failure visible right where they clicked.
-    if (ok) setNotice(null);
+    // STAY PUT ON FAILURE. Navigating anyway used to mean the error message
+    // travelled to a page where the card is suppressed, so it vanished on
+    // arrival and the operator was told nothing. Keeping them here shows the
+    // failure directly under the button they pressed, and they can press it
+    // again. Getting this right also removed the reason the suppression below
+    // needed an `error` exception — which was itself sticky for the whole
+    // session, because `error` only ever cleared on the next attempt.
+    if (!ok) return;
+    setNotice(null);
+    setSettled(true);
     navigate("/admin/waivers");
   }
 
   if (!notice) return null;
-  // Checked at RENDER, not in the fetch, so the acknowledgement state stays
-  // loaded — navigating away from Waivers & policies brings the card straight
-  // back without a refetch.
-  //
-  // `&& !error` is load-bearing. "Edit it now" navigates HERE, and on a failed
-  // write it deliberately keeps the card up to show why. Suppressing
-  // unconditionally would have hidden the card and its error message together
-  // on arrival — the operator clicks, lands on this page, and nothing tells
-  // them the acknowledgement never saved. Redundancy is worth avoiding; a
-  // silent failure is not.
-  if (location.pathname === SUPPRESS_ON && !error) return null;
+  // Unconditional now. It used to carry an `&& !error` exception so that a
+  // failed acknowledgement arriving here still showed its message — but that
+  // state never cleared, so a single network blip restored the duplicate card
+  // on this page for the rest of the session, complete with a stale error on a
+  // page the operator had not clicked anything on. handleEdit no longer
+  // navigates on failure, so there is nothing left to rescue here.
+  if (location.pathname === SUPPRESS_ON) return null;
 
   const waivers = notice.active_waiver_count ?? 0;
   // Where the promise actually reaches a family. A tenant who brings their own
