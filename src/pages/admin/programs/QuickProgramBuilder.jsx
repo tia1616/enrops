@@ -200,6 +200,7 @@ export default function QuickProgramBuilder() {
       // read as "this org has nothing".
       try {
         const { data, error: locErr } = await supabase
+          .from("program_locations")
           // address comes back so the picker can SHOW where the class actually
           // is. Selecting only id+name is why an operator who had just looked
           // an address up could not see it again anywhere on this screen.
