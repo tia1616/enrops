@@ -215,19 +215,37 @@ export default function AdminLayout() {
         }
         setUser(session.user);
 
-        // Look up org_members row for this auth user.
-        // If the URL carries ?org=<id> (e.g. after an OAuth redirect), filter to
-        // that org so a multi-org user lands on the right one. .limit(1) prevents
-        // the bare .maybeSingle() from erroring when multiple rows match.
+        // Look up the org_members row for this auth user.
+        //
+        // .limit(1) is load-bearing, not decorative. A bare .maybeSingle()
+        // ERRORS when more than one row matches, and a user may legitimately be
+        // staff at one org and admin at another (only OWNER-membership is capped
+        // at one - see 20260724a_owner_org_unique_index.sql). Without the limit,
+        // such a user gets an "unauthorized" screen despite valid memberships.
+        //
+        // ?org=<id> is a LANDING HINT, not an access rule. stripe-oauth-callback
+        // appends it so the operator returns to the org they just connected
+        // rather than whichever row sorted first. It is deliberately NOT
+        // authorization: the query is still scoped to this user's own
+        // memberships, so an org id they don't belong to simply finds nothing -
+        // and when that happens we fall back to their default org instead of
+        // locking them out of their own admin over a query string.
         const orgParam = new URLSearchParams(location.search).get("org");
-        let membersQuery = supabase
-          .from("org_members")
-          .select("id, role, organization_id, accepted_at")
-          .eq("auth_user_id", session.user.id);
-        if (orgParam) membersQuery = membersQuery.eq("organization_id", orgParam);
-        const { data: memberRow, error: memErr } = await membersQuery
-          .limit(1)
-          .maybeSingle();
+
+        const loadMembership = (orgId) => {
+          let q = supabase
+            .from("org_members")
+            .select("id, role, organization_id, accepted_at")
+            .eq("auth_user_id", session.user.id);
+          if (orgId) q = q.eq("organization_id", orgId);
+          return q.limit(1).maybeSingle();
+        };
+
+        let { data: memberRow, error: memErr } = await loadMembership(orgParam);
+        if (orgParam && !memErr && !memberRow) {
+          // The hint pointed somewhere this user has no membership. Ignore it.
+          ({ data: memberRow, error: memErr } = await loadMembership(null));
+        }
 
         console.log("org_members query:", { memberRow, memErr, uid: session.user.id });
 
