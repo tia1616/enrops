@@ -21,7 +21,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
-import { renderWaiverText, hasOrgToken } from "../../lib/waiverText.js";
+import { splitOnOrgToken, hasOrgToken } from "../../lib/waiverText.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -52,19 +52,73 @@ const POLICY_KINDS = [
     label: "Cancellation & Refund Policy",
     blurb:
       "What happens when a family cancels or asks for a refund. Families see this on the payment step, before they pay.",
-    // The admin fee is a separate, easy-to-miss setting on the Payments page.
-    // An operator writing their cancellation wording is exactly the person who
-    // needs to know it exists and is theirs to change — otherwise they either
-    // promise something the refund screen won't do, or never realise they can
-    // keep a fee at all.
-    note: {
-      text: "Charging an admin fee when a family withdraws? Set the amount under",
-      linkTo: "/admin/finances",
-      linkLabel: "Payments → Manage setup",
-      after: "so it matches what you say here.",
-    },
+    // The admin fee note is built at render time by adminFeeNote() below — what
+    // it can truthfully say depends on whether the operator can reach the
+    // setting yet.
+    hasAdminFeeNote: true,
   },
 ];
+
+// The admin fee is a separate, easy-to-miss setting on the Payments page. An
+// operator writing their cancellation wording is exactly the person who needs to
+// know it exists and is theirs to change — otherwise they either promise
+// something the refund screen won't do, or never realise they can keep a fee at
+// all.
+//
+// TWO BRANCHES, BOTH TRUE IN THE STATE THAT SELECTS THEM. The field only renders
+// inside Finances' "Manage setup" panel, and that panel only exists when
+// stripe_account_status === 'active' (Finances.jsx: `isActive` gates it). So for
+// an operator who has not finished Stripe — which is EVERY brand-new self-serve
+// signup — the original single-branch note sent them to a page with no such
+// setting on it and no way to reach one. Telling someone to go set a value that
+// does not exist for them yet is worse than saying nothing.
+//
+// The link target is written once here rather than per branch, so the two
+// cannot drift apart.
+// THREE states, three sentences. A new tenant provisions with the fee at 0, so
+// "no fee set" is the DEFAULT — and that is the moment worth advising, not an
+// edge case. Reusing one sentence across all three would tell an operator who
+// has already set $35 that they could set a fee, which is the bug class that
+// bit the refund drawer.
+//
+// It RECOMMENDS rather than just pointing, because the setting is invisible
+// otherwise. The reasoning is stated in plain bottom-line terms and
+// deliberately carries NO percentage: we have no withdrawal data yet, and an
+// invented number is worse than none.
+const FINANCES_PATH = "/admin/finances";
+// WHAT IS TRUE and WHERE THEY CAN GO are answered separately and deliberately.
+// Deciding the sentence from `stripeActive` alone would tell an operator who set
+// a $35 fee and later disconnected Stripe that they have no fee — reusing a
+// can-we-offer-this condition to state a fact is precisely how the refund drawer
+// ended up telling an operator the opposite of the truth.
+function adminFeeNote(stripeActive, feeCents) {
+  // ?setup=1 opens the "Manage setup" panel on arrival. It only exists when
+  // Stripe is active, so anyone else is sent to the page's own front door.
+  const dest = stripeActive
+    ? { linkTo: `${FINANCES_PATH}?setup=1`, linkLabel: "Payments → Manage setup" }
+    : { linkTo: FINANCES_PATH, linkLabel: "connect Stripe to get paid" };
+
+  // Why a fee is worth charging, said once so the two "no fee yet" branches
+  // cannot drift apart. No percentage: we have no withdrawal data, and an
+  // invented number would be worse than none.
+  const WHY = "Most of what a withdrawal costs you is the seat you may not refill, plus the time to process it — a small fee covers that and still reads as fair to families.";
+
+  if (feeCents > 0) {
+    const has = `You keep a ${formatMoney(feeCents)} admin fee when a family withdraws, and the wording above should say so — an amount families were never told about is the one that gets disputed.`;
+    return stripeActive
+      ? { ...dest, text: `${has} Change it under`, after: "any time." }
+      : { ...dest, text: `${has} You can change the amount once you`, after: "again." };
+  }
+
+  return stripeActive
+    ? { ...dest, text: `You don’t charge an admin fee when a family withdraws. ${WHY} Set one under`, after: "and say so in the wording above." }
+    : { ...dest, text: `You don’t charge an admin fee when a family withdraws. ${WHY} You can set one once you`, after: "— then come back and say so in the wording above." };
+}
+
+function formatMoney(cents) {
+  const d = (cents || 0) / 100;
+  return `$${d % 1 === 0 ? d.toFixed(0) : d.toFixed(2)}`;
+}
 
 export default function WaiverManager() {
   const { org } = useOutletContext();
@@ -81,11 +135,20 @@ export default function WaiverManager() {
   const [editingPolicy, setEditingPolicy] = useState(null); // { type, label, row|null }
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
+  // Whether the admin-fee setting is actually reachable. Read here rather than
+  // from the outlet context, which carries stripe_charges_enabled — a DIFFERENT
+  // flag. The note has to branch on the SAME condition that decides whether the
+  // field renders (Finances gates it on stripe_account_status === 'active'), or
+  // it will confidently point at a control that isn't there.
+  const [stripeActive, setStripeActive] = useState(null); // null = unknown
+  // The fee itself, so the note can say what they actually charge instead of
+  // asking a question it already knows the answer to.
+  const [adminFeeCents, setAdminFeeCents] = useState(0);
 
   async function load() {
     if (!org?.id) return;
     setError("");
-    const [wRes, pRes] = await Promise.all([
+    const [wRes, pRes, sRes] = await Promise.all([
       supabase
         .from("waivers")
         .select("id, name, content, required, active, version, updated_at")
@@ -98,8 +161,20 @@ export default function WaiverManager() {
         .from("org_policies")
         .select("id, policy_type, content_markdown, effective_date, last_updated, published")
         .eq("organization_id", org.id),
+      supabase
+        .from("organizations")
+        .select("stripe_account_status, withdrawal_admin_fee_cents")
+        .eq("id", org.id)
+        .maybeSingle(),
     ]);
     if (wRes.error) { setError(wRes.error.message); return; }
+    // Three states, and a missing row is NOT the same as "hasn't connected".
+    // `?.` on an absent row would quietly collapse unknown into false and tell
+    // an operator who is already taking money to go connect Stripe.
+    setStripeActive(
+      sRes.error || !sRes.data ? null : sRes.data.stripe_account_status === "active",
+    );
+    setAdminFeeCents(sRes.data?.withdrawal_admin_fee_cents || 0);
     setWaivers(wRes.data ?? []);
     // Policies are secondary — a failure here shouldn't blank the waivers list.
     // But it must NOT render as "Not published" either: that reads as a settled
@@ -189,6 +264,13 @@ export default function WaiverManager() {
           // would keep published = false on the conflict update and the "Publish"
           // button would silently save-but-not-publish.
           published: true,
+          // These are now the OPERATOR'S words, whatever they started as. This
+          // is what stops the "we published a policy under your name" notice
+          // from greeting someone who is looking at a policy they wrote
+          // themselves. It must be set on the upsert rather than only on the
+          // insert: the row usually already exists (seeded at provisioning), so
+          // the conflict UPDATE is the path that actually runs.
+          seeded_by_platform: false,
         },
         { onConflict: "organization_id,policy_type" },
       );
@@ -286,8 +368,15 @@ export default function WaiverManager() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginTop: 8 }}>
         <div>
           <h1 style={{ margin: 0, color: PURPLE, fontSize: 24, fontWeight: 700 }}>Waivers &amp; policies</h1>
-          <p style={{ color: MUTED, fontSize: 14, marginTop: 4, lineHeight: 1.5, maxWidth: 560 }}>
-            The agreements families sign to enroll, and the privacy policy and terms you publish on your registration site.
+          {/* The legal-advice line lives HERE and nowhere else. It used to also
+              sit inside the policy editor, which meant an operator met it again
+              every time they edited anything — a warning repeated on every
+              document stops being read. Said once, as part of what this page
+              is. */}
+          <p style={{ color: MUTED, fontSize: 14, marginTop: 4, lineHeight: 1.5, maxWidth: 620 }}>
+            The agreements families sign to enroll, and the privacy policy and terms you publish on
+            your registration site. Our starter wording is a helpful beginning, not legal advice
+            &mdash; it&rsquo;s worth having a lawyer read anything that really matters to your business.
           </p>
         </div>
       </div>
@@ -340,7 +429,9 @@ export default function WaiverManager() {
                       filled in. The EDITOR below deliberately keeps the raw
                       {{org}} token — substituting there and saving would write
                       the name back into the stored text and re-freeze it. */}
-                  <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>{renderWaiverText(w.content, org?.name)}</div>
+                  <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>
+                    <OrgName content={w.content} orgName={org?.name} />
+                  </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button type="button" onClick={() => openWaiverEditor(w)} style={ghostBtn(false)}>Edit</button>
@@ -434,18 +525,27 @@ export default function WaiverManager() {
                       <>Saved {formatStamp(row.last_updated)}, kept as a draft. Not shown on your site until you publish it.</>
                     ) : kind.blurb}
                   </div>
-                  {/* Shown in every state, not just the empty one: an operator
-                      who already published a policy is the most likely to have
-                      never seen the admin fee setting. */}
-                  {kind.note && (
-                    <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560 }}>
-                      {kind.note.text}{" "}
-                      <Link to={kind.note.linkTo} style={{ color: BRIGHT, textDecoration: "none" }}>
-                        {kind.note.linkLabel}
-                      </Link>{" "}
-                      {kind.note.after}
-                    </div>
-                  )}
+                  {/* Shown in every policy state, not just the empty one: an
+                      operator who already published a policy is the most likely
+                      to have never seen the admin fee setting.
+
+                      Held back while stripeActive is null (still loading, or the
+                      lookup failed). That is a THIRD state, and neither sentence
+                      is true in it — guessing would either send them after a
+                      control that isn't there or tell them to connect Stripe
+                      they may already have connected. */}
+                  {kind.hasAdminFeeNote && stripeActive !== null && (() => {
+                    const note = adminFeeNote(stripeActive, adminFeeCents);
+                    return (
+                      <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560 }}>
+                        {note.text}{" "}
+                        <Link to={note.linkTo} style={{ color: BRIGHT, textDecoration: "none" }}>
+                          {note.linkLabel}
+                        </Link>{" "}
+                        {note.after}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {isDraft && (
@@ -516,9 +616,15 @@ function PolicyEditor({ kind, busy, saveError, onCancel, onSave }) {
         <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} style={{ ...input, maxWidth: 220 }} disabled={busy} />
 
         <label style={{ ...lbl, marginTop: 16 }}>Policy text</label>
+        {/* No Markdown syntax here on purpose. An operator pasting their real
+            policy does not want to learn "##" and "**" to publish it, and the
+            old note taught the syntax before saying the thing that actually
+            matters: plain text is fine. The one instruction kept is the one
+            that changes the output — a blank line is what separates
+            paragraphs. */}
         <p style={{ margin: "0 0 8px", fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
-          Paste your policy here. Plain text works. If you use Markdown, <strong>## Heading</strong> makes a
-          section heading, <strong>- item</strong> makes a bullet, and <strong>**bold**</strong> bolds text.
+          Paste or type your policy here. Plain writing is fine &mdash; leave a blank line between
+          paragraphs and families will see it laid out the way you wrote it.
         </p>
         <textarea
           value={content}
@@ -529,11 +635,10 @@ function PolicyEditor({ kind, busy, saveError, onCancel, onSave }) {
           disabled={busy}
         />
 
-        <div style={{ marginTop: 14, padding: "10px 12px", background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
-          This is your own legal document. Enrops publishes separate platform policies covering the
-          registration software itself — yours doesn&rsquo;t need to repeat them.
-        </div>
-
+        {/* The "this is your own legal document" note was removed from here
+            (Jessica, 2026-07-28). It rendered inside EVERY policy editor, so
+            the same caution was met three times over and stopped being read.
+            It now appears once, in the page subtitle. */}
         {saveError && (
           <div style={{ marginTop: 14, padding: "10px 12px", background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 8, color: "#991b1b", fontSize: 13, lineHeight: 1.5 }}>
             That didn&rsquo;t save, so nothing changed for families. ({saveError})
@@ -606,6 +711,32 @@ function WaiverEditor({ waiver, busy, saveError, onCancel, onSave }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// The operator's own business name, drawn bold inside the waiver preview, so a
+// page of boilerplate reads at a glance as THEIR document rather than a generic
+// template we handed them.
+//
+// Bold only here, on the operator's review surface. The text a family reads and
+// signs still renders through renderWaiverText as a plain string, and
+// waiver_text_snapshot - the record of what was actually agreed to - must never
+// contain markup.
+function OrgName({ content, orgName }) {
+  const name = typeof orgName === "string" ? orgName.trim() : "";
+  const segments = splitOnOrgToken(content);
+  // Same fallback as renderWaiverText: a legal document must never show a raw
+  // token, and it must never borrow another provider's name.
+  const shown = name || "the program provider";
+  return (
+    <>
+      {segments.map((seg, i) => (
+        <span key={i}>
+          {i > 0 && <strong style={{ color: INK, fontWeight: 700 }}>{shown}</strong>}
+          {seg}
+        </span>
+      ))}
+    </>
   );
 }
 

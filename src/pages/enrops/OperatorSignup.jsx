@@ -10,7 +10,14 @@ import EnropsWordmark from '../../components/EnropsWordmark.jsx';
 //   1. Passwordless auth (Google or magic link) — no credit card, no password.
 //   2. Once signed in with NO org, they type ONLY their business name.
 //   3. provision_operator_org() atomically stands up their org + owner + defaults
-//      (fee model, a seeded waiver, the lean generic form) and returns their slug.
+//      (fee model, seeded waivers, a seeded cancellation & refund policy, the
+//      lean generic form) and returns their slug.
+//      Two of those defaults go LIVE PUBLICLY under the operator's business
+//      name: the cancellation policy renders at /{slug}/cancellation and is
+//      shown to families before they pay, and the waivers appear in their
+//      registration form. That is disclosed on the done screen below and then
+//      properly, with the actual wording, by StarterPolicyNotice in the admin
+//      shell. It must never go back to being mentioned only in a comment.
 //   4. We reveal their live URL, then send them in to build their first program.
 //
 // A signed-in user who ALREADY owns an org is bounced straight to /admin (their
@@ -198,6 +205,10 @@ export default function OperatorSignup() {
           background:rgba(38,214,135,0.08); border:1px solid rgba(38,214,135,0.25); border-radius:10px;
           padding:14px 16px; margin:4px 0 20px; word-break:break-all; }
         .enr-signup .url-reveal .u { color:var(--mint); font-weight:700; font-size:15px; }
+        .enr-signup .seeded {
+          background:rgba(140,136,255,0.1); border:1px solid rgba(140,136,255,0.3); border-radius:10px;
+          padding:12px 14px; margin:0 0 18px; font-size:12.5px; line-height:1.6; color:rgba(255,255,255,0.82); }
+        .enr-signup .seeded strong { color:#fff; font-weight:600; }
         .enr-signup .alert { margin-top:14px; padding:11px 13px; border-radius:8px; font-size:13px; }
         .enr-signup .alert.err { background:rgba(255,120,140,0.12); border:1px solid rgba(255,120,140,0.3); color:#ffb3c0; }
         .enr-signup .alert.ok { background:rgba(38,214,135,0.12); border:1px solid rgba(38,214,135,0.3); color:var(--mint); }
@@ -259,7 +270,19 @@ export default function OperatorSignup() {
             <div className="url-reveal">
               <span className="u">enrops.com/{createdSlug}</span>
             </div>
-            <p className="note" style={{ marginBottom: 20 }}>You can change this address anytime in Settings.</p>
+            <p className="note" style={{ marginBottom: 16 }}>You can change this address anytime in Settings.</p>
+            {/* Said here, at the moment the page goes live, because this is when
+                it becomes true. It is deliberately a statement of fact with no
+                button: the real disclosure — the actual policy wording, and the
+                choice to keep or change it — is StarterPolicyNotice, waiting in
+                the admin shell they land in next. Two competing acknowledgement
+                surfaces would mean neither is the one that counts. */}
+            <div className="seeded">
+              <strong>We&rsquo;ve set up a starter cancellation &amp; refund policy and waivers for you</strong>,
+              published under your business name so your page is ready for families today.
+              They&rsquo;re our words, not yours &mdash; we&rsquo;ll show you exactly what they say
+              in a moment, and you can change any of it.
+            </div>
             <button type="button" className="btn-mint" onClick={() => navigate('/admin/programs/quick-new', { replace: true })}>
               Build your first program →
             </button>

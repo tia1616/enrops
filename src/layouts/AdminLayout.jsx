@@ -8,7 +8,9 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
+import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
+import StarterPolicyNotice from "../components/StarterPolicyNotice.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
 import PortalSwitcher from "../components/PortalSwitcher.jsx";
@@ -102,9 +104,10 @@ const NAV = [
 // Lean registration operators (instructor_pay_model === 'enrops_platform') run a
 // registration-only surface — no instructors, curriculum library, or comms yet.
 // Trim the sidebar to Home . Programs . Finances . Discounts . Settings and hide
-// the paid / curriculum surfaces. Locations (the Partners surface) moves under
-// Settings for lean ops — they set a venue inline in the program builder, so a
-// top-level manager is noise. Any legacy_own_platform tenant (J2S) keeps the
+// the paid / curriculum surfaces. Locations (the Partners surface) is a TAB
+// under Programs for lean ops — they pick a venue every time they build a class,
+// so it belongs beside the programs it serves and not in Settings, where it
+// briefly lived. Any legacy_own_platform tenant (J2S) keeps the
 // full nav — this returns the SAME array reference for them, so their path is
 // unchanged. Empirically safe: every enrops_platform tenant on prod has zero
 // instructors and zero programs, so nothing they use is being hidden.
@@ -124,7 +127,9 @@ function shapeNavForOrg(nav, org) {
                                      // ROUTE still works, so any org that
                                      // already has a second admin keeps it.
     "/admin/schedule",               // Instructors (paid upgrade)
-    "/admin/schools",                // Locations/Partners -> reachable via Settings
+    "/admin/schools",                // Locations/Partners -> now a tab under
+                                     // Programs (see the tabs block below), so
+                                     // it stays off the top-level sidebar.
     "/admin/family-comms/contacts",  // Comms (paid upgrade)
     "/admin/community",              // Community (coming soon)
   ]);
@@ -132,10 +137,20 @@ function shapeNavForOrg(nav, org) {
   for (const item of nav) {
     if (HIDE_TOP.has(item.to)) continue;
     if (item.to === "/admin/programs" && item.tabs) {
-      // Drop the curriculum "Offerings" library and the afterschool custody log.
+      // Drop the curriculum "Offerings" library and the afterschool custody log,
+      // then add the venue surface as a tab. Locations/Calendars used to sit
+      // under Settings for lean ops, which is where you put things you configure
+      // once -- but a registration operator picks a location every time they
+      // build a class, so it belongs beside the programs it serves, not in a
+      // settings drawer. Calendars stays an inner tab of that page (it has no
+      // route of its own; /admin/calendars just redirects to ?tab=calendars).
+      // Label mirrors the page's own reframing, same rule as the sidebar item.
       out.push({
         ...item,
-        tabs: item.tabs.filter((t) => t.to !== "/admin/curricula" && t.to !== "/admin/class-reports"),
+        tabs: [
+          ...item.tabs.filter((t) => t.to !== "/admin/curricula" && t.to !== "/admin/class-reports"),
+          { to: "/admin/schools", label: org?.venue_model === "own_venue" ? "Locations" : "Partners" },
+        ],
       });
       continue;
     }
@@ -150,12 +165,10 @@ function shapeNavForOrg(nav, org) {
       out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
       continue;
     }
-    if (item.to === "/admin/settings") {
-      // Locations lives under Settings for lean ops, so keep Settings lit when
-      // they're on the /admin/schools (or calendars) page reached from there.
-      out.push({ ...item, match: [...(item.match || [item.to]), "/admin/schools", "/admin/calendars"] });
-      continue;
-    }
+    // NOTE: Settings no longer claims /admin/schools in its `match` list. That
+    // existed only to keep Settings lit while the venue surface was reached
+    // from there; now it is a Programs tab, so Programs owns the highlight and
+    // two nav items lighting at once would be a lie about where you are.
     out.push(item);
   }
   return out;
@@ -544,9 +557,11 @@ export default function AdminLayout() {
             })}
           </nav>
 
-          {/* Feedback widget removed from the sidebar (Jessica, 2026-07-24).
-              The component still exists if we want it back on a specific
-              surface later. */}
+          {/* Always-available feedback path for early partners. Lives here in the
+              sidebar (not a floating corner pill) so it never covers page action
+              bars like marketing's "Approve & schedule". Removed 2026-07-24,
+              restored 2026-07-27 at Jessica's request. */}
+          <FeedbackWidget org={org} />
 
           {/* Lifetime time-saved tally — every Director action contributes. */}
           {timeSavedTotal != null && timeSavedTotal > 0 && (
@@ -606,6 +621,13 @@ export default function AdminLayout() {
         {/* Main */}
         <main data-admin-main style={{ padding: "28px 36px", maxWidth: 1200 }}>
           <AnnouncementBanner />
+          {/* Sits in the SHELL, not on the dashboard, and outside the
+              `blockedItem` branch below — a lean registration-only tenant never
+              lands on /admin (AdminOverview sends them to /admin/programs), and
+              those are precisely the self-serve operators who had a refund
+              promise published under their name without being told. Anywhere
+              else and the people it is for would never see it. */}
+          <StarterPolicyNotice org={org} />
           {blockedItem ? (
             <div style={{ maxWidth: 460, margin: "40px auto 0", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, textAlign: "center" }}>
               <div style={{ fontSize: 18, fontWeight: 700, color: PURPLE, marginBottom: 8 }}>

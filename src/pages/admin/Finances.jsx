@@ -97,6 +97,13 @@ export default function Finances() {
   //   /admin/finances?stripe=refresh   — link expired, mint a new one
   const stripeParam = searchParams.get("stripe");
 
+  // /admin/finances?setup=1 — arrive with "Manage setup" already open. Sent from
+  // the Cancellation & Refund Policy card in Waivers & policies, which tells the
+  // operator to come here and set their withdrawal admin fee. Without this the
+  // panel is collapsed on arrival and they land on a page where the setting they
+  // were just pointed at is nowhere on screen, which reads as a broken link.
+  const wantsSetupOpen = searchParams.get("setup") === "1";
+
   // ── load config ─────────────────────────────────────────────────────────
   async function reload() {
     if (!org?.id) return;
@@ -252,6 +259,11 @@ export default function Finances() {
   }
 
   useEffect(() => { reload(); /* eslint-disable-next-line */ }, [org?.id]);
+
+  // Deliberately one-way: it OPENS the panel and never closes it. Tying
+  // setupOpen to the param instead would fight the operator, snapping the panel
+  // shut again the moment they collapsed it themselves.
+  useEffect(() => { if (wantsSetupOpen) setSetupOpen(true); }, [wantsSetupOpen]);
 
   // Re-fetch when Stripe bounces back so the new status is visible quickly.
   // (The webhook is the source of truth, but it may land a few seconds after

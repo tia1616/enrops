@@ -34,6 +34,24 @@ export function renderWaiverText(content, orgName) {
 }
 
 /**
+ * Split stored content on the {{org}} token, returning the plain segments
+ * BETWEEN the occurrences. A caller that wants to draw the business name
+ * differently - bold, highlighted - interleaves its own element between them.
+ *
+ * Returned as data, not as elements, deliberately: this module is also imported
+ * by the signing path, and the one thing that must never happen is markup
+ * leaking into waiver_text_snapshot. renderWaiverText above stays the only
+ * function the snapshot uses, and it still returns a plain string.
+ *
+ * segments.length is always occurrences + 1, so the name goes between every
+ * adjacent pair.
+ */
+export function splitOnOrgToken(content) {
+  if (!content) return [''];
+  return String(content).split(ORG_TOKEN);
+}
+
+/**
  * True if this content still carries a token - used to explain the editor.
  *
  * Deliberately NOT the module-level /g regex: `test` on a global regex advances
