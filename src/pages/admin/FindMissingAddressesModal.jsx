@@ -2,9 +2,11 @@
 // don't have one yet, using Google Places. Operator clicks one button,
 // reviews the suggestions, accepts the good ones, saves in batch.
 //
-// Quota: each lookup is a Places "findPlaceFromQuery" call. Google's Maps
-// Platform $200/mo free credit covers ~12k of these — far more than any
-// realistic alpha tenant will need.
+// Quota: each lookup is one Places `Place.searchByText` call (Text Search).
+// Google retired the blanket $200/mo credit in March 2026 in favour of
+// per-API monthly free caps; Text Search's cap is far more than any realistic
+// alpha tenant will use, and this modal is one call per address-less location,
+// run manually.
 //
 // Activation: button on the Locations page header that opens this modal.
 // Only shown when (a) VITE_GOOGLE_MAPS_API_KEY is set AND (b) at least one
@@ -66,9 +68,13 @@ export default function FindMissingAddressesModal({ orgId, locations, onClose, o
     setProgress({ done: 0, total: missing.length });
     try {
       const google = await loadGoogleMaps(apiKey);
-      // PlacesService requires an attached element; a throwaway div is fine.
-      const host = document.createElement('div');
-      const service = new google.maps.places.PlacesService(host);
+      // `Place`, not the legacy `PlacesService`. PlacesService is deprecated in
+      // the same wave as the old Autocomplete widget and is unavailable on keys
+      // created after March 2025, so leaving it here would mean a key rotation
+      // silently broke bulk address lookup even after the typeahead was fixed.
+      // Place.searchByText is a plain promise, so the throwaway host div that
+      // PlacesService required is gone too.
+      const { Place } = await google.maps.importLibrary('places');
 
       const out = [];
       for (let i = 0; i < missing.length; i++) {
@@ -80,7 +86,7 @@ export default function FindMissingAddressesModal({ orgId, locations, onClose, o
         if (loc.district) queryParts.push(loc.district);
         const query = queryParts.join(' ');
         // eslint-disable-next-line no-await-in-loop
-        const candidate = await lookupOne(service, google, query);
+        const candidate = await lookupOne(Place, query);
         out.push({
           location: loc,
           suggested: candidate, // { name, formatted_address } or null
@@ -98,23 +104,26 @@ export default function FindMissingAddressesModal({ orgId, locations, onClose, o
     }
   }
 
-  function lookupOne(service, google, query) {
-    return new Promise((resolve) => {
-      service.findPlaceFromQuery(
-        {
-          query,
-          fields: ['name', 'formatted_address'],
-        },
-        (results, status) => {
-          if (status === google.maps.places.PlacesServiceStatus.OK && Array.isArray(results) && results.length > 0) {
-            const r = results[0];
-            resolve({ name: r.name ?? query, formatted_address: r.formatted_address ?? '' });
-          } else {
-            resolve(null);
-          }
-        },
-      );
-    });
+  // Returns the same { name, formatted_address } shape the rest of this modal
+  // already renders and saves, so only the lookup changed, not the review table
+  // or the write. A miss resolves to null exactly as the callback version did.
+  async function lookupOne(Place, query) {
+    try {
+      const { places } = await Place.searchByText({
+        textQuery: query,
+        fields: ['displayName', 'formattedAddress'],
+        maxResultCount: 1,
+        region: 'us',
+      });
+      const r = places?.[0];
+      if (!r) return null;
+      return { name: r.displayName ?? query, formatted_address: r.formattedAddress ?? '' };
+    } catch (e) {
+      // One bad row must not abort the whole batch — the old callback form
+      // could only ever resolve, so preserve that: log and treat as "not found".
+      if (typeof console !== 'undefined') console.warn('[FindMissingAddresses] lookup failed for', query, e?.message ?? e);
+      return null;
+    }
   }
 
   function toggleRow(i) {
