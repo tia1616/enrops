@@ -24,20 +24,51 @@
 //   US-based). Drop restriction later when international tenants land.
 // - The script tag is injected once per page-lifetime and cached on window
 //   so opening multiple modals doesn't reload it.
-// - If the API call fails (offline, quota, etc.) we silently fall back to
-//   a regular input — never block typing.
+//
+// WHICH GOOGLE API THIS USES (changed 2026-07-28)
+// Built on `google.maps.places.PlaceAutocompleteElement`, NOT the legacy
+// `places.Autocomplete` class. Google deprecated the legacy class on
+// 2026-03-01 and — the part that actually bites — it is NOT AVAILABLE AT ALL
+// on API keys or GCP projects created after March 2025. The old widget kept
+// working only because this key predates that, so a routine key rotation would
+// have silently killed address lookup on every venue surface at once.
+//
+// The element is a WEB COMPONENT with a CLOSED shadow root, which drives three
+// things below that would otherwise look arbitrary:
+//   1. It renders its own <input>; we cannot pass React a ref to it. So the
+//      component mounts the element imperatively and syncs `value` both ways.
+//   2. It cannot be styled from outside except through the ::part() hooks
+//      Google exposes. The caller's `style` goes on the HOST, and ::part(input)
+//      is stripped bare so the host's border/padding/radius is what you see —
+//      that is what keeps the four call sites looking identical.
+//   3. `input` events are composed, so they DO cross the shadow boundary and
+//      still drive onChange. Verified in the browser, not assumed: typing into
+//      a mounted element fires `input` on the host and updates host.value.
+// Selection fires `gmp-select` carrying `placePrediction`; `.toPlace()` +
+// `fetchFields` gives displayName / formattedAddress.
 
 import { useEffect, useRef } from 'react';
 
-// Google's Places dropdown attaches a div with class `.pac-container` to
-// document.body. Inside modals (z-index 200 in this app), the dropdown
-// sometimes renders behind the modal backdrop. Lift it above everything.
+// The element renders its dropdown inside its own shadow root rather than
+// appending `.pac-container` to document.body the way the legacy widget did,
+// so the old z-index hoist is gone. What IS still needed: the host must sit
+// above this app's modals (z-index 200), and the inner input must be stripped
+// of Google's chrome so the caller's own field styling is what shows.
 // Injected once per page-lifetime.
 let cssInjected = false;
 function ensurePacCss() {
   if (cssInjected || typeof document === 'undefined') return;
   const style = document.createElement('style');
-  style.textContent = '.pac-container{z-index:10001 !important;}';
+  style.textContent = [
+    'gmp-place-autocomplete[data-enrops]{display:block;position:relative;z-index:10001;}',
+    // Strip the element's own box so the HOST carries the border/padding/radius
+    // the caller passed. Without this you get a box inside a box.
+    'gmp-place-autocomplete[data-enrops]::part(input){',
+    'width:100%;box-sizing:border-box;border:none;outline:none;background:transparent;',
+    'font:inherit;color:inherit;padding:0;margin:0;min-width:0;}',
+    // The dropdown itself has to clear the modal backdrop too.
+    'gmp-place-autocomplete[data-enrops]::part(prediction-list){z-index:10002;}',
+  ].join('');
   document.head.appendChild(style);
   cssInjected = true;
 }
@@ -197,39 +228,71 @@ export default function PlacesAutocomplete({
   // but we have to SAY the lookup is unavailable.
   onLookupUnavailable,
 }) {
-  const inputRef = useRef(null);
+  const hostRef = useRef(null);   // wrapper we mount the web component into
+  const elRef = useRef(null);     // the <gmp-place-autocomplete> itself
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+  // Refresh the captured onSelect/onChange without rebuilding the element —
+  // stored on a ref so the listener closures read the latest values.
+  const handlersRef = useRef({ onChange, onSelect });
+  useEffect(() => {
+    handlersRef.current = { onChange, onSelect };
+  }, [onChange, onSelect]);
 
   useEffect(() => {
     // No key configured for this environment. Previously returned in silence.
     if (!apiKey) { onLookupUnavailable?.(true); return undefined; }
-    if (!inputRef.current) return undefined;
+    if (!hostRef.current) return undefined;
     ensurePacCss();
-    let autocomplete;
-    let listener;
     let cancelled = false;
-    // No timer here on purpose: loadGoogleMaps owns the timeout, so a hang
-    // arrives as a rejection in .catch below like any other failure, and every
-    // consumer of the loader gets the same behaviour from one place.
-    const attach = (google) => {
-      if (cancelled || !inputRef.current) return;
-      autocomplete = new google.maps.places.Autocomplete(inputRef.current, {
-        types: ['establishment', 'geocode'],
-        componentRestrictions: { country: 'us' },
-        fields: ['name', 'formatted_address'],
+    let el = null;
+
+    const attach = async (google) => {
+      // The element ships in the `places` library; importLibrary is the only
+      // supported way to reach it and is idempotent once loaded.
+      const { PlaceAutocompleteElement } = await google.maps.importLibrary('places');
+      if (cancelled || !hostRef.current) return;
+
+      // No includedPrimaryTypes: the legacy widget asked for
+      // ['establishment','geocode'] to cover "a named place OR an address",
+      // which is exactly what the new element returns by DEFAULT. Constraining
+      // it here would narrow results, not preserve them.
+      el = new PlaceAutocompleteElement({
+        includedRegionCodes: ['us'],
+        ...(maxLength ? { maxlength: maxLength } : {}),
       });
+      el.dataset.enrops = 'true';
+      if (id) el.id = id;
+      if (placeholder) el.placeholder = placeholder;
+      if (disabled) el.disabled = true;
+      el.value = value ?? '';
+
+      el.addEventListener('input', () => {
+        // Composed event: it crosses the closed shadow boundary, so this is how
+        // the caller's controlled `value` keeps up with typing. Load-bearing —
+        // QuickProgramBuilder gates its Save button on the typed name.
+        handlersRef.current.onChange?.(el.value);
+      });
+
+      el.addEventListener('gmp-select', async (event) => {
+        try {
+          const place = await event.placePrediction.toPlace();
+          await place.fetchFields({ fields: ['displayName', 'formattedAddress'] });
+          const name = place.displayName || el.value || '';
+          const address = place.formattedAddress || '';
+          // Same contract as before: never hand the caller a blank address.
+          if (!address) return;
+          handlersRef.current.onChange?.(name);
+          handlersRef.current.onSelect?.({ name, address });
+        } catch (e) {
+          if (typeof console !== 'undefined') console.warn('[PlacesAutocomplete] select failed:', e?.message ?? e);
+        }
+      });
+
+      hostRef.current.appendChild(el);
+      elRef.current = el;
+      if (autoFocus) { try { el.focus(); } catch (_e) { /* noop */ } }
       onLookupUnavailable?.(false);
-      listener = autocomplete.addListener('place_changed', () => {
-        const place = autocomplete.getPlace();
-        if (!place) return;
-        const name = place.name || (inputRef.current?.value ?? '');
-        const address = place.formatted_address || '';
-        if (!address) return;
-        // Read latest handlers via the ref so we don't have to rebuild
-        // Autocomplete every render.
-        const { onSelect: latestOnSelect } = handlersRef.current;
-        latestOnSelect?.({ name, address });
-      });
     };
 
     const tryLoad = (isRetry) => loadGoogleMaps(apiKey)
@@ -250,33 +313,53 @@ export default function PlacesAutocomplete({
         return undefined;
       });
     tryLoad(false);
+
     return () => {
       cancelled = true;
-      try { listener?.remove(); } catch (_e) { /* noop */ }
+      try { el?.remove(); } catch (_e) { /* noop */ }
+      elRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
-  // Refresh the captured onSelect/onChange in the listener without rebuilding
-  // the Autocomplete instance — store on ref so the listener closure can read
-  // the latest values without re-binding.
-  const handlersRef = useRef({ onChange, onSelect });
+  // Push caller-driven value changes into the element (e.g. applyPlace filling
+  // the name after a selection, or a form reset). Guarded on inequality so we
+  // never clobber the caret while the operator is typing.
   useEffect(() => {
-    handlersRef.current = { onChange, onSelect };
-  }, [onChange, onSelect]);
+    const el = elRef.current;
+    if (el && (value ?? '') !== el.value) el.value = value ?? '';
+  }, [value]);
 
-  return (
-    <input
-      ref={inputRef}
-      id={id}
-      type="text"
-      value={value ?? ''}
-      onChange={(e) => onChange?.(e.target.value)}
-      placeholder={placeholder}
-      disabled={disabled}
-      autoFocus={autoFocus}
-      maxLength={maxLength}
-      autoComplete="off"
-      style={style}
-    />
-  );
+  // Keep the element's own props in sync without rebuilding it.
+  useEffect(() => {
+    const el = elRef.current;
+    if (!el) return;
+    if (placeholder != null) el.placeholder = placeholder;
+    el.disabled = !!disabled;
+  }, [placeholder, disabled]);
+
+  // Without a key there is no element to mount, so fall back to a plain field.
+  // The four call sites already gate on the key and render their own input, so
+  // this is belt-and-braces rather than a path they exercise.
+  if (!apiKey) {
+    return (
+      <input
+        id={id}
+        type="text"
+        value={value ?? ''}
+        onChange={(e) => onChange?.(e.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        autoFocus={autoFocus}
+        maxLength={maxLength}
+        autoComplete="off"
+        style={style}
+      />
+    );
+  }
+
+  // The caller's `style` goes on the HOST: the element's own input is stripped
+  // bare by ::part(input) above, so the border/padding/radius the four surfaces
+  // pass is what the operator sees, unchanged from the legacy widget.
+  return <div ref={hostRef} style={style} />;
 }
