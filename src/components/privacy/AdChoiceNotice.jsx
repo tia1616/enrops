@@ -17,33 +17,57 @@
 //   - the browser sends Global Privacy Control (already answered, legally);
 //   - a choice is already stored.
 
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import {
   isPixelConfigured,
   hasGpcSignal,
   hasMadeAdChoice,
   optOutOfPixel,
   optInToPixel,
+  AD_CHOICE_EVENT,
 } from '../../lib/metaPixel.js';
+
+/** The choice page asks the same question with more room; never do both at once. */
+const CHOICE_PAGE = '/do-not-sell';
 
 const DEEP = '#1C004F';
 const MINT = '#26D687';
 
 export default function AdChoiceNotice() {
-  // Evaluated once on mount. Re-reading on every render would make the bar
-  // flicker back when another tab writes the key, and a notice that reappears
-  // after you answered it reads as broken.
-  const [needed, setNeeded] = useState(
-    () => isPixelConfigured() && !hasGpcSignal() && !hasMadeAdChoice(),
-  );
+  const location = useLocation();
+  const [answered, setAnswered] = useState(() => hasMadeAdChoice());
 
-  if (!needed) return null;
+  // This component is mounted OUTSIDE the route tree, so it is created once for
+  // the app's whole lifetime and navigation never remounts it. Reading the
+  // stored choice only at mount meant that answering anywhere else - the
+  // /do-not-sell page reachable from the footer link right next to this bar -
+  // left the bar on screen, still asking, with its buttons ready to overwrite
+  // the answer just given.
+  //
+  // Two listeners because there are two ways the choice can change underneath
+  // us: same tab (the choice page, via the module's own event) and another tab
+  // (localStorage, via 'storage', which by spec only fires in OTHER tabs).
+  useEffect(() => {
+    const sync = () => setAnswered(hasMadeAdChoice());
+    window.addEventListener(AD_CHOICE_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(AD_CHOICE_EVENT, sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, []);
+
+  if (answered) return null;
+  if (!isPixelConfigured() || hasGpcSignal()) return null;
+  // Never alongside the fuller control. Two things asking the same question on
+  // one screen is worse than either alone.
+  if (location.pathname === CHOICE_PAGE) return null;
 
   function answer(accepted) {
     if (accepted) optInToPixel();
     else optOutOfPixel();
-    setNeeded(false);
+    setAnswered(true);
   }
 
   return (

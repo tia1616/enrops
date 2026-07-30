@@ -61,6 +61,16 @@ function describe({ configured, gpc, optedOut }) {
       action: { label: 'Allow advertising measurement', kind: 'in' },
     };
   }
+  // ONE sentence, because one is all we can honestly say.
+  //
+  // A previous revision split this on isPixelActive() to add an "allowed, but
+  // not currently loaded" state for ad-blocked browsers. That was wrong twice
+  // over: bootstrap() sets `loaded` immediately after fbq('init'), which
+  // succeeds against the queue stub whether or not fbevents.js ever arrives, so
+  // isPixelActive() means "we started it" and the branch was UNREACHABLE - and
+  // even reachable, whether a blocker eats the request is not something we can
+  // observe or should claim. What we can state is our own posture: we have it
+  // enabled and we are sending. That is what this says.
   return {
     heading: 'Advertising measurement is on',
     body:

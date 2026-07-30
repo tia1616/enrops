@@ -29,6 +29,14 @@
 const PIXEL_ID = import.meta.env.VITE_META_PIXEL_ID;
 const OPT_OUT_KEY = 'enrops.meta.optout';
 
+/**
+ * Fired on this window whenever the advertising choice changes. Exported so the
+ * notice bar and the choice page listen for the same string rather than each
+ * hardcoding it - a typo on one side would fail silently, which is the whole
+ * bug class this event exists to close.
+ */
+export const AD_CHOICE_EVENT = 'enrops:adchoice';
+
 let loaded = false;
 let suppressed = false; // opted out or GPC - never send, even if fbq exists
 
@@ -192,6 +200,25 @@ export function optOutOfPixel() {
   suppressed = true;
   if (loaded && window.fbq) window.fbq('consent', 'revoke');
   clearMetaCookies();
+  announceChoice();
+}
+
+/**
+ * Tell the rest of the app the choice changed.
+ *
+ * The notice bar lives outside the route tree, so it is mounted once for the
+ * app's whole lifetime and SPA navigation never remounts it. Without this, a
+ * visitor who took the bar's own footer link to /do-not-sell and opted out
+ * there came back to find the bar still asking - and answering it would have
+ * overwritten the choice they had just made.
+ */
+function announceChoice() {
+  try {
+    window.dispatchEvent(new Event(AD_CHOICE_EVENT));
+  } catch {
+    // CustomEvent unavailable in some embedded webviews. The stored choice is
+    // already correct; only the live UI update is lost.
+  }
 }
 
 /**
@@ -309,4 +336,5 @@ export function optInToPixel() {
   suppressed = false;
   if (!loaded) bootstrap();
   else if (window.fbq) window.fbq('consent', 'grant');
+  announceChoice();
 }
