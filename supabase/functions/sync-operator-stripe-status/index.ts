@@ -76,25 +76,51 @@ serve(async (req: Request) => {
 
     // Resolve target org. If body.org_id is supplied, verify the caller has
     // owner/admin on THAT org. Otherwise find the caller's org by membership.
+    // A bare .maybeSingle() RESOLVES WITH AN ERROR when more than one row
+    // matches, and only OWNER membership is capped at one per user
+    // (20260724a_owner_org_unique_index). So somebody who owns one org and
+    // administers another matched twice here, got an error instead of a row,
+    // and - because the error was discarded - was told `forbidden`. They could
+    // not poll their Stripe status at all. Same defect already fixed in
+    // stripe-oauth-start; this copy was missed.
+    //
+    // Discarding the error also collapsed two different outcomes into one: a
+    // transient database failure looked exactly like "you are not a member".
+    // Both branches still FAIL CLOSED - an unreadable membership is never
+    // treated as permission - but they now say which happened.
     let targetOrgId: string | null = body.org_id || null;
     if (targetOrgId) {
-      const { data: cm } = await supabase
+      const { data: cm, error: cmErr } = await supabase
         .from('org_members')
         .select('role, organization_id')
         .eq('auth_user_id', callerAuthId)
         .eq('organization_id', targetOrgId)
         .in('role', ['owner', 'admin'])
         .not('accepted_at', 'is', null)
+        .limit(1)
         .maybeSingle();
+      if (cmErr) {
+        console.error('[sync-operator-stripe-status] membership check failed for org', targetOrgId, cmErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
       if (!cm) return FORBIDDEN;
     } else {
-      const { data: cm } = await supabase
+      // Deterministic pick, so the same caller resolves to the same org on
+      // every request rather than whichever row the planner happened to return.
+      const { data: cm, error: cmErr } = await supabase
         .from('org_members')
         .select('role, organization_id')
         .eq('auth_user_id', callerAuthId)
         .in('role', ['owner', 'admin'])
         .not('accepted_at', 'is', null)
+        .order('accepted_at', { ascending: true })
+        .order('organization_id', { ascending: true })
+        .limit(1)
         .maybeSingle();
+      if (cmErr) {
+        console.error('[sync-operator-stripe-status] membership lookup failed:', cmErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
       if (!cm) return FORBIDDEN;
       targetOrgId = (cm as { organization_id: string }).organization_id;
     }
