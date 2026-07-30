@@ -191,6 +191,11 @@ export function pixelTrackCustom(event) {
  * bootstraps in the first place.
  */
 export function optOutOfPixel() {
+  // Symmetric with optInToPixel. With no dataset id there is nothing to opt out
+  // of, and recording a choice anyway would mean that if a pixel is configured
+  // LATER, hasMadeAdChoice() already returns true and this person never sees the
+  // notice they were entitled to.
+  if (!PIXEL_ID) return;
   try {
     window.localStorage.setItem(OPT_OUT_KEY, '1');
   } catch {
@@ -332,9 +337,16 @@ export function optInToPixel() {
   }
   // GPC outranks a click. Someone sending GPC while clicking "allow" is a
   // contradiction, and the law says the signal wins.
-  if (hasGpcSignal()) return;
-  suppressed = false;
-  if (!loaded) bootstrap();
-  else if (window.fbq) window.fbq('consent', 'grant');
+  //
+  // Deliberately a wrapped block, NOT an early return: the choice above has
+  // already been written, and returning here skipped announceChoice() so the
+  // state changed while every mounted listener kept showing the old answer. The
+  // stored '0' is still correct to keep - if the signal is ever turned off, they
+  // did say yes - we simply refuse to act on it while the signal is present.
+  if (!hasGpcSignal()) {
+    suppressed = false;
+    if (!loaded) bootstrap();
+    else if (window.fbq) window.fbq('consent', 'grant');
+  }
   announceChoice();
 }

@@ -20,6 +20,7 @@ import {
   optOutOfPixel,
   optInToPixel,
 } from '../lib/metaPixel.js';
+import { useAdChoiceSignal } from '../lib/useAdChoice.js';
 
 const DEEP = '#1C004F';
 const MINT = '#26D687';
@@ -83,6 +84,11 @@ export default function DoNotSell() {
   // Read once per render pass rather than held in state, so the page cannot
   // disagree with the module about what is actually happening.
   const [, force] = useState(0);
+  // Re-render when the choice changes ANYWHERE - most importantly in another
+  // tab. Without this, opting out elsewhere left this page still reading
+  // "Advertising measurement is on" and still offering to opt you out, which is
+  // the one thing the page that owns this setting must never do.
+  useAdChoiceSignal();
   const configured = isPixelConfigured();
   const gpc = hasGpcSignal();
   const optedOut = hasOptedOut();
