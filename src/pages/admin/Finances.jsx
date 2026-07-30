@@ -701,6 +701,19 @@ export default function Finances() {
       {error && (
         <Banner tone="err">{error}</Banner>
       )}
+      {/* A SUCCESSFUL disconnect flips the status, which makes canDisconnect
+          false, which UNMOUNTS DisconnectPanel - taking its own confirmation
+          with it. Observed live on staging 2026-07-30: the account really was
+          disconnected and the page really did re-render, but the operator was
+          never told it worked; they had to infer it from the screen changing
+          under them. So the message is rendered here whenever the panel is gone.
+          The two are mutually exclusive (the panel renders only when
+          canDisconnect is true), so exactly one copy is ever on screen - and in
+          the post-disconnect state the page collapses to one short card, so this
+          IS beside where they just clicked, not a banner far above it. */}
+      {disconnectMsg && !canDisconnect && (
+        <Banner tone={disconnectMsg.tone}>{disconnectMsg.text}</Banner>
+      )}
       {savedToast && (
         <Banner tone="ok">{savedToast}</Banner>
       )}
