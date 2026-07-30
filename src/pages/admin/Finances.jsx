@@ -284,13 +284,37 @@ export default function Finances() {
     setError(null);
     const result = await syncStripeStatus();
     setCheckingStatus(false);
-    if (result?.stripe_account_status === "active") {
-      setSavedToast("You're all set — payments now route to your bank.");
-      setTimeout(() => setSavedToast(null), 3000);
-    } else if (result && !result.error) {
-      setSavedToast("Still verifying with Stripe — nothing to do yet.");
-      setTimeout(() => setSavedToast(null), 3000);
-    } else if (result?.error) {
+    // One sentence per state sync can actually return, because "Still verifying
+    // — nothing to do yet" is only true for ONE of them. It was being shown for
+    // all four non-active outcomes:
+    //   onboarding   — the operator's setup is UNFINISHED. Telling them there is
+    //                  nothing to do is the opposite of the truth, and this
+    //                  button lives on the onboarding screen, so that was the
+    //                  most likely outcome of pressing it.
+    //   restricted   — Stripe is waiting on THEM.
+    //   disconnected — newly reachable: sync now reports the real status when a
+    //                  concurrent disconnect supersedes the poll (superseded:
+    //                  true). The page re-renders into the disconnected state at
+    //                  the same moment, so the old copy would have contradicted
+    //                  the screen it sits on.
+    const status = result?.stripe_account_status;
+    const toast = (msg) => { setSavedToast(msg); setTimeout(() => setSavedToast(null), 3000); };
+    if (result?.error) {
+      setError("Couldn't reach Stripe just now. Try again in a moment.");
+    } else if (status === "active") {
+      toast("You're all set — payments now route to your bank.");
+    } else if (status === "disconnected") {
+      toast("That Stripe account is disconnected, so payments are off. Connect one below.");
+    } else if (status === "restricted") {
+      toast("Stripe needs a bit more from you before payments can switch on.");
+    } else if (status === "onboarding") {
+      toast("Stripe still needs your setup finished — pick up where you left off.");
+    } else if (result) {
+      toast("Still verifying with Stripe — nothing to do yet.");
+    } else {
+      // syncStripeStatus swallows a network failure and returns null, so every
+      // branch above misses and the button produced NO feedback at all — the
+      // "looks dead" failure. Say something true instead.
       setError("Couldn't reach Stripe just now. Try again in a moment.");
     }
   }
@@ -380,8 +404,11 @@ export default function Finances() {
       );
       const json = await resp.json();
       if (!resp.ok || !json.onboarding_url) {
+        // `message` first: stripe-connect-onboard's org_id_required refusal
+        // writes a sentence an operator can act on, and without reading it here
+        // the bare code `org_id_required` would land on their money screen.
         throw new Error(
-          json?.stripe_message || json?.error || `Onboarding failed (${resp.status}).`
+          json?.message || json?.stripe_message || json?.error || `Onboarding failed (${resp.status}).`
         );
       }
       window.location.href = json.onboarding_url;
