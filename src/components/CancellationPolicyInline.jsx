@@ -15,11 +15,18 @@
 // the waivers families sign, so showing the rest of what families see belongs in
 // the same card rather than in a banner that ambushes them later.
 //
+// EVERY SENTENCE HERE IS DERIVED FROM DATA, NOT FROM THE CALL SITE. The first
+// version of this component took a `where` prop and stated authorship
+// unconditionally, which reintroduced two bugs the shell notice had already
+// fixed (see the two blocks below). The rule that came out of it: a component
+// that ASSERTS A FACT about a tenant must read that fact itself. A caller may
+// narrow a claim it knows to be inapplicable, never widen one.
+//
 // NO ACKNOWLEDGEMENT. Nothing is recorded and nothing is gated. This is one of
 // the things you are being shown while you set up, next to the waivers, which is
 // exactly the weight it should carry.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "../lib/supabase";
 import { splitOnWholeName } from "../lib/waiverText.js";
@@ -32,10 +39,15 @@ const RULE = "#e2dfd5";
 /**
  * @param {string}  orgId    organisation whose policy to show
  * @param {string}  orgName  business name, for bolding inside the wording
- * @param {"checkout"|"public"} where
- *        Where this tenant's families actually meet the policy. A tenant whose
- *        registration runs somewhere else has no Enrops payment step, so
- *        "before they pay" is simply false for them - see the copy note below.
+ * @param {boolean} usesEnropsRegistration
+ *        `organizations.uses_enrops_registration` for THIS org, passed from the
+ *        already-loaded org row (AdminLayout selects it). NOT a literal - see
+ *        the checkout-wording note below.
+ * @param {boolean} programRunsOwnRegistration
+ *        `runs_own_registration` for the program being built. A tenant can use
+ *        Enrops registration in general and still hand THIS program to a
+ *        partner, so the caller may narrow the claim even when the org flag is
+ *        true. It can only ever make the wording weaker.
  * @param {string}  editHref  optional; when set, renders a link that opens the
  *        editor in a NEW TAB. Omit it inside a flow that must not be
  *        interrupted, where a sentence is the right answer instead.
@@ -44,12 +56,18 @@ const RULE = "#e2dfd5";
 export default function CancellationPolicyInline({
   orgId,
   orgName,
-  where = "public",
+  usesEnropsRegistration,
+  programRunsOwnRegistration = false,
   editHref,
   dense = false,
 }) {
   const [policy, setPolicy] = useState(null);
   const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(false);
+  // Bumping this re-runs the load. A disclosure that silently isn't there is
+  // the same bug as no disclosure, so a failed read has to be recoverable
+  // without a full page reload.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!orgId) return;
@@ -57,15 +75,45 @@ export default function CancellationPolicyInline({
     (async () => {
       const { data, error } = await supabase
         .from("org_policies")
-        .select("content_markdown, published")
+        // seeded_by_platform decides whether we may claim we wrote this. It is
+        // NOT NULL DEFAULT false, and saving your own wording in WaiverManager
+        // clears it - so it is the only honest source for the authorship line.
+        .select("content_markdown, published, seeded_by_platform")
         .eq("organization_id", orgId)
         .eq("policy_type", "cancellation")
+        // org_policies is UNIQUE (organization_id, policy_type).
         .maybeSingle();
-      if (cancelled || error) return;
+      if (cancelled) return;
+      if (error) { setFailed(true); return; }
+      setFailed(false);
       setPolicy(data ?? null);
     })();
     return () => { cancelled = true; };
-  }, [orgId]);
+  }, [orgId, attempt]);
+
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
+
+  const body = dense ? 12.5 : 13;
+  const small = dense ? 12 : 12.5;
+
+  // A read failure is NOT the same as "there is nothing to disclose", and
+  // rendering null for both was how a transient error could let an operator
+  // finish setup never having been shown the promise made in their name. Say
+  // so, next to where they are looking, with a way out.
+  if (failed) {
+    return (
+      <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: small, color: MUTED, lineHeight: 1.5 }}>
+        We couldn&rsquo;t load your cancellation &amp; refund policy just now.{" "}
+        <button
+          type="button"
+          onClick={retry}
+          style={{ background: "none", border: "none", color: BRIGHT, fontSize: small, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
 
   // Say nothing rather than something untrue. An unpublished policy is not on
   // the public page, and an empty one has no promise in it to disclose - in
@@ -73,35 +121,51 @@ export default function CancellationPolicyInline({
   // absence. This is also the pre-fetch state, so nothing flashes on load.
   if (!policy?.published || !policy.content_markdown?.trim()) return null;
 
-  const body = dense ? 12.5 : 13;
-  const small = dense ? 12 : 12.5;
+  // WHERE FAMILIES ACTUALLY MEET THIS, read from the org row rather than
+  // asserted by the caller. Two prospects on prod (Mrs. Richelle, Shoreview
+  // Chess) have uses_enrops_registration = false: they have no Enrops checkout,
+  // so "before they pay" describes a screen their families never see. That is
+  // the bug migration 20260728s was written to fix, and hardcoding this at the
+  // call site reintroduced it.
+  //
+  // `=== true`, not `!== false`. Anything unknown falls back to the public-page
+  // sentence, which is true in BOTH states - less specific, never wrong.
+  const meetsAtCheckout =
+    usesEnropsRegistration === true && !programRunsOwnRegistration;
 
-  // BOTH BRANCHES MUST BE TRUE IN THE STATE THAT SELECTS THEM. A tenant who
-  // runs registration elsewhere never has an Enrops payment step, so telling
-  // them families read this "before they pay" describes a screen that does not
-  // exist for their families. What is true either way - and what made this
-  // disclosure necessary in the first place - is that the policy is published
-  // publicly under their business name.
-  const lead =
-    where === "checkout"
-      ? "Families also read your cancellation & refund policy on the payment step, before they pay."
-      : "Your cancellation & refund policy is published on your public page, where any family can read it.";
+  const lead = meetsAtCheckout
+    ? "Families also read your cancellation & refund policy on the payment step, before they pay."
+    : "Your cancellation & refund policy is published on your public page, where any family can read it.";
+
+  // WHO WROTE IT. Claiming authorship of a document the operator wrote is the
+  // opposite of the honesty this component exists for - J2S's own policy, which
+  // Jessica pasted in herself, was being introduced with "these are our words,
+  // not yours".
+  //
+  // TRUE only claims OUR authorship. FALSE deliberately claims NOTHING about
+  // who wrote it, because the flag does not mean "they wrote it": the 2026-07-30
+  // sweep cleared it for every existing tenant at once, so orgs still carrying
+  // our untouched template read false too (verified: Riverbend and Cascade are
+  // false while their text still matches the platform template character for
+  // character, J2S and onboard-test are false having genuinely rewritten
+  // theirs). Saying "this is your own wording" would be exactly as wrong for the
+  // swept orgs as the old unconditional sentence was for J2S. The second branch
+  // is therefore the part that is true whoever wrote it - and it is also the
+  // part that matters, because it is the one that asks them to read it.
+  const authorship = policy.seeded_by_platform
+    ? "We wrote a starter version so your page wasn’t missing one — these are our words, not yours, and they make promises about refunds. Change anything you don’t agree with."
+    : "It makes promises about refunds in your name. Change anything you don’t agree with.";
 
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}` }}>
       <div style={{ fontSize: body, color: INK, lineHeight: 1.6 }}>{lead}</div>
-      {/* Said before the wording is opened, not after. "Are these my words?" is
-          the question this provokes, and the answer is the whole point: they
-          are ours, they promise refunds, and the operator can change them. */}
       {/* No "...in Settings, under Waivers & policies" tail here. Every host
           card already ends with that exact sentence for its waivers, and adding
           it again made the same instruction appear three times in one card.
           Where to edit is the host's job to say; this component's job is to say
           what the document IS. */}
       <div style={{ fontSize: small, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
-        We wrote a starter version so your page wasn&rsquo;t missing one &mdash; these are our
-        words, not yours, and they make promises about refunds. Change anything you don&rsquo;t
-        agree with.
+        {authorship}
         {editHref && (
           <>
             {" "}
@@ -138,23 +202,30 @@ export default function CancellationPolicyInline({
         >
           {/* Rendered as markdown, not as pre-wrapped text. The seeded template
               is plain prose, but an operator who rewrites it can use headings
-              and lists, and pre-wrap would show them raw "##". */}
+              and lists, and pre-wrap would show them raw "##".
+
+              EVERY handler destructures `node` out. react-markdown v10 sets
+              passNode: true unconditionally, so a bare {...props} spread puts
+              node="[object Object]" on a real DOM element. Same shape as
+              PolicyPage.jsx. */}
           <ReactMarkdown
             components={{
-              h1: (p) => <div style={headingStyle} {...p} />,
-              h2: (p) => <div style={headingStyle} {...p} />,
-              h3: (p) => <div style={{ ...headingStyle, fontSize: small }} {...p} />,
+              h1: ({ node, ...p }) => <div style={headingStyle} {...p} />,
+              h2: ({ node, ...p }) => <div style={headingStyle} {...p} />,
+              h3: ({ node, ...p }) => <div style={{ ...headingStyle, fontSize: small }} {...p} />,
               p: ({ node, children, ...p }) => (
                 <p style={{ margin: "8px 0 0" }} {...p}>{boldOrgName(children, orgName)}</p>
               ),
-              ul: (p) => <ul style={{ margin: "8px 0 0", paddingLeft: 20 }} {...p} />,
+              ul: ({ node, ...p }) => <ul style={{ margin: "8px 0 0", paddingLeft: 20 }} {...p} />,
+              ol: ({ node, ...p }) => <ol style={{ margin: "8px 0 0", paddingLeft: 20 }} {...p} />,
               li: ({ node, children, ...p }) => (
                 <li style={{ margin: "4px 0 0" }} {...p}>{boldOrgName(children, orgName)}</li>
               ),
-              strong: (p) => <strong style={{ fontWeight: 700, color: INK }} {...p} />,
+              strong: ({ node, ...p }) => <strong style={{ fontWeight: 700, color: INK }} {...p} />,
+              em: ({ node, ...p }) => <em {...p} />,
               // A link inside a policy leaves the admin shell; never navigate
               // an operator out of a half-built program.
-              a: (p) => <a style={{ color: BRIGHT }} target="_blank" rel="noopener noreferrer" {...p} />,
+              a: ({ node, ...p }) => <a style={{ color: BRIGHT }} target="_blank" rel="noopener noreferrer" {...p} />,
             }}
           >
             {policy.content_markdown}

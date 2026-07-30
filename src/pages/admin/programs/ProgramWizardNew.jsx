@@ -697,6 +697,7 @@ export default function ProgramWizardNew() {
             orgActiveTerm={org?.active_registration_term}
             orgId={org?.id}
             orgName={org?.name}
+            usesEnropsRegistration={org?.uses_enrops_registration}
             onSubmit={handleSubmit}
             onBackToPrograms={() => navigate("/admin/programs")}
             step3Valid={step3Valid}
@@ -1231,6 +1232,7 @@ function Step3PriceAndOpen({
   orgActiveTerm,
   orgId,
   orgName,
+  usesEnropsRegistration,
   onSubmit,
   onBackToPrograms,
   step3Valid,
@@ -1367,16 +1369,15 @@ function Step3PriceAndOpen({
             When you invite these families to the portal, they'll sign your required waivers first.{" "}
             <a href="/admin/waivers" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Set up waivers ↗</a>
           </div>
-          {/* where="public", NOT "checkout". The partner runs registration, so
-              this program has no Enrops payment step and no family will ever
-              meet the policy there - saying "before they pay" would describe a
-              screen that does not exist for them. It IS still published under
-              their business name at /{slug}/cancellation, which is the part
-              that made showing it necessary. */}
+          {/* The partner runs registration, so THIS program has no Enrops
+              payment step even if the org uses Enrops registration elsewhere.
+              programRunsOwnRegistration narrows the claim; it can only ever
+              weaken it, never assert a checkout the org does not have. */}
           <CancellationPolicyInline
             orgId={orgId}
             orgName={orgName}
-            where="public"
+            usesEnropsRegistration={usesEnropsRegistration}
+            programRunsOwnRegistration={isPartner}
             editHref="/admin/waivers"
           />
         </div>
@@ -1404,12 +1405,16 @@ function Step3PriceAndOpen({
             Families will read and sign your required waivers during checkout.{" "}
             <a href="/admin/waivers" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Set up waivers ↗</a>
           </div>
-          {/* This branch DOES have an Enrops payment step, so the checkout
-              wording is the true one here. */}
+          {/* This program runs through Enrops checkout, but whether families
+              meet the policy there still depends on the ORG - a tenant with
+              uses_enrops_registration = false has no Enrops checkout at all.
+              The component reads that; this branch only says the program is
+              not partner-run. */}
           <CancellationPolicyInline
             orgId={orgId}
             orgName={orgName}
-            where="checkout"
+            usesEnropsRegistration={usesEnropsRegistration}
+            programRunsOwnRegistration={isPartner}
             editHref="/admin/waivers"
           />
         </div>

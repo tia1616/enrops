@@ -778,7 +778,10 @@ export default function QuickProgramBuilder() {
             <CancellationPolicyInline
               orgId={org?.id}
               orgName={org?.name}
-              where="checkout"
+              usesEnropsRegistration={org?.uses_enrops_registration}
+              /* Every program this builder creates sets
+                 runs_own_registration: false, so the org flag alone decides
+                 the wording here. */
             />
 
             {org.email && (
@@ -912,7 +915,18 @@ export default function QuickProgramBuilder() {
             say?" is shown, and the answer to "how do I change them?" is a
             sentence, because Settings is thirty seconds away once the class is
             saved. */}
-        {isLean && profile.onboarding_completed_at && (
+        {/* `|| programCount > 0` closes a hole between this panel and the
+            first-run card above. The card needs programCount === 0 and this
+            panel needed the onboarding flag, so a lean org with programs but a
+            NULL flag matched NEITHER and saw no waiver summary and no
+            cancellation policy at all. That state is reachable: the column only
+            landed in 20260725d, so every org created before it is NULL forever,
+            and any program created outside this builder leaves it NULL with a
+            non-zero count. The two conditions stay mutually exclusive (the card
+            requires a zero count), so nothing renders twice, and programCount is
+            null until counted, so a failed count falls back to the old
+            behaviour rather than flashing the panel on. */}
+        {isLean && (profile.onboarding_completed_at || programCount > 0) && (
           <div style={{ fontSize: 13, color: MUTED, background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px" }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
               <span>Using your usual questions and waivers.</span>
@@ -972,7 +986,7 @@ export default function QuickProgramBuilder() {
                 <CancellationPolicyInline
                   orgId={org?.id}
                   orgName={org?.name}
-                  where="checkout"
+                  usesEnropsRegistration={org?.uses_enrops_registration}
                   dense
                 />
                 {/* Bolded: this is the instruction, not commentary. It's the
