@@ -1723,6 +1723,13 @@ interface OrgConnectRow {
   alert_email: string | null;
   stripe_account_status: string | null;
   stripe_last_account_event_id: string | null;
+  // Needed by the alert emails below, not by the status write. What happens to
+  // money when an account goes away is entirely different for the two models
+  // (see buildChargeRouting in _shared/connectChargeParams.ts): a destination
+  // charge falls through to the platform, a direct charge is refused outright.
+  // Telling every operator the destination story was false for all of them
+  // except J2S.
+  stripe_charge_model: string | null;
 }
 
 async function handleAccountUpdated(
@@ -1736,7 +1743,7 @@ async function handleAccountUpdated(
   // enrops_platform path, or an event for a different system entirely.
   const { data } = await admin
     .from('organizations')
-    .select('id, name, alert_email, stripe_account_status, stripe_last_account_event_id')
+    .select('id, name, alert_email, stripe_account_status, stripe_last_account_event_id, stripe_charge_model')
     .eq('stripe_account_id', accountId)
     .maybeSingle();
   const org = data as OrgConnectRow | null;
@@ -1800,12 +1807,17 @@ async function handleAccountUpdated(
       brand,
       to: org.alert_email,
       subject: `Stripe paused payments for ${org.name || 'your organization'}`,
+      // Same true-per-charge-model rule as the deauthorize alert below.
       body:
         `Stripe has paused your ability to receive payments. New state: ${nextStatus}.\n\n` +
         (disabledReason ? `Reason from Stripe: ${disabledReason}\n\n` : '') +
-        `Open the Finances tab in your Enrops admin portal to continue verification, ` +
-        `or contact Stripe support directly. Until this is resolved, new parent payments ` +
-        `will land in Enrops's platform account rather than yours.`,
+        (org.stripe_charge_model === 'direct'
+          ? `Open the Payments screen in your Enrops admin portal to continue verification, ` +
+            `or contact Stripe support directly. Until this is resolved your registration links ` +
+            `cannot take payments, so nothing is being charged.`
+          : `Open the Finances tab in your Enrops admin portal to continue verification, ` +
+            `or contact Stripe support directly. Until this is resolved, new parent payments ` +
+            `will land in Enrops's platform account rather than yours.`),
     }).catch((err) => console.warn('regression alert send failed:', err));
   }
 }
@@ -1824,10 +1836,13 @@ async function handleAccountDeauthorized(
 
   const { data } = await admin
     .from('organizations')
-    .select('id, name, alert_email, stripe_last_account_event_id')
+    .select('id, name, alert_email, stripe_last_account_event_id, stripe_charge_model')
     .eq('stripe_account_id', accountId)
     .maybeSingle();
-  const org = data as Pick<OrgConnectRow, 'id' | 'name' | 'alert_email' | 'stripe_last_account_event_id'> | null;
+  const org = data as Pick<
+    OrgConnectRow,
+    'id' | 'name' | 'alert_email' | 'stripe_last_account_event_id' | 'stripe_charge_model'
+  > | null;
 
   if (!org) {
     console.warn(`[stripe-webhook] deauthorize for unknown account ${accountId}`);
@@ -1865,11 +1880,24 @@ async function handleAccountDeauthorized(
       brand,
       to: org.alert_email,
       subject: `Stripe Connect disconnected for ${org.name || 'your organization'}`,
+      // Say what is TRUE for THIS org's charge model. "Payments will land in
+      // Enrops's account until you reconnect" holds only for a destination org,
+      // where buildConnectChargeParams falls through to a platform charge. A
+      // direct org is FAILED CLOSED by buildChargeRouting - nothing is charged
+      // at all - so promising a transfer of money that was never taken would
+      // send the operator looking for funds that do not exist. Both branches
+      // are true in the state that selects them.
       body:
-        `Stripe Connect has been disconnected for your organization.\n\n` +
-        `New parent payments will no longer route to your bank — they will land in ` +
-        `Enrops's platform account until you reconnect. Open the Finances tab in your ` +
-        `Enrops admin portal to reconnect.`,
+        org.stripe_charge_model === 'direct'
+          ? `Stripe Connect has been disconnected for your organization.\n\n` +
+            `Your registration links have stopped taking payments - families cannot ` +
+            `pay you through Enrops until a Stripe account is connected again. Open the ` +
+            `Payments screen in your Enrops admin portal to connect one; it takes about ` +
+            `a minute if you already have Stripe.`
+          : `Stripe Connect has been disconnected for your organization.\n\n` +
+            `New parent payments will no longer route to your bank - they will land in ` +
+            `Enrops's platform account until you reconnect. Open the Finances tab in your ` +
+            `Enrops admin portal to reconnect.`,
     }).catch((err) => console.warn('deauth alert send failed:', err));
   }
 }

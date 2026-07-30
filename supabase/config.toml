@@ -14,8 +14,10 @@ verify_jwt = false
 # can. Its security comes from the single-use row in stripe_oauth_states, not
 # from auth. Deploying it with verify_jwt = true would make every connect
 # attempt 401 after the operator had already authorised at Stripe.
-# (stripe-oauth-start is NOT listed: it takes an operator's JWT and defaults to
-# verify_jwt = true, which is what it needs.)
+# (stripe-oauth-start and stripe-oauth-disconnect are NOT listed: both take an
+# operator's JWT and default to verify_jwt = true, which is what they need.
+# stripe-oauth-disconnect in particular must NEVER be public - it detaches the
+# account a business gets paid through.)
 verify_jwt = false
 
 [functions.org-fee-config]

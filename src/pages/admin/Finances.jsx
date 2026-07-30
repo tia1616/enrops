@@ -9,8 +9,14 @@
 //                      Stripe Dashboard" button.
 //   restricted      -> Stripe paused something. Same UI as onboarding + an
 //                      alert banner.
-//   disconnected    -> Operator clicked Disconnect in Express Dashboard.
-//                      Same UI as not_connected, but with context banner.
+//   disconnected    -> Access to the account is gone: either the operator
+//                      revoked enrops from Stripe's own dashboard, or they used
+//                      Disconnect here. Same UI as not_connected, plus a context
+//                      banner whose wording depends on the charge model.
+//
+// Disconnect (stripe-oauth-disconnect) is offered on every state that HOLDS an
+// account — see canDisconnect. Without it, stripe-oauth-start's "already
+// connected" refusal was a dead end for anyone who attached the wrong account.
 //
 // Multi-tenant: reads org from useOutletContext (AdminLayout supplies it).
 // Never hardcodes J2S.
@@ -76,6 +82,9 @@ export default function Finances() {
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [savedToast, setSavedToast] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  // Result of the Disconnect action, rendered BESIDE that button rather than in
+  // the page-level banners — see disconnectStripe(). { tone, text }.
+  const [disconnectMsg, setDisconnectMsg] = useState(null);
 
   const canManage = orgMember?.role === "owner" || orgMember?.role === "admin";
 
@@ -312,6 +321,27 @@ export default function Finances() {
   const isVerifying = status === "verifying";
   const isDisconnected = status === "disconnected";
 
+  // Whether to offer Disconnect at all. Every clause is load-bearing:
+  //   canManage      - same bar as connecting. Staff/viewer must not detach the
+  //                    account the whole business gets paid through.
+  //   accountId      - nothing to disconnect otherwise.
+  //   status         - not_connected/disconnected are already there; the button
+  //                    would be a no-op that looks like an action.
+  //   charge model   - the edge function refuses anything but 'direct' (a
+  //                    destination org's charges keep succeeding into the
+  //                    platform balance when its account goes away, which is a
+  //                    different money story). Gating HERE as well means we
+  //                    never render a button whose only outcome is a refusal.
+  //                    This is a CONFIG branch, not a tenant branch: both
+  //                    connect paths a new tenant can take write 'direct'.
+  const chargeModel = config?.stripe_charge_model || null;
+  const canDisconnect =
+    canManage &&
+    !!accountId &&
+    status !== "not_connected" &&
+    status !== "disconnected" &&
+    chargeModel === "direct";
+
   // ── actions ─────────────────────────────────────────────────────────────
   async function startOnboarding() {
     setBusy(true);
@@ -427,6 +457,81 @@ export default function Finances() {
       setError(err.message || "Could not open Stripe dashboard.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Detach the connected Stripe account so a different one can be connected.
+  //
+  // Until this existed, stripe-oauth-start's "you already have an account
+  // connected" refusal was a dead end: nothing in the product could set
+  // status='disconnected' except Stripe's own deauthorized webhook, so an
+  // operator who connected the WRONG account had to go find the revoke button
+  // inside Stripe's dashboard.
+  //
+  // Feedback is deliberately NOT routed through the page-level `error` /
+  // `savedToast` banners at the top of the page. This control lives at the
+  // bottom of an expanded settings panel, so a confirmation 1,200px above the
+  // click reads as a dead button. The panel renders `disconnectMsg` itself.
+  async function disconnectStripe() {
+    if (!canManage) return;
+    const label = accountId ? `\n\nAccount: ${accountId}` : "";
+    const ok = window.confirm(
+      "Disconnect this Stripe account?" + label + "\n\n" +
+      "• Families won't be able to pay you through enrops until you connect another account — any registration links you've shared will stop taking payments.\n" +
+      "• Refunds through enrops on payments already taken on this account will stop working too.\n" +
+      "• Your Stripe account itself stays open and yours. We just stop using it.\n\n" +
+      "You can connect a different account straight afterwards."
+    );
+    if (!ok) return;
+
+    setBusy(true);
+    setBusyAction("disconnect");
+    setDisconnectMsg(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const authToken = session?.access_token;
+      if (!authToken) throw new Error("Not signed in.");
+
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-oauth-disconnect`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({ org_id: org.id }),
+        }
+      );
+      const json = await resp.json();
+      if (!resp.ok) {
+        // The function writes `message` for an operator to read — the
+        // unpaid-instalment refusal names the count and the amount, which is
+        // the whole point of it. Prefer it over the code every time.
+        throw new Error(
+          json?.message || json?.error || `Could not disconnect (${resp.status}).`
+        );
+      }
+      // Say which of the two things actually happened. `account_stays_open`
+      // means Stripe would not revoke a grant because the account is one we
+      // created for them (no_deauth_on_controlled_account) — claiming "revoked
+      // at Stripe" there would be false, and an operator who then looks at
+      // their Stripe connected-apps list would catch us in it.
+      setDisconnectMsg({
+        tone: "ok",
+        text: json.already
+          ? "That account was already disconnected."
+          : json.account_stays_open
+            ? "Disconnected. enrops has stopped using that Stripe account — the account itself is still open and yours. You can connect a different one now."
+            : "Disconnected. enrops no longer has access to that Stripe account. You can connect a different one now.",
+      });
+      await reload();
+    } catch (err) {
+      setDisconnectMsg({ tone: "err", text: err.message || "Could not disconnect Stripe." });
+    } finally {
+      setBusy(false);
+      setBusyAction(null);
     }
   }
 
@@ -642,8 +747,26 @@ export default function Finances() {
             {isDisconnected && (
               <DisconnectedBody
                 onReconnect={startOnboarding}
+                onConnectExisting={startOAuthConnect}
                 busy={busy}
+                busyAction={busyAction}
                 canManage={canManage}
+                chargeModel={chargeModel}
+              />
+            )}
+
+            {/* Wrong account connected? This is the state an operator is
+                actually stuck in — mid-onboarding on an account they didn't
+                mean to attach, with stripe-oauth-start refusing to let them
+                pick another. Quiet, at the bottom, but present. */}
+            {canDisconnect && (
+              <DisconnectPanel
+                variant="inline"
+                accountId={accountId}
+                onDisconnect={disconnectStripe}
+                busy={busy}
+                busyAction={busyAction}
+                message={disconnectMsg}
               />
             )}
           </Section>
@@ -826,6 +949,17 @@ export default function Finances() {
               </div>
             </Section>
           </Card>
+
+          {canDisconnect && (
+            <DisconnectPanel
+              variant="card"
+              accountId={accountId}
+              onDisconnect={disconnectStripe}
+              busy={busy}
+              busyAction={busyAction}
+              message={disconnectMsg}
+            />
+          )}
         </>
       )}
 
@@ -1798,18 +1932,131 @@ function NotConnectedBody({ onConnect, onConnectExisting, busy, busyAction, canM
   );
 }
 
-function DisconnectedBody(props) {
+// Detach the connected Stripe account. Two shapes, ONE control: `variant="card"`
+// sits at the bottom of the expanded payment settings for a live account;
+// `variant="inline"` is the same action for an operator stuck part-way through
+// setup on an account they didn't mean to connect. Both render their own result
+// so the confirmation lands where the click did.
+//
+// This is not styled as a big red destructive button on purpose. It is a
+// recoverable, one-minute-to-undo action (connect another account and you're
+// back), and the surrounding copy carries the weight rather than the colour.
+function DisconnectPanel({ variant, accountId, onDisconnect, busy, busyAction, message }) {
+  const working = busyAction === "disconnect";
+  const body = (
+    <>
+      <div style={{ fontSize: 13.5, fontWeight: 700, color: PURPLE }}>
+        Connected the wrong Stripe account?
+      </div>
+      <p style={{ fontSize: 13, color: MUTED, lineHeight: 1.55, margin: "4px 0 10px", maxWidth: 520 }}>
+        Disconnect it and you can connect a different one straight away. While nothing
+        is connected, your registration links can't take payments.
+      </p>
+      <button
+        type="button"
+        onClick={onDisconnect}
+        disabled={busy}
+        style={{
+          padding: "7px 12px",
+          background: "transparent",
+          color: RED,
+          border: `1px solid ${RED}`,
+          borderRadius: 6,
+          fontSize: 13,
+          fontWeight: 600,
+          fontFamily: "inherit",
+          cursor: busy ? "wait" : "pointer",
+        }}
+      >
+        {working ? "Disconnecting…" : "Disconnect Stripe"}
+      </button>
+      {accountId && (
+        <div style={{ fontSize: 11.5, color: MUTED, marginTop: 6, fontFamily: "monospace" }}>
+          {accountId}
+        </div>
+      )}
+      {/* Result renders HERE, under the button that caused it — not in the
+          page-level banner far above this panel. */}
+      {message && (
+        <div style={{ marginTop: 10, maxWidth: 520 }}>
+          <Banner tone={message.tone}>{message.text}</Banner>
+        </div>
+      )}
+    </>
+  );
+
+  if (variant === "card") {
+    return <Card><Section>{body}</Section></Card>;
+  }
+  return (
+    <div style={{ marginTop: 24, paddingTop: 16, borderTop: `1px solid ${RULE}`, textAlign: "left" }}>
+      {body}
+    </div>
+  );
+}
+
+// Where an org lands after its Stripe access goes away — either the operator
+// revoked enrops from Stripe's own dashboard (account.application.deauthorized)
+// or they used Disconnect here.
+//
+// The old copy said "New parent payments are landing in enrops's account until
+// you reconnect. We'll transfer them to you once you're set up." That is only
+// true for a DESTINATION-charge org, where buildConnectChargeParams returns {}
+// and the charge falls through to the platform. For a DIRECT org —
+// which is every new tenant — buildChargeRouting FAILS CLOSED: nothing is
+// charged at all, so no money is landing anywhere and there is nothing to
+// transfer on. Promising a transfer that will never happen is worse than saying
+// payments have stopped. Each branch below is true in the state that selects it.
+//
+// Reconnect offers BOTH paths, same as NotConnectedBody. The single
+// "Reconnect Stripe" button ran startOnboarding (accounts.create), which mints a
+// BRAND NEW Stripe account — the wrong answer for the operator whose whole
+// problem is that they already have one.
+function DisconnectedBody({ onReconnect, onConnectExisting, busy, busyAction, canManage, chargeModel }) {
+  const isDirect = chargeModel === "direct";
   return (
     <>
       <Banner tone="warn">
-        Stripe is disconnected. New parent payments are landing in enrops's account until
-        you reconnect. We'll transfer them to you once you're set up.
+        {isDirect
+          ? "Stripe is disconnected, so your registration links can't take payments right now. Connect an account and they start working again immediately."
+          : "Stripe is disconnected. New parent payments are landing in enrops's account until you reconnect. We'll transfer them to you once you're set up."}
       </Banner>
       <StripeHero
-        title="Reconnect Stripe to get paid again"
-        subtitle="Pick up where you left off. Your money lands straight in your bank."
+        title="Connect Stripe to get paid again"
+        subtitle="Your money lands straight in your bank. Use the account you already have, or set up a new one."
       >
-        <ConnectButton {...props} label="Reconnect Stripe" />
+        {!canManage ? (
+          <em style={{ color: MUTED, fontSize: 13 }}>
+            Only an owner or admin can connect Stripe.
+          </em>
+        ) : (
+          <div style={{ display: "grid", gap: 14, justifyItems: "center" }}>
+            <div>
+              <button
+                onClick={onConnectExisting}
+                disabled={busy}
+                style={btn(BRIGHT, "#fff", false, busy)}
+              >
+                {busyAction === "oauth" ? "Starting…" : "Connect my Stripe account"}
+              </button>
+              <div style={{ color: MUTED, fontSize: 12.5, marginTop: 6 }}>
+                Sign in and pick the account you want to use.
+              </div>
+            </div>
+            <div>
+              <button
+                onClick={onReconnect}
+                disabled={busy}
+                style={btn("transparent", BRIGHT, true, busy)}
+              >
+                {busyAction === "create" ? "Starting…" : "Set up a new Stripe account"}
+              </button>
+              <div style={{ color: MUTED, fontSize: 12.5, marginTop: 6 }}>
+                We'll walk you through it. It takes a few minutes.
+              </div>
+            </div>
+          </div>
+        )}
         <TrustChips />
         <WhatYouWillNeed />
       </StripeHero>
@@ -1960,28 +2207,6 @@ function WhatYouWillNeed() {
   );
 }
 
-function ConnectButton({ onConnect, onReconnect, busy, canManage, label }) {
-  const handler = onConnect || onReconnect;
-  if (!canManage) {
-    return (
-      <em style={{ color: MUTED, fontSize: 13 }}>
-        Only an owner or admin can connect Stripe.
-      </em>
-    );
-  }
-  // One-click: no pre-form. Stripe's hosted onboarding collects business type,
-  // country, and business details on its own screens.
-  return (
-    <button
-      onClick={handler}
-      disabled={busy}
-      style={btn(BRIGHT, "#fff", false, busy)}
-    >
-      {busy ? "Starting…" : label}
-    </button>
-  );
-}
-
 // Stripe has everything and is reviewing. The operator owes NOTHING, so this
 // body deliberately has no "Continue setup" button — offering one would send
 // someone who finished correctly back into a completed form looking for a
@@ -2044,29 +2269,6 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
           </em>
         )}
       </StripeHero>
-    </>
-  );
-}
-
-function ActiveBody({ accountId, onOpenDashboard, busy }) {
-  return (
-    <>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <span style={{
-          display: "inline-block", width: 10, height: 10, borderRadius: "50%",
-          background: OK,
-        }} />
-        <strong style={{ color: OK, fontSize: 14 }}>Connected</strong>
-      </div>
-      <div style={{ fontSize: 13, color: MUTED, marginBottom: 16 }}>
-        Account ID: <code style={{ fontFamily: "monospace", fontSize: 12 }}>{accountId}</code>
-      </div>
-      <button onClick={onOpenDashboard} disabled={busy} style={btn("transparent", BRIGHT, true, busy)}>
-        {busy ? "Loading…" : "Open Stripe Dashboard ↗"}
-      </button>
-      <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
-        Manage payouts, view balances, update bank info.
-      </div>
     </>
   );
 }
