@@ -2030,17 +2030,43 @@ function NotConnectedBody({ onConnect, onConnectExisting, busy, busyAction, canM
 // "Stripe connected" while the grant is actually revoked and every charge fails.
 // The server-side half of this fix is the conditional UPDATE in
 // sync-operator-stripe-status; this half stops the UI offering the collision.
+// `variant` also decides what this panel is FOR, because the two placements
+// answer different operator questions:
+//
+//   "card"   — rendered under Payment settings on a LIVE account. The question
+//              is "this is the wrong account".
+//   "inline" — rendered on onboarding / verifying / restricted, i.e. an account
+//              exists but setup isn't finished. The likeliest way to get here is
+//              clicking "I don't use Stripe yet" by mistake: that mints an
+//              account on the first click, and the two connect buttons then
+//              DISAPPEAR because they only render at 'not_connected'. So the
+//              operator who meant to use the Stripe they already have is stuck
+//              with no signpost back. Disconnect is the way back, and until now
+//              nothing said so. Found on prod 2026-07-30 by the first human to
+//              try it, who did exactly this.
 function DisconnectPanel({ variant, accountId, onDisconnect, busy, busyAction, checking, message }) {
   const working = busyAction === "disconnect";
   const blocked = busy || checking;
+  const midSetup = variant === "inline";
   const body = (
     <>
       <div style={{ fontSize: 13.5, fontWeight: 700, color: PURPLE }}>
-        Connected the wrong Stripe account?
+        {midSetup
+          ? "Wrong account, or meant to use the Stripe you already have?"
+          : "Connected the wrong Stripe account?"}
       </div>
       <p style={{ fontSize: 13, color: MUTED, lineHeight: 1.55, margin: "4px 0 10px", maxWidth: 520 }}>
-        Disconnect it and you can connect a different one straight away. While nothing
-        is connected, your registration links can't take payments.
+        {/* Deliberately makes NO promise about the half-finished account. After a
+            disconnect, stripe-connect-onboard treats the org as a fresh onboard
+            and only sometimes recovers the old account (an orphan search by
+            metadata, which needs exactly one non-rejected candidate and is
+            subject to Stripe's search-index delay). So "nothing you entered is
+            lost" would be true on some runs and false on others - the exact
+            conditional-copy trap. This says only what is certain: you get the
+            choice back. */}
+        {midSetup
+          ? "Disconnect this one and you'll get both choices back — sign in to the Stripe account you already have, or set one up from scratch."
+          : "Disconnect it and you can connect a different one straight away. While nothing is connected, your registration links can't take payments."}
       </p>
       <button
         type="button"
@@ -2340,9 +2366,20 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
           providing additional info — click below to continue.
         </Banner>
       )}
+      {/* Reachable with NOTHING entered. "I don't use Stripe yet" calls
+          accounts.create, which mints the Stripe account on the FIRST click and
+          writes status='onboarding' immediately — before the operator types a
+          single character. So an operator who clicked that button and then
+          closed Stripe's tab lands here having entered nothing at all.
+          "Almost there" and "Stripe remembers what you've entered" were both
+          false for exactly that person. Observed on prod 2026-07-30, by the
+          first human to use this screen.
+          `details_submitted` is not stored on organizations, so the UI cannot
+          tell "started" from "never started" — which means the copy has to be
+          true for BOTH. It no longer claims either. */}
       <StripeHero
-        title="Almost there — finish with Stripe"
-        subtitle="Stripe needs a few more details to verify you. Pick up where you left off; Stripe remembers what you've entered."
+        title="Finish setting up with Stripe"
+        subtitle="Stripe needs your business details before payments can switch on. This opens Stripe's own secure form."
       >
         <div style={{ display: "flex", justifyContent: "center", gap: 18, marginBottom: 16, fontSize: 13, color: INK }}>
           <span><strong>Charges</strong>{" "}<Pill on={chargesEnabled}>{chargesEnabled ? "on" : "pending"}</Pill></span>

@@ -172,7 +172,16 @@ serve(async (req: Request) => {
         } else if (candidates.length > 1) {
           const ids = candidates.map((a: Stripe.Account) => a.id);
           console.error('[connect-onboard] multiple stripe accounts for org', org.id, ids);
-          return json({ error: 'multiple_stripe_accounts', account_ids: ids }, 409);
+          // Reachable by an operator, not just by us: clicking "I don't use
+          // Stripe yet" mints an account on the first click, so a couple of
+          // exploratory clicks leave two carrying this org's metadata. Without a
+          // `message` the Payments screen renders the bare code
+          // "multiple_stripe_accounts" - a raw error string on a money screen.
+          return json({
+            error: 'multiple_stripe_accounts',
+            account_ids: ids,
+            message: 'There\'s more than one Stripe account set up for this business, so we\'ve stopped rather than guess which one to use. Contact us and we\'ll sort it out with you.',
+          }, 409);
         }
       } catch (err) {
         // Search index has a delay; non-fatal. Fall through to create.
