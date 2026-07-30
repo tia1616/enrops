@@ -9,7 +9,10 @@
 // The oracle is a copy of the old code, NOT a call to the new code - a test that
 // compares a function to itself passes and proves nothing.
 //
-// Run: deno test --allow-none supabase/functions/_shared/tests/operatorAccountStatus.test.ts
+// Run: deno test supabase/functions/_shared/tests/operatorAccountStatus.test.ts
+// (No permission flags: this file only imports a pure function. An earlier
+//  version of this line said `--allow-none`, which is not a real Deno flag and
+//  made the documented command fail outright.)
 
 import { assertEquals } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
 import {

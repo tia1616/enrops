@@ -67,6 +67,12 @@ export default function Finances() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // WHICH action is in flight, not just whether one is. The two connect buttons
+  // share `busy` (both must disable so a second click can't start a competing
+  // flow), but they must not share the LABEL - clicking "Connect my Stripe
+  // account" made "I don't use Stripe yet" also read "Starting…", telling the
+  // operator something was happening on a path they never chose.
+  const [busyAction, setBusyAction] = useState(null);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [savedToast, setSavedToast] = useState(null);
   const [downloading, setDownloading] = useState(false);
@@ -302,6 +308,7 @@ export default function Finances() {
   // ── actions ─────────────────────────────────────────────────────────────
   async function startOnboarding() {
     setBusy(true);
+    setBusyAction("create");
     setError(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -333,6 +340,7 @@ export default function Finances() {
     } catch (err) {
       setError(err.message || "Could not start Stripe onboarding.");
       setBusy(false);
+      setBusyAction(null);
     }
   }
 
@@ -345,6 +353,7 @@ export default function Finances() {
   // account. OAuth is the only mechanism that attaches one that already exists.
   async function startOAuthConnect() {
     setBusy(true);
+    setBusyAction("oauth");
     setError(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -378,6 +387,7 @@ export default function Finances() {
     } catch (err) {
       setError(err.message || "Could not start Stripe connect.");
       setBusy(false);
+      setBusyAction(null);
     }
   }
 
@@ -518,10 +528,35 @@ export default function Finances() {
           Stripe's setup link expired. Click "Continue setup" below for a fresh one.
         </Banner>
       )}
+      {/* CONNECTED is not the same as CAN TAKE MONEY, and this banner must not
+          conflate them. buildChargeRouting FAILS CLOSED when an org is
+          stripe_charge_model='direct' with stripe_charges_enabled=false
+          (connectChargeParams.ts) - checkout is blocked. A Standard account can
+          connect in exactly that shape, so a flat "payments will land in it",
+          chosen off the URL param alone, would promise money movement on the one
+          screen where it is already blocked, while the card below it says the
+          opposite. Each branch below is selected by the LOADED status, not by the
+          redirect. */}
       {stripeParam === "connected" && (
-        <Banner tone="ok">
-          Your Stripe account is connected. Payments from families will land in it.
-        </Banner>
+        loading || !config ? (
+          <Banner tone="ok">
+            Your Stripe account is connected. Checking with Stripe for the details…
+          </Banner>
+        ) : config.stripe_charges_enabled ? (
+          <Banner tone="ok">
+            Your Stripe account is connected. Payments from families will land in it.
+          </Banner>
+        ) : config.stripe_account_status === "verifying" ? (
+          <Banner tone="info">
+            Your Stripe account is connected. Stripe is still reviewing it, so payments
+            aren't switched on yet — there's nothing more for you to do.
+          </Banner>
+        ) : (
+          <Banner tone="warn">
+            Your Stripe account is connected, but Stripe needs a bit more before you can
+            take payments. The steps are below.
+          </Banner>
+        )
       )}
       {stripeParam === "cancelled" && (
         <Banner tone="info">
@@ -563,6 +598,7 @@ export default function Finances() {
                 onConnect={startOnboarding}
                 onConnectExisting={startOAuthConnect}
                 busy={busy}
+                busyAction={busyAction}
                 canManage={canManage}
               />
             )}
@@ -1657,7 +1693,10 @@ function describeConnectFailure(reason) {
     case "account_in_use":
       return "That Stripe account is already connected to a different provider on enrops. Pick a different account, or contact us if you think this is wrong.";
     case "already_connected":
-      return "This account already has Stripe connected. Reload the page to see it.";
+      // Emitted when the org gained a DIFFERENT Stripe account while this flow
+      // was open (two admins connecting at once). "You already have one" alone
+      // would read as success and hide the fact that THEIR pick was refused.
+      return "A different Stripe account was connected to this business while you were at Stripe, so the one you picked wasn't saved. Reload to see which account is connected.";
     case "account_unreadable":
       return "We connected to Stripe but couldn't read the account back, so nothing was saved. Please try again.";
     case "persist_failed":
@@ -1680,7 +1719,7 @@ function describeConnectFailure(reason) {
 // verified DETAILS, but per Stripe's docs it "creates a new connected account",
 // so the old subtitle's promise ("you'll keep using the one you have") was false
 // on the only path that existed.
-function NotConnectedBody({ onConnect, onConnectExisting, busy, canManage }) {
+function NotConnectedBody({ onConnect, onConnectExisting, busy, busyAction, canManage }) {
   if (!canManage) {
     return (
       <StripeHero
@@ -1707,7 +1746,7 @@ function NotConnectedBody({ onConnect, onConnectExisting, busy, canManage }) {
             disabled={busy}
             style={btn(BRIGHT, "#fff", false, busy)}
           >
-            {busy ? "Starting…" : "Connect my Stripe account"}
+            {busyAction === "oauth" ? "Starting…" : "Connect my Stripe account"}
           </button>
           <div style={{ color: MUTED, fontSize: 12.5, marginTop: 6 }}>
             Already use Stripe? Sign in and pick the account you already have.
@@ -1720,7 +1759,7 @@ function NotConnectedBody({ onConnect, onConnectExisting, busy, canManage }) {
             disabled={busy}
             style={btn("transparent", BRIGHT, true, busy)}
           >
-            {busy ? "Starting…" : "I don't use Stripe yet"}
+            {busyAction === "create" ? "Starting…" : "I don't use Stripe yet"}
           </button>
           <div style={{ color: MUTED, fontSize: 12.5, marginTop: 6 }}>
             We'll walk you through setting one up. It takes a few minutes.
