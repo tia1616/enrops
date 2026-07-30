@@ -41,6 +41,17 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const UNSUBSCRIBE_SECRET = Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET")!;
 const UNSUBSCRIBE_ENDPOINT = `${SUPABASE_URL}/functions/v1/marketing-unsubscribe`;
+// The `!` above is a COMPILE-time assertion and does nothing at runtime: if the
+// secret is unset, hmacToken signs with the literal string "undefined" and mints
+// a token marketing-unsubscribe rejects with 401. The footer link is then already
+// broken (pre-existing behaviour, deliberately not changed here) — but we must
+// NOT additionally advertise List-Unsubscribe-Post: One-Click against a URL that
+// 401s. Providers would POST into a failure repeatedly, which is a WORSE
+// reputation signal than shipping no header at all, and this whole change exists
+// to improve that signal. Header is emitted only when the secret is configured.
+// (lifecycle-automations-cron does not need this: its computeUnsubscribeUrl
+// returns "" when the secret is missing and it fails the send closed.)
+const UNSUBSCRIBE_CONFIGURED = !!(Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET") ?? "").trim();
 // Public site origin for registration links in emails. Per-environment (set
 // PUBLIC_SITE_URL on staging to the staging site); defaults to prod. Mirrors
 // lifecycle-automations-cron — never hardcode the domain, or staging emails
@@ -686,9 +697,10 @@ serve(async (req: Request) => {
 
     const batchPayload = rendered.map(({ r, subject, bodyHtml, bodyText, unsubscribeUrl }) => {
       // Campaign sends are bulk promotional mail by definition — every one of
-      // them gets List-Unsubscribe + one-click. Empty only if the URL failed to
-      // build, in which case we send without rather than emit a broken header.
-      const unsubHeaders = listUnsubscribeHeaders(unsubscribeUrl);
+      // them gets List-Unsubscribe + one-click. Empty if the URL failed to build
+      // OR the signing secret is missing (see UNSUBSCRIBE_CONFIGURED), in which
+      // case we send without rather than emit a header that 401s.
+      const unsubHeaders = UNSUBSCRIBE_CONFIGURED ? listUnsubscribeHeaders(unsubscribeUrl) : {};
       return {
         from: formatFromAddress(brand),
         reply_to: brand.reply_to,
@@ -1432,7 +1444,7 @@ async function sendViaResend(opts: {
   text: string | null;
   unsubscribeUrl?: string | null;
 }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-  const unsubHeaders = listUnsubscribeHeaders(opts.unsubscribeUrl);
+  const unsubHeaders = UNSUBSCRIBE_CONFIGURED ? listUnsubscribeHeaders(opts.unsubscribeUrl) : {};
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
