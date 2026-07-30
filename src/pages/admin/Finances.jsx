@@ -95,7 +95,11 @@ export default function Finances() {
   // Stripe return-from-onboarding banner. Stripe redirects to:
   //   /admin/finances?stripe=return    — operator finished or paused
   //   /admin/finances?stripe=refresh   — link expired, mint a new one
+  //   /admin/finances?stripe=connected — connected an EXISTING account by OAuth
+  //   /admin/finances?stripe=cancelled — they hit Cancel at Stripe (not an error)
+  //   /admin/finances?stripe=error&reason=… — the connect failed; reason says why
   const stripeParam = searchParams.get("stripe");
+  const stripeReason = searchParams.get("reason");
 
   // /admin/finances?setup=1 — arrive with "Manage setup" already open. Sent from
   // the Cancellation & Refund Policy card in Waivers & policies, which tells the
@@ -332,6 +336,51 @@ export default function Finances() {
     }
   }
 
+  // Connect a Stripe account the operator ALREADY has.
+  //
+  // Distinct from startOnboarding, which calls accounts.create and always mints
+  // a BRAND NEW account. Stripe's onboarding offers to reuse an existing
+  // account's verified details but per its docs "creates a new connected account
+  // while reusing and sharing verified information" - it does not connect the
+  // account. OAuth is the only mechanism that attaches one that already exists.
+  async function startOAuthConnect() {
+    setBusy(true);
+    setError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error("Not signed in.");
+
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-oauth-start`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            org_id: org.id,
+            origin: window.location.origin,
+          }),
+        }
+      );
+      const json = await resp.json();
+      if (!resp.ok || !json.authorize_url) {
+        // The function's own `message` is written for an operator to read
+        // (already_connected explains what to do next); prefer it over the code.
+        throw new Error(
+          json?.message || json?.error || `Could not start Stripe connect (${resp.status}).`
+        );
+      }
+      window.location.href = json.authorize_url;
+    } catch (err) {
+      setError(err.message || "Could not start Stripe connect.");
+      setBusy(false);
+    }
+  }
+
   async function openExpressDashboard() {
     setBusy(true);
     setError(null);
@@ -469,6 +518,20 @@ export default function Finances() {
           Stripe's setup link expired. Click "Continue setup" below for a fresh one.
         </Banner>
       )}
+      {stripeParam === "connected" && (
+        <Banner tone="ok">
+          Your Stripe account is connected. Payments from families will land in it.
+        </Banner>
+      )}
+      {stripeParam === "cancelled" && (
+        <Banner tone="info">
+          No problem — nothing changed. Your Stripe account isn't connected yet, so
+          you can't take payments until you connect one.
+        </Banner>
+      )}
+      {stripeParam === "error" && (
+        <Banner tone="err">{describeConnectFailure(stripeReason)}</Banner>
+      )}
       {error && (
         <Banner tone="err">{error}</Banner>
       )}
@@ -498,6 +561,7 @@ export default function Finances() {
             {status === "not_connected" && (
               <NotConnectedBody
                 onConnect={startOnboarding}
+                onConnectExisting={startOAuthConnect}
                 busy={busy}
                 canManage={canManage}
               />
@@ -1573,13 +1637,96 @@ function Banner({ tone, children }) {
   );
 }
 
-function NotConnectedBody(props) {
+// Turn a `reason` code from stripe-oauth-callback into something an operator can
+// act on. EVERY reason that function can emit has a case here - a code with no
+// case would surface as raw text like "exchange_failed" on their money screen.
+//
+// Each string is written to be TRUE in the state that produces it, not merely
+// reassuring: "already connected to another provider" is a genuinely different
+// problem from "the link expired", and telling someone to try again when the
+// account is spoken for would loop them forever.
+function describeConnectFailure(reason) {
+  switch (reason) {
+    case "missing_state":
+    case "state_unreadable":
+    case "link_expired":
+    case "missing_code":
+      return "That connect link expired before it finished. Nothing changed — click Connect again to start over.";
+    case "exchange_failed":
+      return "Stripe couldn't finish connecting that account. Nothing changed — please try again.";
+    case "account_in_use":
+      return "That Stripe account is already connected to a different provider on enrops. Pick a different account, or contact us if you think this is wrong.";
+    case "already_connected":
+      return "This account already has Stripe connected. Reload the page to see it.";
+    case "account_unreadable":
+      return "We connected to Stripe but couldn't read the account back, so nothing was saved. Please try again.";
+    case "persist_failed":
+      return "We couldn't save the connection on our side. Nothing changed — please try again.";
+    default:
+      // Covers 'internal' and any reason added to the callback later.
+      return "Something went wrong connecting Stripe. Nothing changed — please try again, and tell us if it keeps happening.";
+  }
+}
+
+// The state a BRAND NEW tenant lands in: no Stripe account on the org at all.
+// Every lean gate that says "you can't get paid yet" links here (the term banner
+// and the share-link gate in ProgramsCalendar), so this is the one screen that
+// has to offer both real paths.
+//
+// TWO PATHS, because they are genuinely different actions and the old copy
+// conflated them. `onConnectExisting` runs Connect OAuth, which attaches an
+// account the operator already owns. `onConnect` runs accounts.create, which
+// always mints a NEW one - Stripe's onboarding can reuse a previous account's
+// verified DETAILS, but per Stripe's docs it "creates a new connected account",
+// so the old subtitle's promise ("you'll keep using the one you have") was false
+// on the only path that existed.
+function NotConnectedBody({ onConnect, onConnectExisting, busy, canManage }) {
+  if (!canManage) {
+    return (
+      <StripeHero
+        title="Get paid straight to your bank"
+        subtitle="Families pay through enrops and the money lands in your own Stripe account."
+      >
+        <em style={{ color: MUTED, fontSize: 13 }}>
+          Only an owner or admin can connect Stripe.
+        </em>
+        <TrustChips />
+      </StripeHero>
+    );
+  }
+
   return (
     <StripeHero
       title="Get paid straight to your bank"
-      subtitle="Connect Stripe once and families' payments land in your account. Already use Stripe? Sign in on the next screen and pick that account — you'll keep using the one you have."
+      subtitle="Families pay through enrops and the money lands in your own Stripe account. You'll need this before you can take payments."
     >
-      <ConnectButton {...props} label="Connect Stripe" />
+      <div style={{ display: "grid", gap: 14, justifyItems: "center" }}>
+        <div>
+          <button
+            onClick={onConnectExisting}
+            disabled={busy}
+            style={btn(BRIGHT, "#fff", false, busy)}
+          >
+            {busy ? "Starting…" : "Connect my Stripe account"}
+          </button>
+          <div style={{ color: MUTED, fontSize: 12.5, marginTop: 6 }}>
+            Already use Stripe? Sign in and pick the account you already have.
+          </div>
+        </div>
+
+        <div>
+          <button
+            onClick={onConnect}
+            disabled={busy}
+            style={btn("transparent", BRIGHT, true, busy)}
+          >
+            {busy ? "Starting…" : "I don't use Stripe yet"}
+          </button>
+          <div style={{ color: MUTED, fontSize: 12.5, marginTop: 6 }}>
+            We'll walk you through setting one up. It takes a few minutes.
+          </div>
+        </div>
+      </div>
       <TrustChips />
       <WhatYouWillNeed />
     </StripeHero>
