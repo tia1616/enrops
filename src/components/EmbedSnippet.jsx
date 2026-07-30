@@ -30,7 +30,7 @@ export function buildEmbedSnippet(slug, orgName) {
   // their layout. Their site's stability is our responsibility here.
   // Comment carries the org name so an operator pasting into a page full of
   // other embeds can tell at a glance which block this is.
-  return `<!-- ${orgName || "Registration"} — powered by enrops -->
+  return `<!-- ${orgName || "Registration"} — enrops registration embed -->
 <iframe
   src="${src}"
   title="Register"

@@ -19,6 +19,7 @@ import { supabase } from '../lib/supabase.js';
 import PwaInstallButton from '../components/pwa/PwaInstallButton.jsx';
 import PortalSwitcher from '../components/PortalSwitcher.jsx';
 import { fetchPublishedPolicyTypes, PLATFORM_LEGAL_LINKS } from '../lib/policies.js';
+import PlatformFooterLine from '../components/PlatformFooterLine.jsx';
 
 const ENROPS_PURPLE = '#1C004F';
 const ENROPS_VIOLET = '#8C88FF';
@@ -127,6 +128,8 @@ export default function PublicLayout() {
 // have to configure) the operator's domain, and the payload is a single layout
 // number with no personal data in it.
 function EmbedShell({ org }) {
+  // Needed to tell the embedded CATALOG from the embedded checkout steps.
+  const location = useLocation();
   useEffect(() => {
     if (typeof window === 'undefined' || window.parent === window) return undefined;
     let last = 0;
@@ -170,6 +173,22 @@ function EmbedShell({ org }) {
       style={{ background: 'transparent', color: '#1a1a1a', fontFamily: 'inherit' }}
     >
       <Outlet context={{ org }} />
+      {/* The embed drops all our chrome so the flow looks native on the
+          operator's own site — but the attribution line stays on the CATALOG.
+          It is the highest-value spot in the acquisition loop (a public school
+          or partner page), and the checklist makes the line non-removable on
+          every tier. Matches how Calendly, Typeform and Jotform treat embedded
+          widgets.
+
+          NOT during checkout. embed=1 is carried into the registration steps,
+          so without this guard the line would put a target="_blank" link to
+          getenrops.com next to the child-details and payment fields — an exit
+          from the one flow we most need finished, and inside the operator's own
+          iframe. Same reasoning as dropping the account controls in checkout;
+          the checklist's QA gate is that checkout stays under 4.5 minutes. */}
+      {!isCheckoutPath(location) && (
+        <PlatformFooterLine surface="embed" style={{ marginTop: 12, paddingBottom: 4 }} />
+      )}
     </div>
   );
 }
@@ -245,15 +264,14 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
               </p>
             </div>
             <div>
-              <h4 className="font-grotesk text-xs uppercase tracking-widest" style={{ color: '#8C88FF' }}>Powered by</h4>
-              <a href="https://getenrops.com" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 transition hover:opacity-90" style={{ background: '#1C004F', color: '#FBFBFB' }}>
-                <span className="font-grotesk text-sm font-bold tracking-tight">enrops</span>
-                <span className="text-xs" style={{ color: '#8C88FF' }}>→</span>
-              </a>
-              <p className="mt-2 text-xs text-white/50">The enrichment operations platform.</p>
+              {/* The enrops badge lockup that used to sit here (mark + arrow +
+                  "The enrichment operations platform.") is retired: the footer
+                  checklist allows one quiet line and explicitly no badge
+                  graphic and no second sentence. The line itself now sits below
+                  the operator's own footer content, at the bottom. */}
+              <h4 className="font-grotesk text-xs uppercase tracking-widest" style={{ color: '#8C88FF' }}>Platform</h4>
               {/* Platform legal — governs every account regardless of provider,
-                  so it sits with the "Powered by" badge, not mixed in with the
-                  provider's own documents below. */}
+                  so it sits apart from the provider's own documents below. */}
               <div className="mt-3 flex items-center gap-3 text-xs text-white/40">
                 {PLATFORM_LEGAL_LINKS.map((l) => (
                   <Link key={l.to} to={l.to} className="hover:text-white/70">{l.label}</Link>
@@ -276,6 +294,15 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
               )}
             </div>
           </div>
+
+          {/* Platform attribution — below the operator's own footer content and
+              their policy links, per the checklist. Route-derived source so the
+              parent dashboard and the registration surfaces report separately. */}
+          <PlatformFooterLine
+            tone="dark"
+            surface={location.pathname.includes('/dashboard') ? 'parentPortal' : 'regPage'}
+            style={{ marginTop: 20 }}
+          />
         </div>
       </footer>
     </div>
@@ -331,8 +358,7 @@ function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
           <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>{org.name}</div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.55)', fontSize: 12 }}>
             <div>
-              &copy; {new Date().getFullYear()} {org.name}. Powered by{' '}
-              <a href="https://getenrops.com" target="_blank" rel="noopener noreferrer" style={{ color: ENROPS_VIOLET, textDecoration: 'none' }}>enrops</a>.
+              &copy; {new Date().getFullYear()} {org.name}.
             </div>
             {/* Provider's own docs only when published; Enrops platform docs
                 always, since they govern the account either way. */}
@@ -351,6 +377,17 @@ function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
               ))}
             </div>
           </div>
+
+          {/* Platform attribution. Sits BELOW the operator's own footer content
+              and its legal links, per the footer checklist - the operator's
+              brand stays primary. This layout wraps several parent-facing
+              routes, so the analytics source follows the route rather than
+              being hardcoded to one surface. */}
+          <PlatformFooterLine
+            tone="dark"
+            surface={location.pathname.includes('/dashboard') ? 'parentPortal' : 'regPage'}
+            style={{ paddingTop: 4 }}
+          />
         </div>
       </footer>
     </div>

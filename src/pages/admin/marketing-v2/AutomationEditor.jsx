@@ -21,6 +21,7 @@ import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.
 import { editableToHtml, highlightTokens, htmlToEditable } from "./bodyEditorUtils.js";
 import AttachmentPicker from "./AttachmentPicker.jsx";
 import { buildRegUrl, PUBLIC_SITE } from "../../../lib/regLinks.js";
+import { PLATFORM_FOOTER_TEXT, platformFooterUrl, surfaceForAutomation } from "../../../components/PlatformFooterLine.jsx";
 
 // Decode the common HTML entities operators might type or paste into a
 // plain-text input. The big one is &mdash; in subjects — subjects don't
@@ -171,7 +172,11 @@ function renderTokens(template, tokens) {
   });
 }
 
-function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryColor, orgSlug, isMarketing = false) {
+// `platformSurface` mirrors what the cron's wrapInShell will actually render:
+// the attribution line for parent/partner sends, nothing for instructor ones.
+// Passing it through keeps this preview a TRUE preview instead of drifting from
+// the real email.
+function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryColor, orgSlug, isMarketing = false, platformSurface = null) {
   const tokens = sampleTokens(orgName, senderName, primaryColor, orgSlug);
   const renderedSubject = renderTokens(subject, tokens);
   const renderedBody = renderTokens(body, tokens);
@@ -188,7 +193,7 @@ function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryCo
   <div style="padding:8px 30px 12px;color:#6b6880;font-size:12px;background:#fbfaf6;"><strong>Subject:</strong> ${escapeHtmlSafe(renderedSubject)}</div>
   <div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
   <div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">${renderedBody}</div>
-  <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">${safeName} &middot; Powered by Enrops &middot; ${new Date().getFullYear()}${isMarketing ? '<br><a href="#" style="color:#888;text-decoration:underline;">Unsubscribe</a>' : ''}</div>
+  <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">${safeName} &middot; ${new Date().getFullYear()}${isMarketing ? '<br><a href="#" style="color:#888;text-decoration:underline;">Unsubscribe</a>' : ''}${platformSurface ? `<div style="margin-top:10px;"><a href="${platformFooterUrl(platformSurface)}" style="color:#8C88FF;text-decoration:none;">${PLATFORM_FOOTER_TEXT} &rarr;</a></div>` : ''}</div>
 </div>
 </body></html>`;
 }
@@ -491,8 +496,12 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       subject,
       isBoardSend ? boardSendExampleBody(template.key, body, orgPrimaryColor) : body,
       orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type === "marketing",
+      // Same mapping the cron uses, so the preview shows the SAME ?src= the
+      // real send emits (welcome_camp -> welcome, not reminder) and renders no
+      // line at all for the instructor half of a two-audience automation.
+      surfaceForAutomation(template.key, template.audience, audience),
     ),
-    [subject, body, isBoardSend, template.key, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type],
+    [subject, body, isBoardSend, template.key, orgName, orgSenderName, orgLogoUrl, orgPrimaryColor, orgSlug, template.mailing_type, template.audience, audience],
   );
 
   // What the iframe actually shows. When a real source is picked AND the server

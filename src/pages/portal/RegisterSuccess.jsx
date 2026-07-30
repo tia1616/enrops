@@ -227,26 +227,10 @@ export default function RegisterSuccess() {
         {org?.name ? <> and it goes straight to {org.name}</> : <> and it goes straight to your program provider</>}.
       </p>
 
-      {/* Powered-by attribution + acquisition CTA (the getenrops loop). */}
-      <p className="mt-4 text-center text-xs text-j2s-ink/50">
-        <a
-          href="https://getenrops.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-semibold text-j2s-purple hover:underline"
-        >
-          Powered by enrops
-        </a>{' '}
-        — start your own program free at{' '}
-        <a
-          href="https://getenrops.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="hover:underline"
-        >
-          getenrops.com
-        </a>
-      </p>
+      {/* The platform attribution line used to live here as well, which meant
+          this page rendered it twice - once here and once in PublicLayout's
+          footer, which wraps this route. The checklist allows exactly one, so
+          it now lives only in PublicLayout. */}
     </div>
   );
 }

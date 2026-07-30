@@ -443,9 +443,8 @@ export default function Home() {
               </>
             )}
           </div>
-          <p style={{ textAlign: 'center', color: '#9B9FBB', fontSize: 12, marginTop: 18 }}>
-            Powered by <a href="https://getenrops.com" style={{ color: '#5847C9', textDecoration: 'none', fontWeight: 600 }}>enrops</a>
-          </p>
+          {/* Attribution deliberately omitted: this route renders inside
+              PublicLayout, whose footer carries the single platform line. */}
         </div>
       </div>
     );

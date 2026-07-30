@@ -35,10 +35,21 @@ export async function fetchPublishedPolicyTypes(organizationId) {
 /**
  * Enrops PLATFORM legal docs. These govern every account regardless of which
  * provider the family registered with, so they render in every portal footer
- * alongside the "Powered by Enrops" badge — never as a substitute for a
- * provider's own policy.
+ * under the Platform heading — never as a substitute for a provider's own
+ * policy. (They used to sit alongside a "Powered by Enrops" badge; that badge
+ * was retired for the single attribution line in PlatformFooterLine.jsx.)
  */
 export const PLATFORM_LEGAL_LINKS = [
   { to: '/privacy', label: 'Enrops Privacy' },
   { to: '/terms', label: 'Enrops Terms' },
+  // Requested by the Meta-pixel work: the cookie disclosure is what documents
+  // the advertising pixel, and until now nothing in the app linked to it.
+  // Verified before adding — App.jsx:132 serves /cookies, and the enrops org's
+  // cookies policy is published with real content in prod. A link to an
+  // unpublished policy would render an empty page, which is the failure this
+  // is meant to fix, not repeat.
+  //
+  // NOT added: "Do Not Sell or Share My Personal Information". That needs a
+  // consent module that does not exist yet; it ships with the control it opens.
+  { to: '/cookies', label: 'Enrops Cookies' },
 ];
