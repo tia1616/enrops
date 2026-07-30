@@ -9,8 +9,14 @@
 //                      Stripe Dashboard" button.
 //   restricted      -> Stripe paused something. Same UI as onboarding + an
 //                      alert banner.
-//   disconnected    -> Operator clicked Disconnect in Express Dashboard.
-//                      Same UI as not_connected, but with context banner.
+//   disconnected    -> Access to the account is gone: either the operator
+//                      revoked enrops from Stripe's own dashboard, or they used
+//                      Disconnect here. Same UI as not_connected, plus a context
+//                      banner whose wording depends on the charge model.
+//
+// Disconnect (stripe-oauth-disconnect) is offered on every state that HOLDS an
+// account — see canDisconnect. Without it, stripe-oauth-start's "already
+// connected" refusal was a dead end for anyone who attached the wrong account.
 //
 // Multi-tenant: reads org from useOutletContext (AdminLayout supplies it).
 // Never hardcodes J2S.
@@ -67,9 +73,18 @@ export default function Finances() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // WHICH action is in flight, not just whether one is. The two connect buttons
+  // share `busy` (both must disable so a second click can't start a competing
+  // flow), but they must not share the LABEL - clicking "Connect my Stripe
+  // account" made "I don't use Stripe yet" also read "Starting…", telling the
+  // operator something was happening on a path they never chose.
+  const [busyAction, setBusyAction] = useState(null);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [savedToast, setSavedToast] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  // Result of the Disconnect action, rendered BESIDE that button rather than in
+  // the page-level banners — see disconnectStripe(). { tone, text }.
+  const [disconnectMsg, setDisconnectMsg] = useState(null);
 
   const canManage = orgMember?.role === "owner" || orgMember?.role === "admin";
 
@@ -95,7 +110,11 @@ export default function Finances() {
   // Stripe return-from-onboarding banner. Stripe redirects to:
   //   /admin/finances?stripe=return    — operator finished or paused
   //   /admin/finances?stripe=refresh   — link expired, mint a new one
+  //   /admin/finances?stripe=connected — connected an EXISTING account by OAuth
+  //   /admin/finances?stripe=cancelled — they hit Cancel at Stripe (not an error)
+  //   /admin/finances?stripe=error&reason=… — the connect failed; reason says why
   const stripeParam = searchParams.get("stripe");
+  const stripeReason = searchParams.get("reason");
 
   // /admin/finances?setup=1 — arrive with "Manage setup" already open. Sent from
   // the Cancellation & Refund Policy card in Waivers & policies, which tells the
@@ -105,8 +124,25 @@ export default function Finances() {
   const wantsSetupOpen = searchParams.get("setup") === "1";
 
   // ── load config ─────────────────────────────────────────────────────────
+  //
+  // EVERY column read as `config.x` anywhere in this file must be listed in the
+  // select below. Leaving one out does not throw and does not fail a build:
+  // supabase-js simply returns an object without the key, the read is
+  // `undefined`, and whatever depends on it silently disappears. That is exactly
+  // what happened to stripe_charge_model on 2026-07-30 - the Disconnect button
+  // could never render for anyone, with deno check, npm run build, the unit
+  // tests and every edge-function runtime test all green. Loading the real page
+  // is what caught it. No PostgREST select string may contain SQL comments, so
+  // this note lives here rather than inline.
   async function reload() {
-    if (!org?.id) return;
+    if (!org?.id) {
+      // CLEAR the flag on the way out. `loading` starts true, so returning
+      // without touching it leaves every consumer believing a fetch is still in
+      // flight forever - which is how the connect banner ended up showing
+      // "Checking with Stripe for the details…" permanently.
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     const { data, error: err } = await supabase
@@ -120,6 +156,7 @@ export default function Finances() {
         stripe_payouts_enabled,
         stripe_business_type,
         stripe_country,
+        stripe_charge_model,
         platform_fee_card_pct,
         platform_fee_ach_pct,
         platform_fee_cap_cents,
@@ -159,7 +196,11 @@ export default function Finances() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
-      if (!token) return null;
+      // Distinguishable from a network failure. Both used to return null, so
+      // "Check status" told an operator whose session had lapsed to "try again
+      // in a moment" — advice that can never work, since the fix is signing in
+      // again. downloadFinances below has always handled this case correctly.
+      if (!token) return { error: "no_session" };
       const resp = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sync-operator-stripe-status`,
         {
@@ -247,13 +288,39 @@ export default function Finances() {
     setError(null);
     const result = await syncStripeStatus();
     setCheckingStatus(false);
-    if (result?.stripe_account_status === "active") {
-      setSavedToast("You're all set — payments now route to your bank.");
-      setTimeout(() => setSavedToast(null), 3000);
-    } else if (result && !result.error) {
-      setSavedToast("Still verifying with Stripe — nothing to do yet.");
-      setTimeout(() => setSavedToast(null), 3000);
+    // One sentence per state sync can actually return, because "Still verifying
+    // — nothing to do yet" is only true for ONE of them. It was being shown for
+    // all four non-active outcomes:
+    //   onboarding   — the operator's setup is UNFINISHED. Telling them there is
+    //                  nothing to do is the opposite of the truth, and this
+    //                  button lives on the onboarding screen, so that was the
+    //                  most likely outcome of pressing it.
+    //   restricted   — Stripe is waiting on THEM.
+    //   disconnected — newly reachable: sync now reports the real status when a
+    //                  concurrent disconnect supersedes the poll (superseded:
+    //                  true). The page re-renders into the disconnected state at
+    //                  the same moment, so the old copy would have contradicted
+    //                  the screen it sits on.
+    const status = result?.stripe_account_status;
+    const toast = (msg) => { setSavedToast(msg); setTimeout(() => setSavedToast(null), 3000); };
+    if (result?.error === "no_session") {
+      setError("Please sign in again to check your Stripe status.");
     } else if (result?.error) {
+      setError("Couldn't reach Stripe just now. Try again in a moment.");
+    } else if (status === "active") {
+      toast("You're all set — payments now route to your bank.");
+    } else if (status === "disconnected") {
+      toast("That Stripe account is disconnected, so payments are off. Connect one below.");
+    } else if (status === "restricted") {
+      toast("Stripe needs a bit more from you before payments can switch on.");
+    } else if (status === "onboarding") {
+      toast("Stripe still needs your setup finished — pick up where you left off.");
+    } else if (result) {
+      toast("Still verifying with Stripe — nothing to do yet.");
+    } else {
+      // syncStripeStatus swallows a network failure and returns null, so every
+      // branch above misses and the button produced NO feedback at all — the
+      // "looks dead" failure. Say something true instead.
       setError("Couldn't reach Stripe just now. Try again in a moment.");
     }
   }
@@ -295,9 +362,31 @@ export default function Finances() {
   const isVerifying = status === "verifying";
   const isDisconnected = status === "disconnected";
 
+  // Whether to offer Disconnect at all. Every clause is load-bearing:
+  //   canManage      - same bar as connecting. Staff/viewer must not detach the
+  //                    account the whole business gets paid through.
+  //   accountId      - nothing to disconnect otherwise.
+  //   status         - not_connected/disconnected are already there; the button
+  //                    would be a no-op that looks like an action.
+  //   charge model   - the edge function refuses anything but 'direct' (a
+  //                    destination org's charges keep succeeding into the
+  //                    platform balance when its account goes away, which is a
+  //                    different money story). Gating HERE as well means we
+  //                    never render a button whose only outcome is a refusal.
+  //                    This is a CONFIG branch, not a tenant branch: both
+  //                    connect paths a new tenant can take write 'direct'.
+  const chargeModel = config?.stripe_charge_model || null;
+  const canDisconnect =
+    canManage &&
+    !!accountId &&
+    status !== "not_connected" &&
+    status !== "disconnected" &&
+    chargeModel === "direct";
+
   // ── actions ─────────────────────────────────────────────────────────────
   async function startOnboarding() {
     setBusy(true);
+    setBusyAction("create");
     setError(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -321,14 +410,65 @@ export default function Finances() {
       );
       const json = await resp.json();
       if (!resp.ok || !json.onboarding_url) {
+        // `message` first: stripe-connect-onboard's org_id_required refusal
+        // writes a sentence an operator can act on, and without reading it here
+        // the bare code `org_id_required` would land on their money screen.
         throw new Error(
-          json?.stripe_message || json?.error || `Onboarding failed (${resp.status}).`
+          json?.message || json?.stripe_message || json?.error || `Onboarding failed (${resp.status}).`
         );
       }
       window.location.href = json.onboarding_url;
     } catch (err) {
       setError(err.message || "Could not start Stripe onboarding.");
       setBusy(false);
+      setBusyAction(null);
+    }
+  }
+
+  // Connect a Stripe account the operator ALREADY has.
+  //
+  // Distinct from startOnboarding, which calls accounts.create and always mints
+  // a BRAND NEW account. Stripe's onboarding offers to reuse an existing
+  // account's verified details but per its docs "creates a new connected account
+  // while reusing and sharing verified information" - it does not connect the
+  // account. OAuth is the only mechanism that attaches one that already exists.
+  async function startOAuthConnect() {
+    setBusy(true);
+    setBusyAction("oauth");
+    setError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error("Not signed in.");
+
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-oauth-start`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            org_id: org.id,
+            origin: window.location.origin,
+          }),
+        }
+      );
+      const json = await resp.json();
+      if (!resp.ok || !json.authorize_url) {
+        // The function's own `message` is written for an operator to read
+        // (already_connected explains what to do next); prefer it over the code.
+        throw new Error(
+          json?.message || json?.error || `Could not start Stripe connect (${resp.status}).`
+        );
+      }
+      window.location.href = json.authorize_url;
+    } catch (err) {
+      setError(err.message || "Could not start Stripe connect.");
+      setBusy(false);
+      setBusyAction(null);
     }
   }
 
@@ -361,6 +501,103 @@ export default function Finances() {
       setError(err.message || "Could not open Stripe dashboard.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Detach the connected Stripe account so a different one can be connected.
+  //
+  // Until this existed, stripe-oauth-start's "you already have an account
+  // connected" refusal was a dead end: nothing in the product could set
+  // status='disconnected' except Stripe's own deauthorized webhook, so an
+  // operator who connected the WRONG account had to go find the revoke button
+  // inside Stripe's dashboard.
+  //
+  // Feedback is deliberately NOT routed through the page-level `error` /
+  // `savedToast` banners at the top of the page. This control lives at the
+  // bottom of an expanded settings panel, so a confirmation 1,200px above the
+  // click reads as a dead button. The panel renders `disconnectMsg` itself.
+  async function disconnectStripe() {
+    if (!canManage) return;
+    const label = accountId ? `\n\nAccount: ${accountId}` : "";
+    const ok = window.confirm(
+      "Disconnect this Stripe account?" + label + "\n\n" +
+      "• Families won't be able to pay you through enrops until you connect another account — any registration links you've shared will stop taking payments.\n" +
+      "• Refunds through enrops on payments already taken on this account will stop working too.\n" +
+      "• Your Stripe account itself stays open and yours. We just stop using it.\n\n" +
+      "You can connect a different account straight afterwards."
+    );
+    if (!ok) return;
+
+    setBusy(true);
+    setBusyAction("disconnect");
+    setDisconnectMsg(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const authToken = session?.access_token;
+      if (!authToken) throw new Error("Not signed in.");
+
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-oauth-disconnect`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({ org_id: org.id }),
+        }
+      );
+      const json = await resp.json();
+      if (!resp.ok) {
+        // The function writes `message` for an operator to read — the
+        // unpaid-instalment refusal names the count and the amount, which is
+        // the whole point of it. Prefer it over the code every time.
+        throw new Error(
+          json?.message || json?.error || `Could not disconnect (${resp.status}).`
+        );
+      }
+      // Three outcomes, three sentences, each true only in its own case. The
+      // function reports which one happened rather than encoding it in a boolean:
+      //   revoked         - we called Stripe and access is genuinely gone.
+      //   controlled      - the account is one WE created, so there was no grant
+      //                     to revoke; we simply stopped using it. Saying
+      //                     "no longer has access" here would be false, and an
+      //                     operator looking at their own Stripe connected-apps
+      //                     list would catch us in it.
+      //   already_revoked - the grant was gone before we asked (they revoked us
+      //                     from Stripe's dashboard while we were connected).
+      //   already_disconnected - the org was ALREADY in the disconnected state
+      //                     before this click. Deliberately its own sentence:
+      //                     the row records the status but not how it got there,
+      //                     so an org unlinked via the controlled path (never
+      //                     revoked, enrops still HAS access) must not be told
+      //                     "enrops has no access to it".
+      const outcomeText = {
+        revoked:
+          "Disconnected. enrops no longer has access to that Stripe account. You can connect a different one now.",
+        controlled:
+          "Disconnected. enrops has stopped using that Stripe account — the account itself is still open and yours. You can connect a different one now.",
+        already_revoked:
+          "That account is already disconnected — enrops has no access to it. You can connect a different one now.",
+        already_disconnected:
+          "That account is already disconnected — enrops isn't using it. You can connect a different one now.",
+      };
+      setDisconnectMsg({
+        tone: "ok",
+        // The fallback must NOT be one of the three above. If `outcome` is ever
+        // missing, defaulting to the "revoked" wording would assert the
+        // strongest thing we could say - that access is gone - on the one path
+        // where we do not know. This sentence is true in all three cases.
+        text: outcomeText[json.outcome] ||
+          "Disconnected. enrops has stopped using that Stripe account. You can connect a different one now.",
+      });
+      await reload();
+    } catch (err) {
+      setDisconnectMsg({ tone: "err", text: err.message || "Could not disconnect Stripe." });
+    } finally {
+      setBusy(false);
+      setBusyAction(null);
     }
   }
 
@@ -469,8 +706,68 @@ export default function Finances() {
           Stripe's setup link expired. Click "Continue setup" below for a fresh one.
         </Banner>
       )}
+      {/* CONNECTED is not the same as CAN TAKE MONEY, and this banner must not
+          conflate them. buildChargeRouting FAILS CLOSED when an org is
+          stripe_charge_model='direct' with stripe_charges_enabled=false
+          (connectChargeParams.ts) - checkout is blocked. A Standard account can
+          connect in exactly that shape, so a flat "payments will land in it",
+          chosen off the URL param alone, would promise money movement on the one
+          screen where it is already blocked, while the card below it says the
+          opposite. Each branch below is selected by the LOADED status, not by the
+          redirect. */}
+      {stripeParam === "connected" && (
+        loading ? (
+          <Banner tone="ok">
+            Your Stripe account is connected. Checking with Stripe for the details…
+          </Banner>
+        ) : !config ? (
+          // Done loading and still no config. "Checking…" here would be a
+          // progress message that never resolves, so name the failure and give
+          // them the one action that helps.
+          <Banner tone="warn">
+            Your Stripe account is connected, but we couldn't load your payment details
+            just now. Reload the page to try again.
+          </Banner>
+        ) : config.stripe_charges_enabled ? (
+          <Banner tone="ok">
+            Your Stripe account is connected. Payments from families will land in it.
+          </Banner>
+        ) : config.stripe_account_status === "verifying" ? (
+          <Banner tone="info">
+            Your Stripe account is connected. Stripe is still reviewing it, so payments
+            aren't switched on yet — there's nothing more for you to do.
+          </Banner>
+        ) : (
+          <Banner tone="warn">
+            Your Stripe account is connected, but Stripe needs a bit more before you can
+            take payments. The steps are below.
+          </Banner>
+        )
+      )}
+      {stripeParam === "cancelled" && (
+        <Banner tone="info">
+          No problem — nothing changed. Your Stripe account isn't connected yet, so
+          you can't take payments until you connect one.
+        </Banner>
+      )}
+      {stripeParam === "error" && (
+        <Banner tone="err">{describeConnectFailure(stripeReason)}</Banner>
+      )}
       {error && (
         <Banner tone="err">{error}</Banner>
+      )}
+      {/* A SUCCESSFUL disconnect flips the status, which makes canDisconnect
+          false, which UNMOUNTS DisconnectPanel - taking its own confirmation
+          with it. Observed live on staging 2026-07-30: the account really was
+          disconnected and the page really did re-render, but the operator was
+          never told it worked; they had to infer it from the screen changing
+          under them. So the message is rendered here whenever the panel is gone.
+          The two are mutually exclusive (the panel renders only when
+          canDisconnect is true), so exactly one copy is ever on screen - and in
+          the post-disconnect state the page collapses to one short card, so this
+          IS beside where they just clicked, not a banner far above it. */}
+      {disconnectMsg && !canDisconnect && (
+        <Banner tone={disconnectMsg.tone}>{disconnectMsg.text}</Banner>
       )}
       {savedToast && (
         <Banner tone="ok">{savedToast}</Banner>
@@ -498,7 +795,9 @@ export default function Finances() {
             {status === "not_connected" && (
               <NotConnectedBody
                 onConnect={startOnboarding}
+                onConnectExisting={startOAuthConnect}
                 busy={busy}
+                busyAction={busyAction}
                 canManage={canManage}
               />
             )}
@@ -527,8 +826,27 @@ export default function Finances() {
             {isDisconnected && (
               <DisconnectedBody
                 onReconnect={startOnboarding}
+                onConnectExisting={startOAuthConnect}
                 busy={busy}
+                busyAction={busyAction}
                 canManage={canManage}
+                chargeModel={chargeModel}
+              />
+            )}
+
+            {/* Wrong account connected? This is the state an operator is
+                actually stuck in — mid-onboarding on an account they didn't
+                mean to attach, with stripe-oauth-start refusing to let them
+                pick another. Quiet, at the bottom, but present. */}
+            {canDisconnect && (
+              <DisconnectPanel
+                variant="inline"
+                accountId={accountId}
+                onDisconnect={disconnectStripe}
+                busy={busy}
+                busyAction={busyAction}
+                checking={checkingStatus}
+                message={disconnectMsg}
               />
             )}
           </Section>
@@ -711,6 +1029,18 @@ export default function Finances() {
               </div>
             </Section>
           </Card>
+
+          {canDisconnect && (
+            <DisconnectPanel
+              variant="card"
+              accountId={accountId}
+              onDisconnect={disconnectStripe}
+              busy={busy}
+              busyAction={busyAction}
+              checking={checkingStatus}
+              message={disconnectMsg}
+            />
+          )}
         </>
       )}
 
@@ -1573,31 +1903,258 @@ function Banner({ tone, children }) {
   );
 }
 
-function NotConnectedBody(props) {
+// Turn a `reason` code from stripe-oauth-callback into something an operator can
+// act on. EVERY reason that function can emit has a case here - a code with no
+// case would surface as raw text like "exchange_failed" on their money screen.
+//
+// Each string is written to be TRUE in the state that produces it, not merely
+// reassuring: "already connected to another provider" is a genuinely different
+// problem from "the link expired", and telling someone to try again when the
+// account is spoken for would loop them forever.
+function describeConnectFailure(reason) {
+  switch (reason) {
+    case "missing_state":
+    case "state_unreadable":
+    case "link_expired":
+    case "missing_code":
+      // These fire AFTER Stripe has redirected the operator back, so for most of
+      // them they already approved enrops and only our end of the handshake was
+      // missing. "Nothing changed" would be false in exactly those cases, so this
+      // says what is true of every one of them: we did not save it.
+      return "That connect link expired before we could finish, so the account wasn't saved. Click Connect again to start over — approving enrops a second time is safe.";
+    case "exchange_failed":
+      // Deliberately does NOT say "nothing changed": the operator has already
+      // approved Enrops at Stripe by this point, and the exchange can fail after
+      // that approval landed. Claiming nothing happened would contradict what
+      // they can see in their own Stripe settings.
+      return "Stripe couldn't finish connecting that account, so we didn't save it. Please try again — approving enrops a second time is safe.";
+    case "account_in_use":
+      return "That Stripe account is already connected to a different provider on enrops. Pick a different account, or contact us if you think this is wrong.";
+    case "already_connected":
+      // Emitted when the org gained a DIFFERENT Stripe account while this flow
+      // was open (two admins connecting at once). "You already have one" alone
+      // would read as success and hide the fact that THEIR pick was refused.
+      return "A different Stripe account was connected to this business while you were at Stripe, so the one you picked wasn't saved. Reload to see which account is connected.";
+    case "account_unreadable":
+      return "You approved enrops at Stripe, but we couldn't read the account back, so we didn't save it. Please try again — approving a second time is safe.";
+    case "persist_failed":
+      // By this point the grant EXISTS at Stripe; only our own write failed. "No
+      // changes at all" would be false and would confuse anyone who then looks
+      // at their Stripe connected-apps list.
+      return "You approved enrops at Stripe, but we couldn't save it on our side, so it isn't connected yet. Please try again — approving a second time is safe.";
+    default:
+      // Covers 'internal' and any reason added to the callback later.
+      return "Something went wrong connecting Stripe. Nothing changed — please try again, and tell us if it keeps happening.";
+  }
+}
+
+// The state a BRAND NEW tenant lands in: no Stripe account on the org at all.
+// Every lean gate that says "you can't get paid yet" links here (the term banner
+// and the share-link gate in ProgramsCalendar), so this is the one screen that
+// has to offer both real paths.
+//
+// TWO PATHS, because they are genuinely different actions and the old copy
+// conflated them. `onConnectExisting` runs Connect OAuth, which attaches an
+// account the operator already owns. `onConnect` runs accounts.create, which
+// always mints a NEW one - Stripe's onboarding can reuse a previous account's
+// verified DETAILS, but per Stripe's docs it "creates a new connected account",
+// so the old subtitle's promise ("you'll keep using the one you have") was false
+// on the only path that existed.
+function NotConnectedBody({ onConnect, onConnectExisting, busy, busyAction, canManage }) {
+  if (!canManage) {
+    return (
+      <StripeHero
+        title="Get paid straight to your bank"
+        subtitle="Families pay through enrops and the money lands in your own Stripe account."
+      >
+        <em style={{ color: MUTED, fontSize: 13 }}>
+          Only an owner or admin can connect Stripe.
+        </em>
+        <TrustChips />
+      </StripeHero>
+    );
+  }
+
   return (
     <StripeHero
       title="Get paid straight to your bank"
-      subtitle="Connect Stripe once and families' payments land in your account. Already use Stripe? Sign in on the next screen and pick that account — you'll keep using the one you have."
+      subtitle="Families pay through enrops and the money lands in your own Stripe account. You'll need this before you can take payments."
     >
-      <ConnectButton {...props} label="Connect Stripe" />
+      <div style={{ display: "grid", gap: 14, justifyItems: "center" }}>
+        <div>
+          <button
+            onClick={onConnectExisting}
+            disabled={busy}
+            style={btn(BRIGHT, "#fff", false, busy)}
+          >
+            {busyAction === "oauth" ? "Starting…" : "Connect my Stripe account"}
+          </button>
+          <div style={{ color: MUTED, fontSize: 12.5, marginTop: 6 }}>
+            Already use Stripe? Sign in and pick the account you already have.
+          </div>
+        </div>
+
+        <div>
+          <button
+            onClick={onConnect}
+            disabled={busy}
+            style={btn("transparent", BRIGHT, true, busy)}
+          >
+            {busyAction === "create" ? "Starting…" : "I don't use Stripe yet"}
+          </button>
+          <div style={{ color: MUTED, fontSize: 12.5, marginTop: 6 }}>
+            We'll walk you through setting one up. It takes a few minutes.
+          </div>
+        </div>
+      </div>
       <TrustChips />
       <WhatYouWillNeed />
     </StripeHero>
   );
 }
 
-function DisconnectedBody(props) {
+// Detach the connected Stripe account. Two shapes, ONE control: `variant="card"`
+// sits at the bottom of the expanded payment settings for a live account;
+// `variant="inline"` is the same action for an operator stuck part-way through
+// setup on an account they didn't mean to connect. Both render their own result
+// so the confirmation lands where the click did.
+//
+// This is not styled as a big red destructive button on purpose. It is a
+// recoverable, one-minute-to-undo action (connect another account and you're
+// back), and the surrounding copy carries the weight rather than the colour.
+// `checking` is NOT cosmetic. checkStripeStatus() sets only `checkingStatus`,
+// never `busy`, so gating this button on `busy` alone left it clickable during a
+// status poll — and sync-operator-stripe-status reads the org row, round-trips
+// to Stripe, and only THEN writes. A disconnect landing inside that window gets
+// overwritten by the poll's pre-disconnect snapshot, leaving the screen saying
+// "Stripe connected" while the grant is actually revoked and every charge fails.
+// The server-side half of this fix is the conditional UPDATE in
+// sync-operator-stripe-status; this half stops the UI offering the collision.
+function DisconnectPanel({ variant, accountId, onDisconnect, busy, busyAction, checking, message }) {
+  const working = busyAction === "disconnect";
+  const blocked = busy || checking;
+  const body = (
+    <>
+      <div style={{ fontSize: 13.5, fontWeight: 700, color: PURPLE }}>
+        Connected the wrong Stripe account?
+      </div>
+      <p style={{ fontSize: 13, color: MUTED, lineHeight: 1.55, margin: "4px 0 10px", maxWidth: 520 }}>
+        Disconnect it and you can connect a different one straight away. While nothing
+        is connected, your registration links can't take payments.
+      </p>
+      <button
+        type="button"
+        onClick={onDisconnect}
+        disabled={blocked}
+        style={{
+          padding: "7px 12px",
+          background: "transparent",
+          color: RED,
+          border: `1px solid ${RED}`,
+          borderRadius: 6,
+          fontSize: 13,
+          fontWeight: 600,
+          fontFamily: "inherit",
+          cursor: blocked ? "wait" : "pointer",
+          opacity: blocked && !working ? 0.55 : 1,
+        }}
+      >
+        {working ? "Disconnecting…" : "Disconnect Stripe"}
+      </button>
+      {/* Say WHY it is greyed out. A disabled control with no explanation is the
+          same "looks dead" failure as a button that silently does nothing. */}
+      {checking && !working && (
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+          Available once the Stripe check finishes.
+        </div>
+      )}
+      {accountId && (
+        <div style={{ fontSize: 11.5, color: MUTED, marginTop: 6, fontFamily: "monospace" }}>
+          {accountId}
+        </div>
+      )}
+      {/* Result renders HERE, under the button that caused it — not in the
+          page-level banner far above this panel. */}
+      {message && (
+        <div style={{ marginTop: 10, maxWidth: 520 }}>
+          <Banner tone={message.tone}>{message.text}</Banner>
+        </div>
+      )}
+    </>
+  );
+
+  if (variant === "card") {
+    return <Card><Section>{body}</Section></Card>;
+  }
+  return (
+    <div style={{ marginTop: 24, paddingTop: 16, borderTop: `1px solid ${RULE}`, textAlign: "left" }}>
+      {body}
+    </div>
+  );
+}
+
+// Where an org lands after its Stripe access goes away — either the operator
+// revoked enrops from Stripe's own dashboard (account.application.deauthorized)
+// or they used Disconnect here.
+//
+// The old copy said "New parent payments are landing in enrops's account until
+// you reconnect. We'll transfer them to you once you're set up." That is only
+// true for a DESTINATION-charge org, where buildConnectChargeParams returns {}
+// and the charge falls through to the platform. For a DIRECT org —
+// which is every new tenant — buildChargeRouting FAILS CLOSED: nothing is
+// charged at all, so no money is landing anywhere and there is nothing to
+// transfer on. Promising a transfer that will never happen is worse than saying
+// payments have stopped. Each branch below is true in the state that selects it.
+//
+// Reconnect offers BOTH paths, same as NotConnectedBody. The single
+// "Reconnect Stripe" button ran startOnboarding (accounts.create), which mints a
+// BRAND NEW Stripe account — the wrong answer for the operator whose whole
+// problem is that they already have one.
+function DisconnectedBody({ onReconnect, onConnectExisting, busy, busyAction, canManage, chargeModel }) {
+  const isDirect = chargeModel === "direct";
   return (
     <>
       <Banner tone="warn">
-        Stripe is disconnected. New parent payments are landing in enrops's account until
-        you reconnect. We'll transfer them to you once you're set up.
+        {isDirect
+          ? "Stripe is disconnected, so your registration links can't take payments right now. Connect an account and they start working again immediately."
+          : "Stripe is disconnected. New parent payments are landing in enrops's account until you reconnect. We'll transfer them to you once you're set up."}
       </Banner>
       <StripeHero
-        title="Reconnect Stripe to get paid again"
-        subtitle="Pick up where you left off. Your money lands straight in your bank."
+        title="Connect Stripe to get paid again"
+        subtitle="Your money lands straight in your bank. Use the account you already have, or set up a new one."
       >
-        <ConnectButton {...props} label="Reconnect Stripe" />
+        {!canManage ? (
+          <em style={{ color: MUTED, fontSize: 13 }}>
+            Only an owner or admin can connect Stripe.
+          </em>
+        ) : (
+          <div style={{ display: "grid", gap: 14, justifyItems: "center" }}>
+            <div>
+              <button
+                onClick={onConnectExisting}
+                disabled={busy}
+                style={btn(BRIGHT, "#fff", false, busy)}
+              >
+                {busyAction === "oauth" ? "Starting…" : "Connect my Stripe account"}
+              </button>
+              <div style={{ color: MUTED, fontSize: 12.5, marginTop: 6 }}>
+                Sign in and pick the account you want to use.
+              </div>
+            </div>
+            <div>
+              <button
+                onClick={onReconnect}
+                disabled={busy}
+                style={btn("transparent", BRIGHT, true, busy)}
+              >
+                {busyAction === "create" ? "Starting…" : "Set up a new Stripe account"}
+              </button>
+              <div style={{ color: MUTED, fontSize: 12.5, marginTop: 6 }}>
+                We'll walk you through it. It takes a few minutes.
+              </div>
+            </div>
+          </div>
+        )}
         <TrustChips />
         <WhatYouWillNeed />
       </StripeHero>
@@ -1648,9 +2205,16 @@ function TrustChips() {
     <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 16, marginTop: 14 }}>
       <span style={chip}>
         <SIcon size={16}><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 1.5" /></SIcon>
-        {/* Two numbers, not one: an operator who already has Stripe is done in
-            about 2 minutes, and quoting a flat "5 minutes" undersells that. */}
-        2 min if you have Stripe, 5–10 if not
+        {/* Two numbers, not one: quoting a flat "5 minutes" badly undersells the
+            already-have-Stripe path. MEASURED, not estimated - Jessica's connect
+            on staging 2026-07-30 took 48 seconds from clicking Connect to landing
+            back (stripe_oauth_states created 03:57:04, consumed 03:57:52), and
+            she entered nothing at all. "About a minute" rather than "under a
+            minute" because she was already signed in to Stripe; someone signing
+            in fresh with 2FA spends a little longer. Overstating the effort on
+            the screen that gates every payment is not a safe default - it talks
+            operators out of a one-minute job. */}
+        About a minute if you have Stripe, 5–10 if not
       </span>
       <span style={chip}>
         <SIcon size={16}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></SIcon>
@@ -1704,7 +2268,7 @@ function WhatYouWillNeed() {
 
           <div style={{ marginBottom: 12 }}>
             <div style={pathTitle}>
-              If you already use Stripe <span style={pathTime}>· about 2 minutes</span>
+              If you already use Stripe <span style={pathTime}>· about a minute</span>
             </div>
             <p style={{ ...item, marginBottom: 0 }}>
               Sign in with your usual Stripe login and choose that account. You'll
@@ -1738,28 +2302,6 @@ function WhatYouWillNeed() {
         </div>
       )}
     </div>
-  );
-}
-
-function ConnectButton({ onConnect, onReconnect, busy, canManage, label }) {
-  const handler = onConnect || onReconnect;
-  if (!canManage) {
-    return (
-      <em style={{ color: MUTED, fontSize: 13 }}>
-        Only an owner or admin can connect Stripe.
-      </em>
-    );
-  }
-  // One-click: no pre-form. Stripe's hosted onboarding collects business type,
-  // country, and business details on its own screens.
-  return (
-    <button
-      onClick={handler}
-      disabled={busy}
-      style={btn(BRIGHT, "#fff", false, busy)}
-    >
-      {busy ? "Starting…" : label}
-    </button>
   );
 }
 
@@ -1825,29 +2367,6 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
           </em>
         )}
       </StripeHero>
-    </>
-  );
-}
-
-function ActiveBody({ accountId, onOpenDashboard, busy }) {
-  return (
-    <>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <span style={{
-          display: "inline-block", width: 10, height: 10, borderRadius: "50%",
-          background: OK,
-        }} />
-        <strong style={{ color: OK, fontSize: 14 }}>Connected</strong>
-      </div>
-      <div style={{ fontSize: 13, color: MUTED, marginBottom: 16 }}>
-        Account ID: <code style={{ fontFamily: "monospace", fontSize: 12 }}>{accountId}</code>
-      </div>
-      <button onClick={onOpenDashboard} disabled={busy} style={btn("transparent", BRIGHT, true, busy)}>
-        {busy ? "Loading…" : "Open Stripe Dashboard ↗"}
-      </button>
-      <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
-        Manage payouts, view balances, update bank info.
-      </div>
     </>
   );
 }

@@ -60,24 +60,45 @@ serve(async (req: Request) => {
 
     let targetOrgId = body.org_id || null;
 
+    // .limit(1) on BOTH branches plus a real error check - same fix as
+    // stripe-oauth-start, same reason. A bare .maybeSingle() resolves with an
+    // ERROR when several rows match, and the org-less branch below can match
+    // several: only OWNER membership is capped at one per user
+    // (20260724a_owner_org_unique_index). Someone who owns one org and
+    // administers another matched twice, got an error rather than a row, and -
+    // because the error was thrown away - was told `forbidden`. The result was a
+    // dead "open Stripe dashboard" button with nothing in the logs to separate it
+    // from a genuine permission denial. Still fails closed either way.
     if (targetOrgId) {
-      const { data: cm } = await supabase
+      const { data: cm, error: cmErr } = await supabase
         .from('org_members')
         .select('role, organization_id')
         .eq('auth_user_id', callerAuthId)
         .eq('organization_id', targetOrgId)
         .in('role', ['owner', 'admin'])
         .not('accepted_at', 'is', null)
+        .limit(1)
         .maybeSingle();
+      if (cmErr) {
+        console.error('[connect-login-link] membership check failed for org', targetOrgId, cmErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
       if (!cm) return FORBIDDEN;
     } else {
-      const { data: cm } = await supabase
+      const { data: cm, error: cmErr } = await supabase
         .from('org_members')
         .select('role, organization_id')
         .eq('auth_user_id', callerAuthId)
         .in('role', ['owner', 'admin'])
         .not('accepted_at', 'is', null)
+        .order('accepted_at', { ascending: true })
+        .order('organization_id', { ascending: true })
+        .limit(1)
         .maybeSingle();
+      if (cmErr) {
+        console.error('[connect-login-link] membership lookup failed:', cmErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
       if (!cm) return FORBIDDEN;
       targetOrgId = (cm as { organization_id: string }).organization_id;
     }
@@ -115,20 +136,50 @@ serve(async (req: Request) => {
     // stripe_charge_model: the account is the authority on its own dashboard,
     // and orphan-adopted accounts can be Express while the org row says
     // otherwise.
+    // A CLASSIC STANDARD ACCOUNT HAS NO `controller` OBJECT AT ALL. That is the
+    // shape stripe-oauth-callback connects, and it made the old guard
+    // (`if (dashboardType && dashboardType !== 'express')`) fall straight through
+    // to createLoginLink, which cannot mint a link for it - a 502 and a dead
+    // button on the operator's own money screen. Absent controller must be read
+    // as "not Express", not as "assume Express".
+    //
+    // Distinguish "Stripe told us the type" from "we could not ask". Only the
+    // second case keeps the old optimistic behaviour: a transient retrieve
+    // failure on a genuine Express account should still try for the link it
+    // needs, because sending an Express operator to dashboard.stripe.com is a
+    // dead end - they have no full-dashboard credentials to sign in with.
     let dashboardType: string | null = null;
+    let acctType: string | null = null;
+    let retrieved = false;
     try {
       const acct = await stripe.accounts.retrieve(accountId);
-      dashboardType =
-        (acct as unknown as { controller?: { stripe_dashboard?: { type?: string } } })
-          .controller?.stripe_dashboard?.type ?? null;
+      retrieved = true;
+      const a = acct as unknown as {
+        controller?: { stripe_dashboard?: { type?: string } };
+        type?: string;
+      };
+      dashboardType = a.controller?.stripe_dashboard?.type ?? null;
+      acctType = a.type ?? null;
     } catch (err) {
-      console.warn('[connect-login-link] account retrieve failed, assuming express:', err);
+      console.warn('[connect-login-link] account retrieve failed, will still try a login link:', err);
     }
 
-    if (dashboardType && dashboardType !== 'express') {
-      // Full (or 'none') dashboard: there is no link to mint. Send them to
-      // Stripe's own sign-in, which is where their account actually lives.
-      return json({ url: 'https://dashboard.stripe.com/', dashboard_type: dashboardType });
+    // Express is the ONLY shape createLoginLink works for, so require it
+    // positively rather than excluding the shapes we happen to have thought of.
+    const isExpress = dashboardType === 'express';
+    if (retrieved && !isExpress) {
+      // Standard (OAuth-connected) or a 'full'/'none' controller account: the
+      // operator signs in with their own Stripe credentials, and there is no
+      // link for us to mint.
+      console.log(
+        `[connect-login-link] ${accountId} is not an Express account ` +
+        `(type=${acctType ?? 'none'} dashboard=${dashboardType ?? 'none'}); ` +
+        `sending the operator to Stripe's own sign-in`,
+      );
+      return json({
+        url: 'https://dashboard.stripe.com/',
+        dashboard_type: dashboardType ?? (acctType === 'standard' ? 'standard' : 'unknown'),
+      });
     }
 
     // ── mint a fresh login link (Express accounts only) ───────────────────

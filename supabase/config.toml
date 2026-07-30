@@ -8,6 +8,18 @@ project_id = "enrops"
 [functions.stripe-webhook]
 verify_jwt = false
 
+[functions.stripe-oauth-callback]
+# MUST stay false. This is the redirect target Stripe sends the operator's
+# BROWSER to after they pick an account; it carries no Supabase JWT and never
+# can. Its security comes from the single-use row in stripe_oauth_states, not
+# from auth. Deploying it with verify_jwt = true would make every connect
+# attempt 401 after the operator had already authorised at Stripe.
+# (stripe-oauth-start and stripe-oauth-disconnect are NOT listed: both take an
+# operator's JWT and default to verify_jwt = true, which is what they need.
+# stripe-oauth-disconnect in particular must NEVER be public - it detaches the
+# account a business gets paid through.)
+verify_jwt = false
+
 [functions.org-fee-config]
 verify_jwt = false
 
@@ -24,7 +36,12 @@ verify_jwt = false
 # which is the exact failure the deploy-edge-fn skill exists to prevent. True is
 # both correct and stricter, and the function works under it on prod today: the
 # only caller (Finances.jsx "Check status") always sends a real user JWT.
-# Staging is the anomaly and should be tightened to match, in its own change.
+#
+# RESOLVED 2026-07-29. The drift is GONE - `functions list` now reports
+# verify_jwt=true on BOTH staging and prod, so this file matches reality on both
+# and a plain deploy (no --no-verify-jwt) is correct. The line above saying
+# "staging is the anomaly and should be tightened" is kept only for history; do
+# not act on it, it describes a state that no longer exists.
 #
 # Superseded note, kept so the mistake is legible: it read
 # "Mirrors PROD, which has this as verify_jwt = false. The function does its own

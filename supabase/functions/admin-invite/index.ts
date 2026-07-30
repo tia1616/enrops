@@ -16,6 +16,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { findAuthUserByEmail } from '../_shared/findAuthUserByEmail.ts';
 
 interface AdminInviteBody {
   email?: string;
@@ -65,12 +66,27 @@ serve(async (req: Request) => {
     const role = (body.role ?? '').toLowerCase() as Role;
     if (!ALLOWED_ROLES.includes(role)) return json({ error: 'invalid_role' }, 400);
 
+    // A bare .maybeSingle() RESOLVES WITH AN ERROR when more than one row
+    // matches. Only OWNER membership is capped at one per user
+    // (20260724a_owner_org_unique_index), so somebody who owns one org and
+    // administers another matched twice, and this call returned an error rather
+    // than a row - a legitimate admin of two organisations could not invite
+    // anyone, anywhere. Same defect already fixed in stripe-oauth-start.
+    //
+    // The ordering is deterministic so the same caller resolves to the same org
+    // on every request rather than whichever row the planner happened to
+    // return: `organizationId` below decides which org the invitation is
+    // written against, so an arbitrary pick would send invitations to a
+    // different business than the admin expected.
     const { data: callerMember, error: cmErr } = await supabase
       .from('org_members')
       .select('organization_id, role')
       .eq('auth_user_id', callerAuthId)
       .in('role', ['owner', 'admin'])
       .not('accepted_at', 'is', null)
+      .order('accepted_at', { ascending: true })
+      .order('organization_id', { ascending: true })
+      .limit(1)
       .maybeSingle();
     if (cmErr) {
       console.error('caller org_members lookup failed:', cmErr);
@@ -103,10 +119,10 @@ serve(async (req: Request) => {
     });
     if (createErr) {
       if (/already.+registered|exists/i.test(createErr.message ?? '')) {
-        const { data: usersList } = await supabase.auth.admin.listUsers();
-        const existing = usersList?.users?.find(
-          (u) => u.email?.toLowerCase() === email,
-        );
+        // Paged lookup: a bare listUsers() only searches the 50 newest accounts,
+        // so inviting someone whose account is older than that found nothing and
+        // fell through to the 500 below -- the invite failed instead of linking.
+        const existing = await findAuthUserByEmail(supabase, email);
         if (existing) {
           authUserId = existing.id;
         } else {

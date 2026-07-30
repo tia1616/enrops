@@ -30,6 +30,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { mapOperatorAccountStatus } from '../_shared/operatorAccountStatus.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -75,25 +76,51 @@ serve(async (req: Request) => {
 
     // Resolve target org. If body.org_id is supplied, verify the caller has
     // owner/admin on THAT org. Otherwise find the caller's org by membership.
+    // A bare .maybeSingle() RESOLVES WITH AN ERROR when more than one row
+    // matches, and only OWNER membership is capped at one per user
+    // (20260724a_owner_org_unique_index). So somebody who owns one org and
+    // administers another matched twice here, got an error instead of a row,
+    // and - because the error was discarded - was told `forbidden`. They could
+    // not poll their Stripe status at all. Same defect already fixed in
+    // stripe-oauth-start; this copy was missed.
+    //
+    // Discarding the error also collapsed two different outcomes into one: a
+    // transient database failure looked exactly like "you are not a member".
+    // Both branches still FAIL CLOSED - an unreadable membership is never
+    // treated as permission - but they now say which happened.
     let targetOrgId: string | null = body.org_id || null;
     if (targetOrgId) {
-      const { data: cm } = await supabase
+      const { data: cm, error: cmErr } = await supabase
         .from('org_members')
         .select('role, organization_id')
         .eq('auth_user_id', callerAuthId)
         .eq('organization_id', targetOrgId)
         .in('role', ['owner', 'admin'])
         .not('accepted_at', 'is', null)
+        .limit(1)
         .maybeSingle();
+      if (cmErr) {
+        console.error('[sync-operator-stripe-status] membership check failed for org', targetOrgId, cmErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
       if (!cm) return FORBIDDEN;
     } else {
-      const { data: cm } = await supabase
+      // Deterministic pick, so the same caller resolves to the same org on
+      // every request rather than whichever row the planner happened to return.
+      const { data: cm, error: cmErr } = await supabase
         .from('org_members')
         .select('role, organization_id')
         .eq('auth_user_id', callerAuthId)
         .in('role', ['owner', 'admin'])
         .not('accepted_at', 'is', null)
+        .order('accepted_at', { ascending: true })
+        .order('organization_id', { ascending: true })
+        .limit(1)
         .maybeSingle();
+      if (cmErr) {
+        console.error('[sync-operator-stripe-status] membership lookup failed:', cmErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
       if (!cm) return FORBIDDEN;
       targetOrgId = (cm as { organization_id: string }).organization_id;
     }
@@ -130,21 +157,20 @@ serve(async (req: Request) => {
       return json({ error: 'stripe_unreachable' }, 502);
     }
 
-    // ── map Stripe state to our enum — IDENTICAL to handleAccountUpdated ───
-    // (stripe-webhook/index.ts). Keep these two in lockstep.
-    const chargesEnabled = account.charges_enabled === true;
-    const payoutsEnabled = account.payouts_enabled === true;
-    const detailsSubmitted = account.details_submitted === true;
-    const disabledReason = account.requirements?.disabled_reason || null;
-
-    let nextStatus: 'active' | 'restricted' | 'onboarding';
-    if (chargesEnabled && payoutsEnabled) {
-      nextStatus = 'active';
-    } else if (detailsSubmitted && !chargesEnabled && disabledReason) {
-      nextStatus = 'restricted';
-    } else {
-      nextStatus = 'onboarding';
-    }
+    // ── map Stripe state to our enum ──────────────────────────────────────
+    // ONE implementation, shared with stripe-webhook's handleAccountUpdated and
+    // stripe-oauth-callback (_shared/operatorAccountStatus.ts). This was a
+    // hand-copied duplicate carrying a "keep these two in lockstep" comment,
+    // which is the same bug shape as a number computed in two places: this is
+    // the path behind the "Already finished? Check status" button, so a drift
+    // between the copies is what an operator sees the instant they click it.
+    const {
+      status: nextStatus,
+      chargesEnabled,
+      payoutsEnabled,
+      detailsSubmitted,
+      disabledReason,
+    } = mapOperatorAccountStatus(account);
 
     const changed =
       org.stripe_account_status !== nextStatus;
@@ -153,7 +179,21 @@ serve(async (req: Request) => {
     // touch stripe_last_account_event_id — there is no event here, and leaving
     // it lets a later real webhook event still process (its idempotency check
     // compares event.id, which we never set).
-    const { error: updErr } = await supabase
+    //
+    // CONDITIONAL on the status we READ at the top. The 'disconnected' guard
+    // above is check-then-act with a Stripe round-trip in the middle, so it does
+    // not survive a concurrent disconnect: stripe-oauth-disconnect can revoke
+    // the grant and write 'disconnected' while we are still waiting on
+    // accounts.retrieve, and an unconditional write would then resurrect the org
+    // to 'active' with charges_enabled=true against an account we no longer have
+    // access to — the screen says connected and every charge is rejected by
+    // Stripe. Matching on the pre-read status makes this write lose that race
+    // instead of winning it.
+    //
+    // The column is NULLABLE (default 'not_connected'), and PostgREST `eq` never
+    // matches NULL, so the null case needs `is` or the sync would silently stop
+    // working for such a row.
+    let updateQuery = supabase
       .from('organizations')
       .update({
         stripe_charges_enabled: chargesEnabled,
@@ -161,9 +201,43 @@ serve(async (req: Request) => {
         stripe_account_status: nextStatus,
       })
       .eq('id', org.id);
+    updateQuery = org.stripe_account_status === null
+      ? updateQuery.is('stripe_account_status', null)
+      : updateQuery.eq('stripe_account_status', org.stripe_account_status);
+
+    const { data: written, error: updErr } = await updateQuery.select('id, stripe_account_status');
     if (updErr) {
       console.error('[sync-operator-stripe-status] org update failed:', updErr);
       return json({ error: 'persist_failed' }, 500);
+    }
+
+    // Zero rows matched = somebody else changed the status while we were talking
+    // to Stripe. Do NOT report the status we computed — it is already stale, and
+    // the caller (the Payments screen) would render it. Re-read and tell the
+    // truth about where the row actually landed.
+    if (!written || written.length === 0) {
+      const { data: fresh } = await supabase
+        .from('organizations')
+        .select('stripe_account_status, stripe_charges_enabled, stripe_payouts_enabled')
+        .eq('id', org.id)
+        .maybeSingle();
+      const current = fresh as {
+        stripe_account_status: string | null;
+        stripe_charges_enabled: boolean | null;
+        stripe_payouts_enabled: boolean | null;
+      } | null;
+      console.warn(
+        `[sync-operator-stripe-status] org ${org.id} changed under us ` +
+        `(read '${org.stripe_account_status}', computed '${nextStatus}', now ` +
+        `'${current?.stripe_account_status ?? 'unknown'}'); discarding this poll`,
+      );
+      return json({
+        stripe_account_status: current?.stripe_account_status ?? org.stripe_account_status,
+        stripe_charges_enabled: current?.stripe_charges_enabled ?? false,
+        stripe_payouts_enabled: current?.stripe_payouts_enabled ?? false,
+        changed: false,
+        superseded: true,
+      });
     }
 
     console.log(

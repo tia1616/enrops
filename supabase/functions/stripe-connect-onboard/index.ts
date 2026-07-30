@@ -77,36 +77,53 @@ serve(async (req: Request) => {
     }
     const origin = sanitizeOrigin(body.origin) || 'https://enrops.com';
 
-    // Resolve target org. If body.org_id is supplied, verify the caller has
-    // owner/admin role on THAT org. Otherwise, find the caller's org by
-    // membership (only one for most users).
-    let targetOrgId: string | null = body.org_id || null;
+    // ── the caller must NAME the org ──────────────────────────────────────
+    // This is a MUTATING endpoint: on an org with no account - or one in the
+    // 'disconnected' state, which takes the reconnect branch below - it calls
+    // stripe.accounts.create and writes the new acct_ID onto the row. So an
+    // implicit target is not acceptable, for the same reason it is not
+    // acceptable in stripe-oauth-disconnect.
+    //
+    // This is not theoretical. On 2026-07-30 a verification call with no body
+    // resolved to an org nobody had named, minted a brand new Stripe account
+    // and overwrote that org's stripe_account_id - destroying the record of the
+    // account it had been connected to. The orphan account had to be deleted at
+    // Stripe and the row restored by hand.
+    //
+    // Safe to require: the only caller is startOnboarding() in Finances.jsx,
+    // which always sends org_id. Typed explicitly so a non-string cannot be
+    // truthy, get stringified into the filter, and fail as a malformed UUID
+    // several steps later instead of being refused here.
+    const targetOrgId = typeof body.org_id === 'string' ? body.org_id.trim() : '';
+    if (!targetOrgId) {
+      return json({
+        error: 'org_id_required',
+        message: 'We couldn\'t tell which business to set up. Reload the page and try again.',
+      }, 400);
+    }
     let callerRole: string | null = null;
 
-    if (targetOrgId) {
-      const { data: cm } = await supabase
-        .from('org_members')
-        .select('role, organization_id')
-        .eq('auth_user_id', callerAuthId)
-        .eq('organization_id', targetOrgId)
-        .in('role', ['owner', 'admin'])
-        .not('accepted_at', 'is', null)
-        .maybeSingle();
-      if (!cm) return FORBIDDEN;
-      callerRole = (cm as { role: string }).role;
-    } else {
-      const { data: cm } = await supabase
-        .from('org_members')
-        .select('role, organization_id')
-        .eq('auth_user_id', callerAuthId)
-        .in('role', ['owner', 'admin'])
-        .not('accepted_at', 'is', null)
-        .maybeSingle();
-      if (!cm) return FORBIDDEN;
-      const member = cm as { role: string; organization_id: string };
-      targetOrgId = member.organization_id;
-      callerRole = member.role;
+    // A bare .maybeSingle() RESOLVES WITH AN ERROR when more than one row
+    // matches, and the error was being discarded - so a transient database
+    // failure was indistinguishable from a real permission denial. Scoping to
+    // one org means at most one row can match, but .limit(1) costs nothing and
+    // keeps this identical in shape to stripe-oauth-start and
+    // stripe-oauth-disconnect. Still fails closed either way.
+    const { data: cm, error: cmErr } = await supabase
+      .from('org_members')
+      .select('role, organization_id')
+      .eq('auth_user_id', callerAuthId)
+      .eq('organization_id', targetOrgId)
+      .in('role', ['owner', 'admin'])
+      .not('accepted_at', 'is', null)
+      .limit(1)
+      .maybeSingle();
+    if (cmErr) {
+      console.error('[connect-onboard] membership check failed for org', targetOrgId, cmErr);
+      return json({ error: 'lookup_failed' }, 500);
     }
+    if (!cm) return FORBIDDEN;
+    callerRole = (cm as { role: string }).role;
 
     // ── load org ──────────────────────────────────────────────────────────
     const { data: orgData, error: orgErr } = await supabase
