@@ -1,4 +1,5 @@
 import React from 'react';
+import { capture } from '../lib/analytics.js';
 
 // The enrops platform attribution line. ONE definition, every parent- and
 // partner-facing surface (Jessica's footer copy checklist, 2026-07-26).
@@ -113,6 +114,15 @@ export function platformFooterUrl(surface) {
 }
 
 /**
+ * Resolve the src value WITHOUT building a URL, for the analytics property, so
+ * the number in PostHog and the parameter on the link can never disagree —
+ * both read the same resolver.
+ */
+function srcFor(surface) {
+  return new URL(platformFooterUrl(surface)).searchParams.get('src');
+}
+
+/**
  * @param {object}  props
  * @param {string}  props.surface  key of PLATFORM_FOOTER_SURFACES (or a raw src string)
  * @param {'light'|'dark'} [props.tone]  'dark' for placement on the deep-purple footer
@@ -120,6 +130,30 @@ export function platformFooterUrl(surface) {
  */
 export default function PlatformFooterLine({ surface, tone = 'light', style }) {
   const onDark = tone === 'dark';
+
+  // Clicks-by-source (footer checklist build item 6). getenrops.com sees the
+  // ?src= parameter, but that is a different site — this is the OUR-side half,
+  // so we can tell how often each surface is clicked even before the marketing
+  // site's analytics are joined up.
+  //
+  // Fire-and-forget: capture() already no-ops when PostHog has no key (local
+  // dev), and nothing here is awaited, so a blocked or slow analytics call can
+  // never delay or prevent the navigation.
+  //
+  // No PII: the surface, the resolved src, and the tenant slug from the first
+  // path segment. The slug is a public business identifier, and it is the
+  // dimension that makes the number useful — which operator's page drove it.
+  const handleClick = () => {
+    try {
+      const slug = typeof window !== 'undefined'
+        ? (window.location.pathname.split('/').filter(Boolean)[0] ?? null)
+        : null;
+      capture('platform_footer_click', { surface, src: srcFor(surface), org_slug: slug });
+    } catch (_) {
+      // Analytics must never break an outbound link.
+    }
+  };
+
   return (
     <p
       style={{
@@ -135,6 +169,7 @@ export default function PlatformFooterLine({ surface, tone = 'light', style }) {
         href={platformFooterUrl(surface)}
         target="_blank"
         rel="noopener noreferrer"
+        onClick={handleClick}
         style={{
           color: onDark ? ENROPS_VIOLET : ENROPS_PURPLE,
           textDecoration: 'none',
