@@ -314,12 +314,23 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
 
           {/* Platform attribution — below the operator's own footer content and
               their policy links, per the checklist. Route-derived source so the
-              parent dashboard and the registration surfaces report separately. */}
-          <PlatformFooterLine
-            tone="dark"
-            surface={isParentPortalPath(location) ? 'parentPortal' : 'regPage'}
-            style={{ marginTop: 20 }}
-          />
+              parent dashboard and the registration surfaces report separately.
+
+              Hidden during the registration STEPS, exactly as in the embed. The
+              old "Powered by enrops" was a single word tucked inside the
+              copyright; this is a full call-to-action in brand violet, so
+              leaving it on the payment steps turns a subtle credit into a
+              prominent exit from the one flow we need finished — and the
+              checklist's QA gate is that checkout stays under 4.5 minutes.
+              The success page is NOT checkout, so the line still lands there,
+              which is the better moment for it anyway. */}
+          {!isCheckoutPath(location) && (
+            <PlatformFooterLine
+              tone="dark"
+              surface={isParentPortalPath(location) ? 'parentPortal' : 'regPage'}
+              style={{ marginTop: 20 }}
+            />
+          )}
         </div>
       </footer>
     </div>
@@ -404,12 +415,20 @@ function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
               and its legal links, per the footer checklist - the operator's
               brand stays primary. This layout wraps several parent-facing
               routes, so the analytics source follows the route rather than
-              being hardcoded to one surface. */}
-          <PlatformFooterLine
-            tone="dark"
-            surface={isParentPortalPath(location) ? 'parentPortal' : 'regPage'}
-            style={{ paddingTop: 4 }}
-          />
+              being hardcoded to one surface.
+
+              Hidden during the registration STEPS — same reasoning as the embed
+              and the J2S shell above. This is the shell every self-serve
+              operator's families actually check out through, so it is the one
+              that matters most. The success page is not checkout, so the line
+              still lands there. */}
+          {!isCheckoutPath(location) && (
+            <PlatformFooterLine
+              tone="dark"
+              surface={isParentPortalPath(location) ? 'parentPortal' : 'regPage'}
+              style={{ paddingTop: 4 }}
+            />
+          )}
         </div>
       </footer>
     </div>
