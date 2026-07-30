@@ -34,7 +34,12 @@ verify_jwt = false
 # which is the exact failure the deploy-edge-fn skill exists to prevent. True is
 # both correct and stricter, and the function works under it on prod today: the
 # only caller (Finances.jsx "Check status") always sends a real user JWT.
-# Staging is the anomaly and should be tightened to match, in its own change.
+#
+# RESOLVED 2026-07-29. The drift is GONE - `functions list` now reports
+# verify_jwt=true on BOTH staging and prod, so this file matches reality on both
+# and a plain deploy (no --no-verify-jwt) is correct. The line above saying
+# "staging is the anomaly and should be tightened" is kept only for history; do
+# not act on it, it describes a state that no longer exists.
 #
 # Superseded note, kept so the mistake is legible: it read
 # "Mirrors PROD, which has this as verify_jwt = false. The function does its own
