@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import EnropsWordmark from '../../components/EnropsWordmark.jsx';
+import { pixelCompleteRegistration } from '../../lib/metaPixel.js';
 
 // enrops.com/signup — self-serve OPERATOR signup (Registration MVP, Chunk 1).
 //
@@ -143,7 +144,13 @@ export default function OperatorSignup() {
       setError(friendly(err));
       return;
     }
+    // Resuming an account they already own is not a new registration. Firing
+    // here would count the same operator again every time they revisited
+    // /signup while signed in, which is a normal thing to do.
     if (data?.already_existed) { navigate('/admin', { replace: true }); return; }
+    // Advertising conversion. Fires at the moment the org actually exists, not
+    // when this page opened, per the spec.
+    pixelCompleteRegistration();
     setCreatedSlug(data.slug);
     setPhase('done');
   }
