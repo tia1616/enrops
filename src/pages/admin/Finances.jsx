@@ -116,7 +116,14 @@ export default function Finances() {
 
   // ── load config ─────────────────────────────────────────────────────────
   async function reload() {
-    if (!org?.id) return;
+    if (!org?.id) {
+      // CLEAR the flag on the way out. `loading` starts true, so returning
+      // without touching it leaves every consumer believing a fetch is still in
+      // flight forever - which is how the connect banner ended up showing
+      // "Checking with Stripe for the details…" permanently.
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     const { data, error: err } = await supabase
@@ -538,9 +545,17 @@ export default function Finances() {
           opposite. Each branch below is selected by the LOADED status, not by the
           redirect. */}
       {stripeParam === "connected" && (
-        loading || !config ? (
+        loading ? (
           <Banner tone="ok">
             Your Stripe account is connected. Checking with Stripe for the details…
+          </Banner>
+        ) : !config ? (
+          // Done loading and still no config. "Checking…" here would be a
+          // progress message that never resolves, so name the failure and give
+          // them the one action that helps.
+          <Banner tone="warn">
+            Your Stripe account is connected, but we couldn't load your payment details
+            just now. Reload the page to try again.
           </Banner>
         ) : config.stripe_charges_enabled ? (
           <Banner tone="ok">
@@ -1687,9 +1702,17 @@ function describeConnectFailure(reason) {
     case "state_unreadable":
     case "link_expired":
     case "missing_code":
-      return "That connect link expired before it finished. Nothing changed — click Connect again to start over.";
+      // These fire AFTER Stripe has redirected the operator back, so for most of
+      // them they already approved enrops and only our end of the handshake was
+      // missing. "Nothing changed" would be false in exactly those cases, so this
+      // says what is true of every one of them: we did not save it.
+      return "That connect link expired before we could finish, so the account wasn't saved. Click Connect again to start over — approving enrops a second time is safe.";
     case "exchange_failed":
-      return "Stripe couldn't finish connecting that account. Nothing changed — please try again.";
+      // Deliberately does NOT say "nothing changed": the operator has already
+      // approved Enrops at Stripe by this point, and the exchange can fail after
+      // that approval landed. Claiming nothing happened would contradict what
+      // they can see in their own Stripe settings.
+      return "Stripe couldn't finish connecting that account, so we didn't save it. Please try again — approving enrops a second time is safe.";
     case "account_in_use":
       return "That Stripe account is already connected to a different provider on enrops. Pick a different account, or contact us if you think this is wrong.";
     case "already_connected":
@@ -1698,9 +1721,12 @@ function describeConnectFailure(reason) {
       // would read as success and hide the fact that THEIR pick was refused.
       return "A different Stripe account was connected to this business while you were at Stripe, so the one you picked wasn't saved. Reload to see which account is connected.";
     case "account_unreadable":
-      return "We connected to Stripe but couldn't read the account back, so nothing was saved. Please try again.";
+      return "You approved enrops at Stripe, but we couldn't read the account back, so we didn't save it. Please try again — approving a second time is safe.";
     case "persist_failed":
-      return "We couldn't save the connection on our side. Nothing changed — please try again.";
+      // By this point the grant EXISTS at Stripe; only our own write failed. "No
+      // changes at all" would be false and would confuse anyone who then looks
+      // at their Stripe connected-apps list.
+      return "You approved enrops at Stripe, but we couldn't save it on our side, so it isn't connected yet. Please try again — approving a second time is safe.";
     default:
       // Covers 'internal' and any reason added to the callback later.
       return "Something went wrong connecting Stripe. Nothing changed — please try again, and tell us if it keeps happening.";

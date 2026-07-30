@@ -60,24 +60,45 @@ serve(async (req: Request) => {
 
     let targetOrgId = body.org_id || null;
 
+    // .limit(1) on BOTH branches plus a real error check - same fix as
+    // stripe-oauth-start, same reason. A bare .maybeSingle() resolves with an
+    // ERROR when several rows match, and the org-less branch below can match
+    // several: only OWNER membership is capped at one per user
+    // (20260724a_owner_org_unique_index). Someone who owns one org and
+    // administers another matched twice, got an error rather than a row, and -
+    // because the error was thrown away - was told `forbidden`. The result was a
+    // dead "open Stripe dashboard" button with nothing in the logs to separate it
+    // from a genuine permission denial. Still fails closed either way.
     if (targetOrgId) {
-      const { data: cm } = await supabase
+      const { data: cm, error: cmErr } = await supabase
         .from('org_members')
         .select('role, organization_id')
         .eq('auth_user_id', callerAuthId)
         .eq('organization_id', targetOrgId)
         .in('role', ['owner', 'admin'])
         .not('accepted_at', 'is', null)
+        .limit(1)
         .maybeSingle();
+      if (cmErr) {
+        console.error('[connect-login-link] membership check failed for org', targetOrgId, cmErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
       if (!cm) return FORBIDDEN;
     } else {
-      const { data: cm } = await supabase
+      const { data: cm, error: cmErr } = await supabase
         .from('org_members')
         .select('role, organization_id')
         .eq('auth_user_id', callerAuthId)
         .in('role', ['owner', 'admin'])
         .not('accepted_at', 'is', null)
+        .order('accepted_at', { ascending: true })
+        .order('organization_id', { ascending: true })
+        .limit(1)
         .maybeSingle();
+      if (cmErr) {
+        console.error('[connect-login-link] membership lookup failed:', cmErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
       if (!cm) return FORBIDDEN;
       targetOrgId = (cm as { organization_id: string }).organization_id;
     }

@@ -186,7 +186,7 @@ function navItemActive(item, pathname) {
 export default function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [authState, setAuthState] = useState("loading"); // loading | unauthorized | ready
+  const [authState, setAuthState] = useState("loading"); // loading | unauthorized | org_load_failed | ready
   const [user, setUser] = useState(null);
   const [orgMember, setOrgMember] = useState(null);
   const [org, setOrg] = useState(null);
@@ -232,18 +232,41 @@ export default function AdminLayout() {
         // locking them out of their own admin over a query string.
         const orgParam = new URLSearchParams(location.search).get("org");
 
+        // ACCEPTED ONLY, and DETERMINISTIC. Both matter and neither is cosmetic:
+        //
+        // Filtering accepted_at here is not a duplicate of the accepted_at check
+        // below - it decides WHICH row .limit(1) gets to return. Without it, a
+        // user who is accepted at org A and merely INVITED to org B could have
+        // the org B row selected (row order is arbitrary without ORDER BY), fail
+        // the check below, and be told "unauthorized" for an org they have every
+        // right to. The check below STAYS as a belt-and-braces guard; a filter is
+        // not a substitute for validating what came back.
+        //
+        // ORDER BY makes the choice repeatable instead of leaving it to whatever
+        // the planner returns first: same user, same page, same org, every load.
+        // Oldest accepted membership wins, which is the closest thing to "their
+        // primary org". Tie-break on id so the order is total. Both columns are
+        // already in the select, so nothing here assumes a column exists.
         const loadMembership = (orgId) => {
           let q = supabase
             .from("org_members")
             .select("id, role, organization_id, accepted_at")
-            .eq("auth_user_id", session.user.id);
+            .eq("auth_user_id", session.user.id)
+            .not("accepted_at", "is", null);
           if (orgId) q = q.eq("organization_id", orgId);
-          return q.limit(1).maybeSingle();
+          return q
+            .order("accepted_at", { ascending: true })
+            .order("id", { ascending: true })
+            .limit(1)
+            .maybeSingle();
         };
 
         let { data: memberRow, error: memErr } = await loadMembership(orgParam);
         if (orgParam && !memErr && !memberRow) {
-          // The hint pointed somewhere this user has no membership. Ignore it.
+          // The hint pointed at an org this user has no ACCEPTED membership in
+          // (wrong org, or an invite they never accepted). Either way it is not
+          // somewhere we can land them, so ignore the hint rather than lock them
+          // out of their own admin over a query string.
           ({ data: memberRow, error: memErr } = await loadMembership(null));
         }
 
@@ -257,7 +280,15 @@ export default function AdminLayout() {
         setOrgMember(memberRow);
 
         // Fetch org name + branding (display only — does not gate access)
-        const { data: orgRow } = await supabase
+        //
+        // The error is CAPTURED, not discarded. Every admin page reads `org` from
+        // the outlet context and most early-return on a falsy org.id, so handing
+        // them a null org while declaring authState 'ready' produces pages that
+        // render their shell and then sit there — the Payments screen showed a
+        // permanent "Checking with Stripe for the details…" this way, with no
+        // error and nothing to retry. A shell we cannot populate is a failure, so
+        // say so instead of pretending we are ready.
+        const { data: orgRow, error: orgFetchErr } = await supabase
           .from("organizations")
           // stripe_charges_enabled rides along so any admin surface can tell the
           // truth about whether this org can actually take money yet (a program
@@ -273,6 +304,14 @@ export default function AdminLayout() {
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;
+        if (orgFetchErr || !orgRow) {
+          // Membership is valid (proved above), so this is NOT an authorization
+          // problem — it is a load failure, and it must not be reported as
+          // "you don't have access". Distinct state, distinct message.
+          console.error("AdminLayout: org load failed", { orgFetchErr, orgId: memberRow.organization_id });
+          setAuthState("org_load_failed");
+          return;
+        }
         setOrg(orgRow);
         setAuthState("ready");
       } catch (err) {
@@ -335,6 +374,33 @@ export default function AdminLayout() {
     return (
       <div style={{ minHeight: "100vh", background: CREAM, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Poppins', system-ui, sans-serif", color: MUTED }}>
         Loading admin…
+      </div>
+    );
+  }
+
+  // Membership checked out but the org row would not load. Deliberately NOT the
+  // "you need to sign in with an admin account" screen: they ARE an admin, and
+  // telling them otherwise sends them to re-authenticate against a problem that
+  // is on our side. Retry is the only useful action, so offer exactly that.
+  if (authState === "org_load_failed") {
+    return (
+      <div style={{ minHeight: "100vh", background: CREAM, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Poppins', system-ui, sans-serif", padding: 24 }}>
+        <div style={{ maxWidth: 440, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 32 }}>
+          <div style={{ fontFamily: "'Poppins', system-ui, sans-serif", fontWeight: 700, fontSize: 22, color: PURPLE, marginBottom: 8 }}>
+            Enrops Admin
+          </div>
+          <p style={{ color: INK, fontSize: 15, lineHeight: 1.5, marginTop: 0 }}>
+            We couldn't load your business details just now. Nothing is wrong with your
+            account — this is on our side.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            style={{ marginTop: 16, background: PURPLE, color: "#fff", border: "none", borderRadius: 6, padding: "9px 16px", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}
+          >
+            Try again
+          </button>
+        </div>
       </div>
     );
   }

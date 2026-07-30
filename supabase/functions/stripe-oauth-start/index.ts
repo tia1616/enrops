@@ -76,25 +76,55 @@ serve(async (req: Request) => {
     // ── resolve the org, and prove the caller may act for it ──────────────
     // Same shape as stripe-connect-onboard so the two connect paths cannot
     // disagree about who is allowed to connect an account.
+    // .limit(1) on BOTH branches, and the error is distinguished from "no match".
+    //
+    // A bare .maybeSingle() RESOLVES WITH AN ERROR when more than one row
+    // matches. The org-less branch can legitimately match several: only OWNER
+    // membership is capped at one per user (20260724a_owner_org_unique_index),
+    // so somebody who owns one org and administers another matched twice, got an
+    // error instead of a row, and - because the error was discarded - was told
+    // `forbidden`. A legitimate admin could not start a connect flow at all.
+    //
+    // Discarding the error also collapsed two different outcomes into one: a
+    // transient database failure looked exactly like "you are not a member", so
+    // the 403 was indistinguishable from a real permission denial in the logs.
+    // Both branches still FAIL CLOSED - an unreadable membership is never
+    // treated as permission - but they now say which happened.
     let targetOrgId: string | null = body.org_id || null;
     if (targetOrgId) {
-      const { data: cm } = await supabase
+      // Scoped to one org, so at most one row can match; .limit(1) costs nothing
+      // and keeps the two branches identical in shape.
+      const { data: cm, error: cmErr } = await supabase
         .from('org_members')
         .select('role, organization_id')
         .eq('auth_user_id', callerAuthId)
         .eq('organization_id', targetOrgId)
         .in('role', ['owner', 'admin'])
         .not('accepted_at', 'is', null)
+        .limit(1)
         .maybeSingle();
+      if (cmErr) {
+        console.error('[oauth-start] membership check failed for org', targetOrgId, cmErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
       if (!cm) return FORBIDDEN;
     } else {
-      const { data: cm } = await supabase
+      // Deterministic pick, so the same caller resolves to the same org on every
+      // request rather than whichever row the planner happened to return.
+      const { data: cm, error: cmErr } = await supabase
         .from('org_members')
         .select('role, organization_id')
         .eq('auth_user_id', callerAuthId)
         .in('role', ['owner', 'admin'])
         .not('accepted_at', 'is', null)
+        .order('accepted_at', { ascending: true })
+        .order('organization_id', { ascending: true })
+        .limit(1)
         .maybeSingle();
+      if (cmErr) {
+        console.error('[oauth-start] membership lookup failed:', cmErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
       if (!cm) return FORBIDDEN;
       targetOrgId = (cm as { organization_id: string }).organization_id;
     }
