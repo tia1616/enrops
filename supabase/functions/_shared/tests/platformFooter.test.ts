@@ -37,6 +37,17 @@ Deno.test('instructor automations render no line', () => {
   assertEquals(renderPlatformFooterText(null), '');
 });
 
+// Regression: no_school_day is stored with a families-level audience but also
+// sends a tailored instructor copy. Keying off the audience column alone put
+// the acquisition line in front of instructors.
+Deno.test('the instructor half of a two-audience automation gets no line', () => {
+  assertEquals(surfaceForAutomation('no_school_day', 'families', 'instructor'), null);
+  // ...while the family half of the SAME automation still gets it.
+  assertEquals(surfaceForAutomation('no_school_day', 'families', 'parent'), 'schedule');
+  // Absent role must not change existing behaviour.
+  assertEquals(surfaceForAutomation('no_school_day', 'families'), 'schedule');
+});
+
 Deno.test('family and partner automations map to the right surface', () => {
   assertEquals(surfaceForAutomation('welcome_camp', 'families'), 'welcome');
   assertEquals(surfaceForAutomation('welcome_afterschool', 'families'), 'welcome');
