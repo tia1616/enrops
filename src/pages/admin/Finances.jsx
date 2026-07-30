@@ -524,18 +524,32 @@ export default function Finances() {
           json?.message || json?.error || `Could not disconnect (${resp.status}).`
         );
       }
-      // Say which of the two things actually happened. `account_stays_open`
-      // means Stripe would not revoke a grant because the account is one we
-      // created for them (no_deauth_on_controlled_account) — claiming "revoked
-      // at Stripe" there would be false, and an operator who then looks at
-      // their Stripe connected-apps list would catch us in it.
+      // Three outcomes, three sentences, each true only in its own case. The
+      // function reports which one happened rather than encoding it in a boolean:
+      //   revoked         - we called Stripe and access is genuinely gone.
+      //   controlled      - the account is one WE created, so there was no grant
+      //                     to revoke; we simply stopped using it. Saying
+      //                     "no longer has access" here would be false, and an
+      //                     operator looking at their own Stripe connected-apps
+      //                     list would catch us in it.
+      //   already_revoked - the grant was gone before we asked (they revoked us
+      //                     from Stripe's dashboard, or this is a second click).
+      const outcomeText = {
+        revoked:
+          "Disconnected. enrops no longer has access to that Stripe account. You can connect a different one now.",
+        controlled:
+          "Disconnected. enrops has stopped using that Stripe account — the account itself is still open and yours. You can connect a different one now.",
+        already_revoked:
+          "That account is already disconnected — enrops has no access to it. You can connect a different one now.",
+      };
       setDisconnectMsg({
         tone: "ok",
-        text: json.already
-          ? "That account was already disconnected."
-          : json.account_stays_open
-            ? "Disconnected. enrops has stopped using that Stripe account — the account itself is still open and yours. You can connect a different one now."
-            : "Disconnected. enrops no longer has access to that Stripe account. You can connect a different one now.",
+        // The fallback must NOT be one of the three above. If `outcome` is ever
+        // missing, defaulting to the "revoked" wording would assert the
+        // strongest thing we could say - that access is gone - on the one path
+        // where we do not know. This sentence is true in all three cases.
+        text: outcomeText[json.outcome] ||
+          "Disconnected. enrops has stopped using that Stripe account. You can connect a different one now.",
       });
       await reload();
     } catch (err) {

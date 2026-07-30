@@ -150,9 +150,14 @@ serve(async (req: Request) => {
     if (!org) return json({ error: 'org_not_found' }, 404);
 
     if (org.stripe_account_id && org.stripe_account_status !== 'disconnected') {
+      // The old wording sent them into Stripe's own dashboard to find a revoke
+      // button, because until stripe-oauth-disconnect existed that was genuinely
+      // the only way out. It is not any more, and an instruction that walks an
+      // operator off the platform to do something the platform now does is worse
+      // than no instruction. Point at the control that exists.
       return json({
         error: 'already_connected',
-        message: 'This organization already has a Stripe account connected. Disconnect it in Stripe first if you want to use a different one.',
+        message: 'This organization already has a Stripe account connected. To use a different one, open Payment settings on the Payments screen and disconnect the current account first.',
       }, 409);
     }
 

@@ -48,14 +48,23 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
 
 const CLIENT_ID = Deno.env.get('STRIPE_CONNECT_CLIENT_ID') || '';
 
-// Instalment states that still represent money owed to the operator.
-//   pending             - process-installments will attempt it on its next run.
-//   failed              - card declined; still owed, still retried.
-//   paused_card_failed  - parked after a failure (this is also where a blocked
-//                         direct charge lands), still owed.
-// 'paid' and 'refunded' are settled. 'paused_program_cancelled' will never be
-// charged, so it is not money in flight and must not block a disconnect.
-const UNPAID_STATUSES = ['pending', 'failed', 'paused_card_failed'];
+// Instalment states that are PROVABLY not money in flight:
+//   paid                     - settled.
+//   refunded                 - settled the other way.
+//   paused_program_cancelled - will never be charged at all.
+// Everything else blocks: 'pending' (process-installments attempts it on the
+// next run), 'failed' (declined, still owed, still retried),
+// 'paused_card_failed' (parked after a failure, and where a blocked direct
+// charge lands) - AND anything we do not recognise.
+//
+// Expressed as a DENY-list on purpose. An allow-list of the three unpaid states
+// would silently stop blocking the moment a fourth is added to
+// installments_status_check, exactly the way stripe_account_status quietly grew
+// a 'verifying' value. `status` is also NULLABLE (default 'pending'), and
+// PostgREST `in.(...)` does not match NULL - so a null-status row would have
+// slipped straight past an allow-list. A row whose state we cannot classify is
+// not evidence that there is no money owed.
+const SETTLED_STATUSES = ['paid', 'refunded', 'paused_program_cancelled'];
 
 interface RequestBody {
   org_id?: string;
@@ -164,7 +173,7 @@ serve(async (req: Request) => {
       return json({
         disconnected: true,
         already: true,
-        deauthorized: false,
+        outcome: 'already_revoked',
         message: 'That Stripe account is already disconnected.',
       });
     }
@@ -190,9 +199,9 @@ serve(async (req: Request) => {
     // which account its column happens to name.
     const { data: unpaidRows, error: unpaidErr } = await supabase
       .from('installments')
-      .select('id, amount_cents, status, due_date')
+      .select('amount_cents')
       .eq('organization_id', org.id)
-      .in('status', UNPAID_STATUSES);
+      .or(`status.is.null,status.not.in.(${SETTLED_STATUSES.join(',')})`);
     if (unpaidErr) {
       // FAIL CLOSED. An unreadable instalment table is not evidence that there
       // is no money in flight, and this is the one check standing between a
@@ -231,14 +240,22 @@ serve(async (req: Request) => {
     // backstop: our row would read 'disconnected' while the grant was still
     // live, and every charge would keep being refused by a guard that says the
     // account is gone.
-    let deauthorized = false;
-    let controlledAccount = false;
+    // THREE distinct outcomes, kept distinct. An earlier version collapsed the
+    // last two into one boolean, which meant the response could not tell support
+    // "Stripe would not revoke because the account is one we created" from "the
+    // grant was already gone", and it made the persist_failed message below
+    // claim we had revoked something when we had not touched Stripe at all.
+    //   revoked          - we called deauthorize and Stripe accepted it.
+    //   controlled       - no grant to revoke; the account is one we created.
+    //   already_revoked  - Stripe says there is no grant; most likely the
+    //                      operator revoked us from their own dashboard.
+    let outcome: 'revoked' | 'controlled' | 'already_revoked';
     try {
       await stripe.oauth.deauthorize({
         client_id: CLIENT_ID,
         stripe_user_id: accountId,
       });
-      deauthorized = true;
+      outcome = 'revoked';
     } catch (err) {
       const e = err as { message?: string; raw?: { error?: string; error_description?: string; message?: string } };
       const code = e.raw?.error ?? 'unknown';
@@ -254,14 +271,14 @@ serve(async (req: Request) => {
           // revoke, nothing is left dangling, and the account stays open and
           // theirs. Unlink on our side and tell the truth about it.
           console.log(`[oauth-disconnect] ${accountId} is a controlled account; unlinking locally only`);
-          controlledAccount = true;
+          outcome = 'controlled';
           break;
         case 'already_gone':
           // The operator most likely revoked us from Stripe's own dashboard
           // already. Better to unlink than to strand our row 'active' against
           // an account we can no longer reach.
           console.warn(`[oauth-disconnect] ${accountId} not connected at Stripe (${code}: ${desc}); unlinking locally`);
-          controlledAccount = true;
+          outcome = 'already_revoked';
           break;
         default:
           console.error(`[oauth-disconnect] deauthorize failed for ${accountId}: ${code}: ${desc}`);
@@ -293,27 +310,28 @@ serve(async (req: Request) => {
       })
       .eq('id', org.id);
     if (updErr) {
-      console.error(`[oauth-disconnect] org ${org.id} update failed after revoking ${accountId}:`, updErr);
-      // Say what is TRUE: access is already gone at Stripe. Telling them
-      // "nothing changed" would contradict what they can see in their own
-      // Stripe connected-apps list.
+      console.error(`[oauth-disconnect] org ${org.id} update failed (outcome=${outcome}) for ${accountId}:`, updErr);
+      // TRUE per branch. When we really did revoke, saying "nothing changed"
+      // would contradict what they can see in their own Stripe connected-apps
+      // list. When we never touched Stripe (controlled / already_revoked),
+      // claiming we disconnected it there would be a plain invention.
       return json({
         error: 'persist_failed',
-        message: 'We disconnected the account at Stripe but couldn\'t save it on our side. Reload the page — if it still shows as connected, tell us.',
+        message: outcome === 'revoked'
+          ? 'We disconnected the account at Stripe but couldn\'t save it on our side. Reload the page — if it still shows as connected, tell us.'
+          : 'We couldn\'t save the change on our side, so nothing has changed. Please try again.',
       }, 500);
     }
 
     console.log(
       `[oauth-disconnect] org ${org.id} (${org.name ?? 'unnamed'}) disconnected ${accountId} ` +
-      `by user ${callerAuthId} (deauthorized=${deauthorized}, controlled=${controlledAccount})`,
+      `by user ${callerAuthId} (outcome=${outcome})`,
     );
 
     return json({
       disconnected: true,
-      deauthorized,
-      // true = the Stripe account stays open and theirs; we only stopped using
-      // it. The UI says something different in that case, so it must be told.
-      account_stays_open: controlledAccount,
+      // Named rather than boolean-encoded, so support can tell the three apart.
+      outcome,
       account_id: accountId,
     });
   } catch (err) {
