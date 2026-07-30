@@ -837,8 +837,17 @@ export default function Finances() {
             {/* Wrong account connected? This is the state an operator is
                 actually stuck in — mid-onboarding on an account they didn't
                 mean to attach, with stripe-oauth-start refusing to let them
-                pick another. Quiet, at the bottom, but present. */}
-            {canDisconnect && (
+                pick another. Quiet, at the bottom, but present.
+
+                NOT on 'verifying'. That body tells the operator, correctly,
+                that everything is submitted, there is nothing more to do, and
+                it usually clears in a couple of minutes. Offering "wrong
+                account? disconnect it" directly underneath is the opposite
+                advice on the same screen, and taking it throws away a Stripe
+                review that was about to finish on its own — for a fresh account
+                they would have to onboard from the start. If they genuinely
+                picked the wrong account they can disconnect once it settles. */}
+            {canDisconnect && !isVerifying && (
               <DisconnectPanel
                 variant="inline"
                 accountId={accountId}
@@ -2030,17 +2039,43 @@ function NotConnectedBody({ onConnect, onConnectExisting, busy, busyAction, canM
 // "Stripe connected" while the grant is actually revoked and every charge fails.
 // The server-side half of this fix is the conditional UPDATE in
 // sync-operator-stripe-status; this half stops the UI offering the collision.
+// `variant` also decides what this panel is FOR, because the two placements
+// answer different operator questions:
+//
+//   "card"   — rendered under Payment settings on a LIVE account. The question
+//              is "this is the wrong account".
+//   "inline" — rendered on onboarding / verifying / restricted, i.e. an account
+//              exists but setup isn't finished. The likeliest way to get here is
+//              clicking "I don't use Stripe yet" by mistake: that mints an
+//              account on the first click, and the two connect buttons then
+//              DISAPPEAR because they only render at 'not_connected'. So the
+//              operator who meant to use the Stripe they already have is stuck
+//              with no signpost back. Disconnect is the way back, and until now
+//              nothing said so. Found on prod 2026-07-30 by the first human to
+//              try it, who did exactly this.
 function DisconnectPanel({ variant, accountId, onDisconnect, busy, busyAction, checking, message }) {
   const working = busyAction === "disconnect";
   const blocked = busy || checking;
+  const midSetup = variant === "inline";
   const body = (
     <>
       <div style={{ fontSize: 13.5, fontWeight: 700, color: PURPLE }}>
-        Connected the wrong Stripe account?
+        {midSetup
+          ? "Wrong account, or meant to use the Stripe you already have?"
+          : "Connected the wrong Stripe account?"}
       </div>
       <p style={{ fontSize: 13, color: MUTED, lineHeight: 1.55, margin: "4px 0 10px", maxWidth: 520 }}>
-        Disconnect it and you can connect a different one straight away. While nothing
-        is connected, your registration links can't take payments.
+        {/* Deliberately makes NO promise about the half-finished account. After a
+            disconnect, stripe-connect-onboard treats the org as a fresh onboard
+            and only sometimes recovers the old account (an orphan search by
+            metadata, which needs exactly one non-rejected candidate and is
+            subject to Stripe's search-index delay). So "nothing you entered is
+            lost" would be true on some runs and false on others - the exact
+            conditional-copy trap. This says only what is certain: you get the
+            choice back. */}
+        {midSetup
+          ? "Disconnect this one and you'll get both choices back — sign in to the Stripe account you already have, or set one up from scratch."
+          : "Disconnect it and you can connect a different one straight away. While nothing is connected, your registration links can't take payments."}
       </p>
       <button
         type="button"
@@ -2199,10 +2234,16 @@ function StripeHero({ title, subtitle, children }) {
 
 // Compact reassurance row — answers the "how long / is it safe / where's my
 // money" worries as three chips instead of a paragraph.
-function TrustChips() {
+// `midSetup` drops the timing chip. That chip estimates how long CONNECTING
+// takes and is split by whether you already have Stripe — a choice that is not
+// on offer once an account exists, so mid-setup it answers a question the
+// operator can no longer act on. "Secured by Stripe" and "Straight to your bank"
+// stay: both are true in every state.
+function TrustChips({ midSetup = false }) {
   const chip = { display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, color: MUTED };
   return (
     <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 16, marginTop: 14 }}>
+      {!midSetup && (
       <span style={chip}>
         <SIcon size={16}><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 1.5" /></SIcon>
         {/* Two numbers, not one: quoting a flat "5 minutes" badly undersells the
@@ -2216,6 +2257,7 @@ function TrustChips() {
             operators out of a one-minute job. */}
         About a minute if you have Stripe, 5–10 if not
       </span>
+      )}
       <span style={chip}>
         <SIcon size={16}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></SIcon>
         Secured by Stripe
@@ -2240,7 +2282,13 @@ function TrustChips() {
 //
 // Open by default: this is the screen where operators stall, so the answer
 // should not be behind a click. Tenant-agnostic, no J2S strings.
-function WhatYouWillNeed() {
+// `midSetup` = an account already exists and setup is unfinished. In that state
+// the two-paths framing below is describing a CHOICE THE SCREEN NO LONGER OFFERS
+// - there is no "sign in with your usual Stripe login" button on the onboarding
+// body, only "Continue setup". Reading a confident description of an option you
+// cannot see is a large part of why that screen felt like a dead end (prod,
+// 2026-07-30). Mid-setup, show only what Stripe will ask for.
+function WhatYouWillNeed({ midSetup = false }) {
   const [open, setOpen] = useState(true);
   const item = { fontSize: 13, color: INK, lineHeight: 1.55, marginBottom: 6 };
   const lbl = { fontWeight: 600, color: PURPLE };
@@ -2266,25 +2314,32 @@ function WhatYouWillNeed() {
       {open && (
         <div style={{ marginTop: 10, background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: "12px 14px" }}>
 
-          <div style={{ marginBottom: 12 }}>
-            <div style={pathTitle}>
-              If you already use Stripe <span style={pathTime}>· about a minute</span>
+          {/* The two-paths framing belongs ONLY where both paths are on offer. */}
+          {!midSetup && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={pathTitle}>
+                If you already use Stripe <span style={pathTime}>· about a minute</span>
+              </div>
+              <p style={{ ...item, marginBottom: 0 }}>
+                Sign in with your usual Stripe login and choose that account. You'll
+                use the account you already have — nothing new is created, and the
+                payments you take outside enrops carry on exactly as they do now.
+                Stripe already has your business and bank details, so there's
+                nothing to re-enter.
+              </p>
             </div>
-            <p style={{ ...item, marginBottom: 0 }}>
-              Sign in with your usual Stripe login and choose that account. You'll
-              use the account you already have — nothing new is created, and the
-              payments you take outside enrops carry on exactly as they do now.
-              Stripe already has your business and bank details, so there's
-              nothing to re-enter.
-            </p>
-          </div>
+          )}
 
-          <div style={{ paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
-            <div style={pathTitle}>
-              If you're new to Stripe <span style={pathTime}>· about 5–10 minutes</span>
-            </div>
+          <div style={midSetup ? {} : { paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
+            {!midSetup && (
+              <div style={pathTitle}>
+                If you're new to Stripe <span style={pathTime}>· about 5–10 minutes</span>
+              </div>
+            )}
             <p style={{ ...item, marginBottom: 8 }}>
-              You'll create your Stripe account on the next screen. Have these ready:
+              {midSetup
+                ? "Stripe will ask for these. Have them ready:"
+                : "You'll create your Stripe account on the next screen. Have these ready:"}
             </p>
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               <li style={item}><span style={lbl}>Email and phone</span> — where Stripe sends verification codes.</li>
@@ -2295,9 +2350,10 @@ function WhatYouWillNeed() {
           </div>
 
           <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED, lineHeight: 1.55 }}>
-            Either way, when you come back Stripe may spend a minute or two
-            checking your details before payments switch on. That's normal and
-            there's nothing for you to do while it finishes.
+            {/* "Either way" names two paths; mid-setup there is only one. */}
+            {midSetup
+              ? "When you come back, Stripe may spend a minute or two checking your details before payments switch on. That's normal and there's nothing for you to do while it finishes."
+              : "Either way, when you come back Stripe may spend a minute or two checking your details before payments switch on. That's normal and there's nothing for you to do while it finishes."}
           </div>
         </div>
       )}
@@ -2340,9 +2396,37 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
           providing additional info — click below to continue.
         </Banner>
       )}
+      {/* Reachable with NOTHING entered. "I don't use Stripe yet" calls
+          accounts.create, which mints the Stripe account on the FIRST click and
+          writes status='onboarding' immediately — before the operator types a
+          single character. So an operator who clicked that button and then
+          closed Stripe's tab lands here having entered nothing at all.
+          "Almost there" and "Stripe remembers what you've entered" were both
+          false for exactly that person. Observed on prod 2026-07-30, by the
+          first human to use this screen.
+          `details_submitted` is not stored on organizations, so the UI cannot
+          tell "started" from "never started" — which means the copy has to be
+          true for BOTH. It no longer claims either. */}
+      {/* TWO states share this body, and they are not the same story:
+            onboarding  — setup is genuinely unfinished.
+            restricted  — Stripe PAUSED an account that may be completely set up,
+                          and wants one specific thing it names in their
+                          dashboard. Telling that operator to "finish setting up"
+                          and handing them the full new-account checklist sends
+                          them looking for work that isn't what Stripe asked for. */}
+      {/* The restricted hero does NOT restate the banner above it. Rendered
+          together they read "Stripe has paused some of your account
+          capabilities" immediately followed by "Stripe has paused payments on
+          your account" - the same sentence twice, which pads the screen and
+          buries the one thing they can act on. Banner states the problem; hero
+          gives the next move. */}
       <StripeHero
-        title="Almost there — finish with Stripe"
-        subtitle="Stripe needs a few more details to verify you. Pick up where you left off; Stripe remembers what you've entered."
+        title={status === "restricted"
+          ? "Tell Stripe what they need"
+          : "Finish setting up with Stripe"}
+        subtitle={status === "restricted"
+          ? "Continue below and Stripe will show you exactly what's outstanding on your account."
+          : "Stripe needs your business details before payments can switch on. This opens Stripe's own secure form."}
       >
         <div style={{ display: "flex", justifyContent: "center", gap: 18, marginBottom: 16, fontSize: 13, color: INK }}>
           <span><strong>Charges</strong>{" "}<Pill on={chargesEnabled}>{chargesEnabled ? "on" : "pending"}</Pill></span>
@@ -2358,8 +2442,12 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
                 {checking ? "Checking…" : "Already finished? Check status"}
               </button>
             </div>
-            <TrustChips />
-            <WhatYouWillNeed />
+            <TrustChips midSetup />
+            {/* Hidden when restricted. We do not know what Stripe wants - it
+                could be one document - so listing the full new-account
+                checklist would be a guess presented as instructions. The
+                banner above already points them at the real answer. */}
+            {status !== "restricted" && <WhatYouWillNeed midSetup />}
           </>
         ) : (
           <em style={{ color: MUTED, fontSize: 13 }}>
