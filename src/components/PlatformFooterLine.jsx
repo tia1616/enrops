@@ -70,15 +70,45 @@ export const PLATFORM_FOOTER_SURFACES = {
 export function surfaceForAutomation(key, audience, recipientRole) {
   if (recipientRole === 'instructor') return null;
   if (audience === 'instructors') return null;
+  if (audience === 'partners') return 'partnerRecap';
   const k = (key ?? '').toLowerCase();
   if (k.startsWith('welcome') || k === 'thank_you') return 'welcome';
   if (k === 'no_school_day') return 'schedule';
   return 'reminder';
 }
 
-/** Build the destination URL for a surface. */
+/** The canonical src values, for validating a caller that passes one directly. */
+const VALID_SRC_VALUES = new Set(Object.values(PLATFORM_FOOTER_SURFACES));
+
+/**
+ * Build the destination URL for a surface.
+ *
+ * Accepts either a KEY of PLATFORM_FOOTER_SURFACES ('parentPortal') or its
+ * canonical VALUE ('parent-portal'). Anything else is a typo, and it used to
+ * pass straight through: `surface="parentportal"` silently produced
+ * ?src=parentportal, splitting the metric this whole change exists to produce.
+ * A wrong analytics label that looks right is the silent-failure class.
+ *
+ * Unknown values now resolve to 'unknown' and shout in the console, so a typo
+ * shows up as one obvious bucket instead of masquerading as a real surface.
+ * Deliberately does NOT throw — a bad analytics label must never blank a
+ * parent-facing page.
+ */
 export function platformFooterUrl(surface) {
-  const src = PLATFORM_FOOTER_SURFACES[surface] || surface;
+  const mapped = PLATFORM_FOOTER_SURFACES[surface];
+  let src;
+  if (mapped) {
+    src = mapped;
+  } else if (VALID_SRC_VALUES.has(surface)) {
+    src = surface;
+  } else {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[PlatformFooterLine] unknown surface ${JSON.stringify(surface)} — add it to ` +
+      'PLATFORM_FOOTER_SURFACES. Reporting as "unknown" so it does not pollute a real surface.',
+    );
+    src = 'unknown';
+  }
   return `https://getenrops.com?src=${encodeURIComponent(src)}`;
 }
 

@@ -203,9 +203,26 @@ export function isEmbedContext(location) {
   return p.endsWith('/embed') || /[?&]embed=1(&|$)/.test(q);
 }
 
+// Path SEGMENTS, not a substring. Every route this layout serves is
+// /:slug/<page>[/<sub>], and the slug is operator-chosen — so a bare
+// `pathname.includes('/register')` also matches an operator whose slug is
+// "register-now", silently treating their catalog as a checkout page. That
+// dropped their header account controls, and (once the attribution line was
+// added) would have removed it from their embed too, with no error anywhere.
+function pathParts(location) {
+  return (location?.pathname || '').split('/').filter(Boolean);
+}
+
+/** True on the registration STEPS. The success page is deliberately not checkout. */
 function isCheckoutPath(location) {
-  const p = location?.pathname || '';
-  return p.includes('/register') && !p.includes('/register/success');
+  const [, page, sub] = pathParts(location);
+  return page === 'register' && sub !== 'success';
+}
+
+/** True on the parent portal (dashboard) — drives the analytics surface. */
+function isParentPortalPath(location) {
+  const [, page] = pathParts(location);
+  return page === 'dashboard';
 }
 
 function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
@@ -300,7 +317,7 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
               parent dashboard and the registration surfaces report separately. */}
           <PlatformFooterLine
             tone="dark"
-            surface={location.pathname.includes('/dashboard') ? 'parentPortal' : 'regPage'}
+            surface={isParentPortalPath(location) ? 'parentPortal' : 'regPage'}
             style={{ marginTop: 20 }}
           />
         </div>
@@ -390,7 +407,7 @@ function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
               being hardcoded to one surface. */}
           <PlatformFooterLine
             tone="dark"
-            surface={location.pathname.includes('/dashboard') ? 'parentPortal' : 'regPage'}
+            surface={isParentPortalPath(location) ? 'parentPortal' : 'regPage'}
             style={{ paddingTop: 4 }}
           />
         </div>
