@@ -1860,9 +1860,16 @@ function TrustChips() {
     <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 16, marginTop: 14 }}>
       <span style={chip}>
         <SIcon size={16}><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 1.5" /></SIcon>
-        {/* Two numbers, not one: an operator who already has Stripe is done in
-            about 2 minutes, and quoting a flat "5 minutes" undersells that. */}
-        2 min if you have Stripe, 5–10 if not
+        {/* Two numbers, not one: quoting a flat "5 minutes" badly undersells the
+            already-have-Stripe path. MEASURED, not estimated - Jessica's connect
+            on staging 2026-07-30 took 48 seconds from clicking Connect to landing
+            back (stripe_oauth_states created 03:57:04, consumed 03:57:52), and
+            she entered nothing at all. "About a minute" rather than "under a
+            minute" because she was already signed in to Stripe; someone signing
+            in fresh with 2FA spends a little longer. Overstating the effort on
+            the screen that gates every payment is not a safe default - it talks
+            operators out of a one-minute job. */}
+        About a minute if you have Stripe, 5–10 if not
       </span>
       <span style={chip}>
         <SIcon size={16}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></SIcon>
@@ -1916,7 +1923,7 @@ function WhatYouWillNeed() {
 
           <div style={{ marginBottom: 12 }}>
             <div style={pathTitle}>
-              If you already use Stripe <span style={pathTime}>· about 2 minutes</span>
+              If you already use Stripe <span style={pathTime}>· about a minute</span>
             </div>
             <p style={{ ...item, marginBottom: 0 }}>
               Sign in with your usual Stripe login and choose that account. You'll
