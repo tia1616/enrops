@@ -2391,9 +2391,20 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
           `details_submitted` is not stored on organizations, so the UI cannot
           tell "started" from "never started" — which means the copy has to be
           true for BOTH. It no longer claims either. */}
+      {/* TWO states share this body, and they are not the same story:
+            onboarding  — setup is genuinely unfinished.
+            restricted  — Stripe PAUSED an account that may be completely set up,
+                          and wants one specific thing it names in their
+                          dashboard. Telling that operator to "finish setting up"
+                          and handing them the full new-account checklist sends
+                          them looking for work that isn't what Stripe asked for. */}
       <StripeHero
-        title="Finish setting up with Stripe"
-        subtitle="Stripe needs your business details before payments can switch on. This opens Stripe's own secure form."
+        title={status === "restricted"
+          ? "Stripe has paused payments on your account"
+          : "Finish setting up with Stripe"}
+        subtitle={status === "restricted"
+          ? "Stripe needs something from you before payments can switch back on. Continue below and Stripe will tell you exactly what."
+          : "Stripe needs your business details before payments can switch on. This opens Stripe's own secure form."}
       >
         <div style={{ display: "flex", justifyContent: "center", gap: 18, marginBottom: 16, fontSize: 13, color: INK }}>
           <span><strong>Charges</strong>{" "}<Pill on={chargesEnabled}>{chargesEnabled ? "on" : "pending"}</Pill></span>
@@ -2410,7 +2421,11 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
               </button>
             </div>
             <TrustChips />
-            <WhatYouWillNeed midSetup />
+            {/* Hidden when restricted. We do not know what Stripe wants - it
+                could be one document - so listing the full new-account
+                checklist would be a guess presented as instructions. The
+                banner above already points them at the real answer. */}
+            {status !== "restricted" && <WhatYouWillNeed midSetup />}
           </>
         ) : (
           <em style={{ color: MUTED, fontSize: 13 }}>
