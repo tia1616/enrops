@@ -22,6 +22,7 @@ import ShareProgram from "../../../components/ShareProgram.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete.jsx";
 import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
 import { renderWaiverText } from "../../../lib/waiverText.js";
+import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 const BRIGHT = "#5847C9";
@@ -579,6 +580,10 @@ export default function QuickProgramBuilder() {
         .select("id")
         .single();
       if (error) throw error;
+      // Advertising conversion. This builder always writes status 'open', so
+      // every successful save here is a live, customer-facing registration
+      // workflow. Path 1 of 3 - see pixelWorkflowCreated.
+      pixelWorkflowCreated();
       setCreatedId(data.id);
     } catch (e) {
       setErr(e?.message ?? String(e));

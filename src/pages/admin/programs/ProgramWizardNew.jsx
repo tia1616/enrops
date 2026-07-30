@@ -17,6 +17,7 @@ import { supabase } from "../../../lib/supabase.js";
 import ProgramPrereqEmptyState from "./ProgramPrereqEmptyState.jsx";
 import AddSchoolModal from "../schools/AddSchoolModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -588,6 +589,12 @@ export default function ProgramWizardNew() {
         .select("id")
         .single();
       if (insErr) throw insErr;
+      // Advertising conversion, but ONLY when the program is saved live. This
+      // wizard can also save a draft, and a draft is not a customer-facing
+      // registration workflow - it is invisible to families until published.
+      // The publish that happens later is caught by the Programs calendar
+      // instead. Path 2 of 3 - see pixelWorkflowCreated.
+      if (status === "open") pixelWorkflowCreated();
       setSavedProgramId(data.id);
       setSavedAsStatus(status);
     } catch (e) {

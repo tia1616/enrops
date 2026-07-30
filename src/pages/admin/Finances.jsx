@@ -30,6 +30,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { pixelStripeConnected } from "../../lib/metaPixel.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -219,6 +220,35 @@ export default function Finances() {
       // still land the status moments later.
       console.warn("[finances] operator stripe status sync failed:", err);
     }
+
+    // Advertising conversion, at the ONE moment the operator became able to
+    // take money. `changed` is the edge function's own transition flag, and it
+    // is the same condition that function uses to log its stripe_connected
+    // platform event - so the pixel and our own records cannot disagree about
+    // what "connected" means.
+    //
+    // Both entry paths funnel through here (the ?stripe= return effect and the
+    // manual "Check status" button), which is why this sits in the shared
+    // helper rather than in either caller.
+    //
+    // DELIBERATELY OUTSIDE the fetch's try. Inside it, a throw from the pixel
+    // was caught by the handler above and logged as "operator stripe status
+    // sync failed" - pointing anyone debugging a payments problem at the
+    // payments path when the fault was advertising telemetry. Its own try keeps
+    // a telemetry failure from breaking the operator's actual task.
+    //
+    // KNOWN UNDERCOUNT: Stripe often activates an account by webhook while the
+    // operator is nowhere near this page, and that transition is invisible to
+    // the browser. Those conversions are simply lost to the pixel. The
+    // Conversions API is the fix; this is noted for Darren.
+    if (result?.changed === true && result?.stripe_account_status === "active") {
+      try {
+        pixelStripeConnected();
+      } catch (pixelErr) {
+        console.warn("[finances] StripeConnected pixel event failed:", pixelErr);
+      }
+    }
+
     await reload();
     return result;
   }

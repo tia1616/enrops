@@ -18,6 +18,7 @@ import EmbedSnippet from "../../../components/EmbedSnippet.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
+import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -122,6 +123,14 @@ export default function ProgramsCalendar() {
       alert(`Couldn't publish: ${pubErr.message}`);
       return;
     }
+    // Advertising conversion. This is the path a wizard DRAFT takes to become
+    // customer-facing, and it is the one a browser hook is most likely to miss:
+    // the program was created in one session and published in another. Path 3
+    // of 3 - see pixelWorkflowCreated.
+    //
+    // Unpublishing and republishing fires again. That is correct under "every
+    // save", which is the agreed definition, not first-only.
+    pixelWorkflowCreated();
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "open" } : p)));
   }
 
