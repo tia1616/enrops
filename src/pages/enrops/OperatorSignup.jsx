@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import EnropsWordmark from '../../components/EnropsWordmark.jsx';
 import { pixelCompleteRegistration } from '../../lib/metaPixel.js';
+import { recordSignupAttribution } from '../../lib/signupAttribution.js';
 
 // enrops.com/signup — self-serve OPERATOR signup (Registration MVP, Chunk 1).
 //
@@ -151,6 +152,12 @@ export default function OperatorSignup() {
     // Advertising conversion. Fires at the moment the org actually exists, not
     // when this page opened, per the spec.
     pixelCompleteRegistration();
+    // Which ad brought them, recorded against the org that now exists. NOT
+    // awaited: the operator's page must not wait on a marketing write, and the
+    // helper never throws. Deliberately after the pixel and before the screen
+    // changes, so a slow network cannot leave it running against an unmounted
+    // component.
+    recordSignupAttribution(supabase);
     setCreatedSlug(data.slug);
     setPhase('done');
   }

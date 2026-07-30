@@ -5,7 +5,16 @@ import App from './App.jsx';
 import { AuthProvider } from './context/AuthContext.jsx';
 import { initAnalytics } from './lib/analytics.js';
 import { initMetaPixel } from './lib/metaPixel.js';
+import { captureSignupUtm } from './lib/signupAttribution.js';
 import './index.css';
+
+// Stash utm_content BEFORE anything can redirect. Google OAuth and the magic
+// link both return to `${origin}/signup` with the query string stripped, so if
+// it is not captured on the landing hit it is gone by the time the org exists.
+// Runs unconditionally and independently of the pixel: knowing which ad brought
+// an operator is useful whether or not Meta measurement is switched on, and it
+// must not be lost just because someone opted out of advertising cookies.
+captureSignupUtm();
 
 // Privacy-first PostHog init (no-ops if VITE_POSTHOG_KEY is unset).
 initAnalytics();
