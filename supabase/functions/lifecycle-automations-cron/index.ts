@@ -44,7 +44,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
-import { renderPlatformFooterHtml, surfaceForAutomation } from "../_shared/platformFooter.ts";
+import { renderPlatformFooterHtml, renderPlatformFooterText, surfaceForAutomation } from "../_shared/platformFooter.ts";
 import {
   parseEmailAttachments,
   loadCommsAttachments,
@@ -550,13 +550,18 @@ async function sendOne(
     console.error("[lifecycle-automations-cron] marketing send skipped — no unsubscribe URL (MARKETING_UNSUBSCRIBE_SECRET unset)");
     return "failed";
   }
-  const fullHtml = wrapInShell(
-    innerBody,
-    brand,
-    unsubscribeUrl,
-    surfaceForAutomation(a.template?.key, a.template?.audience),
+  // entry.recipient_role is what actually decides this: no_school_day is stored
+  // with a families-level audience but sends an instructor copy too, and that
+  // copy must not carry the acquisition line.
+  const platformSurface = surfaceForAutomation(
+    a.template?.key,
+    a.template?.audience,
+    entry.recipient_role,
   );
-  const plainBody = htmlToPlainText(renderedHtml) + downloadButtonsText;
+  const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl, platformSurface);
+  const platformFooterText = renderPlatformFooterText(platformSurface);
+  const plainBody = htmlToPlainText(renderedHtml) + downloadButtonsText
+    + (platformFooterText ? `\n\n${platformFooterText}` : "");
   const plainText = unsubscribeUrl
     ? `${plainBody}\n\nUnsubscribe: ${unsubscribeUrl}`
     : plainBody;
@@ -839,7 +844,9 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     innerBody,
     brand,
     unsubscribeUrl,
-    surfaceForAutomation(template?.key, template?.audience),
+    // input.audience is the preview/test-send audience toggle, so the operator
+    // previewing the instructor half of no_school_day sees no line either.
+    surfaceForAutomation(template?.key, template?.audience, input.audience),
   );
 
   return { ok: true, subject, html: fullHtml, brand, template_key: template.key, used_real_data: usedRealData, resend_attachments: resendAttachments };

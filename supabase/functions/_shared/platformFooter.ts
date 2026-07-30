@@ -58,7 +58,13 @@ export function platformFooterUrl(surface: string): string {
 export function surfaceForAutomation(
   key: string | null | undefined,
   audience: string | null | undefined,
+  recipientRole?: string | null,
 ): string | null {
+  // The PER-RECIPIENT role wins over the template-level audience column.
+  // A two-audience automation (no_school_day) is stored with audience
+  // 'families' but also sends a tailored instructor copy, so keying off the
+  // column alone would put the acquisition line in front of instructors.
+  if (recipientRole === 'instructor') return null;
   if (audience === 'instructors') return null;
   if (audience === 'partners') return 'partnerRecap';
   const k = (key ?? '').toLowerCase();

@@ -342,15 +342,16 @@ function buildSignupEmail(signInUrl: string): string {
 function buildOnboardingEmail(firstName: string, signInUrl: string, brand: any): string {
   const orgName = brand?.org_name || 'enrops';
   const accent = brand?.primary_color || '#1C004F';
+  const ink = readableOn(accent);
   const logoBlock = brand?.logo_url
     ? `<img src="${escapeAttr(brand.logo_url)}" alt="${escapeAttr(orgName)}" style="max-height:44px;width:auto;display:inline-block;" />`
-    : `<div style="color:#8C88FF;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(orgName)}</div>`;
+    : `<div style="color:${escapeAttr(ink.muted)};font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(orgName)}</div>`;
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#FBFBFB;font-family:'Poppins',system-ui,sans-serif;">
 <div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
   <div style="background:${escapeAttr(accent)};padding:32px 28px;text-align:center;">
     ${logoBlock}
-    <h1 style="color:#fff;margin:8px 0 0;font-size:24px;font-weight:700;">Continue your onboarding</h1>
+    <h1 style="color:${escapeAttr(ink.fg)};margin:8px 0 0;font-size:24px;font-weight:700;">Continue your onboarding</h1>
   </div>
   <div style="padding:28px;">
     <p style="margin:0 0 16px;font-size:15px;color:#1a1a1a;">Hi ${escapeHtml(firstName)},</p>
@@ -358,7 +359,7 @@ function buildOnboardingEmail(firstName: string, signInUrl: string, brand: any):
       Pick up right where you left off — your progress is saved.
     </p>
     <div style="text-align:center;margin:28px 0;">
-      <a href="${escapeAttr(signInUrl)}" style="display:inline-block;background:${escapeAttr(accent)};color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
+      <a href="${escapeAttr(signInUrl)}" style="display:inline-block;background:${escapeAttr(accent)};color:${escapeAttr(ink.fg)};text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
         Open my onboarding
       </a>
     </div>
@@ -374,15 +375,16 @@ function buildOnboardingEmail(firstName: string, signInUrl: string, brand: any):
 function buildInstructorEmail(firstName: string, signInUrl: string, brand: any): string {
   const orgName = brand?.org_name || 'enrops';
   const accent = brand?.primary_color || '#1C004F';
+  const ink = readableOn(accent);
   const logoBlock = brand?.logo_url
     ? `<img src="${escapeAttr(brand.logo_url)}" alt="${escapeAttr(orgName)}" style="max-height:44px;width:auto;display:inline-block;" />`
-    : `<div style="color:#8C88FF;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(orgName)}</div>`;
+    : `<div style="color:${escapeAttr(ink.muted)};font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(orgName)}</div>`;
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#FBFBFB;font-family:'Poppins',system-ui,sans-serif;">
 <div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
   <div style="background:${escapeAttr(accent)};padding:32px 28px;text-align:center;">
     ${logoBlock}
-    <h1 style="color:#fff;margin:8px 0 0;font-size:24px;font-weight:700;">Sign in</h1>
+    <h1 style="color:${escapeAttr(ink.fg)};margin:8px 0 0;font-size:24px;font-weight:700;">Sign in</h1>
   </div>
   <div style="padding:28px;">
     <p style="margin:0 0 16px;font-size:15px;color:#1a1a1a;">Hi ${escapeHtml(firstName)},</p>
@@ -390,7 +392,7 @@ function buildInstructorEmail(firstName: string, signInUrl: string, brand: any):
       Tap the button below to view your schedule, accept your camps, or request changes.
     </p>
     <div style="text-align:center;margin:28px 0;">
-      <a href="${escapeAttr(signInUrl)}" style="display:inline-block;background:${escapeAttr(accent)};color:#fff;text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
+      <a href="${escapeAttr(signInUrl)}" style="display:inline-block;background:${escapeAttr(accent)};color:${escapeAttr(ink.fg)};text-decoration:none;padding:14px 36px;border-radius:6px;font-size:15px;font-weight:600;">
         Open my schedule
       </a>
     </div>
@@ -430,6 +432,46 @@ function buildParentEmail(firstName: string, signInUrl: string, brand: any): str
   </div>
 </div>
 </body></html>`;
+}
+
+/**
+ * Readable text colour for a given background. The header band used to be a
+ * fixed dark purple, so white text was always safe; now it is the tenant's own
+ * primary_color, and a pale brand colour would render white-on-white.
+ *
+ * Decided by actual WCAG contrast RATIO, not a luminance threshold. A bare
+ * luminance cut is arbitrary and gets real brands wrong: shoreview-chess uses
+ * #64D2D2, whose luminance is 0.534 — under a 0.6 cut it would keep white text
+ * at a 1.8:1 ratio, which is unreadable.
+ *
+ * White is PREFERRED and only abandoned when it fails AA for large text (3:1).
+ * That keeps every brand in use today rendering exactly as it does now
+ * (#674EE8 J2S 5.5:1, #E85C37 3.5:1, #1C004F 15:1 all stay white) and flips
+ * only the cases where white genuinely cannot be read (#64D2D2 -> 1.8:1).
+ *
+ * Known limitation: 3:1 is the large-text threshold, correct for the 24px
+ * heading. The button label is 15px, where AA wants 4.5:1, so a mid-tone brand
+ * keeps a button that passes large-text but not normal-text contrast. Tightening
+ * that would restyle existing tenants' emails, which is a design call, not a
+ * silent one.
+ *
+ * Unparseable or missing colours keep the previous behaviour (white).
+ */
+function readableOn(bg: string): { fg: string; muted: string } {
+  const WHITE = { fg: '#fff', muted: '#8C88FF' };
+  const DARK = { fg: '#1A1530', muted: '#4A4470' };
+  const hex = String(bg ?? '').trim().replace(/^#/, '');
+  const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return WHITE;
+  const chan = (i: number) => {
+    const v = parseInt(full.slice(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  };
+  const bgL = 0.2126 * chan(0) + 0.7152 * chan(2) + 0.0722 * chan(4);
+  const ratio = (aL: number, bL: number) =>
+    (Math.max(aL, bL) + 0.05) / (Math.min(aL, bL) + 0.05);
+  // Luminance of #fff is 1; #1A1530 is ~0.0113.
+  return ratio(1, bgL) >= 3 ? WHITE : (ratio(0.0113, bgL) > ratio(1, bgL) ? DARK : WHITE);
 }
 
 function escapeHtml(s: string): string {
