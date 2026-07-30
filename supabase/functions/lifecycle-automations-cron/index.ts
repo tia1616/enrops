@@ -45,6 +45,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
 import { renderPlatformFooterHtml, renderPlatformFooterText, surfaceForAutomation } from "../_shared/platformFooter.ts";
+import { listUnsubscribeHeaders } from "../_shared/listUnsubscribe.ts";
 import {
   parseEmailAttachments,
   loadCommsAttachments,
@@ -550,6 +551,9 @@ async function sendOne(
     console.error("[lifecycle-automations-cron] marketing send skipped — no unsubscribe URL (MARKETING_UNSUBSCRIBE_SECRET unset)");
     return "failed";
   }
+  // Derived from the SAME unsubscribeUrl the footer link uses, so the header and
+  // the visible link can never point at different places. {} for informational.
+  const unsubHeaders = listUnsubscribeHeaders(unsubscribeUrl);
   // entry.recipient_role is what actually decides this: no_school_day is stored
   // with a families-level audience but sends an instructor copy too, and that
   // copy must not carry the acquisition line.
@@ -581,6 +585,12 @@ async function sendOne(
       { name: "type", value: "lifecycle" },
       { name: "automation", value: a.template.key },
     ],
+    // List-Unsubscribe / one-click headers, but ONLY for promotional sends.
+    // unsubHeaders is {} for every informational template (welcome, recaps,
+    // birthday), so those payloads are byte-for-byte what they were before — a
+    // family must not be able to one-click out of the email telling them where
+    // camp is. See _shared/listUnsubscribe.ts for why the header matters.
+    ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
     ...(resendAttachments.length ? { attachments: resendAttachments } : {}),
   });
 

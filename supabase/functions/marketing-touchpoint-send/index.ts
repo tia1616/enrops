@@ -26,6 +26,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, encodeDisplayName, type OrgBrand } from "../_shared/orgBrand.ts";
+import { listUnsubscribeHeaders } from "../_shared/listUnsubscribe.ts";
 import {
   parseEmailAttachments,
   loadCommsAttachments,
@@ -674,17 +675,30 @@ serve(async (req: Request) => {
         ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
         : stripHtmlToText(renderedInner)) + downloadButtonsText;
 
-      return { r, subject, bodyHtml, bodyText };
+      // Read the unsubscribe URL back out of the SAME token map the footer link
+      // is rendered from (wrapInEmailShell reads tokens.unsubscribe_url). One
+      // value, two surfaces — the header can never point somewhere the visible
+      // link doesn't.
+      const unsubscribeUrl = tokens.get("unsubscribe_url") || "";
+
+      return { r, subject, bodyHtml, bodyText, unsubscribeUrl };
     }));
 
-    const batchPayload = rendered.map(({ r, subject, bodyHtml, bodyText }) => ({
-      from: formatFromAddress(brand),
-      reply_to: brand.reply_to,
-      to: [r.email],
-      subject,
-      html: bodyHtml,
-      text: bodyText,
-    }));
+    const batchPayload = rendered.map(({ r, subject, bodyHtml, bodyText, unsubscribeUrl }) => {
+      // Campaign sends are bulk promotional mail by definition — every one of
+      // them gets List-Unsubscribe + one-click. Empty only if the URL failed to
+      // build, in which case we send without rather than emit a broken header.
+      const unsubHeaders = listUnsubscribeHeaders(unsubscribeUrl);
+      return {
+        from: formatFromAddress(brand),
+        reply_to: brand.reply_to,
+        to: [r.email],
+        subject,
+        html: bodyHtml,
+        text: bodyText,
+        ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
+      };
+    });
 
     let batchResp: { ok: true; ids: string[] } | { ok: false; error: string };
     try {
@@ -1406,6 +1420,9 @@ function extractTopics(what: Record<string, unknown> | undefined): string[] {
 // Resend send
 // ---------------------------------------------------------------------------
 
+// NOTE: currently unused — the batch path above is the only live sender. Kept in
+// sync with it anyway (including the unsubscribe headers) so the two send paths
+// cannot drift into doing different things if this one is ever wired back up.
 async function sendViaResend(opts: {
   fromName: string;
   fromEmail: string;
@@ -1413,7 +1430,9 @@ async function sendViaResend(opts: {
   subject: string;
   html: string;
   text: string | null;
+  unsubscribeUrl?: string | null;
 }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  const unsubHeaders = listUnsubscribeHeaders(opts.unsubscribeUrl);
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -1427,6 +1446,7 @@ async function sendViaResend(opts: {
       subject: opts.subject,
       html: opts.html,
       text: opts.text,
+      ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
     }),
   });
   if (!res.ok) {
@@ -1449,6 +1469,9 @@ async function sendBatchViaResend(
     subject: string;
     html: string;
     text: string | null;
+    // RFC 2369/8058 unsubscribe headers. Absent on any email whose unsubscribe
+    // URL failed to build; Resend passes whatever is here straight through.
+    headers?: Record<string, string>;
   }>,
 ): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
   const res = await fetch("https://api.resend.com/emails/batch", {
