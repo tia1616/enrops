@@ -2266,7 +2266,13 @@ function TrustChips() {
 //
 // Open by default: this is the screen where operators stall, so the answer
 // should not be behind a click. Tenant-agnostic, no J2S strings.
-function WhatYouWillNeed() {
+// `midSetup` = an account already exists and setup is unfinished. In that state
+// the two-paths framing below is describing a CHOICE THE SCREEN NO LONGER OFFERS
+// - there is no "sign in with your usual Stripe login" button on the onboarding
+// body, only "Continue setup". Reading a confident description of an option you
+// cannot see is a large part of why that screen felt like a dead end (prod,
+// 2026-07-30). Mid-setup, show only what Stripe will ask for.
+function WhatYouWillNeed({ midSetup = false }) {
   const [open, setOpen] = useState(true);
   const item = { fontSize: 13, color: INK, lineHeight: 1.55, marginBottom: 6 };
   const lbl = { fontWeight: 600, color: PURPLE };
@@ -2292,25 +2298,32 @@ function WhatYouWillNeed() {
       {open && (
         <div style={{ marginTop: 10, background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: "12px 14px" }}>
 
-          <div style={{ marginBottom: 12 }}>
-            <div style={pathTitle}>
-              If you already use Stripe <span style={pathTime}>· about a minute</span>
+          {/* The two-paths framing belongs ONLY where both paths are on offer. */}
+          {!midSetup && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={pathTitle}>
+                If you already use Stripe <span style={pathTime}>· about a minute</span>
+              </div>
+              <p style={{ ...item, marginBottom: 0 }}>
+                Sign in with your usual Stripe login and choose that account. You'll
+                use the account you already have — nothing new is created, and the
+                payments you take outside enrops carry on exactly as they do now.
+                Stripe already has your business and bank details, so there's
+                nothing to re-enter.
+              </p>
             </div>
-            <p style={{ ...item, marginBottom: 0 }}>
-              Sign in with your usual Stripe login and choose that account. You'll
-              use the account you already have — nothing new is created, and the
-              payments you take outside enrops carry on exactly as they do now.
-              Stripe already has your business and bank details, so there's
-              nothing to re-enter.
-            </p>
-          </div>
+          )}
 
-          <div style={{ paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
-            <div style={pathTitle}>
-              If you're new to Stripe <span style={pathTime}>· about 5–10 minutes</span>
-            </div>
+          <div style={midSetup ? {} : { paddingTop: 12, borderTop: `1px solid ${RULE}` }}>
+            {!midSetup && (
+              <div style={pathTitle}>
+                If you're new to Stripe <span style={pathTime}>· about 5–10 minutes</span>
+              </div>
+            )}
             <p style={{ ...item, marginBottom: 8 }}>
-              You'll create your Stripe account on the next screen. Have these ready:
+              {midSetup
+                ? "Stripe will ask for these. Have them ready:"
+                : "You'll create your Stripe account on the next screen. Have these ready:"}
             </p>
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               <li style={item}><span style={lbl}>Email and phone</span> — where Stripe sends verification codes.</li>
@@ -2321,9 +2334,10 @@ function WhatYouWillNeed() {
           </div>
 
           <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: 12, color: MUTED, lineHeight: 1.55 }}>
-            Either way, when you come back Stripe may spend a minute or two
-            checking your details before payments switch on. That's normal and
-            there's nothing for you to do while it finishes.
+            {/* "Either way" names two paths; mid-setup there is only one. */}
+            {midSetup
+              ? "When you come back, Stripe may spend a minute or two checking your details before payments switch on. That's normal and there's nothing for you to do while it finishes."
+              : "Either way, when you come back Stripe may spend a minute or two checking your details before payments switch on. That's normal and there's nothing for you to do while it finishes."}
           </div>
         </div>
       )}
@@ -2396,7 +2410,7 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
               </button>
             </div>
             <TrustChips />
-            <WhatYouWillNeed />
+            <WhatYouWillNeed midSetup />
           </>
         ) : (
           <em style={{ color: MUTED, fontSize: 13 }}>
