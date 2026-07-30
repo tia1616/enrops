@@ -21,7 +21,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
-import { splitOnOrgToken, hasOrgToken } from "../../lib/waiverText.js";
+import { hasOrgToken } from "../../lib/waiverText.js";
+// Shared with the program builders, so the operator sees their name drawn the
+// same way wherever they review a document.
+import { WaiverOrgName } from "../../components/OrgNameInText.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -430,7 +433,7 @@ export default function WaiverManager() {
                       {{org}} token — substituting there and saving would write
                       the name back into the stored text and re-freeze it. */}
                   <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>
-                    <OrgName content={w.content} orgName={org?.name} />
+                    <WaiverOrgName content={w.content} orgName={org?.name} />
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -711,32 +714,6 @@ function WaiverEditor({ waiver, busy, saveError, onCancel, onSave }) {
         </div>
       </div>
     </div>
-  );
-}
-
-// The operator's own business name, drawn bold inside the waiver preview, so a
-// page of boilerplate reads at a glance as THEIR document rather than a generic
-// template we handed them.
-//
-// Bold only here, on the operator's review surface. The text a family reads and
-// signs still renders through renderWaiverText as a plain string, and
-// waiver_text_snapshot - the record of what was actually agreed to - must never
-// contain markup.
-function OrgName({ content, orgName }) {
-  const name = typeof orgName === "string" ? orgName.trim() : "";
-  const segments = splitOnOrgToken(content);
-  // Same fallback as renderWaiverText: a legal document must never show a raw
-  // token, and it must never borrow another provider's name.
-  const shown = name || "the program provider";
-  return (
-    <>
-      {segments.map((seg, i) => (
-        <span key={i}>
-          {i > 0 && <strong style={{ color: INK, fontWeight: 700 }}>{shown}</strong>}
-          {seg}
-        </span>
-      ))}
-    </>
   );
 }
 
