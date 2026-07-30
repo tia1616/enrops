@@ -2225,10 +2225,16 @@ function StripeHero({ title, subtitle, children }) {
 
 // Compact reassurance row — answers the "how long / is it safe / where's my
 // money" worries as three chips instead of a paragraph.
-function TrustChips() {
+// `midSetup` drops the timing chip. That chip estimates how long CONNECTING
+// takes and is split by whether you already have Stripe — a choice that is not
+// on offer once an account exists, so mid-setup it answers a question the
+// operator can no longer act on. "Secured by Stripe" and "Straight to your bank"
+// stay: both are true in every state.
+function TrustChips({ midSetup = false }) {
   const chip = { display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, color: MUTED };
   return (
     <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 16, marginTop: 14 }}>
+      {!midSetup && (
       <span style={chip}>
         <SIcon size={16}><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 1.5" /></SIcon>
         {/* Two numbers, not one: quoting a flat "5 minutes" badly undersells the
@@ -2242,6 +2248,7 @@ function TrustChips() {
             operators out of a one-minute job. */}
         About a minute if you have Stripe, 5–10 if not
       </span>
+      )}
       <span style={chip}>
         <SIcon size={16}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></SIcon>
         Secured by Stripe
@@ -2398,12 +2405,18 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
                           dashboard. Telling that operator to "finish setting up"
                           and handing them the full new-account checklist sends
                           them looking for work that isn't what Stripe asked for. */}
+      {/* The restricted hero does NOT restate the banner above it. Rendered
+          together they read "Stripe has paused some of your account
+          capabilities" immediately followed by "Stripe has paused payments on
+          your account" - the same sentence twice, which pads the screen and
+          buries the one thing they can act on. Banner states the problem; hero
+          gives the next move. */}
       <StripeHero
         title={status === "restricted"
-          ? "Stripe has paused payments on your account"
+          ? "Tell Stripe what they need"
           : "Finish setting up with Stripe"}
         subtitle={status === "restricted"
-          ? "Stripe needs something from you before payments can switch back on. Continue below and Stripe will tell you exactly what."
+          ? "Continue below and Stripe will show you exactly what's outstanding on your account."
           : "Stripe needs your business details before payments can switch on. This opens Stripe's own secure form."}
       >
         <div style={{ display: "flex", justifyContent: "center", gap: 18, marginBottom: 16, fontSize: 13, color: INK }}>
@@ -2420,7 +2433,7 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
                 {checking ? "Checking…" : "Already finished? Check status"}
               </button>
             </div>
-            <TrustChips />
+            <TrustChips midSetup />
             {/* Hidden when restricted. We do not know what Stripe wants - it
                 could be one document - so listing the full new-account
                 checklist would be a guess presented as instructions. The
