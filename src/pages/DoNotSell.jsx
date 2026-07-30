@@ -41,8 +41,7 @@ function describe({ configured, gpc, optedOut }) {
   if (!configured) {
     return {
       heading: 'Advertising measurement is not running',
-      body:
-        'This site is not currently configured with any advertising measurement, so there is nothing to opt out of here.',
+      body: 'This site is not using advertising measurement, so there is nothing to opt out of.',
       action: null,
     };
   }
@@ -50,7 +49,7 @@ function describe({ configured, gpc, optedOut }) {
     return {
       heading: 'Your browser has already opted you out',
       body:
-        'Your browser is sending a Global Privacy Control signal. We honour it automatically, so advertising measurement is not loaded at all and there is nothing further for you to do.',
+        'Your browser sends Global Privacy Control. We honour it automatically, so nothing is loaded and there is nothing else to do.',
       action: null,
     };
   }
@@ -58,7 +57,7 @@ function describe({ configured, gpc, optedOut }) {
     return {
       heading: 'You have opted out',
       body:
-        'We are not loading advertising measurement, and we are not sharing information about your visit with Meta for advertising. We also cleared the advertising identifiers that had been set.',
+        'We are not measuring your visit for advertising, and we cleared the advertising identifiers that had been set.',
       action: { label: 'Allow advertising measurement', kind: 'in' },
     };
   }
@@ -75,7 +74,7 @@ function describe({ configured, gpc, optedOut }) {
   return {
     heading: 'Advertising measurement is on',
     body:
-      'We use measurement from Meta to see which of our own advertisements bring enrichment businesses to enrops. Under California and Oregon law this counts as sharing personal information for advertising. You can stop it at any time, and nothing about your account or your programs changes if you do.',
+      'We measure how our own advertising performs. Under California and Oregon law this counts as sharing personal information for advertising. You can stop it at any time, and nothing about your account changes if you do.',
     action: { label: 'Do not sell or share my personal information', kind: 'out' },
   };
 }
@@ -147,7 +146,7 @@ export default function DoNotSell() {
         <p style={{ fontSize: 13.5, lineHeight: 1.65, color: MUTED }}>
           This choice is remembered in this browser. If you use another browser or device, set it
           there too. We never share information an operator has entrusted to us, and we never use
-          advertising technology to target children or build profiles of minors.
+          advertising technology to target children or to build profiles of minors.
         </p>
 
         <p style={{ fontSize: 13.5, marginTop: 24 }}>
