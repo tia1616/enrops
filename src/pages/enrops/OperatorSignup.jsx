@@ -18,8 +18,9 @@ import { getSignupUtm, recordSignupAttribution } from '../../lib/signupAttributi
 //      name: the cancellation policy renders at /{slug}/cancellation and is
 //      shown to families before they pay, and the waivers appear in their
 //      registration form. That is disclosed on the done screen below and then
-//      properly, with the actual wording, by StarterPolicyNotice in the admin
-//      shell. It must never go back to being mentioned only in a comment.
+//      properly, with the actual wording, by CancellationPolicyInline in the
+//      program wizard the "Build your first program" button leads straight
+//      into. It must never go back to being mentioned only in a comment.
 //   4. We reveal their live URL, then send them in to build their first program.
 //
 // A signed-in user who ALREADY owns an org is bounced straight to /admin (their
@@ -292,9 +293,12 @@ export default function OperatorSignup() {
             {/* Said here, at the moment the page goes live, because this is when
                 it becomes true. It is deliberately a statement of fact with no
                 button: the real disclosure — the actual policy wording, and the
-                choice to keep or change it — is StarterPolicyNotice, waiting in
-                the admin shell they land in next. Two competing acknowledgement
-                surfaces would mean neither is the one that counts. */}
+                choice to keep or change it — is CancellationPolicyInline, in
+                the program wizard the button below opens. Showing the wording
+                HERE would be premature; they have no program yet, so a refund
+                policy has nothing to attach to. "In a moment" below is a
+                literal promise about the very next screen, and it is kept:
+                /admin/programs/quick-new is QuickProgramBuilder. */}
             <div className="seeded">
               <strong>We&rsquo;ve set up a starter cancellation &amp; refund policy and waivers for you</strong>,
               published under your business name so your page is ready for families today.

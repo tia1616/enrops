@@ -22,6 +22,7 @@ import ShareProgram from "../../../components/ShareProgram.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete.jsx";
 import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
 import { renderWaiverText } from "../../../lib/waiverText.js";
+import CancellationPolicyInline from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
@@ -766,6 +767,20 @@ export default function QuickProgramBuilder() {
               </div>
             )}
 
+            {/* The other thing families read that the operator never wrote.
+                Waivers are what families SIGN; this is what they are PROMISED,
+                in the operator's name, about their money. Sitting under the
+                waivers rather than in a banner is the whole point: this is the
+                screen where they are already being shown what families see.
+                No editHref - the sentence tells them where it lives, because
+                nothing on this screen may navigate away from a half-built
+                class. */}
+            <CancellationPolicyInline
+              orgId={org?.id}
+              orgName={org?.name}
+              where="checkout"
+            />
+
             {org.email && (
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}`, fontSize: 13, color: INK, lineHeight: 1.6 }}>
                 When a family replies to one of your emails, it goes to{" "}
@@ -949,6 +964,17 @@ export default function QuickProgramBuilder() {
                     ))}
                   </div>
                 )}
+                {/* Same disclosure as the first-run card. A returning operator
+                    who never opened it there still hasn't read the promise
+                    made in their name, and "what does this class commit me
+                    to?" is the same question on their second class as their
+                    first. */}
+                <CancellationPolicyInline
+                  orgId={org?.id}
+                  orgName={org?.name}
+                  where="checkout"
+                  dense
+                />
                 {/* Bolded: this is the instruction, not commentary. It's the
                     answer to the question the whole panel provokes. */}
                 <div style={{ marginTop: 6, color: INK, fontWeight: 600 }}>

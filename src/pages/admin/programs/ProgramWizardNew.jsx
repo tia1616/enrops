@@ -17,6 +17,7 @@ import { supabase } from "../../../lib/supabase.js";
 import ProgramPrereqEmptyState from "./ProgramPrereqEmptyState.jsx";
 import AddSchoolModal from "../schools/AddSchoolModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import CancellationPolicyInline from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 
 const PURPLE = "#1C004F";
@@ -694,6 +695,8 @@ export default function ProgramWizardNew() {
             savedAsStatus={savedAsStatus}
             orgSlug={org?.slug}
             orgActiveTerm={org?.active_registration_term}
+            orgId={org?.id}
+            orgName={org?.name}
             onSubmit={handleSubmit}
             onBackToPrograms={() => navigate("/admin/programs")}
             step3Valid={step3Valid}
@@ -1226,6 +1229,8 @@ function Step3PriceAndOpen({
   savedAsStatus,
   orgSlug,
   orgActiveTerm,
+  orgId,
+  orgName,
   onSubmit,
   onBackToPrograms,
   step3Valid,
@@ -1362,6 +1367,18 @@ function Step3PriceAndOpen({
             When you invite these families to the portal, they'll sign your required waivers first.{" "}
             <a href="/admin/waivers" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Set up waivers ↗</a>
           </div>
+          {/* where="public", NOT "checkout". The partner runs registration, so
+              this program has no Enrops payment step and no family will ever
+              meet the policy there - saying "before they pay" would describe a
+              screen that does not exist for them. It IS still published under
+              their business name at /{slug}/cancellation, which is the part
+              that made showing it necessary. */}
+          <CancellationPolicyInline
+            orgId={orgId}
+            orgName={orgName}
+            where="public"
+            editHref="/admin/waivers"
+          />
         </div>
       ) : (
         <div style={fieldGroup}>
@@ -1387,6 +1404,14 @@ function Step3PriceAndOpen({
             Families will read and sign your required waivers during checkout.{" "}
             <a href="/admin/waivers" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Set up waivers ↗</a>
           </div>
+          {/* This branch DOES have an Enrops payment step, so the checkout
+              wording is the true one here. */}
+          <CancellationPolicyInline
+            orgId={orgId}
+            orgName={orgName}
+            where="checkout"
+            editHref="/admin/waivers"
+          />
         </div>
       )}
 
