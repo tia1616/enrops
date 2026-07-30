@@ -157,9 +157,13 @@ export function pixelPageview() {
 }
 
 /** Standard event (the spec uses this for CompleteRegistration). */
-export function pixelTrack(event) {
+export function pixelTrack(event, params) {
   if (!isPixelActive()) return;
-  window.fbq('track', event);
+  // Passing undefined rather than {} when there is nothing to attach: an empty
+  // custom-data object still shows up in Events Manager and makes every event
+  // look like it carried data it did not.
+  if (params) window.fbq('track', event, params);
+  else window.fbq('track', event);
 }
 
 /** Custom event (StripeConnected, WorkflowCreated). */
@@ -232,9 +236,25 @@ function clearMetaCookies() {
 // failure class. Call sites also read as what happened, not as analytics.
 // ---------------------------------------------------------------------------
 
-/** An enrops account + organization was created. Standard event, per the spec. */
-export function pixelCompleteRegistration() {
-  pixelTrack('CompleteRegistration');
+/**
+ * An enrops account + organization was created. Standard event, per the spec.
+ *
+ * The spec's UTM section: "If carrying it through to the CompleteRegistration
+ * call is easy, do that; if not, storing it on the record is enough." It is
+ * easy, so the ad that produced this signup rides along as custom data and
+ * Darren can segment on it in Events Manager without joining to our database.
+ *
+ * It is ALSO stored server-side by record_signup_attribution, deliberately.
+ * These are not redundant: the pixel copy is lost whenever someone opts out, is
+ * running an ad blocker, or arrives on a browser Meta cannot match, while the
+ * database copy survives all of that. The database is the source of truth for
+ * "which ad produced this operator"; the pixel copy exists only so Meta's own
+ * reporting can break conversions down.
+ *
+ * @param {string|null} [utmContent]
+ */
+export function pixelCompleteRegistration(utmContent) {
+  pixelTrack('CompleteRegistration', utmContent ? { utm_content: utmContent } : undefined);
 }
 
 /**

@@ -16,6 +16,7 @@ import { getPermissions } from "../lib/permissions";
 import PortalSwitcher from "../components/PortalSwitcher.jsx";
 import RouteFallback from "../components/RouteFallback.jsx";
 import { setOrgGroup } from "../lib/analytics";
+import { PLATFORM_LEGAL_LINKS } from "../lib/policies.js";
 
 // Enrops brand tokens
 const PURPLE = "#1C004F";   // deep plum — wordmark, headings, body accents
@@ -783,6 +784,35 @@ export default function AdminLayout() {
           </Suspense>
           </>
           )}
+
+          {/* The operator app had NO legal footer at all. That was survivable
+              until the advertising pixel loaded site-wide: CCPA/CPRA requires a
+              clear, always-available way to stop the sharing it performs, and
+              the published Cookie Disclosure and Privacy Policy both promise
+              "the link on our site". PLATFORM_LEGAL_LINKS only renders in
+              PublicLayout, so operators had no standing route to it.
+
+              Deliberately quiet and at the very bottom - it is a legal
+              affordance, not navigation, and must not compete with the
+              operator's actual work. */}
+          <footer
+            style={{
+              marginTop: 40,
+              paddingTop: 14,
+              borderTop: `1px solid ${RULE}`,
+              fontSize: 12,
+              color: MUTED,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+            }}
+          >
+            {PLATFORM_LEGAL_LINKS.map((l) => (
+              <Link key={l.to} to={l.to} style={{ color: MUTED, textDecoration: "none" }}>
+                {l.label}
+              </Link>
+            ))}
+          </footer>
         </main>
       </div>
     </div>

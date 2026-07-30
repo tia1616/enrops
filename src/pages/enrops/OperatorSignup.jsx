@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import EnropsWordmark from '../../components/EnropsWordmark.jsx';
 import { pixelCompleteRegistration } from '../../lib/metaPixel.js';
-import { recordSignupAttribution } from '../../lib/signupAttribution.js';
+import { getSignupUtm, recordSignupAttribution } from '../../lib/signupAttribution.js';
 
 // enrops.com/signup — self-serve OPERATOR signup (Registration MVP, Chunk 1).
 //
@@ -151,7 +151,11 @@ export default function OperatorSignup() {
     if (data?.already_existed) { navigate('/admin', { replace: true }); return; }
     // Advertising conversion. Fires at the moment the org actually exists, not
     // when this page opened, per the spec.
-    pixelCompleteRegistration();
+    //
+    // The utm is read HERE, before recordSignupAttribution runs: that helper
+    // clears the stash once the server has it, so reading it afterwards would
+    // race and usually find nothing.
+    pixelCompleteRegistration(getSignupUtm());
     // Which ad brought them, recorded against the org that now exists. NOT
     // awaited: the operator's page must not wait on a marketing write, and the
     // helper never throws. Deliberately after the pixel and before the screen
