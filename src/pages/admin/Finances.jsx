@@ -196,7 +196,11 @@ export default function Finances() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
-      if (!token) return null;
+      // Distinguishable from a network failure. Both used to return null, so
+      // "Check status" told an operator whose session had lapsed to "try again
+      // in a moment" — advice that can never work, since the fix is signing in
+      // again. downloadFinances below has always handled this case correctly.
+      if (!token) return { error: "no_session" };
       const resp = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sync-operator-stripe-status`,
         {
@@ -299,7 +303,9 @@ export default function Finances() {
     //                  the screen it sits on.
     const status = result?.stripe_account_status;
     const toast = (msg) => { setSavedToast(msg); setTimeout(() => setSavedToast(null), 3000); };
-    if (result?.error) {
+    if (result?.error === "no_session") {
+      setError("Please sign in again to check your Stripe status.");
+    } else if (result?.error) {
       setError("Couldn't reach Stripe just now. Try again in a moment.");
     } else if (status === "active") {
       toast("You're all set — payments now route to your bank.");

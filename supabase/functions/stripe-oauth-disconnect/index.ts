@@ -204,9 +204,19 @@ serve(async (req: Request) => {
     // disconnect, buildChargeRouting blocks EVERY charge for a direct org (no
     // stripe_charges_enabled), so every unpaid row is stranded regardless of
     // which account its column happens to name.
-    const { data: unpaidRows, error: unpaidErr } = await supabase
+    // count:'exact' is load-bearing, not decoration. PostgREST caps a result set
+    // at 1000 rows, so counting and summing the RETURNED rows silently
+    // understated both figures past that point - proven on staging 2026-07-30
+    // with 1,100 rows worth $1,100.00, which this endpoint reported as
+    // "1000 scheduled payments worth $1000.00". The block still fired, so
+    // nothing slipped through; the money number just lied. `count` comes from
+    // PostgREST's Content-Range and is exact regardless of how many rows came
+    // back. Server-side sum() is not available on this project (PGRST123, "Use
+    // of aggregate functions is not allowed"), so when the fetch IS truncated
+    // the total is reported as a floor rather than as a fact.
+    const { data: unpaidRows, error: unpaidErr, count } = await supabase
       .from('installments')
-      .select('amount_cents')
+      .select('amount_cents', { count: 'exact' })
       .eq('organization_id', org.id)
       .or(`status.is.null,status.not.in.(${SETTLED_STATUSES.join(',')})`);
     if (unpaidErr) {
@@ -217,34 +227,50 @@ serve(async (req: Request) => {
       return json({ error: 'lookup_failed' }, 500);
     }
     const unpaid = (unpaidRows ?? []) as { amount_cents: number | null }[];
-    if (unpaid.length > 0) {
+    // The GATE reads the exact count, never the fetched-row length: a hypothetical
+    // future cap of 0 returned rows must not read as "no money owed".
+    const unpaidCount = count ?? unpaid.length;
+    if (unpaidCount > 0) {
       const cents = unpaid.reduce((sum, r) => sum + (r.amount_cents ?? 0), 0);
+      // True when PostgREST handed back fewer rows than exist, so `cents` is a
+      // floor rather than the total.
+      const centsIsPartial = unpaidCount > unpaid.length;
+      const dollars = (cents / 100).toFixed(2);
       console.log(
-        `[oauth-disconnect] blocked org ${org.id}: ${unpaid.length} unpaid instalment row(s), ${cents} cents`,
+        `[oauth-disconnect] blocked org ${org.id}: ${unpaidCount} unpaid instalment row(s), ` +
+        `${cents} cents from ${unpaid.length} fetched row(s)${centsIsPartial ? ' (PARTIAL SUM)' : ''}`,
       );
+      // Singular and plural are BOTH written out rather than patched with a
+      // trailing "(s)" - this lands on an operator's money screen. Every agreeing
+      // word switches together: is/are, payment/payments, it/them, that has/those
+      // have. The third branch exists because a partial sum must not be stated as
+      // a fact; "at least" is true, "worth $X" would not be.
+      //
+      // Deliberately says "to collect" and NOT "to collect on this Stripe
+      // account". The count is org-wide, so an org that connected account A, took
+      // a payment plan, disconnected and connected account B would be told the
+      // outstanding A-money sits on B - sending them to the wrong Stripe dashboard
+      // to look for payments that are not there. Blocking on those rows is still
+      // right (a direct org cannot charge anything while disconnected); only the
+      // attribution was wrong.
+      const message = unpaidCount === 1
+        ? `There is still 1 scheduled payment worth $${dollars} to collect. ` +
+          `Disconnecting now would leave it impossible to charge or refund. ` +
+          `Once that has gone through you can disconnect.`
+        : centsIsPartial
+          ? `There are still ${unpaidCount} scheduled payments to collect, worth at least $${dollars}. ` +
+            `Disconnecting now would leave them impossible to charge or refund. ` +
+            `Once those have gone through you can disconnect.`
+          : `There are still ${unpaidCount} scheduled payments worth $${dollars} to collect. ` +
+            `Disconnecting now would leave them impossible to charge or refund. ` +
+            `Once those have gone through you can disconnect.`;
       return json({
         error: 'unpaid_installments',
-        pending_count: unpaid.length,
+        pending_count: unpaidCount,
         pending_cents: cents,
-        // Singular and plural are BOTH written out rather than patched with a
-        // trailing "(s)" - this lands on an operator's money screen. Every
-        // agreeing word switches together: is/are, payment/payments, it/them,
-        // that has/those have.
-        //
-        // Deliberately says "to collect" and NOT "to collect on this Stripe
-        // account". The count above is org-wide, so an org that connected
-        // account A, took a payment plan, disconnected and connected account B
-        // would be told the outstanding A-money sits on B - sending them to the
-        // wrong Stripe dashboard to look for payments that are not there.
-        // Blocking on those rows is still right (a direct org cannot charge
-        // anything while disconnected); only the attribution was wrong.
-        message: unpaid.length === 1
-          ? `There is still 1 scheduled payment worth $${(cents / 100).toFixed(2)} to collect. ` +
-            `Disconnecting now would leave it impossible to charge or refund. ` +
-            `Once that has gone through you can disconnect.`
-          : `There are still ${unpaid.length} scheduled payments worth $${(cents / 100).toFixed(2)} to collect. ` +
-            `Disconnecting now would leave them impossible to charge or refund. ` +
-            `Once those have gone through you can disconnect.`,
+        // So support can tell a floor from a total without re-deriving it.
+        pending_cents_is_partial: centsIsPartial,
+        message,
       }, 409);
     }
 
