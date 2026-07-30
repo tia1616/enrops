@@ -92,6 +92,63 @@ Deno.test('the edge and web surface vocabularies agree', async () => {
   );
 });
 
+// Guards the vocabulary guard. Without this, an empty or comment-only map body
+// makes surfaceEntries return [] on BOTH sides, and [] === [] passes — the test
+// would report green while checking nothing.
+Deno.test('the vocabulary extractor actually found the surfaces', async () => {
+  const edge = surfaceEntries(await Deno.readTextFile(EDGE));
+  assertEquals(edge.length >= 10, true, `expected >=10 surfaces, got ${edge.length}`);
+  for (const key of ['regPage', 'accountReady', 'embed']) {
+    assertEquals(edge.some((e) => e.startsWith(`${key}:`)), true, `missing ${key}`);
+  }
+});
+
+/** sRGB relative luminance (WCAG 2.x). */
+function luminance(hex: string): number {
+  const h = hex.replace('#', '');
+  const chan = (i: number) => {
+    const v = parseInt(h.slice(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * chan(0) + 0.7152 * chan(2) + 0.0722 * chan(4);
+}
+
+function contrast(a: string, b: string): number {
+  const x = luminance(a), y = luminance(b);
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
+
+/** Pull a `NAME = '#RRGGBB'` or `name: '#RRGGBB'` token out of a source file. */
+function colorToken(source: string, name: string): string {
+  const m = source.match(new RegExp(`${name}\\s*[:=]\\s*'(#[0-9A-Fa-f]{6})'`));
+  if (!m) throw new Error(`colour token ${name} not found`);
+  return m[1];
+}
+
+// The tone->colour tokens live in BOTH twins. Nothing pinned them together, so
+// a rebrand touching one file would leave the other behind — and a drift toward
+// a lighter value would silently undo the contrast fix that made these two
+// tones exist in the first place. This pins the values AND the ratios.
+Deno.test('the light/dark link colours agree across the twins', async () => {
+  const edgeSrc = await Deno.readTextFile(EDGE);
+  const webSrc = await Deno.readTextFile(WEB);
+  assertEquals(colorToken(webSrc, 'ENROPS_PURPLE'), colorToken(edgeSrc, 'light'),
+    'the light-background link colour differs between the twins');
+  assertEquals(colorToken(webSrc, 'ENROPS_VIOLET'), colorToken(edgeSrc, 'dark'),
+    'the dark-background link colour differs between the twins');
+});
+
+// The suite had no contrast assertion at all, which is how a dark-background
+// violet shipped onto white email cards at 2.97:1. 4.5:1 is the AA threshold
+// for the 11-12px this line renders at.
+Deno.test('both tones clear AA against the background they are for', async () => {
+  const edgeSrc = await Deno.readTextFile(EDGE);
+  const onWhite = contrast(colorToken(edgeSrc, 'light'), '#ffffff');
+  const onDark = contrast(colorToken(edgeSrc, 'dark'), '#1A1530');
+  assertEquals(onWhite >= 4.5, true, `light tone on white is ${onWhite.toFixed(2)}:1, needs 4.5`);
+  assertEquals(onDark >= 4.5, true, `dark tone on #1A1530 is ${onDark.toFixed(2)}:1, needs 4.5`);
+});
+
 // Guards the guard: if either function is renamed or restructured so the
 // extractor finds nothing, the parity test above would pass vacuously.
 Deno.test('the parity extractor actually found the decision lines', async () => {
