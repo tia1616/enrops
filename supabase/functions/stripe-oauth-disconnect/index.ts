@@ -331,6 +331,40 @@ serve(async (req: Request) => {
       }
     }
 
+    // ── release the orphan-recovery claim ─────────────────────────────────
+    // Only for an account WE created, which is the only kind that carries
+    // metadata.enrops_org_id and therefore the only kind stripe-connect-onboard
+    // can find again.
+    //
+    // Without this, disconnecting does not actually let the operator start over:
+    // stripe-connect-onboard treats a 'disconnected' org as a fresh onboard,
+    // nulls the account id, then searches Stripe for
+    // metadata['enrops_org_id']:'<org>' and RECOVERS this very account
+    // (stripe-connect-onboard/index.ts, orphan-recovery branch). So "set one up
+    // from scratch" handed back the account they had just abandoned. That is
+    // more than a wording problem: `country` and `controller` are immutable on a
+    // Stripe account, so an operator who created one with the wrong country had
+    // no route out through any screen.
+    //
+    // Clearing the key releases the claim without touching anything the operator
+    // owns - the account, its details and its history are untouched and still
+    // theirs. Deliberately NON-FATAL: failing to release the claim must not
+    // block a disconnect the operator asked for. It is also only attempted where
+    // we still HAVE access; after a real revoke we do not, and those accounts
+    // never carried our metadata anyway.
+    if (outcome === 'controlled') {
+      try {
+        await stripe.accounts.update(accountId, { metadata: { enrops_org_id: '' } });
+        console.log(`[oauth-disconnect] released orphan-recovery claim on ${accountId}`);
+      } catch (err) {
+        console.warn(
+          `[oauth-disconnect] could not clear enrops_org_id on ${accountId}; ` +
+          `a later "set one up from scratch" may recover this account:`,
+          err,
+        );
+      }
+    }
+
     // ── write it ──────────────────────────────────────────────────────────
     // Mirrors handleAccountDeauthorized in stripe-webhook exactly, so the two
     // routes to this state cannot disagree. stripe_account_id is deliberately

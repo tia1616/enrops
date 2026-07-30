@@ -837,8 +837,17 @@ export default function Finances() {
             {/* Wrong account connected? This is the state an operator is
                 actually stuck in — mid-onboarding on an account they didn't
                 mean to attach, with stripe-oauth-start refusing to let them
-                pick another. Quiet, at the bottom, but present. */}
-            {canDisconnect && (
+                pick another. Quiet, at the bottom, but present.
+
+                NOT on 'verifying'. That body tells the operator, correctly,
+                that everything is submitted, there is nothing more to do, and
+                it usually clears in a couple of minutes. Offering "wrong
+                account? disconnect it" directly underneath is the opposite
+                advice on the same screen, and taking it throws away a Stripe
+                review that was about to finish on its own — for a fresh account
+                they would have to onboard from the start. If they genuinely
+                picked the wrong account they can disconnect once it settles. */}
+            {canDisconnect && !isVerifying && (
               <DisconnectPanel
                 variant="inline"
                 accountId={accountId}
