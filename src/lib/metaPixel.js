@@ -32,8 +32,14 @@ const OPT_OUT_KEY = 'enrops.meta.optout';
 let loaded = false;
 let suppressed = false; // opted out or GPC - never send, even if fbq exists
 
-/** Browser-level Do Not Sell/Share signal. Legally binding in CA + OR. */
-function hasGpcSignal() {
+/**
+ * Browser-level Do Not Sell/Share signal. Legally binding in CA + OR.
+ *
+ * Exported because the choice page must be able to say "your browser already
+ * told us, there is nothing for you to do here" rather than offering a toggle
+ * that the signal would override anyway.
+ */
+export function hasGpcSignal() {
   try {
     return navigator.globalPrivacyControl === true;
   } catch {
@@ -41,12 +47,38 @@ function hasGpcSignal() {
   }
 }
 
+// THREE states, not two, and the difference matters:
+//   null -> no choice made yet. Measurement RUNS (US opt-out regime) and the
+//           notice is shown so the person can decline.
+//   '0'  -> explicitly accepted. Measurement runs and the notice stays shut.
+//   '1'  -> declined. Measurement never loads.
+// Storing '0' rather than deleting the key is what separates "accepted" from
+// "never asked". Deleting it would re-show the notice to someone who had
+// already dismissed it, on every new tab, forever.
+
 /** Persisted opt-out. Wrapped because Safari private mode throws on access. */
 export function hasOptedOut() {
   try {
     return window.localStorage.getItem(OPT_OUT_KEY) === '1';
   } catch {
     return false;
+  }
+}
+
+/**
+ * Has this person answered the advertising notice at all?
+ *
+ * Drives whether the notice is shown. Deliberately separate from hasOptedOut():
+ * "declined" and "not asked yet" both mean "not opted in", but only one of them
+ * should put a bar on the screen.
+ */
+export function hasMadeAdChoice() {
+  try {
+    return window.localStorage.getItem(OPT_OUT_KEY) !== null;
+  } catch {
+    // Storage unavailable: treat as answered. A notice that cannot remember the
+    // answer would reappear on every page load, which is worse than not asking.
+    return true;
   }
 }
 
@@ -244,9 +276,12 @@ export function optInToPixel() {
   // broken while the script sat on the page.
   if (!PIXEL_ID) return;
   try {
-    window.localStorage.removeItem(OPT_OUT_KEY);
+    // '0', NOT removeItem. Deleting the key would reset this person to "never
+    // asked" and the notice would reappear on their next visit, having just
+    // been answered.
+    window.localStorage.setItem(OPT_OUT_KEY, '0');
   } catch {
-    /* nothing to clear */
+    /* choice cannot persist; honour it for this session anyway */
   }
   // GPC outranks a click. Someone sending GPC while clicking "allow" is a
   // contradiction, and the law says the signal wins.

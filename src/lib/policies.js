@@ -52,4 +52,9 @@ export const PLATFORM_LEGAL_LINKS = [
   // NOT added: "Do Not Sell or Share My Personal Information". That needs a
   // consent module that does not exist yet; it ships with the control it opens.
   { to: '/cookies', label: 'Enrops Cookies' },
+  // CCPA/CPRA requires a clear, always-available way to stop the sharing that
+  // the advertising pixel performs. Our published Cookie Disclosure and Privacy
+  // Policy both promise "the link on our site" - this is it, and it must not be
+  // removed while a pixel is configured.
+  { to: '/do-not-sell', label: 'Do Not Sell or Share' },
 ];

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import EnropsWordmark from '../../components/EnropsWordmark.jsx';
 import { pixelCompleteRegistration } from '../../lib/metaPixel.js';
@@ -304,6 +304,18 @@ export default function OperatorSignup() {
         )}
       </div>
 
+      {/* This page creates an account governed by the enrops Terms, and until
+          now linked to none of them. /signup sits outside PublicLayout, so it
+          does not inherit the platform footer that carries these elsewhere. */}
+      <p className="foot">
+        <Link to="/terms">Terms</Link>
+        {' · '}
+        <Link to="/privacy">Privacy</Link>
+        {' · '}
+        <Link to="/cookies">Cookies</Link>
+        {' · '}
+        <Link to="/do-not-sell">Do Not Sell or Share</Link>
+      </p>
       <p className="foot">Questions? <a href="mailto:jessica@enrops.com">jessica@enrops.com</a></p>
     </div>
   );

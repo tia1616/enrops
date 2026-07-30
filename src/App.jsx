@@ -5,6 +5,8 @@ import AdminLayout from './layouts/AdminLayout.jsx';
 import { CartProvider } from './context/CartContext.jsx';
 import PwaUpdateToast from './components/pwa/PwaUpdateToast.jsx';
 import AnalyticsBridge from './components/analytics/AnalyticsBridge.jsx';
+import AdChoiceNotice from './components/privacy/AdChoiceNotice.jsx';
+import DoNotSell from './pages/DoNotSell.jsx';
 import RouteFallback from './components/RouteFallback.jsx';
 import ChunkErrorBoundary from './components/ChunkErrorBoundary.jsx';
 
@@ -114,6 +116,11 @@ export default function App() {
     <>
     <PwaUpdateToast />
     <AnalyticsBridge />
+    {/* Outside the route tree on purpose: the pixel loads site-wide, so the
+        chance to decline has to be available site-wide too, not only on
+        whichever page someone happens to land on. Renders nothing at all when
+        no dataset id is configured, which is every environment today. */}
+    <AdChoiceNotice />
     {/* One boundary around the whole route tree: a chunk that 404s after a
         deploy reloads the page instead of white-screening. See
         ChunkErrorBoundary.jsx for why this is load-bearing with a PWA. */}
@@ -130,6 +137,9 @@ export default function App() {
       <Route path="/terms" element={<PolicyPage policyType="terms" orgSlug="enrops" />} />
       <Route path="/acceptable-use" element={<PolicyPage policyType="acceptable-use" orgSlug="enrops" />} />
       <Route path="/cookies" element={<PolicyPage policyType="cookies" orgSlug="enrops" />} />
+      {/* The CCPA/CPRA opt-out control. Platform-level, never tenant-scoped:
+          the sharing is ours, not any operator's. */}
+      <Route path="/do-not-sell" element={<DoNotSell />} />
       <Route path="/data-retention" element={<PolicyPage policyType="data-retention" orgSlug="enrops" />} />
       <Route path="/subprocessors" element={<PolicyPage policyType="subprocessors" orgSlug="enrops" />} />
       <Route path="/dpa" element={<PolicyPage policyType="dpa" orgSlug="enrops" />} />
