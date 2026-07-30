@@ -100,46 +100,46 @@ serve(async (req: Request) => {
       // optional body
     }
 
-    // ── resolve the org, and prove the caller may act for it ──────────────
-    // Same shape as stripe-oauth-start, deliberately: the permission to detach
-    // an account must not be looser than the permission to attach one. .limit(1)
-    // on both branches, and a lookup ERROR is distinguished from "no match" so a
-    // transient database failure never reads as a permission denial. Both fail
-    // closed.
-    let targetOrgId: string | null = body.org_id || null;
-    if (targetOrgId) {
-      const { data: cm, error: cmErr } = await supabase
-        .from('org_members')
-        .select('role, organization_id')
-        .eq('auth_user_id', callerAuthId)
-        .eq('organization_id', targetOrgId)
-        .in('role', ['owner', 'admin'])
-        .not('accepted_at', 'is', null)
-        .limit(1)
-        .maybeSingle();
-      if (cmErr) {
-        console.error('[oauth-disconnect] membership check failed for org', targetOrgId, cmErr);
-        return json({ error: 'lookup_failed' }, 500);
-      }
-      if (!cm) return FORBIDDEN;
-    } else {
-      const { data: cm, error: cmErr } = await supabase
-        .from('org_members')
-        .select('role, organization_id')
-        .eq('auth_user_id', callerAuthId)
-        .in('role', ['owner', 'admin'])
-        .not('accepted_at', 'is', null)
-        .order('accepted_at', { ascending: true })
-        .order('organization_id', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (cmErr) {
-        console.error('[oauth-disconnect] membership lookup failed:', cmErr);
-        return json({ error: 'lookup_failed' }, 500);
-      }
-      if (!cm) return FORBIDDEN;
-      targetOrgId = (cm as { organization_id: string }).organization_id;
+    // ── the caller must NAME the org ──────────────────────────────────────
+    // stripe-oauth-start resolves a missing org_id by picking the caller's first
+    // owner/admin membership, and that is fine there: the worst case is minting
+    // a connect URL for the wrong org, which the operator then sees and can
+    // abandon. THIS endpoint irreversibly revokes a live payment connection, so
+    // an implicit target is not acceptable - a request whose body was dropped on
+    // a retry, or a future client that forgets the field, would silently
+    // disconnect whichever org happened to sort first for a caller who
+    // administers more than one. Name it or be refused.
+    //
+    // Typed explicitly: a non-string (an object, an array) would otherwise be
+    // truthy, get stringified into the filter, and fail as a malformed UUID
+    // several steps later instead of being rejected here.
+    const targetOrgId = typeof body.org_id === 'string' ? body.org_id.trim() : '';
+    if (!targetOrgId) {
+      return json({
+        error: 'org_id_required',
+        message: 'We couldn\'t tell which business to disconnect. Reload the page and try again.',
+      }, 400);
     }
+
+    // Prove the caller may act for it. Same shape as stripe-oauth-start,
+    // deliberately: the permission to detach an account must not be looser than
+    // the permission to attach one. A lookup ERROR is distinguished from "no
+    // match" so a transient database failure never reads as a permission
+    // denial, and both outcomes fail closed.
+    const { data: cm, error: cmErr } = await supabase
+      .from('org_members')
+      .select('role, organization_id')
+      .eq('auth_user_id', callerAuthId)
+      .eq('organization_id', targetOrgId)
+      .in('role', ['owner', 'admin'])
+      .not('accepted_at', 'is', null)
+      .limit(1)
+      .maybeSingle();
+    if (cmErr) {
+      console.error('[oauth-disconnect] membership check failed for org', targetOrgId, cmErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
+    if (!cm) return FORBIDDEN;
 
     // ── what are we actually disconnecting? ───────────────────────────────
     const { data: orgData, error: orgErr } = await supabase
@@ -170,10 +170,17 @@ serve(async (req: Request) => {
       // Already where the caller is trying to get to. Report it as done rather
       // than as a failure - a second click, or a click that raced the
       // account.application.deauthorized webhook, has nothing left to do.
+      //
+      // Its own outcome, NOT 'already_revoked'. The row records the status but
+      // not how it got there: an org unlinked via the controlled-account path
+      // was never revoked at Stripe and enrops still HAS access to it. Reusing
+      // 'already_revoked' made the screen assert "enrops has no access to it",
+      // which is the opposite of the truth in exactly that case. This outcome
+      // claims only what is true of all of them - we are not using the account.
       return json({
         disconnected: true,
         already: true,
-        outcome: 'already_revoked',
+        outcome: 'already_disconnected',
         message: 'That Stripe account is already disconnected.',
       });
     }
@@ -223,11 +230,19 @@ serve(async (req: Request) => {
         // trailing "(s)" - this lands on an operator's money screen. Every
         // agreeing word switches together: is/are, payment/payments, it/them,
         // that has/those have.
+        //
+        // Deliberately says "to collect" and NOT "to collect on this Stripe
+        // account". The count above is org-wide, so an org that connected
+        // account A, took a payment plan, disconnected and connected account B
+        // would be told the outstanding A-money sits on B - sending them to the
+        // wrong Stripe dashboard to look for payments that are not there.
+        // Blocking on those rows is still right (a direct org cannot charge
+        // anything while disconnected); only the attribution was wrong.
         message: unpaid.length === 1
-          ? `There is still 1 scheduled payment worth $${(cents / 100).toFixed(2)} to collect on this Stripe account. ` +
+          ? `There is still 1 scheduled payment worth $${(cents / 100).toFixed(2)} to collect. ` +
             `Disconnecting now would leave it impossible to charge or refund. ` +
             `Once that has gone through you can disconnect.`
-          : `There are still ${unpaid.length} scheduled payments worth $${(cents / 100).toFixed(2)} to collect on this Stripe account. ` +
+          : `There are still ${unpaid.length} scheduled payments worth $${(cents / 100).toFixed(2)} to collect. ` +
             `Disconnecting now would leave them impossible to charge or refund. ` +
             `Once those have gone through you can disconnect.`,
       }, 409);

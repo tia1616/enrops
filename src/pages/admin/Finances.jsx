@@ -533,7 +533,13 @@ export default function Finances() {
       //                     operator looking at their own Stripe connected-apps
       //                     list would catch us in it.
       //   already_revoked - the grant was gone before we asked (they revoked us
-      //                     from Stripe's dashboard, or this is a second click).
+      //                     from Stripe's dashboard while we were connected).
+      //   already_disconnected - the org was ALREADY in the disconnected state
+      //                     before this click. Deliberately its own sentence:
+      //                     the row records the status but not how it got there,
+      //                     so an org unlinked via the controlled path (never
+      //                     revoked, enrops still HAS access) must not be told
+      //                     "enrops has no access to it".
       const outcomeText = {
         revoked:
           "Disconnected. enrops no longer has access to that Stripe account. You can connect a different one now.",
@@ -541,6 +547,8 @@ export default function Finances() {
           "Disconnected. enrops has stopped using that Stripe account — the account itself is still open and yours. You can connect a different one now.",
         already_revoked:
           "That account is already disconnected — enrops has no access to it. You can connect a different one now.",
+        already_disconnected:
+          "That account is already disconnected — enrops isn't using it. You can connect a different one now.",
       };
       setDisconnectMsg({
         tone: "ok",
@@ -804,6 +812,7 @@ export default function Finances() {
                 onDisconnect={disconnectStripe}
                 busy={busy}
                 busyAction={busyAction}
+                checking={checkingStatus}
                 message={disconnectMsg}
               />
             )}
@@ -995,6 +1004,7 @@ export default function Finances() {
               onDisconnect={disconnectStripe}
               busy={busy}
               busyAction={busyAction}
+              checking={checkingStatus}
               message={disconnectMsg}
             />
           )}
@@ -1979,8 +1989,17 @@ function NotConnectedBody({ onConnect, onConnectExisting, busy, busyAction, canM
 // This is not styled as a big red destructive button on purpose. It is a
 // recoverable, one-minute-to-undo action (connect another account and you're
 // back), and the surrounding copy carries the weight rather than the colour.
-function DisconnectPanel({ variant, accountId, onDisconnect, busy, busyAction, message }) {
+// `checking` is NOT cosmetic. checkStripeStatus() sets only `checkingStatus`,
+// never `busy`, so gating this button on `busy` alone left it clickable during a
+// status poll — and sync-operator-stripe-status reads the org row, round-trips
+// to Stripe, and only THEN writes. A disconnect landing inside that window gets
+// overwritten by the poll's pre-disconnect snapshot, leaving the screen saying
+// "Stripe connected" while the grant is actually revoked and every charge fails.
+// The server-side half of this fix is the conditional UPDATE in
+// sync-operator-stripe-status; this half stops the UI offering the collision.
+function DisconnectPanel({ variant, accountId, onDisconnect, busy, busyAction, checking, message }) {
   const working = busyAction === "disconnect";
+  const blocked = busy || checking;
   const body = (
     <>
       <div style={{ fontSize: 13.5, fontWeight: 700, color: PURPLE }}>
@@ -1993,7 +2012,7 @@ function DisconnectPanel({ variant, accountId, onDisconnect, busy, busyAction, m
       <button
         type="button"
         onClick={onDisconnect}
-        disabled={busy}
+        disabled={blocked}
         style={{
           padding: "7px 12px",
           background: "transparent",
@@ -2003,11 +2022,19 @@ function DisconnectPanel({ variant, accountId, onDisconnect, busy, busyAction, m
           fontSize: 13,
           fontWeight: 600,
           fontFamily: "inherit",
-          cursor: busy ? "wait" : "pointer",
+          cursor: blocked ? "wait" : "pointer",
+          opacity: blocked && !working ? 0.55 : 1,
         }}
       >
         {working ? "Disconnecting…" : "Disconnect Stripe"}
       </button>
+      {/* Say WHY it is greyed out. A disabled control with no explanation is the
+          same "looks dead" failure as a button that silently does nothing. */}
+      {checking && !working && (
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+          Available once the Stripe check finishes.
+        </div>
+      )}
       {accountId && (
         <div style={{ fontSize: 11.5, color: MUTED, marginTop: 6, fontFamily: "monospace" }}>
           {accountId}

@@ -153,7 +153,21 @@ serve(async (req: Request) => {
     // touch stripe_last_account_event_id — there is no event here, and leaving
     // it lets a later real webhook event still process (its idempotency check
     // compares event.id, which we never set).
-    const { error: updErr } = await supabase
+    //
+    // CONDITIONAL on the status we READ at the top. The 'disconnected' guard
+    // above is check-then-act with a Stripe round-trip in the middle, so it does
+    // not survive a concurrent disconnect: stripe-oauth-disconnect can revoke
+    // the grant and write 'disconnected' while we are still waiting on
+    // accounts.retrieve, and an unconditional write would then resurrect the org
+    // to 'active' with charges_enabled=true against an account we no longer have
+    // access to — the screen says connected and every charge is rejected by
+    // Stripe. Matching on the pre-read status makes this write lose that race
+    // instead of winning it.
+    //
+    // The column is NULLABLE (default 'not_connected'), and PostgREST `eq` never
+    // matches NULL, so the null case needs `is` or the sync would silently stop
+    // working for such a row.
+    let updateQuery = supabase
       .from('organizations')
       .update({
         stripe_charges_enabled: chargesEnabled,
@@ -161,9 +175,43 @@ serve(async (req: Request) => {
         stripe_account_status: nextStatus,
       })
       .eq('id', org.id);
+    updateQuery = org.stripe_account_status === null
+      ? updateQuery.is('stripe_account_status', null)
+      : updateQuery.eq('stripe_account_status', org.stripe_account_status);
+
+    const { data: written, error: updErr } = await updateQuery.select('id, stripe_account_status');
     if (updErr) {
       console.error('[sync-operator-stripe-status] org update failed:', updErr);
       return json({ error: 'persist_failed' }, 500);
+    }
+
+    // Zero rows matched = somebody else changed the status while we were talking
+    // to Stripe. Do NOT report the status we computed — it is already stale, and
+    // the caller (the Payments screen) would render it. Re-read and tell the
+    // truth about where the row actually landed.
+    if (!written || written.length === 0) {
+      const { data: fresh } = await supabase
+        .from('organizations')
+        .select('stripe_account_status, stripe_charges_enabled, stripe_payouts_enabled')
+        .eq('id', org.id)
+        .maybeSingle();
+      const current = fresh as {
+        stripe_account_status: string | null;
+        stripe_charges_enabled: boolean | null;
+        stripe_payouts_enabled: boolean | null;
+      } | null;
+      console.warn(
+        `[sync-operator-stripe-status] org ${org.id} changed under us ` +
+        `(read '${org.stripe_account_status}', computed '${nextStatus}', now ` +
+        `'${current?.stripe_account_status ?? 'unknown'}'); discarding this poll`,
+      );
+      return json({
+        stripe_account_status: current?.stripe_account_status ?? org.stripe_account_status,
+        stripe_charges_enabled: current?.stripe_charges_enabled ?? false,
+        stripe_payouts_enabled: current?.stripe_payouts_enabled ?? false,
+        changed: false,
+        superseded: true,
+      });
     }
 
     console.log(
