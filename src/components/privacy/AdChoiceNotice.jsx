@@ -91,9 +91,20 @@ export default function AdChoiceNotice() {
         boxShadow: '0 -2px 16px rgba(0,0,0,0.18)',
       }}
     >
+      {/* CATEGORIES here, VENDORS in the policy - the ordinary convention, and
+          what a visitor expects a cookie bar to say. An earlier version named
+          Meta in the bar itself, which reads as unusual and invites the question
+          "why is this site telling me about Meta" rather than answering the one
+          being asked. The Cookie Disclosure behind Details names Meta, says what
+          it receives, and repeats the children and families commitment; the Do
+          Not Sell page states it too. Moved, not dropped.
+
+          "how enrops is used" covers the privacy-respecting product analytics
+          that run everywhere; "measure our own advertising" covers this. Both
+          halves are true, which is why it is not the shorter and vaguer "we use
+          cookies to improve your experience". */}
       <span style={{ maxWidth: 620 }}>
-        We use measurement from Meta to see which of our own ads bring businesses to enrops. We
-        never share information about children or families.{' '}
+        We use cookies to understand how enrops is used and to measure our own advertising.{' '}
         <Link to="/cookies" style={{ color: '#C9C5FF' }}>
           Details
         </Link>
