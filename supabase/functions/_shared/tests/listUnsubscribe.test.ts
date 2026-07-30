@@ -1,8 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.177.0/testing/asserts.ts";
 import { listUnsubscribeHeaders } from "../listUnsubscribe.ts";
 
+// Shape-accurate but tenant-neutral: the org id is a placeholder, not any real
+// tenant's, so nobody greps this file and mistakes a fixture for live config.
 const REAL_URL =
-  "https://abc.supabase.co/functions/v1/marketing-unsubscribe?email=a%40b.com&org=1adf10ad-d091-4aa0-82e3-af331468ea2b&t=Zm9vYmFy";
+  "https://abc.supabase.co/functions/v1/marketing-unsubscribe?email=a%40b.com&org=00000000-0000-4000-a000-000000000001&t=Zm9vYmFy";
 
 Deno.test("promotional send gets both headers, URI in angle brackets", () => {
   const h = listUnsubscribeHeaders(REAL_URL);

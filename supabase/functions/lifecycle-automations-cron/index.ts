@@ -621,6 +621,20 @@ async function sendOne(
     error_message: send.ok ? null : send.error,
     attempts,
     last_attempt_at: nowIso,
+    // Delivery state describes ONE message id. This upsert is also the retry
+    // path, so it can replace resend_message_id on an existing row — and
+    // ON CONFLICT DO UPDATE only touches the columns listed here. Without this
+    // reset, the previous message's verdict would survive onto the new send and
+    // a row could read "bounced" while its current message id was delivered
+    // fine. Not reachable today (the cron and the Phase 2 resend both act only
+    // on status='failed' rows, and a failed row never has a delivery verdict),
+    // but it becomes reachable the moment a bounced send gets a resend control —
+    // which is the next thing we want to build on top of this.
+    delivery_status: null,
+    delivered_at: null,
+    bounced_at: null,
+    complained_at: null,
+    bounce_detail: null,
   };
   // sent_at is NOT NULL (defaults now()). Stamp it only on success so it means
   // "when it actually sent"; last_attempt_at carries the honest last touch for a
