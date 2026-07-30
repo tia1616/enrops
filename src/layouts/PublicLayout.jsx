@@ -358,7 +358,12 @@ function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
           <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>{org.name}</div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.55)', fontSize: 12 }}>
             <div>
-              &copy; {new Date().getFullYear()} {org.name}.
+              {/* No trailing period: the "." here used to separate the org name
+                  from "Powered by enrops." Now that the badge is gone it sits
+                  at the end of the line, and any operator whose name already
+                  ends in one — "Co.", "Inc.", "LLC." — renders a double period.
+                  Caught on Cascade Enrichment Co. */}
+              &copy; {new Date().getFullYear()} {org.name}
             </div>
             {/* Provider's own docs only when published; Enrops platform docs
                 always, since they govern the account either way. */}
