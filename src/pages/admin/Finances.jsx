@@ -124,6 +124,16 @@ export default function Finances() {
   const wantsSetupOpen = searchParams.get("setup") === "1";
 
   // ── load config ─────────────────────────────────────────────────────────
+  //
+  // EVERY column read as `config.x` anywhere in this file must be listed in the
+  // select below. Leaving one out does not throw and does not fail a build:
+  // supabase-js simply returns an object without the key, the read is
+  // `undefined`, and whatever depends on it silently disappears. That is exactly
+  // what happened to stripe_charge_model on 2026-07-30 - the Disconnect button
+  // could never render for anyone, with deno check, npm run build, the unit
+  // tests and every edge-function runtime test all green. Loading the real page
+  // is what caught it. No PostgREST select string may contain SQL comments, so
+  // this note lives here rather than inline.
   async function reload() {
     if (!org?.id) {
       // CLEAR the flag on the way out. `loading` starts true, so returning
@@ -146,6 +156,7 @@ export default function Finances() {
         stripe_payouts_enabled,
         stripe_business_type,
         stripe_country,
+        stripe_charge_model,
         platform_fee_card_pct,
         platform_fee_ach_pct,
         platform_fee_cap_cents,
