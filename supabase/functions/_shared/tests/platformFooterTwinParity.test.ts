@@ -61,6 +61,37 @@ Deno.test('the edge and web surfaceForAutomation implementations agree', async (
   );
 });
 
+/**
+ * Pull the surface map entries (`key: 'value',`) out of
+ * PLATFORM_FOOTER_SURFACES, ignoring comments and whitespace.
+ */
+function surfaceEntries(source: string): string[] {
+  const start = source.indexOf('PLATFORM_FOOTER_SURFACES');
+  const open = source.indexOf('{', start);
+  const end = source.indexOf('}', open);
+  return source
+    .slice(open + 1, end)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('//'))
+    .map((l) => l.replace(/\s+/g, '').replace(/,$/, ''))
+    .filter(Boolean);
+}
+
+// The surface VOCABULARY has to match too, not just the mapping function. A key
+// present in one twin and missing in the other resolves to 'unknown' on that
+// side — the same silent-drift shape, one level down.
+Deno.test('the edge and web surface vocabularies agree', async () => {
+  const edge = surfaceEntries(await Deno.readTextFile(EDGE));
+  const web = surfaceEntries(await Deno.readTextFile(WEB));
+  assertEquals(
+    web,
+    edge,
+    'PLATFORM_FOOTER_SURFACES has drifted between the twins. A surface missing ' +
+    'from one side resolves to ?src=unknown there.',
+  );
+});
+
 // Guards the guard: if either function is renamed or restructured so the
 // extractor finds nothing, the parity test above would pass vacuously.
 Deno.test('the parity extractor actually found the decision lines', async () => {

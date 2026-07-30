@@ -54,6 +54,10 @@ export const PLATFORM_FOOTER_SURFACES = {
   // Not in the checklist's table: the embed had no row. Added per Jessica's
   // call to keep the line in embedded widgets (industry norm on free tiers).
   embed: 'embed',
+  // Also not in the table: the "your account is ready" email. Kept separate
+  // from `welcome` (the program welcome automation) so clicks-by-source can
+  // tell the two apart. Email-only today, but the vocabulary is shared.
+  accountReady: 'account-ready',
 };
 
 /**
