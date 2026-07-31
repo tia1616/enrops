@@ -1,0 +1,23 @@
+-- Drop is_operator_refund_flagged(uuid). It has no caller left.
+--
+-- It existed for one consumer: maybeSendOperatorGrowthAsk, which used it to
+-- skip a growth ask for a flagged operator. That module was retired in
+-- 20260731a when Arielle cut the review and referral asks, and nothing else
+-- ever called this.
+--
+-- The refund-rate machinery it belonged to is UNAFFECTED and stays:
+--   * operator_refund_rate(uuid)   - the canonical per-org calculation, read by
+--                                    the flag alert email (_shared/operatorFlagAlert)
+--   * get_operator_refund_rates()  - the platform-wide list behind the admin
+--                                    Refund Watch screen
+-- Both were introduced in 20260728m precisely so the flag and the email about
+-- it could never disagree; this function was the thin wrapper, not the source.
+--
+-- Verified before dropping, on BOTH databases: no other function body, RLS
+-- policy, view, materialized view, trigger, check constraint or column default
+-- references it, and no TypeScript caller remains.
+--
+-- Only ever executable by service_role (20260728b revoked PUBLIC/anon/
+-- authenticated), so dropping it cannot change what any user could reach.
+
+DROP FUNCTION IF EXISTS public.is_operator_refund_flagged(uuid);
