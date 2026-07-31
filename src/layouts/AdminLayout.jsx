@@ -583,10 +583,18 @@ export default function AdminLayout() {
         </button>
       </div>
 
-      {/* `flex: 1` rather than `minHeight: 100vh`: the grid takes the space left
-          over above the footer, so on a short page the footer lands at the
-          bottom of the viewport instead of directly under the content, and the
-          sidebar still runs the full height of the grid. */}
+      {/* `flex: 1 0 auto` rather than `minHeight: 100vh`, so the grid is sized by
+          the flex column that now owns the page rather than fighting it.
+
+          MEASURED, because the obvious claim is wrong: this does NOT pull the
+          footer up into the viewport on a short page. The sidebar below is
+          `height: 100vh`, so the grid row is always at least a full viewport
+          whatever the content does, and the footer therefore always begins at
+          100vh - about one small scroll down. On a 1280x900 desktop with a short
+          page: footer top 900, document height 947. That is the correct place
+          for page furniture under a full-height sticky sidebar; it is simply not
+          "at the bottom of the viewport", and the grow here is effectively inert.
+          Do not "fix" that by shrinking the grid - the sidebar would overflow it. */}
       <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", flex: "1 0 auto" }}>
         {/* Sidebar */}
         <aside data-admin-sidebar id="admin-nav" data-open={navOpen ? "true" : "false"} style={{
