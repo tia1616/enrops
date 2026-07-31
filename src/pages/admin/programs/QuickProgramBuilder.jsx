@@ -15,7 +15,7 @@
 //   - curriculum_id = null (no curriculum); program_location_id is REQUIRED
 // The operator never sees "term" — it's enrichment-provider vocabulary, not theirs.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
@@ -147,6 +147,18 @@ export default function QuickProgramBuilder() {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
   const [createdId, setCreatedId] = useState(null);
+
+  // How long this build actually took. We refused to print a made-up "your first
+  // program takes N minutes" in the step strip, so this is what earns the right
+  // to print a real one later.
+  //
+  // The clock starts when the builder mounts and RESTARTS in resetForAnother:
+  // building a second class in the same session would otherwise be recorded as
+  // having taken since the page first opened, which would inflate the "every
+  // program after the first" figure - the one the strip most wants to be small
+  // and true.
+  const startedAtRef = useRef(new Date().toISOString());
+  const createdThisSessionRef = useRef(0);
   // Photo (optional). Uploaded to the existing public org-assets bucket the
   // moment it's picked, so the operator sees the real image before saving.
   const [photoUrl, setPhotoUrl] = useState("");
@@ -602,6 +614,7 @@ export default function QuickProgramBuilder() {
       // workflow. Path 1 of 3 - see pixelWorkflowCreated.
       pixelWorkflowCreated();
       setCreatedId(data.id);
+      recordBuildTiming(data.id);
     } catch (e) {
       setErr(e?.message ?? String(e));
     } finally {
@@ -609,7 +622,38 @@ export default function QuickProgramBuilder() {
     }
   }
 
+  // Fire-and-forget. Deliberately NOT awaited and NOT inside the save's try
+  // block: this is telemetry, and a failed metric write must never surface as an
+  // error on a screen that is telling the operator their program is live. The
+  // operator's next decision does not depend on it, which is the only reason a
+  // quiet console warning is the right level here.
+  function recordBuildTiming(programId) {
+    // programCount is null when the count failed. was_first is NOT NULL, and a
+    // guessed value would quietly corrupt the very split this table exists to
+    // measure, so record nothing rather than something made up.
+    if (programCount === null || programCount === undefined) return;
+    const wasFirst = programCount === 0 && createdThisSessionRef.current === 0;
+    createdThisSessionRef.current += 1;
+    supabase
+      .from("program_build_timings")
+      .insert({
+        organization_id: org.id,
+        program_id: programId,
+        was_first: wasFirst,
+        started_at: startedAtRef.current,
+        // completed_at is the column's server-side now(). One clock, so the
+        // elapsed time can't disagree with itself.
+      })
+      .then(({ error }) => {
+        if (error) console.warn("[QuickProgramBuilder] build timing not recorded", error.message);
+      });
+  }
+
   function resetForAnother() {
+    // Restart the clock: the next class is a NEW build, and timing it from the
+    // original page load is how the "every program after the first" number would
+    // end up several minutes too big.
+    startedAtRef.current = new Date().toISOString();
     setName("");
     setPrice("");
     setSpots("18");
