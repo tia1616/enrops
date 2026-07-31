@@ -2,8 +2,11 @@
 //
 //   1. Waivers — the agreements families SIGN. The portal's waiver gate enforces
 //      the required ones and registration collects them.
-//   2. Policies — the Privacy Policy and Terms of Service a provider PUBLISHES.
-//      These render publicly at /{slug}/privacy and /{slug}/terms.
+//   2. Policies — the documents a provider PUBLISHES: Privacy Policy, Terms of
+//      Service, and the Cancellation & Refund Policy. These render publicly at
+//      /{slug}/privacy, /{slug}/terms and /{slug}/cancellation. POLICY_KINDS is
+//      the list; keep prose that describes it count-free so adding a fourth
+//      doesn't quietly make the copy wrong.
 //
 // Owner/admin only (reached from the settings-gated nav). Both tables are
 // org-scoped via RLS. Brand-neutral copy — no tenant strings.
@@ -21,7 +24,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
-import { splitOnOrgToken, hasOrgToken } from "../../lib/waiverText.js";
+import { hasOrgToken } from "../../lib/waiverText.js";
+// Shared with the program builders, so the operator sees their name drawn the
+// same way wherever they review a document.
+import { WaiverOrgName } from "../../components/OrgNameInText.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -374,7 +380,7 @@ export default function WaiverManager() {
               document stops being read. Said once, as part of what this page
               is. */}
           <p style={{ color: MUTED, fontSize: 14, marginTop: 4, lineHeight: 1.5, maxWidth: 620 }}>
-            The agreements families sign to enroll, and the privacy policy and terms you publish on
+            The agreements families sign to enroll, and the policies you publish on
             your registration site. Our starter wording is a helpful beginning, not legal advice
             &mdash; it&rsquo;s worth having a lawyer read anything that really matters to your business.
           </p>
@@ -430,7 +436,7 @@ export default function WaiverManager() {
                       {{org}} token — substituting there and saving would write
                       the name back into the stored text and re-freeze it. */}
                   <div style={{ marginTop: 6, fontSize: 12.5, color: MUTED, lineHeight: 1.5, maxWidth: 560, maxHeight: 40, overflow: "hidden" }}>
-                    <OrgName content={w.content} orgName={org?.name} />
+                    <WaiverOrgName content={w.content} orgName={org?.name} />
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -470,17 +476,25 @@ export default function WaiverManager() {
       )}
 
       <h2 style={{ margin: "36px 0 0", fontSize: 17, fontWeight: 700, color: INK }}>Policies you publish</h2>
+      {/* Says "your own policies", not "your privacy policy and terms". There are
+          THREE kinds in POLICY_KINDS - cancellation joined later - and enumerating
+          two of them while the page lists three is the kind of miscount that makes
+          an operator wonder which one doesn't count. Same reason the paragraph
+          below says "any of these" rather than "either one". */}
       <p style={{ color: MUTED, fontSize: 13.5, margin: "4px 0 0", lineHeight: 1.5, maxWidth: 620 }}>
-        Your own privacy policy and terms, shown on your registration site. Until you publish one,
+        Your own policies, shown on your registration site. Until you publish one,
         its link stays off your site footer and anyone who visits the page is told you haven&rsquo;t
         published one yet — families are never shown another provider&rsquo;s policy.
       </p>
       {/* Publishing reads as one-way unless you say otherwise, so people either
-          stall on it or avoid it. It's editable forever, and this page is always
-          a click away in Settings. */}
+          stall on it or avoid it. It's editable forever.
+          NO "they live in Settings -> Waivers & policies" here: this component IS
+          that page, so it was directing the operator to where they already were
+          (Jessica, 2026-07-30). The reassurance that matters is that they can
+          come back, not a route they are already standing on. */}
       <p style={{ color: MUTED, fontSize: 13, margin: "8px 0 0", lineHeight: 1.5, maxWidth: 620 }}>
-        Nothing here is final. You can edit and republish either one whenever you like, or skip
-        them for now and come back — they live in <strong>Settings &rarr; Waivers &amp; policies</strong>.
+        Nothing here is final. You can edit and republish any of these whenever you like, or
+        skip them for now and come back to this page any time.
       </p>
 
       {policiesError && (
@@ -711,32 +725,6 @@ function WaiverEditor({ waiver, busy, saveError, onCancel, onSave }) {
         </div>
       </div>
     </div>
-  );
-}
-
-// The operator's own business name, drawn bold inside the waiver preview, so a
-// page of boilerplate reads at a glance as THEIR document rather than a generic
-// template we handed them.
-//
-// Bold only here, on the operator's review surface. The text a family reads and
-// signs still renders through renderWaiverText as a plain string, and
-// waiver_text_snapshot - the record of what was actually agreed to - must never
-// contain markup.
-function OrgName({ content, orgName }) {
-  const name = typeof orgName === "string" ? orgName.trim() : "";
-  const segments = splitOnOrgToken(content);
-  // Same fallback as renderWaiverText: a legal document must never show a raw
-  // token, and it must never borrow another provider's name.
-  const shown = name || "the program provider";
-  return (
-    <>
-      {segments.map((seg, i) => (
-        <span key={i}>
-          {i > 0 && <strong style={{ color: INK, fontWeight: 700 }}>{shown}</strong>}
-          {seg}
-        </span>
-      ))}
-    </>
   );
 }
 

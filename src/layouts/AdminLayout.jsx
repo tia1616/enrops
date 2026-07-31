@@ -10,12 +10,12 @@ import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
 import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
-import StarterPolicyNotice from "../components/StarterPolicyNotice.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
 import PortalSwitcher from "../components/PortalSwitcher.jsx";
 import RouteFallback from "../components/RouteFallback.jsx";
 import { setOrgGroup } from "../lib/analytics";
+import { PLATFORM_LEGAL_LINKS } from "../lib/policies.js";
 
 // Enrops brand tokens
 const PURPLE = "#1C004F";   // deep plum — wordmark, headings, body accents
@@ -186,7 +186,7 @@ function navItemActive(item, pathname) {
 export default function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [authState, setAuthState] = useState("loading"); // loading | unauthorized | ready
+  const [authState, setAuthState] = useState("loading"); // loading | unauthorized | org_load_failed | ready
   const [user, setUser] = useState(null);
   const [orgMember, setOrgMember] = useState(null);
   const [org, setOrg] = useState(null);
@@ -215,12 +215,60 @@ export default function AdminLayout() {
         }
         setUser(session.user);
 
-        // Look up org_members row for this auth user
-        const { data: memberRow, error: memErr } = await supabase
-          .from("org_members")
-          .select("id, role, organization_id, accepted_at")
-          .eq("auth_user_id", session.user.id)
-          .maybeSingle();
+        // Look up the org_members row for this auth user.
+        //
+        // .limit(1) is load-bearing, not decorative. A bare .maybeSingle()
+        // ERRORS when more than one row matches, and a user may legitimately be
+        // staff at one org and admin at another (only OWNER-membership is capped
+        // at one - see 20260724a_owner_org_unique_index.sql). Without the limit,
+        // such a user gets an "unauthorized" screen despite valid memberships.
+        //
+        // ?org=<id> is a LANDING HINT, not an access rule. stripe-oauth-callback
+        // appends it so the operator returns to the org they just connected
+        // rather than whichever row sorted first. It is deliberately NOT
+        // authorization: the query is still scoped to this user's own
+        // memberships, so an org id they don't belong to simply finds nothing -
+        // and when that happens we fall back to their default org instead of
+        // locking them out of their own admin over a query string.
+        const orgParam = new URLSearchParams(location.search).get("org");
+
+        // ACCEPTED ONLY, and DETERMINISTIC. Both matter and neither is cosmetic:
+        //
+        // Filtering accepted_at here is not a duplicate of the accepted_at check
+        // below - it decides WHICH row .limit(1) gets to return. Without it, a
+        // user who is accepted at org A and merely INVITED to org B could have
+        // the org B row selected (row order is arbitrary without ORDER BY), fail
+        // the check below, and be told "unauthorized" for an org they have every
+        // right to. The check below STAYS as a belt-and-braces guard; a filter is
+        // not a substitute for validating what came back.
+        //
+        // ORDER BY makes the choice repeatable instead of leaving it to whatever
+        // the planner returns first: same user, same page, same org, every load.
+        // Oldest accepted membership wins, which is the closest thing to "their
+        // primary org". Tie-break on id so the order is total. Both columns are
+        // already in the select, so nothing here assumes a column exists.
+        const loadMembership = (orgId) => {
+          let q = supabase
+            .from("org_members")
+            .select("id, role, organization_id, accepted_at")
+            .eq("auth_user_id", session.user.id)
+            .not("accepted_at", "is", null);
+          if (orgId) q = q.eq("organization_id", orgId);
+          return q
+            .order("accepted_at", { ascending: true })
+            .order("id", { ascending: true })
+            .limit(1)
+            .maybeSingle();
+        };
+
+        let { data: memberRow, error: memErr } = await loadMembership(orgParam);
+        if (orgParam && !memErr && !memberRow) {
+          // The hint pointed at an org this user has no ACCEPTED membership in
+          // (wrong org, or an invite they never accepted). Either way it is not
+          // somewhere we can land them, so ignore the hint rather than lock them
+          // out of their own admin over a query string.
+          ({ data: memberRow, error: memErr } = await loadMembership(null));
+        }
 
         console.log("org_members query:", { memberRow, memErr, uid: session.user.id });
 
@@ -232,7 +280,15 @@ export default function AdminLayout() {
         setOrgMember(memberRow);
 
         // Fetch org name + branding (display only — does not gate access)
-        const { data: orgRow } = await supabase
+        //
+        // The error is CAPTURED, not discarded. Every admin page reads `org` from
+        // the outlet context and most early-return on a falsy org.id, so handing
+        // them a null org while declaring authState 'ready' produces pages that
+        // render their shell and then sit there — the Payments screen showed a
+        // permanent "Checking with Stripe for the details…" this way, with no
+        // error and nothing to retry. A shell we cannot populate is a failure, so
+        // say so instead of pretending we are ready.
+        const { data: orgRow, error: orgFetchErr } = await supabase
           .from("organizations")
           // stripe_charges_enabled rides along so any admin surface can tell the
           // truth about whether this org can actually take money yet (a program
@@ -248,6 +304,14 @@ export default function AdminLayout() {
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;
+        if (orgFetchErr || !orgRow) {
+          // Membership is valid (proved above), so this is NOT an authorization
+          // problem — it is a load failure, and it must not be reported as
+          // "you don't have access". Distinct state, distinct message.
+          console.error("AdminLayout: org load failed", { orgFetchErr, orgId: memberRow.organization_id });
+          setAuthState("org_load_failed");
+          return;
+        }
         setOrg(orgRow);
         setAuthState("ready");
       } catch (err) {
@@ -314,6 +378,33 @@ export default function AdminLayout() {
     );
   }
 
+  // Membership checked out but the org row would not load. Deliberately NOT the
+  // "you need to sign in with an admin account" screen: they ARE an admin, and
+  // telling them otherwise sends them to re-authenticate against a problem that
+  // is on our side. Retry is the only useful action, so offer exactly that.
+  if (authState === "org_load_failed") {
+    return (
+      <div style={{ minHeight: "100vh", background: CREAM, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Poppins', system-ui, sans-serif", padding: 24 }}>
+        <div style={{ maxWidth: 440, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: 32 }}>
+          <div style={{ fontFamily: "'Poppins', system-ui, sans-serif", fontWeight: 700, fontSize: 22, color: PURPLE, marginBottom: 8 }}>
+            Enrops Admin
+          </div>
+          <p style={{ color: INK, fontSize: 15, lineHeight: 1.5, marginTop: 0 }}>
+            We couldn't load your business details just now. Nothing is wrong with your
+            account — this is on our side.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            style={{ marginTop: 16, background: PURPLE, color: "#fff", border: "none", borderRadius: 6, padding: "9px 16px", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (authState === "unauthorized") {
     return (
       <div style={{ minHeight: "100vh", background: CREAM, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Poppins', system-ui, sans-serif", padding: 24 }}>
@@ -364,8 +455,12 @@ export default function AdminLayout() {
   const showSectionTabs =
     activeTabSection && activeTabSection.tabs.some((t) => location.pathname === t.to);
 
+  // Page column: sidebar+content grid on top, legal footer underneath it. The
+  // footer is a PAGE footer - it must span the full width below both the sidebar
+  // and the content, not hang off the bottom of the middle column
+  // (Jessica, 2026-07-31).
   return (
-    <div style={{ minHeight: "100vh", background: CREAM, fontFamily: "'Poppins', system-ui, sans-serif", color: INK }}>
+    <div style={{ minHeight: "100vh", background: CREAM, fontFamily: "'Poppins', system-ui, sans-serif", color: INK, display: "flex", flexDirection: "column" }}>
       {/* MOBILE ADMIN. The shell is a hard 240px sidebar + content grid, which on a
           375px phone left ~135px for the page (minus 72px padding = ~63px usable)
           — the admin was effectively unusable on a phone. Operators build programs
@@ -419,6 +514,9 @@ export default function AdminLayout() {
           [data-admin-sidebar] nav a { border-left: none !important; }
 
           [data-admin-main] { padding: 16px 14px !important; max-width: 100% !important; }
+          /* The footer left <main>, so it no longer inherits main's mobile
+             padding - match it, or the links sit flush against the edge. */
+          [data-admin-footer] { padding: 14px !important; }
 
           /* ROOT CAUSE of admin pages being wider than the phone: a flex or grid
              child defaults to min-width:auto, which refuses to shrink below its
@@ -485,7 +583,11 @@ export default function AdminLayout() {
         </button>
       </div>
 
-      <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
+      {/* `flex: 1` rather than `minHeight: 100vh`: the grid takes the space left
+          over above the footer, so on a short page the footer lands at the
+          bottom of the viewport instead of directly under the content, and the
+          sidebar still runs the full height of the grid. */}
+      <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", flex: "1 0 auto" }}>
         {/* Sidebar */}
         <aside data-admin-sidebar id="admin-nav" data-open={navOpen ? "true" : "false"} style={{
           background: LAVENDER,
@@ -621,13 +723,13 @@ export default function AdminLayout() {
         {/* Main */}
         <main data-admin-main style={{ padding: "28px 36px", maxWidth: 1200 }}>
           <AnnouncementBanner />
-          {/* Sits in the SHELL, not on the dashboard, and outside the
-              `blockedItem` branch below — a lean registration-only tenant never
-              lands on /admin (AdminOverview sends them to /admin/programs), and
-              those are precisely the self-serve operators who had a refund
-              promise published under their name without being told. Anywhere
-              else and the people it is for would never see it. */}
-          <StarterPolicyNotice org={org} />
+          {/* The starter cancellation-policy notice used to sit here, in the
+              shell, so it appeared above every admin page. That was the bug:
+              a disclosure with nothing to do with the screen you were on read
+              as an interruption, and it followed you everywhere until you
+              answered it (Jessica, 2026-07-30). The same disclosure now lives
+              in the program wizards, next to the waivers, where the operator
+              is already looking at what families will see. */}
           {blockedItem ? (
             <div style={{ maxWidth: 460, margin: "40px auto 0", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 28, textAlign: "center" }}>
               <div style={{ fontSize: 18, fontWeight: 700, color: PURPLE, marginBottom: 8 }}>
@@ -692,8 +794,46 @@ export default function AdminLayout() {
           </Suspense>
           </>
           )}
+
         </main>
       </div>
+
+      {/* The operator app had NO legal footer at all. That was survivable
+          until the advertising pixel loaded site-wide: CCPA/CPRA requires a
+          clear, always-available way to stop the sharing it performs, and
+          the published Cookie Disclosure and Privacy Policy both promise
+          "the link on our site". PLATFORM_LEGAL_LINKS only renders in
+          PublicLayout, so operators had no standing route to it.
+
+          Deliberately quiet and at the very bottom - it is a legal
+          affordance, not navigation, and must not compete with the
+          operator's actual work.
+
+          OUTSIDE the grid, not inside <main>. Inside, it inherited the content
+          column's width and sat directly under whatever the page happened to
+          end with - on a short page that is halfway up an empty screen, reading
+          as part of the page rather than the bottom of it. A legal footer is
+          page furniture: full width, under the sidebar too, always last. */}
+      <footer
+        data-admin-footer
+        style={{
+          padding: "14px 36px",
+          borderTop: `1px solid ${RULE}`,
+          fontSize: 12,
+          color: MUTED,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 12,
+          // Never absorbed by the grid growing above it.
+          flexShrink: 0,
+        }}
+      >
+        {PLATFORM_LEGAL_LINKS.map((l) => (
+          <Link key={l.to} to={l.to} style={{ color: MUTED, textDecoration: "none" }}>
+            {l.label}
+          </Link>
+        ))}
+      </footer>
     </div>
   );
 }

@@ -21,7 +21,15 @@ import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete.jsx";
 import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
-import { renderWaiverText } from "../../../lib/waiverText.js";
+import { WaiverOrgName } from "../../../components/OrgNameInText.jsx";
+import {
+  useCancellationPolicy,
+  cancellationCopy,
+  cancellationAuthorship,
+  CancellationPolicyBody,
+  CancellationPolicyLoadError,
+  CANCELLATION_POLICY_LABEL,
+} from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
@@ -381,6 +389,14 @@ export default function QuickProgramBuilder() {
   // get. Naming them here is the whole fix.
   const [waivers, setWaivers] = useState([]);
   const [openWaiverId, setOpenWaiverId] = useState(null);
+  // The cancellation policy is shown in the SAME box as the waivers, so it is
+  // loaded alongside them rather than by a card of its own.
+  const { policy, failed: policyFailed, retry: retryPolicy } = useCancellationPolicy(org?.id);
+  // Every program this builder creates is runs_own_registration: false, so the
+  // org flag alone decides whether families meet the policy at checkout.
+  const policyCopy = cancellationCopy({
+    usesEnropsRegistration: org?.uses_enrops_registration,
+  });
   const [extraQuestions, setExtraQuestions] = useState([]);
   const [showInherited, setShowInherited] = useState(false);
   // Loaded for every lean operator, not just first-run: the returning-operator
@@ -720,32 +736,52 @@ export default function QuickProgramBuilder() {
               </div>
             )}
 
-            {waivers.length > 0 && (
+            {/* ONE box for everything families see. The cancellation policy used
+                to sit in its own bordered block underneath, which still read as
+                a separate announcement bolted beneath the waivers - from the
+                operator's side it is one question, so it is one box, and the
+                policy is named and bolded exactly like the waivers because it
+                is the same kind of thing (Jessica, 2026-07-30).
+
+                Every program this builder creates sets
+                runs_own_registration: false, so the org flag alone decides the
+                wording. Nothing here navigates: sending someone to the editor
+                mid-build drops them out of a half-filled class with no way
+                back. */}
+            {(waivers.length > 0 || policy || policyFailed) && (
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}` }}>
-                <div style={{ fontSize: 13, color: INK, lineHeight: 1.6 }}>
-                  {waivers.length === 1
-                    ? <>Families sign your <strong>{waivers[0].name}</strong> before they finish registering.</>
-                    : <>Families sign {waivers.map((w, i) => (
-                        <span key={w.id}>{i > 0 && (i === waivers.length - 1 ? " and " : ", ")}<strong>{w.name}</strong></span>
-                      ))} before they finish registering.</>}
-                </div>
-                {/* Opens in place. Sending someone to the waiver editor here
-                    drops them out of setting up their first class with no way
-                    back to it — the one flow that must not be interrupted. */}
-                {/* Said up front, not only after expanding. "Can I change
-                    this?" is the question a waiver list provokes, and the
-                    answer was hidden behind a click. */}
-                <div style={{ fontSize: 12.5, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
-                  You can edit these any time in Settings, under Waivers &amp; policies.
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setOpenWaiverId((id) => (id === "all" ? null : "all"))}
-                  aria-expanded={openWaiverId === "all"}
-                  style={{ marginTop: 6, background: "none", border: "none", color: BRIGHT, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
-                >
-                  {openWaiverId === "all" ? "Hide the wording" : "Read the wording"}
-                </button>
+                {/* Guarded, not just handed the arrays: with no waivers AND a
+                    policy that failed to load there is nothing to name, and an
+                    unguarded sentence renders the orphan word "Families." */}
+                {(waivers.length > 0 || policy) && (
+                  <div style={{ fontSize: 13, color: INK, lineHeight: 1.6 }}>
+                    <FamiliesSeeSentence
+                      waivers={waivers}
+                      policy={policy}
+                      policyCopy={policyCopy}
+                    />
+                  </div>
+                )}
+                {policy && (
+                  <div style={{ fontSize: 12.5, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
+                    {cancellationAuthorship(policy)}
+                  </div>
+                )}
+                {policyFailed && (
+                  <div style={{ marginTop: 4 }}>
+                    <CancellationPolicyLoadError onRetry={retryPolicy} />
+                  </div>
+                )}
+                {(waivers.length > 0 || policy) && (
+                  <button
+                    type="button"
+                    onClick={() => setOpenWaiverId((id) => (id === "all" ? null : "all"))}
+                    aria-expanded={openWaiverId === "all"}
+                    style={{ marginTop: 6, background: "none", border: "none", color: BRIGHT, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                  >
+                    {openWaiverId === "all" ? "Hide the wording" : "Read the wording"}
+                  </button>
+                )}
                 {openWaiverId === "all" && (
                   <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
                     {waivers.map((w) => (
@@ -753,16 +789,31 @@ export default function QuickProgramBuilder() {
                         <div style={{ fontSize: 12.5, fontWeight: 700, color: INK, marginBottom: 4 }}>
                           {w.name}{w.required === false ? " (families can decline this one)" : ""}
                         </div>
+                        {/* Business name drawn bold inside the wording, so a
+                            page of boilerplate reads at a glance as already
+                            personalised rather than a generic template. */}
                         <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff", padding: 10, fontSize: 12, color: MUTED, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
-                          {renderWaiverText(w.content, org?.name)}
+                          <WaiverOrgName content={w.content} orgName={org?.name} />
                         </div>
                       </div>
                     ))}
-                    <div style={{ fontSize: 12, color: MUTED }}>
-                      You can edit any of this later in Settings, under Waivers &amp; policies.
-                    </div>
+                    {policy && (
+                      <div>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: INK, marginBottom: 4 }}>
+                          {CANCELLATION_POLICY_LABEL}
+                        </div>
+                        <CancellationPolicyBody policy={policy} orgName={org?.name} />
+                      </div>
+                    )}
                   </div>
                 )}
+                {/* Prominent, not muted grey: "can I change this?" is the
+                    question this whole box provokes, and it was previously
+                    answered twice in 12px grey - once here and once more inside
+                    the expander. Said ONCE, in the operator's own colour. */}
+                <div style={{ marginTop: 10, fontSize: 12.5, color: INK, fontWeight: 600, lineHeight: 1.5 }}>
+                  You can change any of this any time in Settings, under Waivers &amp; policies.
+                </div>
               </div>
             )}
 
@@ -897,7 +948,18 @@ export default function QuickProgramBuilder() {
             say?" is shown, and the answer to "how do I change them?" is a
             sentence, because Settings is thirty seconds away once the class is
             saved. */}
-        {isLean && profile.onboarding_completed_at && (
+        {/* `|| programCount > 0` closes a hole between this panel and the
+            first-run card above. The card needs programCount === 0 and this
+            panel needed the onboarding flag, so a lean org with programs but a
+            NULL flag matched NEITHER and saw no waiver summary and no
+            cancellation policy at all. That state is reachable: the column only
+            landed in 20260725d, so every org created before it is NULL forever,
+            and any program created outside this builder leaves it NULL with a
+            non-zero count. The two conditions stay mutually exclusive (the card
+            requires a zero count), so nothing renders twice, and programCount is
+            null until counted, so a failed count falls back to the old
+            behaviour rather than flashing the panel on. */}
+        {isLean && (profile.onboarding_completed_at || programCount > 0) && (
           <div style={{ fontSize: 13, color: MUTED, background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px" }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
               <span>Using your usual questions and waivers.</span>
@@ -918,10 +980,39 @@ export default function QuickProgramBuilder() {
                   contact details
                   {extraQuestions.length > 0 && <>, plus: {extraQuestions.join(", ")}</>}.
                 </div>
-                {waivers.length > 0 && (
+                {(waivers.length > 0 || policy) && (
                   <div style={{ marginTop: 4 }}>
-                    <strong style={{ color: INK }}>They sign</strong>{" "}
-                    {waivers.map((w) => w.name).join(", ")}.{" "}
+                    {/* Same one-box treatment as the first-run card: the policy
+                        is named and bolded alongside the waivers rather than
+                        arriving in a block of its own underneath.
+
+                        Split the same way, for the same reason - a family only
+                        signs these if they register through enrops, while the
+                        policy is published publicly either way. Rolling both
+                        into one "They see ..." list quietly applied the wrong
+                        qualifier to each half. */}
+                    {waivers.length > 0 && (
+                      <>
+                        <strong style={{ color: INK }}>They sign</strong>{" "}
+                        {waivers.map((w, i) => (
+                          <span key={w.id}>
+                            {i > 0 && (i === waivers.length - 1 ? " and " : ", ")}
+                            <strong style={{ color: INK }}>{w.name}</strong>
+                          </span>
+                        ))}
+                        , if you run registration through enrops.{" "}
+                      </>
+                    )}
+                    {policy && (
+                      <>
+                        {/* "also" only when something preceded it. */}
+                        <strong style={{ color: INK }}>
+                          {waivers.length > 0 ? "They also read" : "They read"}
+                        </strong>{" "}
+                        your{" "}
+                        <strong style={{ color: INK }}>{CANCELLATION_POLICY_LABEL}</strong>.{" "}
+                      </>
+                    )}
                     {/* Naming the documents without letting anyone read them is
                         half an answer - same expander as the first-run card,
                         and it opens in place for the same reason. */}
@@ -943,10 +1034,31 @@ export default function QuickProgramBuilder() {
                           {w.name}{w.required === false ? " (families can decline this one)" : ""}
                         </div>
                         <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff", padding: 10, fontSize: 12, color: MUTED, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
-                          {renderWaiverText(w.content, org?.name)}
+                          <WaiverOrgName content={w.content} orgName={org?.name} />
                         </div>
                       </div>
                     ))}
+                    {policy && (
+                      <div>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: INK, marginBottom: 4 }}>
+                          {CANCELLATION_POLICY_LABEL}
+                        </div>
+                        <CancellationPolicyBody policy={policy} orgName={org?.name} />
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* A returning operator who never opened this still hasn't read
+                    the promise made in their name, so the authorship line
+                    stays outside the expander. */}
+                {policy && (
+                  <div style={{ marginTop: 4, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
+                    {cancellationAuthorship(policy)}
+                  </div>
+                )}
+                {policyFailed && (
+                  <div style={{ marginTop: 4 }}>
+                    <CancellationPolicyLoadError onRetry={retryPolicy} />
                   </div>
                 )}
                 {/* Bolded: this is the instruction, not commentary. It's the
@@ -1355,6 +1467,61 @@ export default function QuickProgramBuilder() {
 // A question answered by tapping one of three cards. Big targets rather than a
 // dropdown: this is the first thing a new operator touches, often on a phone,
 // and a <select> hides the choices behind an extra tap.
+// Everything a family is shown, with each document drawn bold - waivers and the
+// cancellation policy alike, because to the operator they are the same kind of
+// thing.
+//
+// TWO SENTENCES, NOT ONE, because the two halves are true under DIFFERENT
+// conditions and a single sentence cannot carry two different qualifiers.
+// Waivers are only ever seen by a family registering through enrops, so that
+// clause says so out loud (Jessica, 2026-07-30) - a provider who takes
+// registrations elsewhere was previously told families sign documents those
+// families never see. The policy clause does NOT take that qualifier: the
+// policy is published publicly under their business name either way, and
+// `cancellationCopy` already branches it on uses_enrops_registration.
+//
+// Each state is written out rather than assembled from a shared trunk with
+// optional bits, so every one can be read aloud against the state that selects
+// it. The no-waivers case is reachable the moment an operator deactivates their
+// last waiver, and it takes `leadPrefixAlone` because "Families ALSO read" is a
+// lie when the policy is the only thing named.
+function FamiliesSeeSentence({ waivers, policy, policyCopy }) {
+  const waiverSentence =
+    waivers.length === 0 ? null : waivers.length === 1 ? (
+      <>
+        Families sign your <strong>{waivers[0].name}</strong> before they finish
+        registering, if you run registration through enrops.
+      </>
+    ) : (
+      <>
+        Families sign{" "}
+        {waivers.map((w, i) => (
+          <span key={w.id}>
+            {i > 0 && (i === waivers.length - 1 ? " and " : ", ")}
+            <strong>{w.name}</strong>
+          </span>
+        ))}{" "}
+        before they finish registering, if you run registration through enrops.
+      </>
+    );
+
+  const policySentence = policy ? (
+    <>
+      {waiverSentence ? policyCopy.leadPrefix : policyCopy.leadPrefixAlone}
+      <strong>{CANCELLATION_POLICY_LABEL}</strong>
+      {policyCopy.leadSuffix}
+    </>
+  ) : null;
+
+  return (
+    <>
+      {waiverSentence}
+      {waiverSentence && policySentence ? " " : null}
+      {policySentence}
+    </>
+  );
+}
+
 function ChoiceQuestion({ label, value, onChange, options }) {
   return (
     <div>

@@ -17,6 +17,7 @@ import { supabase } from "../../../lib/supabase.js";
 import ProgramPrereqEmptyState from "./ProgramPrereqEmptyState.jsx";
 import AddSchoolModal from "../schools/AddSchoolModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import CancellationPolicyInline from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 
 const PURPLE = "#1C004F";
@@ -694,6 +695,9 @@ export default function ProgramWizardNew() {
             savedAsStatus={savedAsStatus}
             orgSlug={org?.slug}
             orgActiveTerm={org?.active_registration_term}
+            orgId={org?.id}
+            orgName={org?.name}
+            usesEnropsRegistration={org?.uses_enrops_registration}
             onSubmit={handleSubmit}
             onBackToPrograms={() => navigate("/admin/programs")}
             step3Valid={step3Valid}
@@ -1226,6 +1230,9 @@ function Step3PriceAndOpen({
   savedAsStatus,
   orgSlug,
   orgActiveTerm,
+  orgId,
+  orgName,
+  usesEnropsRegistration,
   onSubmit,
   onBackToPrograms,
   step3Valid,
@@ -1362,6 +1369,17 @@ function Step3PriceAndOpen({
             When you invite these families to the portal, they'll sign your required waivers first.{" "}
             <a href="/admin/waivers" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Set up waivers ↗</a>
           </div>
+          {/* The partner runs registration, so THIS program has no Enrops
+              payment step even if the org uses Enrops registration elsewhere.
+              programRunsOwnRegistration narrows the claim; it can only ever
+              weaken it, never assert a checkout the org does not have. */}
+          <CancellationPolicyInline
+            orgId={orgId}
+            orgName={orgName}
+            usesEnropsRegistration={usesEnropsRegistration}
+            programRunsOwnRegistration={isPartner}
+            editHref="/admin/waivers"
+          />
         </div>
       ) : (
         <div style={fieldGroup}>
@@ -1384,9 +1402,34 @@ function Step3PriceAndOpen({
             promo codes after this is created — they usually boost sign-ups.
           </div>
           <div style={{ marginTop: 12, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
-            Families will read and sign your required waivers during checkout.{" "}
+            {/* Same qualifier as the lean builder's waiver line: a family only
+                ever signs these if they register through enrops, and a tenant
+                with uses_enrops_registration = false has no enrops checkout for
+                them to sign at. Stated unconditionally rather than branched on
+                the org flag, exactly as QuickProgramBuilder does, so the two
+                wizards say the same thing in the same words.
+
+                The partner branch above does NOT take this qualifier: it
+                describes the portal-invite path, where the operator invites
+                families and they sign there. That happens whoever runs
+                registration - it is in fact the path FOR partner-run programs -
+                so the qualifier would be wrong there. */}
+            Families will read and sign your required waivers during checkout, if you
+            run registration through enrops.{" "}
             <a href="/admin/waivers" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Set up waivers ↗</a>
           </div>
+          {/* This program runs through Enrops checkout, but whether families
+              meet the policy there still depends on the ORG - a tenant with
+              uses_enrops_registration = false has no Enrops checkout at all.
+              The component reads that; this branch only says the program is
+              not partner-run. */}
+          <CancellationPolicyInline
+            orgId={orgId}
+            orgName={orgName}
+            usesEnropsRegistration={usesEnropsRegistration}
+            programRunsOwnRegistration={isPartner}
+            editHref="/admin/waivers"
+          />
         </div>
       )}
 

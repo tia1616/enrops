@@ -1,4 +1,18 @@
-// Waiver text rendering.
+// Waiver and policy text rendering.
+//
+// Two storage shapes live here, and they are NOT interchangeable:
+//
+//   waivers        - store the {{org}} TOKEN and substitute at render
+//                    (renderWaiverText / splitOnOrgToken / hasOrgToken).
+//   org_policies   - store the business name ALREADY substituted, because
+//                    seed_default_cancellation_policy() bakes it in at
+//                    provisioning time. There is no token left to split on,
+//                    so highlighting the name means matching the literal
+//                    string (splitOnWholeName).
+//
+// Reaching for the wrong one is silent: splitOnOrgToken on a policy finds no
+// token and returns the whole document as a single segment, so the name simply
+// never bolds and nobody notices.
 //
 // A waiver's stored content keeps {{org}} where the business name belongs, and
 // the name is substituted when the text is shown or signed. Storing the name
@@ -64,4 +78,48 @@ export function splitOnOrgToken(content) {
  */
 export function hasOrgToken(content) {
   return typeof content === 'string' && /\{\{\s*org\s*\}\}/.test(content);
+}
+
+/**
+ * Split text on STANDALONE occurrences of the business name, returning the
+ * segments between them (length = occurrences + 1, same contract as
+ * splitOnOrgToken, so callers can interleave the name identically).
+ *
+ * For text where the name is already substituted - org_policies content, which
+ * seed_default_cancellation_policy() bakes the name into at provisioning. There
+ * is no {{org}} token left, so splitOnOrgToken would return one segment and the
+ * name would silently never bold.
+ *
+ * A plain String.split(name) bolds any substring hit, so an operator called
+ * "Play" would see the fragment lit up inside "Playgrounds" - a rendering glitch
+ * on the one screen whose job is to make the document feel carefully theirs.
+ * Business names are operator-supplied free text, so short ones are a matter of
+ * time.
+ *
+ * Boundaries are checked by inspecting the neighbouring characters rather than
+ * with a \b regex: the name is untrusted text that would have to be escaped, and
+ * \b is defined against word characters, so it behaves wrongly for a name that
+ * begins or ends with punctuation ("Mrs. Richelle", "Acme Inc."). Matching is
+ * case-sensitive on purpose - the stored policy carries the name exactly as
+ * substituted, and loosening it would bold unrelated words.
+ */
+export function splitOnWholeName(text, name) {
+  if (!text || !name) return [text ?? ''];
+  const isWordChar = (ch) => ch !== undefined && /[A-Za-z0-9]/.test(ch);
+  const parts = [];
+  let segmentStart = 0; // start of the plain text run being accumulated
+  let searchFrom = 0;   // independent cursor, so a rejected hit still advances
+  for (;;) {
+    const at = text.indexOf(name, searchFrom);
+    if (at === -1) break;
+    const standalone =
+      !isWordChar(text[at - 1]) && !isWordChar(text[at + name.length]);
+    if (standalone) {
+      parts.push(text.slice(segmentStart, at));
+      segmentStart = at + name.length;
+    }
+    searchFrom = at + name.length;
+  }
+  parts.push(text.slice(segmentStart));
+  return parts;
 }
