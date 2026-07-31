@@ -25,6 +25,8 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const DONE = "#3a7c3a";
 
+import { STRIPE_CONNECT_ESTIMATE } from "../lib/stripeConnectEstimate.js";
+
 const FIRST_STEPS = ["Enter your program info", "Publish it", "Connect Stripe"];
 const REPEAT_STEPS = ["Enter your program info", "Publish it"];
 
@@ -100,18 +102,18 @@ export default function ProgramSteps({ count, current = 1 }) {
         })}
       </div>
 
-      {/* The ONLY timing claim here is one we actually measured — Jessica's own
-          Stripe connect on staging, 48 seconds, which is where the Payments
-          screen's figure comes from too. There is deliberately no headline "your
-          first program takes N minutes": we have never timed that, and a number
-          that turns out to be double reality is worse than no number. It goes in
-          once there is data behind it. */}
+      {/* The ONLY timing claim here is one we actually measured, and it is READ
+          from stripeConnectEstimate rather than restated — the Payments screen
+          shows the same figure, and two hardcoded copies is how they drift apart.
+          There is deliberately no headline "your first program takes N minutes":
+          we have never timed that, and a number that turns out to be double
+          reality is worse than no number. It goes in once there is data. */}
       {isFirst ? (
         <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.55, margin: "10px 0 0" }}>
-          Connecting Stripe takes about a minute if you already use it, 5 to 10 if
-          not. Your waivers and cancellation policy are already written for you —
-          they&rsquo;re templates, so you can turn them on or off and edit the
-          wording in Settings any time.
+          Connecting Stripe takes {STRIPE_CONNECT_ESTIMATE}. Your waivers and
+          cancellation policy are already written for you &mdash; they&rsquo;re
+          templates, so you can turn them on or off and edit the wording in
+          Settings any time.
         </p>
       ) : (
         <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.55, margin: "10px 0 0" }}>

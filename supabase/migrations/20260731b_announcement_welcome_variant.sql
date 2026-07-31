@@ -21,3 +21,11 @@ alter table public.platform_announcements
 alter table public.platform_announcements
   add constraint platform_announcements_variant_check
   check (variant = any (array['info'::text, 'success'::text, 'warning'::text, 'welcome'::text]));
+
+-- The column comment said "info (default) / success / warning. Drives styling
+-- only." Both halves are now wrong: it misses 'welcome', and variant no longer
+-- drives styling ALONE - it decides whether Ennie appears on the banner. These
+-- rows are authored by hand, so a comment claiming the choice is cosmetic would
+-- mislead exactly the person reaching for it.
+comment on column public.platform_announcements.variant is
+  'Banner tone: info (default) / success / warning / welcome. Drives styling, AND welcome is the only tone that renders Ennie (see AnnouncementBanner.jsx). An unknown value falls back to the info palette and no Ennie.';

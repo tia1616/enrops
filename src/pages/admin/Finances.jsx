@@ -32,6 +32,7 @@ import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { pixelStripeConnected } from "../../lib/metaPixel.js";
 import EnnieTip from "../../components/EnnieTip.jsx";
+import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../lib/stripeConnectEstimate.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -1599,21 +1600,29 @@ function ActivityTab({ org }) {
             {/* Two states, two tips. The fee sentence above already branches, and
                 a single explainer would be false in one of them: an operator who
                 absorbs the fee has no checkout line item to reason about, and an
-                operator who passes it on is not "covering" anything. Advice only,
-                no invented statistic. */}
+                operator who passes it on is not "covering" anything.
+                The 40% is Baymard Institute's, named on screen so an operator can
+                judge the source - it is OUTSIDE research about online checkouts
+                generally, not an enrops number, and must never be presented as
+                one. We have no enrops benchmark yet. If that figure is ever
+                restated anywhere else in the product, it gets read from one place
+                rather than retyped. */}
             {feeCfg?.fee_pass_through ? (
               <EnnieTip title="Why families see the fee">
-                They see it itemised before they pay, on purpose. A cost that
-                turns up at the last step is one of the surest ways to lose
-                someone mid&#8209;checkout. The same cost, shown plainly up
-                front, usually isn&rsquo;t.
+                They see it itemised before they pay, on purpose. Across online
+                checkouts, the single most common reason people abandon an order
+                is extra costs turning up at the end &mdash; 40%, ahead of every
+                other reason (Baymard Institute). The same cost, shown plainly up
+                front, is a different thing entirely.
               </EnnieTip>
             ) : (
               <EnnieTip title="You're covering the service fee">
                 Families pay exactly your class price, and the fee comes out of
                 it rather than being added at checkout. Nothing appears at the
-                last step that wasn&rsquo;t on the class page, which is what
-                keeps people from dropping out partway through.
+                last step that wasn&rsquo;t on the class page &mdash; which
+                matters, because across online checkouts the most common reason
+                people abandon an order is extra costs turning up at the end
+                (40%, Baymard Institute).
               </EnnieTip>
             )}{" "}
             Stripe&rsquo;s processing fee is deducted before the money reaches your bank.{" "}
@@ -2307,15 +2316,13 @@ function TrustChips({ midSetup = false }) {
       <span style={chip}>
         <SIcon size={16}><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 1.5" /></SIcon>
         {/* Two numbers, not one: quoting a flat "5 minutes" badly undersells the
-            already-have-Stripe path. MEASURED, not estimated - Jessica's connect
-            on staging 2026-07-30 took 48 seconds from clicking Connect to landing
-            back (stripe_oauth_states created 03:57:04, consumed 03:57:52), and
-            she entered nothing at all. "About a minute" rather than "under a
-            minute" because she was already signed in to Stripe; someone signing
-            in fresh with 2FA spends a little longer. Overstating the effort on
-            the screen that gates every payment is not a safe default - it talks
-            operators out of a one-minute job. */}
-        About a minute if you have Stripe, 5–10 if not
+            already-have-Stripe path, and overstating the effort on the screen
+            that gates every payment talks operators out of a one-minute job.
+            The wording itself now lives in lib/stripeConnectEstimate.js, with the
+            measurement it came from, because the first-program step strip shows
+            the same figure - two hardcoded copies is how they drift apart. Edit
+            it there, not here. */}
+        {STRIPE_CONNECT_ESTIMATE_SENTENCE}
       </span>
       )}
       <span style={chip}>

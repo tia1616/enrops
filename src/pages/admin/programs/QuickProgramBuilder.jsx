@@ -20,6 +20,7 @@ import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import ProgramSteps from "../../../components/ProgramSteps.jsx";
+import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../../lib/stripeConnectEstimate.js";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete.jsx";
 import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
 import { WaiverOrgName } from "../../../components/OrgNameInText.jsx";
@@ -937,7 +938,7 @@ export default function QuickProgramBuilder() {
                     MEASURED figure on the Payments screen (48s for an operator
                     who already has Stripe). One task quoted two different times
                     on two screens. */}
-                Connect Stripe so families&rsquo; payments go straight into your own account. About a minute if you already use Stripe, 5 to 10 if not — then share your link.
+                Connect Stripe so families&rsquo; payments go straight into your own account. {STRIPE_CONNECT_ESTIMATE_SENTENCE} &mdash; then share your link.
               </p>
               <button onClick={() => navigate("/admin/finances")} style={primaryBtn}>
                 Connect Stripe →
