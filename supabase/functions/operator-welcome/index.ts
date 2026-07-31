@@ -84,6 +84,13 @@ serve(async (req) => {
     const businessName = (org.name ?? '').trim();
     const buildUrl = `${PUBLIC_SITE_URL}/admin/programs/quick-new`;
 
+    // Platform postal address for the CAN-SPAM footer. Read from the enrops org row
+    // (same platform-row lookup orgBrand.ts already does) rather than hardcoded, and
+    // simply omitted while it is unset - an invented address is worse than none.
+    const { data: platformOrg } = await supabase
+      .from('organizations').select('mailing_address').eq('slug', 'enrops').maybeSingle();
+    const postalAddress = (platformOrg?.mailing_address ?? '').trim();
+
     const brand = await loadOrgBrand(supabase, null); // sends AS enrops, not as the tenant
 
     // COPY BELOW IS ARIELLE'S, APPROVED VERBATIM 2026-07-31.
@@ -160,6 +167,13 @@ serve(async (req) => {
       provide ideas or feedback on enrops, or something else. Until next time, may you
       be well.
     </p>
+
+    <p style="margin:20px 0 0;font-size:12px;color:#8a8a8a;line-height:1.6;">
+      You're getting this because you just created an enrops account.
+      <a href="mailto:${esc(FOUNDER_REPLY_TO)}?subject=Unsubscribe" style="color:#8a8a8a;">Unsubscribe</a>.${
+        postalAddress ? `<br>${esc(postalAddress)}` : ''
+      }
+    </p>
   </div>
 </div>
 </body></html>`;
@@ -195,6 +209,23 @@ serve(async (req) => {
           reply_to: FOUNDER_REPLY_TO,
           subject,
           html,
+          // List-Unsubscribe as a MAILTO, deliberately not via _shared/listUnsubscribe.ts.
+          //
+          // That module builds an HMAC link into marketing-unsubscribe, which writes
+          // public.marketing_suppressions — a table scoped to organization_id, i.e. the
+          // TENANT's own family-marketing suppression list. Pointing an operator at it
+          // would suppress them as a family contact OF THEIR OWN BUSINESS and would not
+          // stop enrops emailing them: a silent no-op for what they actually asked for,
+          // plus a junk row in the tenant's list. There is no platform-level operator
+          // suppression to point at yet.
+          //
+          // A mailto is RFC 2369 valid, gives mailbox providers the header they grade
+          // on, and is honest: it reaches a human who can act. No List-Unsubscribe-Post,
+          // because one-click is a promise of an unauthenticated POST endpoint we do not
+          // have, and advertising it falsely is worse than omitting it.
+          headers: {
+            'List-Unsubscribe': `<mailto:${FOUNDER_REPLY_TO}?subject=Unsubscribe>`,
+          },
           tags: [{ name: 'type', value: 'operator_welcome' }],
         }),
         signal: AbortSignal.timeout(20_000),
