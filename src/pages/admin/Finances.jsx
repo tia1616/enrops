@@ -2003,8 +2003,8 @@ function NotConnectedBody({ onConnect, onConnectExisting, busy, busyAction, canM
   if (!canManage) {
     return (
       <StripeHero
-        title="Get paid straight to your bank"
-        subtitle="Families pay through enrops and the money lands in your own Stripe account."
+        title="Get paid straight into your own account"
+        subtitle="Families pay through enrops. The money goes into your own Stripe account, and Stripe sends it on to your bank."
       >
         <em style={{ color: MUTED, fontSize: 13 }}>
           Only an owner or admin can connect Stripe.
@@ -2016,8 +2016,8 @@ function NotConnectedBody({ onConnect, onConnectExisting, busy, busyAction, canM
 
   return (
     <StripeHero
-      title="Get paid straight to your bank"
-      subtitle="Families pay through enrops and the money lands in your own Stripe account. You'll need this before you can take payments."
+      title="Get paid straight into your own account"
+      subtitle="Families pay through enrops. The money goes into your own Stripe account, and Stripe sends it on to your bank. You'll need this before you can take payments."
     >
       <div style={{ display: "grid", gap: 14, justifyItems: "center" }}>
         <div>
@@ -2267,8 +2267,17 @@ function StripeHero({ title, subtitle, children }) {
 // `midSetup` drops the timing chip. That chip estimates how long CONNECTING
 // takes and is split by whether you already have Stripe — a choice that is not
 // on offer once an account exists, so mid-setup it answers a question the
-// operator can no longer act on. "Secured by Stripe" and "Straight to your bank"
-// stay: both are true in every state.
+// operator can no longer act on. "Secured by Stripe" and "Paid into your own
+// account" stay: both are true in every state.
+//
+// The chip used to read "Straight to your bank", matching a hero titled "Get
+// paid straight to your bank". Both were removed 2026-07-31: money settles in
+// the operator's own STRIPE account and Stripe pays out to the bank on its own
+// schedule (a rolling delay for a new US account), so "straight to your bank"
+// promised a timeline neither we nor the operator controls. "Your own account"
+// keeps the part that is actually true and actually the selling point - the
+// money is theirs, in their account, not held by us - and is true under both
+// the direct and destination charge models.
 function TrustChips({ midSetup = false }) {
   const chip = { display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, color: MUTED };
   return (
@@ -2294,7 +2303,7 @@ function TrustChips({ midSetup = false }) {
       </span>
       <span style={chip}>
         <SIcon size={16}><path d="M3 21h18" /><path d="M5 21v-9M19 21v-9M10 21v-9M14 21v-9" /><path d="M12 3l8 4H4l8-4z" /></SIcon>
-        Straight to your bank
+        Paid into your own account
       </span>
     </div>
   );
