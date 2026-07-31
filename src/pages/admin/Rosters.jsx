@@ -141,7 +141,7 @@ export default function Rosters() {
           Rosters
         </h1>
         <p style={{ color: MUTED, marginTop: 6, fontSize: 14 }}>
-          View, edit, add, and email rosters. Afterschool rosters fill in as families register; you can also add kids by hand.
+          Who&rsquo;s in each class. Anyone who registers through enrops shows up here automatically, and you can add or upload the rest.
         </p>
       </header>
 

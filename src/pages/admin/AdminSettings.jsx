@@ -215,10 +215,20 @@ export default function AdminSettings() {
       </section>
       )}
 
-      {/* Branding is hidden for registration operators: registration is
-          enrops-branded in v1, so offering a logo-and-colours screen that
-          barely shows up anywhere promises something we don't deliver yet. */}
-      {org?.instructor_pay_model !== "enrops_platform" && (
+      {/* Branding used to be hidden from registration operators, on the reasoning
+          that a logo-and-colours screen "barely shows up anywhere" for them. That
+          stopped being true. Verified 2026-07-31 before unhiding:
+            - the logo renders in the public header on every tenant page,
+              including the registration flow (PublicLayout reads
+              organizations.logo_url);
+            - the catalog page reads org_branding and renders the operator's
+              colours and banner image (portal/Home.jsx).
+          So the card's own promise - "they appear on your registration page and
+          every email you send" - is accurate, while the gate meant the one
+          operator type that most needs their own branding was the only one who
+          could not reach it. Settings was making a promise the product kept and
+          the gate hid. The /admin/branding ROUTE was never gated (the route guard
+          blocks on role permissions only), so this only ever hid the entrance. */}
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Branding</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -231,7 +241,6 @@ export default function AdminSettings() {
           <Link to="/admin/branding" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
-      )}
 
       {/* Reply-to is the one exception to "no provider branding in v1", because
           without it a family's reply goes to us instead of to them. The copy is

@@ -648,8 +648,8 @@ export default function QuickProgramBuilder() {
           Let&rsquo;s set up your first class
         </div>
         <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 24px" }}>
-          Three quick questions, so we only ask you for the things you actually
-          use. You can change any of this later.
+          Three quick questions, so we can set things up the way you actually run
+          them. You can change any of this later.
         </p>
 
         <div style={{ display: "grid", gap: 22 }}>
@@ -872,7 +872,15 @@ export default function QuickProgramBuilder() {
                 One step left: connect Stripe to get paid
               </div>
               <p style={{ fontSize: 13.5, color: "#3C3489", lineHeight: 1.55, margin: "0 0 12px" }}>
-                Connect Stripe so families' payments land straight in your bank account. Takes about 5 minutes, then share your link.
+                {/* Was "land straight in your bank account… takes about 5 minutes".
+                    Two problems, both fixed 2026-07-31: money settles in the
+                    operator's own Stripe account and Stripe pays out to the bank
+                    on its own schedule, so "straight in your bank" promised a
+                    timeline we don't control; and the duration disagreed with the
+                    MEASURED figure on the Payments screen (48s for an operator
+                    who already has Stripe). One task quoted two different times
+                    on two screens. */}
+                Connect Stripe so families&rsquo; payments go straight into your own account. About a minute if you already use Stripe, 5 to 10 if not — then share your link.
               </p>
               <button onClick={() => navigate("/admin/finances")} style={primaryBtn}>
                 Connect Stripe →
@@ -911,6 +919,27 @@ export default function QuickProgramBuilder() {
             />
           </div>
         )}
+
+        {/* Where an operator learns their logo exists. Deliberately in BOTH
+            states, not just the connected one: the not-connected branch has no
+            share panel, so hanging this off the panel would mean the operator
+            who most needs setup help never sees it. Kept to one quiet line so it
+            never competes with "One step left: connect Stripe" above. */}
+        <p style={{ fontSize: 13, color: MUTED, lineHeight: 1.55, margin: "0 0 20px" }}>
+          Want your own logo on the page families see?{" "}
+          <button
+            type="button"
+            onClick={() => navigate("/admin/branding")}
+            style={{
+              background: "none", border: "none", padding: 0, font: "inherit",
+              color: BRIGHT, fontWeight: 600, cursor: "pointer", textDecoration: "underline",
+            }}
+          >
+            Add it in Settings
+          </button>{" "}
+          any time.
+        </p>
+
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <button onClick={resetForAnother} style={primaryBtn}>
             Create another

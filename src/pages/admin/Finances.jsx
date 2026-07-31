@@ -338,7 +338,7 @@ export default function Finances() {
     } else if (result?.error) {
       setError("Couldn't reach Stripe just now. Try again in a moment.");
     } else if (status === "active") {
-      toast("You're all set — payments now route to your bank.");
+      toast("You're all set — payments now route to your own account.");
     } else if (status === "disconnected") {
       toast("That Stripe account is disconnected, so payments are off. Connect one below.");
     } else if (status === "restricted") {
@@ -2186,7 +2186,7 @@ function DisconnectedBody({ onReconnect, onConnectExisting, busy, busyAction, ca
       </Banner>
       <StripeHero
         title="Connect Stripe to get paid again"
-        subtitle="Your money lands straight in your bank. Use the account you already have, or set up a new one."
+        subtitle="Your money goes into your own Stripe account, and Stripe sends it on to your bank. Use the account you already have, or set up a new one."
       >
         {!canManage ? (
           <em style={{ color: MUTED, fontSize: 13 }}>
