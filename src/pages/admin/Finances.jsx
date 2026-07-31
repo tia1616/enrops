@@ -923,11 +923,11 @@ export default function Finances() {
               </div>
               <div style={{ background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 14, color: INK }}>
-                  Stripe's standard rate — about 2.9% + 30&cent; per card charge, or
-                  0.8% (capped at $5) for bank/ACH.
+                  Stripe's standard rate — about 2.9% + 30&cent; per card payment, or
+                  0.8% (never more than $5) if a family pays by bank transfer.
                 </div>
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
-                  Charged by Stripe and deducted from your payout. This is separate from
+                  Stripe takes this out before the money reaches your bank. It is separate from
                   the enrops service fee above — not an enrops fee.
                 </div>
               </div>
@@ -1186,7 +1186,7 @@ function AchAttention({ org }) {
             {processing.length} bank transfer{processing.length > 1 ? "s" : ""} clearing
           </div>
           <p style={{ color: MUTED, fontSize: 13, margin: "4px 0 8px" }}>
-            ACH takes 1–3 business days. The seat is held; these mark paid automatically when they clear.
+            Bank transfers take 1 to 3 business days. The child&rsquo;s place is held, and these tick over to paid on their own once the money clears.
           </p>
           {processing.map((r) => <Row key={r.id} r={r} tone={AMBER} suffix="processing" />)}
         </div>
@@ -1304,7 +1304,7 @@ function FeePayerRow({ feePassThrough, canManage, onToggle }) {
         </div>
         <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
           {feePassThrough
-            ? "Families cover the enrops service fee as a separate line at checkout. (Stripe's processing fee still comes out of your payout.)"
+            ? "Families cover the enrops service fee as a separate line at checkout. (Stripe's processing fee still comes out before the money reaches your bank.)"
             : "Your organization absorbs the enrops service fee — families pay your base price. (Stripe's processing fee still applies.)"}
         </div>
       </div>
@@ -1690,7 +1690,7 @@ function InvoicesTab() {
       <div style={{ color: MUTED, fontSize: 14, textAlign: "center", padding: "32px 16px" }}>
         Send invoices to schools and partners — track paid, overdue, outstanding.
         <div style={{ fontSize: 12, marginTop: 8 }}>
-          Coming next — Stripe Invoicing with ACH support.
+          Coming next — invoices families can pay by bank transfer.
         </div>
       </div>
     </Card>
@@ -2452,8 +2452,8 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
     <>
       {status === "restricted" && (
         <Banner tone="warn">
-          Stripe has paused some of your account capabilities. You'll usually fix this by
-          providing additional info — click below to continue.
+          Stripe has paused part of your account. It usually just needs a bit more
+          information from you — click below to finish.
         </Banner>
       )}
       {/* Reachable with NOTHING entered. "I don't use Stripe yet" calls
@@ -2532,7 +2532,7 @@ function FeeReadout({ config }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
       <FeeStat label="Card" value={fmtPct(config.platform_fee_card_pct)} />
-      <FeeStat label="ACH" value={fmtPct(config.platform_fee_ach_pct)} note="(when supported)" />
+      <FeeStat label="Bank transfer" value={fmtPct(config.platform_fee_ach_pct)} note="(when supported)" />
       <FeeStat
         label="Per registration"
         value={rangeValue}
