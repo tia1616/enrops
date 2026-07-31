@@ -8,16 +8,24 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
+import Ennie from "../Ennie.jsx";
 
 const PURPLE = "#1C004F";
 const RULE = "#e2dfd5";
 const MUTED = "#6b6b6b";
 
-// variant -> banner palette
+// variant -> banner palette.
+//
+// `welcome` is the warm first-run tone and the ONLY one that gets Ennie. That is
+// deliberately a variant rather than a separate show_ennie flag: Ennie belongs to
+// a tone, and a boolean would permit a smiling character on a warning banner,
+// which is wrong in every case. An unknown variant falls back to info below, so
+// an older frontend meeting a 'welcome' row still renders sensibly.
 const VARIANTS = {
   info:    { bg: "#F2F0FF", border: "#cfc8f5", accent: "#5847C9" }, // lavender / indigo
   success: { bg: "#E9F8EF", border: "#bfe6cd", accent: "#1f7a3d" }, // mint
   warning: { bg: "#FFF7E0", border: "#f0e2a8", accent: "#8a6d00" }, // amber
+  welcome: { bg: "#FAF6FF", border: "#e0d5f8", accent: "#5847C9" }, // soft plum
 };
 
 const DISMISS_KEY = "enrops_dismissed_announcements";
@@ -69,6 +77,10 @@ export default function AnnouncementBanner() {
   if (!announcement) return null;
 
   const v = VARIANTS[announcement.variant] || VARIANTS.info;
+  // Read the variant, not the palette: an unknown variant falls back to the info
+  // PALETTE above, and reusing that fallback to decide whether Ennie appears
+  // would put her on announcements that never asked for her.
+  const showEnnie = announcement.variant === "welcome";
 
   return (
     <div
@@ -85,6 +97,14 @@ export default function AnnouncementBanner() {
         fontFamily: "'Poppins', system-ui, sans-serif",
       }}
     >
+      {/* HARD rule (feedback_ennie_no_frame): Ennie is never framed. Her idle
+          Lottie loops on its own, which is the movement on this banner — no
+          extra entrance animation competing with it. */}
+      {showEnnie && (
+        <div style={{ flexShrink: 0, marginTop: -2 }}>
+          <Ennie state="idle" size={46} framed={false} />
+        </div>
+      )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: PURPLE }}>
           {announcement.title}
