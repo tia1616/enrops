@@ -270,7 +270,7 @@ export default function BrandLogoSettings() {
       <Link to="/admin/settings" style={{ fontSize: 13, color: MUTED, textDecoration: "none" }}>← Settings</Link>
       <h1 style={{ margin: "8px 0 4px", color: PURPLE, fontSize: 24, fontWeight: 700 }}>Branding</h1>
       <p style={{ color: MUTED, fontSize: 14, marginTop: 0, lineHeight: 1.5, maxWidth: 560 }}>
-        Your logo and colors — used on your registration page and every email you send. Set them once here.
+        Set these once. Your <strong>logo</strong> appears on your registration pages and your emails. Your <strong>colors</strong> style your emails. Your <strong>banner</strong> sits at the top of your class list.
       </p>
 
       {error && <div style={{ marginTop: 16, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}

@@ -214,8 +214,21 @@ export default function PwaInstallButton({ variant = 'inline' }) {
             background: 'rgba(0,0,0,0.65)',
             zIndex: 9999,
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            // NOT align/justify center. Centring a child that is taller than the
+            // overlay pushes its TOP off-screen, and a fixed overlay does not
+            // scroll, so there is no way to reach it - Jessica hit this on a
+            // laptop and again on an iPhone, landing on step 2 with the heading
+            // and step 1 above the top edge. iOS Safari's browser chrome makes
+            // the usable height much shorter than the screen suggests, so the
+            // card only has to be modestly tall for this to bite.
+            //
+            // `overflow-y: auto` here plus `margin: auto` on the card is the
+            // combination that behaves: the card still centres when there IS
+            // room, and when there isn't, the overlay scrolls instead of
+            // clipping. (Centring via align-items and then adding overflow does
+            // NOT fix it - the overflowing top stays unreachable.)
+            overflowY: 'auto',
+            WebkitOverflowScrolling: 'touch',
             padding: 16,
             fontFamily: "'Poppins', system-ui, sans-serif",
           }}
@@ -227,6 +240,7 @@ export default function PwaInstallButton({ variant = 'inline' }) {
               borderRadius: 16,
               maxWidth: 360,
               width: '100%',
+              margin: 'auto',
               padding: 22,
               boxShadow: '0 12px 40px rgba(0,0,0,0.35)',
               color: INK,

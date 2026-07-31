@@ -1608,21 +1608,19 @@ function ActivityTab({ org }) {
                 restated anywhere else in the product, it gets read from one place
                 rather than retyped. */}
             {feeCfg?.fee_pass_through ? (
-              <EnnieTip title="Why families see the fee">
-                They see it itemised before they pay, on purpose. Across online
-                checkouts, the single most common reason people abandon an order
-                is extra costs turning up at the end &mdash; 40%, ahead of every
-                other reason (Baymard Institute). The same cost, shown plainly up
-                front, is a different thing entirely.
+              <EnnieTip title="Why do families see the fee?">
+                They see it before they pay, on purpose. Costs that appear at the
+                last step are the number one reason people abandon an online order
+                (40%, Baymard Institute). Shown up front, the same cost
+                doesn&rsquo;t do that.
               </EnnieTip>
             ) : (
-              <EnnieTip title="You're covering the service fee">
-                Families pay exactly your class price, and the fee comes out of
-                it rather than being added at checkout. Nothing appears at the
-                last step that wasn&rsquo;t on the class page &mdash; which
-                matters, because across online checkouts the most common reason
-                people abandon an order is extra costs turning up at the end
-                (40%, Baymard Institute).
+              <EnnieTip title="Why is there no fee at checkout?">
+                Families pay exactly your class price, because you&rsquo;re
+                covering the fee. Nothing turns up at the last step that
+                wasn&rsquo;t on the class page &mdash; and last-step surprises are
+                the number one reason people abandon an online order (40%, Baymard
+                Institute).
               </EnnieTip>
             )}{" "}
             Stripe&rsquo;s processing fee is deducted before the money reaches your bank.{" "}

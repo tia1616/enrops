@@ -235,7 +235,7 @@ export default function AdminSettings() {
           <div>
             <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Logo &amp; colors</div>
             <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Set your logo and brand colors once — they appear on your registration page and every email you send.
+              Your logo appears on your registration pages and your emails. Your colors style your emails, and your banner sits at the top of your class list.
             </div>
           </div>
           <Link to="/admin/branding" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
