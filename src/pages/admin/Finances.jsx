@@ -1493,7 +1493,7 @@ function ActivityTab({ org }) {
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
       <div>
         <h2 style={{ margin: "0 0 2px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Money in</h2>
-        <div style={{ fontSize: 12, color: OK, fontWeight: 600 }}>Always up to date — no spreadsheet reconciliation.</div>
+        <div style={{ fontSize: 12, color: OK, fontWeight: 600 }}>Always up to date — no spreadsheet to keep in sync.</div>
       </div>
       {period && (
         <select

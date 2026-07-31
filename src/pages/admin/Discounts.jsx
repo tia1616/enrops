@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { usePermissions } from "../../lib/permissions.js";
+import EnnieTip from "../../components/EnnieTip.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -317,7 +318,16 @@ export default function Discounts() {
 
       {/* Automatic discounts */}
       <div style={{ ...card, marginBottom: 16 }}>
-        <div style={cardTitle}>Sibling discount</div>
+        <div style={{ ...cardTitle, display: "flex", alignItems: "center", gap: 7 }}>
+          Sibling discount
+          <EnnieTip title="Why a sibling discount earns its keep">
+            A family with two children is deciding whether to sign up twice, not
+            once. A small automatic discount on the second child usually costs you
+            less than losing that second registration &mdash; and because it
+            applies at checkout on its own, it never turns into a conversation
+            about price.
+          </EnnieTip>
+        </div>
         <p style={cardBody}>Automatic % off each additional child in the same order. Blank turns it off.</p>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ position: "relative", width: 100 }}>
@@ -341,7 +351,15 @@ export default function Discounts() {
 
       {/* Promo codes */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: PURPLE }}>Promo codes</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: PURPLE, display: "flex", alignItems: "center", gap: 7 }}>
+          Promo codes
+          <EnnieTip title="What makes a code work">
+            Give each code a reason and an end date &mdash; a partner school, a
+            launch week, a thank-you for returning families. Open-ended codes get
+            passed around and quietly become your new price. A separate code per
+            reason also shows you which one actually brought people in.
+          </EnnieTip>
+        </div>
         <button type="button" onClick={() => { setError(""); setDraft(blankDraft()); }} style={primaryBtn(false)}>+ New code</button>
       </div>
 
