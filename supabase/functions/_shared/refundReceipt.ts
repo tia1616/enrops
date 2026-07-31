@@ -20,6 +20,19 @@
 // family received something that went to the operator. A refund email that
 // overstates by even a line is worse than a plain one.
 //
+// RE-EXAMINED 2026-07-31 and deliberately left alone. Arielle cut the two
+// OPERATOR-facing asks partly because "we refunded our fee too" is a weak
+// pitch; the question was whether the same line should come out of this
+// FAMILY-facing receipt. It should not, and the rule here is already the one
+// the payments industry uses: a refund receipt itemises exactly what the
+// checkout itemised and nothing more. An absorb org's family never saw a fee
+// line, so familyFeeCents arrives 0/null and this stays silent - introducing an
+// "enrops fee" at refund time would raise a question they cannot act on. A
+// pass-through family DID pay a visible "enrops service fee" line, so when they
+// get the whole charge back they are told it came back too. On a PARTIAL refund
+// we stay silent by design: the fee refund lands in the operator's balance and
+// no honest per-line split exists to quote them.
+//
 // Rendering is a pure function so the wording is testable without sending
 // anything. Both refund paths (refund-registration for in-app, stripe-webhook
 // for a refund made in the operator's own Stripe) call the same renderer, so a
