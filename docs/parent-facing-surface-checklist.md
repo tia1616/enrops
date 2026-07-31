@@ -91,4 +91,8 @@ single-file check could see it.
       how a double-period bug in the copyright line got missed once.
 - [ ] Mobile: no horizontal overflow at 375px.
 - [ ] The `?src=` on the rendered link matches the surface you intended.
-- [ ] `deno test supabase/functions/_shared/tests/platformFooter*.test.ts`
+- [ ] `deno test --allow-read=supabase/functions,src supabase/functions/_shared/tests/platformFooter*.test.ts`
+      The `--allow-read` is not optional: the twin-parity guard reads the web
+      half from `src/components/PlatformFooterLine.jsx`. Without it all six
+      tests die `NotCapable` before comparing anything, which reads like
+      catastrophic drift and is really just a missing flag.

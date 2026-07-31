@@ -1,16 +1,19 @@
 name: Unit tests
 
-# Runs all Deno unit tests in supabase/functions on every push to main
-# and on every pull request. If any test fails, the workflow fails and
-# GitHub emails the repo owner (Jessica) based on her notification
+# Runs all Deno unit tests in supabase/functions on every push to staging or
+# main, and on every pull request into either. If any test fails, the workflow
+# fails and GitHub emails the repo owner (Jessica) based on her notification
 # settings (Settings → Notifications → Actions → "Send notifications for
 # failed workflows only").
-
+#
+# Staging is in the trigger list for the same reason build.yml has it: the
+# release flow lands on staging first, so a main-only trigger means the first
+# red run is already on the production branch.
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 jobs:
   test:
@@ -30,11 +33,15 @@ jobs:
         # --allow-net is needed because some test files import from
         # https://deno.land (std lib). --allow-read is scoped to
         # supabase/functions/ so the aiTenantScoping drift guard can walk
-        # the edge-function sources; it still can't read secrets elsewhere
-        # on disk, and --allow-env stays off so tests can't reach real
-        # Supabase or Stripe by accident.
+        # the edge-function sources, plus src/ because the twin-parity
+        # guards read their web halves from there (e.g.
+        # platformFooterTwinParity reads src/components/PlatformFooterLine.jsx
+        # — without src/ that test fails NotCapable, which is what turned CI
+        # red). Both paths are committed app source; the scope still can't
+        # reach .env or anything outside the repo, and --allow-env stays off
+        # so tests can't reach real Supabase or Stripe by accident.
         # --no-check matches Supabase Edge Runtime, which doesn't
         # type-check at deploy time either. Strict type-checking would
         # flag pre-existing warnings in non-test files and block CI on
         # unrelated noise.
-        run: deno test --allow-net --allow-read=supabase/functions --no-check supabase/functions/
+        run: deno test --allow-net --allow-read=supabase/functions,src --no-check supabase/functions/
