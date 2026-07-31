@@ -194,7 +194,7 @@ async function handleLifecycleEvent(
   // to one row" instead of throwing PGRST116 and 500-ing the webhook.
   const { data: rows, error: lookupErr } = await supabase
     .from("automation_run_recipients")
-    .select("id, delivery_status, delivered_at, bounced_at, complained_at")
+    .select("id, delivery_status, delivered_at, bounced_at, complained_at, bounce_detail")
     .eq("resend_message_id", emailId)
     .limit(1);
 
@@ -228,18 +228,31 @@ async function handleLifecycleEvent(
       break;
     }
     case "email.bounced": {
-      const bounce = (data.bounce ?? {}) as Record<string, unknown>;
       // A complaint is the stronger signal about a real person; don't overwrite
       // it with a later bounce on the same message.
       if (row.delivery_status === "complained") break;
-      update.delivery_status = "bounced";
+      const bounce = (data.bounce ?? {}) as Record<string, unknown>;
+      // null (not "unknown") when THIS event carries no bounce object, so the
+      // check below can tell "no reason supplied" apart from a real reason.
+      const detail = bounce.type
+        ? `${bounce.type}${bounce.subType ? ` (${bounce.subType})` : ""}`
+        : null;
+      if (row.delivery_status !== "bounced") update.delivery_status = "bounced";
       if (!row.bounced_at) update.bounced_at = nowIso;
-      update.bounce_detail = `${bounce.type ?? "unknown"}${bounce.subType ? ` (${bounce.subType})` : ""}`;
+      // Only write a reason we actually have. Webhooks are at-least-once, so a
+      // redelivery (or a differently-shaped bounce event) must not overwrite a
+      // recorded "Permanent (General)" with "unknown" — that reason is the whole
+      // value of the row to an operator deciding what to do about the address.
+      if (detail) {
+        if (detail !== row.bounce_detail) update.bounce_detail = detail;
+      } else if (!row.bounce_detail) {
+        update.bounce_detail = "unknown";
+      }
       break;
     }
     case "email.complained": {
       // Recorded, NOT suppressed — see note 3 in the header comment.
-      update.delivery_status = "complained";
+      if (row.delivery_status !== "complained") update.delivery_status = "complained";
       if (!row.complained_at) update.complained_at = nowIso;
       break;
     }

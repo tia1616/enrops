@@ -58,6 +58,13 @@ export function listUnsubscribeHeaders(
   // deno-lint-ignore no-control-regex
   if (/[\x00-\x1F\x7F]/.test(url)) return {};
 
+  // Any INTERIOR whitespace too (surrounding whitespace was trimmed above). A
+  // space cannot survive URLSearchParams, so today's caller can't produce one —
+  // but the guard above exists for future hand-built callers, and for those a
+  // space is just as fatal: `<https://host/a b>` is a malformed RFC 2369 value,
+  // which is the exact class of broken header this module exists to prevent.
+  if (/\s/.test(url)) return {};
+
   // https only. The endpoint is our own Supabase function; an http:// or
   // javascript: value here would mean something upstream is badly wrong, and
   // advertising it to every mailbox provider is not the way to find out.

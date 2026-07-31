@@ -38,6 +38,19 @@ Deno.test("angle brackets in the URL would break the header, so refuse", () => {
   assertEquals(listUnsubscribeHeaders("https://x.co/u?a=<b>"), {});
 });
 
+// Interior whitespace makes `<https://host/a b>` a malformed RFC 2369 value.
+// Unreachable from URLSearchParams, but the guard is for hand-built callers.
+Deno.test("interior whitespace is refused", () => {
+  assertEquals(listUnsubscribeHeaders("https://x.co/a b"), {});
+  assertEquals(listUnsubscribeHeaders("https://x.co/a b"), {});
+  // ...but a normal query string still passes — proves the guard is not
+  // over-broad and that ? & = survive untouched.
+  assertEquals(
+    listUnsubscribeHeaders("https://x.co/u?a=1&b=2")["List-Unsubscribe"],
+    "<https://x.co/u?a=1&b=2>",
+  );
+});
+
 Deno.test("surrounding whitespace is trimmed, not rejected", () => {
   const h = listUnsubscribeHeaders(`  ${REAL_URL}  `);
   assertEquals(h["List-Unsubscribe"], `<${REAL_URL}>`);

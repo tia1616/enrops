@@ -41,16 +41,17 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const UNSUBSCRIBE_SECRET = Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET")!;
 const UNSUBSCRIBE_ENDPOINT = `${SUPABASE_URL}/functions/v1/marketing-unsubscribe`;
-// The `!` above is a COMPILE-time assertion and does nothing at runtime: if the
-// secret is unset, hmacToken signs with the literal string "undefined" and mints
-// a token marketing-unsubscribe rejects with 401. The footer link is then already
-// broken (pre-existing behaviour, deliberately not changed here) — but we must
-// NOT additionally advertise List-Unsubscribe-Post: One-Click against a URL that
-// 401s. Providers would POST into a failure repeatedly, which is a WORSE
-// reputation signal than shipping no header at all, and this whole change exists
-// to improve that signal. Header is emitted only when the secret is configured.
-// (lifecycle-automations-cron does not need this: its computeUnsubscribeUrl
-// returns "" when the secret is missing and it fails the send closed.)
+// The `!` above is a COMPILE-time assertion and does nothing at runtime: with the
+// secret unset, hmacToken signs with the literal string "undefined" and mints a
+// token marketing-unsubscribe rejects with 401 — a footer link that looks fine
+// and fails on click, leaving "report spam" as the recipient's only working exit.
+//
+// This flag drives a FAIL-CLOSED refusal in serve() (no secret, no send), matching
+// how lifecycle-automations-cron already handles the same condition. It is the one
+// place the environment is read; computeUnsubscribeUrl returns "" when it is false,
+// and everything downstream (footer block, List-Unsubscribe header) keys off that
+// empty URL rather than re-checking the environment. One source of truth, so the
+// header and the visible link cannot disagree.
 const UNSUBSCRIBE_CONFIGURED = !!(Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET") ?? "").trim();
 // Public site origin for registration links in emails. Per-environment (set
 // PUBLIC_SITE_URL on staging to the staging site); defaults to prod. Mirrors
@@ -292,6 +293,25 @@ serve(async (req: Request) => {
   // Old callers that still pass recipient_ids: silently ignored.
   if (body.mode === "preview" && (!body.preview_location_id || typeof body.preview_location_id !== "string")) {
     return json({ error: "preview_location_id required for mode='preview'" }, 400);
+  }
+
+  // FAIL CLOSED on a missing unsubscribe secret, matching lifecycle-automations-cron.
+  // Campaign email is promotional by definition, so every one of these sends is
+  // legally required to carry a working unsubscribe. Without the secret we can
+  // only mint a token the unsubscribe endpoint rejects — previously that shipped
+  // a link that looked fine and 401'd on click, leaving "report spam" as the
+  // recipient's only working exit. Refusing the send is the safer failure: it is
+  // loud, it is recoverable, and it never reaches a family.
+  //
+  // Checked BEFORE any recipient is loaded so the batch cannot half-send. Applies
+  // to 'send' and 'test' (both actually deliver mail); 'preview' renders to screen
+  // and never sends, so it stays available for the operator to keep working.
+  if (!UNSUBSCRIBE_CONFIGURED && body.mode !== "preview") {
+    console.error("[marketing-touchpoint-send] send refused — MARKETING_UNSUBSCRIBE_SECRET is not set");
+    return json({
+      error: "unsubscribe_not_configured",
+      message: "Email can't go out right now: the unsubscribe link can't be signed. Nothing was sent. This needs an admin to set MARKETING_UNSUBSCRIBE_SECRET.",
+    }, 503);
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -697,10 +717,11 @@ serve(async (req: Request) => {
 
     const batchPayload = rendered.map(({ r, subject, bodyHtml, bodyText, unsubscribeUrl }) => {
       // Campaign sends are bulk promotional mail by definition — every one of
-      // them gets List-Unsubscribe + one-click. Empty if the URL failed to build
-      // OR the signing secret is missing (see UNSUBSCRIBE_CONFIGURED), in which
-      // case we send without rather than emit a header that 401s.
-      const unsubHeaders = UNSUBSCRIBE_CONFIGURED ? listUnsubscribeHeaders(unsubscribeUrl) : {};
+      // them gets List-Unsubscribe + one-click. Derived from the URL alone: it is
+      // "" exactly when the secret is missing (computeUnsubscribeUrl) and the
+      // serve() guard has already refused that send, so there is no second
+      // boolean here to drift out of step with the footer.
+      const unsubHeaders = listUnsubscribeHeaders(unsubscribeUrl);
       return {
         from: formatFromAddress(brand),
         reply_to: brand.reply_to,
@@ -1444,7 +1465,7 @@ async function sendViaResend(opts: {
   text: string | null;
   unsubscribeUrl?: string | null;
 }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-  const unsubHeaders = UNSUBSCRIBE_CONFIGURED ? listUnsubscribeHeaders(opts.unsubscribeUrl) : {};
+  const unsubHeaders = listUnsubscribeHeaders(opts.unsubscribeUrl);
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -1513,6 +1534,12 @@ async function sendBatchViaResend(
 // ---------------------------------------------------------------------------
 
 async function computeUnsubscribeUrl(email: string, orgId: string): Promise<string> {
+  // Mirrors lifecycle-automations-cron: with no secret, return "" rather than a
+  // URL signed with the literal string "undefined". "" makes wrapInEmailShell
+  // omit the footer block and listUnsubscribeHeaders return {}, so nothing
+  // renders a link that cannot work. The serve() guard above already refuses the
+  // send outright; this is the second line of defence for any future caller.
+  if (!UNSUBSCRIBE_CONFIGURED) return "";
   const lowered = email.toLowerCase();
   const token = await hmacToken(lowered, orgId);
   const params = new URLSearchParams({ email: lowered, org: orgId, t: token });

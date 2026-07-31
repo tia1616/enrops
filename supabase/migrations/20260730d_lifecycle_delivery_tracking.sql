@@ -24,7 +24,12 @@
 --
 -- ADDITIVE + INERT: every column is nullable with no default backfill, and
 -- nothing reads them yet. Existing rows and all current queries are unaffected.
--- Applied to staging and prod in the same pass (parity).
+--
+-- PARITY: must land on staging AND prod. Do not read this file as evidence that
+-- it has - the migration is applied out of band via MCP, so the file's presence
+-- says nothing about either environment. Confirm with a live query against each
+-- (information_schema.columns for delivery_status) before assuming parity.
+-- As of writing: applied to STAGING only; prod pending.
 
 alter table public.automation_run_recipients
   add column if not exists delivery_status text,
@@ -65,4 +70,4 @@ create index if not exists idx_automation_run_recipients_delivery_problem
 comment on column public.automation_run_recipients.delivery_status is
   'What the mailbox provider did with an accepted send: delivered | bounced | complained. NULL = no webhook event yet (or the send never left). Written ONLY by marketing-resend-webhook. Separate from status, which tracks our own send attempt.';
 comment on column public.automation_run_recipients.bounce_detail is
-  'Resend bounce type/subType, e.g. "Permanent (General)". Null unless delivery_status = bounced.';
+  'Resend bounce type/subType, e.g. "Permanent (General)". Set when a bounce is recorded and never cleared afterwards, so it can still be populated on a row whose delivery_status has since moved to complained (bounce followed by a spam report). Read it as "the reason of the last bounce seen", NOT as a proxy for delivery_status = bounced.';
