@@ -31,6 +31,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { pixelStripeConnected } from "../../lib/metaPixel.js";
+import EnnieTip from "../../components/EnnieTip.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -1595,6 +1596,26 @@ function ActivityTab({ org }) {
             {feeCfg?.fee_pass_through
               ? <>The enrops service fee is added on top at checkout and paid by families, so it isn&rsquo;t taken out of this.</>
               : <>You&rsquo;ve chosen to cover the enrops service fee, so it comes out of this.</>}{" "}
+            {/* Two states, two tips. The fee sentence above already branches, and
+                a single explainer would be false in one of them: an operator who
+                absorbs the fee has no checkout line item to reason about, and an
+                operator who passes it on is not "covering" anything. Advice only,
+                no invented statistic. */}
+            {feeCfg?.fee_pass_through ? (
+              <EnnieTip title="Why families see the fee">
+                They see it itemised before they pay, on purpose. A cost that
+                turns up at the last step is one of the surest ways to lose
+                someone mid&#8209;checkout. The same cost, shown plainly up
+                front, usually isn&rsquo;t.
+              </EnnieTip>
+            ) : (
+              <EnnieTip title="You're covering the service fee">
+                Families pay exactly your class price, and the fee comes out of
+                it rather than being added at checkout. Nothing appears at the
+                last step that wasn&rsquo;t on the class page, which is what
+                keeps people from dropping out partway through.
+              </EnnieTip>
+            )}{" "}
             Stripe&rsquo;s processing fee is deducted before the money reaches your bank.{" "}
           </>
         )}

@@ -76,7 +76,49 @@
   .help-text {
     @apply mt-1 text-xs text-gray-500;
   }
+
   .error-text {
     @apply mt-1 text-xs font-semibold text-j2s-orange-dark;
+  }
+}
+
+/* Ennie coaching bubble.
+   Deliberately OUTSIDE @layer components: Tailwind tree-shakes unused rules in
+   that layer, and keyframes are not referenced by a class name it can detect.
+   The entrance lives in CSS at all because keyframes cannot be expressed in a
+   style prop. It animates transform, so it MUST sit on a different element from
+   useViewportClamp's correction, which also writes transform — EnnieTip keeps
+   the clamp on an outer wrapper and this on the bubble inside it. */
+@keyframes ennie-tip-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.94); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes ennie-tip-puff {
+  from { opacity: 0; transform: scale(0.4); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.ennie-tip-bubble {
+  transform-origin: 28px 0;
+  animation: ennie-tip-in 200ms cubic-bezier(0.2, 1.25, 0.5, 1) both;
+}
+
+/* The two thought-puffs pop after the bubble, smallest last, so it reads as a
+   thought rising toward the question mark rather than three things appearing at
+   once. */
+.ennie-tip-puff {
+  transform-origin: center;
+  animation: ennie-tip-puff 160ms cubic-bezier(0.2, 1.4, 0.5, 1) both;
+}
+.ennie-tip-puff-1 { animation-delay: 90ms; }
+.ennie-tip-puff-2 { animation-delay: 150ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ennie-tip-bubble,
+  .ennie-tip-puff {
+    animation: none;
+    opacity: 1;
+    transform: none;
   }
 }

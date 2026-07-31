@@ -7,8 +7,9 @@
 // Pass disabled + disabledNode to show a guidance message instead of a dead
 // link (e.g. an unpublished program has no working link yet).
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
+import useViewportClamp, { VIEWPORT_GUTTER } from "../lib/useViewportClamp";
 
 const BRIGHT = "#5847C9";
 const INK = "#1a1a1a";
@@ -18,9 +19,6 @@ const OK_GREEN = "#3a7c3a";
 
 const QR_DARK = "#1a1a1a";
 const QR_LIGHT = "#ffffff";
-
-// Breathing room between the share panel and the edge of the screen.
-const GUTTER = 8;
 
 export default function ShareLink({
   url,
@@ -36,10 +34,9 @@ export default function ShareLink({
   const [copied, setCopied] = useState(false);
   const previewRef = useRef(null);
   const containerRef = useRef(null);
-  const panelRef = useRef(null);
-  // Horizontal correction applied to keep the panel on screen. See the layout
-  // effect below.
-  const [shiftX, setShiftX] = useState(0);
+  // Keeps the panel on screen on a phone. Shared with every other popover so the
+  // clipped-QR bug can only ever be fixed in one place.
+  const { ref: panelRef, shiftX } = useViewportClamp(open);
 
   const active = !disabled && !!url;
 
@@ -71,51 +68,6 @@ export default function ShareLink({
       color: { dark: QR_DARK, light: QR_LIGHT },
     }).catch(() => {});
   }, [open, active, url]);
-
-  // Keep the panel inside the viewport.
-  //
-  // The panel is absolutely positioned against the trigger button and is a
-  // fixed 322px wide, so on a phone it runs off whichever edge it is anchored
-  // toward: align="right" overflows to the left, align="left" overflows to the
-  // right. BOTH are in use — ProgramsCalendar passes "right" for the page-level
-  // share and "left" for the per-program one — which is why the QR was getting
-  // cut off in admin on a phone. A CSS-only fix can't do this: the element has
-  // no idea where it sits in the viewport. So measure after paint and nudge.
-  useLayoutEffect(() => {
-    if (!open) {
-      setShiftX(0);
-      return;
-    }
-    function clamp() {
-      const el = panelRef.current;
-      if (!el) return;
-      // Measure the panel's NATURAL position by clearing any correction first.
-      // An earlier version instead subtracted the previous shift inside a
-      // functional setState, which is wrong under rapid resize: two clamp()
-      // calls can both measure the same painted box (React has not re-rendered
-      // between them) while the second updater receives the FIRST one's result
-      // as `prev` — so it subtracts a shift the DOM never applied and the panel
-      // jumps sideways. This runs in useLayoutEffect, before paint, so the
-      // reset is never visible.
-      el.style.transform = "none";
-      const rect = el.getBoundingClientRect();
-      const vw = document.documentElement.clientWidth;
-      let next = 0;
-      if (rect.right > vw - GUTTER) next = vw - GUTTER - rect.right;
-      // Pulling it off the right edge can push it off the left. Left wins: a
-      // panel whose start is off-screen is unreadable, and the QR sits at the
-      // start.
-      if (rect.left + next < GUTTER) next = GUTTER - rect.left;
-      // Apply immediately so the corrected position is what paints, then keep
-      // React's style prop in sync so an unrelated re-render (the Copy button
-      // flipping to "Copied") cannot drop the correction.
-      el.style.transform = next ? `translateX(${next}px)` : "";
-      setShiftX(next);
-    }
-    clamp();
-    window.addEventListener("resize", clamp);
-    return () => window.removeEventListener("resize", clamp);
-  }, [open, active]);
 
   function copyLink() {
     if (!url) return;
@@ -190,10 +142,10 @@ export default function ShareLink({
             top: "calc(100% + 6px)",
             [align]: 0,
             zIndex: 40,
-            // Never wider than the screen it has to fit on. The shift below
+            // Never wider than the screen it has to fit on. The clamp hook
             // handles WHERE it sits; this handles a phone narrower than the
             // panel itself.
-            width: `min(322px, calc(100vw - ${GUTTER * 2}px))`,
+            width: `min(322px, calc(100vw - ${VIEWPORT_GUTTER * 2}px))`,
             transform: shiftX ? `translateX(${shiftX}px)` : undefined,
             background: "#fff",
             border: `1px solid ${RULE}`,
