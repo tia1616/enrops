@@ -111,11 +111,13 @@ export function cancellationCopy({ usesEnropsRegistration, programRunsOwnRegistr
     // same kind of thing. Returned as parts rather than one string: a caller
     // cannot bold a word in the middle of a sentence it was handed whole.
     leadPrefix: meetsAtCheckout ? "Families also read your " : "Your ",
+    // Same sentence with nothing before it. "also" is a lie when the policy is
+    // the only thing named, which happens the moment an operator deactivates
+    // their last waiver.
+    leadPrefixAlone: meetsAtCheckout ? "Families read your " : "Your ",
     leadSuffix: meetsAtCheckout
       ? " on the payment step, before they pay."
       : " is published on your public page, where any family can read it.",
-    // Tail, for when the policy is folded into the waiver sentence.
-    inlineTail: meetsAtCheckout ? "before they pay" : "on your public page",
   };
 }
 

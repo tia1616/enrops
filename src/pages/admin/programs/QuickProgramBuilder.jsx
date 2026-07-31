@@ -758,7 +758,7 @@ export default function QuickProgramBuilder() {
                     <FamiliesSeeSentence
                       waivers={waivers}
                       policy={policy}
-                      policyTail={policyCopy.inlineTail}
+                      policyCopy={policyCopy}
                     />
                   </div>
                 )}
@@ -984,19 +984,35 @@ export default function QuickProgramBuilder() {
                   <div style={{ marginTop: 4 }}>
                     {/* Same one-box treatment as the first-run card: the policy
                         is named and bolded alongside the waivers rather than
-                        arriving in a block of its own underneath. */}
-                    <strong style={{ color: INK }}>They see</strong>{" "}
-                    {waivers.map((w, i) => (
-                      <span key={w.id}>
-                        {i > 0 && ", "}
-                        <strong style={{ color: INK }}>{w.name}</strong>
-                      </span>
-                    ))}
-                    {waivers.length > 0 && policy && ", and "}
-                    {policy && (
-                      <strong style={{ color: INK }}>{CANCELLATION_POLICY_LABEL}</strong>
+                        arriving in a block of its own underneath.
+
+                        Split the same way, for the same reason - a family only
+                        signs these if they register through enrops, while the
+                        policy is published publicly either way. Rolling both
+                        into one "They see ..." list quietly applied the wrong
+                        qualifier to each half. */}
+                    {waivers.length > 0 && (
+                      <>
+                        <strong style={{ color: INK }}>They sign</strong>{" "}
+                        {waivers.map((w, i) => (
+                          <span key={w.id}>
+                            {i > 0 && (i === waivers.length - 1 ? " and " : ", ")}
+                            <strong style={{ color: INK }}>{w.name}</strong>
+                          </span>
+                        ))}
+                        , if you run registration through enrops.{" "}
+                      </>
                     )}
-                    .{" "}
+                    {policy && (
+                      <>
+                        {/* "also" only when something preceded it. */}
+                        <strong style={{ color: INK }}>
+                          {waivers.length > 0 ? "They also read" : "They read"}
+                        </strong>{" "}
+                        your{" "}
+                        <strong style={{ color: INK }}>{CANCELLATION_POLICY_LABEL}</strong>.{" "}
+                      </>
+                    )}
                     {/* Naming the documents without letting anyone read them is
                         half an answer - same expander as the first-run card,
                         and it opens in place for the same reason. */}
@@ -1451,30 +1467,31 @@ export default function QuickProgramBuilder() {
 // A question answered by tapping one of three cards. Big targets rather than a
 // dropdown: this is the first thing a new operator touches, often on a phone,
 // and a <select> hides the choices behind an extra tap.
-// One sentence naming everything a family is shown, with each document drawn
-// bold - waivers and the cancellation policy alike, because to the operator
-// they are the same kind of thing.
+// Everything a family is shown, with each document drawn bold - waivers and the
+// cancellation policy alike, because to the operator they are the same kind of
+// thing.
 //
-// FOUR STATES, FOUR SENTENCES. Each is written out rather than assembled from a
-// shared trunk with optional bits, so every one can be read aloud against the
-// state that selects it. The no-waivers case is only reachable when a policy
-// exists, because the host box does not render when both are absent.
+// TWO SENTENCES, NOT ONE, because the two halves are true under DIFFERENT
+// conditions and a single sentence cannot carry two different qualifiers.
+// Waivers are only ever seen by a family registering through enrops, so that
+// clause says so out loud (Jessica, 2026-07-30) - a provider who takes
+// registrations elsewhere was previously told families sign documents those
+// families never see. The policy clause does NOT take that qualifier: the
+// policy is published publicly under their business name either way, and
+// `cancellationCopy` already branches it on uses_enrops_registration.
 //
-// The "sign ... before they finish registering" clause is carried over
-// unchanged from the previous copy on purpose - see the note in the handoff
-// about whether it holds for a tenant with uses_enrops_registration = false.
-function FamiliesSeeSentence({ waivers, policy, policyTail }) {
-  const policyClause = policy ? (
-    <> read your <strong>{CANCELLATION_POLICY_LABEL}</strong> {policyTail}</>
-  ) : null;
-
-  if (waivers.length === 0) {
-    return <>Families{policyClause}.</>;
-  }
-
-  const signClause =
-    waivers.length === 1 ? (
-      <>Families sign your <strong>{waivers[0].name}</strong> before they finish registering</>
+// Each state is written out rather than assembled from a shared trunk with
+// optional bits, so every one can be read aloud against the state that selects
+// it. The no-waivers case is reachable the moment an operator deactivates their
+// last waiver, and it takes `leadPrefixAlone` because "Families ALSO read" is a
+// lie when the policy is the only thing named.
+function FamiliesSeeSentence({ waivers, policy, policyCopy }) {
+  const waiverSentence =
+    waivers.length === 0 ? null : waivers.length === 1 ? (
+      <>
+        Families sign your <strong>{waivers[0].name}</strong> before they finish
+        registering, if you run registration through enrops.
+      </>
     ) : (
       <>
         Families sign{" "}
@@ -1484,14 +1501,23 @@ function FamiliesSeeSentence({ waivers, policy, policyTail }) {
             <strong>{w.name}</strong>
           </span>
         ))}{" "}
-        before they finish registering
+        before they finish registering, if you run registration through enrops.
       </>
     );
 
+  const policySentence = policy ? (
+    <>
+      {waiverSentence ? policyCopy.leadPrefix : policyCopy.leadPrefixAlone}
+      <strong>{CANCELLATION_POLICY_LABEL}</strong>
+      {policyCopy.leadSuffix}
+    </>
+  ) : null;
+
   return (
     <>
-      {signClause}
-      {policyClause ? <>, and{policyClause}</> : null}.
+      {waiverSentence}
+      {waiverSentence && policySentence ? " " : null}
+      {policySentence}
     </>
   );
 }
