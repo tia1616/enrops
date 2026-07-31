@@ -48,6 +48,16 @@ const TAIL_DEPTH = 12;
 const TAIL_CX = PAD + 26; // sits under the "?", which the panel is aligned to
 const PANEL_W = CONTENT_W + PAD * 2;
 
+// The cloud is drawn at the panel's ACTUAL pixel width, never scaled to fit.
+//
+// It used to be a fixed 522-wide viewBox stretched with preserveAspectRatio="none"
+// over a wrapper that caps at the viewport, while the text box kept a hard 464px
+// width. Below about 509px that meant the outline squashed and the text did not,
+// so on every phone the words rendered OUTSIDE the bubble and ran off the right
+// of the screen. useViewportClamp could not catch it: the WRAPPER was on screen,
+// so it computed a shift of zero. Found in review 2026-07-31; my own check had
+// measured the wrapper's position and never compared the content against it.
+//
 // A run of outward semicircular arcs along one edge. Radius is half the step and
 // is also how far it bulges, so capping the step at MAX_STEP is what guarantees
 // the scallops stay inside PAD and never clip.
@@ -64,10 +74,10 @@ function scallops(distance, dx, dy) {
 // Cloud outline around a CONTENT_W x h box, walked clockwise so every arc takes
 // sweep-flag 1. When `tail` is true the bottom edge is interrupted by a downward
 // point, which is what turns a thought-cloud into a dialogue bubble.
-function cloudPath(h, tail) {
+function cloudPath(innerW, h, tail) {
   const top = PAD;
   const bottom = PAD + h;
-  const right = PAD + CONTENT_W;
+  const right = PAD + innerW;
 
   const tailRight = TAIL_CX + TAIL_W / 2;
   const tailLeft = TAIL_CX - TAIL_W / 2;
@@ -79,11 +89,11 @@ function cloudPath(h, tail) {
         `L ${tailLeft} ${bottom}`,
         scallops(tailLeft - PAD, -1, 0),
       ].join(' ')
-    : scallops(CONTENT_W, -1, 0);
+    : scallops(innerW, -1, 0);
 
   return [
     `M ${PAD} ${top}`,
-    scallops(CONTENT_W, 1, 0),
+    scallops(innerW, 1, 0),
     scallops(h, 0, 1),
     bottomEdge,
     scallops(h, 0, -1),
@@ -99,6 +109,10 @@ export default function EnnieTip({
 }) {
   const [open, setOpen] = useState(false);
   const [contentH, setContentH] = useState(0);
+  // The panel's REAL rendered width. It caps at the viewport on a phone, and the
+  // cloud has to be drawn at whatever that turns out to be - not at the desktop
+  // maximum scaled down.
+  const [panelW, setPanelW] = useState(PANEL_W);
   const [placement, setPlacement] = useState('above');
   const wrapRef = useRef(null);
   const btnRef = useRef(null);
@@ -137,6 +151,10 @@ export default function EnnieTip({
     const el = contentRef.current;
     if (!el) return undefined;
     const measure = () => {
+      // Width FIRST: the text box is inset from the panel, so its height depends
+      // on how wide the panel actually ended up.
+      const pw = panelRef.current?.getBoundingClientRect().width;
+      if (pw) setPanelW(pw);
       // The cloud's inner box is the text box plus an equal INSET on every side.
       const h = el.getBoundingClientRect().height + INSET * 2;
       setContentH(h);
@@ -152,6 +170,10 @@ export default function EnnieTip({
     if (typeof ResizeObserver === 'undefined') return undefined;
     const ro = new ResizeObserver(measure);
     ro.observe(el);
+    // Observe the PANEL too: on a phone its width is set by the viewport cap, not
+    // by us, and the cloud has to be redrawn when that changes (rotation, or the
+    // first measurement after mount).
+    if (panelRef.current) ro.observe(panelRef.current);
     return () => ro.disconnect();
   }, [open]);
 
@@ -226,16 +248,19 @@ export default function EnnieTip({
               transformOrigin: placement === 'above' ? `${TAIL_CX}px 100%` : `${TAIL_CX}px 0`,
             }}
           >
+            {/* Drawn 1:1 - width, height and viewBox all in the same real pixels,
+                so nothing is stretched and the outline always matches the box the
+                text is sitting in. No preserveAspectRatio override, because there
+                is no aspect mismatch left to resolve. */}
             <svg
-              width="100%"
+              width={panelW}
               height={panelH}
-              viewBox={`0 0 ${PANEL_W} ${panelH}`}
-              preserveAspectRatio="none"
+              viewBox={`0 0 ${panelW} ${panelH}`}
               style={{ position: 'absolute', top: 0, left: 0 }}
               aria-hidden="true"
             >
               <path
-                d={cloudPath(h, showTail)}
+                d={cloudPath(panelW - PAD * 2, h, showTail)}
                 fill={CLOUD_FILL}
                 stroke={CLOUD_LINE}
                 strokeWidth="1.5"
@@ -247,9 +272,12 @@ export default function EnnieTip({
               ref={contentRef}
               style={{
                 position: 'absolute',
+                // left/right insets, NOT a fixed width. A hard width cannot
+                // shrink with the panel, which is how the text ended up outside
+                // the bubble on every phone.
                 left: PAD + INSET,
+                right: PAD + INSET,
                 top: PAD + INSET,
-                width: CONTENT_W - INSET * 2,
                 display: 'flex',
                 gap: 12,
                 alignItems: 'flex-start',

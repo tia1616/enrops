@@ -36,6 +36,15 @@ import {
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
+// Monotonic where available. performance.now() is immune to the system clock
+// being changed underneath us mid-build; Date.now() is the fallback for anything
+// that lacks it.
+function nowMs() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
 const BRIGHT = "#5847C9";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -160,6 +169,13 @@ export default function QuickProgramBuilder() {
   // program after the first" figure - the one the strip most wants to be small
   // and true.
   const startedAtRef = useRef(new Date().toISOString());
+  // The DURATION is measured on a monotonic clock and sent as elapsed_ms.
+  // started_at above is kept for context only and is no longer load-bearing:
+  // comparing a browser timestamp against the server's now() meant an operator
+  // whose laptop ran a couple of minutes fast had EVERY row rejected by a CHECK,
+  // silently, from the one table that exists to collect them. performance.now()
+  // also survives the user changing their system clock mid-build.
+  const startedMsRef = useRef(nowMs());
   const createdThisSessionRef = useRef(0);
   // Photo (optional). Uploaded to the existing public org-assets bucket the
   // moment it's picked, so the operator sees the real image before saving.
@@ -617,6 +633,16 @@ export default function QuickProgramBuilder() {
       pixelWorkflowCreated();
       setCreatedId(data.id);
       recordBuildTiming(data.id);
+      // This org now has one more program than it did at mount. Without this,
+      // "Create another" brings the form back with programCount still 0 and the
+      // strip greets a second program with "Your first program" - the exact
+      // first-vs-repeat contrast the component exists to draw.
+      //
+      // AFTER recordBuildTiming on purpose. That call reads programCount from
+      // this render's closure, so the order does not actually change was_first,
+      // but keeping the read before the write means nobody has to prove that
+      // again later.
+      setProgramCount((c) => (typeof c === "number" ? c + 1 : c));
     } catch (e) {
       setErr(e?.message ?? String(e));
     } finally {
@@ -651,8 +677,10 @@ export default function QuickProgramBuilder() {
           program_id: programId,
           was_first: wasFirst,
           started_at: startedAtRef.current,
-          // completed_at is the column's server-side now(). One clock, so the
-          // elapsed time can't disagree with itself.
+          // The authoritative figure: start and finish read from the SAME
+          // monotonic clock, so no amount of skew between this machine and the
+          // server can make it nonsense or get the row rejected.
+          elapsed_ms: Math.max(0, Math.round(nowMs() - startedMsRef.current)),
         })
         .then(({ error }) => {
           if (error) console.warn("[QuickProgramBuilder] build timing not recorded", error.message);
@@ -668,6 +696,7 @@ export default function QuickProgramBuilder() {
     // original page load is how the "every program after the first" number would
     // end up several minutes too big.
     startedAtRef.current = new Date().toISOString();
+    startedMsRef.current = nowMs();
     setName("");
     setPrice("");
     setSpots("18");
@@ -924,16 +953,14 @@ export default function QuickProgramBuilder() {
           {notConnected ? "Your program is almost live." : "Your program is live."}
         </div>
 
-        {/* Same strip, now showing what they just finished. programCount was read
-            on mount, so it still describes the journey they are ON rather than
-            the one they just completed — a first-timer correctly keeps the
-            three-step version here. "All done" is steps.length + 1, which is 4
-            for a first program and 3 for any after it. */}
+        {/* Always 3 here, and it needs no branching. Info and Publish are both
+            done, so step 3 is either "Connect Stripe" in progress (when that step
+            exists) or one past the end, meaning all done. The old version threaded
+            notConnected through the first-program branch only and hardcoded 3 for
+            everyone else, which ticked BOTH pips and said "it's live" directly
+            above "One step left: connect Stripe". */}
         {isLean && (
-          <ProgramSteps
-            count={programCount}
-            current={programCount === 0 ? (notConnected ? 3 : 4) : 3}
-          />
+          <ProgramSteps count={programCount} chargesEnabled={chargesEnabled} current={3} />
         )}
 
         {notConnected ? (
@@ -1051,7 +1078,7 @@ export default function QuickProgramBuilder() {
       {/* Lean only. A legacy operator has had Stripe connected for years, so a
           strip whose third step is "Connect Stripe" would be describing a road
           they finished long ago. */}
-      {isLean && <ProgramSteps count={programCount} current={1} />}
+      {isLean && <ProgramSteps count={programCount} chargesEnabled={chargesEnabled} current={1} />}
 
       <div style={{ display: "grid", gap: 18 }}>
         {/* Every class after the first inherits the questions and waivers set

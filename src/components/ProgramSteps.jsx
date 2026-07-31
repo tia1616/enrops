@@ -27,8 +27,8 @@ const DONE = "#3a7c3a";
 
 import { STRIPE_CONNECT_ESTIMATE } from "../lib/stripeConnectEstimate.js";
 
-const FIRST_STEPS = ["Enter your program info", "Publish it", "Connect Stripe"];
-const REPEAT_STEPS = ["Enter your program info", "Publish it"];
+const BASE_STEPS = ["Enter your program info", "Publish it"];
+const CONNECT_STRIPE = "Connect Stripe";
 
 function Pip({ n, label, state }) {
   const bg = state === "done" ? DONE : state === "current" ? BRIGHT : "#fff";
@@ -62,14 +62,25 @@ function Pip({ n, label, state }) {
 }
 
 /**
- * @param {number|null} count    programs this org already has. null = still counting.
- * @param {number} current       1-based step in progress. Pass steps.length + 1 for "all done".
+ * @param {number|null}  count           programs this org already has. null = still counting.
+ * @param {boolean|null} chargesEnabled  can this org take money yet? null = not known yet.
+ * @param {number} current               1-based step in progress. steps.length + 1 = all done.
  */
-export default function ProgramSteps({ count, current = 1 }) {
+export default function ProgramSteps({ count, chargesEnabled, current = 1 }) {
+  // Two things we may not know yet, and neither has a safe default. Claiming
+  // "two steps and it's live" to an operator who cannot take payment, or calling
+  // someone's fourth program their first, are both worse than showing nothing
+  // for a beat.
   if (count === null || count === undefined) return null;
+  if (chargesEnabled === null || chargesEnabled === undefined) return null;
 
   const isFirst = count === 0;
-  const steps = isFirst ? FIRST_STEPS : REPEAT_STEPS;
+  // Connecting Stripe is a step whenever it HASN'T happened - which is not the
+  // same question as whether this is their first program. Keying the step list
+  // off `isFirst` alone told a returning operator with a disconnected account
+  // that their program was live, directly above a panel saying it wasn't.
+  const needsStripe = chargesEnabled === false;
+  const steps = needsStripe ? [...BASE_STEPS, CONNECT_STRIPE] : BASE_STEPS;
 
   return (
     <div
@@ -81,10 +92,20 @@ export default function ProgramSteps({ count, current = 1 }) {
         marginBottom: 20,
       }}
     >
+      {/* FOUR states, four sentences, each matching the number of pips below it.
+          Said out loud:
+            first + no Stripe   -> "three steps to live"   (3 pips)
+            first + Stripe on   -> "two steps to live"     (2 pips)
+            repeat + no Stripe  -> "three steps this time" (3 pips)
+            repeat + Stripe on  -> "two steps, and it's live" (2 pips) */}
       <div style={{ fontSize: 13, fontWeight: 700, color: PURPLE, marginBottom: 10 }}>
         {isFirst
-          ? "Your first program: three steps to live"
-          : "Two steps, and it's live"}
+          ? (needsStripe
+              ? "Your first program: three steps to live"
+              : "Your first program: two steps to live")
+          : (needsStripe
+              ? "Three steps this time — Stripe still needs connecting"
+              : "Two steps, and it's live")}
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 10px" }}>
@@ -108,12 +129,18 @@ export default function ProgramSteps({ count, current = 1 }) {
           There is deliberately no headline "your first program takes N minutes":
           we have never timed that, and a number that turns out to be double
           reality is worse than no number. It goes in once there is data. */}
+      {/* The Stripe timing belongs to the Stripe STEP, not to first-run - a
+          returning operator who needs to connect deserves the same estimate. */}
+      {needsStripe && (
+        <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.55, margin: "10px 0 0" }}>
+          Connecting Stripe takes {STRIPE_CONNECT_ESTIMATE}.
+        </p>
+      )}
       {isFirst ? (
         <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.55, margin: "10px 0 0" }}>
-          Connecting Stripe takes {STRIPE_CONNECT_ESTIMATE}. Your waivers and
-          cancellation policy are already written for you &mdash; they&rsquo;re
-          templates, so you can turn them on or off and edit the wording in
-          Settings any time.
+          Your waivers and cancellation policy are already written for you
+          &mdash; they&rsquo;re templates, so you can turn them on or off and edit
+          the wording in Settings any time.
         </p>
       ) : (
         <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.55, margin: "10px 0 0" }}>
