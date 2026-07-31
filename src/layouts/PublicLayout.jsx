@@ -40,6 +40,16 @@ export default function PublicLayout() {
     let cancelled = false;
     (async () => {
       setLoadState('loading');
+      // Drop the previous org's published-policy list before resolving the new
+      // one. This state outlives the slug it was fetched for, and the footer
+      // now renders as soon as the ORG resolves rather than waiting for the
+      // policies — so without this, navigating from an org that publishes a
+      // Privacy Policy to one that does not would render the second org's
+      // footer with the first org's links for the ~110ms until the new list
+      // lands, pointing families at /<newslug>/privacy, a document that org has
+      // never published. The old code got this for free by setting both at the
+      // same moment; making the page render sooner is what exposed it.
+      setPolicyTypes(new Set());
       const { data, error } = await supabase
         .from('public_org_directory')
         .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled')
@@ -47,14 +57,45 @@ export default function PublicLayout() {
         .maybeSingle();
       if (cancelled) return;
       if (error || !data) { setLoadState('not_found'); return; }
-      // Resolve the published policy list BEFORE flipping to 'ok'. Setting
-      // 'ok' first would render the footer with an empty set, so J2S's real
-      // Privacy/Terms links would vanish for a frame and then pop back in.
-      const types = await fetchPublishedPolicyTypes(data.id);
-      if (cancelled) return;
-      setPolicyTypes(types);
+      // Render as soon as the ORG resolves; let the published-policy list land
+      // on its own.
+      //
+      // This used to await fetchPublishedPolicyTypes before flipping to 'ok',
+      // to stop the footer's Privacy/Terms links popping in a frame late. The
+      // cost of that was invisible from here: 'ok' gates the <Outlet>, so the
+      // PAGE did not even mount until this second round trip came back. Every
+      // parent-facing route paid it, and on the catalog it sat in front of five
+      // more serial queries. Measured on prod 2026-07-30: 8 round trips in a
+      // strict chain, last one finishing 10.2s after navigation start, with the
+      // HTML ready at 98ms.
+      //
+      // The links CAN still flash, and this is the accepted trade rather than a
+      // guarantee. Do not read the old comment's promise into this code.
+      //
+      // Nothing orders this query against the page's own. They are independent
+      // and concurrent, so which lands first is a race. It is a cheap read (a
+      // single indexed lookup on organization_id) and it usually wins, but the
+      // measured margin is thin and not something to rely on:
+      //
+      //   prod via localhost   policies 347ms vs page 528ms   won by 181ms
+      //   staging /j2s         policies 538ms vs page 555ms   won by  16ms
+      //   staging /riverbend   policies 539ms vs page 539ms   dead heat
+      //
+      // When it loses - a fast connection, or an org with few programs - the
+      // footer renders with an empty set and the provider's links appear a
+      // frame or two later. That is cosmetic and below the fold on a page whose
+      // content is still loading, and it is worth one fewer round trip on EVERY
+      // parent-facing route. If you ever need the links guaranteed present on
+      // first paint, fetch them with the org in a single query rather than
+      // restoring the await, which is what cost the page a whole round trip.
+      //
+      // Fail-closed is unchanged: on error we render no provider legal links,
+      // never a link to a policy we cannot confirm.
       setOrg(data);
       setLoadState('ok');
+      fetchPublishedPolicyTypes(data.id).then((types) => {
+        if (!cancelled) setPolicyTypes(types);
+      });
     })();
     return () => { cancelled = true; };
   }, [slug]);

@@ -82,40 +82,32 @@ export default function Home() {
     }
     setOrgId(org.id);
 
-    // Fetch branding (hero copy, colors, etc) — multi-tenant ready.
-    // Any provider can customize these via org_branding row; defaults apply if blank.
-    const { data: br } = await supabase
-      .from('org_branding')
-      .select('hero_headline, hero_subtext, banner_image_url')
-      .eq('organization_id', org.id)
-      .maybeSingle();
-    setBranding(br);
-
-    const { data: sc } = await supabase
-      .from('program_locations')
-      .select('id, name, district, address, organization_id')
-      .eq('organization_id', org.id)
-      .order('name');
+    // Fee config: fired FIRST and deliberately NOT awaited.
+    //
+    // It only needs the slug, which we already have, so there is nothing for it
+    // to wait behind - yet it used to be kicked off on the last line of this
+    // function, after all five queries above had finished in series. On prod it
+    // was the last request of the whole page load, starting at 1749ms and
+    // landing at 2168ms, which meant the class cards rendered with the bare
+    // class price and the all-in price replaced it ~420ms later. The one call
+    // that decides what a family thinks they will pay was scheduled last.
+    //
+    // Still not awaited, on purpose. Cards must not wait on it: if it is slow
+    // or fails, they render the plain price - the documented fallback - instead
+    // of holding the whole catalog hostage to the fee line. Starting it here
+    // just shrinks the window where the price is incomplete rather than
+    // creating one. Same source the Pay step uses.
+    supabase.functions
+      .invoke('org-fee-config', { body: { slug: org.slug } })
+      .then(({ data }) => setFeeConfig(data || null))
+      .catch(() => setFeeConfig(null));
 
     // The one term the catalog serves, per org. Every term-derived label on
     // this page reads from this same value, so the page can't claim one season
     // while listing another's programs.
     const catalogTerm = org.active_registration_term;
 
-    const { data: pg } = await supabase
-      .from('programs')
-      .select('*, program_locations(name)')
-      .eq('organization_id', org.id)
-      .eq('term', catalogTerm)
-      .eq('status', 'open')
-      // Native programs (we run checkout) OR partner-run programs the operator
-      // explicitly listed with a registration link (shown as a link-out, no checkout).
-      .or('runs_own_registration.eq.false,and(runs_own_registration.eq.true,list_in_public_catalog.eq.true,external_registration_url.not.is.null)')
-      .order('day_of_week');
-
-    // Look up Winter/Spring matches for each fall program to determine VIP eligibility.
-    // A fall program is VIP-eligible only if that school year's Winter AND Spring
-    // exist at the same school + day.
+    // Winter/Spring codes for the VIP bundle lookup, derived from the open term.
     //
     // Gated on the open term being a FALL term (schoolYearTermsForFall returns
     // null otherwise): VIP sells a whole school year, which only makes sense
@@ -124,15 +116,82 @@ export default function Home() {
     // twice. Codes are derived from the open term, never hardcoded, so this
     // keeps working when the school year rolls over.
     const bundleTerms = schoolYearTermsForFall(catalogTerm);
+
+    // ONE round trip, not five.
+    //
+    // These queries were five sequential awaits, each waiting on the one above
+    // it for no reason - none of them consumes another's result. Measured on
+    // prod 2026-07-30 they formed a strict chain (each request started 2-4ms
+    // after the previous one ended) sitting behind two more serial round trips
+    // in PublicLayout, for 8 in total and a last-byte 10.2s after navigation
+    // start. Total time was simply 8x whatever one round trip cost that day,
+    // which is why the run-to-run variance was so wide.
+    //
+    // The bundle lookup joins this batch rather than waiting for `pg`: it only
+    // filters on organization_id and the two derived term codes, all known
+    // here. It is `pg` that is matched against ITS result, below, not the other
+    // way round. When the open term is not a fall term there is no bundle to
+    // build, so the query is skipped entirely rather than sent and discarded.
+    //
+    // It used to ALSO be gated on `pg.length`, which cannot be known without
+    // waiting - that gate is what chained it. So an org whose fall term is open
+    // but has no open programs now issues one query it did not before. It costs
+    // no wall-clock (it runs alongside the others) and changes nothing on the
+    // page: the match loop below still requires `pg.length`, so `bundles` comes
+    // out {} either way, exactly as it did before.
+    //
+    // Fee config stays OUT of this batch deliberately - see below.
+    const [brRes, scRes, pgRes, futureRes, wcRes] = await Promise.all([
+      // Branding (hero copy, colors, etc) - multi-tenant ready. Any provider
+      // can customize these via org_branding row; defaults apply if blank.
+      supabase
+        .from('org_branding')
+        .select('hero_headline, hero_subtext, banner_image_url')
+        .eq('organization_id', org.id)
+        .maybeSingle(),
+      supabase
+        .from('program_locations')
+        .select('id, name, district, address, organization_id')
+        .eq('organization_id', org.id)
+        .order('name'),
+      supabase
+        .from('programs')
+        .select('*, program_locations(name)')
+        .eq('organization_id', org.id)
+        .eq('term', catalogTerm)
+        .eq('status', 'open')
+        // Native programs (we run checkout) OR partner-run programs the operator
+        // explicitly listed with a registration link (shown as a link-out, no checkout).
+        .or('runs_own_registration.eq.false,and(runs_own_registration.eq.true,list_in_public_catalog.eq.true,external_registration_url.not.is.null)')
+        .order('day_of_week'),
+      bundleTerms
+        ? supabase
+          .from('programs')
+          .select('*')
+          .eq('organization_id', org.id)
+          .eq('runs_own_registration', false) // don't bundle partner-run programs into a paid VIP offer
+          .in('term', [bundleTerms.winter, bundleTerms.spring])
+        : Promise.resolve({ data: null }),
+      // Recurring weekly classes for outside-registration tenants (no term/checkout).
+      // Read from the anon-safe view (no coach email/notes). Only renders a section
+      // when rows exist, so registration tenants (J2S) are unaffected.
+      supabase
+        .from('class_schedule_public')
+        .select('id, title, day_of_week, start_time, end_time, location_text, age_min, age_max, capacity')
+        .eq('organization_id', org.id),
+    ]);
+
+    const br = brRes.data;
+    const sc = scRes.data;
+    const pg = pgRes.data;
+    const wc = wcRes.data;
+
+    // Look up Winter/Spring matches for each fall program to determine VIP
+    // eligibility. A fall program is VIP-eligible only if that school year's
+    // Winter AND Spring exist at the same school + day.
+    const futureTerms = futureRes?.data;
     const bundles = {};
     if (pg && pg.length && bundleTerms) {
-      const { data: futureTerms } = await supabase
-        .from('programs')
-        .select('*')
-        .eq('organization_id', org.id)
-        .eq('runs_own_registration', false) // don't bundle partner-run programs into a paid VIP offer
-        .in('term', [bundleTerms.winter, bundleTerms.spring]);
-
       pg.forEach((fall) => {
         const winter = futureTerms?.find(
           (f) => f.term === bundleTerms.winter && f.program_location_id === fall.program_location_id && f.day_of_week === fall.day_of_week,
@@ -146,22 +205,7 @@ export default function Home() {
       });
     }
 
-    // Recurring weekly classes for outside-registration tenants (no term/checkout).
-    // Read from the anon-safe view (no coach email/notes). Only renders a section
-    // when rows exist, so registration tenants (J2S) are unaffected.
-    const { data: wc } = await supabase
-      .from('class_schedule_public')
-      .select('id, title, day_of_week, start_time, end_time, location_text, age_min, age_max, capacity')
-      .eq('organization_id', org.id);
-
-    // Same source the Pay step uses. Best-effort: if it fails the cards fall
-    // back to the plain price, which is the old behaviour, rather than showing
-    // a total that might be wrong.
-    supabase.functions
-      .invoke('org-fee-config', { body: { slug: org.slug } })
-      .then(({ data }) => setFeeConfig(data || null))
-      .catch(() => setFeeConfig(null));
-
+    setBranding(br);
     setSchools(sc || []);
     setPrograms(pg || []);
     setVipBundles(bundles);
