@@ -84,7 +84,7 @@ serve(async (req) => {
     // --- The operator ---
     const { data: org } = await supabase
       .from('organizations')
-      .select('id, slug, name, email, timezone')
+      .select('id, slug, name, email, timezone, stripe_charges_enabled, instructor_pay_model')
       .eq('id', note.organization_id)
       .maybeSingle();
     if (!org) return json({ error: 'org not found' }, 404);
@@ -131,6 +131,32 @@ serve(async (req) => {
 
     if (note.trigger_key === 'first_registration') {
       subjectNoun = 'First registration';
+
+      // CAN THEY ACTUALLY TAKE MONEY?
+      //
+      // Publishing a program and being able to be paid are two different gates, so
+      // this email can say "First registration" while the button below leads to a
+      // page reading "Registration isn't open yet". Jessica hit exactly that
+      // confusion. Naming it here removes the contradiction and is the single most
+      // actionable fact for a founder: an operator who published but cannot be paid
+      // is one step from live and is precisely who needs a nudge.
+      //
+      // Mirrors the PUBLIC PAGE's own gate rather than inventing a second one
+      // (src/pages/portal/Home.jsx:263-268):
+      //   isLeanReg     = instructor_pay_model !== 'legacy_own_platform'
+      //   paymentsReady = stripe_charges_enabled !== false
+      // Note `!== false`, NOT `=== true`: a null counts as READY on purpose, so an
+      // older org row does not blank a working provider's page. Writing `=== true`
+      // here would make this line disagree with the page for every null.
+      // Only lean-AND-not-ready actually hides the catalog, so only that state gets
+      // the consequence clause. Three states, three true sentences.
+      const paymentsReady = org.stripe_charges_enabled !== false;
+      const leanReg = org.instructor_pay_model !== 'legacy_own_platform';
+      facts.push(['Payments', paymentsReady
+        ? 'ready'
+        : (leanReg
+            ? 'not set up yet, so their page will not show the class'
+            : 'not set up yet')]);
 
       if (note.subject_table === 'programs') {
         const { data: p } = await supabase
