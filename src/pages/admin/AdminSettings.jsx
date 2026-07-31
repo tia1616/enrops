@@ -174,7 +174,7 @@ export default function AdminSettings() {
           <div>
             <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Waivers &amp; policies</div>
             <div style={{ fontSize: 13, color: MUTED, marginTop: 2, lineHeight: 1.5, maxWidth: 460 }}>
-              The forms families sign to enroll, plus the privacy policy and terms you publish on your registration site.
+              The forms families sign to enroll, plus the policies you publish on your registration site.
             </div>
           </div>
           <Link to="/admin/waivers" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
