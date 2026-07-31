@@ -1402,7 +1402,20 @@ function Step3PriceAndOpen({
             promo codes after this is created — they usually boost sign-ups.
           </div>
           <div style={{ marginTop: 12, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
-            Families will read and sign your required waivers during checkout.{" "}
+            {/* Same qualifier as the lean builder's waiver line: a family only
+                ever signs these if they register through enrops, and a tenant
+                with uses_enrops_registration = false has no enrops checkout for
+                them to sign at. Stated unconditionally rather than branched on
+                the org flag, exactly as QuickProgramBuilder does, so the two
+                wizards say the same thing in the same words.
+
+                The partner branch above does NOT take this qualifier: it
+                describes the portal-invite path, where the operator invites
+                families and they sign there. That happens whoever runs
+                registration - it is in fact the path FOR partner-run programs -
+                so the qualifier would be wrong there. */}
+            Families will read and sign your required waivers during checkout, if you
+            run registration through enrops.{" "}
             <a href="/admin/waivers" target="_blank" rel="noreferrer" style={{ color: BRIGHT, textDecoration: "none" }}>Set up waivers ↗</a>
           </div>
           {/* This program runs through Enrops checkout, but whether families
