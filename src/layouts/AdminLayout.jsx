@@ -455,8 +455,12 @@ export default function AdminLayout() {
   const showSectionTabs =
     activeTabSection && activeTabSection.tabs.some((t) => location.pathname === t.to);
 
+  // Page column: sidebar+content grid on top, legal footer underneath it. The
+  // footer is a PAGE footer - it must span the full width below both the sidebar
+  // and the content, not hang off the bottom of the middle column
+  // (Jessica, 2026-07-31).
   return (
-    <div style={{ minHeight: "100vh", background: CREAM, fontFamily: "'Poppins', system-ui, sans-serif", color: INK }}>
+    <div style={{ minHeight: "100vh", background: CREAM, fontFamily: "'Poppins', system-ui, sans-serif", color: INK, display: "flex", flexDirection: "column" }}>
       {/* MOBILE ADMIN. The shell is a hard 240px sidebar + content grid, which on a
           375px phone left ~135px for the page (minus 72px padding = ~63px usable)
           — the admin was effectively unusable on a phone. Operators build programs
@@ -510,6 +514,9 @@ export default function AdminLayout() {
           [data-admin-sidebar] nav a { border-left: none !important; }
 
           [data-admin-main] { padding: 16px 14px !important; max-width: 100% !important; }
+          /* The footer left <main>, so it no longer inherits main's mobile
+             padding - match it, or the links sit flush against the edge. */
+          [data-admin-footer] { padding: 14px !important; }
 
           /* ROOT CAUSE of admin pages being wider than the phone: a flex or grid
              child defaults to min-width:auto, which refuses to shrink below its
@@ -576,7 +583,11 @@ export default function AdminLayout() {
         </button>
       </div>
 
-      <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", minHeight: "100vh" }}>
+      {/* `flex: 1` rather than `minHeight: 100vh`: the grid takes the space left
+          over above the footer, so on a short page the footer lands at the
+          bottom of the viewport instead of directly under the content, and the
+          sidebar still runs the full height of the grid. */}
+      <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", flex: "1 0 auto" }}>
         {/* Sidebar */}
         <aside data-admin-sidebar id="admin-nav" data-open={navOpen ? "true" : "false"} style={{
           background: LAVENDER,
@@ -784,36 +795,45 @@ export default function AdminLayout() {
           </>
           )}
 
-          {/* The operator app had NO legal footer at all. That was survivable
-              until the advertising pixel loaded site-wide: CCPA/CPRA requires a
-              clear, always-available way to stop the sharing it performs, and
-              the published Cookie Disclosure and Privacy Policy both promise
-              "the link on our site". PLATFORM_LEGAL_LINKS only renders in
-              PublicLayout, so operators had no standing route to it.
-
-              Deliberately quiet and at the very bottom - it is a legal
-              affordance, not navigation, and must not compete with the
-              operator's actual work. */}
-          <footer
-            style={{
-              marginTop: 40,
-              paddingTop: 14,
-              borderTop: `1px solid ${RULE}`,
-              fontSize: 12,
-              color: MUTED,
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 12,
-            }}
-          >
-            {PLATFORM_LEGAL_LINKS.map((l) => (
-              <Link key={l.to} to={l.to} style={{ color: MUTED, textDecoration: "none" }}>
-                {l.label}
-              </Link>
-            ))}
-          </footer>
         </main>
       </div>
+
+      {/* The operator app had NO legal footer at all. That was survivable
+          until the advertising pixel loaded site-wide: CCPA/CPRA requires a
+          clear, always-available way to stop the sharing it performs, and
+          the published Cookie Disclosure and Privacy Policy both promise
+          "the link on our site". PLATFORM_LEGAL_LINKS only renders in
+          PublicLayout, so operators had no standing route to it.
+
+          Deliberately quiet and at the very bottom - it is a legal
+          affordance, not navigation, and must not compete with the
+          operator's actual work.
+
+          OUTSIDE the grid, not inside <main>. Inside, it inherited the content
+          column's width and sat directly under whatever the page happened to
+          end with - on a short page that is halfway up an empty screen, reading
+          as part of the page rather than the bottom of it. A legal footer is
+          page furniture: full width, under the sidebar too, always last. */}
+      <footer
+        data-admin-footer
+        style={{
+          padding: "14px 36px",
+          borderTop: `1px solid ${RULE}`,
+          fontSize: 12,
+          color: MUTED,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 12,
+          // Never absorbed by the grid growing above it.
+          flexShrink: 0,
+        }}
+      >
+        {PLATFORM_LEGAL_LINKS.map((l) => (
+          <Link key={l.to} to={l.to} style={{ color: MUTED, textDecoration: "none" }}>
+            {l.label}
+          </Link>
+        ))}
+      </footer>
     </div>
   );
 }
