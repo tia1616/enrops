@@ -62,6 +62,31 @@ function isPhone() {
   return window.matchMedia?.('(pointer: coarse)').matches === true;
 }
 
+// On iOS, Add to Home Screen is a SAFARI-ONLY feature. Every iOS browser runs on
+// WebKit, but only Safari's share sheet offers the option at all - Chrome,
+// Firefox and Edge for iOS cannot do it, and neither can the in-app browsers a
+// link opens in from Gmail, Instagram or Facebook. That last case is the common
+// one for us: we email operators a link, and the phone opens it in a webview.
+//
+// Without this check we showed Safari's exact steps to people who had no way to
+// follow them - the same defect as the desktop branch, one platform down.
+// Verified 2026-07-31.
+function isIosSafari() {
+  if (typeof navigator === 'undefined') return false;
+  // Self-contained: without this, Android Chrome ("... Chrome/125 Mobile
+  // Safari/537.36") satisfies the checks below and the function returns true,
+  // which is only harmless because today's single caller already knows it is on
+  // iOS. Don't leave that trap for the next caller.
+  if (!isIos()) return false;
+  const ua = navigator.userAgent;
+  // Third-party iOS browsers and the common in-app webviews all identify
+  // themselves. Anything left that still claims Safari IS Safari. Bare WKWebView
+  // usually omits "Safari" entirely, so it fails closed, which is what we want.
+  const NOT_SAFARI = /CriOS|FxiOS|EdgiOS|OPiOS|OPT\/|YaBrowser|DuckDuckGo|FBAN|FBAV|FB_IAB|Instagram|Line\/|MicroMessenger|Snapchat|Pinterest|LinkedInApp/i;
+  if (NOT_SAFARI.test(ua)) return false;
+  return /Safari/.test(ua);
+}
+
 function isStandalone() {
   if (typeof window === 'undefined') return false;
   // matchMedia is the modern API. navigator.standalone is the legacy iOS
@@ -76,6 +101,7 @@ function isStandalone() {
 export default function PwaInstallButton({ variant = 'inline' }) {
   const [installed, setInstalled] = useState(isStandalone);
   const [iosUser, setIosUser] = useState(false);
+  const [iosSafari, setIosSafari] = useState(false);
   // Lazy initialiser, same as `installed` above: this is a client-only SPA, so
   // the value is correct on first paint and the button never renders the wrong
   // label for a tick.
@@ -85,6 +111,7 @@ export default function PwaInstallButton({ variant = 'inline' }) {
 
   useEffect(() => {
     setIosUser(isIos());
+    setIosSafari(isIosSafari());
 
     // Catch the install prompt on Chromium. Once captured, we hold it until
     // the user taps our button.
@@ -208,7 +235,16 @@ export default function PwaInstallButton({ variant = 'inline' }) {
             <div style={{ fontSize: 11, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 700, marginBottom: 6 }}>
               {phone ? 'Install Enrops' : 'Enrops on your phone'}
             </div>
-            {!phone ? <DesktopNote /> : iosUser ? <IosSteps /> : <AndroidFallback />}
+            {/* Four real situations, four true answers. Said out loud:
+                  laptop            -> "designed for your phone"      (can't install here)
+                  iPhone, Safari    -> Share icon -> Add to Home Screen (works)
+                  iPhone, not Safari-> "open it in Safari first"      (Safari-only feature)
+                  Android phone     -> browser menu -> Install app    (works) */}
+            {!phone
+              ? <DesktopNote />
+              : iosUser
+                ? (iosSafari ? <IosSteps /> : <IosNeedsSafari />)
+                : <AndroidFallback />}
             <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
               <button
                 type="button"
@@ -292,11 +328,19 @@ function AndroidFallback() {
       <p style={{ fontSize: 14, color: INK, lineHeight: 1.5, margin: '0 0 12px' }}>
         Your browser didn't offer the one-tap install just now. You can still install Enrops manually:
       </p>
+      {/* Do not name one browser's menu position as if it were every browser's.
+          This said "the ⋮ menu in the top-right", which is Chrome. In Samsung
+          Internet - a large slice of Android - the menu is a ☰ at the BOTTOM
+          right and the item is "Add page to" -> "Home screen". Naming both, and
+          leading with what they are looking FOR, keeps it true either way.
+          Checked 2026-07-31. */}
       <Step n={1}>
-        Tap the <strong>⋮</strong> menu in the top-right of your browser.
+        Open your browser&rsquo;s menu &mdash; <strong>⋮</strong> at the top right in
+        Chrome, <strong>☰</strong> at the bottom right in Samsung Internet.
       </Step>
       <Step n={2}>
-        Tap <strong>Install app</strong> or <strong>Add to Home Screen</strong>.
+        Tap <strong>Install app</strong>, or <strong>Add page to</strong> &rarr;{' '}
+        <strong>Home screen</strong>.
       </Step>
     </>
   );
@@ -325,6 +369,32 @@ function DesktopNote() {
       </Step>
       <Step n={2}>
         Tap <strong>Install app</strong> there, and it lands on your home screen.
+      </Step>
+    </>
+  );
+}
+
+// iPhone or iPad, but not in Safari. Add to Home Screen simply does not exist in
+// Chrome/Firefox/Edge for iOS or in an in-app browser, so there is no set of
+// steps that works here - the only honest instruction is "switch to Safari".
+// Says so plainly rather than implying they did something wrong.
+function IosNeedsSafari() {
+  return (
+    <>
+      <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700, color: PURPLE, lineHeight: 1.25 }}>
+        Open enrops.com in Safari to install it.
+      </h3>
+      <p style={{ fontSize: 14, color: INK, lineHeight: 1.5, margin: '0 0 14px' }}>
+        On iPhone and iPad, only Safari can add an app to your home screen.
+        That&rsquo;s an Apple rule, not something you&rsquo;ve missed. Everything here
+        keeps working in this browser either way.
+      </p>
+      <Step n={1}>
+        Open <strong>Safari</strong> and go to <strong>enrops.com</strong>.
+      </Step>
+      <Step n={2}>
+        Tap the <strong>Share icon</strong> <ShareIconInline />, then{' '}
+        <strong>Add to Home Screen</strong>.
       </Step>
     </>
   );
