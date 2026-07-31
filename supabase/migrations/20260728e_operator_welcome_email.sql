@@ -98,6 +98,13 @@ create trigger trg_operator_welcome_on_onboarded
 -- Retry sweep, for the same reason the founder pings have one: a dispatch that
 -- never lands would otherwise be lost in silence. Bounded to providers who
 -- finished onboarding in the last day so it can never wake up and mail a backlog.
+--
+-- THIS FUNCTION IS INERT UNTIL IT IS SCHEDULED. Writing it is not the same as
+-- running it, and an unscheduled safety net is worse than none because it reads
+-- as covered. Self-review caught exactly that on staging. Schedule per environment
+-- (values differ, so not committed here):
+--   select cron.schedule('operator-welcome-retry', '*/15 * * * *',
+--     $job$ select public.retry_unsent_operator_welcome() $job$);
 -- ---------------------------------------------------------------------------
 create or replace function public.retry_unsent_operator_welcome()
 returns integer
