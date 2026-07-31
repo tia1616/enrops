@@ -31,6 +31,7 @@
 // Visual style matches the Enrops portal (PURPLE/VIOLET/CREAM tokens).
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 const PURPLE = '#1C004F';
 const VIOLET = '#8C88FF';
@@ -205,12 +206,31 @@ export default function PwaInstallButton({ variant = 'inline' }) {
         {phone ? 'Install app' : 'Get the phone app'}
       </button>
 
-      {overlayOpen && (
+      {/* PORTALLED to document.body. This button renders inside the admin shell
+          and the public header, and a position:fixed overlay is only truly fixed
+          to the viewport if NO ancestor creates a containing block - any
+          transform, filter, backdrop-filter, will-change or contain on any
+          ancestor traps it, and z-index then only competes inside that ancestor.
+          Jessica hit exactly that: on her phone the card rendered BEHIND the page
+          with only its first line showing.
+          Rather than hunt the specific ancestor and leave the next one to
+          re-break it, the overlay leaves the tree entirely. That is what modals
+          are supposed to do. */}
+      {overlayOpen && createPortal(
         <div
           onClick={closeOverlay}
           style={{
             position: 'fixed',
-            inset: 0,
+            top: 0,
+            left: 0,
+            right: 0,
+            // 100dvh tracks the VISIBLE viewport on iOS, which shrinks and grows
+            // as Safari's chrome slides. inset:0 uses the LAYOUT viewport, so the
+            // bottom of the overlay - and anything centred in it - can sit below
+            // what the phone is actually showing. minHeight is the fallback for
+            // anything that does not know dvh; it is ignored where dvh applies.
+            minHeight: '100vh',
+            height: '100dvh',
             background: 'rgba(0,0,0,0.65)',
             zIndex: 9999,
             display: 'flex',
@@ -298,7 +318,8 @@ export default function PwaInstallButton({ variant = 'inline' }) {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

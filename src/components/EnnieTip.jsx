@@ -38,7 +38,11 @@ const CLOUD_LINE = '#CECBF6';
 const CONTENT_W = 500;   // ~2x the first build, per review
 const PAD = 11;          // room for the scallops to bulge into
 const MAX_STEP = 22;     // widest a single scallop may be
-const BOTTOM_ROOM = 16;  // space under the last line before the outline
+// ONE inset, used on all four sides, so the white space around the text is even
+// the whole way round. The first build insetted the text by 4 horizontally, 0 at
+// the top and 16 at the bottom, which is what made it look cramped at the top and
+// loose at the bottom.
+const INSET = 18;
 const TAIL_W = 22;
 const TAIL_DEPTH = 12;
 const TAIL_CX = PAD + 26; // sits under the "?", which the panel is aligned to
@@ -133,7 +137,8 @@ export default function EnnieTip({
     const el = contentRef.current;
     if (!el) return undefined;
     const measure = () => {
-      const h = el.getBoundingClientRect().height + BOTTOM_ROOM;
+      // The cloud's inner box is the text box plus an equal INSET on every side.
+      const h = el.getBoundingClientRect().height + INSET * 2;
       setContentH(h);
       // Above unless it genuinely will not fit, in which case below - with no
       // tail, rather than a tail pointing at nothing.
@@ -242,9 +247,9 @@ export default function EnnieTip({
               ref={contentRef}
               style={{
                 position: 'absolute',
-                left: PAD + 4,
-                top: PAD,
-                width: CONTENT_W - 8,
+                left: PAD + INSET,
+                top: PAD + INSET,
+                width: CONTENT_W - INSET * 2,
                 display: 'flex',
                 gap: 12,
                 alignItems: 'flex-start',
