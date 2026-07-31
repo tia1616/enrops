@@ -117,8 +117,13 @@ export default function ProgramSteps({ count, current = 1 }) {
         </p>
       ) : (
         <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.55, margin: "10px 0 0" }}>
-          Run similar classes each term? Copy one in a click from Programs instead
-          of starting over.
+          {/* NOT "copy one in a click". The real flow is: open the program, type
+              the term you want it in, then Copy - and the button stays disabled
+              until that term is filled in. Promising one click sends an operator
+              hunting for a button that is not there, which is the opposite of
+              what this line is for. */}
+          Run similar classes each term? Open one from Scheduled programs and copy
+          it into another term, instead of building it again.
         </p>
       )}
     </div>

@@ -633,22 +633,34 @@ export default function QuickProgramBuilder() {
     // programCount is null when the count failed. was_first is NOT NULL, and a
     // guessed value would quietly corrupt the very split this table exists to
     // measure, so record nothing rather than something made up.
-    if (programCount === null || programCount === undefined) return;
-    const wasFirst = programCount === 0 && createdThisSessionRef.current === 0;
-    createdThisSessionRef.current += 1;
-    supabase
-      .from("program_build_timings")
-      .insert({
-        organization_id: org.id,
-        program_id: programId,
-        was_first: wasFirst,
-        started_at: startedAtRef.current,
-        // completed_at is the column's server-side now(). One clock, so the
-        // elapsed time can't disagree with itself.
-      })
-      .then(({ error }) => {
-        if (error) console.warn("[QuickProgramBuilder] build timing not recorded", error.message);
-      });
+    // Belt AND braces. This is CALLED from inside the save's try block (the
+    // program id it needs is scoped there), so anything that threw synchronously
+    // out of here would be caught by that catch and shown to the operator as a
+    // failed save - on a screen where the program was in fact created and is
+    // live. They would retry and end up with a duplicate. A metric must never be
+    // able to do that, so it swallows its own failures, including a rejected
+    // promise as well as a returned error.
+    try {
+      if (programCount === null || programCount === undefined) return;
+      const wasFirst = programCount === 0 && createdThisSessionRef.current === 0;
+      createdThisSessionRef.current += 1;
+      supabase
+        .from("program_build_timings")
+        .insert({
+          organization_id: org.id,
+          program_id: programId,
+          was_first: wasFirst,
+          started_at: startedAtRef.current,
+          // completed_at is the column's server-side now(). One clock, so the
+          // elapsed time can't disagree with itself.
+        })
+        .then(({ error }) => {
+          if (error) console.warn("[QuickProgramBuilder] build timing not recorded", error.message);
+        })
+        .catch((e) => console.warn("[QuickProgramBuilder] build timing not recorded", e?.message ?? e));
+    } catch (e) {
+      console.warn("[QuickProgramBuilder] build timing not recorded", e?.message ?? e);
+    }
   }
 
   function resetForAnother() {
