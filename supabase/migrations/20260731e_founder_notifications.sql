@@ -1,4 +1,8 @@
-﻿-- 20260728c_founder_notifications.sql
+﻿-- 20260731e_founder_notifications.sql
+--
+-- RUN ORDER IS LOAD-BEARING: e -> f -> g. This file adds organizations.is_internal,
+-- which g's trigger references. plpgsql does not validate that at CREATE time and the
+-- trigger swallows every exception, so applying g first fails SILENTLY, FOREVER.
 --
 -- FOUNDER NOTIFICATIONS 1.0 (spec: "enrops Founder Notifications", 2026-07-27).
 -- Two triggers, one real-time email each, straight to the founder inbox:
