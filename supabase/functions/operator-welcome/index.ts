@@ -136,6 +136,16 @@ serve(async (req) => {
              style="width:100%;border-radius:8px;display:block;">
       </video>
     </a>
+    <!-- ALWAYS VISIBLE, never conditional. Plenty of people read mail with images
+         off by default, and for them the block above collapses to alt text with
+         nothing obvious to click. Email cannot detect blocked images, so there is no
+         honest condition to branch on: the only version that is true in every state
+         is the one that is always there. Same VIDEO_URL constant as the block above,
+         so the two can never drift to different videos. -->
+    <p style="margin:10px 0 0;font-size:14px;color:#6b6b6b;text-align:center;">
+      Can't see the video?
+      <a href="${esc(VIDEO_URL)}" style="color:#1C004F;font-weight:600;">Watch it here</a>.
+    </p>
   </div>
 
   <div style="padding:24px 32px 32px;">
