@@ -137,15 +137,25 @@ revoke all on function public.retry_unsent_operator_welcome() from public, anon,
 grant execute on function public.retry_unsent_operator_welcome() to service_role;
 
 -- ---------------------------------------------------------------------------
--- BACKFILL GUARD - the step that stops this mailing every existing provider.
+-- BACKFILL GUARD - the step that stops this mailing every EXISTING provider.
 --
--- Every org that already finished onboarding is marked as though its welcome was
--- already sent. Without this, the first retry sweep would email all twelve current
--- providers a "welcome to enrops" letter, several of whom have been live for months.
--- Marked with a sentinel timestamp so it is obvious in the data that these were
--- suppressed rather than genuinely delivered.
+-- Suppresses EVERY organization that exists at migration time, not just the ones
+-- that have finished onboarding.
+--
+-- The narrower "only onboarded orgs" version was wrong, and a dry run against prod
+-- is what showed it: not one production org has onboarding_completed_at set. They
+-- all predate self-serve onboarding and were provisioned by hand. So the narrow
+-- guard would have suppressed NOBODY, and the first time anything set that column
+-- on j2s - a company live since April - it would have received "welcome to enrops,
+-- the fiddly part is done".
+--
+-- The rule this encodes: a welcome is for someone who arrived AFTER we started
+-- sending welcomes. Anyone already here is, by definition, not new.
+--
+-- Sentinel timestamp rather than now(), so the data says plainly "suppressed at
+-- migration" instead of pretending a letter was delivered. To deliberately send a
+-- welcome to one of these orgs later, clear welcome_email_sent_at for that row.
 -- ---------------------------------------------------------------------------
 update public.organizations
    set welcome_email_sent_at = '1970-01-01T00:00:00Z'::timestamptz
- where welcome_email_sent_at is null
-   and onboarding_completed_at is not null;
+ where welcome_email_sent_at is null;
