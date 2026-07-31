@@ -21,6 +21,7 @@ import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import ProgramSteps from "../../../components/ProgramSteps.jsx";
 import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../../lib/stripeConnectEstimate.js";
+import EnnieTip from "../../../components/EnnieTip.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete.jsx";
 import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
 import { WaiverOrgName } from "../../../components/OrgNameInText.jsx";
@@ -1016,8 +1017,19 @@ export default function QuickProgramBuilder() {
   // ---- The lean form ----
   return (
     <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
-      <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 4 }}>
+      {/* The ONE tip on this screen, at the title - same placement rule as every
+          other page. Deliberately not a fee explainer (that lives on Payments,
+          where the fee does) and not a sprinkle through the form: during a first
+          run, anything important enough to explain should be said in the copy,
+          not hidden behind a click a first-timer will not go looking for. What a
+          "?" is genuinely good for here is the question the copy cannot answer
+          without bloating every field - whether any of this is permanent. */}
+      <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 4, display: "flex", alignItems: "center", gap: 2 }}>
         Create a program
+        <EnnieTip title="Can I change this later?">
+          Yes &mdash; the name, price, times and dates can all be edited after you
+          publish. Families who already registered keep the price they paid.
+        </EnnieTip>
       </div>
       <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.55, margin: "0 0 20px" }}>
         The essentials only. You'll get a shareable registration link the moment

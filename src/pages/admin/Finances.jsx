@@ -719,8 +719,36 @@ export default function Finances() {
           and the old subtitle promised "invoices to schools", which they don't
           have and can't get. Say what this page actually is for them. J2S keeps
           the accounting language its nav still uses. */}
-      <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700 }}>
+      {/* ONE tip per page, at the title. Same place on every screen, so the "?"
+          becomes something an operator learns once rather than hunts for. It
+          used to sit mid-paragraph further down this page, which read as
+          floating and broke that rule. Lean only: the fee it explains is the
+          registration operator's fee. */}
+      <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700, display: "flex", alignItems: "center", gap: 2 }}>
         {isLean ? "Payments" : "Receivables"}
+        {/* `feePassThrough`, not `feeCfg` - feeCfg only exists inside ActivityTab
+            further down this file, and referencing it here rendered a blank page
+            (a ReferenceError the build cannot catch, because an undefined
+            identifier is only a problem at runtime).
+            Gated on `config` because feePassThrough starts false and is set from
+            the same fetch: before it lands we do not KNOW which is true, and the
+            wrong branch is a confident lie about the operator's own fee. Using
+            the state rather than config.fee_pass_through so the tip follows the
+            toggle without a reload. */}
+        {isLean && config && (feePassThrough ? (
+          <EnnieTip title="Why do families see the fee?">
+            They see it before they pay, on purpose. Costs that appear at the last
+            step are the number one reason people abandon an online order (40%,
+            Baymard Institute). Shown up front, the same cost doesn&rsquo;t do that.
+          </EnnieTip>
+        ) : (
+          <EnnieTip title="Why is there no fee at checkout?">
+            Families pay exactly your class price, because you&rsquo;re covering
+            the fee. Nothing turns up at the last step that wasn&rsquo;t on the
+            class page &mdash; and last-step surprises are the number one reason
+            people abandon an online order (40%, Baymard Institute).
+          </EnnieTip>
+        ))}
       </h1>
       <p style={{ margin: "0 0 24px", color: MUTED, fontSize: 14 }}>
         {isLean
@@ -1597,32 +1625,11 @@ function ActivityTab({ org }) {
             {feeCfg?.fee_pass_through
               ? <>The enrops service fee is added on top at checkout and paid by families, so it isn&rsquo;t taken out of this.</>
               : <>You&rsquo;ve chosen to cover the enrops service fee, so it comes out of this.</>}{" "}
-            {/* Two states, two tips. The fee sentence above already branches, and
-                a single explainer would be false in one of them: an operator who
-                absorbs the fee has no checkout line item to reason about, and an
-                operator who passes it on is not "covering" anything.
-                The 40% is Baymard Institute's, named on screen so an operator can
-                judge the source - it is OUTSIDE research about online checkouts
-                generally, not an enrops number, and must never be presented as
-                one. We have no enrops benchmark yet. If that figure is ever
-                restated anywhere else in the product, it gets read from one place
-                rather than retyped. */}
-            {feeCfg?.fee_pass_through ? (
-              <EnnieTip title="Why do families see the fee?">
-                They see it before they pay, on purpose. Costs that appear at the
-                last step are the number one reason people abandon an online order
-                (40%, Baymard Institute). Shown up front, the same cost
-                doesn&rsquo;t do that.
-              </EnnieTip>
-            ) : (
-              <EnnieTip title="Why is there no fee at checkout?">
-                Families pay exactly your class price, because you&rsquo;re
-                covering the fee. Nothing turns up at the last step that
-                wasn&rsquo;t on the class page &mdash; and last-step surprises are
-                the number one reason people abandon an online order (40%, Baymard
-                Institute).
-              </EnnieTip>
-            )}{" "}
+            {/* The fee explainer used to sit here, mid-paragraph. It moved to the
+                page title: one tip per page, always in the same place, so the "?"
+                is learned once instead of hunted for. Both branches of the tip
+                live up there together, because this sentence branches too and a
+                single explainer would be false in one state. */}
             Stripe&rsquo;s processing fee is deducted before the money reaches your bank.{" "}
           </>
         )}
