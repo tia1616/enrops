@@ -52,23 +52,11 @@ export function fmtMoney(cents: number | null | undefined): string | null {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-/**
- * HTML-escape for interpolation into the email body.
- *
- * Quotes are escaped too, not just the angle brackets. This is used inside an
- * ATTRIBUTE (href="..."), where an unescaped double quote closes the attribute
- * early and lets the rest of the value inject new ones. organizations.slug has no
- * CHECK constraint enforcing its format, so "the slug is always url-safe" is an
- * app-layer convention, not a guarantee this function can rely on.
- */
-export function esc(s: unknown): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+// esc now lives in _shared/escapeHtml.ts, because operator-welcome needs it too and
+// one function importing from a sibling's lib/ is a dependency nobody expects.
+// Re-exported here so existing imports and the tests in lib.test.ts keep exercising
+// the SAME implementation that ships, rather than a copy.
+export { esc } from '../_shared/escapeHtml.ts';
 
 /**
  * The operator's personal name, or null when we do not really have one.

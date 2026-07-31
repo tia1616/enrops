@@ -25,6 +25,15 @@ alter table public.organizations
 comment on column public.organizations.welcome_email_sent_at is
   'When the Day 1 welcome email was sent to this provider. Also the once-ever lock: the send is claimed by setting this where it is still null.';
 
+-- Why the send failed, when it did. Without this, "the secret was never configured",
+-- "Resend rejected it" and "the request timed out" are indistinguishable on the row -
+-- and the difference decides whether a retry is safe.
+alter table public.organizations
+  add column if not exists welcome_send_error text;
+
+comment on column public.organizations.welcome_send_error is
+  'Last failure reason for the Day 1 welcome email. A row with welcome_email_sent_at SET and an error here means the send was indeterminate (5xx or timeout) and was deliberately NOT retried, to avoid sending the founder letter twice.';
+
 -- ---------------------------------------------------------------------------
 -- Dispatch. Same shape as the founder pings: Vault-configured URL + gate secret,
 -- so the migration is identical across environments and each points at its own

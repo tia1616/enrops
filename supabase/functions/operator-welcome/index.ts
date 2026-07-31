@@ -23,7 +23,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
-import { esc } from '../founder-notify/lib.ts';
+import { esc } from '../_shared/escapeHtml.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -106,7 +106,9 @@ serve(async (req) => {
   <div style="padding:32px 32px 8px;">
     <p style="margin:0 0 16px;font-size:16px;color:#1a1a1a;">Hello my fellow enrops peep!</p>
     <p style="margin:0 0 16px;font-size:16px;color:#1a1a1a;line-height:1.6;">
-      ${esc(businessName)} is set up on enrops.
+      ${businessName
+        ? `${esc(businessName)} is set up on enrops.`
+        : `You're set up on enrops.`}
     </p>
     <p style="margin:0 0 24px;font-size:16px;color:#1a1a1a;line-height:1.6;">
       I'm Arielle, the founder of enrops. As a fellow kids enrichment owner-operator, I
@@ -180,33 +182,58 @@ serve(async (req) => {
     }
     if (!claimed?.length) return json({ ok: true, skipped: 'already_claimed' }, 200);
 
-    const resp = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
-      body: JSON.stringify({
-        from: formatFromAddress(brand),
-        to: [to],
-        // Replies go to the founder personally, matching what the letter promises.
-        reply_to: FOUNDER_REPLY_TO,
-        subject,
-        html,
-        tags: [{ name: 'type', value: 'operator_welcome' }],
-      }),
-    });
+    // Bounded so a hung connection cannot pin the claim open indefinitely.
+    let resp: Response;
+    try {
+      resp = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
+        body: JSON.stringify({
+          from: formatFromAddress(brand),
+          to: [to],
+          // Replies go to the founder personally, matching what the letter promises.
+          reply_to: FOUNDER_REPLY_TO,
+          subject,
+          html,
+          tags: [{ name: 'type', value: 'operator_welcome' }],
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch (netErr) {
+      // TIMED OUT OR THE CONNECTION DIED. We do NOT know whether Resend accepted the
+      // message, so the claim STAYS. Releasing here is what would double-send: a
+      // request that timed out client-side is very often one the server processed.
+      // A missed welcome is recoverable by hand; two copies of a founder's personal
+      // letter is not.
+      console.error('[operator-welcome] Resend request failed before a response:', (netErr as Error).message);
+      await supabase.from('organizations')
+        .update({ welcome_send_error: `no response: ${(netErr as Error).message}`.slice(0, 500) })
+        .eq('id', org.id);
+      return json({ error: 'send indeterminate, claim held' }, 502);
+    }
 
     if (!resp.ok) {
       const errText = await resp.text();
       console.error('[operator-welcome] Resend failed:', resp.status, errText);
-      // Release the claim so the sweep can retry.
+
+      // RELEASE ONLY ON 4xx. A 4xx is Resend telling us it rejected the message, so
+      // nothing was delivered and a retry is safe. A 5xx is ambiguous - Resend may
+      // well have accepted and queued it before failing - so releasing the claim
+      // would let the 15-minute sweep send a SECOND copy. Hold the claim, record the
+      // error, and let a human decide.
+      const rejected = resp.status >= 400 && resp.status < 500;
+      const patch: Record<string, unknown> = {
+        welcome_send_error: `${resp.status}: ${errText}`.slice(0, 500),
+      };
+      if (rejected) patch.welcome_email_sent_at = null;
+
       const { error: releaseErr } = await supabase
-        .from('organizations')
-        .update({ welcome_email_sent_at: null })
-        .eq('id', org.id);
+        .from('organizations').update(patch).eq('id', org.id);
       if (releaseErr) {
-        console.error('[operator-welcome] STUCK: claimed but not sent, release failed for',
+        console.error('[operator-welcome] STUCK: claimed but not sent, and the update failed for',
           org.id, releaseErr.message);
       }
-      return json({ error: 'send failed' }, 502);
+      return json({ error: 'send failed', retriable: rejected }, 502);
     }
 
     return json({ ok: true, sent_to: to }, 200);

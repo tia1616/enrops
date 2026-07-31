@@ -84,7 +84,7 @@ serve(async (req) => {
     // --- The operator ---
     const { data: org } = await supabase
       .from('organizations')
-      .select('id, slug, name, email, timezone, stripe_charges_enabled, instructor_pay_model')
+      .select('id, slug, name, email, timezone')
       .eq('id', note.organization_id)
       .maybeSingle();
     if (!org) return json({ error: 'org not found' }, 404);
@@ -124,6 +124,17 @@ serve(async (req) => {
 
     const operatorName = pickOperatorName(owner?.name, authFullName, authName, org.name);
 
+    // --- Is there a public page to send the founder to at all? ---
+    //
+    // Looked up for BOTH triggers, not just the publish one, so the "See their page"
+    // button is gated by the same fact in every email this function sends.
+    const { data: dir } = await supabase
+      .from('public_org_directory')
+      .select('stripe_charges_enabled, instructor_pay_model')
+      .eq('id', note.organization_id)
+      .maybeSingle();
+    const publiclyVisible = !!dir;
+
     // --- Trigger-specific facts ---
     const facts: Array<[string, string]> = [];
     let subjectNoun = '';
@@ -135,28 +146,35 @@ serve(async (req) => {
       // CAN THEY ACTUALLY TAKE MONEY?
       //
       // Publishing a program and being able to be paid are two different gates, so
-      // this email can say "First registration" while the button below leads to a
-      // page reading "Registration isn't open yet". Jessica hit exactly that
-      // confusion. Naming it here removes the contradiction and is the single most
-      // actionable fact for a founder: an operator who published but cannot be paid
-      // is one step from live and is precisely who needs a nudge.
+      // this email can say "First registration" while its own button leads to a page
+      // reading "Registration isn't open yet". Naming it here removes the
+      // contradiction, and it is the most actionable fact a founder can have: an
+      // operator who published but cannot be paid is one step from live.
       //
-      // Mirrors the PUBLIC PAGE's own gate rather than inventing a second one
-      // (src/pages/portal/Home.jsx:263-268):
-      //   isLeanReg     = instructor_pay_model !== 'legacy_own_platform'
-      //   paymentsReady = stripe_charges_enabled !== false
-      // Note `!== false`, NOT `=== true`: a null counts as READY on purpose, so an
-      // older org row does not blank a working provider's page. Writing `=== true`
-      // here would make this line disagree with the page for every null.
-      // Only lean-AND-not-ready actually hides the catalog, so only that state gets
-      // the consequence clause. Three states, three true sentences.
-      const paymentsReady = org.stripe_charges_enabled !== false;
-      const leanReg = org.instructor_pay_model !== 'legacy_own_platform';
-      facts.push(['Payments', paymentsReady
-        ? 'ready'
-        : (leanReg
-            ? 'not set up yet, so their page will not show the class'
-            : 'not set up yet')]);
+      // READ THE SAME SOURCE THE PAGE READS - the public_org_directory VIEW, not the
+      // organizations table. An earlier version of this block read the table and was
+      // wrong in two ways that only the view exposes:
+      //   1. the view does COALESCE(stripe_charges_enabled, false), so a NULL is NOT
+      //      ready. Reading the table with `!== false` called a NULL "ready" while
+      //      the page called it closed - the exact contradiction this block exists to
+      //      remove.
+      //   2. the view is WHERE status = 'active', so a non-active org is not in it at
+      //      all and its public page does not resolve. Offering a "See their page"
+      //      button for one sends the founder to a dead link.
+      // Reading the view makes both impossible by construction rather than by
+      // remembering to mirror two conditions in a second place.
+      if (!dir) {
+        facts.push(['Payments', 'their public page is not live yet, so there is nothing to look at']);
+      } else {
+        // stripe_charges_enabled is already COALESCEd by the view, so === true is
+        // exactly right here and a NULL can no longer reach this line.
+        const leanReg = dir.instructor_pay_model !== 'legacy_own_platform';
+        facts.push(['Payments', dir.stripe_charges_enabled === true
+          ? 'ready'
+          : (leanReg
+              ? 'not set up yet, so their page will not show the class'
+              : 'not set up yet')]);
+      }
 
       if (note.subject_table === 'programs') {
         const { data: p } = await supabase
@@ -231,7 +249,10 @@ serve(async (req) => {
     // The link is the operator's real, live public page. There is deliberately NO
     // "open their account" link: no such founder-facing surface exists, and an
     // invented URL is worse than none.
-    const publicUrl = org.slug ? `${PUBLIC_SITE_URL}/${org.slug}` : null;
+    // Only offered when the org is actually IN the public directory. A slug alone is
+    // not enough: the directory is WHERE status = 'active', so a non-active org has a
+    // slug but no page, and the button would be a dead link.
+    const publicUrl = (publiclyVisible && org.slug) ? `${PUBLIC_SITE_URL}/${org.slug}` : null;
 
     // No 'Business' row: the business name is already the headline. Repeating it
     // here just made every email say it twice.
