@@ -147,7 +147,7 @@ serve(async (req) => {
       -Dr. Arielle Hammond, EdD<br>
       Founder, enrops<br>
       <a href="mailto:${esc(FOUNDER_REPLY_TO)}" style="color:#1C004F;">${esc(FOUNDER_REPLY_TO)}</a><br>
-      tireless relentless champion of kids enrichment business owners
+      tireless and relentless champion of kids enrichment business owners
     </p>
 
     <p style="margin:0;padding-top:20px;border-top:1px solid #eee;font-size:15px;color:#1a1a1a;line-height:1.6;">
