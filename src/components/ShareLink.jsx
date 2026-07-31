@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
+import useViewportClamp, { VIEWPORT_GUTTER } from "../lib/useViewportClamp";
 
 const BRIGHT = "#5847C9";
 const INK = "#1a1a1a";
@@ -33,6 +34,9 @@ export default function ShareLink({
   const [copied, setCopied] = useState(false);
   const previewRef = useRef(null);
   const containerRef = useRef(null);
+  // Keeps the panel on screen on a phone. Shared with every other popover so the
+  // clipped-QR bug can only ever be fixed in one place.
+  const { ref: panelRef, shiftX } = useViewportClamp(open);
 
   const active = !disabled && !!url;
 
@@ -132,12 +136,17 @@ export default function ShareLink({
 
       {open && (
         <div
+          ref={panelRef}
           style={{
             position: "absolute",
             top: "calc(100% + 6px)",
             [align]: 0,
             zIndex: 40,
-            width: 322,
+            // Never wider than the screen it has to fit on. The clamp hook
+            // handles WHERE it sits; this handles a phone narrower than the
+            // panel itself.
+            width: `min(322px, calc(100vw - ${VIEWPORT_GUTTER * 2}px))`,
+            transform: shiftX ? `translateX(${shiftX}px)` : undefined,
             background: "#fff",
             border: `1px solid ${RULE}`,
             borderRadius: 10,

@@ -62,7 +62,7 @@ export default function StepParent({ parent, onUpdate, guardianConfig }) {
             placeholder="Street, city, zip"
             autoComplete="street-address"
           />
-          <p className="help-text">Optional, but helpful for future mailers.</p>
+          <p className="help-text">Optional.</p>
         </div>
       </div>
 

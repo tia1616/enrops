@@ -15,10 +15,13 @@
 //   - curriculum_id = null (no curriculum); program_location_id is REQUIRED
 // The operator never sees "term" — it's enrichment-provider vocabulary, not theirs.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import ProgramSteps from "../../../components/ProgramSteps.jsx";
+import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../../lib/stripeConnectEstimate.js";
+import EnnieTip from "../../../components/EnnieTip.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete.jsx";
 import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
 import { WaiverOrgName } from "../../../components/OrgNameInText.jsx";
@@ -33,6 +36,15 @@ import {
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
+// Monotonic where available. performance.now() is immune to the system clock
+// being changed underneath us mid-build; Date.now() is the fallback for anything
+// that lacks it.
+function nowMs() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
 const BRIGHT = "#5847C9";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -146,6 +158,25 @@ export default function QuickProgramBuilder() {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
   const [createdId, setCreatedId] = useState(null);
+
+  // How long this build actually took. We refused to print a made-up "your first
+  // program takes N minutes" in the step strip, so this is what earns the right
+  // to print a real one later.
+  //
+  // The clock starts when the builder mounts and RESTARTS in resetForAnother:
+  // building a second class in the same session would otherwise be recorded as
+  // having taken since the page first opened, which would inflate the "every
+  // program after the first" figure - the one the strip most wants to be small
+  // and true.
+  const startedAtRef = useRef(new Date().toISOString());
+  // The DURATION is measured on a monotonic clock and sent as elapsed_ms.
+  // started_at above is kept for context only and is no longer load-bearing:
+  // comparing a browser timestamp against the server's now() meant an operator
+  // whose laptop ran a couple of minutes fast had EVERY row rejected by a CHECK,
+  // silently, from the one table that exists to collect them. performance.now()
+  // also survives the user changing their system clock mid-build.
+  const startedMsRef = useRef(nowMs());
+  const createdThisSessionRef = useRef(0);
   // Photo (optional). Uploaded to the existing public org-assets bucket the
   // moment it's picked, so the operator sees the real image before saving.
   const [photoUrl, setPhotoUrl] = useState("");
@@ -601,6 +632,17 @@ export default function QuickProgramBuilder() {
       // workflow. Path 1 of 3 - see pixelWorkflowCreated.
       pixelWorkflowCreated();
       setCreatedId(data.id);
+      recordBuildTiming(data.id);
+      // This org now has one more program than it did at mount. Without this,
+      // "Create another" brings the form back with programCount still 0 and the
+      // strip greets a second program with "Your first program" - the exact
+      // first-vs-repeat contrast the component exists to draw.
+      //
+      // AFTER recordBuildTiming on purpose. That call reads programCount from
+      // this render's closure, so the order does not actually change was_first,
+      // but keeping the read before the write means nobody has to prove that
+      // again later.
+      setProgramCount((c) => (typeof c === "number" ? c + 1 : c));
     } catch (e) {
       setErr(e?.message ?? String(e));
     } finally {
@@ -608,7 +650,53 @@ export default function QuickProgramBuilder() {
     }
   }
 
+  // Fire-and-forget. Deliberately NOT awaited and NOT inside the save's try
+  // block: this is telemetry, and a failed metric write must never surface as an
+  // error on a screen that is telling the operator their program is live. The
+  // operator's next decision does not depend on it, which is the only reason a
+  // quiet console warning is the right level here.
+  function recordBuildTiming(programId) {
+    // programCount is null when the count failed. was_first is NOT NULL, and a
+    // guessed value would quietly corrupt the very split this table exists to
+    // measure, so record nothing rather than something made up.
+    // Belt AND braces. This is CALLED from inside the save's try block (the
+    // program id it needs is scoped there), so anything that threw synchronously
+    // out of here would be caught by that catch and shown to the operator as a
+    // failed save - on a screen where the program was in fact created and is
+    // live. They would retry and end up with a duplicate. A metric must never be
+    // able to do that, so it swallows its own failures, including a rejected
+    // promise as well as a returned error.
+    try {
+      if (programCount === null || programCount === undefined) return;
+      const wasFirst = programCount === 0 && createdThisSessionRef.current === 0;
+      createdThisSessionRef.current += 1;
+      supabase
+        .from("program_build_timings")
+        .insert({
+          organization_id: org.id,
+          program_id: programId,
+          was_first: wasFirst,
+          started_at: startedAtRef.current,
+          // The authoritative figure: start and finish read from the SAME
+          // monotonic clock, so no amount of skew between this machine and the
+          // server can make it nonsense or get the row rejected.
+          elapsed_ms: Math.max(0, Math.round(nowMs() - startedMsRef.current)),
+        })
+        .then(({ error }) => {
+          if (error) console.warn("[QuickProgramBuilder] build timing not recorded", error.message);
+        })
+        .catch((e) => console.warn("[QuickProgramBuilder] build timing not recorded", e?.message ?? e));
+    } catch (e) {
+      console.warn("[QuickProgramBuilder] build timing not recorded", e?.message ?? e);
+    }
+  }
+
   function resetForAnother() {
+    // Restart the clock: the next class is a NEW build, and timing it from the
+    // original page load is how the "every program after the first" number would
+    // end up several minutes too big.
+    startedAtRef.current = new Date().toISOString();
+    startedMsRef.current = nowMs();
     setName("");
     setPrice("");
     setSpots("18");
@@ -648,8 +736,8 @@ export default function QuickProgramBuilder() {
           Let&rsquo;s set up your first class
         </div>
         <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 24px" }}>
-          Three quick questions, so we only ask you for the things you actually
-          use. You can change any of this later.
+          Three quick questions, so we can set things up the way you actually run
+          them. You can change any of this later.
         </p>
 
         <div style={{ display: "grid", gap: 22 }}>
@@ -865,6 +953,16 @@ export default function QuickProgramBuilder() {
           {notConnected ? "Your program is almost live." : "Your program is live."}
         </div>
 
+        {/* Always 3 here, and it needs no branching. Info and Publish are both
+            done, so step 3 is either "Connect Stripe" in progress (when that step
+            exists) or one past the end, meaning all done. The old version threaded
+            notConnected through the first-program branch only and hardcoded 3 for
+            everyone else, which ticked BOTH pips and said "it's live" directly
+            above "One step left: connect Stripe". */}
+        {isLean && (
+          <ProgramSteps count={programCount} chargesEnabled={chargesEnabled} current={3} />
+        )}
+
         {notConnected ? (
           <>
             <div style={{ background: "#EEEDFE", border: "1px solid #CECBF6", borderRadius: 12, padding: "16px 18px", marginBottom: 20 }}>
@@ -872,7 +970,15 @@ export default function QuickProgramBuilder() {
                 One step left: connect Stripe to get paid
               </div>
               <p style={{ fontSize: 13.5, color: "#3C3489", lineHeight: 1.55, margin: "0 0 12px" }}>
-                Connect Stripe so families' payments land straight in your bank account. Takes about 5 minutes, then share your link.
+                {/* Was "land straight in your bank account… takes about 5 minutes".
+                    Two problems, both fixed 2026-07-31: money settles in the
+                    operator's own Stripe account and Stripe pays out to the bank
+                    on its own schedule, so "straight in your bank" promised a
+                    timeline we don't control; and the duration disagreed with the
+                    MEASURED figure on the Payments screen (48s for an operator
+                    who already has Stripe). One task quoted two different times
+                    on two screens. */}
+                Connect Stripe so families&rsquo; payments go straight into your own account. {STRIPE_CONNECT_ESTIMATE_SENTENCE} &mdash; then share your link.
               </p>
               <button onClick={() => navigate("/admin/finances")} style={primaryBtn}>
                 Connect Stripe →
@@ -911,6 +1017,27 @@ export default function QuickProgramBuilder() {
             />
           </div>
         )}
+
+        {/* Where an operator learns their logo exists. Deliberately in BOTH
+            states, not just the connected one: the not-connected branch has no
+            share panel, so hanging this off the panel would mean the operator
+            who most needs setup help never sees it. Kept to one quiet line so it
+            never competes with "One step left: connect Stripe" above. */}
+        <p style={{ fontSize: 13, color: MUTED, lineHeight: 1.55, margin: "0 0 20px" }}>
+          Want your own logo on the page families see?{" "}
+          <button
+            type="button"
+            onClick={() => navigate("/admin/branding")}
+            style={{
+              background: "none", border: "none", padding: 0, font: "inherit",
+              color: BRIGHT, fontWeight: 600, cursor: "pointer", textDecoration: "underline",
+            }}
+          >
+            Add it in Settings
+          </button>{" "}
+          any time.
+        </p>
+
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <button onClick={resetForAnother} style={primaryBtn}>
             Create another
@@ -929,13 +1056,29 @@ export default function QuickProgramBuilder() {
   // ---- The lean form ----
   return (
     <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
-      <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 4 }}>
+      {/* The ONE tip on this screen, at the title - same placement rule as every
+          other page. Deliberately not a fee explainer (that lives on Payments,
+          where the fee does) and not a sprinkle through the form: during a first
+          run, anything important enough to explain should be said in the copy,
+          not hidden behind a click a first-timer will not go looking for. What a
+          "?" is genuinely good for here is the question the copy cannot answer
+          without bloating every field - whether any of this is permanent. */}
+      <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 4, display: "flex", alignItems: "center", gap: 2 }}>
         Create a program
+        <EnnieTip title="Can I change this later?">
+          Yes &mdash; the name, price, times and dates can all be edited after you
+          publish. Families who already registered keep the price they paid.
+        </EnnieTip>
       </div>
-      <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.55, margin: "0 0 24px" }}>
+      <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.55, margin: "0 0 20px" }}>
         The essentials only. You'll get a shareable registration link the moment
         you save.
       </p>
+
+      {/* Lean only. A legacy operator has had Stripe connected for years, so a
+          strip whose third step is "Connect Stripe" would be describing a road
+          they finished long ago. */}
+      {isLean && <ProgramSteps count={programCount} chargesEnabled={chargesEnabled} current={1} />}
 
       <div style={{ display: "grid", gap: 18 }}>
         {/* Every class after the first inherits the questions and waivers set

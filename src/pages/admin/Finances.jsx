@@ -31,6 +31,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { pixelStripeConnected } from "../../lib/metaPixel.js";
+import EnnieTip from "../../components/EnnieTip.jsx";
+import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../lib/stripeConnectEstimate.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -338,7 +340,7 @@ export default function Finances() {
     } else if (result?.error) {
       setError("Couldn't reach Stripe just now. Try again in a moment.");
     } else if (status === "active") {
-      toast("You're all set — payments now route to your bank.");
+      toast("You're all set — payments now route to your own account.");
     } else if (status === "disconnected") {
       toast("That Stripe account is disconnected, so payments are off. Connect one below.");
     } else if (status === "restricted") {
@@ -717,8 +719,36 @@ export default function Finances() {
           and the old subtitle promised "invoices to schools", which they don't
           have and can't get. Say what this page actually is for them. J2S keeps
           the accounting language its nav still uses. */}
-      <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700 }}>
+      {/* ONE tip per page, at the title. Same place on every screen, so the "?"
+          becomes something an operator learns once rather than hunts for. It
+          used to sit mid-paragraph further down this page, which read as
+          floating and broke that rule. Lean only: the fee it explains is the
+          registration operator's fee. */}
+      <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700, display: "flex", alignItems: "center", gap: 2 }}>
         {isLean ? "Payments" : "Receivables"}
+        {/* `feePassThrough`, not `feeCfg` - feeCfg only exists inside ActivityTab
+            further down this file, and referencing it here rendered a blank page
+            (a ReferenceError the build cannot catch, because an undefined
+            identifier is only a problem at runtime).
+            Gated on `config` because feePassThrough starts false and is set from
+            the same fetch: before it lands we do not KNOW which is true, and the
+            wrong branch is a confident lie about the operator's own fee. Using
+            the state rather than config.fee_pass_through so the tip follows the
+            toggle without a reload. */}
+        {isLean && config && (feePassThrough ? (
+          <EnnieTip title="Why do families see the fee?">
+            They see it before they pay, on purpose. Costs that appear at the last
+            step are the number one reason people abandon an online order (40%,
+            Baymard Institute). Shown up front, the same cost doesn&rsquo;t do that.
+          </EnnieTip>
+        ) : (
+          <EnnieTip title="Why is there no fee at checkout?">
+            Families pay exactly your class price, because you&rsquo;re covering
+            the fee. Nothing turns up at the last step that wasn&rsquo;t on the
+            class page &mdash; and last-step surprises are the number one reason
+            people abandon an online order (40%, Baymard Institute).
+          </EnnieTip>
+        ))}
       </h1>
       <p style={{ margin: "0 0 24px", color: MUTED, fontSize: 14 }}>
         {isLean
@@ -922,11 +952,11 @@ export default function Finances() {
               </div>
               <div style={{ background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 14, color: INK }}>
-                  Stripe's standard rate — about 2.9% + 30&cent; per card charge, or
-                  0.8% (capped at $5) for bank/ACH.
+                  Stripe's standard rate — about 2.9% + 30&cent; per card payment, or
+                  0.8% (never more than $5) if a family pays by bank transfer.
                 </div>
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
-                  Charged by Stripe and deducted from your payout. This is separate from
+                  Stripe takes this out before the money reaches your bank. It is separate from
                   the enrops service fee above — not an enrops fee.
                 </div>
               </div>
@@ -1185,7 +1215,7 @@ function AchAttention({ org }) {
             {processing.length} bank transfer{processing.length > 1 ? "s" : ""} clearing
           </div>
           <p style={{ color: MUTED, fontSize: 13, margin: "4px 0 8px" }}>
-            ACH takes 1–3 business days. The seat is held; these mark paid automatically when they clear.
+            Bank transfers take 1 to 3 business days. The child&rsquo;s place is held, and these tick over to paid on their own once the money clears.
           </p>
           {processing.map((r) => <Row key={r.id} r={r} tone={AMBER} suffix="processing" />)}
         </div>
@@ -1303,7 +1333,7 @@ function FeePayerRow({ feePassThrough, canManage, onToggle }) {
         </div>
         <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
           {feePassThrough
-            ? "Families cover the enrops service fee as a separate line at checkout. (Stripe's processing fee still comes out of your payout.)"
+            ? "Families cover the enrops service fee as a separate line at checkout. (Stripe's processing fee still comes out before the money reaches your bank.)"
             : "Your organization absorbs the enrops service fee — families pay your base price. (Stripe's processing fee still applies.)"}
         </div>
       </div>
@@ -1492,7 +1522,7 @@ function ActivityTab({ org }) {
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
       <div>
         <h2 style={{ margin: "0 0 2px", fontSize: 18, color: PURPLE, fontWeight: 700 }}>Money in</h2>
-        <div style={{ fontSize: 12, color: OK, fontWeight: 600 }}>Always up to date — no spreadsheet reconciliation.</div>
+        <div style={{ fontSize: 12, color: OK, fontWeight: 600 }}>Always up to date — no spreadsheet to keep in sync.</div>
       </div>
       {period && (
         <select
@@ -1595,6 +1625,11 @@ function ActivityTab({ org }) {
             {feeCfg?.fee_pass_through
               ? <>The enrops service fee is added on top at checkout and paid by families, so it isn&rsquo;t taken out of this.</>
               : <>You&rsquo;ve chosen to cover the enrops service fee, so it comes out of this.</>}{" "}
+            {/* The fee explainer used to sit here, mid-paragraph. It moved to the
+                page title: one tip per page, always in the same place, so the "?"
+                is learned once instead of hunted for. Both branches of the tip
+                live up there together, because this sentence branches too and a
+                single explainer would be false in one state. */}
             Stripe&rsquo;s processing fee is deducted before the money reaches your bank.{" "}
           </>
         )}
@@ -1669,7 +1704,7 @@ function InvoicesTab() {
       <div style={{ color: MUTED, fontSize: 14, textAlign: "center", padding: "32px 16px" }}>
         Send invoices to schools and partners — track paid, overdue, outstanding.
         <div style={{ fontSize: 12, marginTop: 8 }}>
-          Coming next — Stripe Invoicing with ACH support.
+          Coming next — invoices families can pay by bank transfer.
         </div>
       </div>
     </Card>
@@ -2003,8 +2038,8 @@ function NotConnectedBody({ onConnect, onConnectExisting, busy, busyAction, canM
   if (!canManage) {
     return (
       <StripeHero
-        title="Get paid straight to your bank"
-        subtitle="Families pay through enrops and the money lands in your own Stripe account."
+        title="Get paid straight into your own account"
+        subtitle="Families pay through enrops. The money goes into your own Stripe account, and Stripe sends it on to your bank."
       >
         <em style={{ color: MUTED, fontSize: 13 }}>
           Only an owner or admin can connect Stripe.
@@ -2016,8 +2051,8 @@ function NotConnectedBody({ onConnect, onConnectExisting, busy, busyAction, canM
 
   return (
     <StripeHero
-      title="Get paid straight to your bank"
-      subtitle="Families pay through enrops and the money lands in your own Stripe account. You'll need this before you can take payments."
+      title="Get paid straight into your own account"
+      subtitle="Families pay through enrops. The money goes into your own Stripe account, and Stripe sends it on to your bank. You'll need this before you can take payments."
     >
       <div style={{ display: "grid", gap: 14, justifyItems: "center" }}>
         <div>
@@ -2186,7 +2221,7 @@ function DisconnectedBody({ onReconnect, onConnectExisting, busy, busyAction, ca
       </Banner>
       <StripeHero
         title="Connect Stripe to get paid again"
-        subtitle="Your money lands straight in your bank. Use the account you already have, or set up a new one."
+        subtitle="Your money goes into your own Stripe account, and Stripe sends it on to your bank. Use the account you already have, or set up a new one."
       >
         {!canManage ? (
           <em style={{ color: MUTED, fontSize: 13 }}>
@@ -2267,8 +2302,17 @@ function StripeHero({ title, subtitle, children }) {
 // `midSetup` drops the timing chip. That chip estimates how long CONNECTING
 // takes and is split by whether you already have Stripe — a choice that is not
 // on offer once an account exists, so mid-setup it answers a question the
-// operator can no longer act on. "Secured by Stripe" and "Straight to your bank"
-// stay: both are true in every state.
+// operator can no longer act on. "Secured by Stripe" and "Paid into your own
+// account" stay: both are true in every state.
+//
+// The chip used to read "Straight to your bank", matching a hero titled "Get
+// paid straight to your bank". Both were removed 2026-07-31: money settles in
+// the operator's own STRIPE account and Stripe pays out to the bank on its own
+// schedule (a rolling delay for a new US account), so "straight to your bank"
+// promised a timeline neither we nor the operator controls. "Your own account"
+// keeps the part that is actually true and actually the selling point - the
+// money is theirs, in their account, not held by us - and is true under both
+// the direct and destination charge models.
 function TrustChips({ midSetup = false }) {
   const chip = { display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, color: MUTED };
   return (
@@ -2277,15 +2321,13 @@ function TrustChips({ midSetup = false }) {
       <span style={chip}>
         <SIcon size={16}><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 1.5" /></SIcon>
         {/* Two numbers, not one: quoting a flat "5 minutes" badly undersells the
-            already-have-Stripe path. MEASURED, not estimated - Jessica's connect
-            on staging 2026-07-30 took 48 seconds from clicking Connect to landing
-            back (stripe_oauth_states created 03:57:04, consumed 03:57:52), and
-            she entered nothing at all. "About a minute" rather than "under a
-            minute" because she was already signed in to Stripe; someone signing
-            in fresh with 2FA spends a little longer. Overstating the effort on
-            the screen that gates every payment is not a safe default - it talks
-            operators out of a one-minute job. */}
-        About a minute if you have Stripe, 5–10 if not
+            already-have-Stripe path, and overstating the effort on the screen
+            that gates every payment talks operators out of a one-minute job.
+            The wording itself now lives in lib/stripeConnectEstimate.js, with the
+            measurement it came from, because the first-program step strip shows
+            the same figure - two hardcoded copies is how they drift apart. Edit
+            it there, not here. */}
+        {STRIPE_CONNECT_ESTIMATE_SENTENCE}
       </span>
       )}
       <span style={chip}>
@@ -2294,7 +2336,7 @@ function TrustChips({ midSetup = false }) {
       </span>
       <span style={chip}>
         <SIcon size={16}><path d="M3 21h18" /><path d="M5 21v-9M19 21v-9M10 21v-9M14 21v-9" /><path d="M12 3l8 4H4l8-4z" /></SIcon>
-        Straight to your bank
+        Paid into your own account
       </span>
     </div>
   );
@@ -2422,8 +2464,8 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
     <>
       {status === "restricted" && (
         <Banner tone="warn">
-          Stripe has paused some of your account capabilities. You'll usually fix this by
-          providing additional info — click below to continue.
+          Stripe has paused part of your account. It usually just needs a bit more
+          information from you — click below to finish.
         </Banner>
       )}
       {/* Reachable with NOTHING entered. "I don't use Stripe yet" calls
@@ -2502,7 +2544,7 @@ function FeeReadout({ config }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
       <FeeStat label="Card" value={fmtPct(config.platform_fee_card_pct)} />
-      <FeeStat label="ACH" value={fmtPct(config.platform_fee_ach_pct)} note="(when supported)" />
+      <FeeStat label="Bank transfer" value={fmtPct(config.platform_fee_ach_pct)} note="(when supported)" />
       <FeeStat
         label="Per registration"
         value={rangeValue}
