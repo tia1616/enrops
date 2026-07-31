@@ -91,7 +91,12 @@ serve(async (req) => {
     // review doc ("good to go for live prod site?" / "yep"). Do not reword it,
     // tighten it, or re-add anything she cut. If it needs to change, it changes
     // through her. Her standing note: she owns user-facing copy from here on.
-    const subject = 'read this super important welcome email';
+    // Subject is Arielle's greeting rather than her original "read this super important
+    // welcome email". Jessica's call, 2026-07-31: "super important" is a well-worn spam
+    // trigger and this is the first email a new operator ever gets, so landing in
+    // Promotions would cost more than the joke earns. Kept in her voice and her words.
+    // Flagged back to Arielle since the copy is hers.
+    const subject = 'hello my fellow enrops peep';
 
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"></head>
