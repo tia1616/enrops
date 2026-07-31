@@ -19,6 +19,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import ProgramSteps from "../../../components/ProgramSteps.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete.jsx";
 import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
 import { WaiverOrgName } from "../../../components/OrgNameInText.jsx";
@@ -865,6 +866,18 @@ export default function QuickProgramBuilder() {
           {notConnected ? "Your program is almost live." : "Your program is live."}
         </div>
 
+        {/* Same strip, now showing what they just finished. programCount was read
+            on mount, so it still describes the journey they are ON rather than
+            the one they just completed — a first-timer correctly keeps the
+            three-step version here. "All done" is steps.length + 1, which is 4
+            for a first program and 3 for any after it. */}
+        {isLean && (
+          <ProgramSteps
+            count={programCount}
+            current={programCount === 0 ? (notConnected ? 3 : 4) : 3}
+          />
+        )}
+
         {notConnected ? (
           <>
             <div style={{ background: "#EEEDFE", border: "1px solid #CECBF6", borderRadius: 12, padding: "16px 18px", marginBottom: 20 }}>
@@ -961,10 +974,15 @@ export default function QuickProgramBuilder() {
       <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 4 }}>
         Create a program
       </div>
-      <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.55, margin: "0 0 24px" }}>
+      <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.55, margin: "0 0 20px" }}>
         The essentials only. You'll get a shareable registration link the moment
         you save.
       </p>
+
+      {/* Lean only. A legacy operator has had Stripe connected for years, so a
+          strip whose third step is "Connect Stripe" would be describing a road
+          they finished long ago. */}
+      {isLean && <ProgramSteps count={programCount} current={1} />}
 
       <div style={{ display: "grid", gap: 18 }}>
         {/* Every class after the first inherits the questions and waivers set
