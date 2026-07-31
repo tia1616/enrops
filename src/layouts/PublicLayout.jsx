@@ -69,13 +69,28 @@ export default function PublicLayout() {
       // strict chain, last one finishing 10.2s after navigation start, with the
       // HTML ready at 98ms.
       //
-      // The links do not actually flash now. This query is the cheapest read on
-      // the page (~110ms measured, single indexed lookup on organization_id)
-      // and it now runs CONCURRENTLY with the page's own queries, the slowest
-      // of which is ~270ms. It resolves while the content above the footer is
-      // still loading, so the footer has its links before there is a page to
-      // scroll down. Fail-closed is unchanged: on error we render no provider
-      // legal links, never a link to a policy we cannot confirm.
+      // The links CAN still flash, and this is the accepted trade rather than a
+      // guarantee. Do not read the old comment's promise into this code.
+      //
+      // Nothing orders this query against the page's own. They are independent
+      // and concurrent, so which lands first is a race. It is a cheap read (a
+      // single indexed lookup on organization_id) and it usually wins, but the
+      // measured margin is thin and not something to rely on:
+      //
+      //   prod via localhost   policies 347ms vs page 528ms   won by 181ms
+      //   staging /j2s         policies 538ms vs page 555ms   won by  16ms
+      //   staging /riverbend   policies 539ms vs page 539ms   dead heat
+      //
+      // When it loses - a fast connection, or an org with few programs - the
+      // footer renders with an empty set and the provider's links appear a
+      // frame or two later. That is cosmetic and below the fold on a page whose
+      // content is still loading, and it is worth one fewer round trip on EVERY
+      // parent-facing route. If you ever need the links guaranteed present on
+      // first paint, fetch them with the org in a single query rather than
+      // restoring the await, which is what cost the page a whole round trip.
+      //
+      // Fail-closed is unchanged: on error we render no provider legal links,
+      // never a link to a policy we cannot confirm.
       setOrg(data);
       setLoadState('ok');
       fetchPublishedPolicyTypes(data.id).then((types) => {
