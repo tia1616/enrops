@@ -80,7 +80,6 @@ import { readChargeFeeFacts } from '../_shared/chargeFeeFacts.ts';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
-import { maybeSendOperatorGrowthAsk } from '../_shared/operatorGrowthAsks.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
 
 // Per-environment site origin, same convention as the webhook. Only used to
@@ -813,15 +812,12 @@ serve(async (req: Request) => {
       receipt = { sent: false, reason: (receiptErr as Error).message };
     }
 
-    // ── v4 section 8 items 3-4: the growth asks, at most once per operator ──
-    // Off by default and skipped entirely for an operator flagged under section
-    // 4. Runs last and swallows its own errors: nothing about a marketing ask
-    // may affect a refund that has already moved money.
-    await maybeSendOperatorGrowthAsk(supabase, {
-      organizationId: reg.organization_id,
-      resendApiKey: RESEND_API_KEY,
-      isAllowed: isEmailAllowed,
-    });
+    // v4 section 8 items 3-4, the review ask and the referral ask, USED TO FIRE
+    // HERE. Removed 2026-07-31 on Arielle's review of the build: a refund is the
+    // wrong moment to ask an operator for a review or a referral, and the pitch
+    // rested on "we gave our fee back too", which only lands with an operator
+    // who was burned by that exact thing elsewhere. The section 4 flag alert
+    // below is a different mechanism and stays.
 
     // v4 section 4: tell the platform team when this operator crosses the
     // refund-rate threshold. Internal only, once per operator per month, and

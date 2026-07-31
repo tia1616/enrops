@@ -88,7 +88,6 @@ import { readChargeFeeFacts, FEE_REFUND_SOURCE_KEY, FEE_REFUND_REGISTRATION_KEY 
 import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
-import { maybeSendOperatorGrowthAsk } from '../_shared/operatorGrowthAsks.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
 import {
   settlementForCheckoutCompleted,
@@ -1206,14 +1205,9 @@ async function recordExternalRefund(
     console.error('[charge.refunded] receipt failed (refund itself is recorded):', receiptErr);
   }
 
-  // v4 section 8 items 3-4. Same call as the in-app path, so a growth ask does
-  // not depend on where the operator clicked either. Off by default, skipped for
-  // flagged operators, and at most once per operator forever.
-  await maybeSendOperatorGrowthAsk(admin, {
-    organizationId: reg.organization_id,
-    resendApiKey: RESEND_API_KEY,
-    isAllowed: isEmailAllowed,
-  });
+  // v4 section 8 items 3-4, the review ask and the referral ask, USED TO FIRE
+  // HERE too. Removed 2026-07-31 on Arielle's review: wrong moment to ask. See
+  // the matching note in refund-registration. The section 4 alert below stays.
 
   // v4 section 4: a flag nobody is told about is a flag nobody sees. Internal
   // heads-up only, throttled to once per operator per month, and it can never
