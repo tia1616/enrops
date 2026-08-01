@@ -16,6 +16,12 @@ import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
+import {
+  readAuthRedirectError,
+  clearAuthRedirectError,
+  EXPIRED_LINK_MESSAGE,
+  genericAuthErrorMessage,
+} from "../../lib/authRedirectError.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Enrops default; tenant-skinnable later)
@@ -115,6 +121,10 @@ export default function InstructorPortal() {
   const [selectedProgramAssignmentId, setSelectedProgramAssignmentId] = useState(null);
   const [selectedSubId, setSelectedSubId] = useState(null);
   const [weeklyClasses, setWeeklyClasses] = useState([]); // class_schedule rows assigned to me (outside-registration tenants)
+  // A failed magic link, read out of the URL fragment. Held in state (rather
+  // than re-read at render) because we clear the fragment immediately, so the
+  // URL is no longer the source of truth after the first pass.
+  const [authLinkError, setAuthLinkError] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -122,6 +132,22 @@ export default function InstructorPortal() {
       try {
         const params = new URLSearchParams(window.location.search);
         const asEmail = params.get("as");
+
+        // Read the auth fragment BEFORE getSession(). This is the whole fix:
+        // an expired link leaves a STALE session in place, so the session check
+        // succeeds and the failure is never mentioned. That is how an expired
+        // contractor invite came to be reported as "your account isn't fully
+        // set up as an instructor yet" (2026-08-01).
+        //
+        // We record it and let the normal flow continue rather than forcing a
+        // sign-out: someone with a working session who clicks an old link
+        // should still land in their schedule, not be thrown back to login.
+        // Each terminal phase below decides what, if anything, to say.
+        const linkErr = readAuthRedirectError();
+        if (linkErr) {
+          if (mounted) setAuthLinkError(linkErr);
+          clearAuthRedirectError(navigate);
+        }
 
         const { data: { session } } = await supabase.auth.getSession();
         if (!mounted) return;
@@ -796,6 +822,18 @@ export default function InstructorPortal() {
           <h1 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, color: PURPLE }}>Instructor sign in</h1>
           <p style={{ margin: "0 0 18px", color: MUTED, fontSize: 14 }}>Sign in to view your schedule and respond to offers.</p>
 
+          {/* The link they just clicked failed. Say so, right above the form
+              that fixes it — not in a card further down the page, and never
+              instead of the form. Absent when they arrived here normally. */}
+          {authLinkError && (
+            <div
+              role="status"
+              style={{ margin: "0 0 18px", padding: 12, borderRadius: 8, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, color: INK, fontSize: 13, lineHeight: 1.5 }}
+            >
+              {authLinkError.isExpiredLink ? EXPIRED_LINK_MESSAGE : genericAuthErrorMessage(authLinkError)}
+            </div>
+          )}
+
           <button
             type="button"
             onClick={handleGoogle}
@@ -910,9 +948,31 @@ export default function InstructorPortal() {
       <Shell>
         <div style={{ background: "#fff", border: `1px solid ${CORAL}`, borderRadius: 12, padding: 28, maxWidth: 540 }}>
           <h1 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: INK }}>We couldn't load your schedule</h1>
+          {/* This is the state that produced the original bug: a stale session
+              plus an expired link. The session lookup "succeeded", so we fell
+              through to "you're not set up as an instructor" and never
+              mentioned the link — sending the person off to ask their operator
+              for an invite that would not have helped. When a failed link is
+              the likelier explanation, it goes FIRST, and the operator advice
+              below is demoted to a maybe. */}
+          {authLinkError && (
+            <p style={{ color: INK, fontSize: 14, margin: "0 0 12px", lineHeight: 1.5, fontWeight: 600 }}>
+              {authLinkError.isExpiredLink ? EXPIRED_LINK_MESSAGE : genericAuthErrorMessage(authLinkError)}
+            </p>
+          )}
+          {authLinkError && (
+            <p style={{ color: MUTED, fontSize: 13, margin: "0 0 4px", lineHeight: 1.5 }}>
+              If a new link doesn&rsquo;t fix it:
+            </p>
+          )}
+          {/* `friendly` is rendered verbatim in both branches. One of its cases
+              returns a raw error string, so splicing it into a larger sentence
+              (lower-casing its first letter, say) would mangle messages that
+              start with an email address or a proper noun. Lead-in above, text
+              untouched below. */}
           <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px", lineHeight: 1.5 }}>{friendly}</p>
           <button type="button" onClick={signOut} style={{ padding: "8px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
-            Sign out and try again
+            {authLinkError ? "Sign out and request a new link" : "Sign out and try again"}
           </button>
         </div>
       </Shell>

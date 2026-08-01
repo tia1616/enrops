@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import WizardHost from './WizardHost.jsx';
+import { readAuthRedirectError } from '../../lib/authRedirectError.js';
 
 // Top-level resolver for /:slug/onboarding. Runs on every visit and decides:
 //
@@ -31,18 +32,16 @@ function isMinorFromDob(dob, today = new Date()) {
   return today < eighteenthBirthday;
 }
 
-// Supabase appends auth errors to the URL hash on failure (e.g. magic link
-// expired). Detect otp_expired so we can route to the resend form.
-function readAuthErrorFromUrl() {
-  const hash = window.location.hash || '';
-  if (!hash || hash.length < 2) return null;
-  const params = new URLSearchParams(hash.slice(1));
-  const errorCode = params.get('error_code');
-  if (errorCode === 'otp_expired' || errorCode === 'access_denied') {
-    return errorCode;
-  }
-  return null;
-}
+// Auth-error-from-the-hash reading now lives in lib/authRedirectError.js and is
+// shared with the instructor portal and the admin area. This file's local copy
+// was the only one that existed, which is why the other two surfaces silently
+// swallowed the same failure.
+//
+// One behaviour change from folding them together, and it is a fix rather than
+// a side effect: the old local version returned 'access_denied' but the caller
+// below only ever branched on 'otp_expired', so an access_denied link fell
+// straight through to the session check and was never reported. The shared
+// helper's isExpiredLink covers both, and the caller now branches on that.
 
 export default function OnboardingRouter() {
   const navigate = useNavigate();
@@ -54,9 +53,16 @@ export default function OnboardingRouter() {
     let cancelled = false;
 
     async function resolve() {
-      // 1. Magic link expired? Bounce to the resend form before anything else.
-      const authErr = readAuthErrorFromUrl();
-      if (authErr === 'otp_expired') {
+      // 1. Magic link failed? Bounce to the resend form before anything else.
+      //    Routing to /error?reason=link_expired is right for THIS surface
+      //    specifically: its resend form calls resend-onboarding-invite, which
+      //    looks people up in `instructors` and sends them back to
+      //    /:slug/onboarding. The instructor portal and the admin area
+      //    deliberately do NOT route here — that resender would find nothing for
+      //    a non-instructor admin and report a cheerful "check your inbox" for
+      //    an email that never gets sent.
+      const authErr = readAuthRedirectError();
+      if (authErr?.isExpiredLink) {
         navigate('/error?reason=link_expired', { replace: true });
         return;
       }

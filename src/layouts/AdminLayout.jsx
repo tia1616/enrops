@@ -16,6 +16,12 @@ import PortalSwitcher from "../components/PortalSwitcher.jsx";
 import RouteFallback from "../components/RouteFallback.jsx";
 import { setOrgGroup } from "../lib/analytics";
 import { PLATFORM_LEGAL_LINKS } from "../lib/policies.js";
+import {
+  readAuthRedirectError,
+  clearAuthRedirectError,
+  EXPIRED_LINK_MESSAGE,
+  genericAuthErrorMessage,
+} from "../lib/authRedirectError.js";
 
 // Enrops brand tokens
 const PURPLE = "#1C004F";   // deep plum — wordmark, headings, body accents
@@ -25,6 +31,7 @@ const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
+const CORAL = "#D9694F";    // same warning coral the instructor portal uses
 
 // Flat sidebar nav — every item is a single page. Sections with multiple
 // facets (Programs, Instructors, Money) expose an in-page tab strip (rendered
@@ -187,6 +194,10 @@ export default function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [authState, setAuthState] = useState("loading"); // loading | unauthorized | org_load_failed | ready
+  // A failed magic link, read out of the URL fragment on mount. See
+  // lib/authRedirectError.js — Supabase reports these in the hash, not the
+  // query string, so nothing here ever saw them.
+  const [authLinkError, setAuthLinkError] = useState(null);
   const [user, setUser] = useState(null);
   const [orgMember, setOrgMember] = useState(null);
   const [org, setOrg] = useState(null);
@@ -207,6 +218,15 @@ export default function AdminLayout() {
     let mounted = true;
     (async () => {
       try {
+        // Read the auth fragment BEFORE getSession(), for the same reason the
+        // instructor portal does: a failed link can leave a stale session in
+        // place, so "we have a session" is not evidence the link worked.
+        const linkErr = readAuthRedirectError();
+        if (linkErr) {
+          if (mounted) setAuthLinkError(linkErr);
+          clearAuthRedirectError(navigate);
+        }
+
         const { data: { session } } = await supabase.auth.getSession();
         if (!mounted) return;
         if (!session?.user) {
@@ -412,6 +432,18 @@ export default function AdminLayout() {
           <div style={{ fontFamily: "'Poppins', system-ui, sans-serif", fontWeight: 700, fontSize: 22, color: PURPLE, marginBottom: 8 }}>
             Enrops Admin
           </div>
+          {/* admin-invite sends teammates to /admin. When that link is stale,
+              Supabase reports it in the URL fragment and nothing here read it,
+              so an invited admin was told only "you need to sign in" with no
+              hint that the link they had just clicked was the problem. */}
+          {authLinkError && (
+            <div
+              role="status"
+              style={{ margin: "0 0 16px", padding: 12, borderRadius: 8, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, color: INK, fontSize: 13, lineHeight: 1.5 }}
+            >
+              {authLinkError.isExpiredLink ? EXPIRED_LINK_MESSAGE : genericAuthErrorMessage(authLinkError)}
+            </div>
+          )}
           <p style={{ color: INK, fontSize: 15, lineHeight: 1.5, marginTop: 0 }}>
             You need to sign in with an admin account to access this area.
           </p>
