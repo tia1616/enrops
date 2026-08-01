@@ -1718,11 +1718,16 @@ export default function Schedule() {
         let realMsg = error.message ?? "function error";
         try {
           const body = await error.context?.json?.();
-          if (body?.error) realMsg = body.error;
+          // `message` before `error`: `error` is a machine code for branching
+          // ("no_tenant_inbox"), and showing the operator a code is showing them
+          // nothing. When the function supplies a sentence, that is what goes
+          // on screen; codes remain the fallback for the ones that don't.
+          if (body?.message) realMsg = body.message;
+          else if (body?.error) realMsg = body.error;
         } catch {}
         throw new Error(realMsg);
       }
-      if (data?.error) throw new Error(data.error);
+      if (data?.error) throw new Error(data.message ?? data.error);
       // ~8 min per instructor to write and send their camp schedule by hand. Only a
       // real send that reached someone counts — a preview or test saves nothing, and a
       // 0-sent run saved nothing either.

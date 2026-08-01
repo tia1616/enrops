@@ -110,10 +110,11 @@ const STRIPE_WEBHOOK_SECRET = Deno.env.get('STRIPE_WEBHOOK_SECRET')!;
 // connected accounts. Optional; if unset, only the primary secret is tried.
 const STRIPE_WEBHOOK_SECRET_CONNECT = Deno.env.get('STRIPE_WEBHOOK_SECRET_CONNECT') || null;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
-// All FROM/reply-to/alert addresses now come from loadOrgBrand(), which
-// cascades tenant -> Enrops -> hardcoded Enrops defaults. No more J2S-baked
-// global constant.
-const PLATFORM_ALERT_DEFAULT = 'alerts@enrops.com';
+// All FROM/reply-to addresses come from loadOrgBrand(). Alert RECIPIENTS come
+// from brand.tenant_alert_email and never cascade to the platform - see
+// sendOperatorAlert. A `PLATFORM_ALERT_DEFAULT = 'alerts@enrops.com'` constant
+// used to sit here; it was already unreferenced, and leaving a platform address
+// lying next to this code is how a tenant alert finds its way back to us.
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so the account-ready email's dashboard/login links point at staging, not prod.
 // Defaults to prod (this webhook fires on real payments).
@@ -175,7 +176,18 @@ serve(async (req) => {
       const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
       const orgId = regForOrg?.organization_id;
       const brand = await loadOrgBrand(admin, orgId);
-      const alertEmail = brand.alert_email;
+      // The tenant's OWN inbox, or null. NOT brand.alert_email: every alert
+      // below names a paying family (their registration IDs, their name, their
+      // email address) or the provider's Stripe internals, and alert_email
+      // cascades tenant -> Enrops -> a hardcoded Enrops address. On an org with
+      // no address of its own that cascade forwarded one provider's customers
+      // to us. Each send site checks this and refuses loudly instead.
+      //
+      // Refusing does not lose the signal: every one of these paths already
+      // console.errors the detail, and the underlying rows stay in their
+      // unhappy state (unconfirmed registration, missing installments) where
+      // the operator's own screens surface them.
+      const alertEmail = brand.tenant_alert_email;
 
       // Card settles instantly (session.payment_status === 'paid'). ACH/bank
       // transfer finishes Checkout but settles asynchronously — payment_status
@@ -547,7 +559,9 @@ serve(async (req) => {
       await admin.from('registrations').update({ ...SETTLEMENT_ON_ASYNC_FAILURE }).in('id', regIds);
       await sendOperatorAlert({
         brand,
-        to: brand.alert_email,
+        // Tenant inbox only: the body below names the family and quotes their
+        // email address. The cascade would have handed both to Enrops.
+        to: brand.tenant_alert_email,
         subject: 'Bank transfer (ACH) failed — follow up needed',
         body: `A family's bank transfer did not clear (e.g. insufficient funds). The seat is still held (confirmed) but unpaid. Registration IDs: ${regIds.join(', ')}. Parent: ${meta.parent_name || ''} ${session.customer_email || meta.parent_email || ''}. Contact the family to arrange payment, or release the seat.`,
       });
@@ -1346,7 +1360,9 @@ async function autoCreateParentAccount(
   email: string,
   name: string,
   orgSlug: string,
-  alertEmail: string,
+  // Nullable: the caller passes the tenant's own inbox, which may not exist.
+  // The alert below puts a parent's email address in the SUBJECT line.
+  alertEmail: string | null,
 ) {
   // Paginate through ALL auth users. A bare listUsers() returns only the first
   // page (default 50), so past that the existence check reads FALSE for parents
@@ -1447,7 +1463,24 @@ async function sendAccountReadyEmail(admin: SupabaseClient, brand: OrgBrand, ema
   }
 }
 
-async function sendOperatorAlert({ brand, to, subject, body }: { brand: OrgBrand; to: string; subject: string; body: string }) {
+// Every operator alert in this file funnels through here, which is why the
+// no-recipient check lives here rather than at each of the eleven call sites.
+// `to` is nullable ON PURPOSE: it is the tenant's own inbox (brand
+// .tenant_alert_email or a raw organizations.alert_email), never the cascading
+// brand.alert_email, because every body we send names a family, a contractor,
+// or a provider's Stripe internals. A missing address means we have nowhere
+// inside the tenant to put it, and the answer is to refuse and say so - never
+// to fall back to the platform, which is how this data reached Enrops before.
+async function sendOperatorAlert(
+  { brand, to, subject, body }: { brand: OrgBrand; to: string | null; subject: string; body: string },
+) {
+  if (!to) {
+    console.error('[stripe-webhook] operator alert NOT sent - org has no inbox of its own', {
+      organization_id: brand.org_id,
+      subject,
+    });
+    return;
+  }
   try {
     await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -2012,8 +2045,18 @@ async function sendInstructorRegressionAlert(
     loadOrgBrand(admin, orgId),
   ]);
 
-  if (!brand.alert_email) {
-    console.warn(`[stripe-webhook] no alert_email for org ${orgId} — skipping instructor regression alert`);
+  // This guard used to test brand.alert_email, which is a cascade ending at a
+  // hardcoded Enrops address and therefore NEVER empty - so the branch could
+  // not fire and the warning under it had never once run. Worse, the send below
+  // it was unconditional, so an org with no address of its own had this
+  // contractor's name and email delivered to Enrops instead. Both halves are
+  // fixed by asking the question that actually has a false case: does this
+  // TENANT have an inbox?
+  if (!brand.tenant_alert_email) {
+    console.error(
+      `[stripe-webhook] instructor payout-regression alert NOT sent - org ${orgId} has no inbox of its own`,
+      { instructorId },
+    );
     return;
   }
 
@@ -2030,7 +2073,7 @@ async function sendInstructorRegressionAlert(
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
     body: JSON.stringify({
       from: formatFromAddress(brand),
-      to: brand.alert_email,
+      to: brand.tenant_alert_email,
       reply_to: brand.reply_to,
       subject,
       text,

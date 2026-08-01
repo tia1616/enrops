@@ -1,6 +1,6 @@
 // send-afterschool-offers: emails offer letters to instructors for an after-school
 // TERM and flips their confirmed program_assignments to published. Sibling of the
-// camp send-offers, but term/program-shaped (no weeks/session_types — each class
+// camp send-offers, but term/program-shaped (no weeks/session_types â€” each class
 // recurs the same weekday all term).
 //
 // Input: { organization_id, term, instructor_ids?: string[]|null, mode: 'preview'|'test'|'send', deadline?: 'YYYY-MM-DD' }
@@ -15,7 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -93,7 +93,7 @@ serve(async (req: Request) => {
     const instructorIdsInput: string[] | null | undefined = body.instructor_ids;
     const mode: 'preview' | 'test' | 'send' = body.mode ?? 'preview';
     const deadline: string | null = body.deadline ?? null;
-    const testRecipient: string | undefined = body.test_recipient; // test-mode override; else tenant alert_email
+    const testRecipient: string | undefined = body.test_recipient; // test-mode override; else the tenant's OWN inbox, or null -> refuse
     const introMessage: string | null = body.intro_message ?? null;
 
     if (!organizationId) return json({ error: 'organization_id is required' }, 400);
@@ -122,10 +122,21 @@ serve(async (req: Request) => {
     const fromName = brandingRow?.email_from_name ?? org.name;
     const replyTo = brandingRow?.email_reply_to ?? null;
 
-    // Tenant email signature — loaded once per org (outside the instructor loop).
+    // Tenant email signature â€” loaded once per org (outside the instructor loop).
     const brand = await loadOrgBrand(supabase, organizationId);
-    // Where test-mode sends land: caller-supplied recipient, else the tenant's inbox.
+    // Where test-mode sends land: caller-supplied recipient, else the tenant's
+    // OWN inbox. Null when the org has neither â€” see resolveTestRecipient.
     const testInbox = resolveTestRecipient(brand, testRecipient);
+    // Refuse a TEST send with nowhere tenant-side to put it â€” same rule and
+    // same words as send-offers, its camp-side twin. Preview is not gated:
+    // it renders without sending (see `mode === 'preview'` below).
+    if (mode === 'test' && !testInbox) {
+      console.error('send-afterschool-offers: test send refused, org has no inbox of its own', {
+        organization_id: organizationId,
+        term,
+      });
+      return json({ error: 'no_tenant_inbox', message: NO_TENANT_INBOX_MESSAGE, sent: 0, failed: [], preview: [] }, 400);
+    }
 
     // Programs for this term (open only).
     const { data: progs } = await supabase
@@ -148,7 +159,7 @@ serve(async (req: Request) => {
     const assigns = assignsRaw ?? [];
     if (assigns.length === 0) {
       return json({ sent: 0, failed: [], preview: [], note: mode === 'preview'
-        ? 'Nothing to preview — approve some proposed matches first.'
+        ? 'Nothing to preview â€” approve some proposed matches first.'
         : 'No approved (confirmed) assignments to send. Approve some first.' });
     }
 
@@ -186,10 +197,14 @@ serve(async (req: Request) => {
         .filter((r: any) => !!r.p)
         .sort((x: any, y: any) => (parse12h(x.p.start_time) ?? 0) - (parse12h(y.p.start_time) ?? 0));
 
-      const subject = `Your ${termDisplay} after-school schedule is ready — please review`;
+      const subject = `Your ${termDisplay} after-school schedule is ready â€” please review`;
       const html = renderHtml({ org, primary, firstName: inst.preferred_name ?? inst.first_name ?? 'there', termDisplay, classes, portalUrl, deadline, locById, signatureHtml: renderSignatureBlock(brand), introMessage });
       const text = renderText({ org, firstName: inst.preferred_name ?? inst.first_name ?? 'there', termDisplay, classes, portalUrl, deadline, locById, introMessage });
-      const recipient = mode === 'send' ? inst.email : testInbox;
+      // testInbox is non-null in test mode (guarded above). In preview mode it
+      // can be null, and the preview should say so rather than render "null".
+      const recipient = mode === 'send'
+        ? inst.email
+        : (testInbox ?? '(no address on file)');
       previews.push({ instructor_id: instructorId, to: recipient, subject, html, text });
       if (mode === 'preview') continue;
 
@@ -219,7 +234,7 @@ serve(async (req: Request) => {
               organization_id: organizationId,
               program_assignment_id: aid,
               sender_role: 'system',
-              message: deadline ? `Offer email sent — deadline ${deadline}` : 'Offer email sent',
+              message: deadline ? `Offer email sent â€” deadline ${deadline}` : 'Offer email sent',
             })),
           );
         }
@@ -250,7 +265,7 @@ serve(async (req: Request) => {
 function venueHtml(loc: any): string {
   if (!loc) return '';
   const lines: string[] = [];
-  if (loc.address) lines.push(`<div>${escape(loc.address)}${loc.room_number ? ` · Room ${escape(loc.room_number)}` : ''}</div>`);
+  if (loc.address) lines.push(`<div>${escape(loc.address)}${loc.room_number ? ` Â· Room ${escape(loc.room_number)}` : ''}</div>`);
   else if (loc.room_number) lines.push(`<div>Room ${escape(loc.room_number)}</div>`);
   if (loc.arrival_instructions) lines.push(`<div><strong>Arrival:</strong> ${escape(loc.arrival_instructions)}</div>`);
   if (loc.dismissal_instructions) lines.push(`<div><strong>Dismissal:</strong> ${escape(loc.dismissal_instructions)}</div>`);
@@ -259,7 +274,7 @@ function venueHtml(loc: any): string {
   if (loc.contact_name) c.push(escape(loc.contact_name));
   if (loc.contact_phone) c.push(escape(loc.contact_phone));
   if (loc.contact_email) c.push(escape(loc.contact_email));
-  if (c.length) lines.push(`<div><strong>Venue contact:</strong> ${c.join(' · ')}</div>`);
+  if (c.length) lines.push(`<div><strong>Venue contact:</strong> ${c.join(' Â· ')}</div>`);
   if (loc.notes) lines.push(`<div><strong>Notes:</strong> ${escape(loc.notes)}</div>`);
   if (!lines.length) return '';
   return `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">${lines.join('')}</div>`;
@@ -268,7 +283,7 @@ function venueHtml(loc: any): string {
 function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, deadline, locById, signatureHtml, introMessage }: any) {
   const rows = classes.map(({ a, p }: any) => {
     const loc = p.program_location_id ? locById.get(p.program_location_id) : undefined;
-    const area = loc?.area ? ` · ${escape(loc.area)}` : '';
+    const area = loc?.area ? ` Â· ${escape(loc.area)}` : '';
     const ab = arriveBy(p.start_time);
     const hardship = Array.isArray(a.flags) && (a.flags.includes('location_override') || a.flags.includes('location_low_pref'));
     const bonus = a.distance_bonus_cents
@@ -277,8 +292,8 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
     return `<tr><td style="padding:14px 0;border-bottom:1px solid ${BORDER};">
       <div style="font-size:15px;font-weight:700;color:${TEXT};line-height:1.3;">${escape(p.curriculum ?? 'Class')}</div>
       <div style="font-size:13px;color:${MUTED};margin-top:4px;line-height:1.4;">
-        ${escape(dayLabel(p.day_of_week))} ${escape(p.start_time ?? '')}–${escape(p.end_time ?? '')} · <strong>all term</strong><br/>
-        ${escape(loc?.name ?? '')}${area}${ab ? ` · please arrive by ${ab}` : ''}
+        ${escape(dayLabel(p.day_of_week))} ${escape(p.start_time ?? '')}â€“${escape(p.end_time ?? '')} Â· <strong>all term</strong><br/>
+        ${escape(loc?.name ?? '')}${area}${ab ? ` Â· please arrive by ${ab}` : ''}
       </div>
       ${venueHtml(loc)}
       ${bonus}
@@ -295,33 +310,33 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
       </td></tr>
       <tr><td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
         Hi ${escape(firstName)},<br/><br/>
-        ${introMessage ? escape(introMessage).replace(/\n/g, '<br />') : `Your proposed after-school schedule for ${escape(termDisplay)} is below. <strong>Please tap Accept or Request change on each of the ${n} ${cls}</strong> — each one runs weekly all term, and your schedule isn't confirmed until we hear back on every one.`}${deadline ? `<br/><br/><strong>Please respond by ${escape(deadline)}.</strong>` : ''}
+        ${introMessage ? escape(introMessage).replace(/\n/g, '<br />') : `Your proposed after-school schedule for ${escape(termDisplay)} is below. <strong>Please tap Accept or Request change on each of the ${n} ${cls}</strong> â€” each one runs weekly all term, and your schedule isn't confirmed until we hear back on every one.`}${deadline ? `<br/><br/><strong>Please respond by ${escape(deadline)}.</strong>` : ''}
       </td></tr>
       <tr><td style="padding:8px 32px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${rows}</table></td></tr>
       <tr><td style="padding:24px 32px 6px;" align="left">
-        <a href="${portalUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;font-weight:700;">Review and respond →</a>
+        <a href="${portalUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;font-weight:700;">Review and respond â†’</a>
       </td></tr>
-      <tr><td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">Once you've responded to every class, you're set. Questions? Just reply to this email.${signatureHtml || `<br/><br/>— ${escape(org.name)}`}</td></tr>
+      <tr><td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">Once you've responded to every class, you're set. Questions? Just reply to this email.${signatureHtml || `<br/><br/>â€” ${escape(org.name)}`}</td></tr>
     </table>
   </td></tr></table></body></html>`;
 }
 
 function renderText({ org, firstName, termDisplay, classes, portalUrl, deadline, locById, introMessage }: any) {
   const lines: string[] = [`Hi ${firstName},`, ''];
-  lines.push(introMessage || `Your proposed after-school schedule for ${termDisplay} is below. Please tap Accept or Request change on each class — each runs weekly all term, and nothing's confirmed until we hear back on every one.`);
+  lines.push(introMessage || `Your proposed after-school schedule for ${termDisplay} is below. Please tap Accept or Request change on each class â€” each runs weekly all term, and nothing's confirmed until we hear back on every one.`);
   if (deadline) { lines.push(''); lines.push(`Please respond by ${deadline}.`); }
   lines.push('');
   for (const { a, p } of classes) {
     const loc = p.program_location_id ? locById.get(p.program_location_id) : undefined;
     const ab = arriveBy(p.start_time);
-    lines.push(`• ${p.curriculum ?? 'Class'}`);
-    lines.push(`  ${dayLabel(p.day_of_week)} ${p.start_time ?? ''}–${p.end_time ?? ''} · all term`);
-    lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
+    lines.push(`â€¢ ${p.curriculum ?? 'Class'}`);
+    lines.push(`  ${dayLabel(p.day_of_week)} ${p.start_time ?? ''}â€“${p.end_time ?? ''} Â· all term`);
+    lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` Â· ${loc.area}` : ''}${ab ? ` Â· arrive by ${ab}` : ''}`);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} bonus`);
     lines.push('');
   }
   lines.push(`Review and respond: ${portalUrl}`);
   lines.push('');
-  lines.push(`— ${org.name}`);
+  lines.push(`â€” ${org.name}`);
   return lines.join('\n');
 }

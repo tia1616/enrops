@@ -4,7 +4,9 @@
 // Input: { cycle_id: string, instructor_ids: string[] | null, mode: 'preview' | 'test' | 'send' }
 // - mode 'preview': returns rendered HTML + meta for every instructor in scope, no DB writes, no email sends
 // - mode 'test':    sends each rendered email to the tenant's test inbox (body.test_recipient,
-//                   else the tenant's alert_email), overriding instructor.email, still flips DB
+//                   else the tenant's OWN inbox), overriding instructor.email, still flips DB.
+//                   Refuses with 400 no_tenant_inbox when the org has neither, rather than
+//                   falling back to the platform address and mailing the roster to Enrops.
 // - mode 'send':    sends to real instructor.email, flips DB
 //
 // Multi-tenant: queries scoped by organization (inferred from cycle.organization_id).
@@ -13,7 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -119,7 +121,7 @@ function classDaysSummary(days: string[] | null) {
   const short: Record<string, string> = {
     monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat', sunday: 'Sun',
   };
-  if (days.length === 5 && order.slice(0, 5).every((d) => days.includes(d))) return 'Mon–Fri';
+  if (days.length === 5 && order.slice(0, 5).every((d) => days.includes(d))) return 'Monâ€“Fri';
   const sorted = days.slice().sort((a, b) => order.indexOf(a) - order.indexOf(b));
   return sorted.map((d) => short[d] ?? d).join(', ');
 }
@@ -139,7 +141,7 @@ serve(async (req: Request) => {
     const instructorIdsInput: string[] | null | undefined = body.instructor_ids;
     const mode: 'preview' | 'test' | 'send' = body.mode ?? 'preview';
     const deadline: string | null = body.deadline ?? null; // YYYY-MM-DD
-    const testRecipient: string | undefined = body.test_recipient; // test-mode override; else tenant alert_email
+    const testRecipient: string | undefined = body.test_recipient; // test-mode override; else the tenant's OWN inbox, or null -> refuse
     const introMessage: string | null = body.intro_message ?? null;
 
     if (!cycleId) return json({ error: 'cycle_id is required' }, 400);
@@ -189,12 +191,26 @@ serve(async (req: Request) => {
       email_reply_to: brandingRow?.email_reply_to ?? null,
     };
 
-    // Tenant email signature — loaded once per org (outside the instructor loop).
+    // Tenant email signature â€” loaded once per org (outside the instructor loop).
     const brand = await loadOrgBrand(supabase, cycle.organization_id);
-    // Where test-mode sends land: caller-supplied recipient, else the tenant's inbox.
+    // Where test-mode sends land: caller-supplied recipient, else the tenant's
+    // OWN inbox. Null when the org has neither â€” see resolveTestRecipient.
     const testInbox = resolveTestRecipient(brand, testRecipient);
+    // Refuse a TEST send with nowhere tenant-side to put it. The email being
+    // tested names instructors, their assignments and their pay; the old
+    // fallback would have mailed that to Enrops while telling the operator it
+    // went to their own inbox. Preview is deliberately NOT gated here: it
+    // renders without sending anything (see `mode === 'preview'` below), so it
+    // stays usable and simply shows that there is no address on file.
+    if (mode === 'test' && !testInbox) {
+      console.error('send-offers: test send refused, org has no inbox of its own', {
+        organization_id: cycle.organization_id,
+        cycle_id: cycleId,
+      });
+      return json({ error: 'no_tenant_inbox', message: NO_TENANT_INBOX_MESSAGE, sent: 0, failed: [], preview: [] }, 400);
+    }
 
-    // Preview and Test include confirmed AND published — both are non-mutating, so
+    // Preview and Test include confirmed AND published â€” both are non-mutating, so
     // they let admins inspect and re-test without changing the send-state.
     // Real Send fires only on 'confirmed' so it never re-mails already-published rows.
     const statusFilter = mode === 'send' ? ['confirmed'] : ['confirmed', 'published'];
@@ -216,7 +232,7 @@ serve(async (req: Request) => {
     const assignments = (assignmentsRaw ?? []) as AssignmentRow[];
     if (assignments.length === 0) {
       const note = mode === 'preview'
-        ? 'Nothing to preview — no confirmed or published assignments in this cycle. Click Approve to confirm some first.'
+        ? 'Nothing to preview â€” no confirmed or published assignments in this cycle. Click Approve to confirm some first.'
         : 'No confirmed assignments to send. Either Approve some first, or roll published rows back if you re-need to send them.';
       return json({ sent: 0, failed: [], preview: [], note });
     }
@@ -233,7 +249,7 @@ serve(async (req: Request) => {
     // Pull venue details (address, room, contact, arrival, food/drink, notes) for
     // any locations referenced by these sessions. Each gets rendered under its camp
     // row in the email so instructors have everything they need in one place. Fields
-    // are optional — only set fields render.
+    // are optional â€” only set fields render.
     const locationIds = Array.from(new Set((sessions ?? []).map((s) => s.location_id).filter(Boolean)));
     const { data: locations } = locationIds.length
       ? await supabase
@@ -272,12 +288,16 @@ serve(async (req: Request) => {
         .sort((x, y) => (x.s!.starts_on ?? '').localeCompare(y.s!.starts_on ?? ''));
 
       const cycleDisplay = cycleDisplayName(cycle.name);
-      const subject = `Your ${cycleDisplay} schedule is ready — please review`;
+      const subject = `Your ${cycleDisplay} schedule is ready â€” please review`;
       if (!org.slug) throw new Error(`send-offers: org ${org.id} has no slug; cannot build portal URL`);
       const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
       const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand), introMessage });
       const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById, introMessage });
-      const recipient = mode === 'send' ? instructor.email! : testInbox;
+      // testInbox is non-null in test mode (guarded above). In preview mode it
+      // can be null, and the preview should say so rather than render "null".
+      const recipient = mode === 'send'
+        ? instructor.email!
+        : (testInbox ?? '(no address on file)');
 
       previews.push({ instructor_id: instructorId, to: recipient, subject, html, text });
 
@@ -333,7 +353,7 @@ serve(async (req: Request) => {
               organization_id: cycle.organization_id,
               camp_assignment_id: assignmentId,
               sender_role: 'system',
-              message: deadline ? `Offer email sent — deadline ${deadline}` : 'Offer email sent',
+              message: deadline ? `Offer email sent â€” deadline ${deadline}` : 'Offer email sent',
             }))
           );
         }
@@ -384,7 +404,7 @@ function json(body: unknown, status = 200) {
 function renderVenueDetailsHtml(loc: LocationDetails | undefined): string {
   if (!loc) return '';
   const lines: string[] = [];
-  if (loc.address) lines.push(`<div>${escape(loc.address)}${loc.room_number ? ` · Room ${escape(loc.room_number)}` : ''}</div>`);
+  if (loc.address) lines.push(`<div>${escape(loc.address)}${loc.room_number ? ` Â· Room ${escape(loc.room_number)}` : ''}</div>`);
   else if (loc.room_number) lines.push(`<div>Room ${escape(loc.room_number)}</div>`);
   if (loc.arrival_instructions) lines.push(`<div><strong>Arrival:</strong> ${escape(loc.arrival_instructions)}</div>`);
   if (loc.dismissal_instructions) lines.push(`<div><strong>Dismissal:</strong> ${escape(loc.dismissal_instructions)}</div>`);
@@ -393,7 +413,7 @@ function renderVenueDetailsHtml(loc: LocationDetails | undefined): string {
   if (loc.contact_name) contactParts.push(escape(loc.contact_name));
   if (loc.contact_phone) contactParts.push(escape(loc.contact_phone));
   if (loc.contact_email) contactParts.push(escape(loc.contact_email));
-  if (contactParts.length) lines.push(`<div><strong>Venue contact:</strong> ${contactParts.join(' · ')}</div>`);
+  if (contactParts.length) lines.push(`<div><strong>Venue contact:</strong> ${contactParts.join(' Â· ')}</div>`);
   if (loc.notes) lines.push(`<div><strong>Notes:</strong> ${escape(loc.notes)}</div>`);
   if (lines.length === 0) return '';
   return `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">${lines.join('')}</div>`;
@@ -402,7 +422,7 @@ function renderVenueDetailsHtml(loc: LocationDetails | undefined): string {
 function renderVenueDetailsText(loc: LocationDetails | undefined): string[] {
   if (!loc) return [];
   const out: string[] = [];
-  if (loc.address) out.push(`  ${loc.address}${loc.room_number ? ` · Room ${loc.room_number}` : ''}`);
+  if (loc.address) out.push(`  ${loc.address}${loc.room_number ? ` Â· Room ${loc.room_number}` : ''}`);
   else if (loc.room_number) out.push(`  Room ${loc.room_number}`);
   if (loc.arrival_instructions) out.push(`  Arrival: ${loc.arrival_instructions}`);
   if (loc.dismissal_instructions) out.push(`  Dismissal: ${loc.dismissal_instructions}`);
@@ -411,7 +431,7 @@ function renderVenueDetailsText(loc: LocationDetails | undefined): string[] {
   if (loc.contact_name) contactParts.push(loc.contact_name);
   if (loc.contact_phone) contactParts.push(loc.contact_phone);
   if (loc.contact_email) contactParts.push(loc.contact_email);
-  if (contactParts.length) out.push(`  Venue contact: ${contactParts.join(' · ')}`);
+  if (contactParts.length) out.push(`  Venue contact: ${contactParts.join(' Â· ')}`);
   if (loc.notes) out.push(`  Notes: ${loc.notes}`);
   return out;
 }
@@ -431,7 +451,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
   const primary = branding.primary_color ?? DEFAULT_PRIMARY;
   const firstName = instructor.preferred_name ?? instructor.first_name ?? 'there';
   const campCount = camps.length;
-  const cycleRange = (cycle.starts_on && cycle.ends_on) ? `${fmt(cycle.starts_on)} – ${fmt(cycle.ends_on)}` : '';
+  const cycleRange = (cycle.starts_on && cycle.ends_on) ? `${fmt(cycle.starts_on)} â€“ ${fmt(cycle.ends_on)}` : '';
 
   const campRows = camps.map(({ a, s }) => {
     if (!s) return '';
@@ -458,8 +478,8 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
             ${escape(s.curriculum_name ?? 'Camp')}${role}
           </div>
           <div style="font-size:13px;color:${MUTED};margin-top:4px;line-height:1.4;">
-            Week ${s.week_num} · ${fmt(s.starts_on)} – ${fmt(s.ends_on)} · ${classDaysSummary(s.class_days)}<br />
-            ${escape(s.location_name ?? '')} · ${titleCase(s.session_type)} ${fmtTime(s.start_time)}–${fmtTime(s.end_time)}
+            Week ${s.week_num} Â· ${fmt(s.starts_on)} â€“ ${fmt(s.ends_on)} Â· ${classDaysSummary(s.class_days)}<br />
+            ${escape(s.location_name ?? '')} Â· ${titleCase(s.session_type)} ${fmtTime(s.start_time)}â€“${fmtTime(s.end_time)}
           </div>
           ${venue}
           ${bonus}
@@ -485,7 +505,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
             <td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
               Hi ${escape(firstName)},
               <br /><br />
-              ${introMessage ? escape(introMessage).replace(/\n/g, '<br />') : `Your proposed schedule for ${escape(cycleDisplayName(cycle.name))} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${unitLabel(cycle.cycle_type, campCount)}</strong>${cycleRange ? ` · ${cycleRange}` : ''} — your schedule isn't confirmed until we hear back from you on every one.`}${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
+              ${introMessage ? escape(introMessage).replace(/\n/g, '<br />') : `Your proposed schedule for ${escape(cycleDisplayName(cycle.name))} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${unitLabel(cycle.cycle_type, campCount)}</strong>${cycleRange ? ` Â· ${cycleRange}` : ''} â€” your schedule isn't confirmed until we hear back from you on every one.`}${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
             </td>
           </tr>
           <tr>
@@ -496,7 +516,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
           <tr>
             <td style="padding:24px 32px 6px;" align="left">
               <a href="${portalUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;font-weight:700;letter-spacing:0.2px;">
-                Review and respond →
+                Review and respond â†’
               </a>
               <div style="font-size:12px;color:${MUTED};margin-top:10px;">
                 You'll see each ${unitLabel(cycle.cycle_type, 1)} with an <strong>Accept</strong> and <strong>Request change</strong> button.
@@ -507,7 +527,7 @@ function renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadli
             <td style="padding:14px 32px 8px;font-size:13px;color:${MUTED};line-height:1.55;">
               Once you've responded to every ${unitLabel(cycle.cycle_type, 1)}, you're set. Questions? Just reply to this email.
               ${signatureHtml || `<br /><br />
-              — The ${escape(org.name)} team`}
+              â€” The ${escape(org.name)} team`}
             </td>
           </tr>
           <tr>
@@ -534,11 +554,11 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline, locati
   introMessage: string | null;
 }) {
   const firstName = instructor.preferred_name ?? instructor.first_name ?? 'there';
-  const cycleRange = (cycle.starts_on && cycle.ends_on) ? ` (${fmt(cycle.starts_on)} – ${fmt(cycle.ends_on)})` : '';
+  const cycleRange = (cycle.starts_on && cycle.ends_on) ? ` (${fmt(cycle.starts_on)} â€“ ${fmt(cycle.ends_on)})` : '';
   const lines: string[] = [];
   lines.push(`Hi ${firstName},`);
   lines.push('');
-  lines.push(introMessage || `Your proposed schedule for ${cycleDisplayName(cycle.name)}${cycleRange} is below. Please tap Accept or Request change on each of the ${camps.length} ${unitLabel(cycle.cycle_type, camps.length)} — your schedule isn't confirmed until we hear back from you on every one.`);
+  lines.push(introMessage || `Your proposed schedule for ${cycleDisplayName(cycle.name)}${cycleRange} is below. Please tap Accept or Request change on each of the ${camps.length} ${unitLabel(cycle.cycle_type, camps.length)} â€” your schedule isn't confirmed until we hear back from you on every one.`);
   if (deadline) {
     lines.push('');
     lines.push(`Please respond by ${fmt(deadline)}.`);
@@ -548,9 +568,9 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline, locati
     if (!s) continue;
     const loc = s.location_id ? locationById.get(s.location_id) : undefined;
     const role = a.role === 'developing' ? ' (Developing)' : '';
-    lines.push(`• ${s.curriculum_name ?? titleCase(unitLabel(cycle.cycle_type, 1))}${role}`);
-    lines.push(`  Week ${s.week_num} · ${fmt(s.starts_on)} – ${fmt(s.ends_on)} · ${classDaysSummary(s.class_days)}`);
-    lines.push(`  ${s.location_name ?? ''} · ${titleCase(s.session_type)} ${fmtTime(s.start_time)}–${fmtTime(s.end_time)}`);
+    lines.push(`â€¢ ${s.curriculum_name ?? titleCase(unitLabel(cycle.cycle_type, 1))}${role}`);
+    lines.push(`  Week ${s.week_num} Â· ${fmt(s.starts_on)} â€“ ${fmt(s.ends_on)} Â· ${classDaysSummary(s.class_days)}`);
+    lines.push(`  ${s.location_name ?? ''} Â· ${titleCase(s.session_type)} ${fmtTime(s.start_time)}â€“${fmtTime(s.end_time)}`);
     for (const v of renderVenueDetailsText(loc)) lines.push(v);
     if (a.distance_bonus_cents) {
       const hasOverride = Array.isArray(a.flags) && a.flags.includes('location_override');
@@ -564,7 +584,7 @@ function renderText({ cycle, org, instructor, camps, portalUrl, deadline, locati
   lines.push('');
   lines.push(`Once you've responded to every ${unitLabel(cycle.cycle_type, 1)}, you're set. Questions? Just reply to this email.`);
   lines.push('');
-  lines.push(`— The ${org.name} team`);
+  lines.push(`â€” The ${org.name} team`);
   lines.push('');
   lines.push(`* Assignments are subject to change according to enrollment. Changes can be made up to one week before the start date. More programs may open and be offered to you before the start of ${unitLabel(cycle.cycle_type, 2)} as well.`);
   return lines.join('\n');

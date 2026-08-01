@@ -370,23 +370,55 @@ function isPlausibleEmail(s: string): boolean {
 }
 
 /**
- * Resolve where a TEST-mode send should land. Test sends never reach real
- * families/instructors; they route to a single operator inbox so the operator
- * can eyeball the rendered email. Priority:
- *   1. An explicit recipient the caller passed (the admin UI can send the
+ * Resolve where a TEST-mode send should land, or null when there is nowhere
+ * inside the tenant to send it. Test sends never reach real families or
+ * instructors; they route to a single operator inbox so the operator can
+ * eyeball the rendered email. Priority:
+ *   1. An explicit recipient the caller passed (the admin UI always sends the
  *      current operator's own email) — used only if it looks like an address.
- *   2. The tenant's operator inbox: brand.alert_email, which cascades
- *      tenant org.alert_email -> Enrops -> alerts@enrops.com.
+ *   2. The tenant's OWN operator inbox: brand.tenant_alert_email.
+ *
+ * RETURNS NULL RATHER THAN FALLING BACK TO brand.alert_email. The rendered
+ * email being tested is a real tenant document — an instructor's name, the
+ * class they are being offered, the pay attached to it. alert_email cascades
+ * tenant -> Enrops -> a hardcoded Enrops address, so the old fallback meant
+ * that an operator whose org had no address of its own clicked "Send test" and
+ * silently mailed their contractor roster to us, while the UI told them it had
+ * gone to their own inbox. A test send that refuses to run is strictly better
+ * than one that quietly lands somewhere else.
+ *
+ * Callers must treat null as "refuse the send and say so", never as "send it
+ * anywhere". In practice this is rare and cheap: every admin surface passes the
+ * logged-in operator's own address as `explicit`, so the null branch is reached
+ * only by a direct API call or an org with no contact address at all.
  *
  * Never a hardcoded tenant literal, so every tenant's test lands in THEIR inbox
  * instead of the first tenant's. Callers already gate test-mode behind
  * owner/admin auth, so an explicit recipient is operator-chosen, not arbitrary.
  */
-export function resolveTestRecipient(brand: OrgBrand, explicit?: string | null): string {
+export function resolveTestRecipient(brand: OrgBrand, explicit?: string | null): string | null {
   const candidate = (explicit ?? '').trim();
   if (candidate && isPlausibleEmail(candidate)) return candidate;
-  return brand.alert_email;
+  return brand.tenant_alert_email;
 }
+
+/**
+ * The operator-facing reason a test send was refused. One string, defined once,
+ * so all three offer-sending functions say the same thing rather than drifting
+ * into three different explanations of the same state.
+ */
+// Every clause here is checked against the state that produces it. An earlier
+// draft said "Add one in Settings, or type an address to send the test to" -
+// BOTH were false. No settings surface writes organizations.email or
+// alert_email (EmailSenderSettings writes org_branding.email_reply_to and
+// mailing_address only), and the offer dialogs have no test-recipient input:
+// they pass the signed-in operator's own address automatically. Telling someone
+// to use a control that does not exist is worse than telling them nothing.
+export const NO_TENANT_INBOX_MESSAGE =
+  'This test could not be sent: your organization has no email address on file, ' +
+  'and a test has to land in your own inbox rather than ours. ' +
+  'Nothing was sent to your instructors. ' +
+  'Contact enrops support and we will add your address.';
 
 /**
  * Build the Resend "from" string: `Name <email>` (display name RFC 5322-encoded).

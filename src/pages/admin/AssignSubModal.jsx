@@ -245,7 +245,10 @@ export default function AssignSubModal({
       );
       const data = await resp.json();
       if (!resp.ok) {
-        setErr(data.detail || data.error || 'Could not send the offer.');
+        // `message` sits between detail and error: `error` is a machine code
+        // (e.g. 'no_tenant_inbox') and putting a code on screen tells the
+        // operator nothing. Prefer any human sentence the function supplies.
+        setErr(data.detail || data.message || data.error || 'Could not send the offer.');
         setBusy(false);
         return;
       }

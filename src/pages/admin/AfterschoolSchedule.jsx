@@ -1343,10 +1343,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       });
       if (error) {
         let msg = error.message ?? "function error";
-        try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+        // `message` before `error`: `error` is a machine code for branching
+        // ("no_tenant_inbox"), and showing the operator a code is showing them
+        // nothing. When the function supplies a sentence, that is what goes on
+        // screen; codes remain the fallback for the ones that don't.
+        try { const b = await error.context?.json?.(); if (b?.message) msg = b.message; else if (b?.error) msg = b.error; } catch {}
         throw new Error(msg);
       }
-      if (data?.error) throw new Error(data.error);
+      if (data?.error) throw new Error(data.message ?? data.error);
       setOfferDialog({ mode: "result", payload: { mode, data } });
       // ~8 min per instructor to write and send their schedule by hand. Only counts a
       // real send that actually reached someone — a preview or a 0-sent run saves nothing.
