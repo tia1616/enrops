@@ -85,11 +85,23 @@ export default function EmailSenderSettings() {
   const [fromName, setFromName] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [mailingAddress, setMailingAddress] = useState("");
-  // organizations.alert_email — where OUR alerts to the operator go. Empty means
-  // "fall back to organizations.email", which is exactly what loadOrgBrand's
-  // tenant_alert_email coalesce does; orgEmail is loaded so the UI can tell the
-  // operator which of the two is actually in force right now.
+  // organizations.alert_email — where OUR alerts to the operator go.
+  //
+  // THIS FIELD NEVER WRITES NULL, and that is load-bearing. loadOrgBrand's
+  // tenant_alert_email coalesces alert_email -> email, so null looks harmless
+  // from here — but several functions read the RAW column with no fallback, and
+  // simply go quiet when it is null: respond-to-sub-offer drops the "your sub
+  // declined" notice to a console.warn, and stripe-webhook skips its Connect
+  // account-status alerts. Until those coalesce, "clear it" would mean "stop
+  // telling me some things, silently". So an empty box means "use my sign-up
+  // email", and we persist THAT address rather than a null.
+  //
+  // storedAlert is the column as it actually is in the DB (empty string when
+  // null); alertEmail is the textbox, pre-filled with whichever address is
+  // really in force. Keeping them separate is what lets the page say where the
+  // current value came from.
   const [alertEmail, setAlertEmail] = useState("");
+  const [storedAlert, setStoredAlert] = useState("");
   const [orgEmail, setOrgEmail] = useState("");
   const [alertErr, setAlertErr] = useState("");
   const alertInputRef = useRef(null);
@@ -120,6 +132,9 @@ export default function EmailSenderSettings() {
   // off-screen once you've scrolled down to this section).
   const [testMsg, setTestMsg] = useState(null); // { kind: 'ok'|'warn'|'err', text }
   const [error, setError] = useState("");
+  // Save failures render beside the Save button; `error` stays for the signature
+  // image upload, whose control sits higher up the panel.
+  const [saveErr, setSaveErr] = useState("");
   const [toast, setToast] = useState("");
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 3000); }
@@ -163,9 +178,15 @@ export default function EmailSenderSettings() {
         setFromName(data?.email_from_name ?? "");
         setReplyTo(data?.email_reply_to ?? "");
         setMailingAddress(orgRow?.mailing_address ?? "");
-        setAlertEmail(orgRow?.alert_email ?? "");
-        setOrgEmail(orgRow?.email ?? "");
+        // Pre-fill with the address actually in force, so the box is never
+        // mysteriously blank for an org that IS receiving alerts today.
+        const storedA = orgRow?.alert_email ?? "";
+        const orgE = orgRow?.email ?? "";
+        setStoredAlert(storedA);
+        setOrgEmail(orgE);
+        setAlertEmail(storedA || orgE);
         setAlertErr("");
+        setSaveErr("");
         setSigHtml(sig);
         setSigImageUrl(customImg);
         setOrgLogo(logo);
@@ -174,7 +195,9 @@ export default function EmailSenderSettings() {
           fromName: data?.email_from_name ?? "",
           replyTo: data?.email_reply_to ?? "",
           mailingAddress: orgRow?.mailing_address ?? "",
-          alertEmail: orgRow?.alert_email ?? "",
+          // The pre-filled value, not the raw column — otherwise an org whose
+          // alert_email is null loads permanently "dirty".
+          alertEmail: storedA || orgE,
           sigHtml: sig,
           sigImageUrl: customImg,
           sigImgMode: mode,
@@ -210,20 +233,27 @@ export default function EmailSenderSettings() {
   }
 
   async function save() {
-    setSaving(true); setError("");
-    const alertTrimmed = alertEmail.trim();
+    setSaving(true); setError(""); setSaveErr("");
+    // Emptying the box means "go back to my sign-up email" — resolve it to that
+    // concrete address rather than writing null (see the state comment above).
+    const alertTyped = alertEmail.trim();
+    const alertToSave = alertTyped || orgEmail.trim();
     // Two distinct bad states, two distinct sentences — each true only in the
-    // state that selects it.
-    if (alertTrimmed && !PLAUSIBLE_EMAIL.test(alertTrimmed)) {
-      blockOnAlert(`"${alertTrimmed}" doesn't look like an email address. Check for a typo — it needs an @ and a domain, like you@yourprogram.com.`);
+    // state that selects it. The typo message quotes what THEY typed; the
+    // nothing-at-all message only fires when there is genuinely no fallback.
+    if (alertTyped && !PLAUSIBLE_EMAIL.test(alertTyped)) {
+      blockOnAlert(`"${alertTyped}" doesn't look like an email address. Check for a typo — it needs an @ and a domain, like you@yourprogram.com.`);
       return;
     }
-    if (!alertTrimmed && !orgEmail.trim()) {
-      // The genuinely-broken state: nothing left to fall back to, so alerts
-      // would be refused outright rather than sent to us. This is the only case
-      // the field is required in — an org that HAS a contact email can leave it
-      // empty and simply inherit that one.
+    if (!alertToSave) {
       blockOnAlert("Your alerts need somewhere to go. Add an address here — without one we can't tell you about a background check that needs review or a payment that failed.");
+      return;
+    }
+    // The fallback can itself be junk: organizations.email is written from the
+    // signup JWT and has never been format-checked, so don't hand it to the DB
+    // constraint unexamined and turn a 23514 into the operator's problem.
+    if (!PLAUSIBLE_EMAIL.test(alertToSave)) {
+      blockOnAlert(`We were going to send alerts to "${alertToSave}", the email your account was created with, but that isn't a valid address. Type the one you want instead.`);
       return;
     }
     setAlertErr("");
@@ -254,7 +284,7 @@ export default function EmailSenderSettings() {
         .from("organizations")
         .update({
           mailing_address: mailingAddress.trim() || null,
-          alert_email: alertTrimmed || null,
+          alert_email: alertToSave, // never null — see the state comment above
         })
         .eq("id", org.id)
         .select("mailing_address, alert_email, email")
@@ -263,18 +293,26 @@ export default function EmailSenderSettings() {
       if (!savedOrg) throw new Error("That didn't save. Your role may not have permission to change organization settings — ask an owner or admin.");
       flash("Sender saved.");
       // Reflect what the DATABASE now holds, not what we hoped it would hold.
-      setAlertEmail(savedOrg.alert_email ?? "");
-      setOrgEmail(savedOrg.email ?? "");
+      const storedBack = savedOrg.alert_email ?? "";
+      const orgEmailBack = savedOrg.email ?? "";
+      setStoredAlert(storedBack);
+      setOrgEmail(orgEmailBack);
+      setAlertEmail(storedBack || orgEmailBack);
       setMailingAddress(savedOrg.mailing_address ?? "");
       setSaved({
         fromName, replyTo,
         mailingAddress: savedOrg.mailing_address ?? "",
-        alertEmail: savedOrg.alert_email ?? "",
+        alertEmail: storedBack || orgEmailBack,
         sigHtml, sigImageUrl, sigImgMode,
       });
       await loadPreview();
     } catch (e) {
-      setError(e.message ?? "Couldn't save your sender settings.");
+      // Next to the Save button, NOT in the page-top box: this panel is now long
+      // enough that the top of the page is well off-screen by the time you reach
+      // Save, and an error you cannot see reads as a button that did nothing.
+      // The page-top box stays for the signature image upload, whose control
+      // lives further up.
+      setSaveErr(e.message ?? "Couldn't save your sender settings.");
     } finally {
       setSaving(false);
     }
@@ -407,14 +445,19 @@ export default function EmailSenderSettings() {
     alertEmail !== saved.alertEmail ||
     sigHtml !== saved.sigHtml || sigImageUrl !== saved.sigImageUrl || sigImgMode !== saved.sigImgMode;
 
-  // What is in force RIGHT NOW, read off the SAVED values, never the in-progress
-  // edit — "right now" has to describe the database, not the textbox. Three
-  // states, three sentences; the third is the one an operator most needs
-  // explained, because it is the state where alerts are refused outright.
-  const savedAlert = (saved.alertEmail ?? "").trim();
+  // What is in force RIGHT NOW, read off the STORED column and never off the
+  // textbox — "right now" has to describe the database, not what someone is
+  // half-way through typing. Three states, three sentences:
+  //   explicit  — alert_email is set; that is the answer.
+  //   inherited — alert_email is null, so loadOrgBrand falls through to
+  //               organizations.email. The box is pre-filled with it, but the
+  //               column is still empty, and the operator deserves to know the
+  //               value came from signup rather than from them.
+  //   none      — neither exists. Alerts carrying tenant data are refused.
+  const storedAlertTrimmed = storedAlert.trim();
   const savedOrgEmail = orgEmail.trim();
-  const effectiveAlert = savedAlert || savedOrgEmail;
-  const alertSource = savedAlert ? "explicit" : savedOrgEmail ? "inherited" : "none";
+  const effectiveAlert = storedAlertTrimmed || savedOrgEmail;
+  const alertSource = storedAlertTrimmed ? "explicit" : savedOrgEmail ? "inherited" : "none";
 
   if (loading) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
@@ -467,19 +510,21 @@ export default function EmailSenderSettings() {
             background check that needs your review, a card declining on a payment plan, a bank transfer
             that didn't go through. Use an inbox a person actually reads.
           </div>
+          {/* The box is pre-filled whenever either address exists, so the
+              placeholder is only ever seen in the "none" state. */}
           <input
             id="alert-email"
             ref={alertInputRef}
             type="email"
             value={alertEmail}
             onChange={(e) => { setAlertEmail(e.target.value); if (alertErr) setAlertErr(""); }}
-            placeholder={savedOrgEmail || "you@yourprogram.com"}
+            placeholder="you@yourprogram.com"
             aria-invalid={alertErr ? "true" : undefined}
-            aria-describedby="alert-email-state"
+            aria-describedby={alertErr ? "alert-email-error alert-email-state" : "alert-email-state"}
             style={{ ...input, borderColor: alertErr ? "#fecaca" : RULE }}
           />
           {alertErr && (
-            <div style={{ marginTop: 8, padding: "9px 11px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 12.5, lineHeight: 1.5 }}>
+            <div id="alert-email-error" role="alert" style={{ marginTop: 8, padding: "9px 11px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 12.5, lineHeight: 1.5 }}>
               {alertErr}
             </div>
           )}
@@ -498,7 +543,7 @@ export default function EmailSenderSettings() {
             {alertSource === "inherited" && (
               <>
                 Right now alerts go to <strong>{savedOrgEmail}</strong>, the email your account was created
-                with. Leave this empty to keep it that way, or enter a different address.
+                with — you haven't chosen one yourself yet. Change it above if they should go somewhere else.
               </>
             )}
             {alertSource === "none" && (
@@ -598,6 +643,11 @@ export default function EmailSenderSettings() {
           )}
         </div>
 
+        {saveErr && (
+          <div role="alert" style={{ marginTop: 18, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13, lineHeight: 1.5 }}>
+            {saveErr}
+          </div>
+        )}
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
           <button type="button" onClick={save} disabled={saving || !dirty} style={primaryBtn(saving || !dirty)}>{saving ? "Saving…" : dirty ? "Save" : "Saved ✓"}</button>
         </div>
