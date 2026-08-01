@@ -43,6 +43,7 @@
 // deno.land/std fetch at bundle time and is the current Supabase standard.
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import Anthropic from "npm:@anthropic-ai/sdk@0.96.0";
+import { loadOrgBrand } from "../_shared/orgBrand.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -155,11 +156,11 @@ type VipOffering = {
   excluded_location_ids?: string[];
 };
 
+// Sender identity is deliberately NOT here: it comes from loadOrgBrand, so
+// nothing in this function can read the raw columns and disagree with the
+// address marketing-touchpoint-send actually sends from.
 type OrgConfig = {
   id: string;
-  default_sender_name: string | null;
-  default_sender_email: string | null;
-  sending_domain: string | null;
   brand_voice: Record<string, unknown> | null;
   timezone: string | null;
   vip_offering: VipOffering | null;
@@ -1136,6 +1137,7 @@ function buildSystemPrompt(
   programDetailsBlock: string, // pre-rendered KNOWN PROGRAM DETAILS section — grounded facts OR fuzzy curriculum matches
   topicsForPrompt: string[],   // explicit topics list (derived from grounded facts when present, else from legacy what)
   cadenceSlots: CadenceSlot[], // server-computed fixed send schedule (empty for one-off sends); when non-empty the model writes to these exact slots and does NOT choose timing
+  senderName: string,          // resolved provider identity from loadOrgBrand — the model writes "on behalf of" this
 ): string {
   const v = (org.brand_voice ?? {}) as {
     audience?: string;
@@ -1145,7 +1147,9 @@ function buildSystemPrompt(
     additional_notes?: string;
     closer?: string;
   };
-  const sender = org.default_sender_name ?? "the team";
+  // Was org.default_sender_name ?? "the team". Every provider now has a real
+  // resolved identity, so no campaign is drafted "on behalf of the team".
+  const sender = senderName;
   const audience = v.audience ?? "parents of K-5 kids enrolled or interested in enrichment programs";
   const tone = v.tone ?? "warm, positive, smart, casual — like a thoughtful friend";
   const avoid = v.do_not_use?.length ? `\nThis provider has asked you to AVOID these phrases (their explicit corrections beat your defaults): ${v.do_not_use.join(", ")}` : "";
@@ -2138,17 +2142,18 @@ Deno.serve(async (req: Request) => {
   // ---- Load org config ----
   const { data: orgRow, error: oErr } = await supabase
     .from("organizations")
-    .select("id, default_sender_name, default_sender_email, sending_domain, brand_voice, timezone, vip_offering")
+    .select("id, brand_voice, timezone, vip_offering")
     .eq("id", organization_id)
     .single<OrgConfig>();
   if (oErr || !orgRow) return jsonError(`organization not found: ${oErr?.message ?? "unknown"}`, 404);
 
-  const missing: string[] = [];
-  if (!orgRow.default_sender_email) missing.push("default_sender_email");
-  if (!orgRow.default_sender_name) missing.push("default_sender_name");
-  if (missing.length > 0) {
-    return jsonError("org_not_configured", 400, { missing });
-  }
+  // Sender identity comes from the SAME cascade marketing-touchpoint-send uses
+  // when it actually sends, so the sender this endpoint reports back to the
+  // ScheduleReview UI cannot drift from the From line parents will see. It
+  // always resolves, which is why the old org_not_configured 400 is gone: a
+  // provider who never filled in Settings can now draft a campaign instead of
+  // being stopped by a gate that guarded a column the sender no longer reads.
+  const brand = await loadOrgBrand(supabase, organization_id);
 
   // ---- Resolve recipients ----
   const resolved = await resolveParents(supabase, organization_id, inputs.who.filter as ParentsFilter);
@@ -2346,7 +2351,7 @@ Deno.serve(async (req: Request) => {
           topics: tp.topics,
         })),
       },
-      sender: { name: orgRow.default_sender_name!, email: orgRow.default_sender_email! },
+      sender: { name: brand.sender_name, email: brand.sender_email },
       recipients: { ids: recipientIds, count: recipientCount, segment_summary },
       mechanical_checks: { retried: false, touchpoints: [] },
       curriculum_matches: curriculumMatches.map((m) => ({
@@ -2370,7 +2375,7 @@ Deno.serve(async (req: Request) => {
 
   // ---- Build prompt + call Claude ----
   const todayIso = new Date().toISOString();
-  const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone, programDetailsBlock, topicsArr, cadenceSlots);
+  const systemPrompt = buildSystemPrompt(orgRow, inputs, segment_summary, todayIso, orgTimezone, programDetailsBlock, topicsArr, cadenceSlots, brand.sender_name);
   let claudeResult = await callClaude(systemPrompt, topicsArr);
   if (!claudeResult.ok) return jsonError(claudeResult.error, claudeResult.status);
   let { schedule, model } = claudeResult;
@@ -2558,8 +2563,8 @@ Deno.serve(async (req: Request) => {
       })),
     },
     sender: {
-      name: orgRow.default_sender_name!,
-      email: orgRow.default_sender_email!,
+      name: brand.sender_name,
+      email: brand.sender_email,
     },
     recipients: {
       ids: recipientIds,

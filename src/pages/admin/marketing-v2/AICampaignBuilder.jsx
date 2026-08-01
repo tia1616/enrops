@@ -112,10 +112,11 @@ async function friendlyDraftError(error) {
     // body wasn't JSON or already consumed — fall back below
   }
   const code = payload?.error ?? error?.message ?? "unknown_error";
-  if (code === "org_not_configured") {
-    const missing = Array.isArray(payload?.missing) ? payload.missing.join(", ") : "sender info";
-    return `Your org is missing ${missing}. Add it in Settings, then try again.`;
-  }
+  // "org_not_configured" used to be handled here with "Your org is missing
+  // <fields>. Add it in Settings, then try again." Removed 2026-08-01:
+  // marketing-draft-campaign no longer gates on default_sender_name/_email, so
+  // the code is unreachable and the instruction is stale — the sender is
+  // derived now, and there is nothing for the operator to go and fill in.
   if (code === "draft_timeout") {
     return "Ennie took too long to draft this one. Try again — usually clears up on a retry.";
   }
@@ -677,7 +678,14 @@ export default function AICampaignBuilder() {
   const resumeDraft = async (campaignId) => {
     if (!campaignId || !org?.id) return;
     try {
-      const [cRes, tpRes] = await Promise.all([
+      // The sender shown on the review screen must be the one that will
+      // actually send. Reopening a draft used to rebuild it client-side from
+      // organizations.default_sender_name/_email — the raw columns — so a
+      // provider who never filled those in saw a blank From on a screen whose
+      // whole job is to show them what parents will receive. tenant-sender is
+      // the documented single source of truth for that line and runs the same
+      // loadOrgBrand cascade the send does.
+      const [cRes, tpRes, senderRes] = await Promise.all([
         supabase
           .from("marketing_campaigns")
           .select("id, name, status, draft_inputs, approved_recipient_ids")
@@ -690,6 +698,9 @@ export default function AICampaignBuilder() {
           .eq("campaign_id", campaignId)
           .eq("organization_id", org.id)
           .order("order_index", { ascending: true }),
+        supabase.functions
+          .invoke("tenant-sender", { body: { organization_id: org.id, action: "preview" } })
+          .catch(() => ({ data: null })),
       ]);
       if (cRes.error) throw cRes.error;
       if (tpRes.error) throw tpRes.error;
@@ -721,7 +732,10 @@ export default function AICampaignBuilder() {
           notes_to_operator: "",
           touchpoints,
         },
-        sender: { name: org?.default_sender_name, email: org?.default_sender_email },
+        sender: {
+          name: senderRes?.data?.sender_name ?? null,
+          email: senderRes?.data?.sender_email ?? null,
+        },
         recipients: {
           ids: recipientIds,
           count: recipientIds.length,

@@ -139,7 +139,7 @@ serve(async (req: Request) => {
             account_id: accountId,
           });
         } else if (search.data.length > 1) {
-          const ids = search.data.map((a) => a.id);
+          const ids = search.data.map((a: Stripe.Account) => a.id);
           console.error('multiple stripe accounts for instructor', me.id, ids);
           return json({ error: 'multiple_stripe_accounts', account_ids: ids }, 409);
         }
@@ -223,6 +223,22 @@ serve(async (req: Request) => {
       }
       accountId = account.id;
       justCreated = true;
+    }
+
+    // accountId is `string | null` here and the type-checker was right to say
+    // so. Every path that SHOULD produce one does (the existing row, the orphan
+    // search, or the create above, which returns 502 on failure) — but nothing
+    // asserted that Stripe's response actually carried an `id`, and
+    // `stripe.accounts.create` is untyped through esm.sh, so `account.id` is
+    // `any` and could be undefined without a single complaint.
+    //
+    // Silencing this with `!` or `as string` would push a literal
+    // "undefined" into stripe_connect_account_id and only surface it later, at
+    // payout time, as a contractor who cannot be paid. Fail here instead, where
+    // the cause is still visible.
+    if (!accountId) {
+      console.error('no stripe account id after lookup/create', { instructor_id: me.id });
+      return json({ error: 'stripe_account_id_missing' }, 502);
     }
 
     // Persist the account ID. Use update or insert depending on whether

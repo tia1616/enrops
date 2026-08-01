@@ -15,7 +15,8 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock, encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
+import { findAuthUserByEmail } from '../_shared/findAuthUserByEmail.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so the onboarding link points at staging, not prod. Defaults to prod.
@@ -99,10 +100,11 @@ serve(async (req: Request) => {
         // Email may already be in use by another auth.users row (e.g., they
         // registered as a parent). Try to look that up and link.
         if (/already.+registered|exists/i.test(createErr.message ?? '')) {
-          const { data: usersList } = await supabase.auth.admin.listUsers();
-          const existing = usersList?.users?.find(
-            (u) => u.email?.toLowerCase() === instructorRow.email!.toLowerCase(),
-          );
+          // Paged lookup: a bare listUsers() only searches the 50 newest
+          // accounts, so an instructor who already had an account (e.g. they
+          // registered as a parent first) was not found and the invite failed
+          // with the 500 below instead of linking to it.
+          const existing = await findAuthUserByEmail(supabase, instructorRow.email!);
           if (existing) {
             authUserId = existing.id;
           } else {
@@ -180,18 +182,22 @@ serve(async (req: Request) => {
     // 7. Look up org for tenant-derived values (NEVER hardcode J2S identity).
     const { data: org, error: orgErr } = await supabase
       .from('organizations')
-      .select('slug, name, default_sender_name, default_sender_email, background_check_config')
+      .select('slug, name, background_check_config')
       .eq('id', instructorRow.organization_id)
       .maybeSingle();
     if (orgErr) {
       console.error('org lookup failed:', orgErr);
       return json({ error: 'lookup_failed' }, 500);
     }
-    if (!org?.slug || !org.default_sender_name || !org.default_sender_email) {
-      console.error('org missing slug or sender config:', {
-        organization_id: instructorRow.organization_id,
-      });
-      return json({ error: 'org_missing_sender_config', organization_id: instructorRow.organization_id }, 500);
+    // Kept, but narrowed and renamed honestly. organizations.slug is NOT NULL
+    // (checked in the live DB, both envs), so the only way this fires is the org
+    // row being absent — maybeSingle() returning null. It still has to fire:
+    // slug builds the magic-link redirect below, and `/undefined/instructor` is
+    // a dead invite. The SENDER half of the old combined guard is gone;
+    // loadOrgBrand always resolves a verified From.
+    if (!org?.slug) {
+      console.error('org row not found:', { organization_id: instructorRow.organization_id });
+      return json({ error: 'org_not_found', organization_id: instructorRow.organization_id }, 500);
     }
 
     // 8. Generate magic link via Supabase auth admin.
@@ -275,7 +281,10 @@ serve(async (req: Request) => {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${encodeDisplayName(org.default_sender_name)} <${org.default_sender_email}>`,
+        from: formatFromAddress(brand),
+        // "reach out to the admin" in the body — replies must land on the
+        // provider, which the From no longer guarantees on the shared domain.
+        reply_to: brand.reply_to,
         to: instructorRow.email,
         subject,
         text,

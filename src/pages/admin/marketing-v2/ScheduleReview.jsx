@@ -59,7 +59,13 @@ export default function ScheduleReview({
   const [recipientsOpen, setRecipientsOpen] = useState(false);
   const touchpoints = draft?.schedule?.touchpoints ?? [];
   const recipients = draft?.recipients ?? { count: 0, ids: [], segment_summary: "" };
-  const sender = draft?.sender ?? { name: org?.default_sender_name, email: org?.default_sender_email };
+  // Always the server-derived sender the send will actually use — never
+  // rebuilt from organizations.default_sender_name/_email, which are only a
+  // CANDIDATE for the From (loadOrgBrand ignores them unless the domain is the
+  // tenant's verified sending_domain) and are null for any provider who never
+  // filled in Settings. Every caller passes draft.sender; the fallback exists
+  // so a missing one renders as blank rather than as a wrong address.
+  const sender = draft?.sender ?? { name: org?.name ?? "", email: "" };
   const timezone = org?.timezone ?? "America/Los_Angeles";
 
   // Whether the operator picked any curricula in Q1. For schedule-change /

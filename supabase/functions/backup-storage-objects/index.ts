@@ -20,8 +20,19 @@
 // We NEVER delete from R2 — so a file deleted/corrupted in prod still survives
 // in the backup. Re-runs overwrite the same key (idempotent).
 //
-// Body: { dry_run?: boolean } — when true, returns the object list/counts
-// without copying anything.
+// Body — three mutually exclusive modes, checked in this order:
+//   { dry_run: true }                    list/count what WOULD be copied, copy nothing.
+//   { restore_check: true, sample?: n }  RESTORE DRILL: pull n objects (1-5, default 3,
+//                                        spread across the buckets) back OUT of R2 and
+//                                        prove each is byte-identical to the live source
+//                                        by SHA-256. This is the only mode that tests
+//                                        RECOVERY rather than backup, so it is the one
+//                                        worth running by hand periodically. Nothing
+//                                        calls it on a schedule.
+//   {} (or no body)                      do the actual backup.
+//
+// The header used to document only dry_run, which is how restore_check ended up
+// missing from the body type as well.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
@@ -45,7 +56,15 @@ function json(body: unknown, status = 200) {
   });
 }
 
-async function sha256hex(bytes: Uint8Array): Promise<string> {
+// `Uint8Array<ArrayBuffer>`, not a bare `Uint8Array`. Newer lib types make
+// Uint8Array generic over its backing store, and the default
+// `Uint8Array<ArrayBufferLike>` includes SharedArrayBuffer-backed views, which
+// crypto.subtle.digest's BufferSource does not accept. Narrowing the PARAMETER
+// is the honest fix: both callers build theirs from `await blob.arrayBuffer()`
+// / `await res.arrayBuffer()`, which are plain ArrayBuffers, so they already
+// satisfy it — no cast needed, and a genuinely shared buffer would now be
+// rejected at the call site instead of here.
+async function sha256hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -62,7 +81,15 @@ serve(async (req) => {
   if (gateErr) return json({ error: 'gate secret read failed', detail: gateErr.message }, 500);
   if (!token || token !== gate) return json({ error: 'unauthorized' }, 401);
 
-  let body: { dry_run?: boolean } = {};
+  // All three modes are declared here. `restore_check` and `sample` were read
+  // below but missing from this type, which is what `deno check` was reporting.
+  //
+  // It was ONLY a declaration gap, not a dead feature: `req.json()` is `any`, so
+  // the assignment is allowed, Deno strips types at runtime, and
+  // `body.restore_check` has always read the real posted value. Verified rather
+  // than assumed — a standalone Deno script with the same narrow annotation
+  // still reports the property as present and the branch as taken.
+  let body: { dry_run?: boolean; restore_check?: boolean; sample?: number } = {};
   try { body = await req.json(); } catch { /* empty body is fine */ }
 
   // --- R2 config ---

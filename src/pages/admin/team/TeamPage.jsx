@@ -152,8 +152,11 @@ export default function TeamPage() {
         return "That doesn't look like a valid email address.";
       case "invalid_role":
         return "Pick a role for this teammate.";
-      case "org_missing_sender_config":
-        return "Your workspace needs a sender email set in Settings before you can invite people.";
+      // "org_missing_sender_config" used to live here. Removed 2026-08-01:
+      // admin-invite can no longer return it, and the advice was wrong anyway —
+      // inviting someone never needed a sender email in Settings, the invite
+      // just silently 500'd when the column was blank. The sender is now derived
+      // for every workspace.
       case "auth_create_failed":
         return "Couldn't set up that person's sign-in. Double-check the email and try again.";
       default:

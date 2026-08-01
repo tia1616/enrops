@@ -12,7 +12,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
-import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 interface ResendInviteBody {
   email?: string;
@@ -79,19 +79,25 @@ serve(async (req: Request) => {
     // Look up org for tenant-derived values.
     const { data: org, error: orgErr } = await supabase
       .from('organizations')
-      .select('slug, name, default_sender_name, default_sender_email')
+      .select('slug, name')
       .eq('id', instructor.organization_id)
       .maybeSingle();
     if (orgErr) {
       console.error('org lookup failed:', orgErr);
       return success();
     }
-    if (!org?.slug || !org.default_sender_name || !org.default_sender_email) {
-      console.error('org missing slug or sender config:', instructor.organization_id);
+    // Kept but narrowed: organizations.slug is NOT NULL, so this only fires when
+    // the org row is absent. It still has to fire — slug builds the magic-link
+    // redirect below. The sender half of the old guard is gone; loadOrgBrand
+    // always resolves a verified From.
+    if (!org?.slug) {
+      console.error('org row not found:', instructor.organization_id);
       // This IS a real misconfiguration — log loudly but still return success
       // so the contractor isn't stuck on a confusing error.
       return success();
     }
+
+    const brand = await loadOrgBrand(supabase, instructor.organization_id);
 
     // Generate fresh magic link.
     const redirectTo = `${PUBLIC_SITE_URL}/${org.slug}/onboarding`;
@@ -130,7 +136,8 @@ serve(async (req: Request) => {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${encodeDisplayName(org.default_sender_name)} <${org.default_sender_email}>`,
+        from: formatFromAddress(brand),
+        reply_to: brand.reply_to,
         to: instructor.email,
         subject: `Your new onboarding link for ${org.name ?? 'enrops'}`,
         text,

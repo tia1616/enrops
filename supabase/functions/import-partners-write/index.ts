@@ -234,12 +234,19 @@ serve(async (req: Request) => {
           .insert(insertRow)
           .select('id')
           .maybeSingle();
-        if (cErr || !created) {
+        // `!created.id` is the part that was missing, and it is not pedantry:
+        // supabase-js returns `any` here, so an insert that succeeded but came
+        // back without an id would have set partnerId to undefined and then
+        // written `partner_id: undefined` onto this partner's contacts and
+        // locations further down — silently orphaning every row in the import
+        // for this partner. Skipping the row and telling the operator which
+        // partner failed is the honest outcome.
+        if (cErr || !created || !created.id) {
           errors.push({ partner: name, reason: cErr?.message ?? 'insert failed' });
           partnersSkipped++;
           continue;
         }
-        partnerId = created.id;
+        partnerId = created.id as string;
         byNormName.set(normName(name), partnerId);
         partnersCreated++;
       } else {

@@ -11,12 +11,12 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const DIGEST_EMAIL = Deno.env.get('REPLAY_DIGEST_EMAIL') ?? 'jessica@journeytosteam.com';
-const FROM_EMAIL = 'Enrops <hello@updates.journeytosteam.com>';
 const POSTHOG_HOST = 'https://us.posthog.com';
 const POSTHOG_PROJECT = '437783';
 
@@ -113,11 +113,17 @@ serve(async (req) => {
       <p style="margin-top:18px;font-size:12px;color:#6b6b6b">Long pauses = confusion · repeated clicks = something's unclear · ⚠ errors = a bug to check.</p>
     </div>`;
 
+    // Platform identity, not a tenant's. This was hardcoded to
+    // hello@updates.journeytosteam.com — one tenant's sending domain speaking
+    // as the platform, which also breaks the day that tenant leaves.
+    const platformBrand = await loadOrgBrand(supabase, null);
+
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
       body: JSON.stringify({
-        from: FROM_EMAIL,
+        from: formatFromAddress(platformBrand),
+        reply_to: platformBrand.reply_to,
         to: DIGEST_EMAIL,
         subject: `Enrops replay digest — ${n} session${n === 1 ? '' : 's'} to review`,
         html,

@@ -19,7 +19,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
-import { loadOrgBrand, renderSignatureBlock, encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -95,19 +95,17 @@ serve(async (req: Request) => {
 
     const { data: org } = await supabase
       .from('organizations')
-      .select('id, name, slug, sending_domain, default_sender_email, default_sender_name, logo_email_url, logo_url')
+      .select('id, name, slug, logo_email_url, logo_url')
       .eq('id', program.organization_id)
       .maybeSingle();
     if (!org) return json({ error: 'org not found' }, 404);
 
     const { data: branding } = await supabase
       .from('org_branding')
-      .select('primary_color, logo_url, email_from_name, email_reply_to')
+      .select('primary_color, logo_url')
       .eq('organization_id', program.organization_id)
       .maybeSingle();
     const primaryColor = branding?.primary_color ?? DEFAULT_PRIMARY;
-    const fromName = branding?.email_from_name ?? org.default_sender_name ?? org.name;
-    const replyTo = branding?.email_reply_to ?? null;
 
     const brand = await loadOrgBrand(supabase, program.organization_id);
 
@@ -238,16 +236,12 @@ serve(async (req: Request) => {
     const pdfFilename = makePdfFilename({ name: program.curriculum, locationName: location?.name ?? '', term: program.term });
 
     // ── Compose email ──────────────────────────────────────────────────────
-    // Sender is tenant-driven — never hardcode one tenant's domain. Prefer the
-    // org's configured sender email; else hello@ on its verified sending domain.
-    // A tenant with neither gets a clear error instead of sending from (and
-    // misbranding as) another tenant's domain.
-    const senderEmail = org.default_sender_email
-      || (org.sending_domain ? `hello@${org.sending_domain}` : null);
-    if (!senderEmail) {
-      return json({ error: 'no_sender_configured', detail: 'Add a sending email or verified domain in Settings before emailing rosters.' }, 400);
-    }
-    const fromEmail = `${encodeDisplayName(fromName)} <${senderEmail}>`;
+    // Sender is tenant-driven and comes from the ONE shared cascade. It always
+    // resolves — the tenant's own domain when Resend-verified, else a
+    // per-tenant address on the verified platform domain — so the old
+    // no_sender_configured 400 has no state left to fire in, and an operator
+    // is no longer blocked from emailing a roster because Settings is blank.
+    const fromEmail = formatFromAddress(brand);
     const subjectWhere = partner?.partner_name ?? location?.name ?? '';
     const subject = `Roster: ${program.curriculum} — ${scheduleLabel(program)}${subjectWhere ? ` @ ${subjectWhere}` : ''}`;
 
@@ -263,7 +257,10 @@ serve(async (req: Request) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
           body: JSON.stringify({
-            from: fromEmail, to: r.email, reply_to: replyTo ?? undefined,
+            // A partner replying to a roster must reach the PROVIDER. That used
+            // to happen implicitly (the From was the provider's own address);
+            // on the shared domain it has to be stated.
+            from: fromEmail, to: r.email, reply_to: brand.reply_to,
             subject, html, text,
             attachments: [{ filename: pdfFilename, content: pdfBase64 }],
           }),
