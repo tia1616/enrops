@@ -1,10 +1,18 @@
-// /admin/email-sender — set how this org's outgoing email identifies itself.
+// /admin/email-sender — set how this org's outgoing email identifies itself,
+// and where the alerts meant for the operator land.
 //
 // The provider sets a sender display name + reply-to email. The actual FROM
 // address is derived server-side (a per-tenant address on the verified platform
 // domain), so providers never touch DNS and a misconfig can't silently break
 // sending. The `tenant-sender` edge fn is the single source of truth for the
 // resolved sender, so the preview always matches real emails. Owner/admin only.
+//
+// The alert address (organizations.alert_email) is the OTHER direction: mail we
+// send TO the operator about their own business. It used to be set only at
+// signup by two DB triggers (20260731f) with no way to change it, which was a
+// real dead end once d7dbe6d made tenant-data alerts refuse to send rather than
+// fall back to the Enrops inbox. This page is where an owner/admin fixes it.
+// See migration 20260801d.
 
 import { useEffect, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
@@ -64,11 +72,27 @@ function escapeAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// Deliberately the SAME shape as the organizations_alert_email_format CHECK
+// constraint (migration 20260801d) and isPlausibleEmail() in
+// supabase/functions/_shared/orgBrand.ts: one non-whitespace address, one @, a
+// dot in the domain. Not an RFC 5322 validator — Resend still gates delivery.
+// The DB constraint is the real backstop (a direct PostgREST PATCH never runs
+// this); this exists so the operator gets a sentence instead of a 23514.
+const PLAUSIBLE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export default function EmailSenderSettings() {
   const { org, user } = useOutletContext();
   const [fromName, setFromName] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [mailingAddress, setMailingAddress] = useState("");
+  // organizations.alert_email — where OUR alerts to the operator go. Empty means
+  // "fall back to organizations.email", which is exactly what loadOrgBrand's
+  // tenant_alert_email coalesce does; orgEmail is loaded so the UI can tell the
+  // operator which of the two is actually in force right now.
+  const [alertEmail, setAlertEmail] = useState("");
+  const [orgEmail, setOrgEmail] = useState("");
+  const [alertErr, setAlertErr] = useState("");
+  const alertInputRef = useRef(null);
   // Signature: rich HTML (from the WYSIWYG box) + an optional image URL. Stored
   // as sanitized HTML in org_branding.email_signature.
   const [sigHtml, setSigHtml] = useState("");
@@ -86,7 +110,7 @@ export default function EmailSenderSettings() {
   const [linkUrl, setLinkUrl] = useState("");
   // Snapshot of the last loaded/saved values so the Save button can grey out
   // when there's nothing to save, and light up when you change something.
-  const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "", sigHtml: "", sigImageUrl: "" });
+  const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "", alertEmail: "", sigHtml: "", sigImageUrl: "" });
   const [preview, setPreview] = useState(null); // { from, reply_to }
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -117,10 +141,12 @@ export default function EmailSenderSettings() {
         .select("email_from_name, email_reply_to, email_signature, email_signature_image_url, email_signature_image_mode")
         .eq("organization_id", org.id)
         .maybeSingle();
-      // mailing_address lives on organizations (CAN-SPAM footer), not org_branding.
+      // mailing_address + alert_email live on organizations, not org_branding.
+      // `email` is read (never written here) purely to show which address is in
+      // force when alert_email is empty.
       const { data: orgRow } = await supabase
         .from("organizations")
-        .select("mailing_address, logo_url")
+        .select("mailing_address, logo_url, alert_email, email")
         .eq("id", org.id)
         .maybeSingle();
       if (!cancelled) {
@@ -137,6 +163,9 @@ export default function EmailSenderSettings() {
         setFromName(data?.email_from_name ?? "");
         setReplyTo(data?.email_reply_to ?? "");
         setMailingAddress(orgRow?.mailing_address ?? "");
+        setAlertEmail(orgRow?.alert_email ?? "");
+        setOrgEmail(orgRow?.email ?? "");
+        setAlertErr("");
         setSigHtml(sig);
         setSigImageUrl(customImg);
         setOrgLogo(logo);
@@ -145,6 +174,7 @@ export default function EmailSenderSettings() {
           fromName: data?.email_from_name ?? "",
           replyTo: data?.email_reply_to ?? "",
           mailingAddress: orgRow?.mailing_address ?? "",
+          alertEmail: orgRow?.alert_email ?? "",
           sigHtml: sig,
           sigImageUrl: customImg,
           sigImgMode: mode,
@@ -168,8 +198,35 @@ export default function EmailSenderSettings() {
     }
   }, [loading]);
 
+  // Refuse the save and put the operator's cursor on the offending field. The
+  // panel's Save button sits below the alert field, so setting an error alone
+  // could leave the explanation off-screen above the click — scroll it into
+  // view rather than trusting where the page happens to be.
+  function blockOnAlert(msg) {
+    setAlertErr(msg);
+    setSaving(false);
+    alertInputRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    alertInputRef.current?.focus({ preventScroll: true });
+  }
+
   async function save() {
     setSaving(true); setError("");
+    const alertTrimmed = alertEmail.trim();
+    // Two distinct bad states, two distinct sentences — each true only in the
+    // state that selects it.
+    if (alertTrimmed && !PLAUSIBLE_EMAIL.test(alertTrimmed)) {
+      blockOnAlert(`"${alertTrimmed}" doesn't look like an email address. Check for a typo — it needs an @ and a domain, like you@yourprogram.com.`);
+      return;
+    }
+    if (!alertTrimmed && !orgEmail.trim()) {
+      // The genuinely-broken state: nothing left to fall back to, so alerts
+      // would be refused outright rather than sent to us. This is the only case
+      // the field is required in — an org that HAS a contact email can leave it
+      // empty and simply inherit that one.
+      blockOnAlert("Your alerts need somewhere to go. Add an address here — without one we can't tell you about a background check that needs review or a payment that failed.");
+      return;
+    }
+    setAlertErr("");
     try {
       const cleanSig = sanitizeSignatureHtml(sigHtml);
       const fields = {
@@ -188,14 +245,33 @@ export default function EmailSenderSettings() {
       const { error: e } = await supabase
         .from("org_branding").upsert(fields, { onConflict: "organization_id" });
       if (e) throw e;
-      // mailing_address lives on organizations (its own row already exists).
-      const { error: addrErr } = await supabase
+      // mailing_address + alert_email live on organizations (its own row already
+      // exists). Read the row back in the same call rather than assuming the
+      // write took: RLS could refuse it (members_update_own_org is owner/admin
+      // only) and a 0-row update returns no error, which would otherwise show
+      // "Saved" for a save that changed nothing.
+      const { data: savedOrg, error: addrErr } = await supabase
         .from("organizations")
-        .update({ mailing_address: mailingAddress.trim() || null })
-        .eq("id", org.id);
+        .update({
+          mailing_address: mailingAddress.trim() || null,
+          alert_email: alertTrimmed || null,
+        })
+        .eq("id", org.id)
+        .select("mailing_address, alert_email, email")
+        .maybeSingle();
       if (addrErr) throw addrErr;
+      if (!savedOrg) throw new Error("That didn't save. Your role may not have permission to change organization settings — ask an owner or admin.");
       flash("Sender saved.");
-      setSaved({ fromName, replyTo, mailingAddress, sigHtml, sigImageUrl, sigImgMode });
+      // Reflect what the DATABASE now holds, not what we hoped it would hold.
+      setAlertEmail(savedOrg.alert_email ?? "");
+      setOrgEmail(savedOrg.email ?? "");
+      setMailingAddress(savedOrg.mailing_address ?? "");
+      setSaved({
+        fromName, replyTo,
+        mailingAddress: savedOrg.mailing_address ?? "",
+        alertEmail: savedOrg.alert_email ?? "",
+        sigHtml, sigImageUrl, sigImgMode,
+      });
       await loadPreview();
     } catch (e) {
       setError(e.message ?? "Couldn't save your sender settings.");
@@ -328,7 +404,17 @@ export default function EmailSenderSettings() {
 
   const dirty =
     fromName !== saved.fromName || replyTo !== saved.replyTo || mailingAddress !== saved.mailingAddress ||
+    alertEmail !== saved.alertEmail ||
     sigHtml !== saved.sigHtml || sigImageUrl !== saved.sigImageUrl || sigImgMode !== saved.sigImgMode;
+
+  // What is in force RIGHT NOW, read off the SAVED values, never the in-progress
+  // edit — "right now" has to describe the database, not the textbox. Three
+  // states, three sentences; the third is the one an operator most needs
+  // explained, because it is the state where alerts are refused outright.
+  const savedAlert = (saved.alertEmail ?? "").trim();
+  const savedOrgEmail = orgEmail.trim();
+  const effectiveAlert = savedAlert || savedOrgEmail;
+  const alertSource = savedAlert ? "explicit" : savedOrgEmail ? "inherited" : "none";
 
   if (loading) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
@@ -342,8 +428,9 @@ export default function EmailSenderSettings() {
       <Link to="/admin/settings" style={{ fontSize: 13, color: MUTED, textDecoration: "none" }}>← Settings</Link>
       <h1 style={{ margin: "8px 0 4px", color: PURPLE, fontSize: 24, fontWeight: 700 }}>Email sender</h1>
       <p style={{ color: MUTED, fontSize: 14, marginTop: 0, lineHeight: 1.5, maxWidth: 560 }}>
-        How your emails — invites, waivers, reminders — show up in families' inboxes. We handle the sending
-        domain for you, so there's nothing to set up with your web host.
+        How your emails — invites, waivers, reminders — show up in families' inboxes, and where the alerts
+        meant for you land. We handle the sending domain for you, so there's nothing to set up with your
+        web host.
       </p>
 
       {error && <div style={{ marginTop: 16, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
@@ -370,6 +457,59 @@ export default function EmailSenderSettings() {
         <label style={{ ...lbl, marginTop: 18 }}>Mailing address</label>
         <textarea value={mailingAddress} onChange={(e) => setMailingAddress(e.target.value)} placeholder="e.g. 123 Main St, Portland, OR 97201" rows={2} style={{ ...input, resize: "vertical", lineHeight: 1.5 }} />
         <div style={hint}>Required on marketing emails by law (CAN-SPAM). Shown in the footer.</div>
+
+        {/* Alerts to the OPERATOR — the other direction from everything above.
+            Own divider so it doesn't read as another family-facing field. */}
+        <div style={{ borderTop: `1px solid ${RULE}`, margin: "22px 0 0", paddingTop: 20 }}>
+          <label style={lbl} htmlFor="alert-email">Where should we send your alerts?</label>
+          <div style={{ ...hint, marginTop: 0, marginBottom: 8 }}>
+            This one isn't for families — it's us telling you about your own business. A contractor's
+            background check that needs your review, a card declining on a payment plan, a bank transfer
+            that didn't go through. Use an inbox a person actually reads.
+          </div>
+          <input
+            id="alert-email"
+            ref={alertInputRef}
+            type="email"
+            value={alertEmail}
+            onChange={(e) => { setAlertEmail(e.target.value); if (alertErr) setAlertErr(""); }}
+            placeholder={savedOrgEmail || "you@yourprogram.com"}
+            aria-invalid={alertErr ? "true" : undefined}
+            aria-describedby="alert-email-state"
+            style={{ ...input, borderColor: alertErr ? "#fecaca" : RULE }}
+          />
+          {alertErr && (
+            <div style={{ marginTop: 8, padding: "9px 11px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 12.5, lineHeight: 1.5 }}>
+              {alertErr}
+            </div>
+          )}
+          {/* What is true today, straight off the saved row. An operator who has
+              never touched this has no way to know the value came from signup,
+              so say which address is in force and where it came from. */}
+          <div id="alert-email-state" style={alertSource === "none"
+            ? { marginTop: 8, padding: "9px 11px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, color: "#92400e", fontSize: 12.5, lineHeight: 1.5 }
+            : hint}>
+            {alertSource === "explicit" && (
+              <>
+                Right now alerts go to <strong>{effectiveAlert}</strong>.
+                {effectiveAlert.toLowerCase() === savedOrgEmail.toLowerCase() && " That's the email your account was created with."}
+              </>
+            )}
+            {alertSource === "inherited" && (
+              <>
+                Right now alerts go to <strong>{savedOrgEmail}</strong>, the email your account was created
+                with. Leave this empty to keep it that way, or enter a different address.
+              </>
+            )}
+            {alertSource === "none" && (
+              <>
+                Right now your alerts have nowhere to go. Anything that names your staff or your families
+                is held back rather than sent to Enrops, so you aren't hearing about it at all. Add an
+                address to turn those back on.
+              </>
+            )}
+          </div>
+        </div>
 
         <div style={{ borderTop: `1px solid ${RULE}`, margin: "22px 0 0", paddingTop: 20 }}>
           <label style={lbl}>Email signature</label>

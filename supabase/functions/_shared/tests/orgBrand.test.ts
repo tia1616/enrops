@@ -1,7 +1,7 @@
 // Tests for encodeDisplayName / formatFromAddress (From-header RFC 5322 quoting).
 
 import { assertEquals } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
-import { encodeDisplayName, formatFromAddress, resolveTestRecipient, OrgBrand } from '../orgBrand.ts';
+import { encodeDisplayName, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE, OrgBrand } from '../orgBrand.ts';
 
 // Minimal brand stub — only the two fields formatFromAddress reads matter.
 function brandWith(sender_name: string, sender_email = 'sender@mail.enrops.com'): OrgBrand {
@@ -145,6 +145,26 @@ Deno.test('resolveTestRecipient: no tenant inbox yields null, NOT the platform a
   assertEquals(resolveTestRecipient(brand), null);
   assertEquals(resolveTestRecipient(brand, null), null);
   assertEquals(resolveTestRecipient(brand, 'still-not-an-email'), null);
+});
+
+Deno.test('NO_TENANT_INBOX_MESSAGE points at a control that exists, and attributes it to a role that can use it', () => {
+  // This string is the ONLY instruction an operator gets when a test send is
+  // refused, and it has been wrong twice. It is only true while
+  // /admin/email-sender actually writes organizations.alert_email; if that field
+  // is ever removed, this test is the tripwire.
+  //
+  // It must name the destination in the words that appear on screen: the
+  // Settings section heading and the page's own h1 are both "Email sender".
+  assertEquals(NO_TENANT_INBOX_MESSAGE.includes('Settings'), true);
+  assertEquals(NO_TENANT_INBOX_MESSAGE.includes('Email sender'), true);
+
+  // Must NOT tell the reader to do it themselves. The offer surfaces that raise
+  // this refusal carry no role gate, so staff reach it, and staff cannot open
+  // Settings. Naming the role keeps the sentence true for every reader.
+  assertEquals(NO_TENANT_INBOX_MESSAGE.includes('owner or admin'), true);
+
+  // The dead-end wording this replaced must not creep back.
+  assertEquals(NO_TENANT_INBOX_MESSAGE.toLowerCase().includes('contact enrops support'), false);
 });
 
 Deno.test('resolveTestRecipient: an explicit address still works with no tenant inbox', () => {

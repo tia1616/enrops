@@ -409,16 +409,32 @@ export function resolveTestRecipient(brand: OrgBrand, explicit?: string | null):
  */
 // Every clause here is checked against the state that produces it. An earlier
 // draft said "Add one in Settings, or type an address to send the test to" -
-// BOTH were false. No settings surface writes organizations.email or
-// alert_email (EmailSenderSettings writes org_branding.email_reply_to and
-// mailing_address only), and the offer dialogs have no test-recipient input:
-// they pass the signed-in operator's own address automatically. Telling someone
-// to use a control that does not exist is worse than telling them nothing.
+// BOTH were false. No settings surface wrote organizations.email or alert_email,
+// and the offer dialogs have no test-recipient input: they pass the signed-in
+// operator's own address automatically. Telling someone to use a control that
+// does not exist is worse than telling them nothing.
+//
+// The last sentence is now a real control: /admin/email-sender writes
+// organizations.alert_email (see migration 20260801d). Re-checked against every
+// state that selects this string:
+//   - Reached only when brand.tenant_alert_email is null, i.e. BOTH
+//     organizations.alert_email and organizations.email are null. So "no email
+//     address on file" is true, not approximate.
+//   - The field genuinely fixes it: the RLS policy members_update_own_org
+//     accepts the write from role owner OR admin (can_admin_org), proven under a
+//     real owner JWT on staging.
+//   - It says "an owner or admin can" rather than "you can" ON PURPOSE. The
+//     offer surfaces this refusal comes from (/admin/schedule and
+//     /admin/afterschool-schedule) carry no role gate, so a STAFF member reaches
+//     this message - and staff cannot open Settings at all (gate 'settings' is
+//     owner/admin). "Go to Settings" would be false for exactly the reader least
+//     able to work out why. Naming the role is true for both readers: it tells
+//     staff who to ask, and an owner reading it is an owner.
 export const NO_TENANT_INBOX_MESSAGE =
   'This test could not be sent: your organization has no email address on file, ' +
   'and a test has to land in your own inbox rather than ours. ' +
   'Nothing was sent to your instructors. ' +
-  'Contact enrops support and we will add your address.';
+  'An owner or admin can add one under Settings, on the Email sender page.';
 
 /**
  * Build the Resend "from" string: `Name <email>` (display name RFC 5322-encoded).

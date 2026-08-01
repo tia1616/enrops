@@ -104,7 +104,14 @@ const NAV = [
   },
   { to: "/admin/community", label: "Community", soon: true },
   // Settings owns Waivers as a sub-page (/admin/waivers) — keep this item lit there.
-  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates"] }, // owner/admin only
+  // /admin/email-sender is in `match` so the route GUARD covers it, not just the
+  // sidebar highlight. Three layers already said owner/admin — the page's own
+  // header comment, permissions.canManageSettings, and the RLS policy
+  // members_update_own_org (can_admin_org) — but the guard's match list missed
+  // it, so staff/viewer could open it by URL and every save then failed as a
+  // 0-row update. Other Settings sub-pages (background-checks, training,
+  // branding, registration-questions) have the same gap and are NOT fixed here.
+  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender"] }, // owner/admin only
   { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
 ];
 
