@@ -321,17 +321,20 @@ serve(async (req: Request) => {
           detail: 'Stripe-routed instructor pay through Enrops\'s platform is on the v2 roadmap. Use manual mode for now: record what you paid through your existing pay system.',
         }, 501);
       }
-      // enrops_platform path: money moves from the operator's Enrops-connected
-      // account balance. If the operator hasn't connected (or their account
-      // was disconnected), we have no source — surface a clear error instead
-      // of a cryptic Stripe failure. (Unreachable while the safety net above
-      // is in place; kept for when v2 removes it.)
-      if (payModel === 'enrops_platform' && !org.stripe_account_id) {
-        return json({
-          error: 'operator_stripe_not_connected',
-          detail: 'Connect your organization\'s Stripe account before paying instructors.',
-        }, 409);
-      }
+      // A second `payModel === 'enrops_platform'` check used to sit here,
+      // guarding org.stripe_account_id. It was unreachable — the safety net
+      // directly above returns for that exact payModel — and `deno check`
+      // reported it as a no-overlap comparison. CI runs deno with --no-check,
+      // which is why nobody saw it.
+      //
+      // It is NOT deleted, it is MOVED to the point of use (search
+      // operator_stripe_not_connected below, at the transfers.create call).
+      // That check is load-bearing for v2: it is what protects the
+      // `org.stripe_account_id!` non-null assertion on the request options. Had
+      // it simply been removed here, a future v2 that lifts the safety net
+      // above would have silently handed Stripe an undefined account id and got
+      // a cryptic failure instead of a clear one. Living next to the assertion
+      // it protects, it cannot be orphaned that way.
     }
 
     // ── pre-insert payout row (status=pending) ────────────────────────────
@@ -417,7 +420,25 @@ serve(async (req: Request) => {
           idempotencyKey: `payout_${payoutId}`,
         };
         if (payModel === 'enrops_platform') {
-          requestOptions.stripeAccount = org.stripe_account_id!;
+          // MOVED HERE from the via_stripe block above, where it was
+          // unreachable. This is the point of use: without it the line below
+          // was a bare `!` assertion, i.e. a promise to the compiler that the
+          // account id exists, with nothing actually checking. Throwing rather
+          // than returning is deliberate - the payout row is already inserted
+          // as 'pending' by this point, and the catch below is what marks it
+          // 'failed' with a reason. Returning early here would leave a dangling
+          // pending row and a double-pay hazard on the next run.
+          //
+          // Cannot fire in v1: the safety net above returns 501 for this
+          // payModel before we ever reach the transfer. It exists so that
+          // lifting the safety net in v2 cannot silently hand Stripe an
+          // undefined account.
+          if (!org.stripe_account_id) {
+            throw new Error(
+              'operator_stripe_not_connected: connect the organization\'s Stripe account before paying instructors',
+            );
+          }
+          requestOptions.stripeAccount = org.stripe_account_id;
         }
         transfer = await stripe.transfers.create(transferParams, requestOptions);
       } catch (err) {

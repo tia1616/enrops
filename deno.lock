@@ -1773,6 +1773,7 @@
     "https://deno.land/std@0.208.0/assert/unimplemented.ts": "d56fbeecb1f108331a380f72e3e010a1f161baa6956fd0f7cf3e095ae1a4c75a",
     "https://deno.land/std@0.208.0/assert/unreachable.ts": "4600dc0baf7d9c15a7f7d234f00c23bca8f3eba8b140286aaca7aa998cf9a536",
     "https://deno.land/std@0.208.0/fmt/colors.ts": "34b3f77432925eb72cf0bfb351616949746768620b8e5ead66da532f93d10ba2",
+    "https://esm.sh/@resvg/resvg-wasm@2.6.2": "0657db3e6d5f5b08b63e93c566b7ea08569c5f895188c13b27dd495908e7e3df",
     "https://esm.sh/@supabase/functions-js@2.105.4/denonext/functions-js.mjs": "8f2223b4fe1b213fa5c1926767bc43cfedc13a3734cf49bf5e4a31ecd49b7cc9",
     "https://esm.sh/@supabase/functions-js@2.105.4?target=denonext": "249d51d0b7608f6f25ab644e7815f7ef8ec7ce8b0536ec94e66c08bc76012386",
     "https://esm.sh/@supabase/gotrue-js@2.105.4/denonext/gotrue-js.mjs": "0354cf24cc7c95b254f87c2d52d919da08def5a401dd69d803a0c7042c3682f7",
@@ -1799,7 +1800,8 @@
     "https://esm.sh/webidl-conversions@3.0.1/denonext/webidl-conversions.mjs": "238cd0743827707cbc1c2d7c2cf1027dbc536fb53ec9a3fde0ff8026a3ac5385",
     "https://esm.sh/webidl-conversions@3.0.1?target=denonext": "4e20318d50528084616c79d7b3f6e7f0fe7b6d09013bd01b3974d7448d767e29",
     "https://esm.sh/whatwg-url@5.0.0/denonext/whatwg-url.mjs": "29b16d74ee72624c915745bbd25b617cfd2248c6af0f5120d131e232a9a9af79",
-    "https://esm.sh/whatwg-url@5.0.0?target=denonext": "f001a2cadf81312d214ca330033f474e74d81a003e21e8c5d70a1f46dc97b02d"
+    "https://esm.sh/whatwg-url@5.0.0?target=denonext": "f001a2cadf81312d214ca330033f474e74d81a003e21e8c5d70a1f46dc97b02d",
+    "https://esm.sh/xlsx@0.18.5": "feaad96c2697fd87d8d2cbf00030869f6f3cb87afc6f58c92602f1e33309dc03"
   },
   "workspace": {
     "packageJson": {

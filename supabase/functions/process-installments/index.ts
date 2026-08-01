@@ -74,7 +74,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
 import { computePlatformFee } from '../_shared/computePlatformFee.ts';
 import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
@@ -317,8 +317,18 @@ serve(async (req) => {
   }
 });
 
+// `ReturnType<typeof createClient>` picks up createClient's DEFAULT generics
+// (<unknown, never, GenericSchema>), NOT the <any, 'public', any> the caller at
+// line ~289 actually has. The two are not assignable, so the parameter type
+// collapsed and every .select() inside this function came back as
+// SelectQueryError - which is why `r.id` below was reported as not existing.
+// Pinning the param to the schema the caller really has fixes both errors at
+// the root instead of casting each read. Same defect and same fix as
+// stripe-connect-instructor-webhook.
+type AdminClient = SupabaseClient<any, 'public', any>;
+
 async function processGroup(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   groupRows: InstallmentRow[],
   summary: any,
   alertEmail: string,
