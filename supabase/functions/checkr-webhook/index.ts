@@ -251,7 +251,9 @@ async function sendCheckrCompleteContractorEmail(
     ``,
     `Good news — your background check came back clear. You're one step closer to being fully onboarded with ${org?.name ?? brand.org_name}.`,
     ``,
-    `Log back in to continue: ${PUBLIC_SITE_URL}/${org?.slug ?? ''}/onboarding`,
+    // Only include the link when we have a slug; `//onboarding` matches no
+    // route, and a dead call to action is worse than none.
+    ...(org?.slug ? [`Log back in to continue: ${PUBLIC_SITE_URL}/${org.slug}/onboarding`] : []),
   ].join('\n');
 
   try {
@@ -289,11 +291,17 @@ async function sendCheckrReviewAdminEmail(
     .select('first_name, last_name, email')
     .eq('id', instructorId)
     .maybeSingle();
-  // Both From and recipient come from the shared cascade, which always
-  // resolves. The old "org missing config" branch dropped a
-  // needs-human-review alert with nothing but a console.warn; there is no such
-  // state now, so it is deleted rather than left as unreachable code.
+  // The From always resolves. The RECIPIENT deliberately does not: this email
+  // names a contractor and states that their BACKGROUND CHECK needs review, so
+  // it must never travel outside the tenant. brand.alert_email would cascade to
+  // the Enrops inbox when the org has no address of its own; tenant_alert_email
+  // has no platform step, so the worst case here is an alert we refuse to send
+  // and log loudly, not one we misdeliver.
   const brand = await loadOrgBrand(supabase, orgId);
+  if (!brand.tenant_alert_email) {
+    console.error('no tenant alert address — checkr review alert NOT sent', { orgId, instructorId });
+    return;
+  }
 
   const instructorName =
     `${instructor?.first_name ?? ''} ${instructor?.last_name ?? ''}`.trim() ||
@@ -319,7 +327,7 @@ async function sendCheckrReviewAdminEmail(
       body: JSON.stringify({
         from: formatFromAddress(brand),
         reply_to: brand.reply_to,
-        to: brand.alert_email,
+        to: brand.tenant_alert_email,
         subject: `Background check needs review: ${instructorName}`,
         text,
         tags: [{ name: 'type', value: 'checkr_review' }],

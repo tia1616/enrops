@@ -119,6 +119,13 @@ serve(async (req: Request) => {
         continue;
       }
       const brand = await loadOrgBrand(supabase, orgId);
+      // The admin summary lists every in-progress contractor by name. Tenant
+      // inbox or skip this org — brand.alert_email would send that roster to
+      // Enrops for any org without an address of its own. Contractor reminders
+      // below are unaffected: those go to the contractors themselves.
+      if (!brand.tenant_alert_email) {
+        console.error('no tenant alert address — admin summary NOT sent for this org', { orgId });
+      }
 
       // Pull all in-progress-ish contractors for this org.
       const { data: rows } = await supabase
@@ -136,16 +143,18 @@ serve(async (req: Request) => {
         instructors: { first_name: string | null; last_name: string | null; email: string | null };
       }>;
 
-      // Admin summary (always)
-      const adminBody = buildAdminSummaryText(all, org.name ?? 'enrops');
-      const adminOk = await sendEmail({
-        brand,
-        to: brand.alert_email,
-        subject: `Contractor onboarding status — ${new Date().toISOString().slice(0, 10)}`,
-        text: adminBody,
-        tag: 'reminder_admin_summary',
-      });
-      if (adminOk) summary.admin_emails_sent++;
+      // Admin summary — whenever the org has an inbox of its own to send it to.
+      if (brand.tenant_alert_email) {
+        const adminBody = buildAdminSummaryText(all, org.name ?? 'enrops');
+        const adminOk = await sendEmail({
+          brand,
+          to: brand.tenant_alert_email,
+          subject: `Contractor onboarding status — ${new Date().toISOString().slice(0, 10)}`,
+          text: adminBody,
+          tag: 'reminder_admin_summary',
+        });
+        if (adminOk) summary.admin_emails_sent++;
+      }
 
       // Step 3: contractor reminders (only on the june10 run).
       if (type === 'admin_and_contractor') {

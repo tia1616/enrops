@@ -15,6 +15,12 @@ function brandWith(sender_name: string, sender_email = 'sender@mail.enrops.com')
     // updated, which broke type-checking for the WHOLE _shared suite - and it
     // went unnoticed because the tests are normally run without --check.
     font_family: 'Poppins, sans-serif',
+    // Distinct from alert_email on purpose. alert_email cascades to the
+    // platform; this one is tenant-only and nullable, and anything carrying
+    // tenant data must route by it. Keeping different values here means a
+    // future test that confuses the two fails loudly instead of passing on a
+    // coincidence.
+    tenant_alert_email: 'tenant@example.com',
   };
 }
 

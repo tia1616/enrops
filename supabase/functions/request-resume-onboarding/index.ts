@@ -75,6 +75,13 @@ serve(async (req: Request) => {
     // old org_missing_admin_email 500 has no state left to fire in: a resume
     // request is never silently lost.
     const brand = await loadOrgBrand(supabase, me.organization_id);
+    // Carries the contractor's name, email and phone. Tenant inbox or nothing —
+    // brand.alert_email would forward all three to Enrops when the org has no
+    // address of its own.
+    if (!brand.tenant_alert_email) {
+      console.error('no tenant alert address — resume request NOT sent', { org_id: me.organization_id, instructor_id: me.id });
+      return json({ error: 'org_missing_admin_email' }, 500);
+    }
 
     const resendKey = Deno.env.get('RESEND_API_KEY');
     if (!resendKey) {
@@ -106,7 +113,7 @@ serve(async (req: Request) => {
         // Preserves the old reply path exactly: the From used to BE the org's
         // own address, so a reply went to the org. Keep that, don't repoint it.
         reply_to: brand.reply_to,
-        to: brand.alert_email,
+        to: brand.tenant_alert_email,
         subject: `Resume request: ${instructorName}`,
         text,
         tags: [{ name: 'type', value: 'resume_request' }],

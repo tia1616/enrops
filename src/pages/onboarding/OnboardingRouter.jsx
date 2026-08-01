@@ -37,11 +37,15 @@ function isMinorFromDob(dob, today = new Date()) {
 // was the only one that existed, which is why the other two surfaces silently
 // swallowed the same failure.
 //
-// One behaviour change from folding them together, and it is a fix rather than
-// a side effect: the old local version returned 'access_denied' but the caller
-// below only ever branched on 'otp_expired', so an access_denied link fell
-// straight through to the session check and was never reported. The shared
-// helper's isExpiredLink covers both, and the caller now branches on that.
+// Behaviour here is UNCHANGED from the local version it replaced: only
+// error_code=otp_expired routes to the resend form, and anything else falls
+// through to the session check.
+//
+// An intermediate version of this refactor did broaden it to cover a bare
+// error=access_denied, described at the time as a fix. It was not: access_denied
+// is the OAuth code for the user declining consent, so broadening it would have
+// bounced someone who cancelled the Google button to a "this link has expired"
+// resend form. Reverted - see lib/authRedirectError.js.
 
 export default function OnboardingRouter() {
   const navigate = useNavigate();

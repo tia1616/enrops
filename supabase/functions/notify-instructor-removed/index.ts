@@ -122,10 +122,13 @@ serve(async (req: Request) => {
         to: instructor.email,
         subject,
         text: bodyText,
-        // Unchanged semantics: replies go to the org's alert inbox, which is
-        // exactly what brand.alert_email resolves to (it just no longer goes
-        // missing).
-        reply_to: [brand.alert_email],
+        // Replies go to the org's own inbox, falling back to its reply-to.
+        // NOT brand.alert_email: that cascades to Enrops, which would point a
+        // removed contractor's reply about their own removal at the platform
+        // instead of the provider who removed them. Both candidates here are
+        // tenant-scoped, and reply_to always resolves, so this cannot end up
+        // empty.
+        reply_to: [brand.tenant_alert_email ?? brand.reply_to],
         tags: [{ name: 'type', value: 'instructor_removed' }],
       }),
     });

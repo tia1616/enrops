@@ -76,6 +76,13 @@ serve(async (req: Request) => {
     // happened; it just console.warn'd and dropped the alert. There is no such
     // state now, so the branch is gone rather than kept as unreachable code.
     const brand = await loadOrgBrand(supabase, me.organization_id);
+    // Names the contractor and quotes their decline reason — tenant data, so it
+    // routes to the tenant's own inbox or nowhere. brand.alert_email would
+    // cascade to Enrops when the org has no address of its own.
+    if (!brand.tenant_alert_email) {
+      console.error('no tenant alert address — decline alert NOT sent', { org_id: me.organization_id, instructor_id: me.id });
+      return json({ success: true, admin_alerted: false });
+    }
     await sendAdminEmail({
       brand,
       instructorName: `${me.first_name ?? ''} ${me.last_name ?? ''}`.trim() || me.email,
@@ -121,7 +128,8 @@ async function sendAdminEmail(args: {
       body: JSON.stringify({
         from: formatFromAddress(args.brand),
         reply_to: args.brand.reply_to,
-        to: args.brand.alert_email,
+        // Non-null: the caller returns early when it is missing.
+        to: args.brand.tenant_alert_email!,
         subject: `Contractor declined onboarding: ${args.instructorName}`,
         text,
         tags: [{ name: 'type', value: 'contractor_declined' }],

@@ -131,6 +131,16 @@ async function sendPayoutReversalAlert(
     admin.from('organizations').select('name').eq('id', payout.organization_id).maybeSingle(),
     loadOrgBrand(admin, payout.organization_id),
   ]);
+  // Names an instructor and a payout amount. Tenant inbox or nothing:
+  // brand.alert_email would forward another provider's payroll detail to Enrops
+  // when that org has no address of its own.
+  if (!brand.tenant_alert_email) {
+    console.error(`${logTag} no tenant alert address — payout-reversal alert NOT sent`, {
+      organization_id: payout.organization_id,
+      payout_id: payout.id,
+    });
+    return;
+  }
   const name =
     `${(instructor as { first_name?: string } | null)?.first_name ?? ''} ${(instructor as { last_name?: string } | null)?.last_name ?? ''}`.trim() ||
     'an instructor';
@@ -141,7 +151,7 @@ async function sendPayoutReversalAlert(
     body: JSON.stringify({
       from: formatFromAddress(brand),
       reply_to: brand.reply_to,
-      to: brand.alert_email,
+      to: brand.tenant_alert_email,
       subject: `[${(org as { name?: string } | null)?.name ?? brand.org_name}] Instructor payout reversed — ${name}`,
       text:
         `A Stripe transfer for ${name} (${amount}) was reversed.\n\n` +

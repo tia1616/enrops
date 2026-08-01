@@ -25,8 +25,24 @@ export interface OrgBrand {
   sender_email: string;
   // Reply-to override (operator-facing email a parent should respond to).
   reply_to: string;
-  // Where alerts to the operator go (e.g. card decline summaries).
+  // Where alerts to the operator go (e.g. card decline summaries). CASCADES TO
+  // THE PLATFORM: tenant -> Enrops org -> a hardcoded Enrops address. Safe for
+  // platform-owned notices; NOT safe for anything containing tenant data.
   alert_email: string;
+  // The tenant's OWN operator inbox, or null when this org has none.
+  //
+  // Use this - not alert_email - for any alert whose BODY contains tenant data
+  // (a contractor's name, their email, a background-check status, a payout).
+  // alert_email is a cascade that ends at the platform, so routing tenant PII
+  // through it silently forwards one provider's private information to Enrops
+  // the moment their own address is missing. That is not hypothetical: the
+  // default-alert-email trigger is BEFORE INSERT only and nothing locks the
+  // column, so an operator can clear it (proven under a real owner JWT:
+  // `update organizations set alert_email = null` is accepted by RLS).
+  //
+  // Deliberately has NO platform fallback. When it is null the correct answer
+  // is to not send and say so loudly, never to send to us instead.
+  tenant_alert_email: string | null;
   // Branding for email HTML.
   logo_url: string | null;
   primary_color: string;
@@ -266,6 +282,14 @@ export async function loadOrgBrand(
 
     alert_email:
       pick(tenantOrg?.alert_email, enropsOrg?.alert_email) ?? ENROPS_DEFAULTS.alert_email,
+
+    // Tenant-only, no Enrops step in the chain. organizations.email is included
+    // because provision_operator_org always writes it from the signup JWT, so a
+    // self-serve org has a usable operator inbox even if alert_email was never
+    // set or was later cleared - which keeps the honest-failure case genuinely
+    // rare rather than routine. Null only when there is no tenant at all, or
+    // the tenant has neither address.
+    tenant_alert_email: pick(tenantOrg?.alert_email, tenantOrg?.email),
 
     // ?? ENROPS_DEFAULTS.logo_url is the important part: before it, a provider
     // with no logo of their own AND an Enrops org row that has no logo set (the

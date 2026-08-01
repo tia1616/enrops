@@ -55,12 +55,20 @@ export function readAuthRedirectError(hash = window.location.hash) {
   return {
     code: code || error || 'unknown',
     description,
-    // otp_expired is the specific "this link is too old" code. access_denied is
-    // what Supabase sends when the link was already used or is otherwise
-    // rejected; from the person's point of view both mean "the link I clicked
-    // did not work, send me another", which is the only action either one
-    // supports.
-    isExpiredLink: code === 'otp_expired' || error === 'access_denied' || code === 'access_denied',
+    // ONLY error_code=otp_expired. An earlier version also treated a bare
+    // `error=access_denied` as an expired link, which was wrong: access_denied
+    // is the OAuth code for THE USER DECLINING (RFC 6749 4.1.2.1), so
+    // cancelling the Google button told people a sign-in link had expired when
+    // they had never clicked one. This repo already documents that meaning -
+    // see pages/auth/GoogleAuthCallback.jsx, which maps access_denied to "You
+    // declined the Google permission request."
+    //
+    // Supabase sends BOTH together for a genuinely stale magic link
+    // (#error=access_denied&error_code=otp_expired), so keying on error_code
+    // still catches the real case; it just stops claiming expiry for the
+    // link-less ones. Everything else falls through to the generic message,
+    // which does not assert how the person was trying to sign in.
+    isExpiredLink: code === 'otp_expired',
   };
 }
 
@@ -126,7 +134,13 @@ export const EXPIRED_LINK_MESSAGE =
  */
 export function genericAuthErrorMessage(err) {
   const detail = (err?.description || '').trim();
+  // Neither branch may assert HOW the person was signing in. This path is
+  // reached for Google failures too (a declined consent lands here now that
+  // isExpiredLink is otp_expired-only), and the previous wording - "We couldn't
+  // sign you in with that link" - told someone who had clicked the Google
+  // button that a link had failed. Say only what is true in every state that
+  // selects this: the sign-in did not work, and they should start again.
   return detail
-    ? `We couldn't sign you in: ${detail.replace(/\.$/, '')}. You'll need a new sign-in link.`
-    : "We couldn't sign you in with that link. You'll need a new one.";
+    ? `We couldn't sign you in: ${detail.replace(/\.$/, '')}. Please try signing in again.`
+    : "We couldn't sign you in. Please try signing in again.";
 }

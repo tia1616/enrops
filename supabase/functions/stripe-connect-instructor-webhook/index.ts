@@ -198,6 +198,14 @@ async function sendRegressionAlert(
     loadOrgBrand(admin, orgId),
   ]);
 
+  // Names an instructor and their email, and says their payouts are disabled.
+  // Tenant inbox or nothing: brand.alert_email would forward that to Enrops for
+  // an org with no address of its own.
+  if (!brand.tenant_alert_email) {
+    console.error('no tenant alert address — payouts-disabled alert NOT sent', { orgId, instructorId });
+    return;
+  }
+
   const name = `${instructor?.first_name ?? ''} ${instructor?.last_name ?? ''}`.trim() || instructor?.email || 'A contractor';
   const subject = `[${org?.name ?? brand.org_name}] Stripe payouts disabled — ${name}`;
   const text = `${name}'s Stripe Connect payouts have been disabled by Stripe.\n\nThis usually means their verification information has expired. The contractor needs to re-verify in Stripe before the next payroll export.\n\nContractor email: ${instructor?.email ?? '(unknown)'}\n\n— enrops`;
@@ -211,7 +219,7 @@ async function sendRegressionAlert(
     body: JSON.stringify({
       from: formatFromAddress(brand),
       reply_to: brand.reply_to,
-      to: brand.alert_email,
+      to: brand.tenant_alert_email,
       subject,
       text,
     }),

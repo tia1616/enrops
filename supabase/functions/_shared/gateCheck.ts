@@ -163,7 +163,11 @@ async function sendOnboardingCompleteEmails(
   const fullName = `${instructor.first_name ?? ''} ${instructor.last_name ?? ''}`.trim();
   const greeting = instructor.preferred_name || instructor.first_name || 'there';
   const orgName = org?.name ?? brand.org_name;
-  const portalUrl = `${PUBLIC_SITE_URL}/${org?.slug ?? ''}/instructor`;
+  // Only build the portal link when we actually have a slug. Interpolating an
+  // empty one produced `https://enrops.com//instructor`, which matches no
+  // route - an email whose single call to action is a dead link is worse than
+  // one that omits it.
+  const portalUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : null;
   // Only mention the background check when this org actually requires one.
   const bgcPhrase = bgcEnabled ? 'background check cleared, ' : '';
 
@@ -173,8 +177,9 @@ async function sendOnboardingCompleteEmails(
     ``,
     `You're fully onboarded with ${orgName} — paperwork signed, ${bgcPhrase}payouts set up.`,
     ``,
-    `Sign in to your portal any time to see your schedule, accept assignments, and view your pay:`,
-    portalUrl,
+    ...(portalUrl
+      ? [`Sign in to your portal any time to see your schedule, accept assignments, and view your pay:`, portalUrl]
+      : [`Sign in to your portal any time to see your schedule, accept assignments, and view your pay.`]),
     ``,
     `Questions? Just reply to this email.`,
   ].join('\n');
@@ -199,7 +204,19 @@ async function sendOnboardingCompleteEmails(
     console.error('contractor onboarding-complete email failed:', err);
   }
 
-  // 2. Admin (the org's alert inbox) — "X is fully onboarded"
+  // 2. Admin (the org's OWN alert inbox) — "X is fully onboarded".
+  //
+  // tenant_alert_email, not alert_email: this body names a specific contractor
+  // and their email address. alert_email cascades to the platform, so on an org
+  // with no address of its own that cascade would forward one provider's
+  // contractor details to Enrops. Fail closed and say so instead.
+  if (!brand.tenant_alert_email) {
+    console.error('no tenant alert address — onboarding-complete admin alert NOT sent', {
+      organization_id: instructor.organization_id,
+      instructor_id: instructorId,
+    });
+    return;
+  }
   const adminText = [
     `${fullName || instructor.email} is fully onboarded.`,
     ``,
@@ -215,7 +232,7 @@ async function sendOnboardingCompleteEmails(
       body: JSON.stringify({
         from,
         reply_to: brand.reply_to,
-        to: brand.alert_email,
+        to: brand.tenant_alert_email,
         subject: `${fullName || instructor.email} is fully onboarded`,
         text: adminText,
         tags: [{ name: 'type', value: 'onboarding_complete_admin' }],
