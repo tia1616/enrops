@@ -25,7 +25,7 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
-import { loadOrgBrand, formatFromAddress, renderSignatureBlock, encodeDisplayName, type OrgBrand } from "../_shared/orgBrand.ts";
+import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
 import { listUnsubscribeHeaders } from "../_shared/listUnsubscribe.ts";
 import {
   parseEmailAttachments,
@@ -192,12 +192,14 @@ type VipOffering = {
   excluded_location_ids?: string[];
 };
 
+// Sender identity is deliberately NOT here — it comes from loadOrgBrand below.
+// The raw columns were still being selected after that switch, which left a
+// second, stale source of the From line sitting in scope where a later edit
+// could reach for it.
 type Org = {
   id: string;
   name: string;
   slug: string;
-  default_sender_name: string | null;
-  default_sender_email: string | null;
   brand_voice: { closer?: string; phone?: string; website?: string } | null;
   logo_url: string | null;
   vip_offering: VipOffering | null;
@@ -355,7 +357,7 @@ serve(async (req: Request) => {
   // ---- Load org ----
   const { data: org, error: oErr } = await supabase
     .from("organizations")
-    .select("id, name, slug, default_sender_name, default_sender_email, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, org_branding(primary_color)")
+    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, org_branding(primary_color)")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
@@ -1453,43 +1455,12 @@ function extractTopics(what: Record<string, unknown> | undefined): string[] {
 // Resend send
 // ---------------------------------------------------------------------------
 
-// NOTE: currently unused — the batch path above is the only live sender. Kept in
-// sync with it anyway (including the unsubscribe headers) so the two send paths
-// cannot drift into doing different things if this one is ever wired back up.
-async function sendViaResend(opts: {
-  fromName: string;
-  fromEmail: string;
-  toEmail: string;
-  subject: string;
-  html: string;
-  text: string | null;
-  unsubscribeUrl?: string | null;
-}): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-  const unsubHeaders = listUnsubscribeHeaders(opts.unsubscribeUrl);
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: `${encodeDisplayName(opts.fromName)} <${opts.fromEmail}>`,
-      reply_to: opts.fromEmail,
-      to: [opts.toEmail],
-      subject: opts.subject,
-      html: opts.html,
-      text: opts.text,
-      ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    return { ok: false, error: `resend ${res.status}: ${body.slice(0, 200)}` };
-  }
-  const data = await res.json();
-  return { ok: true, id: data.id ?? "" };
-}
-
+// DELETED 2026-08-01: a single-send sendViaResend() with zero callers. Its
+// comment claimed it was "kept in sync" with the live batch path, but it had
+// already drifted — it built the From from raw fromName/fromEmail args and set
+// reply_to to the From address, which is exactly the pattern this pass removes.
+// A dead copy of the old shape is a landmine, not a spare.
+//
 // Resend batch endpoint: POST /emails/batch with an array of email objects
 // (up to 100). Returns { data: [{id}, ...] } on success — one id per email
 // in the SAME ORDER as the request. On rate-limit / auth / validation

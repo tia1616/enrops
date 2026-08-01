@@ -8,7 +8,7 @@
 //
 // AUTH: caller must be owner/admin of organization_id.
 // INPUT:  { organization_id, action: 'preview' | 'test', to? }
-// OUTPUT: preview -> { from, reply_to, sender_source, org_name }
+// OUTPUT: preview -> { from, sender_name, sender_email, reply_to, sender_source, org_name }
 //         test    -> { sent, held_back?, to, from, error? }
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
@@ -63,7 +63,19 @@ serve(async (req) => {
     const from = formatFromAddress(brand);
 
     if (action === 'preview') {
-      return json({ from, reply_to: brand.reply_to, sender_source: brand.sender_source, org_name: brand.org_name });
+      // sender_name/sender_email are the SAME values `from` is built from,
+      // returned split so a caller that renders the two parts separately (the
+      // campaign review screen) doesn't have to parse the header back apart —
+      // or, as it did before, rebuild them from the raw org columns and
+      // disagree with what actually sends.
+      return json({
+        from,
+        sender_name: brand.sender_name,
+        sender_email: brand.sender_email,
+        reply_to: brand.reply_to,
+        sender_source: brand.sender_source,
+        org_name: brand.org_name,
+      });
     }
 
     if (action === 'test') {

@@ -12,13 +12,14 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
+const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // Platform support inbox — overridable via env; defaults to the founder address.
 const NOTIFY_EMAIL = Deno.env.get('FEEDBACK_NOTIFY_EMAIL') ?? 'jessica@journeytosteam.com';
-const FROM_EMAIL = 'Enrops <hello@updates.journeytosteam.com>';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -103,6 +104,29 @@ serve(async (req) => {
     // Notify the platform inbox. Never fail the request on email error.
     let emailed = false;
     try {
+      // Platform identity, not a tenant's: this email is Enrops writing to
+      // itself about feedback. It used to be hardcoded to
+      // hello@updates.journeytosteam.com — one tenant's sending domain
+      // impersonating the platform, which also means it would stop working the
+      // day that tenant left. loadOrgBrand(null) resolves the Enrops row.
+      // SERVICE ROLE IN A USER-CALLABLE FUNCTION - deliberate, and narrow.
+      // A tenant audit will flag this line, so here is the answer up front:
+      //  - It is needed. Proven on staging with set_config('role','authenticated')
+      //    as an ordinary operator: SELECT on organizations WHERE slug='enrops'
+      //    returns 0 rows under RLS. Without the elevated read, loadOrgBrand
+      //    silently degrades to its hardcoded fallback, which is a SECOND source
+      //    of truth for the platform sender and drifts the day the row changes.
+      //  - It cannot leak tenant data. loadOrgBrand(client, null) reads ONLY the
+      //    platform's own org + org_branding rows; no tenant row is touched
+      //    because no tenant id is passed.
+      //  - No caller input reaches it. The client is built here, used for this
+      //    one call, and never sees the request body.
+      //  - Its entire output is a From header. The feedback INSERT still runs on
+      //    the caller's own RLS-scoped client above.
+      const platformBrand = await loadOrgBrand(
+        createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } }),
+        null,
+      );
       const where = page_path ?? page_url ?? 'unknown';
       const html = `
         <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;line-height:1.5">
@@ -118,7 +142,9 @@ serve(async (req) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
         body: JSON.stringify({
-          from: FROM_EMAIL,
+          from: formatFromAddress(platformBrand),
+          // UNCHANGED: replies go to the person who wrote the feedback, exactly
+          // as the body promises.
           to: NOTIFY_EMAIL,
           reply_to: user.email ?? undefined,
           subject: `[Enrops feedback] ${orgName} — ${user.email ?? 'user'}`,

@@ -20,7 +20,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -106,17 +106,10 @@ serve(async (req: Request) => {
     if (instructor.organization_id !== orgId) return FORBIDDEN;
     if (!instructor.email) return json({ error: 'instructor_missing_email' }, 400);
 
-    // Load org for sender identity.
-    const { data: org, error: orgErr } = await supabase
-      .from('organizations')
-      .select('name, default_sender_name, default_sender_email, alert_email')
-      .eq('id', orgId)
-      .maybeSingle();
-    if (orgErr || !org?.default_sender_email) {
-      return json({ error: 'org_sender_missing' }, 500);
-    }
-
-    const from = `${encodeDisplayName(org.default_sender_name ?? org.name ?? 'enrops')} <${org.default_sender_email}>`;
+    // Sender identity from the shared cascade — always resolves, so the old
+    // org_sender_missing 500 has no state left to fire in.
+    const brand = await loadOrgBrand(supabase, orgId);
+    const from = formatFromAddress(brand);
 
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -129,7 +122,10 @@ serve(async (req: Request) => {
         to: instructor.email,
         subject,
         text: bodyText,
-        reply_to: org.alert_email ? [org.alert_email] : undefined,
+        // Unchanged semantics: replies go to the org's alert inbox, which is
+        // exactly what brand.alert_email resolves to (it just no longer goes
+        // missing).
+        reply_to: [brand.alert_email],
         tags: [{ name: 'type', value: 'instructor_removed' }],
       }),
     });

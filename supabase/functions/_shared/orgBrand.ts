@@ -233,7 +233,14 @@ export async function loadOrgBrand(
       enropsBranding?.email_from_name,
     ) ?? ENROPS_DEFAULTS.sender_name;
 
-  const senderSource: OrgBrand['sender_source'] = tenantOrg?.default_sender_email
+  // Keyed off tenantSenderVerified, NOT off the column merely being non-null.
+  // The column being set does not mean it is the address we send from: unless
+  // its domain matches the tenant's verified sending_domain it is ignored and
+  // the From is the shared platform address. Reporting 'tenant' for those orgs
+  // told the operator (via tenant-sender's preview) that their own domain was
+  // in use when it was not - shoreview-chess, whose column holds a
+  // mail.enrops.com address, read as 'tenant' today.
+  const senderSource: OrgBrand['sender_source'] = tenantSenderVerified
     ? 'tenant'
     : tenantSlug
       ? 'platform_shared'

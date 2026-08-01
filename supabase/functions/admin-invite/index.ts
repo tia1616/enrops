@@ -15,7 +15,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
-import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { findAuthUserByEmail } from '../_shared/findAuthUserByEmail.ts';
 
 interface AdminInviteBody {
@@ -101,16 +101,19 @@ serve(async (req: Request) => {
 
     const { data: org, error: orgErr } = await supabase
       .from('organizations')
-      .select('id, slug, name, default_sender_name, default_sender_email')
+      .select('id, slug, name')
       .eq('id', organizationId)
       .maybeSingle();
     if (orgErr || !org) {
       console.error('org lookup failed:', orgErr);
       return json({ error: 'lookup_failed' }, 500);
     }
-    if (!org.slug || !org.default_sender_name || !org.default_sender_email) {
-      return json({ error: 'org_missing_sender_config' }, 500);
-    }
+
+    // Sender identity from the shared cascade — always resolves to a verified
+    // address, so the old org_missing_sender_config 500 has no state left to
+    // fire in. An org that never configured a sender now gets its per-tenant
+    // address on the platform domain instead of a failed invite.
+    const brand = await loadOrgBrand(supabase, organizationId);
 
     let authUserId: string | null = null;
     const { data: createdUser, error: createErr } = await supabase.auth.admin.createUser({
@@ -227,7 +230,11 @@ serve(async (req: Request) => {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${encodeDisplayName(org.default_sender_name)} <${org.default_sender_email}>`,
+        from: formatFromAddress(brand),
+        // Was implicit before: the From WAS the org's own address, so a reply
+        // reached them. The From is now the shared platform domain, so the
+        // reply path has to be stated to stay the same.
+        reply_to: brand.reply_to,
         to: email,
         subject,
         text,

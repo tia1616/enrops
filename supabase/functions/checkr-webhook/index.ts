@@ -20,7 +20,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
-import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so the onboarding link points at staging, not prod. Defaults to prod.
@@ -235,20 +235,23 @@ async function sendCheckrCompleteContractorEmail(
     .select('first_name, email')
     .eq('id', instructorId)
     .maybeSingle();
+  // slug is still read from the org row — it builds the portal link below.
   const { data: org } = await supabase
     .from('organizations')
-    .select('name, default_sender_name, default_sender_email, slug')
+    .select('name, slug')
     .eq('id', orgId)
     .maybeSingle();
 
-  if (!instructor?.email || !org?.default_sender_email) return;
+  // Only the recipient can still be missing. The sender always resolves.
+  if (!instructor?.email) return;
+  const brand = await loadOrgBrand(supabase, orgId);
 
   const text = [
     `Hi ${instructor.first_name ?? 'there'},`,
     ``,
-    `Good news — your background check came back clear. You're one step closer to being fully onboarded with ${org.name ?? 'us'}.`,
+    `Good news — your background check came back clear. You're one step closer to being fully onboarded with ${org?.name ?? brand.org_name}.`,
     ``,
-    `Log back in to continue: ${PUBLIC_SITE_URL}/${org.slug}/onboarding`,
+    `Log back in to continue: ${PUBLIC_SITE_URL}/${org?.slug ?? ''}/onboarding`,
   ].join('\n');
 
   try {
@@ -259,7 +262,8 @@ async function sendCheckrCompleteContractorEmail(
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${encodeDisplayName(org.default_sender_name ?? org.name ?? 'enrops')} <${org.default_sender_email}>`,
+        from: formatFromAddress(brand),
+        reply_to: brand.reply_to,
         to: instructor.email,
         subject: `Your background check is complete`,
         text,
@@ -285,16 +289,11 @@ async function sendCheckrReviewAdminEmail(
     .select('first_name, last_name, email')
     .eq('id', instructorId)
     .maybeSingle();
-  const { data: org } = await supabase
-    .from('organizations')
-    .select('alert_email, name, default_sender_name, default_sender_email')
-    .eq('id', orgId)
-    .maybeSingle();
-
-  if (!org?.alert_email || !org.default_sender_email) {
-    console.warn('cannot send checkr review alert — org missing config', { orgId });
-    return;
-  }
+  // Both From and recipient come from the shared cascade, which always
+  // resolves. The old "org missing config" branch dropped a
+  // needs-human-review alert with nothing but a console.warn; there is no such
+  // state now, so it is deleted rather than left as unreachable code.
+  const brand = await loadOrgBrand(supabase, orgId);
 
   const instructorName =
     `${instructor?.first_name ?? ''} ${instructor?.last_name ?? ''}`.trim() ||
@@ -318,8 +317,9 @@ async function sendCheckrReviewAdminEmail(
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${encodeDisplayName(org.default_sender_name ?? org.name ?? 'enrops')} <${org.default_sender_email}>`,
-        to: org.alert_email,
+        from: formatFromAddress(brand),
+        reply_to: brand.reply_to,
+        to: brand.alert_email,
         subject: `Background check needs review: ${instructorName}`,
         text,
         tags: [{ name: 'type', value: 'checkr_review' }],

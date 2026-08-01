@@ -19,7 +19,7 @@ import {
   resolveInstructor,
   adminClient,
 } from '../_shared/instructor.ts';
-import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress, type OrgBrand } from '../_shared/orgBrand.ts';
 
 interface SubmitDeclineBody {
   reason?: string;
@@ -70,27 +70,18 @@ serve(async (req: Request) => {
       return json({ error: 'update_failed' }, 500);
     }
 
-    // Email the org's alert_email.
-    const { data: org } = await supabase
-      .from('organizations')
-      .select('name, alert_email, default_sender_name, default_sender_email')
-      .eq('id', me.organization_id)
-      .maybeSingle();
-
-    if (org?.alert_email && org.default_sender_email) {
-      await sendAdminEmail({
-        to: org.alert_email,
-        fromName: org.default_sender_name ?? org.name ?? 'enrops',
-        fromEmail: org.default_sender_email,
-        instructorName: `${me.first_name ?? ''} ${me.last_name ?? ''}`.trim() || me.email,
-        instructorEmail: me.email,
-        reason,
-      });
-    } else {
-      console.warn('cannot send decline alert — org missing alert_email or sender', {
-        org_id: me.organization_id,
-      });
-    }
+    // Alert the org. Both halves — who it's from and who it goes to — come from
+    // the shared cascade, which always resolves. The old "org missing
+    // alert_email or sender" branch had no way to tell anyone the decline
+    // happened; it just console.warn'd and dropped the alert. There is no such
+    // state now, so the branch is gone rather than kept as unreachable code.
+    const brand = await loadOrgBrand(supabase, me.organization_id);
+    await sendAdminEmail({
+      brand,
+      instructorName: `${me.first_name ?? ''} ${me.last_name ?? ''}`.trim() || me.email,
+      instructorEmail: me.email,
+      reason,
+    });
 
     return json({ success: true });
   } catch (err) {
@@ -100,9 +91,7 @@ serve(async (req: Request) => {
 });
 
 async function sendAdminEmail(args: {
-  to: string;
-  fromName: string;
-  fromEmail: string;
+  brand: OrgBrand;
   instructorName: string;
   instructorEmail: string;
   reason: string;
@@ -130,8 +119,9 @@ async function sendAdminEmail(args: {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${encodeDisplayName(args.fromName)} <${args.fromEmail}>`,
-        to: args.to,
+        from: formatFromAddress(args.brand),
+        reply_to: args.brand.reply_to,
+        to: args.brand.alert_email,
         subject: `Contractor declined onboarding: ${args.instructorName}`,
         text,
         tags: [{ name: 'type', value: 'contractor_declined' }],

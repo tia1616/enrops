@@ -15,9 +15,9 @@
 
 import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
+import { loadOrgBrand, formatFromAddress } from './orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
-const FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || 'alerts@enrops.com';
 
 interface PayoutRow {
   id: string;
@@ -121,12 +121,16 @@ async function sendPayoutReversalAlert(
     console.warn(`${logTag} RESEND_API_KEY not set — skipping reversal alert`);
     return;
   }
-  const [{ data: instructor }, { data: org }] = await Promise.all([
+  // Same sender-config gap as the thirteen raw readers, found by sweeping the
+  // class rather than the named list: this alert was hardcoded to
+  // alerts@enrops.com, which is NOT the Resend-verified sending domain
+  // (mail.enrops.com is), and it dropped silently when alert_email was unset.
+  // Both halves now come from the shared cascade.
+  const [{ data: instructor }, { data: org }, brand] = await Promise.all([
     admin.from('instructors').select('first_name, last_name, email').eq('id', payout.instructor_id).maybeSingle(),
-    admin.from('organizations').select('alert_email, name').eq('id', payout.organization_id).maybeSingle(),
+    admin.from('organizations').select('name').eq('id', payout.organization_id).maybeSingle(),
+    loadOrgBrand(admin, payout.organization_id),
   ]);
-  const alertEmail = (org as { alert_email?: string } | null)?.alert_email;
-  if (!alertEmail) return;
   const name =
     `${(instructor as { first_name?: string } | null)?.first_name ?? ''} ${(instructor as { last_name?: string } | null)?.last_name ?? ''}`.trim() ||
     'an instructor';
@@ -135,9 +139,10 @@ async function sendPayoutReversalAlert(
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      from: FROM_EMAIL,
-      to: alertEmail,
-      subject: `[${(org as { name?: string } | null)?.name ?? 'Enrops'}] Instructor payout reversed — ${name}`,
+      from: formatFromAddress(brand),
+      reply_to: brand.reply_to,
+      to: brand.alert_email,
+      subject: `[${(org as { name?: string } | null)?.name ?? brand.org_name}] Instructor payout reversed — ${name}`,
       text:
         `A Stripe transfer for ${name} (${amount}) was reversed.\n\n` +
         `The related session_delivery_confirmations have been flipped back to "approved" so you can re-issue the payment (or withhold) from the Payroll page.\n\n` +

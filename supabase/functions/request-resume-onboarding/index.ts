@@ -16,7 +16,7 @@ import {
   resolveInstructor,
   adminClient,
 } from '../_shared/instructor.ts';
-import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 interface RequestResumeBody {
   note?: string;
@@ -70,20 +70,11 @@ serve(async (req: Request) => {
       }
     }
 
-    // Look up org for sender + recipient
-    const { data: org, error: orgErr } = await supabase
-      .from('organizations')
-      .select('name, alert_email, default_sender_name, default_sender_email')
-      .eq('id', me.organization_id)
-      .maybeSingle();
-    if (orgErr) {
-      console.error('org lookup failed:', orgErr);
-      return json({ error: 'lookup_failed' }, 500);
-    }
-    if (!org?.alert_email || !org.default_sender_email) {
-      console.error('org missing alert_email or sender config:', me.organization_id);
-      return json({ error: 'org_missing_admin_email' }, 500);
-    }
+    // Sender AND recipient both come from the shared cascade. brand.alert_email
+    // falls back to the platform inbox rather than dropping the alert, so the
+    // old org_missing_admin_email 500 has no state left to fire in: a resume
+    // request is never silently lost.
+    const brand = await loadOrgBrand(supabase, me.organization_id);
 
     const resendKey = Deno.env.get('RESEND_API_KEY');
     if (!resendKey) {
@@ -111,8 +102,11 @@ serve(async (req: Request) => {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${encodeDisplayName(org.default_sender_name ?? org.name ?? 'enrops')} <${org.default_sender_email}>`,
-        to: org.alert_email,
+        from: formatFromAddress(brand),
+        // Preserves the old reply path exactly: the From used to BE the org's
+        // own address, so a reply went to the org. Keep that, don't repoint it.
+        reply_to: brand.reply_to,
+        to: brand.alert_email,
         subject: `Resume request: ${instructorName}`,
         text,
         tags: [{ name: 'type', value: 'resume_request' }],
