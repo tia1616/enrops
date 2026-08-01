@@ -1,7 +1,7 @@
 // Tests for encodeDisplayName / formatFromAddress (From-header RFC 5322 quoting).
 
 import { assertEquals } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
-import { encodeDisplayName, formatFromAddress, OrgBrand } from '../orgBrand.ts';
+import { encodeDisplayName, formatFromAddress, resolveTestRecipient, OrgBrand } from '../orgBrand.ts';
 
 // Minimal brand stub — only the two fields formatFromAddress reads matter.
 function brandWith(sender_name: string, sender_email = 'sender@mail.enrops.com'): OrgBrand {
@@ -15,6 +15,12 @@ function brandWith(sender_name: string, sender_email = 'sender@mail.enrops.com')
     // updated, which broke type-checking for the WHOLE _shared suite - and it
     // went unnoticed because the tests are normally run without --check.
     font_family: 'Poppins, sans-serif',
+    // Distinct from alert_email on purpose. alert_email cascades to the
+    // platform; this one is tenant-only and nullable, and anything carrying
+    // tenant data must route by it. Keeping different values here means a
+    // future test that confuses the two fails loudly instead of passing on a
+    // coincidence.
+    tenant_alert_email: 'tenant@example.com',
   };
 }
 
@@ -107,4 +113,44 @@ Deno.test('formatFromAddress: newline in name cannot break the header', () => {
 
 Deno.test('formatFromAddress: empty name falls back to bare address', () => {
   assertEquals(formatFromAddress(brandWith('')), 'sender@mail.enrops.com');
+});
+
+// --- resolveTestRecipient: a test send never escapes the tenant ---
+//
+// The regression these pin: resolveTestRecipient used to end at
+// `brand.alert_email`, which cascades tenant -> Enrops -> a hardcoded Enrops
+// address and is therefore NEVER null. An operator whose org had no address of
+// its own clicked "Send test" and mailed their instructor roster to Enrops,
+// while the admin UI told them it had gone to their own inbox.
+
+Deno.test('resolveTestRecipient: an explicit operator-supplied address wins', () => {
+  const brand = brandWith('Acme');
+  assertEquals(resolveTestRecipient(brand, 'admin@acme.com'), 'admin@acme.com');
+});
+
+Deno.test('resolveTestRecipient: a junk explicit value falls through to the tenant inbox', () => {
+  const brand = brandWith('Acme');
+  assertEquals(resolveTestRecipient(brand, 'not-an-email'), 'tenant@example.com');
+  assertEquals(resolveTestRecipient(brand, '   '), 'tenant@example.com');
+  assertEquals(resolveTestRecipient(brand, null), 'tenant@example.com');
+  assertEquals(resolveTestRecipient(brand, undefined), 'tenant@example.com');
+});
+
+Deno.test('resolveTestRecipient: no tenant inbox yields null, NOT the platform address', () => {
+  // The whole point. alert_email is deliberately left populated here, exactly
+  // as it is in production, so a regression that reinstates the cascade returns
+  // 'x@x.com' and fails this test instead of quietly shipping.
+  const brand = { ...brandWith('Acme'), tenant_alert_email: null };
+  assertEquals(brand.alert_email, 'x@x.com');
+  assertEquals(resolveTestRecipient(brand), null);
+  assertEquals(resolveTestRecipient(brand, null), null);
+  assertEquals(resolveTestRecipient(brand, 'still-not-an-email'), null);
+});
+
+Deno.test('resolveTestRecipient: an explicit address still works with no tenant inbox', () => {
+  // Refusing must not block the normal path: every admin surface passes the
+  // logged-in operator's own address, so a missing org address does not stop
+  // an operator testing against themselves.
+  const brand = { ...brandWith('Acme'), tenant_alert_email: null };
+  assertEquals(resolveTestRecipient(brand, 'admin@acme.com'), 'admin@acme.com');
 });

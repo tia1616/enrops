@@ -22,7 +22,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
-import { encodeDisplayName } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress, type OrgBrand } from '../_shared/orgBrand.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so the onboarding link points at staging, not prod. Defaults to prod.
@@ -104,13 +104,27 @@ serve(async (req: Request) => {
 
       const { data: org } = await supabase
         .from('organizations')
-        .select('id, slug, name, alert_email, default_sender_name, default_sender_email')
+        .select('id, slug, name')
         .eq('id', orgId)
         .maybeSingle();
 
-      if (!org?.slug || !org.default_sender_email || !org.alert_email) {
-        console.error('org missing required config for reminders', { orgId });
+      // Kept but narrowed: organizations.slug is NOT NULL, so this only skips an
+      // org whose row is absent. It still has to skip — slug builds the
+      // magic-link redirect for every contractor reminder below. Sender + alert
+      // recipient no longer gate anything: loadOrgBrand resolves both, so a
+      // provider who never configured a sender now GETS their reminders instead
+      // of the whole org being skipped with a console.error nobody reads.
+      if (!org?.slug) {
+        console.error('org row not found for reminders', { orgId });
         continue;
+      }
+      const brand = await loadOrgBrand(supabase, orgId);
+      // The admin summary lists every in-progress contractor by name. Tenant
+      // inbox or skip this org — brand.alert_email would send that roster to
+      // Enrops for any org without an address of its own. Contractor reminders
+      // below are unaffected: those go to the contractors themselves.
+      if (!brand.tenant_alert_email) {
+        console.error('no tenant alert address — admin summary NOT sent for this org', { orgId });
       }
 
       // Pull all in-progress-ish contractors for this org.
@@ -129,17 +143,18 @@ serve(async (req: Request) => {
         instructors: { first_name: string | null; last_name: string | null; email: string | null };
       }>;
 
-      // Admin summary (always)
-      const adminBody = buildAdminSummaryText(all, org.name ?? 'enrops');
-      const adminOk = await sendEmail({
-        fromName: org.default_sender_name ?? org.name ?? 'enrops',
-        fromEmail: org.default_sender_email,
-        to: org.alert_email,
-        subject: `Contractor onboarding status — ${new Date().toISOString().slice(0, 10)}`,
-        text: adminBody,
-        tag: 'reminder_admin_summary',
-      });
-      if (adminOk) summary.admin_emails_sent++;
+      // Admin summary — whenever the org has an inbox of its own to send it to.
+      if (brand.tenant_alert_email) {
+        const adminBody = buildAdminSummaryText(all, org.name ?? 'enrops');
+        const adminOk = await sendEmail({
+          brand,
+          to: brand.tenant_alert_email,
+          subject: `Contractor onboarding status — ${new Date().toISOString().slice(0, 10)}`,
+          text: adminBody,
+          tag: 'reminder_admin_summary',
+        });
+        if (adminOk) summary.admin_emails_sent++;
+      }
 
       // Step 3: contractor reminders (only on the june10 run).
       if (type === 'admin_and_contractor') {
@@ -165,8 +180,7 @@ serve(async (req: Request) => {
             link,
           });
           const ok = await sendEmail({
-            fromName: org.default_sender_name ?? org.name ?? 'enrops',
-            fromEmail: org.default_sender_email,
+            brand,
             to: row.instructors.email,
             subject: `Reminder: complete your contractor onboarding by June 12`,
             text,
@@ -244,8 +258,7 @@ function buildContractorReminderText(args: {
 }
 
 async function sendEmail(args: {
-  fromName: string;
-  fromEmail: string;
+  brand: OrgBrand;
   to: string;
   subject: string;
   text: string;
@@ -264,7 +277,10 @@ async function sendEmail(args: {
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: `${encodeDisplayName(args.fromName)} <${args.fromEmail}>`,
+        from: formatFromAddress(args.brand),
+        // The contractor reminder says "reply to this email". The From is now
+        // the shared platform domain, so state the reply path explicitly.
+        reply_to: args.brand.reply_to,
         to: args.to,
         subject: args.subject,
         text: args.text,

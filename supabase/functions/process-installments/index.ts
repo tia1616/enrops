@@ -74,7 +74,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
 import { computePlatformFee } from '../_shared/computePlatformFee.ts';
 import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
@@ -88,9 +88,17 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
-// FROM/reply-to/alert addresses are loaded per-org via loadOrgBrand() with
-// Enrops platform defaults baked in. No more J2S-flavored env-var fallback.
-const PLATFORM_ALERT_DEFAULT = 'alerts@enrops.com';
+// FROM/reply-to addresses are loaded per-org via loadOrgBrand() with Enrops
+// platform defaults baked in. No more J2S-flavored env-var fallback.
+//
+// Alert RECIPIENTS are a different question and deliberately do NOT work that
+// way: every per-org alert in this file names a family (their card decline,
+// their payment plan, their email address), so it routes to that tenant's own
+// inbox - brand.tenant_alert_email, which has no platform step - or is refused
+// by sendOperatorAlert. The only thing still addressed to the platform is the
+// top-level crash notice, which carries no tenant at all, and it now uses the
+// platform brand's own alert address rather than a hardcoded literal so it
+// reaches a mailbox that exists.
 const CRON_SECRET = Deno.env.get('CRON_SECRET');
 
 interface InstallmentRow {
@@ -225,8 +233,13 @@ serve(async (req) => {
     const orgIds = [...new Set(dueInstallments.map((r) => r.organization_id))];
     const { data: orgs } = await admin
       .from('organizations')
+      // alert_email is deliberately NOT selected here any more. Nothing in this
+      // query's consumers may route an alert by it - the tenant inbox comes off
+      // the loaded brand (brand.tenant_alert_email) instead. Leaving the column
+      // in the select left `org.alert_email` sitting in scope as an inviting,
+      // wrong answer for the next person editing this block.
       .select(`
-        id, alert_email, name,
+        id, name,
         stripe_account_id, stripe_charges_enabled,
         statement_descriptor_suffix,
         platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents,
@@ -234,10 +247,8 @@ serve(async (req) => {
       `)
       .in('id', orgIds);
 
-    const alertEmailMap = new Map<string, string>();
     const orgConfigMap = new Map<string, ConnectOrgConfig>();
     for (const org of orgs || []) {
-      alertEmailMap.set(org.id, org.alert_email || PLATFORM_ALERT_DEFAULT);
       orgConfigMap.set(org.id, {
         stripe_account_id: org.stripe_account_id,
         stripe_charges_enabled: org.stripe_charges_enabled,
@@ -282,9 +293,18 @@ serve(async (req) => {
 
     for (const [groupKey, groupRows] of groupMap.entries()) {
       const orgId = groupRows[0].organization_id;
-      const alertEmail = alertEmailMap.get(orgId) || PLATFORM_ALERT_DEFAULT;
       const orgConfig = orgConfigMap.get(orgId) || null;
       const brand = orgBrandMap.get(orgId) || platformBrand;
+      // The tenant's own inbox, or null. Read off the brand we already loaded
+      // rather than re-deriving the tenant -> org.email chain from a second
+      // query: two implementations of one address is how they drift apart.
+      // Null means "this provider has no inbox"; sendOperatorAlert refuses.
+      //
+      // NOTE the `|| platformBrand` above: when an org's brand is missing we
+      // fall back to the PLATFORM brand for FROM/colors, whose
+      // tenant_alert_email is null - so the alert is refused rather than
+      // addressed to Enrops. That is the intended reading, not an accident.
+      const alertEmail = brand.tenant_alert_email;
       try {
         await processGroup(admin, groupRows, summary, alertEmail, orgConfig, brand);
       } catch (err) {
@@ -308,7 +328,14 @@ serve(async (req) => {
     if (fatalBrand) {
       await sendOperatorAlert({
         brand: fatalBrand,
-        to: PLATFORM_ALERT_DEFAULT,
+        // The one genuinely PLATFORM-owned notice in this file: the worker
+        // crashed before it knew which org it was working on, so the body
+        // contains no tenant data - just our own stack message. It therefore
+        // uses the cascading alert_email, which is the correct address for a
+        // platform notice. It was a hardcoded 'alerts@enrops.com', a mailbox
+        // never confirmed to exist, so our own crash alert may have been going
+        // nowhere; the cascade resolves to a real one.
+        to: fatalBrand.alert_email,
         subject: 'Cron worker FATAL error',
         body: `process-installments crashed: ${(err as Error).message}\n\nNo installments were processed today. Manual investigation required.`,
       });
@@ -317,11 +344,23 @@ serve(async (req) => {
   }
 });
 
+// `ReturnType<typeof createClient>` picks up createClient's DEFAULT generics
+// (<unknown, never, GenericSchema>), NOT the <any, 'public', any> the caller at
+// line ~289 actually has. The two are not assignable, so the parameter type
+// collapsed and every .select() inside this function came back as
+// SelectQueryError - which is why `r.id` below was reported as not existing.
+// Pinning the param to the schema the caller really has fixes both errors at
+// the root instead of casting each read. Same defect and same fix as
+// stripe-connect-instructor-webhook.
+type AdminClient = SupabaseClient<any, 'public', any>;
+
 async function processGroup(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   groupRows: InstallmentRow[],
   summary: any,
-  alertEmail: string,
+  // The tenant's own inbox, or null when this provider has none. Passed down
+  // rather than re-derived so every alert in this group agrees on where it goes.
+  alertEmail: string | null,
   orgConfig: ConnectOrgConfig | null,
   brand: OrgBrand,
 ) {
@@ -826,7 +865,24 @@ function buildCancelledAlertBody({
   ].join('\n');
 }
 
-async function sendOperatorAlert({ brand, to, subject, body }: { brand: OrgBrand; to: string; subject: string; body: string }) {
+// All nine alert sites in this file funnel through here, which is why the
+// no-recipient check lives here rather than being repeated at each one.
+// `to` is nullable ON PURPOSE - it is the tenant's own inbox and a provider
+// may not have one. Every per-org body below names a family: a card decline
+// carries their first and last name in the SUBJECT, the unusual-charge-state
+// alert quotes their email address, and the paused-plan alerts list the
+// registration rows behind their payment plan. There is no version of "send it
+// to Enrops instead" that is acceptable for any of them.
+async function sendOperatorAlert(
+  { brand, to, subject, body }: { brand: OrgBrand; to: string | null; subject: string; body: string },
+) {
+  if (!to) {
+    console.error('[process-installments] operator alert NOT sent - org has no inbox of its own', {
+      organization_id: brand.org_id,
+      subject,
+    });
+    return;
+  }
   try {
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',

@@ -9,8 +9,10 @@
 //   sub_instructor_id: string,
 //   sub_tier: 'lead' | 'developing',
 //   notes?: string,
-//   mode?: 'send' | 'test'    // default 'send'; 'test' routes to test_recipient (else tenant alert_email)
-//   test_recipient?: string   // test-mode override inbox; defaults to the tenant's alert_email
+//   mode?: 'send' | 'test'    // default 'send'; 'test' routes to test_recipient (else the tenant's OWN inbox)
+//   test_recipient?: string   // test-mode override inbox; defaults to the tenant's OWN inbox.
+//                             // Refuses with 400 no_tenant_inbox when the org has neither, rather
+//                             // than falling back to the platform address and mailing us the detail.
 // }
 //
 // Behavior:
@@ -28,7 +30,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, formatFromAddress, resolveTestRecipient } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so portal links in offer emails point at staging, not prod. Defaults to prod.
@@ -131,7 +133,7 @@ serve(async (req: Request) => {
     const subTier = body.sub_tier;
     const notes = (body.notes || '').toString().trim().slice(0, 1000);
     const mode = body.mode === 'test' ? 'test' : 'send';
-    const testRecipient = body.test_recipient; // test-mode override; else tenant alert_email
+    const testRecipient = body.test_recipient; // test-mode override; else the tenant's OWN inbox, or null -> refuse
 
     if (!parentId) return json({ error: 'missing_parent_assignment_id' }, 400);
     if (parentType !== 'camp' && parentType !== 'program') return json({ error: 'invalid_parent_assignment_type' }, 400);
@@ -340,6 +342,19 @@ serve(async (req: Request) => {
     // ── Send via Resend ───────────────────────────────────────────────────
     const fromEmail = formatFromAddress(brand);
     const recipient = mode === 'test' ? resolveTestRecipient(brand, testRecipient) : sub.email;
+    // A test offer names the sub, the class and the date. resolveTestRecipient
+    // returns null rather than cascading to the platform, so refuse here: the
+    // old fallback mailed one provider's substitution detail to Enrops while
+    // the modal reported a successful test. The substitution row is left in
+    // place exactly as the resend-failure path below leaves it, so the admin
+    // can fix the address and retry without re-creating anything.
+    if (mode === 'test' && !recipient) {
+      console.error('[create-assignment-substitution] test send refused, org has no inbox of its own', {
+        organization_id: orgId,
+        substitution_id: substitutionId,
+      });
+      return json({ error: 'no_tenant_inbox', message: NO_TENANT_INBOX_MESSAGE }, 400);
+    }
     const subjectOut = mode === 'test' ? `[TEST] ${subject}` : subject;
 
     const resp = await fetch('https://api.resend.com/emails', {

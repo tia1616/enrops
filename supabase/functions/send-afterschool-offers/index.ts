@@ -15,7 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -93,7 +93,7 @@ serve(async (req: Request) => {
     const instructorIdsInput: string[] | null | undefined = body.instructor_ids;
     const mode: 'preview' | 'test' | 'send' = body.mode ?? 'preview';
     const deadline: string | null = body.deadline ?? null;
-    const testRecipient: string | undefined = body.test_recipient; // test-mode override; else tenant alert_email
+    const testRecipient: string | undefined = body.test_recipient; // test-mode override; else the tenant's OWN inbox, or null -> refuse
     const introMessage: string | null = body.intro_message ?? null;
 
     if (!organizationId) return json({ error: 'organization_id is required' }, 400);
@@ -124,8 +124,19 @@ serve(async (req: Request) => {
 
     // Tenant email signature — loaded once per org (outside the instructor loop).
     const brand = await loadOrgBrand(supabase, organizationId);
-    // Where test-mode sends land: caller-supplied recipient, else the tenant's inbox.
+    // Where test-mode sends land: caller-supplied recipient, else the tenant's
+    // OWN inbox. Null when the org has neither - see resolveTestRecipient.
     const testInbox = resolveTestRecipient(brand, testRecipient);
+    // Refuse a TEST send with nowhere tenant-side to put it - same rule and
+    // same words as send-offers, its camp-side twin. Preview is not gated:
+    // it renders without sending (see `mode === 'preview'` below).
+    if (mode === 'test' && !testInbox) {
+      console.error('send-afterschool-offers: test send refused, org has no inbox of its own', {
+        organization_id: organizationId,
+        term,
+      });
+      return json({ error: 'no_tenant_inbox', message: NO_TENANT_INBOX_MESSAGE, sent: 0, failed: [], preview: [] }, 400);
+    }
 
     // Programs for this term (open only).
     const { data: progs } = await supabase
@@ -189,7 +200,11 @@ serve(async (req: Request) => {
       const subject = `Your ${termDisplay} after-school schedule is ready — please review`;
       const html = renderHtml({ org, primary, firstName: inst.preferred_name ?? inst.first_name ?? 'there', termDisplay, classes, portalUrl, deadline, locById, signatureHtml: renderSignatureBlock(brand), introMessage });
       const text = renderText({ org, firstName: inst.preferred_name ?? inst.first_name ?? 'there', termDisplay, classes, portalUrl, deadline, locById, introMessage });
-      const recipient = mode === 'send' ? inst.email : testInbox;
+      // testInbox is non-null in test mode (guarded above). In preview mode it
+      // can be null, and the preview should say so rather than render "null".
+      const recipient = mode === 'send'
+        ? inst.email
+        : (testInbox ?? '(no address on file)');
       previews.push({ instructor_id: instructorId, to: recipient, subject, html, text });
       if (mode === 'preview') continue;
 

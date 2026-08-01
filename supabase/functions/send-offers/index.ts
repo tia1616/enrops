@@ -4,7 +4,9 @@
 // Input: { cycle_id: string, instructor_ids: string[] | null, mode: 'preview' | 'test' | 'send' }
 // - mode 'preview': returns rendered HTML + meta for every instructor in scope, no DB writes, no email sends
 // - mode 'test':    sends each rendered email to the tenant's test inbox (body.test_recipient,
-//                   else the tenant's alert_email), overriding instructor.email, still flips DB
+//                   else the tenant's OWN inbox), overriding instructor.email, still flips DB.
+//                   Refuses with 400 no_tenant_inbox when the org has neither, rather than
+//                   falling back to the platform address and mailing the roster to Enrops.
 // - mode 'send':    sends to real instructor.email, flips DB
 //
 // Multi-tenant: queries scoped by organization (inferred from cycle.organization_id).
@@ -13,7 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient } from '../_shared/orgBrand.ts';
+import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -139,7 +141,7 @@ serve(async (req: Request) => {
     const instructorIdsInput: string[] | null | undefined = body.instructor_ids;
     const mode: 'preview' | 'test' | 'send' = body.mode ?? 'preview';
     const deadline: string | null = body.deadline ?? null; // YYYY-MM-DD
-    const testRecipient: string | undefined = body.test_recipient; // test-mode override; else tenant alert_email
+    const testRecipient: string | undefined = body.test_recipient; // test-mode override; else the tenant's OWN inbox, or null -> refuse
     const introMessage: string | null = body.intro_message ?? null;
 
     if (!cycleId) return json({ error: 'cycle_id is required' }, 400);
@@ -191,8 +193,22 @@ serve(async (req: Request) => {
 
     // Tenant email signature — loaded once per org (outside the instructor loop).
     const brand = await loadOrgBrand(supabase, cycle.organization_id);
-    // Where test-mode sends land: caller-supplied recipient, else the tenant's inbox.
+    // Where test-mode sends land: caller-supplied recipient, else the tenant's
+    // OWN inbox. Null when the org has neither - see resolveTestRecipient.
     const testInbox = resolveTestRecipient(brand, testRecipient);
+    // Refuse a TEST send with nowhere tenant-side to put it. The email being
+    // tested names instructors, their assignments and their pay; the old
+    // fallback would have mailed that to Enrops while telling the operator it
+    // went to their own inbox. Preview is deliberately NOT gated here: it
+    // renders without sending anything (see `mode === 'preview'` below), so it
+    // stays usable and simply shows that there is no address on file.
+    if (mode === 'test' && !testInbox) {
+      console.error('send-offers: test send refused, org has no inbox of its own', {
+        organization_id: cycle.organization_id,
+        cycle_id: cycleId,
+      });
+      return json({ error: 'no_tenant_inbox', message: NO_TENANT_INBOX_MESSAGE, sent: 0, failed: [], preview: [] }, 400);
+    }
 
     // Preview and Test include confirmed AND published — both are non-mutating, so
     // they let admins inspect and re-test without changing the send-state.
@@ -277,7 +293,11 @@ serve(async (req: Request) => {
       const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
       const html = renderHtml({ cycle, org, branding, instructor, camps, portalUrl, deadline, locationById, signatureHtml: renderSignatureBlock(brand), introMessage });
       const text = renderText({ cycle, org, instructor, camps, portalUrl, deadline, locationById, introMessage });
-      const recipient = mode === 'send' ? instructor.email! : testInbox;
+      // testInbox is non-null in test mode (guarded above). In preview mode it
+      // can be null, and the preview should say so rather than render "null".
+      const recipient = mode === 'send'
+        ? instructor.email!
+        : (testInbox ?? '(no address on file)');
 
       previews.push({ instructor_id: instructorId, to: recipient, subject, html, text });
 

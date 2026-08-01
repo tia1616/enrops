@@ -13,10 +13,11 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
 import { handleTransferReversed as sharedHandleTransferReversed } from '../_shared/handleTransferReversed.ts';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 
 // Instructor Connect platform = new J2S Stripe account. STRIPE_INSTRUCTOR_
 // PLATFORM_KEY is the API key for that account; the webhook signature is
@@ -39,7 +40,6 @@ const CONNECT_WEBHOOK_SECRET = Deno.env.get('STRIPE_CONNECT_WEBHOOK_SECRET')!;
 const CONNECT_WEBHOOK_SECRET_CONNECTED =
   Deno.env.get('STRIPE_CONNECT_WEBHOOK_SECRET_CONNECTED') || null;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
-const FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || 'alerts@enrops.com';
 
 serve(async (req: Request) => {
   const signature = req.headers.get('stripe-signature');
@@ -160,8 +160,17 @@ serve(async (req: Request) => {
   return new Response('ok', { status: 200 });
 });
 
+// `ReturnType<typeof createClient>` picks up createClient's DEFAULT generics
+// (<unknown, never, GenericSchema>), not the caller's inferred
+// <any, 'public', any>. The two are not assignable, so every .select() inside
+// this function collapsed to SelectQueryError and `deno check` reported six
+// errors — on code nobody had touched, because CI runs deno with --no-check.
+// Pinning the param to the schema the caller actually has fixes the inference
+// at the root instead of casting each read.
+type AdminClient = SupabaseClient<any, 'public', any>;
+
 async function sendRegressionAlert(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   instructorId: string,
   orgId: string,
 ) {
@@ -170,7 +179,12 @@ async function sendRegressionAlert(
     return;
   }
 
-  const [{ data: instructor }, { data: org }] = await Promise.all([
+  // Same sender-config gap as the thirteen raw readers, found by sweeping the
+  // class rather than the named list: the From was hardcoded to
+  // alerts@enrops.com, which is NOT the Resend-verified sending domain
+  // (mail.enrops.com is), and the alert dropped silently when alert_email was
+  // unset. Both halves now come from the shared cascade.
+  const [{ data: instructor }, { data: org }, brand] = await Promise.all([
     admin
       .from('instructors')
       .select('first_name, last_name, email')
@@ -178,19 +192,22 @@ async function sendRegressionAlert(
       .maybeSingle(),
     admin
       .from('organizations')
-      .select('alert_email, name')
+      .select('name')
       .eq('id', orgId)
       .maybeSingle(),
+    loadOrgBrand(admin, orgId),
   ]);
 
-  const alertEmail = org?.alert_email;
-  if (!alertEmail) {
-    console.warn('no alert_email for org', orgId, '— skipping regression alert');
+  // Names an instructor and their email, and says their payouts are disabled.
+  // Tenant inbox or nothing: brand.alert_email would forward that to Enrops for
+  // an org with no address of its own.
+  if (!brand.tenant_alert_email) {
+    console.error('no tenant alert address — payouts-disabled alert NOT sent', { orgId, instructorId });
     return;
   }
 
   const name = `${instructor?.first_name ?? ''} ${instructor?.last_name ?? ''}`.trim() || instructor?.email || 'A contractor';
-  const subject = `[${org?.name ?? 'enrops'}] Stripe payouts disabled — ${name}`;
+  const subject = `[${org?.name ?? brand.org_name}] Stripe payouts disabled — ${name}`;
   const text = `${name}'s Stripe Connect payouts have been disabled by Stripe.\n\nThis usually means their verification information has expired. The contractor needs to re-verify in Stripe before the next payroll export.\n\nContractor email: ${instructor?.email ?? '(unknown)'}\n\n— enrops`;
 
   await fetch('https://api.resend.com/emails', {
@@ -200,8 +217,9 @@ async function sendRegressionAlert(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: FROM_EMAIL,
-      to: alertEmail,
+      from: formatFromAddress(brand),
+      reply_to: brand.reply_to,
+      to: brand.tenant_alert_email,
       subject,
       text,
     }),

@@ -14,7 +14,7 @@
 
 import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { StepKey } from './onboardingStep.ts';
-import { encodeDisplayName } from './orgBrand.ts';
+import { loadOrgBrand, formatFromAddress } from './orgBrand.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so links in the gate-check admin email point at staging, not prod. Defaults to prod.
@@ -148,17 +148,26 @@ async function sendOnboardingCompleteEmails(
     .maybeSingle();
   if (!instructor?.email || !instructor.organization_id) return;
 
+  // slug is still read from the org row (loadOrgBrand doesn't expose it) — it
+  // builds the portal URL below.
   const { data: org } = await supabase
     .from('organizations')
-    .select('name, slug, alert_email, default_sender_name, default_sender_email')
+    .select('name, slug')
     .eq('id', instructor.organization_id)
     .maybeSingle();
-  if (!org?.default_sender_email) return;
 
-  const from = `${encodeDisplayName(org.default_sender_name ?? org.name ?? 'enrops')} <${org.default_sender_email}>`;
+  // From/reply-to come from the shared cascade, which always resolves to a
+  // verified address. There is no "no sender configured" state to guard.
+  const brand = await loadOrgBrand(supabase, instructor.organization_id);
+  const from = formatFromAddress(brand);
   const fullName = `${instructor.first_name ?? ''} ${instructor.last_name ?? ''}`.trim();
   const greeting = instructor.preferred_name || instructor.first_name || 'there';
-  const portalUrl = `${PUBLIC_SITE_URL}/${org.slug}/instructor`;
+  const orgName = org?.name ?? brand.org_name;
+  // Only build the portal link when we actually have a slug. Interpolating an
+  // empty one produced `https://enrops.com//instructor`, which matches no
+  // route - an email whose single call to action is a dead link is worse than
+  // one that omits it.
+  const portalUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : null;
   // Only mention the background check when this org actually requires one.
   const bgcPhrase = bgcEnabled ? 'background check cleared, ' : '';
 
@@ -166,10 +175,11 @@ async function sendOnboardingCompleteEmails(
   const contractorText = [
     `Hi ${greeting},`,
     ``,
-    `You're fully onboarded with ${org.name ?? 'us'} — paperwork signed, ${bgcPhrase}payouts set up.`,
+    `You're fully onboarded with ${orgName} — paperwork signed, ${bgcPhrase}payouts set up.`,
     ``,
-    `Sign in to your portal any time to see your schedule, accept assignments, and view your pay:`,
-    portalUrl,
+    ...(portalUrl
+      ? [`Sign in to your portal any time to see your schedule, accept assignments, and view your pay:`, portalUrl]
+      : [`Sign in to your portal any time to see your schedule, accept assignments, and view your pay.`]),
     ``,
     `Questions? Just reply to this email.`,
   ].join('\n');
@@ -180,8 +190,12 @@ async function sendOnboardingCompleteEmails(
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${resendKey}` },
       body: JSON.stringify({
         from,
+        // The body says "just reply to this email". The From is now the shared
+        // platform domain, so without this the reply would not reach the
+        // provider — reply_to keeps that promise true.
+        reply_to: brand.reply_to,
         to: instructor.email,
-        subject: `You're fully onboarded with ${org.name ?? 'us'}`,
+        subject: `You're fully onboarded with ${orgName}`,
         text: contractorText,
         tags: [{ name: 'type', value: 'onboarding_complete_contractor' }],
       }),
@@ -190,8 +204,19 @@ async function sendOnboardingCompleteEmails(
     console.error('contractor onboarding-complete email failed:', err);
   }
 
-  // 2. Admin (org.alert_email) — "X is fully onboarded"
-  if (!org.alert_email) return;
+  // 2. Admin (the org's OWN alert inbox) — "X is fully onboarded".
+  //
+  // tenant_alert_email, not alert_email: this body names a specific contractor
+  // and their email address. alert_email cascades to the platform, so on an org
+  // with no address of its own that cascade would forward one provider's
+  // contractor details to Enrops. Fail closed and say so instead.
+  if (!brand.tenant_alert_email) {
+    console.error('no tenant alert address — onboarding-complete admin alert NOT sent', {
+      organization_id: instructor.organization_id,
+      instructor_id: instructorId,
+    });
+    return;
+  }
   const adminText = [
     `${fullName || instructor.email} is fully onboarded.`,
     ``,
@@ -206,7 +231,8 @@ async function sendOnboardingCompleteEmails(
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${resendKey}` },
       body: JSON.stringify({
         from,
-        to: org.alert_email,
+        reply_to: brand.reply_to,
+        to: brand.tenant_alert_email,
         subject: `${fullName || instructor.email} is fully onboarded`,
         text: adminText,
         tags: [{ name: 'type', value: 'onboarding_complete_admin' }],
