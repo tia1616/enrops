@@ -17,8 +17,9 @@
 //   - the browser sends Global Privacy Control (already answered, legally);
 //   - a choice is already stored.
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { capture } from '../../lib/analytics.js';
 import {
   isPixelConfigured,
   hasGpcSignal,
@@ -50,13 +51,43 @@ export default function AdChoiceNotice() {
   // own state.
   const [dismissed, setDismissed] = useState(false);
 
-  if (dismissed || hasMadeAdChoice()) return null;
-  if (!isPixelConfigured() || hasGpcSignal()) return null;
-  // Never alongside the fuller control. Two things asking the same question on
-  // one screen is worse than either alone.
-  if (location.pathname === CHOICE_PAGE) return null;
+  // Visibility computed BEFORE any early return, so the effect below obeys the
+  // rules of hooks. Same conditions as before, just named.
+  const visible =
+    !dismissed &&
+    !hasMadeAdChoice() &&
+    isPixelConfigured() &&
+    !hasGpcSignal() &&
+    // Never alongside the fuller control. Two things asking the same question on
+    // one screen is worse than either alone.
+    location.pathname !== CHOICE_PAGE;
+
+  // How many people actually ANSWER this, and where they see it.
+  //
+  // The choice itself lives only in the visitor's own localStorage, so until now
+  // there was no way to know whether anyone engages with the bar at all - and a
+  // non-blocking bar is precisely the design people ignore. Without an impression
+  // there is no denominator, so this records the showing as well as the answer.
+  //
+  // `surface` is a coarse public/admin bucket rather than the path, because the
+  // question it settles is "does this follow operators into their own dashboard"
+  // and a raw pathname would carry tenant slugs into analytics for no extra
+  // insight.
+  //
+  // This component mounts once for the app's lifetime and re-renders on every
+  // navigation, hence the ref: one impression per visit, not one per render.
+  const surface = location.pathname.startsWith('/admin') ? 'admin' : 'public';
+  const shownRef = useRef(false);
+  useEffect(() => {
+    if (!visible || shownRef.current) return;
+    shownRef.current = true;
+    capture('ad_notice_shown', { surface });
+  }, [visible, surface]);
+
+  if (!visible) return null;
 
   function answer(accepted) {
+    capture('ad_notice_answered', { choice: accepted ? 'ok' : 'decline', surface });
     if (accepted) optInToPixel();
     else optOutOfPixel();
     // Belt and braces. Both calls dispatch the event that re-renders this
@@ -100,11 +131,21 @@ export default function AdChoiceNotice() {
           Not Sell page states it too. Moved, not dropped.
 
           "how enrops is used" covers the privacy-respecting product analytics
-          that run everywhere; "measure our own advertising" covers this. Both
-          halves are true, which is why it is not the shorter and vaguer "we use
-          cookies to improve your experience". */}
+          that run everywhere; "how people find us" covers the advertising
+          measurement. Both halves are true.
+
+          It said "to measure our own advertising" until 2026-07-31. Jessica's
+          call, and the reasoning is worth keeping: the word "advertising" makes
+          an ordinary bar read as a bigger deal than it is, and what we actually
+          do with it is attribution - working out how somebody arrived. "How
+          people find us" says that in words a provider would use.
+          What it must NOT become is the vaguer "improve your experience": there
+          is a Decline button sitting next to this sentence, and a bar that no
+          longer names what is being declined is the start of a dark pattern.
+          The purpose has to stay recognisable in the bar even when the vendor
+          lives in the policy. */}
       <span style={{ maxWidth: 620 }}>
-        We use cookies to understand how enrops is used and to measure our own advertising.{' '}
+        We use cookies to understand how enrops is used and how people find us.{' '}
         <Link to="/cookies" style={{ color: '#C9C5FF' }}>
           Details
         </Link>
