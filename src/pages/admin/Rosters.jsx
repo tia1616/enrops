@@ -1912,7 +1912,16 @@ function AfterschoolRostersSection({ org, canEdit }) {
             bodyKey: "program_id",
           }}
           onClose={() => setEmailingProgram(null)}
-          onSent={() => setEmailingProgram(null)}
+          onSent={() => {
+            // Mirror the camps path above: stamp the row so its "emailed <date>"
+            // label is true immediately, and DON'T close here — onSent fires on
+            // success, and closing would unmount the modal's own DoneStep before
+            // the operator ever sees who it went to. Closing is onClose's job.
+            const now = new Date().toISOString();
+            setPrograms((ps) => (ps ?? []).map((p) =>
+              p.id === emailingProgram.id ? { ...p, last_emailed_at: now } : p
+            ));
+          }}
         />
       )}
 

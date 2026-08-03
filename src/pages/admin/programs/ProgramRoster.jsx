@@ -345,7 +345,6 @@ export default function ProgramRoster() {
             bodyKey: "program_id",
           }}
           onClose={() => setEmailing(false)}
-          onSent={() => setEmailing(false)}
         />
       )}
 
