@@ -8,15 +8,25 @@
 // address, not the provider. Shown on the Family Comms surfaces until set.
 //
 // Multi-tenant: scoped to the passed org id. No hardcoded tenant.
+//
+// ROLE: owner/admin only, and that is not cosmetic. This notice renders on the
+// Comms surfaces, which are gated on "send" — a tier that INCLUDES staff — but
+// its only action is a link to /admin/email-sender, which is gated on
+// "settings" (owner/admin). Showing it to staff means telling someone to fix
+// something the next click refuses to let them fix: they land on "Settings
+// isn't available for your role". A nudge nobody can act on is worse than no
+// nudge, so it is hidden for roles that cannot reach the destination.
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { usePermissions } from "../../../lib/permissions";
 import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 
 export default function SenderSetupNotice({ orgId }) {
   // Start false so the banner never flashes before we know the real state.
   const [needsSetup, setNeedsSetup] = useState(false);
+  const perm = usePermissions();
 
   useEffect(() => {
     if (!orgId) return;
@@ -35,7 +45,9 @@ export default function SenderSetupNotice({ orgId }) {
     return () => { cancelled = true; };
   }, [orgId]);
 
-  if (!needsSetup) return null;
+  // Two separate questions, deliberately not folded together: needsSetup is
+  // "is this true", canManageSettings is "can THIS reader do anything about it".
+  if (!needsSetup || !perm.canManageSettings) return null;
 
   return (
     <div

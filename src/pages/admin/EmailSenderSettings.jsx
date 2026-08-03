@@ -234,27 +234,40 @@ export default function EmailSenderSettings() {
 
   async function save() {
     setSaving(true); setError(""); setSaveErr("");
-    // Emptying the box means "go back to my sign-up email" — resolve it to that
-    // concrete address rather than writing null (see the state comment above).
+    // Only touch alert_email when the operator actually changed THIS field.
+    //
+    // The box is pre-filled with whichever address is in force, so writing it on
+    // every save meant an org whose column was still null had it quietly filled
+    // in by, say, editing their signature — adopting a value they never chose,
+    // and destroying the page's ability to tell them it came from signup rather
+    // than from them. Nothing else on this panel gets to write this column.
     const alertTyped = alertEmail.trim();
+    const alertDirty = alertEmail !== saved.alertEmail;
+    // Emptying the box means "go back to my sign-up email" — resolved to that
+    // concrete address rather than written as null, because several functions
+    // read the raw column with no fallback (see the state comment above).
     const alertToSave = alertTyped || orgEmail.trim();
-    // Two distinct bad states, two distinct sentences — each true only in the
-    // state that selects it. The typo message quotes what THEY typed; the
-    // nothing-at-all message only fires when there is genuinely no fallback.
-    if (alertTyped && !PLAUSIBLE_EMAIL.test(alertTyped)) {
-      blockOnAlert(`"${alertTyped}" doesn't look like an email address. Check for a typo — it needs an @ and a domain, like you@yourprogram.com.`);
-      return;
-    }
-    if (!alertToSave) {
-      blockOnAlert("Your alerts need somewhere to go. Add an address here — without one we can't tell you about a background check that needs review or a payment that failed.");
-      return;
-    }
-    // The fallback can itself be junk: organizations.email is written from the
-    // signup JWT and has never been format-checked, so don't hand it to the DB
-    // constraint unexamined and turn a 23514 into the operator's problem.
-    if (!PLAUSIBLE_EMAIL.test(alertToSave)) {
-      blockOnAlert(`We were going to send alerts to "${alertToSave}", the email your account was created with, but that isn't a valid address. Type the one you want instead.`);
-      return;
+    if (alertDirty) {
+      // Three distinct bad states, three distinct sentences — each true only in
+      // the state that selects it. The typo message quotes what THEY typed; the
+      // nothing-at-all message fires only when there is genuinely no fallback;
+      // the third fires only for an unusable inherited address, which is
+      // reachable only when the box was left empty.
+      if (alertTyped && !PLAUSIBLE_EMAIL.test(alertTyped)) {
+        blockOnAlert(`"${alertTyped}" doesn't look like an email address. Check for a typo — it needs an @ and a domain, like you@yourprogram.com.`);
+        return;
+      }
+      if (!alertToSave) {
+        blockOnAlert("Your alerts need somewhere to go. Add an address here — without one we can't tell you about a background check that needs review or a payment that failed.");
+        return;
+      }
+      // The fallback can itself be junk: organizations.email is written from the
+      // signup JWT and has never been format-checked, so don't hand it to the DB
+      // constraint unexamined and turn a 23514 into the operator's problem.
+      if (!PLAUSIBLE_EMAIL.test(alertToSave)) {
+        blockOnAlert(`We were going to send alerts to "${alertToSave}", the email your account was created with, but that isn't a valid address. Type the one you want instead.`);
+        return;
+      }
     }
     setAlertErr("");
     try {
@@ -284,7 +297,9 @@ export default function EmailSenderSettings() {
         .from("organizations")
         .update({
           mailing_address: mailingAddress.trim() || null,
-          alert_email: alertToSave, // never null — see the state comment above
+          // Omitted entirely unless this field changed, so an untouched null
+          // column stays null. When present it is never null — see above.
+          ...(alertDirty ? { alert_email: alertToSave } : {}),
         })
         .eq("id", org.id)
         .select("mailing_address, alert_email, email")
