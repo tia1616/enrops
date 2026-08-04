@@ -37,26 +37,44 @@ export type ChargeModel = 'destination' | 'direct';
 export const DEFAULT_CHARGE_MODEL: ChargeModel = 'destination';
 
 export interface ChargeModelInputs {
-  /** The org's current value. Null/blank/unrecognised is treated as the default. */
+  /** The org's current value. Blank/unrecognised is treated as the default. */
   existingModel: string | null;
+  /**
+   * True when the org's CURRENT model could not be read at all.
+   *
+   * This is deliberately SEPARATE from historyUnreadable. Collapsing the two
+   * into one "something failed" flag is what made the first version of this
+   * function claim to preserve while actually defaulting a direct org to
+   * destination: with the org row unread, existingModel is null, and null
+   * coerces to 'destination'. "Preserve" is only possible if we know what to
+   * preserve.
+   */
+  existingModelUnreadable: boolean;
   /**
    * Has this org ever taken money? Evidence must be a payment intent, never a
    * status or a payment_method label - `payment_method='stripe'` silently missed
    * half of production when the refund-rate function trusted it.
    */
   hasTakenMoney: boolean;
-  /** True when the caller could NOT establish the two facts above. */
+  /** True when the "has this org taken money?" question could not be answered. */
   historyUnreadable: boolean;
   /** What the connected Stripe account itself says about who pays Stripe's fee. */
   operatorBearsStripeFees: boolean;
 }
 
 export interface ChargeModelDecision {
-  /** What to write. Always a valid model, never null. */
-  chargeModel: ChargeModel;
+  /**
+   * What to write, or NULL meaning "write nothing - leave the column alone".
+   *
+   * Null is the only honest answer when the model must be preserved but its
+   * current value is unknown. The caller MUST omit the column from its update in
+   * that case; substituting a default here would be the exact silent rewrite
+   * this function exists to prevent.
+   */
+  chargeModel: ChargeModel | null;
   /** What the account alone would have implied. Kept for logging and review. */
   inferredModel: ChargeModel;
-  /** True when the org's existing model was kept instead of the inference. */
+  /** True when the inference was deliberately not applied. */
   preserved: boolean;
   /** Human-readable reason, for the connect log. */
   source: string;
@@ -86,35 +104,44 @@ function coerce(model: string | null): ChargeModel {
 
 export function decideChargeModel(inputs: ChargeModelInputs): ChargeModelDecision {
   const inferredModel: ChargeModel = inputs.operatorBearsStripeFees ? 'direct' : 'destination';
+
+  // Why preservation is required, if it is. Unreadable history counts: if we
+  // could not answer "has this org taken money?", `hasTakenMoney` carries no
+  // information and must not select the inference branch merely by being false.
+  const reason = inputs.historyUnreadable
+    ? "could not read this org's charge history"
+    : inputs.hasTakenMoney
+    ? 'org has already taken money'
+    : null;
+
+  if (reason === null) {
+    return {
+      chargeModel: inferredModel,
+      inferredModel,
+      preserved: false,
+      source: inputs.operatorBearsStripeFees
+        ? 'inferred direct'
+        : 'inferred destination (unconfirmed fee model)',
+    };
+  }
+
+  // Preservation is required. It is only POSSIBLE if we know the current value.
+  // When we do not, the column is left alone rather than defaulted - defaulting
+  // here would rewrite a direct org to destination while reporting success.
+  if (inputs.existingModelUnreadable) {
+    return {
+      chargeModel: null,
+      inferredModel,
+      preserved: true,
+      source: `left unchanged (${reason}, and its current model could not be read)`,
+    };
+  }
+
   const existing = coerce(inputs.existingModel);
-
-  // Order matters: unreadable history is checked FIRST. If we could not read,
-  // `hasTakenMoney` carries no information and must not be allowed to select the
-  // inference branch by being false.
-  if (inputs.historyUnreadable) {
-    return {
-      chargeModel: existing,
-      inferredModel,
-      preserved: true,
-      source: `preserved ${existing} (could not read this org's charge history)`,
-    };
-  }
-
-  if (inputs.hasTakenMoney) {
-    return {
-      chargeModel: existing,
-      inferredModel,
-      preserved: true,
-      source: `preserved ${existing} (org has already taken money)`,
-    };
-  }
-
   return {
-    chargeModel: inferredModel,
+    chargeModel: existing,
     inferredModel,
-    preserved: false,
-    source: inputs.operatorBearsStripeFees
-      ? 'inferred direct'
-      : 'inferred destination (unconfirmed fee model)',
+    preserved: true,
+    source: `preserved ${existing} (${reason})`,
   };
 }

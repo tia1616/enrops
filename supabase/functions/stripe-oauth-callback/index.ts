@@ -234,13 +234,19 @@ serve(async (req: Request) => {
           .limit(1),
       ]);
 
-    const historyUnreadable = Boolean(orgNowErr || priorMoneyErr);
-    if (historyUnreadable) {
-      // Not fatal - the decision below fails closed on it - but it must not pass
-      // unnoticed, because it silently disables the "is this org new?" question.
+    // TWO different failures with DIFFERENT consequences, deliberately not
+    // collapsed into one flag. Not knowing whether the org took money means we
+    // must preserve; not knowing WHAT it is on means we cannot preserve at all
+    // and must leave the column untouched. One combined boolean is what made an
+    // earlier version of this report "preserved" while defaulting a direct org
+    // to destination.
+    const existingModelUnreadable = Boolean(orgNowErr);
+    const historyUnreadable = Boolean(priorMoneyErr);
+    if (existingModelUnreadable || historyUnreadable) {
       console.warn(
-        `[oauth-callback] could not read charge history for org ${row.organization_id}:`,
-        orgNowErr?.message ?? priorMoneyErr?.message ?? 'unknown',
+        `[oauth-callback] incomplete read for org ${row.organization_id}: ` +
+        `current model ${existingModelUnreadable ? `UNREADABLE (${orgNowErr?.message ?? 'unknown'})` : 'ok'}, ` +
+        `charge history ${historyUnreadable ? `UNREADABLE (${priorMoneyErr?.message ?? 'unknown'})` : 'ok'}`,
       );
     }
 
@@ -248,6 +254,7 @@ serve(async (req: Request) => {
       decideChargeModel({
         existingModel:
           (orgNow as { stripe_charge_model?: string | null } | null)?.stripe_charge_model ?? null,
+        existingModelUnreadable,
         hasTakenMoney: ((priorMoney as { id: string }[] | null)?.length ?? 0) > 0,
         historyUnreadable,
         operatorBearsStripeFees,
@@ -266,19 +273,22 @@ serve(async (req: Request) => {
     // ── write it ──────────────────────────────────────────────────────────
     // service_role bypasses guard_organizations_locked_columns, which otherwise
     // blocks stripe_account_id changes (verified in 20260703_lock_stripe_fee_payer_in_org_guard.sql).
-    // stripe_charge_model is always written EXPLICITLY, never left to whatever
-    // happened to be on the row - but WHICH value is decided above, and the two
-    // cases are different. An org with no money yet gets the model inferred from
-    // the account, so a previously connected, disconnected, reconnecting org
-    // cannot carry a stale 'direct' into a new account whose fee arrangement we
-    // could not confirm. An org that HAS taken money keeps its current model,
-    // because live charges and payment plans already depend on it.
+    // WHICH value stripe_charge_model gets is decided above, and there are three
+    // cases. An org with no money yet gets it inferred from the account, so a
+    // previously connected, disconnected, reconnecting org cannot carry a stale
+    // 'direct' into a new account whose fee arrangement we could not confirm. An
+    // org that HAS taken money keeps its current model, because live charges and
+    // payment plans already depend on it. And when preservation is required but
+    // the current model could not be read, the key is OMITTED so Postgres leaves
+    // the column exactly as it was.
     const update: Record<string, unknown> = {
       stripe_account_id: connectedAccountId,
       stripe_charges_enabled: mapped.chargesEnabled,
       stripe_payouts_enabled: mapped.payoutsEnabled,
       stripe_account_status: mapped.status,
-      stripe_charge_model: chargeModel,
+      // Omitting the key is what makes "leave it alone" true. Substituting a
+      // default here would be exactly the silent rewrite the decision refused.
+      ...(chargeModel !== null ? { stripe_charge_model: chargeModel } : {}),
     };
 
     // The "is this org already connected?" rule lives in stripe-oauth-start, but
@@ -327,9 +337,25 @@ serve(async (req: Request) => {
       .eq('state', row.state);
     if (annotateErr) console.warn('[oauth-callback] state annotate failed:', annotateErr.message);
 
-    // Three outcomes, and each message below has to be TRUE in the state that
+    // Four outcomes, and each message below has to be TRUE in the state that
     // selects it. Preserved-and-agreeing is deliberately silent: there is
     // nothing surprising and nothing to say.
+    if (chargeModel === null) {
+      // The account is attached, but we could not read the org's current money
+      // model, so the column was left exactly as it was. This is the RIGHT
+      // outcome and still the one most worth a human eye: the org is now on a
+      // new account while nobody has confirmed which model it routes under.
+      // Checked FIRST - the comparison in the next branch would be true for null
+      // and would report a value that was never written.
+      console.error(
+        `[oauth-callback] NEEDS REVIEW: org ${row.organization_id} (connect started by user ${row.created_by_user_id ?? 'unknown'}) ` +
+        `connected ${connectedAccountId}, and stripe_charge_model was LEFT UNCHANGED because its current value could not be read. ` +
+        `The account itself implies '${inferredModel}' (type=${acctType ?? 'none'}, fees.payer=${feesPayer ?? 'none'}). ` +
+        `Confirm the org's model matches the account before it takes another payment.`,
+      );
+      return back(origin, { stripe: 'connected' }, row.organization_id);
+    }
+
     if (modelWasPreserved && chargeModel !== inferredModel) {
       // The account just connected implies a different money model than the one
       // this org runs. EXPECTED for a deliberate repoint - an established
