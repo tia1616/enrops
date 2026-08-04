@@ -216,9 +216,13 @@ serve(async (req: Request) => {
     // payment_method label - see the refund-rate bug where payment_method='stripe'
     // silently dropped half of production.
     //
-    // FAILS CLOSED. If either read errors we cannot PROVE the org is new, and an
-    // unprovable "it's new" is not the same as "it's new". Preserve instead, and
-    // say so in the log.
+    // FAILS CLOSED, but on the RIGHT question. If the history read errors we
+    // cannot PROVE the org is new, and an unprovable "it's new" is not the same
+    // as "it's new" - so preserve. If the org's own row is what could not be
+    // read, preservation is impossible and the column is left untouched instead
+    // (see the null case below). A readable history showing no money still
+    // infers even if the org row failed, so new-operator onboarding is not
+    // collateral damage.
     const [{ data: orgNow, error: orgNowErr }, { data: priorMoney, error: priorMoneyErr }] =
       await Promise.all([
         admin
