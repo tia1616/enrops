@@ -175,7 +175,7 @@ serve(async (req: Request) => {
       .select(`
         id, status, payment_status, authorized_pickup_contacts, registered_at,
         student:students ( id, first_name, last_name, grade, birthdate, pronouns,
-                           allergies, epipen_required,
+                           homeroom_teacher,
                            emergency_contact_name, emergency_contact_phone ),
         parent:parents ( id, first_name, last_name, email, phone )
       `)
@@ -398,7 +398,12 @@ async function buildRosterPdf(params: {
   const COLS = [
     { key: 'name', label: 'Student', width: 120 },
     { key: 'grade', label: 'Grade', width: 40 },
-    { key: 'allergy', label: 'Allergy / EpiPen', width: 110 },
+    // Homeroom takes the slot the allergy column used to hold, at the same
+    // width, so the table total is unchanged and no other column shifts.
+    // The school's front office needs homeroom to release a child to us;
+    // allergy/EpiPen stays on the admin roster screen and the instructor's
+    // view, and is deliberately not in the copy that leaves for the partner.
+    { key: 'homeroom', label: 'Homeroom', width: 110 },
     { key: 'parent', label: 'Parent', width: 100 },
     { key: 'parent_phone', label: 'Parent phone', width: 88 },
     { key: 'parent_email', label: 'Parent email', width: 122 },
@@ -474,19 +479,15 @@ async function buildRosterPdf(params: {
       const p2 = reg.parent ?? {};
       const name = `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim() || 'Unnamed';
       const grade = s.grade == null ? '' : (s.grade === 0 ? 'K' : String(s.grade));
-      const allergyBits: string[] = [];
-      if ((s.allergies ?? '').trim()) allergyBits.push(s.allergies);
-      if (s.epipen_required) allergyBits.push('EpiPen');
-      const allergy = allergyBits.join(' · ') || '—';
+      const homeroom = (s.homeroom_teacher ?? '').trim() || '—';
       const parentName = `${p2.first_name ?? ''} ${p2.last_name ?? ''}`.trim() || '—';
       const ec = s.emergency_contact_name ? `${s.emergency_contact_name}${s.emergency_contact_phone ? ` · ${s.emergency_contact_phone}` : ''}` : '—';
 
       page.drawLine({ start: { x: MARGIN_X, y: y - 0.5 }, end: { x: MARGIN_X + TABLE_W, y: y - 0.5 }, thickness: 0.5, color: rgb(border.r, border.g, border.b) });
-      const values: Record<string, string> = { name, grade, allergy, parent: parentName, parent_phone: p2.phone ?? '', parent_email: p2.email ?? '', ec };
+      const values: Record<string, string> = { name, grade, homeroom, parent: parentName, parent_phone: p2.phone ?? '', parent_email: p2.email ?? '', ec };
       let xc = MARGIN_X;
       for (const col of COLS) {
-        const isAllergy = col.key === 'allergy' && allergy !== '—';
-        page.drawText(truncate(values[col.key] ?? '', col.width, font, 9), { x: xc + 4, y: y - 13, size: 9, font: isAllergy ? bold : font, color: isAllergy ? rgb(0.71, 0.22, 0.22) : rgb(ink.r, ink.g, ink.b) });
+        page.drawText(truncate(values[col.key] ?? '', col.width, font, 9), { x: xc + 4, y: y - 13, size: 9, font, color: rgb(ink.r, ink.g, ink.b) });
         xc += col.width;
       }
       y -= ROW_H;
