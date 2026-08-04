@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { formatMoney } from '../../../lib/pricing.js';
 import { feeOnCents, installmentFeeShares } from '../../../lib/platformFee.js';
+import { formatStartDate } from '../../../lib/programSchedule.js';
 
 export default function StepPay({
   pricing,
@@ -82,12 +83,6 @@ export default function StepPay({
     ? installmentSchedule.reduce((s, i, idx) => s + i.amount_cents + feeForIndex(idx), 0)
     : chargedToday;
 
-  const fmtDate = (iso) =>
-    new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-    });
-
   return (
     <div>
       <h1 className="font-titan text-3xl text-j2s-ink sm:text-4xl">
@@ -141,7 +136,7 @@ export default function StepPay({
             </div>
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
               <p className="text-xs uppercase tracking-wider text-j2s-purple-dark">
-                {fmtDate(installmentSchedule[1].due_date)}
+                {formatStartDate(installmentSchedule[1].due_date)}
               </p>
               <p className="font-titan text-lg text-j2s-ink">
                 {formatMoney(chargedForIndex(1))}
@@ -149,7 +144,7 @@ export default function StepPay({
             </div>
             <div className="rounded-lg bg-j2s-purple-soft/40 px-3 py-2">
               <p className="text-xs uppercase tracking-wider text-j2s-purple-dark">
-                {fmtDate(installmentSchedule[2].due_date)}
+                {formatStartDate(installmentSchedule[2].due_date)}
               </p>
               <p className="font-titan text-lg text-j2s-ink">
                 {formatMoney(chargedForIndex(2))}

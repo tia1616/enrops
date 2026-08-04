@@ -667,6 +667,15 @@ export default function Home() {
                     // Same null-guarded weekday label as the openPrograms cards -
                     // a program with no day must not render the literal "nulls".
                     const dayLabel = formatDayLabel(p);
+                    // Filtered join (like openPrograms' meta line) so an absent day
+                    // or time never leaves an orphan " · " in front of the grades.
+                    const timeStr = p.start_time
+                      ? `${p.start_time}${p.end_time ? `–${p.end_time}` : ''}`
+                      : null;
+                    const gradeStr = p.grade_min != null && p.grade_max != null
+                      ? `Grades ${p.grade_min === 0 ? 'K' : p.grade_min}–${p.grade_max}`
+                      : null;
+                    const metaStr = [dayLabel, timeStr, gradeStr].filter(Boolean).join(' · ');
                     // Partner-run, listed program: families register on the partner's
                     // site, so render a link-out card (no price, no VIP, no checkout).
                     if (p.runs_own_registration) {
@@ -681,12 +690,7 @@ export default function Home() {
                             {p.short_description && (
                               <p className="mt-1 text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
                             )}
-                            <p className="mt-1 text-sm text-j2s-ink/70">
-                              {dayLabel && <>{dayLabel} · </>}{p.start_time}{p.end_time && <>–{p.end_time}</>}
-                              {p.grade_min != null && p.grade_max != null && (
-                                <> · Grades {p.grade_min === 0 ? 'K' : p.grade_min}–{p.grade_max}</>
-                              )}
-                            </p>
+                            <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>
                             {scheduleStr && (
                               <p className="mt-1 text-sm font-semibold text-j2s-ink/70">
                                 {scheduleStr}
@@ -737,15 +741,7 @@ export default function Home() {
                               {p.short_description}
                             </p>
                           )}
-                          <p className="mt-1 text-sm text-j2s-ink/70">
-                            {dayLabel && <>{dayLabel} · </>}{p.start_time}{p.end_time && <>–{p.end_time}</>}
-                            {p.grade_min != null && p.grade_max != null && (
-                              <>
-                                {' '}· Grades {p.grade_min === 0 ? 'K' : p.grade_min}–
-                                {p.grade_max}
-                              </>
-                            )}
-                          </p>
+                          <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>
                           {/* Session count used to live on the line above, but only
                               when it wasn't 8 - so the most common class silently
                               said nothing about its length. It now always shows,
