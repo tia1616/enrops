@@ -26,6 +26,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { logPlatformEvent, FEATURE, ACTION } from '../_shared/logPlatformEvent.ts';
+import { decideChargeModel } from '../_shared/chargeModelDecision.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -47,6 +48,7 @@ interface OrgRow {
   stripe_account_status: string | null;
   stripe_business_type: string | null;
   stripe_country: string | null;
+  stripe_charge_model: string | null;
 }
 
 const FORBIDDEN = json({ error: 'forbidden' }, 403);
@@ -128,7 +130,12 @@ serve(async (req: Request) => {
     // ── load org ──────────────────────────────────────────────────────────
     const { data: orgData, error: orgErr } = await supabase
       .from('organizations')
-      .select('id, name, slug, website, email, stripe_account_id, stripe_account_status, stripe_business_type, stripe_country')
+      // stripe_charge_model is read below to decide whether minting an account
+      // may re-declare this org's money model. Every column read as org.x must
+      // appear here: PostgREST returns an object WITHOUT the key rather than
+      // throwing, so a missing one reads undefined and whatever depends on it
+      // silently disappears.
+      .select('id, name, slug, website, email, stripe_account_id, stripe_account_status, stripe_business_type, stripe_country, stripe_charge_model')
       .eq('id', targetOrgId)
       .maybeSingle();
     if (orgErr) {
@@ -298,18 +305,65 @@ serve(async (req: Request) => {
     // Trigger guard_organizations_locked_columns blocks org admins from
     // changing stripe_account_id; service_role (this fn) bypasses.
     if (justCreated || org.stripe_account_id !== accountId) {
+      // ── may this mint re-declare the org's money model? ──────────────────
+      // Only an account WE just minted is known to be controller-based. The
+      // orphan-recovery branch above adopts a pre-existing Stripe account, which
+      // may well be a legacy Express one — marking that 'direct' would route its
+      // charges the wrong way and make the operator pay a Stripe fee we are also
+      // still recovering via the uplift. Those keep whatever they had.
+      //
+      // AND minting is not licence to re-declare the model either. An org that
+      // has already taken money has live charges and payment plans depending on
+      // its current model; process-installments FAILS CLOSED on any plan that
+      // predates a switch to 'direct', marking those rows paused_card_failed.
+      // Observed for real on staging 2026-08-04: this button flipped an org with
+      // 10 paid registrations from destination to direct in one click. The same
+      // shared rule the OAuth callback uses decides it here, so the answer
+      // cannot depend on which button the operator pressed.
+      let chargeModelPatch: Record<string, unknown> = {};
+      if (justCreated) {
+        const { data: priorMoney, error: priorMoneyErr } = await supabase
+          .from('registrations')
+          .select('id')
+          .eq('organization_id', org.id)
+          .not('stripe_payment_intent_id', 'is', null)
+          .limit(1);
+        if (priorMoneyErr) {
+          console.warn(
+            `[connect-onboard] could not read charge history for org ${org.id}:`,
+            priorMoneyErr.message,
+          );
+        }
+        const decision = decideChargeModel({
+          existingModel: org.stripe_charge_model ?? null,
+          // The org row was loaded successfully above, or we would have returned.
+          existingModelUnreadable: false,
+          hasTakenMoney: ((priorMoney as { id: string }[] | null)?.length ?? 0) > 0,
+          historyUnreadable: Boolean(priorMoneyErr),
+          // We mint with controller.fees.payer='account', so a minted account
+          // genuinely is direct-capable. That is what makes this the INFERENCE
+          // for a new org and irrelevant for an established one.
+          operatorBearsStripeFees: true,
+        });
+        if (decision.chargeModel !== null) {
+          chargeModelPatch = { stripe_charge_model: decision.chargeModel };
+        }
+        if (decision.preserved) {
+          console.error(
+            `[connect-onboard] NEEDS REVIEW: org ${org.id} minted ${accountId} but KEPT ` +
+            `charge_model='${decision.chargeModel}' (${decision.source}). A minted account is ` +
+            `direct-capable, so this org is now on a new account it does not route charges through ` +
+            `directly. Confirm that is intended.`,
+          );
+        }
+      }
+
       const { error: updErr } = await supabase
         .from('organizations')
         .update({
           stripe_account_id: accountId,
           stripe_account_status: 'onboarding',
-          // Only an account WE just minted is known to be controller-based.
-          // The orphan-recovery branch above adopts a pre-existing Stripe
-          // account, which may well be a legacy Express one — marking that
-          // 'direct' would route its charges the wrong way and make the
-          // operator pay a Stripe fee we are also still recovering via the
-          // uplift. Leave those on the 'destination' default.
-          ...(justCreated ? { stripe_charge_model: 'direct' } : {}),
+          ...chargeModelPatch,
         })
         .eq('id', org.id);
       if (updErr) {
