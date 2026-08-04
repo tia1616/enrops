@@ -116,7 +116,13 @@ serve(async (req: Request) => {
     }
 
     // ── Resolve recipients ─────────────────────────────────────────────────
-    type Recipient = { name: string; email: string; role: string | null; source: 'partner_contact' | 'location_contact' | 'ad_hoc_cc'; partner_contact_id?: string | null };
+    // `delivery` is stamped per recipient during the send loop and persisted in
+    // the recipients snapshot. The row-level status only says whether ANYONE
+    // got it, so without this a contact whose own address failed on a partial
+    // send is indistinguishable from one who received it. Optional because rows
+    // written before this existed have no per-recipient outcome; readers must
+    // treat undefined as "unknown" and fall back to the row status.
+    type Recipient = { name: string; email: string; role: string | null; source: 'partner_contact' | 'location_contact' | 'ad_hoc_cc'; partner_contact_id?: string | null; delivery?: 'sent' | 'failed' };
     const recipients: Recipient[] = [];
     const seen = new Set<string>();
 
@@ -288,12 +294,15 @@ serve(async (req: Request) => {
         });
         if (!resp.ok) {
           const errText = await resp.text();
+          r.delivery = 'failed';
           failed.push({ email: r.email, reason: `resend ${resp.status}: ${errText.slice(0, 200)}` });
           continue;
         }
         const data = await resp.json().catch(() => ({}));
+        r.delivery = 'sent';
         sent.push({ email: r.email, message_id: data?.id ?? null });
       } catch (err) {
+        r.delivery = 'failed';
         failed.push({ email: r.email, reason: (err as Error).message });
       }
     }

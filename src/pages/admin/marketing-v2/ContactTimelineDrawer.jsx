@@ -218,12 +218,16 @@ async function fetchPartner(contact) {
 
   // Keep only sends this contact was actually on. New sends carry
   // partner_contact_id in the recipients snapshot; older ones match by email.
-  const mine = (rs ?? []).filter((r) => Array.isArray(r.recipients) && r.recipients.some(
+  // Hold on to the matched recipient entry, not just the fact that one matched:
+  // it carries this contact's OWN delivery outcome, which the row-level status
+  // cannot express on a partial send.
+  const matchOf = (r) => (Array.isArray(r.recipients) ? r.recipients : []).find(
     (x) => (x.partner_contact_id && x.partner_contact_id === contact.id) || (email && low(x.email) === email),
-  ));
+  );
+  const mine = (rs ?? []).map((r) => ({ r, hit: matchOf(r) })).filter((x) => x.hit);
 
-  const pIds = [...new Set(mine.map((r) => r.program_id).filter(Boolean))];
-  const csIds = [...new Set(mine.map((r) => r.camp_session_id).filter(Boolean))];
+  const pIds = [...new Set(mine.map(({ r }) => r.program_id).filter(Boolean))];
+  const csIds = [...new Set(mine.map(({ r }) => r.camp_session_id).filter(Boolean))];
   const pMap = new Map();
   const csMap = new Map();
   if (pIds.length) {
@@ -234,11 +238,29 @@ async function fetchPartner(contact) {
     const { data } = await supabase.from("camp_sessions").select("id, curriculum_name").in("id", csIds);
     for (const s of data ?? []) csMap.set(s.id, s);
   }
-  for (const r of mine) {
+  for (const { r, hit } of mine) {
     let name = "Class roster";
     if (r.program_id && pMap.get(r.program_id)) name = `${pMap.get(r.program_id).curriculum ?? "Class"} roster`;
     else if (r.camp_session_id && csMap.get(r.camp_session_id)) name = `${csMap.get(r.camp_session_id).curriculum_name ?? "Camp"} roster`;
-    events.push({ id: "rs" + r.id, at: r.sent_at, icon: "📄", title: `${name} sent`, detail: r.status === "failed" ? "Failed" : "", tone: r.status === "failed" ? "negative" : "sent" });
+    // Three states, and the middle one is the whole point of this:
+    //   hit.delivery === 'failed'  -> THIS contact's address bounced, even if
+    //                                 the send as a whole is recorded as sent.
+    //   hit.delivery === 'sent'    -> this contact got it.
+    //   undefined (rows written before per-recipient outcome existed) -> the
+    //                                 row status is all we have. A wholly failed
+    //                                 row means nobody got it, so that much is
+    //                                 still safe to say; a partial old row will
+    //                                 read as sent, which is the limit of what
+    //                                 was recorded and is not backfillable.
+    const contactFailed = hit.delivery === "failed" || (hit.delivery == null && r.status === "failed");
+    events.push({
+      id: "rs" + r.id,
+      at: r.sent_at,
+      icon: "📄",
+      title: contactFailed ? `${name} not delivered` : `${name} sent`,
+      detail: contactFailed ? "Their email address failed" : "",
+      tone: contactFailed ? "negative" : "sent",
+    });
   }
   return events;
 }
