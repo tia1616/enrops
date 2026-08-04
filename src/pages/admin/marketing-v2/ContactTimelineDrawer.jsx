@@ -243,8 +243,9 @@ async function fetchPartner(contact) {
     if (r.program_id && pMap.get(r.program_id)) name = `${pMap.get(r.program_id).curriculum ?? "Class"} roster`;
     else if (r.camp_session_id && csMap.get(r.camp_session_id)) name = `${csMap.get(r.camp_session_id).curriculum_name ?? "Camp"} roster`;
     // Three states, and the middle one is the whole point of this:
-    //   hit.delivery === 'failed'  -> THIS contact's address bounced, even if
-    //                                 the send as a whole is recorded as sent.
+    //   hit.delivery === 'failed'  -> the send to THIS address did not go
+    //                                 through, even if the send as a whole is
+    //                                 recorded as sent.
     //   hit.delivery === 'sent'    -> this contact got it.
     //   undefined (rows written before per-recipient outcome existed) -> the
     //                                 row status is all we have. A wholly failed
@@ -252,13 +253,21 @@ async function fetchPartner(contact) {
     //                                 still safe to say; a partial old row will
     //                                 read as sent, which is the limit of what
     //                                 was recorded and is not backfillable.
+    //
+    // The title says THAT it did not arrive and stops there. We do not know
+    // WHY: 'failed' is stamped for any non-2xx from Resend, which covers our
+    // own API key being wrong or rate-limited just as much as a bad address.
+    // There is a real send on record that failed for every recipient with
+    // "API key is invalid" - telling that operator their partner's address was
+    // at fault would send them to chase a school over our outage. The reason
+    // stays in failure_reason on the row, which is where it belongs.
     const contactFailed = hit.delivery === "failed" || (hit.delivery == null && r.status === "failed");
     events.push({
       id: "rs" + r.id,
       at: r.sent_at,
       icon: "📄",
       title: contactFailed ? `${name} not delivered` : `${name} sent`,
-      detail: contactFailed ? "Their email address failed" : "",
+      detail: "",
       tone: contactFailed ? "negative" : "sent",
     });
   }
