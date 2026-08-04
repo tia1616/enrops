@@ -351,7 +351,12 @@ serve(async (req: Request) => {
       return back(origin, { stripe: 'connected' }, row.organization_id);
     }
 
-    if (!modelWasPreserved && !operatorBearsStripeFees) {
+    // Reads the DECISION's own inferredModel rather than re-deriving it from
+    // operatorBearsStripeFees. The two are identical today by construction,
+    // which is exactly why re-deriving it here is a drift waiting to happen: if
+    // the inference rule ever gains a condition, this branch would keep using
+    // the old one and disagree with the value actually written.
+    if (!modelWasPreserved && inferredModel === 'destination') {
       // A NEW org, and the account did not confirm the operator bears Stripe's
       // fees. Set to 'destination' rather than 'direct': money still reaches
       // them, and routing a charge on a guess is how it ends up in the wrong

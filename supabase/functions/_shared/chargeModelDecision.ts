@@ -62,7 +62,20 @@ export interface ChargeModelDecision {
   source: string;
 }
 
-/** Normalise anything off the row into a model we recognise. */
+/**
+ * Normalise anything off the row into a model we recognise.
+ *
+ * KNOWN LIMITATION, deliberately not engineered around. This collapses every
+ * unrecognised value to 'destination', which is safe only while
+ * organizations_stripe_charge_model_check (20260727c) permits exactly
+ * 'destination' and 'direct'. If a THIRD model is ever added to that constraint,
+ * this function will silently rewrite an org running the new model back to
+ * destination on its next connect - the very failure the preserve branch exists
+ * to prevent. Whoever adds a third value must update this function in the same
+ * change. There is no value today that can reach the fallback from a DB read,
+ * so the alternative (preserving unknown strings verbatim) would be machinery
+ * for a case that cannot currently occur.
+ */
 function coerce(model: string | null): ChargeModel {
   // Deliberately exact-match, not a case-insensitive compare: buildChargeRouting
   // treats anything that is not exactly 'direct' as destination, and this
