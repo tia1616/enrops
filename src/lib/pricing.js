@@ -238,6 +238,11 @@ export function calculateCart(cart) {
           term_label: termLabel, // 'Fall' / 'Winter' / 'Spring' for VIP lines, null otherwise
           first_session_date: prog.first_session_date,
           sessions: prog.session_count || 8,
+          // The raw value, WITHOUT the 8 fallback above. `sessions` feeds the
+          // installment-window math, where defaulting to 8 is a reasonable guess;
+          // the review line SHOWS this number to a family, where guessing "8
+          // sessions" at a program that never said so is a claim we can't back.
+          session_count: prog.session_count ?? null,
           // VIP-only: surface Winter and Spring start dates for installment scheduling
           vip_winter_first_session_date:
             item.isVip && item.vipBundle?.winter?.first_session_date

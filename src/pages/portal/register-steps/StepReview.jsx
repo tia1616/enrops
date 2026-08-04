@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { formatMoney, INSTALLMENT_MIN_CENTS } from '../../../lib/pricing.js';
+import { programScheduleSummary } from '../../../lib/programSchedule.js';
 
 const DISMISSAL_LABELS = {
   released_to_authorized_adult: 'Released to an authorized adult',
@@ -58,6 +59,7 @@ export default function StepReview({
           {pricing.lines.map((l, i) => {
             const child = cart.children[l.child_index];
             const student = child?.student;
+            const scheduleStr = programScheduleSummary(l);
             return (
               <div key={i} className="px-6 py-4">
                 <div className="flex items-start justify-between gap-4">
@@ -80,6 +82,12 @@ export default function StepReview({
                         .filter(Boolean)
                         .join(' · ')}
                     </p>
+                    {/* Same start date and length the family saw on the catalog
+                        card, restated at the last screen before they pay, so the
+                        dates they decided on are the dates they're confirming. */}
+                    {scheduleStr && (
+                      <p className="mt-1 text-sm text-j2s-ink/70">{scheduleStr}</p>
+                    )}
                     <p className="mt-1 text-xs text-j2s-ink/50">
                       Child {l.child_index + 1}
                       {student?.first_name && `: ${student.first_name} ${student.last_name}`}
