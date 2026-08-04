@@ -18,6 +18,7 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const CREAM = "#FBFBFB";
 const OK = "#3a7c3a";
+const AMBER = "#a16207";   // partial success - matches Rosters/ProgramRoster
 const RED = "#b53737";
 
 function fmtDate(d) {
@@ -242,7 +243,12 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
       }
       setResult(json);
       setPhase("done");
-      if (onSent) onSent();
+      // Pass the result up. A 200 here does NOT mean anyone received it: both
+      // roster functions loop the recipients, collect per-address failures, and
+      // still return 200 with { sent: 0, failed: [...] } when Resend rejected
+      // every one. Callers that record "emailed on <date>" have to see the
+      // count, not just the fact that the request came back.
+      if (onSent) onSent(json);
     } catch (e) {
       setError(e.message ?? "Send failed.");
       setPhase("compose");
@@ -632,10 +638,35 @@ function ContactRow({ contact, checked, onToggle }) {
 function DoneStep({ result, onClose }) {
   const sent = result.sent || 0;
   const failed = result.failed || [];
+  // The function returns 200 whether every address went out or none did, so
+  // this banner is the only thing telling the operator which happened. Three
+  // states, three sentences, each true in the state that selects it:
+  //   sent > 0, none failed  -> it all went
+  //   sent > 0, some failed  -> it partly went, and the list below says who missed
+  //   sent === 0             -> nobody got it, however green the box used to look
+  const attempted = sent + failed.length;
+  const anySent = sent > 0;
+  const allSent = anySent && failed.length === 0;
+  // Defined once so the branches cannot drift on the count or the plural.
+  const rosterSuffix = result.camper_count != null
+    ? ` (${result.camper_count} camper${result.camper_count === 1 ? "" : "s"} on roster)`
+    : "";
+  const bannerColor = allSent ? OK : anySent ? AMBER : RED;
   return (
     <div>
-      <div style={{ background: `${OK}1A`, border: `1px solid ${OK}55`, padding: 14, borderRadius: 8, fontSize: 14, color: INK, lineHeight: 1.5 }}>
-        <strong style={{ color: OK }}>Sent.</strong> Roster delivered to {sent} recipient{sent === 1 ? "" : "s"}{result.camper_count != null ? ` (${result.camper_count} camper${result.camper_count === 1 ? "" : "s"} on roster).` : "."}
+      <div style={{ background: `${bannerColor}1A`, border: `1px solid ${bannerColor}55`, padding: 14, borderRadius: 8, fontSize: 14, color: INK, lineHeight: 1.5 }}>
+        {allSent && (
+          <><strong style={{ color: bannerColor }}>Sent.</strong> Roster delivered to {sent} recipient{sent === 1 ? "" : "s"}{rosterSuffix}.</>
+        )}
+        {anySent && !allSent && (
+          <><strong style={{ color: bannerColor }}>Partly sent.</strong> Roster delivered to {sent} of {attempted} recipients{rosterSuffix}.</>
+        )}
+        {!anySent && (
+          // No pointer to "the list below": whether that list exists depends on
+          // a guard in the edge function, not on anything this component knows.
+          // The sentence has to be true on its own.
+          <><strong style={{ color: bannerColor }}>Not sent.</strong> No one received this roster. Nothing was delivered, so it still needs sending.</>
+        )}
       </div>
       {failed.length > 0 && (
         <div style={{ marginTop: 10, background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13 }}>
