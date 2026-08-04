@@ -53,3 +53,16 @@ export function programScheduleSummary(program, now = new Date()) {
   if (count) parts.push(`${count} sessions`);
   return parts.length ? parts.join(` ${SEP} `) : null;
 }
+
+// The weekday label for a program row OR a pricing line: "Mondays" for a normal
+// recurring class, "Monday" (singular) for a one-off workshop that meets once,
+// and null when the operator never set a day (so the caller renders nothing, not
+// the literal string "nulls"). ONE definition so the day label and the schedule
+// line can never disagree on the same card - the count test here uses the exact
+// same Number() coercion programScheduleSummary uses, so a string "1" is treated
+// as one session by both, never one/plural by one and the other.
+export function formatDayLabel(program) {
+  const day = program?.day_of_week;
+  if (!day) return null;
+  return Number(program?.session_count) === 1 ? day : `${day}s`;
+}

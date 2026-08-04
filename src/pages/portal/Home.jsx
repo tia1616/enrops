@@ -15,7 +15,7 @@ import {
   standardPriceFor,
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
-import { programScheduleSummary } from '../../lib/programSchedule.js';
+import { programScheduleSummary, formatDayLabel } from '../../lib/programSchedule.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
@@ -430,12 +430,10 @@ export default function Home() {
                         : p.age_max != null
                           ? `Up to age ${p.age_max}`
                           : null;
-                    // A one-off workshop meets once, so "Mondays" would be wrong.
-                    // Null-guarded: without it a program with no day rendered the
-                    // literal string "nulls" as the first thing on the card.
-                    const dayStr = p.day_of_week
-                      ? (p.session_count === 1 ? p.day_of_week : `${p.day_of_week}s`)
-                      : null;
+                    // "Mondays", "Monday" for a one-off, or null when no day is set
+                    // (never the literal "nulls"). Shared helper so this label and
+                    // the schedule line below use the same one-session coercion.
+                    const dayStr = formatDayLabel(p);
                     const meta = [dayStr, timeStr, p.program_locations?.name, ageStr].filter(Boolean).join(' · ');
                     // "When does it start, and how many weeks am I buying?" - the
                     // two questions that previously could only be answered by
@@ -666,6 +664,9 @@ export default function Home() {
                     // two questions that previously could only be answered by
                     // starting a registration, which is where families dropped out.
                     const scheduleStr = programScheduleSummary(p);
+                    // Same null-guarded weekday label as the openPrograms cards -
+                    // a program with no day must not render the literal "nulls".
+                    const dayLabel = formatDayLabel(p);
                     // Partner-run, listed program: families register on the partner's
                     // site, so render a link-out card (no price, no VIP, no checkout).
                     if (p.runs_own_registration) {
@@ -681,7 +682,7 @@ export default function Home() {
                               <p className="mt-1 text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
                             )}
                             <p className="mt-1 text-sm text-j2s-ink/70">
-                              {p.day_of_week}s · {p.start_time}{p.end_time && <>–{p.end_time}</>}
+                              {dayLabel && <>{dayLabel} · </>}{p.start_time}{p.end_time && <>–{p.end_time}</>}
                               {p.grade_min != null && p.grade_max != null && (
                                 <> · Grades {p.grade_min === 0 ? 'K' : p.grade_min}–{p.grade_max}</>
                               )}
@@ -737,7 +738,7 @@ export default function Home() {
                             </p>
                           )}
                           <p className="mt-1 text-sm text-j2s-ink/70">
-                            {p.day_of_week}s · {p.start_time}{p.end_time && <>–{p.end_time}</>}
+                            {dayLabel && <>{dayLabel} · </>}{p.start_time}{p.end_time && <>–{p.end_time}</>}
                             {p.grade_min != null && p.grade_max != null && (
                               <>
                                 {' '}· Grades {p.grade_min === 0 ? 'K' : p.grade_min}–
