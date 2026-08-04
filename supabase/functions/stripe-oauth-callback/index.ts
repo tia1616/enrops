@@ -24,6 +24,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { mapOperatorAccountStatus } from '../_shared/operatorAccountStatus.ts';
+import { decideChargeModel } from '../_shared/chargeModelDecision.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -198,30 +199,86 @@ serve(async (req: Request) => {
     const operatorBearsStripeFees =
       feesPayer === 'account' || (feesPayer === null && acctType === 'standard');
 
+    // ── an org that has already taken money does not get its model re-decided ─
+    // The inference above reads the ACCOUNT, which is right for a first connect
+    // and wrong for a REPOINT. stripe_charge_model is not a description of the
+    // account; it is a description of the charges and payment plans already in
+    // flight. A destination org whose operator connects a Standard account would
+    // be flipped to 'direct' here, and process-installments then FAILS CLOSED on
+    // every plan that predates the switch (its `orgIsDirect && !recordedAcct`
+    // branch) - it marks those rows paused_card_failed and emails the operator.
+    // That PAUSES real families' payment plans; it does not merely re-route them.
+    //
+    // So: money already taken -> preserve what the org is on. No money -> infer,
+    // exactly as before, which is every genuinely new operator.
+    //
+    // "Has taken money" is evidenced by a payment intent, never by a status or a
+    // payment_method label - see the refund-rate bug where payment_method='stripe'
+    // silently dropped half of production.
+    //
+    // FAILS CLOSED. If either read errors we cannot PROVE the org is new, and an
+    // unprovable "it's new" is not the same as "it's new". Preserve instead, and
+    // say so in the log.
+    const [{ data: orgNow, error: orgNowErr }, { data: priorMoney, error: priorMoneyErr }] =
+      await Promise.all([
+        admin
+          .from('organizations')
+          .select('stripe_charge_model')
+          .eq('id', row.organization_id)
+          .maybeSingle(),
+        admin
+          .from('registrations')
+          .select('id')
+          .eq('organization_id', row.organization_id)
+          .not('stripe_payment_intent_id', 'is', null)
+          .limit(1),
+      ]);
+
+    const historyUnreadable = Boolean(orgNowErr || priorMoneyErr);
+    if (historyUnreadable) {
+      // Not fatal - the decision below fails closed on it - but it must not pass
+      // unnoticed, because it silently disables the "is this org new?" question.
+      console.warn(
+        `[oauth-callback] could not read charge history for org ${row.organization_id}:`,
+        orgNowErr?.message ?? priorMoneyErr?.message ?? 'unknown',
+      );
+    }
+
+    const { chargeModel, inferredModel, preserved: modelWasPreserved, source: modelSource } =
+      decideChargeModel({
+        existingModel:
+          (orgNow as { stripe_charge_model?: string | null } | null)?.stripe_charge_model ?? null,
+        hasTakenMoney: ((priorMoney as { id: string }[] | null)?.length ?? 0) > 0,
+        historyUnreadable,
+        operatorBearsStripeFees,
+      });
+
     console.log(
       `[oauth-callback] connected ${connectedAccountId} for org ${row.organization_id}: ` +
       `type=${acctType ?? 'none'} fees.payer=${feesPayer ?? 'none'} ` +
       `charges=${mapped.chargesEnabled} payouts=${mapped.payoutsEnabled} status=${mapped.status} ` +
-      // Say what is actually written. The column is set on BOTH branches - a log
-      // claiming it was left alone would send the next person debugging a
-      // destination-routed operator looking anywhere but here.
-      `-> charge_model=${operatorBearsStripeFees ? 'direct' : 'destination (unconfirmed fee model)'}`,
+      // Say what is actually written. A log claiming the column was left alone
+      // would send the next person debugging a destination-routed operator
+      // looking anywhere but here.
+      `-> charge_model=${chargeModel} (${modelSource})`,
     );
 
     // ── write it ──────────────────────────────────────────────────────────
     // service_role bypasses guard_organizations_locked_columns, which otherwise
     // blocks stripe_account_id changes (verified in 20260703_lock_stripe_fee_payer_in_org_guard.sql).
-    // stripe_charge_model is set EXPLICITLY either way, never left to whatever
-    // happened to be on the row. An org that previously connected, disconnected,
-    // and is now reconnecting could be carrying a stale 'direct' from its old
-    // account - inheriting that for a NEW account whose fee arrangement we could
-    // not confirm would route real charges on an assumption.
+    // stripe_charge_model is always written EXPLICITLY, never left to whatever
+    // happened to be on the row - but WHICH value is decided above, and the two
+    // cases are different. An org with no money yet gets the model inferred from
+    // the account, so a previously connected, disconnected, reconnecting org
+    // cannot carry a stale 'direct' into a new account whose fee arrangement we
+    // could not confirm. An org that HAS taken money keeps its current model,
+    // because live charges and payment plans already depend on it.
     const update: Record<string, unknown> = {
       stripe_account_id: connectedAccountId,
       stripe_charges_enabled: mapped.chargesEnabled,
       stripe_payouts_enabled: mapped.payoutsEnabled,
       stripe_account_status: mapped.status,
-      stripe_charge_model: operatorBearsStripeFees ? 'direct' : 'destination',
+      stripe_charge_model: chargeModel,
     };
 
     // The "is this org already connected?" rule lives in stripe-oauth-start, but
@@ -270,8 +327,32 @@ serve(async (req: Request) => {
       .eq('state', row.state);
     if (annotateErr) console.warn('[oauth-callback] state annotate failed:', annotateErr.message);
 
-    if (!operatorBearsStripeFees) {
-      // Connected, but the account did not confirm the operator bears Stripe's
+    // Three outcomes, and each message below has to be TRUE in the state that
+    // selects it. Preserved-and-agreeing is deliberately silent: there is
+    // nothing surprising and nothing to say.
+    if (modelWasPreserved && chargeModel !== inferredModel) {
+      // The account just connected implies a different money model than the one
+      // this org runs. EXPECTED for a deliberate repoint - an established
+      // destination org moving to a new account is exactly why the model is
+      // preserved - but it is also the shape a mistake would take, so it is
+      // recorded rather than waved through.
+      //
+      // No `review` flag goes back to the operator. Their charges route
+      // correctly and there is nothing they can act on; a review banner they
+      // cannot resolve is noise, not honesty. This one is for us.
+      console.error(
+        `[oauth-callback] NEEDS REVIEW: org ${row.organization_id} (connect started by user ${row.created_by_user_id ?? 'unknown'}) ` +
+        `connected ${connectedAccountId} and KEPT charge_model='${chargeModel}', while the account itself implies '${inferredModel}' ` +
+        `(type=${acctType ?? 'none'}, fees.payer=${feesPayer ?? 'none'}). ` +
+        (historyUnreadable
+          ? 'This org\'s charge history was UNREADABLE, so preserving was the fail-closed answer rather than a proven one.'
+          : 'Preserved because the org has already taken money and live charges depend on the current model.'),
+      );
+      return back(origin, { stripe: 'connected' }, row.organization_id);
+    }
+
+    if (!modelWasPreserved && !operatorBearsStripeFees) {
+      // A NEW org, and the account did not confirm the operator bears Stripe's
       // fees. Set to 'destination' rather than 'direct': money still reaches
       // them, and routing a charge on a guess is how it ends up in the wrong
       // balance. Flagged for a human to decide.
