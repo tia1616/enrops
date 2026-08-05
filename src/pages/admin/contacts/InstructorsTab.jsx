@@ -238,8 +238,14 @@ export default function InstructorsTab({ org }) {
     setEditingNameId(null);
   }
 
+  // The ONE invite implementation. Both entry points go through it: the row's
+  // Send/Resend button, and the "send it now?" step of the Add-instructor modal
+  // (which used to call contractor-invite itself and never refreshed the row,
+  // so the row still read "Send onboarding invite" after the invite had gone
+  // out and admins sent a second one). Returns the result so a caller that owns
+  // its own viewport — the modal — can show it where the click happened.
   async function sendInvite(instructorId) {
-    if (inviteBusyId) return;
+    if (inviteBusyId) return { type: 'err', message: 'Another invite is still sending.' };
     setInviteBusyId(instructorId);
     setInviteResult((s) => ({ ...s, [instructorId]: null }));
     try {
@@ -247,11 +253,9 @@ export default function InstructorsTab({ org }) {
         body: { instructor_id: instructorId },
       });
       if (fnErr || data?.error) {
-        setInviteResult((s) => ({
-          ...s,
-          [instructorId]: { type: 'err', message: data?.error || fnErr?.message || 'Failed to send invite.' },
-        }));
-        return;
+        const result = { type: 'err', message: data?.error || fnErr?.message || 'Failed to send invite.' };
+        setInviteResult((s) => ({ ...s, [instructorId]: result }));
+        return result;
       }
       // Refresh this instructor's onboarding status so the button label flips
       // from "Send invite" to "Resend" — contractor-invite stamps invited_at.
@@ -260,19 +264,34 @@ export default function InstructorsTab({ org }) {
         .select('instructor_id, overall_status, current_step, checkr_status, stripe_payouts_enabled, background_check_source, invited_at')
         .eq('instructor_id', instructorId)
         .maybeSingle();
-      if (fresh) {
-        setRows((rs) => (rs ?? []).map((r) => (r.id === instructorId ? { ...r, status: fresh } : r)));
-      }
-      setInviteResult((s) => ({
-        ...s,
-        [instructorId]: { type: 'ok', message: 'Invite sent ✓' },
-      }));
+      const nowIso = new Date().toISOString();
+      setRows((rs) =>
+        (rs ?? []).map((r) => {
+          if (r.id !== instructorId) return r;
+          if (fresh) return { ...r, status: fresh };
+          // Re-select came back empty (transient network error — the invite
+          // itself already succeeded). Reflect only what contractor-invite
+          // guarantees on success rather than leaving a stale "never invited"
+          // row that invites a duplicate send. Mirrors that function: it always
+          // stamps invited_at, inserts new rows as 'invited', and promotes an
+          // existing row only from not_invited/null — it never demotes.
+          const prior = r.status ?? null;
+          if (!prior) return { ...r, status: { instructor_id: instructorId, overall_status: 'invited', invited_at: nowIso } };
+          const promote = prior.overall_status == null || prior.overall_status === 'not_invited';
+          return {
+            ...r,
+            status: { ...prior, invited_at: nowIso, ...(promote ? { overall_status: 'invited' } : {}) },
+          };
+        })
+      );
+      const result = { type: 'ok', message: 'Invite sent ✓' };
+      setInviteResult((s) => ({ ...s, [instructorId]: result }));
+      return result;
     } catch (err) {
       console.error('[admin/contacts] send invite failed', err);
-      setInviteResult((s) => ({
-        ...s,
-        [instructorId]: { type: 'err', message: 'Something went wrong sending the invite.' },
-      }));
+      const result = { type: 'err', message: 'Something went wrong sending the invite.' };
+      setInviteResult((s) => ({ ...s, [instructorId]: result }));
+      return result;
     } finally {
       setInviteBusyId(null);
     }
@@ -404,13 +423,16 @@ export default function InstructorsTab({ org }) {
           onClose={() => setAddOpen(false)}
           onAdded={(newRow) => {
             // Prepend new instructor to the list with empty status + contacts
-            // so it shows up immediately. The Send-invite call (if user picks
-            // it) will refresh status afterwards.
+            // so it shows up immediately. If the admin then sends the invite
+            // from the modal, it runs through sendInvite below, which refreshes
+            // this row's status — so the row reads "Resend invite", not a
+            // first-time "Send onboarding invite" for one already sent.
             setRows((rs) => [
               { ...newRow, status: null, emergency_contacts: [] },
               ...(rs ?? []),
             ]);
           }}
+          onSendInvite={sendInvite}
         />
       )}
 
@@ -1307,10 +1329,14 @@ function BackgroundCheckUploadModal({ instructors, initialInstructorId, onClose,
 // Modal for manually adding an instructor row. Two phases:
 //   1. Form — collect first/last/email/phone/tier, insert row.
 //   2. Confirm — after insert, ask "Send onboarding invite now?" with
-//      Yes / Not now buttons. Yes fires contractor-invite then closes.
+//      Yes / Not now buttons. Yes delegates to the tab's sendInvite (passed in
+//      as onSendInvite) so the new row's onboarding status is refreshed the
+//      same way the row button does it — the modal must NOT call
+//      contractor-invite itself, or the row goes on advertising a first-time
+//      "Send onboarding invite" for an invite that already went out.
 // Direct insert via supabase client; RLS policy org_admins_write_instructors
 // gates this to owners + admins. No edge function needed.
-function AddInstructorModal({ org, onClose, onAdded }) {
+function AddInstructorModal({ org, onClose, onAdded, onSendInvite }) {
   const [phase, setPhase] = useState('form'); // 'form' | 'invite'
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -1382,23 +1408,20 @@ function AddInstructorModal({ org, onClose, onAdded }) {
   }
 
   async function handleSendInvite() {
-    if (!createdInstructor) return;
+    if (!createdInstructor || !onSendInvite) return;
     setBusy(true);
     setInviteResult(null);
     try {
-      const { data, error: fnErr } = await supabase.functions.invoke('contractor-invite', {
-        body: { instructor_id: createdInstructor.id },
-      });
-      if (fnErr || data?.error) {
-        setInviteResult({
-          type: 'err',
-          message: data?.error || fnErr?.message || 'Failed to send the invite.',
-        });
-        setBusy(false);
-        return;
+      // Single implementation, owned by the tab: it sends AND refreshes the
+      // instructor's onboarding status. Show the result here, where the click
+      // happened, then close — the row underneath already reads "Resend invite".
+      const result = await onSendInvite(createdInstructor.id);
+      setInviteResult(result ?? { type: 'err', message: 'Failed to send the invite.' });
+      if (result?.type === 'ok') {
+        setTimeout(() => { onClose && onClose(); }, 1200);
+        return; // leave busy set so the button stays disabled until it closes
       }
-      setInviteResult({ type: 'ok', message: 'Invite sent ✓' });
-      setTimeout(() => { onClose && onClose(); }, 1200);
+      setBusy(false);
     } catch (err) {
       console.error('[AddInstructorModal] invite failed', err);
       setInviteResult({ type: 'err', message: 'Something went wrong sending the invite.' });
@@ -1626,7 +1649,9 @@ function AddInstructorModal({ org, onClose, onAdded }) {
                   opacity: busy || inviteResult?.type === 'ok' ? 0.5 : 1,
                 }}
               >
-                {busy ? 'Sending…' : 'Send onboarding invite'}
+                {/* Don't say "Sending…" while the banner above already says it
+                    sent — the modal stays up for a beat before it closes. */}
+                {inviteResult?.type === 'ok' ? 'Sent ✓' : busy ? 'Sending…' : 'Send onboarding invite'}
               </button>
             </div>
           </div>
