@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { formatMoney, INSTALLMENT_MIN_CENTS } from '../../../lib/pricing.js';
+import { programScheduleSummary, formatStartDate, formatDayLabel } from '../../../lib/programSchedule.js';
 
 const DISMISSAL_LABELS = {
   released_to_authorized_adult: 'Released to an authorized adult',
@@ -34,12 +35,6 @@ export default function StepReview({
   const canUseInstallments =
     !!installmentSchedule && pricing.total_cents >= INSTALLMENT_MIN_CENTS;
 
-  const fmtDate = (iso) =>
-    new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-    });
-
   return (
     <div>
       <h1 className="font-titan text-3xl text-j2s-ink sm:text-4xl">
@@ -58,6 +53,7 @@ export default function StepReview({
           {pricing.lines.map((l, i) => {
             const child = cart.children[l.child_index];
             const student = child?.student;
+            const scheduleStr = programScheduleSummary(l);
             return (
               <div key={i} className="px-6 py-4">
                 <div className="flex items-start justify-between gap-4">
@@ -76,10 +72,16 @@ export default function StepReview({
                       )}
                     </div>
                     <p className="mt-1 text-sm text-j2s-ink/70">
-                      {[l.school_name, l.day_of_week ? `${l.day_of_week}s` : null, l.start_time]
+                      {[l.school_name, formatDayLabel(l), l.start_time]
                         .filter(Boolean)
                         .join(' · ')}
                     </p>
+                    {/* Same start date and length the family saw on the catalog
+                        card, restated at the last screen before they pay, so the
+                        dates they decided on are the dates they're confirming. */}
+                    {scheduleStr && (
+                      <p className="mt-1 text-sm text-j2s-ink/70">{scheduleStr}</p>
+                    )}
                     <p className="mt-1 text-xs text-j2s-ink/50">
                       Child {l.child_index + 1}
                       {student?.first_name && `: ${student.first_name} ${student.last_name}`}
@@ -224,9 +226,9 @@ export default function StepReview({
                 Pay {formatMoney(installmentSchedule[0].amount_cents)} today and
                 we'll automatically charge your card{' '}
                 {formatMoney(installmentSchedule[1].amount_cents)} on{' '}
-                {fmtDate(installmentSchedule[1].due_date)} and{' '}
+                {formatStartDate(installmentSchedule[1].due_date)} and{' '}
                 {formatMoney(installmentSchedule[2].amount_cents)} on{' '}
-                {fmtDate(installmentSchedule[2].due_date)}.
+                {formatStartDate(installmentSchedule[2].due_date)}.
               </p>
               {cart.payment_plan && (
                 <div className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -240,7 +242,7 @@ export default function StepReview({
                   </div>
                   <div className="rounded-lg bg-j2s-purple-soft/50 px-3 py-2">
                     <p className="text-xs uppercase tracking-wider text-j2s-purple-dark">
-                      {fmtDate(installmentSchedule[1].due_date)}
+                      {formatStartDate(installmentSchedule[1].due_date)}
                     </p>
                     <p className="font-titan text-lg text-j2s-ink">
                       {formatMoney(installmentSchedule[1].amount_cents)}
@@ -248,7 +250,7 @@ export default function StepReview({
                   </div>
                   <div className="rounded-lg bg-j2s-purple-soft/50 px-3 py-2">
                     <p className="text-xs uppercase tracking-wider text-j2s-purple-dark">
-                      {fmtDate(installmentSchedule[2].due_date)}
+                      {formatStartDate(installmentSchedule[2].due_date)}
                     </p>
                     <p className="font-titan text-lg text-j2s-ink">
                       {formatMoney(installmentSchedule[2].amount_cents)}

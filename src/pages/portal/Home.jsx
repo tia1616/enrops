@@ -15,6 +15,7 @@ import {
   standardPriceFor,
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
+import { programScheduleSummary, formatDayLabel } from '../../lib/programSchedule.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
@@ -429,9 +430,15 @@ export default function Home() {
                         : p.age_max != null
                           ? `Up to age ${p.age_max}`
                           : null;
-                    // A one-off workshop meets once, so "Mondays" would be wrong.
-                    const dayStr = p.session_count === 1 ? p.day_of_week : `${p.day_of_week}s`;
+                    // "Mondays", "Monday" for a one-off, or null when no day is set
+                    // (never the literal "nulls"). Shared helper so this label and
+                    // the schedule line below use the same one-session coercion.
+                    const dayStr = formatDayLabel(p);
                     const meta = [dayStr, timeStr, p.program_locations?.name, ageStr].filter(Boolean).join(' · ');
+                    // "When does it start, and how many weeks am I buying?" - the
+                    // two questions that previously could only be answered by
+                    // starting a registration, which is where families dropped out.
+                    const scheduleStr = programScheduleSummary(p);
                     const hl = highlightProgram === p.id;
                     // Optional program photo. alt="" because the class name sits
                     // right beside it — announcing the file twice adds nothing.
@@ -452,6 +459,9 @@ export default function Home() {
                             <div style={{ minWidth: 0 }}>
                               <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
                               <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
+                              {scheduleStr && (
+                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{scheduleStr}</div>
+                              )}
                             </div>
                           </div>
                           <a href={p.external_registration_url} target="_blank" rel="noopener noreferrer" style={leanBtn}>Register &#8599;</a>
@@ -467,6 +477,9 @@ export default function Home() {
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
                             </div>
+                            {scheduleStr && (
+                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{scheduleStr}</div>
+                            )}
                             {/* All-in price, stated here rather than at the Pay
                                 step. The breakdown sits underneath so the fee
                                 is never a reveal — a family sees the real
@@ -647,6 +660,22 @@ export default function Home() {
                 </div>
                 <div className="space-y-4">
                   {programsAtSchool.map((p) => {
+                    // "When does it start, and how many weeks am I buying?" - the
+                    // two questions that previously could only be answered by
+                    // starting a registration, which is where families dropped out.
+                    const scheduleStr = programScheduleSummary(p);
+                    // Same null-guarded weekday label as the openPrograms cards -
+                    // a program with no day must not render the literal "nulls".
+                    const dayLabel = formatDayLabel(p);
+                    // Filtered join (like openPrograms' meta line) so an absent day
+                    // or time never leaves an orphan " · " in front of the grades.
+                    const timeStr = p.start_time
+                      ? `${p.start_time}${p.end_time ? `–${p.end_time}` : ''}`
+                      : null;
+                    const gradeStr = p.grade_min != null && p.grade_max != null
+                      ? `Grades ${p.grade_min === 0 ? 'K' : p.grade_min}–${p.grade_max}`
+                      : null;
+                    const metaStr = [dayLabel, timeStr, gradeStr].filter(Boolean).join(' · ');
                     // Partner-run, listed program: families register on the partner's
                     // site, so render a link-out card (no price, no VIP, no checkout).
                     if (p.runs_own_registration) {
@@ -661,12 +690,12 @@ export default function Home() {
                             {p.short_description && (
                               <p className="mt-1 text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
                             )}
-                            <p className="mt-1 text-sm text-j2s-ink/70">
-                              {p.day_of_week}s · {p.start_time}{p.end_time && <>–{p.end_time}</>}
-                              {p.grade_min != null && p.grade_max != null && (
-                                <> · Grades {p.grade_min === 0 ? 'K' : p.grade_min}–{p.grade_max}</>
-                              )}
-                            </p>
+                            {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
+                            {scheduleStr && (
+                              <p className="mt-1 text-sm font-semibold text-j2s-ink/70">
+                                {scheduleStr}
+                              </p>
+                            )}
                           </div>
                           <div className="px-5 py-4">
                             <p className="text-sm text-j2s-ink/70">
@@ -712,18 +741,18 @@ export default function Home() {
                               {p.short_description}
                             </p>
                           )}
-                          <p className="mt-1 text-sm text-j2s-ink/70">
-                            {p.day_of_week}s · {p.start_time}{p.end_time && <>–{p.end_time}</>}
-                            {p.grade_min != null && p.grade_max != null && (
-                              <>
-                                {' '}· Grades {p.grade_min === 0 ? 'K' : p.grade_min}–
-                                {p.grade_max}
-                              </>
-                            )}
-                            {p.session_count && p.session_count !== 8 && (
-                              <> · {p.session_count} sessions</>
-                            )}
-                          </p>
+                          {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
+                          {/* Session count used to live on the line above, but only
+                              when it wasn't 8 - so the most common class silently
+                              said nothing about its length. It now always shows,
+                              next to the start date, on one line that owns both.
+                              (The old guard also rendered a bare "0" for a program
+                              whose session_count was 0, since `0 && ...` is 0.) */}
+                          {scheduleStr && (
+                            <p className="mt-1 text-sm font-semibold text-j2s-ink/70">
+                              {scheduleStr}
+                            </p>
+                          )}
                         </div>
 
                         {/* Two-column pricing — #1: VIP on LEFT */}
