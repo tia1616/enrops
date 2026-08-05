@@ -222,6 +222,24 @@ export default function ProgramsCalendar() {
     }
   }
 
+  // Re-derive ONE program's schedule and merge it into state, so a change made
+  // outside the field-save path (an in-context "mark no-school day") updates the
+  // dates the row + expanded panel show, without a full reload. Same read the
+  // field-save refetch uses; single source of truth is the SQL derivation.
+  async function refreshProgramSchedule(programId) {
+    try {
+      const { data: sched, error: schErr } = await supabase.rpc(
+        "derive_program_session_schedule",
+        { p_program_id: programId },
+      );
+      if (schErr) throw schErr;
+      const arr = (sched ?? []).map((r) => ({ date: r.entry_date, kind: r.kind, reason: r.reason }));
+      setSessionDatesByProgram((prev) => ({ ...prev, [programId]: arr }));
+    } catch (e) {
+      console.warn("Couldn't refresh derived dates after skip:", e?.message ?? e);
+    }
+  }
+
   // Copy a program into another term — same location/day/time/curriculum/price,
   // just a different term/class. Server-side RPC so it copies every column on
   // the row, not just the subset this view happens to select. New row always
@@ -789,6 +807,7 @@ export default function ProgramsCalendar() {
               onUnpublish={unpublishProgram}
               onDelete={deleteProgram}
               onUpdate={updateProgramFields}
+              onScheduleChanged={refreshProgramSchedule}
               onDuplicate={duplicateProgram}
               termOptions={termOptions}
               locations={locationsForPicker}
@@ -810,6 +829,7 @@ export default function ProgramsCalendar() {
               onUnpublish={unpublishProgram}
               onDelete={deleteProgram}
               onUpdate={updateProgramFields}
+              onScheduleChanged={refreshProgramSchedule}
               onDuplicate={duplicateProgram}
               termOptions={termOptions}
               locations={locationsForPicker}
@@ -858,7 +878,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -906,6 +926,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, driftByProg
               onUnpublish={onUnpublish}
               onDelete={onDelete}
               onUpdate={onUpdate}
+              onScheduleChanged={onScheduleChanged}
               onDuplicate={onDuplicate}
               termOptions={termOptions}
               locations={locations}
@@ -919,7 +940,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, driftByProg
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -1027,6 +1048,7 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, driftByProg
                 onUnpublish={onUnpublish}
                 onDelete={onDelete}
                 onUpdate={onUpdate}
+                onScheduleChanged={onScheduleChanged}
                 onDuplicate={onDuplicate}
                 termOptions={termOptions}
                 locations={locations}
@@ -1084,7 +1106,7 @@ function districtHasCal(program, calendarCoverage) {
   return entry.hasCalendar;
 }
 
-function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
   // Lean registration ops have no curriculum library, no partner-school
   // facilities, and no instructors — hide those J2S-shaped affordances. J2S
   // (legacy_own_platform) keeps them all.
@@ -1322,6 +1344,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
         drift={drift}
         districtHasCalendar={districtHasCalendar}
         onUpdate={onUpdate}
+        onScheduleChanged={onScheduleChanged}
         onPublish={onPublish}
         onUnpublish={onUnpublish}
         onDelete={onDelete}
@@ -1340,7 +1363,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
 // bottom, an editable form for day/time/dates/capacity/price/location at
 // the top, and the unpublish + delete actions on a footer row. The panel
 // only renders when the operator clicks "Expand" on a program row.
-function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUpdate, onPublish, onUnpublish, onDelete, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUpdate, onScheduleChanged, onPublish, onUnpublish, onDelete, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   // Lean ops don't have partner-run registration or instructors — hide those.
   const { org: panelOrg } = useOutletContext() ?? {};
   const isLean = panelOrg?.instructor_pay_model === "enrops_platform";
@@ -2032,7 +2055,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           Unsaved schedule changes — the dates below update when you Save.
         </div>
       )}
-      <SessionDatesPanel program={program} dates={dates} districtHasCalendar={districtHasCalendar} inline />
+      <SessionDatesPanel program={program} dates={dates} districtHasCalendar={districtHasCalendar} onScheduleChanged={onScheduleChanged} inline />
     </div>
   );
 }
@@ -2058,11 +2081,22 @@ const expandInputStyle = {
   boxSizing: "border-box",
 };
 
-function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false }) {
+function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChanged, inline = false }) {
   // Lean ops have no instructors and no partner-school calendars.
   const { org: sdpOrg } = useOutletContext() ?? {};
   const isLean = sdpOrg?.instructor_pay_model === "enrops_platform";
   const [copied, setCopied] = useState(false);
+  // In-context "mark a no-school day": lets the operator drop a class date right
+  // here without hunting for the School calendar page. Writes via the
+  // add_program_no_school_date RPC (district calendar, or the location's own
+  // closures when there's no district), then re-derives so the list below shows
+  // the real shifted schedule.
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [skipDate, setSkipDate] = useState("");
+  const [skipReason, setSkipReason] = useState("");
+  const [skipBusy, setSkipBusy] = useState(false);
+  const [skipErr, setSkipErr] = useState(null);
+  const [skipDone, setSkipDone] = useState(null);
 
   // `dates` is the full schedule: [{ date, kind: 'session'|'no_school', reason }].
   const schedule = Array.isArray(dates) ? dates : [];
@@ -2079,6 +2113,32 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
       },
       () => { /* clipboard blocked — ignore */ },
     );
+  }
+
+  async function confirmSkip() {
+    if (!skipDate) return;
+    setSkipBusy(true);
+    setSkipErr(null);
+    try {
+      const { error } = await supabase.rpc("add_program_no_school_date", {
+        p_program_id: program.id,
+        p_date: skipDate,
+        p_reason: skipReason.trim() || null,
+      });
+      if (error) throw error;
+      // Re-derive so the list below reflects the real, shifted schedule rather
+      // than a guess computed here (single source of truth is the SQL derivation).
+      if (onScheduleChanged) await onScheduleChanged(program.id);
+      setSkipDone(skipDate);
+      setSkipOpen(false);
+      setSkipDate("");
+      setSkipReason("");
+      setTimeout(() => setSkipDone(null), 5000);
+    } catch (e) {
+      setSkipErr(e?.message || "Couldn't mark that date. Please try again.");
+    } finally {
+      setSkipBusy(false);
+    }
   }
 
   const district = program.program_locations?.district ?? null;
@@ -2132,6 +2192,14 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
           title="Copy the date list to clipboard (one per line)"
         >
           {copied ? "✓ Copied" : "Copy list"}
+        </button>
+        <button
+          type="button"
+          onClick={() => { setSkipErr(null); setSkipReason(""); setSkipDate(sessions[0]?.date ?? ""); setSkipOpen(true); }}
+          style={{ ...editLinkStyle }}
+          title="Remove a class date from this program (e.g. a no-school day your calendar doesn't cover yet)"
+        >
+          Mark a no-school day
         </button>
       </div>
       <div style={{ fontSize: 13, color: INK, marginBottom: 10, display: "flex", gap: 16, flexWrap: "wrap" }}>
@@ -2192,6 +2260,51 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, inline = false
           )
         ))}
       </div>
+
+      {skipDone && (
+        <div style={{ marginTop: 8, fontSize: 12.5, color: OK_GREEN, fontWeight: 600 }}>
+          ✓ {formatSessionDate(skipDone)} marked a no-school day — the dates above updated.
+        </div>
+      )}
+
+      {skipOpen && (
+        <div
+          onClick={() => !skipBusy && setSkipOpen(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "8vh 16px", zIndex: 300 }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, maxWidth: 460, width: "100%", padding: 20, boxShadow: "0 10px 40px rgba(0,0,0,0.25)", fontFamily: "inherit" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: PURPLE, marginBottom: 12 }}>Mark a no-school day</div>
+            <label style={{ display: "block", fontSize: 12, color: MUTED, marginBottom: 4 }}>Which class date is off?</label>
+            <select
+              value={skipDate}
+              onChange={(e) => setSkipDate(e.target.value)}
+              disabled={skipBusy}
+              style={{ width: "100%", padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", marginBottom: 12, background: "#fff", color: INK }}
+            >
+              {sessions.map((s) => <option key={s.date} value={s.date}>{formatSessionDate(s.date)}</option>)}
+            </select>
+            <label style={{ display: "block", fontSize: 12, color: MUTED, marginBottom: 4 }}>Reason (optional)</label>
+            <input
+              type="text"
+              value={skipReason}
+              onChange={(e) => setSkipReason(e.target.value)}
+              disabled={skipBusy}
+              placeholder="e.g. Teacher workday"
+              style={{ width: "100%", padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", marginBottom: 12, color: INK }}
+            />
+            <div style={{ background: "#faf7ed", border: "1px solid #ece1bf", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, color: INK, marginBottom: 14, lineHeight: 1.5 }}>
+              {district
+                ? <>This adds <strong>{skipDate ? formatSessionDate(skipDate) : "this date"}</strong> to <strong>{districtLabel}</strong>'s school calendar, so <strong>every program in {districtLabel}</strong> skips it too. Your class keeps all <strong>{sessions.length}</strong> session{sessions.length === 1 ? "" : "s"}, so the last class moves about a week later.</>
+                : <>This adds <strong>{skipDate ? formatSessionDate(skipDate) : "this date"}</strong> to <strong>this location's</strong> no-school days, so classes here skip it. Your class keeps all <strong>{sessions.length}</strong> session{sessions.length === 1 ? "" : "s"}, so the last class moves about a week later.</>}
+            </div>
+            {skipErr && <div style={{ fontSize: 12.5, color: "#b3261e", marginBottom: 10 }}>{skipErr}</div>}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={() => setSkipOpen(false)} disabled={skipBusy} style={{ padding: "8px 14px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: skipBusy ? "not-allowed" : "pointer" }}>Cancel</button>
+              <button type="button" onClick={confirmSkip} disabled={skipBusy || !skipDate} style={{ padding: "8px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit", cursor: (skipBusy || !skipDate) ? "not-allowed" : "pointer", opacity: (skipBusy || !skipDate) ? 0.6 : 1 }}>{skipBusy ? "Marking…" : "Mark no-school day"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </Wrapper>
   );
 }
