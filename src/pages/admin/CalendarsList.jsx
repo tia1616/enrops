@@ -871,9 +871,10 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
           </div>
         )}
         {modelNotes && (
-          <div style={{ ...infoBanner, marginTop: 10 }}>
-            <strong>Heads up:</strong> {modelNotes}
-          </div>
+          <details style={{ ...helpDetails, marginTop: 10 }}>
+            <summary style={{ ...helpSummary, color: AMBER, fontWeight: 600 }}>Notes from the reader</summary>
+            <div style={{ marginTop: 6, fontSize: 12.5, color: INK, lineHeight: 1.5 }}>{modelNotes}</div>
+          </details>
         )}
       </fieldset>
 

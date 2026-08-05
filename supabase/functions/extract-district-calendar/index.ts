@@ -84,7 +84,9 @@ Rules:
 12. **WHEN UNSURE, OMIT.** It is far better to miss one closure the admin can add manually than to invent one. If you cannot tell whether a marking means no-school vs early-release, or cannot determine the year, leave that date out and flag it in model_notes. For a web page or pasted text that clearly is NOT a school calendar (or has no dates), return empty date lists and say so in model_notes.
 
 model_notes usage:
-- Use ONLY for ambiguity the admin must resolve, or to say the source didn't look like a calendar. Do NOT narrate your reasoning or restate the structured output. If nothing is genuinely ambiguous, return null.
+- Use ONLY for a specific date the admin must VERIFY (a cell you genuinely could not read, or a marking you could not classify), OR to say the source did not look like a school calendar / had no dates.
+- NEVER explain why you EXCLUDED a date. Out-of-school-year dates, weekends, summer, pre-service/post-service days, and end-of-quarter/grading markers are EXPECTED exclusions and need no note. NEVER restate or justify what is already in the date lists.
+- If the only thing you could write is exclusion or inclusion reasoning, return null. For a clean, legible calendar this should be null.
 
 Return ONLY the JSON object, starting with { and ending with }.`;
 
