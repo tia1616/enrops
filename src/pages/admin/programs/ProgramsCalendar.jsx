@@ -2283,15 +2283,23 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             >
               {sessions.map((s) => <option key={s.date} value={s.date}>{formatSessionDate(s.date)}</option>)}
             </select>
-            <label style={{ display: "block", fontSize: 12, color: MUTED, marginBottom: 4 }}>Reason (optional)</label>
-            <input
-              type="text"
-              value={skipReason}
-              onChange={(e) => setSkipReason(e.target.value)}
-              disabled={skipBusy}
-              placeholder="e.g. Teacher workday"
-              style={{ width: "100%", padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", marginBottom: 12, color: INK }}
-            />
+            {/* Reason only shows for the district path: a district calendar stores
+                {date, reason}, but the no-district fallback writes to the location's
+                closure_dates (a plain date[]) with nowhere to keep a reason. Hiding
+                it there rather than accepting text we'd silently drop. */}
+            {district && (
+              <>
+                <label style={{ display: "block", fontSize: 12, color: MUTED, marginBottom: 4 }}>Reason (optional)</label>
+                <input
+                  type="text"
+                  value={skipReason}
+                  onChange={(e) => setSkipReason(e.target.value)}
+                  disabled={skipBusy}
+                  placeholder="e.g. Teacher workday"
+                  style={{ width: "100%", padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", marginBottom: 12, color: INK }}
+                />
+              </>
+            )}
             <div style={{ background: "#faf7ed", border: "1px solid #ece1bf", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, color: INK, marginBottom: 14, lineHeight: 1.5 }}>
               {district
                 ? <>This adds <strong>{skipDate ? formatSessionDate(skipDate) : "this date"}</strong> to <strong>{districtLabel}</strong>'s school calendar, so <strong>every program in {districtLabel}</strong> skips it too. Your class keeps all <strong>{sessions.length}</strong> session{sessions.length === 1 ? "" : "s"}, so the last class moves about a week later.</>
