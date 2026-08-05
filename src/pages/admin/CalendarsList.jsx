@@ -231,6 +231,28 @@ export default function CalendarsList() {
         </ol>
       </div>
 
+      {/* Early-release rules, spelled out (Jessica: providers have to be told how
+          these are handled, because we run programs on them and they behave
+          differently from a plain no-school day). */}
+      <div style={{
+        background: "#faf7ed",
+        border: `1px solid #ece1bf`,
+        borderRadius: 12,
+        padding: "14px 18px",
+        fontSize: 13.5,
+        color: INK,
+        lineHeight: 1.6,
+        maxWidth: 820,
+      }}>
+        <strong style={{ color: PURPLE }}>How early-release days work</strong>
+        <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
+          <li>Add them in the <strong>Early-release days</strong> list for the district below (next to no-school days).</li>
+          <li>If your class day is early release <strong>every week</strong> (e.g. every Wednesday), class still meets &mdash; we don&rsquo;t skip it. Just set the program&rsquo;s start time for right after the early dismissal.</li>
+          <li>If early release only lands on <strong>some</strong> weeks, we skip those dates like a no-school day, and the term runs a little longer.</li>
+          <li>This only works when the district&rsquo;s <strong>first and last day of school</strong> are set below &mdash; that&rsquo;s how we tell &ldquo;every week&rdquo; apart from &ldquo;just some weeks.&rdquo;</li>
+        </ul>
+      </div>
+
       {topError && <div style={errorBanner}>{topError}</div>}
 
       {loading ? (

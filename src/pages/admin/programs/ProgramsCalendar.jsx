@@ -2089,6 +2089,10 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
   const [skipBusy, setSkipBusy] = useState(false);
   const [skipErr, setSkipErr] = useState(null);
   const [skipDone, setSkipDone] = useState(null);
+  // 'district' = whole district's calendar; 'location' = just this school's own
+  // closures. Defaulted on open (district when the location has one, else forced
+  // to location). Drives the write target, the reason field, and the copy.
+  const [skipScope, setSkipScope] = useState("district");
 
   // `dates` is the full schedule: [{ date, kind: 'session'|'no_school', reason }].
   const schedule = Array.isArray(dates) ? dates : [];
@@ -2116,6 +2120,7 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
         p_program_id: program.id,
         p_date: skipDate,
         p_reason: skipReason.trim() || null,
+        p_scope: skipScope,
       });
       if (error) throw error;
       // Re-derive so the list below reflects the real, shifted schedule rather
@@ -2174,10 +2179,11 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             text-transform. Adds what the subtitle doesn't say: it's district-wide
             and flows to families + instructors on its own. */}
         <EnnieTip title="What's a no-school day?">
-          A day your district is closed, so class doesn't meet. Your schedule
-          skips it and runs a week (or more) longer, and that updates for families
-          and instructors automatically. If one's missing, use "Mark a no-school
-          day" and we'll add it for every class in that district.
+          A day school is closed, so class doesn't meet. Your schedule skips it and
+          runs a week or more longer, and that updates for families and instructors
+          automatically. Missing one? Use "Mark a no-school day" — choose all of
+          your district for a district holiday, or just this school if the day is
+          specific to your school and not district-wide.
         </EnnieTip>
         <div style={{ fontSize: 12, color: MUTED }}>
           Derived from this program's first session and day of week{!isLean ? `, and the ${district || "location"} school calendar` : ""}.
@@ -2197,7 +2203,7 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
         </button>
         <button
           type="button"
-          onClick={() => { setSkipErr(null); setSkipReason(""); setSkipDate(sessions[0]?.date ?? ""); setSkipOpen(true); }}
+          onClick={() => { setSkipErr(null); setSkipReason(""); setSkipDate(sessions[0]?.date ?? ""); setSkipScope(district ? "district" : "location"); setSkipOpen(true); }}
           style={{ ...editLinkStyle }}
           title="Remove a class date from this program (e.g. a no-school day your calendar doesn't cover yet)"
         >
@@ -2285,11 +2291,41 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             >
               {sessions.map((s) => <option key={s.date} value={s.date}>{formatSessionDate(s.date)}</option>)}
             </select>
-            {/* Reason only shows for the district path: a district calendar stores
-                {date, reason}, but the no-district fallback writes to the location's
-                closure_dates (a plain date[]) with nowhere to keep a reason. Hiding
-                it there rather than accepting text we'd silently drop. */}
-            {district && (
+            {/* Scope: a district holiday -> the whole district's calendar (every
+                program there skips it); a day only THIS school is closed -> just
+                this location. Only offer the district option when the location
+                actually has a district to write to. */}
+            {district ? (
+              <>
+                <label style={{ display: "block", fontSize: 12, color: MUTED, marginBottom: 4 }}>Who's off that day?</label>
+                <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    disabled={skipBusy}
+                    onClick={() => setSkipScope("district")}
+                    style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${skipScope === "district" ? BRIGHT : RULE}`, background: skipScope === "district" ? BRIGHT : "#fff", color: skipScope === "district" ? "#fff" : INK, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: skipBusy ? "not-allowed" : "pointer" }}
+                  >
+                    All of {district}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={skipBusy}
+                    onClick={() => setSkipScope("location")}
+                    style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${skipScope === "location" ? BRIGHT : RULE}`, background: skipScope === "location" ? BRIGHT : "#fff", color: skipScope === "location" ? "#fff" : INK, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: skipBusy ? "not-allowed" : "pointer" }}
+                  >
+                    Just this school
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>
+                Applies to <strong>this school only</strong> — its location has no district set.
+              </div>
+            )}
+            {/* Reason is stored only on the district calendar ({date, reason}); the
+                location closure list is a plain date[] with nowhere to keep one, so
+                hide it when the scope is this-school-only. */}
+            {skipScope === "district" && (
               <>
                 <label style={{ display: "block", fontSize: 12, color: MUTED, marginBottom: 4 }}>Reason (optional)</label>
                 <input
@@ -2303,9 +2339,9 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
               </>
             )}
             <div style={{ background: "#faf7ed", border: "1px solid #ece1bf", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, color: INK, marginBottom: 14, lineHeight: 1.5 }}>
-              {district
+              {skipScope === "district"
                 ? <>This adds <strong>{skipDate ? formatSessionDate(skipDate) : "this date"}</strong> to <strong>{districtLabel}</strong>'s school calendar, so <strong>every program in {districtLabel}</strong> skips it too. Your class keeps all <strong>{sessions.length}</strong> session{sessions.length === 1 ? "" : "s"}, so the last class moves about a week or more later.</>
-                : <>This adds <strong>{skipDate ? formatSessionDate(skipDate) : "this date"}</strong> to <strong>this location's</strong> no-school days, so classes here skip it. Your class keeps all <strong>{sessions.length}</strong> session{sessions.length === 1 ? "" : "s"}, so the last class moves about a week or more later.</>}
+                : <>This adds <strong>{skipDate ? formatSessionDate(skipDate) : "this date"}</strong> to <strong>this school's</strong> own no-school days, so only <strong>this school's</strong> classes skip it. Your class keeps all <strong>{sessions.length}</strong> session{sessions.length === 1 ? "" : "s"}, so the last class moves about a week or more later.</>}
             </div>
             {skipErr && <div style={{ fontSize: 12.5, color: "#b3261e", marginBottom: 10 }}>{skipErr}</div>}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
