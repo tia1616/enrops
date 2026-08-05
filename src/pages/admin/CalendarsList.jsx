@@ -25,6 +25,23 @@ const AMBER = "#a16207";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
+// Collapsible help: a clickable question that reveals a short answer.
+const helpDetails = {
+  background: "#faf7ed",
+  border: "1px solid #ece1bf",
+  borderRadius: 12,
+  padding: "10px 16px",
+  fontSize: 13.5,
+  color: INK,
+  maxWidth: 820,
+};
+const helpSummary = {
+  cursor: "pointer",
+  fontWeight: 700,
+  color: PURPLE,
+  fontSize: 13.5,
+};
+
 function defaultSchoolYear(now = new Date()) {
   const y = now.getFullYear();
   const m = now.getMonth(); // 0 = Jan
@@ -59,6 +76,10 @@ function formatRelativeDate(iso) {
 export default function CalendarsList() {
   const { org } = useOutletContext() ?? {};
   const isLean = org?.instructor_pay_model === "enrops_platform";
+  // Districts are discovered from each school's District field, which lives on
+  // the venue surface - labelled "Locations" for own-venue orgs, "Partners"
+  // otherwise (mirror of AdminLayout's nav label).
+  const venueLabel = org?.venue_model === "own_venue" ? "Locations" : "Partners";
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
   const [districts, setDistricts] = useState([]); // merged rows: [{ key, label, districtId, calendarKey, location_count }]
   const [calendars, setCalendars] = useState([]); // district_calendars rows for current school year
@@ -211,47 +232,27 @@ export default function CalendarsList() {
         </label>
       </header>
 
-      {/* Explicit how-to, spelled out on the page (not hidden behind a help
-          icon) - this is the step a lean operator most often doesn't know exists. */}
-      <div style={{
-        background: "#faf7ed",
-        border: `1px solid #ece1bf`,
-        borderRadius: 12,
-        padding: "14px 18px",
-        fontSize: 13.5,
-        color: INK,
-        lineHeight: 1.6,
-        maxWidth: 820,
-      }}>
-        <strong style={{ color: PURPLE }}>How to set up a school calendar</strong>
-        <ol style={{ margin: "8px 0 0", paddingLeft: 20 }}>
-          <li>Pick your district in the list below (if it isn&rsquo;t there yet, add a location with its district name first).</li>
-          <li>Give us its no-school days one of three ways: <strong>upload the district&rsquo;s calendar PDF</strong>, <strong>paste a link to it</strong>, or <strong>type the dates in by hand</strong>.</li>
-          <li>That&rsquo;s it &mdash; every class at that district then skips those days automatically, on your schedule, the family&rsquo;s registration view, and instructor calendars.</li>
+      {/* Help is collapsed by default (Jessica: too much text on screen). Each
+          question is clickable and reveals a short answer - native <details> so
+          it's accessible and needs no state. */}
+      <details style={helpDetails}>
+        <summary style={helpSummary}>How do I set this up?</summary>
+        <ol style={{ margin: "8px 0 0", paddingLeft: 20, lineHeight: 1.55 }}>
+          <li>Pick the district for each of your schools under <strong>{venueLabel}</strong>, then choose that district below.</li>
+          <li>Add its no-school days: <strong>upload a PDF</strong>, <strong>paste a link or the text</strong>, or <strong>type them in</strong>.</li>
+          <li>Every class in that district then skips those days automatically.</li>
         </ol>
-      </div>
+      </details>
 
-      {/* Early-release rules, spelled out (Jessica: providers have to be told how
-          these are handled, because we run programs on them and they behave
-          differently from a plain no-school day). */}
-      <div style={{
-        background: "#faf7ed",
-        border: `1px solid #ece1bf`,
-        borderRadius: 12,
-        padding: "14px 18px",
-        fontSize: 13.5,
-        color: INK,
-        lineHeight: 1.6,
-        maxWidth: 820,
-      }}>
-        <strong style={{ color: PURPLE }}>How early-release days work</strong>
-        <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
-          <li>Add them in the <strong>Early-release days</strong> list for the district below (next to no-school days).</li>
-          <li>If your class day is early release <strong>every week</strong> (e.g. every Wednesday), class still meets &mdash; we don&rsquo;t skip it. Just set the program&rsquo;s start time for right after the early dismissal.</li>
-          <li>If early release only lands on <strong>some</strong> weeks, we skip those dates like a no-school day, and the term runs a little longer.</li>
-          <li>This only works when the district&rsquo;s <strong>first and last day of school</strong> are set below &mdash; that&rsquo;s how we tell &ldquo;every week&rdquo; apart from &ldquo;just some weeks.&rdquo;</li>
+      <details style={helpDetails}>
+        <summary style={helpSummary}>How do early-release days work?</summary>
+        <ul style={{ margin: "8px 0 0", paddingLeft: 20, lineHeight: 1.55 }}>
+          <li>Pulled from the <strong>school calendar</strong> you add above — or add them by hand in the <strong>Early-release days</strong> list below.</li>
+          <li><strong>Every week</strong> (e.g. every Wednesday)? Class still meets &mdash; set the program time for just after dismissal.</li>
+          <li><strong>Some weeks only?</strong> We skip those like a no-school day.</li>
+          <li>Needs the district&rsquo;s <strong>first &amp; last day of school</strong> set below.</li>
         </ul>
-      </div>
+      </details>
 
       {topError && <div style={errorBanner}>{topError}</div>}
 
@@ -259,8 +260,8 @@ export default function CalendarsList() {
         <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>Loading…</div>
       ) : districts.length === 0 ? (
         <div style={emptyState}>
-          No districts yet. Create one from a school's <strong>District</strong> field
-          on the Locations tab (or add a location with a district name), then come back here.
+          No districts yet. Give a school a <strong>District</strong> under <strong>{venueLabel}</strong>
+          (or add one there with a district name), then come back here.
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -550,6 +551,7 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
   const [extractRaw, setExtractRaw] = useState(null);
   const [extractMode, setExtractMode] = useState("url");
   const [urlInput, setUrlInput] = useState(existing?.source_url ?? "");
+  const [textInput, setTextInput] = useState("");
   const [modelNotes, setModelNotes] = useState(null);
 
   // Live elapsed timer while extracting
@@ -639,11 +641,20 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
   function onExtractUrl() {
     const url = urlInput.trim();
     if (!url) {
-      setExtractError("Paste a PDF URL first.");
+      setExtractError("Paste a link first (a calendar PDF or a calendar web page).");
       return;
     }
     setDraft((d) => ({ ...d, source_url: url }));
     runExtract({ url });
+  }
+
+  function onExtractText() {
+    const text = textInput.trim();
+    if (!text) {
+      setExtractError("Paste the calendar text first.");
+      return;
+    }
+    runExtract({ text });
   }
 
   function onFileSelected(e) {
@@ -759,27 +770,35 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
 
       {/* Extract block */}
       <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>1. Pull dates from the district's calendar PDF</legend>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10 }}>
-          <ModeTab active={extractMode === "url"} onClick={() => setExtractMode("url")} label="Paste URL" />
+        <legend style={legendStyle}>1. Pull dates from the district&rsquo;s calendar (PDF, web page, or pasted text)</legend>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+          <ModeTab active={extractMode === "url"} onClick={() => setExtractMode("url")} label="Paste a link" />
           <ModeTab active={extractMode === "upload"} onClick={() => setExtractMode("upload")} label="Upload PDF" />
+          <ModeTab active={extractMode === "text"} onClick={() => setExtractMode("text")} label="Paste text" />
           <span style={{ fontSize: 12, color: MUTED }}>or skip and enter dates manually below.</span>
         </div>
         {extractMode === "url" ? (
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              type="text"
-              value={urlInput}
-              onChange={(e) => setUrlInput(e.target.value)}
-              placeholder="https://district.edu/calendar.pdf"
-              style={{ ...inputStyle, flex: 1 }}
-              disabled={extracting}
-            />
-            <button type="button" onClick={onExtractUrl} disabled={extracting} style={btn(BRIGHT, "#fff", false, extracting)}>
-              {extracting ? "Reading…" : "Extract"}
-            </button>
+          <div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="text"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                placeholder="https://district.edu/calendar  (a PDF or a calendar web page)"
+                style={{ ...inputStyle, flex: 1 }}
+                disabled={extracting}
+              />
+              <button type="button" onClick={onExtractUrl} disabled={extracting} style={btn(BRIGHT, "#fff", false, extracting)}>
+                {extracting ? "Reading…" : "Extract"}
+              </button>
+            </div>
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+              A link to a PDF or a district calendar web page. If a page builds its
+              calendar with JavaScript we may not be able to read it &mdash; upload the
+              PDF or paste the text instead.
+            </div>
           </div>
-        ) : (
+        ) : extractMode === "upload" ? (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <label style={{ ...btn(BRIGHT, "#fff", false, extracting), cursor: extracting ? "default" : "pointer" }}>
               {extracting ? "Reading…" : "Choose PDF…"}
@@ -792,6 +811,22 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
               />
             </label>
             <span style={{ fontSize: 12, color: MUTED }}>PDF only, up to 20 MB.</span>
+          </div>
+        ) : (
+          <div>
+            <textarea
+              value={textInput}
+              onChange={(e) => setTextInput(e.target.value)}
+              disabled={extracting}
+              rows={6}
+              placeholder="Paste the calendar text here - dates and their labels, e.g. 'Nov 27 Thanksgiving - no school', 'Every Wednesday early release'."
+              style={{ ...inputStyle, width: "100%", resize: "vertical", minHeight: 120, fontFamily: "inherit", boxSizing: "border-box" }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+              <button type="button" onClick={onExtractText} disabled={extracting} style={btn(BRIGHT, "#fff", false, extracting)}>
+                {extracting ? "Reading…" : "Extract"}
+              </button>
+            </div>
           </div>
         )}
         {extracting && (
@@ -840,9 +875,10 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
           </div>
         )}
         {modelNotes && (
-          <div style={{ ...infoBanner, marginTop: 10 }}>
-            <strong>Heads up:</strong> {modelNotes}
-          </div>
+          <details style={{ ...helpDetails, marginTop: 10 }}>
+            <summary style={{ ...helpSummary, color: AMBER, fontWeight: 600 }}>Notes from the reader</summary>
+            <div style={{ marginTop: 6, fontSize: 12.5, color: INK, lineHeight: 1.5 }}>{modelNotes}</div>
+          </details>
         )}
       </fieldset>
 
@@ -1062,15 +1098,6 @@ const errorBanner = {
   padding: "8px 12px",
   color: CORAL,
   fontWeight: 500,
-  fontSize: 13,
-};
-
-const infoBanner = {
-  background: `${AMBER}1F`,
-  border: `1px solid ${AMBER}`,
-  borderRadius: 6,
-  padding: "8px 12px",
-  color: AMBER,
   fontSize: 13,
 };
 

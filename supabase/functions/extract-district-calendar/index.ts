@@ -1,30 +1,38 @@
-// extract-district-calendar: takes a PDF district calendar (uploaded as
-// base64, or as a URL we fetch) and asks Claude to extract the structured
-// no-school + early-release date list that the admin can review before
-// saving to district_calendars.
+// extract-district-calendar: takes a district school calendar as a PDF (uploaded
+// base64 or a URL we fetch), a WEB PAGE (URL we fetch and read as text), or
+// PASTED TEXT, and asks Claude to extract the structured no-school + early-release
+// date list the admin reviews before saving to district_calendars.
 //
 // Input:
 //   {
-//     organization_id: string, // the org this calendar is being extracted for
-//     url?: string,           // PDF URL (will be fetched server-side)
-//     pdf_base64?: string,    // PDF bytes as base64 (data: prefix allowed)
-//     filename?: string,      // optional hint for prompts/logs
+//     organization_id: string,   // the org this calendar is for
+//     url?: string,              // PDF URL *or* a calendar web page URL (fetched server-side)
+//     pdf_base64?: string,       // PDF bytes as base64 (data: prefix allowed)
+//     text?: string,             // pasted calendar text
+//     filename?: string,         // optional hint for prompts/logs
 //     school_year_hint?: string, // optional, e.g. "2026-2027"
 //   }
+//   Exactly one source (url | pdf_base64 | text) is used, in that precedence.
 //
 // Output:
 //   {
-//     school_year: string | null,
-//     first_day_of_school: string | null,
-//     last_day_of_school: string | null,
-//     no_school_dates: [{ date: string, reason: string }],
-//     early_release_dates: [{ date: string, reason: string }],
-//     model_notes: string | null,
+//     school_year, first_day_of_school, last_day_of_school,
+//     no_school_dates: [{ date, reason }],
+//     early_release_dates: [{ date, reason }],
+//     model_notes,
+//     source_kind: "pdf" | "webpage" | "text",   // what we actually read
 //   }
 //
-// Auth: caller must be owner/admin of the specified organization_id (mirrors
-// import-partners-extract). No tenant DB reads or writes; UI persists after
-// review. The org gate scopes the call to the target tenant.
+// Auth: caller must be owner/admin of organization_id. No tenant DB reads/writes;
+// the UI persists after review.
+//
+// SSRF: url fetches are limited to http/https and reject obvious internal hosts
+// (loopback, private ranges, link-local incl. the cloud metadata IP). Residual
+// risk is low: the fetched content is only handed to Claude and ONLY structured
+// date JSON is returned to the caller - the raw response body is never returned.
+// The final URL after redirects is re-checked too. (Known gap: a hostname that
+// RESOLVES to a private IP via DNS is not caught - literal-host checks only.
+// Acceptable given the limited return.)
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
@@ -34,7 +42,10 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 
-const MAX_PDF_BYTES = 20 * 1024 * 1024; // 20 MB. Anthropic doc limit is 32 MB.
+const MAX_PDF_BYTES = 20 * 1024 * 1024; // 20 MB (Anthropic doc limit is 32 MB)
+const MAX_TEXT_CHARS = 200_000;         // cap web/pasted text sent to the model
+const MAX_FETCH_BYTES = MAX_PDF_BYTES;  // hard cap on any URL response we buffer
+const URL_FETCH_TIMEOUT_MS = 30_000;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -42,7 +53,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const SYSTEM_PROMPT = `You extract structured school calendar data from district calendar PDFs. PDFs vary in layout (month grids, legends with color keys, side annotations). Read the PDF visually — colors, legends, callouts — and produce structured JSON.
+const SYSTEM_PROMPT = `You extract structured school calendar data from a district's school calendar. The source may be a PDF (a visual month-grid with a color legend), a web page's text, or text an admin pasted. Read whatever you are given and produce structured JSON. For a PDF, read it visually - colors, legends, callouts. For web-page or pasted TEXT, read the words, tables, and lists; there is no image to inspect, so rely only on the text present.
 
 Return ONLY valid JSON in this exact shape (no markdown, no commentary):
 {
@@ -61,22 +72,23 @@ Return ONLY valid JSON in this exact shape (no markdown, no commentary):
 Rules:
 1. Include EVERY weekday during the school year when students do not attend full classes.
 2. Categorize each closure:
-   - Full closure (students do not attend): "no school", "schools closed", "non-contract day", "teacher in-service", "PD day", "grade prep", "holiday", "winter break", "spring break", "conferences" with no student attendance, family connections/transitions days where students don't attend → no_school_dates
-   - Shorter day (students attend, just dismissed early): "early release", "early dismissal", "half day" → early_release_dates
-3. A date may appear in EITHER no_school_dates OR early_release_dates, never both. If both could apply (e.g., last day is early release AND end of year), the more restrictive category wins — no-school > early-release.
+   - Full closure (students do not attend): "no school", "schools closed", "non-contract day", "teacher in-service", "PD day", "grade prep", "holiday", "winter break", "spring break", "conferences" with no student attendance, family connections/transitions days where students don't attend -> no_school_dates
+   - Shorter day (students attend, just dismissed early): "early release", "early dismissal", "half day" -> early_release_dates
+3. A date may appear in EITHER no_school_dates OR early_release_dates, never both. If both could apply, the more restrictive category wins - no-school > early-release.
 4. End-of-quarter / end-of-semester markers alone do NOT mean no school. Only include if the date is also marked no-school.
-5. Use the calendar's legend to interpret colors and codes. Read the legend carefully — different colors can mean different things in the same calendar (e.g., pink = no school, yellow = family conference no-school, gray = early release).
+5. For a PDF, use the legend to interpret colors and codes; different colors can mean different things. For text sources, use the words/labels next to each date.
 6. For multi-day breaks (winter break, spring break), enumerate each weekday individually. Skip Saturdays and Sundays.
 7. Do not include weekends, summer break, or any date outside the school year.
-8. Teacher-only / PD days BEFORE the first day of school or AFTER the last day are not relevant — skip them.
-9. The "reason" field MUST quote the calendar's exact label text where readable ("Thanksgiving", "MLK Day", "Winter Break", "Teacher Grade Prep", "Family Conferences"). This lets the admin cross-reference each date against the PDF at a glance. Keep under 40 chars. Do NOT paraphrase, summarize, or invent a label — if the calendar says "Non-Contract Day," write "Non-Contract Day," not "Staff day off."
-10. If the school year is not stated explicitly on the calendar, derive it from the dates (Fall start year + next year, e.g., "2026-2027"). If you cannot determine it confidently, return null.
+8. Teacher-only / PD days BEFORE the first day of school or AFTER the last day are not relevant - skip them.
+9. The "reason" field MUST quote the calendar's exact label text where readable ("Thanksgiving", "MLK Day", "Winter Break", "Teacher Grade Prep"). Keep under 40 chars. Do NOT paraphrase or invent a label.
+10. If the school year is not stated explicitly, derive it from the dates (Fall start year + next year). If you cannot determine it confidently, return null.
 11. All dates ISO 8601 (YYYY-MM-DD) with explicit year. Do not guess years.
-12. **WHEN UNSURE, OMIT.** It is far better to miss one closure the admin can add manually than to invent one. If you cannot read a cell, cannot tell whether a marking means no-school vs. early-release, or cannot determine the year, leave that date out of the structured output and flag it in model_notes.
+12. **WHEN UNSURE, OMIT.** It is far better to miss one closure the admin can add manually than to invent one. If you cannot tell whether a marking means no-school vs early-release, or cannot determine the year, leave that date out and flag it in model_notes. For a web page or pasted text that clearly is NOT a school calendar (or has no dates), return empty date lists and say so in model_notes.
 
 model_notes usage:
-- Use ONLY for ambiguity the admin must resolve. Examples of good notes: "March 15 cell is illegible — please verify," "Aug 26 may apply only to grades K, 8, 10-12 — calendar marks it as Family Connections," "Two colors overlap on Oct 9 — could be no-school or early-release."
-- DO NOT use model_notes to narrate your reasoning, restate facts already in the structured output, explain why you excluded weekends/summer, or describe the calendar layout. If there is nothing genuinely ambiguous, return null.
+- Use ONLY for a specific date the admin must VERIFY (a cell you genuinely could not read, or a marking you could not classify), OR to say the source did not look like a school calendar / had no dates.
+- NEVER explain why you EXCLUDED a date. Out-of-school-year dates, weekends, summer, pre-service/post-service days, and end-of-quarter/grading markers are EXPECTED exclusions and need no note. NEVER restate or justify what is already in the date lists.
+- If the only thing you could write is exclusion or inclusion reasoning, return null. For a clean, legible calendar this should be null.
 
 Return ONLY the JSON object, starting with { and ending with }.`;
 
@@ -104,63 +116,145 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
-const URL_FETCH_TIMEOUT_MS = 30_000;
+// --- SSRF guard: only http/https, reject obvious internal/loopback hosts ---
+function isBlockedHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  if (h === "0.0.0.0" || h === "::1" || h === "::") return true;
+  // IPv6 link-local / ULA - only for IPv6 LITERALS (contain a colon), never
+  // bare hostnames. Without the colon guard this wrongly blocked real district
+  // domains like fcps.edu (Fairfax County) that merely start with "fc"/"fd".
+  if (h.includes(":") && (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd"))) return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = +m[1], b = +m[2];
+    if (a === 127 || a === 10 || a === 0) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true; // link-local + cloud metadata 169.254.169.254
+  }
+  return false;
+}
 
-async function fetchUrlAsPdfBytes(
-  url: string,
-): Promise<
-  | { ok: true; bytes: Uint8Array }
-  | { ok: false; status: number; message: string }
-> {
+function validateUrl(raw: string): { ok: true; href: string } | { ok: false; message: string } {
+  let u: URL;
+  try { u = new URL(raw.trim()); } catch { return { ok: false, message: "That doesn't look like a valid link." }; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    return { ok: false, message: "Only http and https links are supported." };
+  }
+  if (isBlockedHost(u.hostname)) {
+    return { ok: false, message: "That link points to an internal address we can't fetch." };
+  }
+  return { ok: true, href: u.href };
+}
+
+// Read a response body into memory but never buffer more than `cap` bytes.
+// Returns { tooBig: true } instead of OOM-ing on a huge/endless response.
+async function readCapped(resp: Response, cap: number): Promise<Uint8Array | { tooBig: true }> {
+  const reader = resp.body?.getReader();
+  if (!reader) {
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    return buf.length > cap ? { tooBig: true } : buf;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.length;
+      if (total > cap) { await reader.cancel(); return { tooBig: true }; }
+      chunks.push(value);
+    }
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
+function htmlToText(html: string): string {
+  let s = html;
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, " ");
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, " ");
+  s = s.replace(/<!--[\s\S]*?-->/g, " ");
+  s = s.replace(/<\/(p|div|tr|li|h[1-6]|table|thead|tbody|section|article)>/gi, "\n");
+  s = s.replace(/<br\s*\/?>/gi, "\n");
+  s = s.replace(/<(td|th)\b[^>]*>/gi, "\t");
+  s = s.replace(/<[^>]+>/g, " ");
+  s = s.replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<")
+       .replace(/&gt;/gi, ">").replace(/&#39;/gi, "'").replace(/&rsquo;/gi, "'")
+       .replace(/&quot;/gi, '"').replace(/&mdash;/gi, "-").replace(/&ndash;/gi, "-");
+  s = s.replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return s;
+}
+
+type FetchResult =
+  | { ok: true; kind: "pdf"; bytes: Uint8Array }
+  | { ok: true; kind: "webpage"; text: string }
+  | { ok: false; status: number; message: string };
+
+async function fetchUrl(href: string): Promise<FetchResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), URL_FETCH_TIMEOUT_MS);
-
   let resp: Response;
   try {
-    resp = await fetch(url, {
+    resp = await fetch(href, {
       redirect: "follow",
       headers: { "User-Agent": "Enrops-Calendar-Extractor/1.0" },
       signal: controller.signal,
     });
   } catch (e) {
     if ((e as { name?: string })?.name === "AbortError") {
-      return {
-        ok: false,
-        status: 400,
-        message: `That URL took longer than ${URL_FETCH_TIMEOUT_MS / 1000}s to respond. Try downloading the PDF and uploading it directly.`,
-      };
+      return { ok: false, status: 400, message: `That link took longer than ${URL_FETCH_TIMEOUT_MS / 1000}s to respond. Try uploading the file or pasting the text instead.` };
     }
-    return { ok: false, status: 400, message: `Could not fetch URL: ${e instanceof Error ? e.message : String(e)}` };
+    return { ok: false, status: 400, message: `Couldn't fetch that link: ${e instanceof Error ? e.message : String(e)}` };
   } finally {
     clearTimeout(timeoutId);
   }
-  if (!resp.ok) {
-    return { ok: false, status: 400, message: `Fetch returned ${resp.status} ${resp.statusText}` };
+  if (!resp.ok) return { ok: false, status: 400, message: `That link returned ${resp.status} ${resp.statusText}.` };
+
+  // Re-check the FINAL host: redirect: "follow" may have landed on an internal
+  // address the original URL didn't name. (Literal-host only; DNS rebinding still
+  // out of scope - documented at top of file.)
+  try {
+    if (isBlockedHost(new URL(resp.url).hostname)) {
+      return { ok: false, status: 400, message: "That link redirected to an internal address we can't fetch." };
+    }
+  } catch { /* resp.url always parses in practice; ignore */ }
+
+  // Fast reject on a declared Content-Length before we read a byte.
+  const declaredLen = Number(resp.headers.get("content-length"));
+  if (Number.isFinite(declaredLen) && declaredLen > MAX_FETCH_BYTES) {
+    return { ok: false, status: 400, message: `That page/file is too large (${(declaredLen / 1024 / 1024).toFixed(1)} MB). Max ${MAX_FETCH_BYTES / 1024 / 1024} MB.` };
   }
 
   const contentType = (resp.headers.get("content-type") ?? "").toLowerCase();
-  if (!contentType.includes("pdf") && !contentType.includes("octet-stream")) {
-    return {
-      ok: false,
-      status: 400,
-      message:
-        "This URL looks like a webpage, not a PDF. Find the PDF calendar link on the district's page (often labeled \"download\" or \"printable calendar\") and paste that URL instead.",
-    };
+  const read = await readCapped(resp, MAX_FETCH_BYTES);
+  if ("tooBig" in read) {
+    return { ok: false, status: 400, message: `That page/file is too large to read. Max ${MAX_FETCH_BYTES / 1024 / 1024} MB. Try uploading the file or pasting the text instead.` };
+  }
+  const buf = read;
+  if (buf.length === 0) return { ok: false, status: 400, message: "That link returned an empty page." };
+
+  const looksPdf = contentType.includes("pdf") || contentType.includes("octet-stream")
+    || String.fromCharCode(...buf.slice(0, 5)).startsWith("%PDF");
+  if (looksPdf) {
+    // Size is already capped by readCapped (MAX_FETCH_BYTES === MAX_PDF_BYTES).
+    if (!String.fromCharCode(...buf.slice(0, 5)).startsWith("%PDF")) {
+      return { ok: false, status: 400, message: "That link's content type says PDF but the file isn't one." };
+    }
+    return { ok: true, kind: "pdf", bytes: buf };
   }
 
-  const bytes = new Uint8Array(await resp.arrayBuffer());
-  if (bytes.length === 0) return { ok: false, status: 400, message: "Fetched file is empty." };
-  if (bytes.length > MAX_PDF_BYTES) {
-    return { ok: false, status: 400, message: `PDF is too large (${(bytes.length / 1024 / 1024).toFixed(1)} MB). Max ${MAX_PDF_BYTES / 1024 / 1024} MB.` };
-  }
-
-  // Sanity check: PDFs start with "%PDF-"
-  const head = String.fromCharCode(...bytes.slice(0, 5));
-  if (!head.startsWith("%PDF")) {
-    return { ok: false, status: 400, message: "Downloaded file is not a PDF (header check failed)." };
-  }
-
-  return { ok: true, bytes };
+  // Otherwise treat as a web page / text.
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: false }).decode(buf); } catch { text = ""; }
+  const stripped = contentType.includes("html") || /<html|<body|<table|<div/i.test(text.slice(0, 2000))
+    ? htmlToText(text)
+    : text.trim();
+  if (!stripped) return { ok: false, status: 400, message: "Couldn't read any text from that page." };
+  return { ok: true, kind: "webpage", text: stripped.slice(0, MAX_TEXT_CHARS) };
 }
 
 type ExtractedShape = {
@@ -199,14 +293,17 @@ serve(async (req: Request) => {
       organization_id?: string;
       url?: string;
       pdf_base64?: string;
+      text?: string;
       filename?: string;
       school_year_hint?: string;
     };
 
     const organizationId = body.organization_id ?? "";
     if (!organizationId) return json({ error: "organization_id is required." }, 400);
-    if (!body.url && !body.pdf_base64) {
-      return json({ error: "Provide either url or pdf_base64." }, 400);
+
+    const pastedText = typeof body.text === "string" ? body.text.trim() : "";
+    if (!body.url && !body.pdf_base64 && !pastedText) {
+      return json({ error: "Provide a url, a PDF, or pasted text." }, 400);
     }
 
     // Auth: owner/admin of THIS organization
@@ -223,64 +320,59 @@ serve(async (req: Request) => {
       .eq("auth_user_id", userData.user.id)
       .eq("organization_id", organizationId)
       .in("role", ["owner", "admin"]);
-    if (!memberships || memberships.length === 0) {
-      return json({ error: "Forbidden." }, 403);
-    }
+    if (!memberships || memberships.length === 0) return json({ error: "Forbidden." }, 403);
 
-    // Resolve PDF bytes
-    let pdfBytes: Uint8Array;
-    if (body.url) {
-      const result = await fetchUrlAsPdfBytes(body.url);
+    // Resolve the source into either a PDF document block or a text block.
+    // Precedence: pasted text -> url -> uploaded PDF.
+    let sourceKind: "pdf" | "webpage" | "text";
+    let pdfBytes: Uint8Array | null = null;
+    let sourceText = "";
+
+    if (pastedText) {
+      sourceKind = "text";
+      sourceText = pastedText.slice(0, MAX_TEXT_CHARS);
+    } else if (body.url) {
+      const v = validateUrl(body.url);
+      if (!v.ok) return json({ error: v.message }, 400);
+      const result = await fetchUrl(v.href);
       if (!result.ok) return json({ error: result.message }, result.status);
-      pdfBytes = result.bytes;
+      if (result.kind === "pdf") { sourceKind = "pdf"; pdfBytes = result.bytes; }
+      else { sourceKind = "webpage"; sourceText = result.text; }
     } else {
-      try {
-        pdfBytes = base64ToBytes(body.pdf_base64!);
-      } catch {
-        return json({ error: "pdf_base64 is not valid base64." }, 400);
-      }
+      sourceKind = "pdf";
+      try { pdfBytes = base64ToBytes(body.pdf_base64!); }
+      catch { return json({ error: "Uploaded file is not valid base64." }, 400); }
       if (pdfBytes.length === 0) return json({ error: "PDF is empty." }, 400);
       if (pdfBytes.length > MAX_PDF_BYTES) {
-        return json(
-          { error: `PDF is too large (${(pdfBytes.length / 1024 / 1024).toFixed(1)} MB). Max ${MAX_PDF_BYTES / 1024 / 1024} MB.` },
-          400,
-        );
+        return json({ error: `PDF is too large (${(pdfBytes.length / 1024 / 1024).toFixed(1)} MB). Max ${MAX_PDF_BYTES / 1024 / 1024} MB.` }, 400);
       }
-      const head = String.fromCharCode(...pdfBytes.slice(0, 5));
-      if (!head.startsWith("%PDF")) {
+      if (!String.fromCharCode(...pdfBytes.slice(0, 5)).startsWith("%PDF")) {
         return json({ error: "Uploaded file is not a PDF (header check failed)." }, 400);
       }
     }
 
-    // Build the user message: hint (if any) + PDF document block
     const userText = body.school_year_hint
       ? `Extract calendar data. School year hint from the admin: ${body.school_year_hint}.`
-      : "Extract calendar data from this district calendar PDF.";
+      : "Extract the calendar data from this district school calendar.";
+
+    const content = sourceKind === "pdf"
+      ? [
+          { type: "document" as const, source: { type: "base64" as const, media_type: "application/pdf" as const, data: bytesToBase64(pdfBytes!) } },
+          { type: "text" as const, text: userText },
+        ]
+      : [
+          { type: "text" as const, text: `Calendar source (${sourceKind === "webpage" ? "web page text" : "pasted text"}) between the markers:\n<calendar>\n${sourceText}\n</calendar>` },
+          { type: "text" as const, text: userText },
+        ];
 
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
     const requestPayload = {
       model: "claude-sonnet-4-6",
       max_tokens: 8000,
       system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user" as const,
-          content: [
-            {
-              type: "document" as const,
-              source: {
-                type: "base64" as const,
-                media_type: "application/pdf" as const,
-                data: bytesToBase64(pdfBytes),
-              },
-            },
-            { type: "text" as const, text: userText },
-          ],
-        },
-      ],
+      messages: [{ role: "user" as const, content }],
     };
 
-    // Retry once on 429 (rate limit) or 529 (overloaded); user-friendly errors otherwise.
     let resp;
     try {
       resp = await anthropic.messages.create(requestPayload);
@@ -292,12 +384,8 @@ serve(async (req: Request) => {
           resp = await anthropic.messages.create(requestPayload);
         } catch (retryErr) {
           const retryStatus = (retryErr as { status?: number })?.status;
-          if (retryStatus === 429) {
-            return json({ error: "Claude is rate-limited right now. Try again in a minute." }, 503);
-          }
-          if (retryStatus === 529) {
-            return json({ error: "Anthropic is overloaded right now. Try again in a few minutes." }, 503);
-          }
+          if (retryStatus === 429) return json({ error: "Claude is rate-limited right now. Try again in a minute." }, 503);
+          if (retryStatus === 529) return json({ error: "Anthropic is overloaded right now. Try again in a few minutes." }, 503);
           console.error("[extract-district-calendar] anthropic retry failed", retryErr);
           return json({ error: "Extraction service is having trouble. Try again shortly." }, 502);
         }
@@ -319,9 +407,6 @@ serve(async (req: Request) => {
       raw = raw.replace(/^```[a-zA-Z]*\n?/, "").replace(/```\s*$/, "").trim();
     }
 
-    // Tolerant JSON extraction: if the model wrapped the JSON in prose
-    // ("Here is the JSON: {...}") or trailing notes, try to extract the
-    // first {...} block before giving up.
     let parsed: ExtractedShape | null = null;
     try {
       parsed = JSON.parse(raw) as ExtractedShape;
@@ -329,18 +414,11 @@ serve(async (req: Request) => {
       const firstBrace = raw.indexOf("{");
       const lastBrace = raw.lastIndexOf("}");
       if (firstBrace !== -1 && lastBrace > firstBrace) {
-        const candidate = raw.slice(firstBrace, lastBrace + 1);
-        try {
-          parsed = JSON.parse(candidate) as ExtractedShape;
-        } catch { /* fall through */ }
+        try { parsed = JSON.parse(raw.slice(firstBrace, lastBrace + 1)) as ExtractedShape; } catch { /* fall through */ }
       }
     }
-
     if (!parsed) {
-      return json(
-        { error: "The AI returned something we couldn't parse as JSON.", raw: raw.slice(0, 2000) },
-        502,
-      );
+      return json({ error: "The AI returned something we couldn't parse as JSON.", raw: raw.slice(0, 2000) }, 502);
     }
 
     const sy = typeof parsed.school_year === "string" ? parsed.school_year.trim() : null;
@@ -354,6 +432,7 @@ serve(async (req: Request) => {
       no_school_dates: sanitizeDateList(parsed.no_school_dates),
       early_release_dates: sanitizeDateList(parsed.early_release_dates),
       model_notes: typeof parsed.model_notes === "string" ? parsed.model_notes : null,
+      source_kind: sourceKind,
     });
   } catch (err) {
     console.error("[extract-district-calendar] unexpected", err);
