@@ -76,6 +76,10 @@ function formatRelativeDate(iso) {
 export default function CalendarsList() {
   const { org } = useOutletContext() ?? {};
   const isLean = org?.instructor_pay_model === "enrops_platform";
+  // Districts are discovered from each school's District field, which lives on
+  // the venue surface - labelled "Locations" for own-venue orgs, "Partners"
+  // otherwise (mirror of AdminLayout's nav label).
+  const venueLabel = org?.venue_model === "own_venue" ? "Locations" : "Partners";
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
   const [districts, setDistricts] = useState([]); // merged rows: [{ key, label, districtId, calendarKey, location_count }]
   const [calendars, setCalendars] = useState([]); // district_calendars rows for current school year
@@ -234,7 +238,7 @@ export default function CalendarsList() {
       <details style={helpDetails}>
         <summary style={helpSummary}>How do I set this up?</summary>
         <ol style={{ margin: "8px 0 0", paddingLeft: 20, lineHeight: 1.55 }}>
-          <li>Pick your district below.</li>
+          <li>Pick the district for each of your schools under <strong>{venueLabel}</strong>, then choose that district below.</li>
           <li>Add its no-school days: <strong>upload a PDF</strong>, <strong>paste a link or the text</strong>, or <strong>type them in</strong>.</li>
           <li>Every class in that district then skips those days automatically.</li>
         </ol>
@@ -243,7 +247,7 @@ export default function CalendarsList() {
       <details style={helpDetails}>
         <summary style={helpSummary}>How do early-release days work?</summary>
         <ul style={{ margin: "8px 0 0", paddingLeft: 20, lineHeight: 1.55 }}>
-          <li>Add them in the <strong>Early-release days</strong> list below.</li>
+          <li>Pulled from the <strong>school calendar</strong> you add above — or add them by hand in the <strong>Early-release days</strong> list below.</li>
           <li><strong>Every week</strong> (e.g. every Wednesday)? Class still meets &mdash; set the program time for just after dismissal.</li>
           <li><strong>Some weeks only?</strong> We skip those like a no-school day.</li>
           <li>Needs the district&rsquo;s <strong>first &amp; last day of school</strong> set below.</li>
@@ -256,8 +260,8 @@ export default function CalendarsList() {
         <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>Loading…</div>
       ) : districts.length === 0 ? (
         <div style={emptyState}>
-          No districts yet. Create one from a school's <strong>District</strong> field
-          on the Locations tab (or add a location with a district name), then come back here.
+          No districts yet. Give a school a <strong>District</strong> under <strong>{venueLabel}</strong>
+          (or add one there with a district name), then come back here.
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
