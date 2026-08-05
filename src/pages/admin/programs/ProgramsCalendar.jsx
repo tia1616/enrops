@@ -2201,14 +2201,19 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
         >
           {copied ? "✓ Copied" : "Copy list"}
         </button>
-        <button
-          type="button"
-          onClick={() => { setSkipErr(null); setSkipReason(""); setSkipDate(sessions[0]?.date ?? ""); setSkipScope(district ? "district" : "location"); setSkipOpen(true); }}
-          style={{ ...editLinkStyle }}
-          title="Remove a class date from this program (e.g. a no-school day your calendar doesn't cover yet)"
-        >
-          Mark a no-school day
-        </button>
+        {/* Needs a location to record against (district calendar is resolved via
+            the location; the school-only fallback writes the location's own
+            closures). No location -> nowhere to write, so don't offer it. */}
+        {program.program_location_id && (
+          <button
+            type="button"
+            onClick={() => { setSkipErr(null); setSkipReason(""); setSkipDate(sessions[0]?.date ?? ""); setSkipScope(district ? "district" : "location"); setSkipOpen(true); }}
+            style={{ ...editLinkStyle }}
+            title="Remove a class date from this program (e.g. a no-school day your calendar doesn't cover yet)"
+          >
+            Mark a no-school day
+          </button>
+        )}
       </div>
       <div style={{ fontSize: 13, color: INK, marginBottom: 10, display: "flex", gap: 16, flexWrap: "wrap" }}>
         {!isLean && (
@@ -2310,7 +2315,7 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
                   <button
                     type="button"
                     disabled={skipBusy}
-                    onClick={() => setSkipScope("location")}
+                    onClick={() => { setSkipScope("location"); setSkipReason(""); }}
                     style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${skipScope === "location" ? BRIGHT : RULE}`, background: skipScope === "location" ? BRIGHT : "#fff", color: skipScope === "location" ? "#fff" : INK, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: skipBusy ? "not-allowed" : "pointer" }}
                   >
                     Just this school
