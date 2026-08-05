@@ -16,8 +16,12 @@
 //     lie - this is the state on staging and on every dev machine);
 //   - the browser sends Global Privacy Control (already answered, legally);
 //   - a choice is already stored;
-//   - the visitor is inside /admin, i.e. they have an account already. The
-//     opt-out still reaches them through the admin footer; see the guard below.
+//   - the visitor is SIGNED IN. Someone with an account is being measured as a
+//     condition of using the product, and this bar only ever governed what goes
+//     to an ad network - so asking a logged-in person implies a control we do
+//     not offer. Their opt-out still lives in the admin footer (Do Not Sell or
+//     Share, via PLATFORM_LEGAL_LINKS). Auth state, NOT the URL, is the signal:
+//     a logged-in operator sitting on a public page must not see it either.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
@@ -30,26 +34,10 @@ import {
   optInToPixel,
 } from '../../lib/metaPixel.js';
 import { useAdChoiceSignal } from '../../lib/useAdChoice.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 
 /** The choice page asks the same question with more room; never do both at once. */
 const CHOICE_PAGE = '/do-not-sell';
-
-/**
- * The operator sign-in screen. App.jsx serves the SAME AdminLogin component at
- * both of these paths, so they have to behave identically here - /admin/login
- * would otherwise be silently covered by the /admin prefix below while /login
- * was not, and one screen would show the notice or not depending purely on which
- * URL you arrived through.
- *
- * Listed rather than inferred: /admin/login is already inside the /admin prefix,
- * and naming it anyway means this still holds if that prefix rule ever changes.
- *
- * NOT included: /{slug}/login, the family sign-in inside a tenant's own tree.
- * That is a different component on a public, tenant-branded surface where
- * ordinary visitors are, and folding it in would be extending the rule rather
- * than fixing the inconsistency this list exists for.
- */
-const SIGN_IN_PATHS = ['/login', '/admin/login'];
 
 const DEEP = '#1C004F';
 const MINT = '#26D687';
@@ -70,44 +58,28 @@ export default function AdChoiceNotice() {
   // own state.
   const [dismissed, setDismissed] = useState(false);
 
-  // ONE definition of "is this the operator app", used by both the visibility
-  // rule and the analytics dimension below, so the two can never disagree about
-  // which surface a given render is on.
-  const inOperatorApp = location.pathname.startsWith('/admin');
-  const onSignIn = SIGN_IN_PATHS.includes(location.pathname);
+  // The rule: never show the bar to someone who is signed in. `loading` guards
+  // the brief window before the session resolves, so we never FLASH the bar at
+  // a logged-in visitor and then yank it. Auth state, not the pathname, is the
+  // signal - it catches a logged-in operator on a public page too, which a
+  // path check could not.
+  const { user, loading: authLoading } = useAuth();
 
   // Visibility computed BEFORE any early return, so the effect below obeys the
-  // rules of hooks. Same conditions as before, just named.
+  // rules of hooks.
   const visible =
     !dismissed &&
+    // Not until we know whether they're signed in (avoids a flash), and never
+    // once they are. A signed-in person's opt-out lives in the admin footer
+    // (Do Not Sell or Share, via PLATFORM_LEGAL_LINKS) - nothing legally
+    // required is removed by hiding the bar for them.
+    !authLoading &&
+    !user &&
     !hasMadeAdChoice() &&
     isPixelConfigured() &&
     !hasGpcSignal() &&
-    // NEVER inside the operator's own dashboard.
-    //
-    // Someone in /admin has an account. Interrupting their work to ask about
-    // advertising measurement is the objection Darren raised: it reads as a
-    // choice about whether we track you, when the honest answer is that using
-    // the product means being measured, and this bar only ever governed what
-    // goes to an ad network. Asking there implies a control we are not offering.
-    //
-    // This does NOT remove their opt-out, which is the part the law requires:
-    // AdminLayout carries PLATFORM_LEGAL_LINKS, so Do Not Sell or Share sits in
-    // the footer of every admin page. Verified present on main before this
-    // guard was added - if that footer is ever removed, this suppression has to
-    // go with it or operators lose the route entirely.
-    //
-    // Public pages keep the bar. A visitor who has not signed up is being shared
-    // with Meta while having no relationship with us at all, which is precisely
-    // the case the notice exists for.
-    !inOperatorApp &&
-    // Nor on the operator sign-in screen. Nobody reaches it without an account,
-    // so it is the same population as the dashboard, and App.jsx serves it at
-    // two URLs - one of which the /admin prefix above already caught. Treating
-    // them differently made one screen behave two ways.
-    !onSignIn &&
-    // Never alongside the fuller control. Two things asking the same question on
-    // one screen is worse than either alone.
+    // Never alongside the fuller control on /do-not-sell. Two things asking the
+    // same question on one screen is worse than either alone.
     location.pathname !== CHOICE_PAGE;
 
   // How many people actually ANSWER this, and where they see it.
@@ -117,24 +89,16 @@ export default function AdChoiceNotice() {
   // non-blocking bar is precisely the design people ignore. Without an impression
   // there is no denominator, so this records the showing as well as the answer.
   //
-  // `surface` is a coarse public/admin bucket rather than the path, because the
-  // question it settles is "does this follow operators into their own dashboard"
-  // and a raw pathname would carry tenant slugs into analytics for no extra
-  // insight.
-  //
-  // READ THIS BEFORE INTERPRETING THE ADMIN BUCKET: since the guard above,
-  // surface='admin' is unreachable and should always be zero. That zero is BY
-  // DESIGN, not evidence that the bar naturally stays out of the dashboard. It
-  // was briefly read as such - the admin count was zero before the guard existed
-  // too, simply because no operator had yet signed up and left the bar
-  // unanswered, and an absent scenario was mistaken for a working one.
-  //
-  // Keeping the dimension anyway: it is now a regression canary. If admin
-  // impressions ever appear, the guard has been removed or routed around.
+  // `surface` is a coarse public/admin bucket rather than the raw path, which
+  // would carry tenant slugs into analytics for no extra insight. Because the
+  // bar now hides for anyone signed in, this only ever fires for LOGGED-OUT
+  // visitors - so 'admin' here means a logged-out visitor sitting on an operator
+  // screen (the sign-in page), worth seeing apart from a public marketing or
+  // registration page.
   //
   // This component mounts once for the app's lifetime and re-renders on every
   // navigation, hence the ref: one impression per visit, not one per render.
-  const surface = inOperatorApp ? 'admin' : 'public';
+  const surface = location.pathname.startsWith('/admin') ? 'admin' : 'public';
   const shownRef = useRef(false);
   useEffect(() => {
     if (!visible || shownRef.current) return;
