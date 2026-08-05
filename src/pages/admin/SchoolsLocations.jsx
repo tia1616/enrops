@@ -28,14 +28,14 @@ const BRIGHT = '#5847C9';   // indigo - active tabs/actions (Figma)
 const OWN_VENUE_TABS = [
   { key: 'schools',   label: 'Locations',
     help: 'The places you run your classes — your center, studios, or online. Add each one’s address, room, and arrival details once and they flow into every roster and reminder.' },
-  { key: 'calendars', label: 'Calendars',
+  { key: 'calendars', label: 'School calendar',
     help: 'Closure and no-class days that flow into every program’s session dates.' },
 ];
 
 const PARTNER_TABS = [
   { key: 'schools',   label: 'Partners',
     help: 'Every partner you work with — schools, Parks & Rec, churches, community orgs — with its venue(s), contacts, calendar, and what runs there. One place per partner.' },
-  { key: 'calendars', label: 'Calendars',
+  { key: 'calendars', label: 'School calendar',
     help: 'District academic calendars — no-school days that flow into every program’s session dates.' },
 ];
 
@@ -44,7 +44,12 @@ export default function SchoolsLocations() {
   const [params, setParams] = useSearchParams();
 
   const ownVenue = org?.venue_model === 'own_venue';
-  const TABS = ownVenue ? OWN_VENUE_TABS : PARTNER_TABS;
+  // Lean ops reach School calendar as its own Programs peer tab, so drop the
+  // inner calendars tab here — one door, not two. Full nav (J2S) keeps it under
+  // Partners as before.
+  const isLean = org?.instructor_pay_model === 'enrops_platform';
+  const baseTabs = ownVenue ? OWN_VENUE_TABS : PARTNER_TABS;
+  const TABS = isLean ? baseTabs.filter((t) => t.key !== 'calendars') : baseTabs;
   const title = ownVenue ? 'Locations' : 'Partners';
 
   const tab = params.get('tab') || 'schools';

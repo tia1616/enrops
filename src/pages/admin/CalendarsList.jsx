@@ -211,6 +211,26 @@ export default function CalendarsList() {
         </label>
       </header>
 
+      {/* Explicit how-to, spelled out on the page (not hidden behind a help
+          icon) - this is the step a lean operator most often doesn't know exists. */}
+      <div style={{
+        background: "#faf7ed",
+        border: `1px solid #ece1bf`,
+        borderRadius: 12,
+        padding: "14px 18px",
+        fontSize: 13.5,
+        color: INK,
+        lineHeight: 1.6,
+        maxWidth: 820,
+      }}>
+        <strong style={{ color: PURPLE }}>How to set up a school calendar</strong>
+        <ol style={{ margin: "8px 0 0", paddingLeft: 20 }}>
+          <li>Pick your district in the list below (if it isn&rsquo;t there yet, add a location with its district name first).</li>
+          <li>Give us its no-school days one of three ways: <strong>upload the district&rsquo;s calendar PDF</strong>, <strong>paste a link to it</strong>, or <strong>type the dates in by hand</strong>.</li>
+          <li>That&rsquo;s it &mdash; every class at that district then skips those days automatically, on your schedule, the family&rsquo;s registration view, and instructor calendars.</li>
+        </ol>
+      </div>
+
       {topError && <div style={errorBanner}>{topError}</div>}
 
       {loading ? (

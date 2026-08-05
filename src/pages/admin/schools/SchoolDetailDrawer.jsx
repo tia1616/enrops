@@ -228,8 +228,8 @@ export default function SchoolDetailDrawer({ org, partner, districts = [], partn
                       <span style={{ color: "#b67e00" }}>none uploaded yet</span>
                     )}
                   </div>
-                  <button type="button" onClick={() => navigate("/admin/schools?tab=calendars")} style={{ ...linkBtn, marginTop: 8 }}>
-                    Manage calendars →
+                  <button type="button" onClick={() => navigate("/admin/calendars")} style={{ ...linkBtn, marginTop: 8 }}>
+                    Manage school calendar →
                   </button>
                 </>
               ) : (
