@@ -25,6 +25,23 @@ const AMBER = "#a16207";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
+// Collapsible help: a clickable question that reveals a short answer.
+const helpDetails = {
+  background: "#faf7ed",
+  border: "1px solid #ece1bf",
+  borderRadius: 12,
+  padding: "10px 16px",
+  fontSize: 13.5,
+  color: INK,
+  maxWidth: 820,
+};
+const helpSummary = {
+  cursor: "pointer",
+  fontWeight: 700,
+  color: PURPLE,
+  fontSize: 13.5,
+};
+
 function defaultSchoolYear(now = new Date()) {
   const y = now.getFullYear();
   const m = now.getMonth(); // 0 = Jan
@@ -211,47 +228,27 @@ export default function CalendarsList() {
         </label>
       </header>
 
-      {/* Explicit how-to, spelled out on the page (not hidden behind a help
-          icon) - this is the step a lean operator most often doesn't know exists. */}
-      <div style={{
-        background: "#faf7ed",
-        border: `1px solid #ece1bf`,
-        borderRadius: 12,
-        padding: "14px 18px",
-        fontSize: 13.5,
-        color: INK,
-        lineHeight: 1.6,
-        maxWidth: 820,
-      }}>
-        <strong style={{ color: PURPLE }}>How to set up a school calendar</strong>
-        <ol style={{ margin: "8px 0 0", paddingLeft: 20 }}>
-          <li>Pick your district in the list below (if it isn&rsquo;t there yet, add a location with its district name first).</li>
-          <li>Give us its no-school days a few ways: <strong>upload the district&rsquo;s calendar PDF</strong>, <strong>paste a link</strong> (a PDF or a calendar web page), <strong>paste the calendar text</strong>, or <strong>type the dates in by hand</strong>.</li>
-          <li>That&rsquo;s it &mdash; every class at that district then skips those days automatically, on your schedule, the family&rsquo;s registration view, and instructor calendars.</li>
+      {/* Help is collapsed by default (Jessica: too much text on screen). Each
+          question is clickable and reveals a short answer - native <details> so
+          it's accessible and needs no state. */}
+      <details style={helpDetails}>
+        <summary style={helpSummary}>How do I set this up?</summary>
+        <ol style={{ margin: "8px 0 0", paddingLeft: 20, lineHeight: 1.55 }}>
+          <li>Pick your district below.</li>
+          <li>Add its no-school days: <strong>upload a PDF</strong>, <strong>paste a link or the text</strong>, or <strong>type them in</strong>.</li>
+          <li>Every class in that district then skips those days automatically.</li>
         </ol>
-      </div>
+      </details>
 
-      {/* Early-release rules, spelled out (Jessica: providers have to be told how
-          these are handled, because we run programs on them and they behave
-          differently from a plain no-school day). */}
-      <div style={{
-        background: "#faf7ed",
-        border: `1px solid #ece1bf`,
-        borderRadius: 12,
-        padding: "14px 18px",
-        fontSize: 13.5,
-        color: INK,
-        lineHeight: 1.6,
-        maxWidth: 820,
-      }}>
-        <strong style={{ color: PURPLE }}>How early-release days work</strong>
-        <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
-          <li>Add them in the <strong>Early-release days</strong> list for the district below (next to no-school days).</li>
-          <li>If your class day is early release <strong>every week</strong> (e.g. every Wednesday), class still meets &mdash; we don&rsquo;t skip it. Just set the program&rsquo;s start time for right after the early dismissal.</li>
-          <li>If early release only lands on <strong>some</strong> weeks, we skip those dates like a no-school day, and the term runs a little longer.</li>
-          <li>This only works when the district&rsquo;s <strong>first and last day of school</strong> are set below &mdash; that&rsquo;s how we tell &ldquo;every week&rdquo; apart from &ldquo;just some weeks.&rdquo;</li>
+      <details style={helpDetails}>
+        <summary style={helpSummary}>How do early-release days work?</summary>
+        <ul style={{ margin: "8px 0 0", paddingLeft: 20, lineHeight: 1.55 }}>
+          <li>Add them in the <strong>Early-release days</strong> list below.</li>
+          <li><strong>Every week</strong> (e.g. every Wednesday)? Class still meets &mdash; set the program time for just after dismissal.</li>
+          <li><strong>Some weeks only?</strong> We skip those like a no-school day.</li>
+          <li>Needs the district&rsquo;s <strong>first &amp; last day of school</strong> set below.</li>
         </ul>
-      </div>
+      </details>
 
       {topError && <div style={errorBanner}>{topError}</div>}
 
