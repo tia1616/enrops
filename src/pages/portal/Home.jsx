@@ -690,7 +690,7 @@ export default function Home() {
                             {p.short_description && (
                               <p className="mt-1 text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
                             )}
-                            <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>
+                            {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                             {scheduleStr && (
                               <p className="mt-1 text-sm font-semibold text-j2s-ink/70">
                                 {scheduleStr}
@@ -741,7 +741,7 @@ export default function Home() {
                               {p.short_description}
                             </p>
                           )}
-                          <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>
+                          {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                           {/* Session count used to live on the line above, but only
                               when it wasn't 8 - so the most common class silently
                               said nothing about its length. It now always shows,
