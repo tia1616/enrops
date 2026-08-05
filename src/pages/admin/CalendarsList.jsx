@@ -226,7 +226,7 @@ export default function CalendarsList() {
         <strong style={{ color: PURPLE }}>How to set up a school calendar</strong>
         <ol style={{ margin: "8px 0 0", paddingLeft: 20 }}>
           <li>Pick your district in the list below (if it isn&rsquo;t there yet, add a location with its district name first).</li>
-          <li>Give us its no-school days one of three ways: <strong>upload the district&rsquo;s calendar PDF</strong>, <strong>paste a link to it</strong>, or <strong>type the dates in by hand</strong>.</li>
+          <li>Give us its no-school days a few ways: <strong>upload the district&rsquo;s calendar PDF</strong>, <strong>paste a link</strong> (a PDF or a calendar web page), <strong>paste the calendar text</strong>, or <strong>type the dates in by hand</strong>.</li>
           <li>That&rsquo;s it &mdash; every class at that district then skips those days automatically, on your schedule, the family&rsquo;s registration view, and instructor calendars.</li>
         </ol>
       </div>
@@ -550,6 +550,7 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
   const [extractRaw, setExtractRaw] = useState(null);
   const [extractMode, setExtractMode] = useState("url");
   const [urlInput, setUrlInput] = useState(existing?.source_url ?? "");
+  const [textInput, setTextInput] = useState("");
   const [modelNotes, setModelNotes] = useState(null);
 
   // Live elapsed timer while extracting
@@ -639,11 +640,20 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
   function onExtractUrl() {
     const url = urlInput.trim();
     if (!url) {
-      setExtractError("Paste a PDF URL first.");
+      setExtractError("Paste a link first (a calendar PDF or a calendar web page).");
       return;
     }
     setDraft((d) => ({ ...d, source_url: url }));
     runExtract({ url });
+  }
+
+  function onExtractText() {
+    const text = textInput.trim();
+    if (!text) {
+      setExtractError("Paste the calendar text first.");
+      return;
+    }
+    runExtract({ text });
   }
 
   function onFileSelected(e) {
@@ -759,27 +769,35 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
 
       {/* Extract block */}
       <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>1. Pull dates from the district's calendar PDF</legend>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10 }}>
-          <ModeTab active={extractMode === "url"} onClick={() => setExtractMode("url")} label="Paste URL" />
+        <legend style={legendStyle}>1. Pull dates from the district&rsquo;s calendar (PDF, web page, or pasted text)</legend>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+          <ModeTab active={extractMode === "url"} onClick={() => setExtractMode("url")} label="Paste a link" />
           <ModeTab active={extractMode === "upload"} onClick={() => setExtractMode("upload")} label="Upload PDF" />
+          <ModeTab active={extractMode === "text"} onClick={() => setExtractMode("text")} label="Paste text" />
           <span style={{ fontSize: 12, color: MUTED }}>or skip and enter dates manually below.</span>
         </div>
         {extractMode === "url" ? (
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              type="text"
-              value={urlInput}
-              onChange={(e) => setUrlInput(e.target.value)}
-              placeholder="https://district.edu/calendar.pdf"
-              style={{ ...inputStyle, flex: 1 }}
-              disabled={extracting}
-            />
-            <button type="button" onClick={onExtractUrl} disabled={extracting} style={btn(BRIGHT, "#fff", false, extracting)}>
-              {extracting ? "Reading…" : "Extract"}
-            </button>
+          <div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="text"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                placeholder="https://district.edu/calendar  (a PDF or a calendar web page)"
+                style={{ ...inputStyle, flex: 1 }}
+                disabled={extracting}
+              />
+              <button type="button" onClick={onExtractUrl} disabled={extracting} style={btn(BRIGHT, "#fff", false, extracting)}>
+                {extracting ? "Reading…" : "Extract"}
+              </button>
+            </div>
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+              A link to a PDF or a district calendar web page. If a page builds its
+              calendar with JavaScript we may not be able to read it &mdash; upload the
+              PDF or paste the text instead.
+            </div>
           </div>
-        ) : (
+        ) : extractMode === "upload" ? (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <label style={{ ...btn(BRIGHT, "#fff", false, extracting), cursor: extracting ? "default" : "pointer" }}>
               {extracting ? "Reading…" : "Choose PDF…"}
@@ -792,6 +810,22 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
               />
             </label>
             <span style={{ fontSize: 12, color: MUTED }}>PDF only, up to 20 MB.</span>
+          </div>
+        ) : (
+          <div>
+            <textarea
+              value={textInput}
+              onChange={(e) => setTextInput(e.target.value)}
+              disabled={extracting}
+              rows={6}
+              placeholder="Paste the calendar text here - dates and their labels, e.g. 'Nov 27 Thanksgiving - no school', 'Every Wednesday early release'."
+              style={{ ...inputStyle, width: "100%", resize: "vertical", minHeight: 120, fontFamily: "inherit", boxSizing: "border-box" }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+              <button type="button" onClick={onExtractText} disabled={extracting} style={btn(BRIGHT, "#fff", false, extracting)}>
+                {extracting ? "Reading…" : "Extract"}
+              </button>
+            </div>
           </div>
         )}
         {extracting && (
