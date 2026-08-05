@@ -1097,15 +1097,6 @@ const errorBanner = {
   fontSize: 13,
 };
 
-const infoBanner = {
-  background: `${AMBER}1F`,
-  border: `1px solid ${AMBER}`,
-  borderRadius: 6,
-  padding: "8px 12px",
-  color: AMBER,
-  fontSize: 13,
-};
-
 const waitBanner = {
   background: `${BRIGHT}14`,
   border: `1px solid ${BRIGHT}66`,

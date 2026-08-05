@@ -30,8 +30,9 @@
 // (loopback, private ranges, link-local incl. the cloud metadata IP). Residual
 // risk is low: the fetched content is only handed to Claude and ONLY structured
 // date JSON is returned to the caller - the raw response body is never returned.
-// (Known gap: a hostname that RESOLVES to a private IP, or a redirect to one, is
-// not caught - literal-host checks only. Acceptable given the limited return.)
+// The final URL after redirects is re-checked too. (Known gap: a hostname that
+// RESOLVES to a private IP via DNS is not caught - literal-host checks only.
+// Acceptable given the limited return.)
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
@@ -43,6 +44,7 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024; // 20 MB (Anthropic doc limit is 32 MB)
 const MAX_TEXT_CHARS = 200_000;         // cap web/pasted text sent to the model
+const MAX_FETCH_BYTES = MAX_PDF_BYTES;  // hard cap on any URL response we buffer
 const URL_FETCH_TIMEOUT_MS = 30_000;
 
 const corsHeaders = {
@@ -119,7 +121,10 @@ function isBlockedHost(hostname: string): boolean {
   const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (h === "localhost" || h.endsWith(".localhost")) return true;
   if (h === "0.0.0.0" || h === "::1" || h === "::") return true;
-  if (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")) return true; // IPv6 link-local / ULA
+  // IPv6 link-local / ULA - only for IPv6 LITERALS (contain a colon), never
+  // bare hostnames. Without the colon guard this wrongly blocked real district
+  // domains like fcps.edu (Fairfax County) that merely start with "fc"/"fd".
+  if (h.includes(":") && (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd"))) return true;
   const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (m) {
     const a = +m[1], b = +m[2];
@@ -141,6 +146,31 @@ function validateUrl(raw: string): { ok: true; href: string } | { ok: false; mes
     return { ok: false, message: "That link points to an internal address we can't fetch." };
   }
   return { ok: true, href: u.href };
+}
+
+// Read a response body into memory but never buffer more than `cap` bytes.
+// Returns { tooBig: true } instead of OOM-ing on a huge/endless response.
+async function readCapped(resp: Response, cap: number): Promise<Uint8Array | { tooBig: true }> {
+  const reader = resp.body?.getReader();
+  if (!reader) {
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    return buf.length > cap ? { tooBig: true } : buf;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.length;
+      if (total > cap) { await reader.cancel(); return { tooBig: true }; }
+      chunks.push(value);
+    }
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
 }
 
 function htmlToText(html: string): string {
@@ -184,16 +214,33 @@ async function fetchUrl(href: string): Promise<FetchResult> {
   }
   if (!resp.ok) return { ok: false, status: 400, message: `That link returned ${resp.status} ${resp.statusText}.` };
 
+  // Re-check the FINAL host: redirect: "follow" may have landed on an internal
+  // address the original URL didn't name. (Literal-host only; DNS rebinding still
+  // out of scope - documented at top of file.)
+  try {
+    if (isBlockedHost(new URL(resp.url).hostname)) {
+      return { ok: false, status: 400, message: "That link redirected to an internal address we can't fetch." };
+    }
+  } catch { /* resp.url always parses in practice; ignore */ }
+
+  // Fast reject on a declared Content-Length before we read a byte.
+  const declaredLen = Number(resp.headers.get("content-length"));
+  if (Number.isFinite(declaredLen) && declaredLen > MAX_FETCH_BYTES) {
+    return { ok: false, status: 400, message: `That page/file is too large (${(declaredLen / 1024 / 1024).toFixed(1)} MB). Max ${MAX_FETCH_BYTES / 1024 / 1024} MB.` };
+  }
+
   const contentType = (resp.headers.get("content-type") ?? "").toLowerCase();
-  const buf = new Uint8Array(await resp.arrayBuffer());
+  const read = await readCapped(resp, MAX_FETCH_BYTES);
+  if ("tooBig" in read) {
+    return { ok: false, status: 400, message: `That page/file is too large to read. Max ${MAX_FETCH_BYTES / 1024 / 1024} MB. Try uploading the file or pasting the text instead.` };
+  }
+  const buf = read;
   if (buf.length === 0) return { ok: false, status: 400, message: "That link returned an empty page." };
 
   const looksPdf = contentType.includes("pdf") || contentType.includes("octet-stream")
     || String.fromCharCode(...buf.slice(0, 5)).startsWith("%PDF");
   if (looksPdf) {
-    if (buf.length > MAX_PDF_BYTES) {
-      return { ok: false, status: 400, message: `PDF is too large (${(buf.length / 1024 / 1024).toFixed(1)} MB). Max ${MAX_PDF_BYTES / 1024 / 1024} MB.` };
-    }
+    // Size is already capped by readCapped (MAX_FETCH_BYTES === MAX_PDF_BYTES).
     if (!String.fromCharCode(...buf.slice(0, 5)).startsWith("%PDF")) {
       return { ok: false, status: 400, message: "That link's content type says PDF but the file isn't one." };
     }
