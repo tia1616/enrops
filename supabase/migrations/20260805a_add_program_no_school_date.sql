@@ -45,8 +45,6 @@ DECLARE
   v_sy       text;
   v_reason   text := COALESCE(NULLIF(TRIM(p_reason), ''), 'No school');
   v_datestr  text := to_char(p_date, 'YYYY-MM-DD');
-  v_cal_id   uuid;
-  v_existing jsonb;
   v_target   text;
 BEGIN
   IF p_program_id IS NULL OR p_date IS NULL THEN
@@ -71,27 +69,24 @@ BEGIN
   v_sy := public.term_to_school_year(v_term);
 
   IF v_district IS NOT NULL AND v_sy IS NOT NULL THEN
-    -- District path (district-wide).
-    SELECT id, no_school_dates INTO v_cal_id, v_existing
-    FROM public.district_calendars
-    WHERE organization_id = v_org AND district = v_district AND school_year = v_sy;
-
-    IF v_cal_id IS NULL THEN
-      INSERT INTO public.district_calendars
-        (organization_id, district, school_year, no_school_dates, created_by)
-      VALUES
-        (v_org, v_district, v_sy,
-         jsonb_build_array(jsonb_build_object('date', v_datestr, 'reason', v_reason)),
-         auth.uid());
-    ELSIF NOT EXISTS (
-      SELECT 1 FROM jsonb_array_elements(v_existing) e WHERE e->>'date' = v_datestr
-    ) THEN
-      UPDATE public.district_calendars
-      SET no_school_dates = v_existing
-            || jsonb_build_array(jsonb_build_object('date', v_datestr, 'reason', v_reason)),
-          updated_at = now()
-      WHERE id = v_cal_id;
-    END IF;
+    -- District path (district-wide). Atomic upsert: two admins marking the FIRST
+    -- no-school day for the same not-yet-created district converge here instead
+    -- of one hitting the UNIQUE(org,district,school_year) violation. Dedup by
+    -- DATE -- re-marking a date drops its old entry and re-adds it (so the reason
+    -- updates) rather than appending a duplicate the derivation would ignore.
+    INSERT INTO public.district_calendars
+      (organization_id, district, school_year, no_school_dates, created_by)
+    VALUES
+      (v_org, v_district, v_sy,
+       jsonb_build_array(jsonb_build_object('date', v_datestr, 'reason', v_reason)),
+       auth.uid())
+    ON CONFLICT (organization_id, district, school_year) DO UPDATE
+    SET no_school_dates = (
+          SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
+          FROM jsonb_array_elements(district_calendars.no_school_dates) e
+          WHERE e->>'date' <> v_datestr
+        ) || jsonb_build_array(jsonb_build_object('date', v_datestr, 'reason', v_reason)),
+        updated_at = now();
     v_target := 'district';
 
   ELSE
