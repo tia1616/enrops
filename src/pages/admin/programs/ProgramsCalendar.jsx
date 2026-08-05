@@ -14,6 +14,7 @@ import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
+import EnnieTip from "../../../components/EnnieTip.jsx";
 import EmbedSnippet from "../../../components/EmbedSnippet.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
@@ -207,18 +208,9 @@ export default function ProgramsCalendar() {
         delete next[programId];
         return next;
       });
-      try {
-        const { data: sched, error: schErr } = await supabase.rpc(
-          "derive_program_session_schedule",
-          { p_program_id: programId },
-        );
-        if (!schErr) {
-          const arr = (sched ?? []).map((r) => ({ date: r.entry_date, kind: r.kind, reason: r.reason }));
-          setSessionDatesByProgram((prev) => ({ ...prev, [programId]: arr }));
-        }
-      } catch (e) {
-        console.warn("Couldn't refresh derived dates after save:", e?.message ?? e);
-      }
+      // Same re-derive + merge the in-context skip uses — one helper, so a
+      // future change to how dates refresh can't drift between the two paths.
+      await refreshProgramSchedule(programId);
     }
   }
 
@@ -2177,6 +2169,16 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
         <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5 }}>
           Session dates · {sessions.length}
         </div>
+        {/* Light-touch coaching (EnnieTip = the "?" bubble). Kept OUTSIDE the
+            uppercase heading above so the bubble text doesn't inherit
+            text-transform. Adds what the subtitle doesn't say: it's district-wide
+            and flows to families + instructors on its own. */}
+        <EnnieTip title="What's a no-school day?">
+          A day your district is closed, so class doesn't meet. Your schedule
+          skips it and runs a week (or more) longer, and that updates for families
+          and instructors automatically. If one's missing, use "Mark a no-school
+          day" and we'll add it for every class in that district.
+        </EnnieTip>
         <div style={{ fontSize: 12, color: MUTED }}>
           Derived from this program's first session and day of week{!isLean ? `, and the ${district || "location"} school calendar` : ""}.
           {closureCount > 0 && " No-school days are shown struck through and don't count as sessions."}
@@ -2302,8 +2304,8 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             )}
             <div style={{ background: "#faf7ed", border: "1px solid #ece1bf", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, color: INK, marginBottom: 14, lineHeight: 1.5 }}>
               {district
-                ? <>This adds <strong>{skipDate ? formatSessionDate(skipDate) : "this date"}</strong> to <strong>{districtLabel}</strong>'s school calendar, so <strong>every program in {districtLabel}</strong> skips it too. Your class keeps all <strong>{sessions.length}</strong> session{sessions.length === 1 ? "" : "s"}, so the last class moves about a week later.</>
-                : <>This adds <strong>{skipDate ? formatSessionDate(skipDate) : "this date"}</strong> to <strong>this location's</strong> no-school days, so classes here skip it. Your class keeps all <strong>{sessions.length}</strong> session{sessions.length === 1 ? "" : "s"}, so the last class moves about a week later.</>}
+                ? <>This adds <strong>{skipDate ? formatSessionDate(skipDate) : "this date"}</strong> to <strong>{districtLabel}</strong>'s school calendar, so <strong>every program in {districtLabel}</strong> skips it too. Your class keeps all <strong>{sessions.length}</strong> session{sessions.length === 1 ? "" : "s"}, so the last class moves about a week or more later.</>
+                : <>This adds <strong>{skipDate ? formatSessionDate(skipDate) : "this date"}</strong> to <strong>this location's</strong> no-school days, so classes here skip it. Your class keeps all <strong>{sessions.length}</strong> session{sessions.length === 1 ? "" : "s"}, so the last class moves about a week or more later.</>}
             </div>
             {skipErr && <div style={{ fontSize: 12.5, color: "#b3261e", marginBottom: 10 }}>{skipErr}</div>}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
