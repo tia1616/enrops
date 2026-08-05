@@ -60,6 +60,7 @@ const ProgramWizardNew = lazy(() => import('./pages/admin/programs/ProgramWizard
 const QuickProgramBuilder = lazy(() => import('./pages/admin/programs/QuickProgramBuilder.jsx'));
 const ProgramRoster = lazy(() => import('./pages/admin/programs/ProgramRoster.jsx'));
 const SchoolsLocations = lazy(() => import('./pages/admin/SchoolsLocations.jsx'));
+const CalendarsList = lazy(() => import('./pages/admin/CalendarsList.jsx'));
 const InstructorsPage = lazy(() => import('./pages/admin/instructors/InstructorsPage.jsx'));
 const SurveyResponses = lazy(() => import('./pages/admin/instructors/SurveyResponses.jsx'));
 const Payroll = lazy(() => import('./pages/admin/Payroll.jsx'));
@@ -250,7 +251,10 @@ export default function App() {
             unified Partners surface (/admin/schools) is the single home. Redirect
             every legacy URL there so bookmarks/email links still resolve. */}
         <Route path="locations" element={<Navigate to="/admin/schools" replace />} />
-        <Route path="calendars" element={<Navigate to="/admin/schools?tab=calendars" replace />} />
+        {/* School calendar is its own page now (was a redirect into the Partners
+            tab). Lean nav surfaces it as a peer tab under Programs; full nav keeps
+            reaching it under Partners (AdminLayout Partners `match` includes it). */}
+        <Route path="calendars" element={<CalendarsList />} />
         <Route path="contacts" element={<Navigate to="/admin/schools" replace />} />
         <Route path="instructors" element={<InstructorsPage />} />
         <Route path="availability" element={<SurveyResponses />} />

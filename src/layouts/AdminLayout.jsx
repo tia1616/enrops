@@ -38,8 +38,9 @@ const CORAL = "#D9694F";    // same warning coral the instructor portal uses
 // in <main>) instead of an expandable sidebar group, so the sidebar pattern is
 // uniform. Partners (/admin/schools) and Comms (/admin/family-comms) own their
 // own internal tab strips, so they have no shell tab strip — `match` keeps the
-// sidebar item lit on their sub-routes (for Partners, incl. the retired
-// /admin/calendars, which now redirects into the Calendars tab).
+// sidebar item lit on their sub-routes (for Partners, incl. /admin/calendars,
+// the School calendar page — a real route now, kept in Partners' `match` so
+// full nav lights Partners on it; lean nav surfaces it as a Programs tab).
 //
 // URL guardrail: /admin/finances stays put — the Stripe return_url in
 // stripe-connect-onboard is hardcoded to /admin/finances?stripe=return.
@@ -156,13 +157,18 @@ function shapeNavForOrg(nav, org) {
       // under Settings for lean ops, which is where you put things you configure
       // once -- but a registration operator picks a location every time they
       // build a class, so it belongs beside the programs it serves, not in a
-      // settings drawer. Calendars stays an inner tab of that page (it has no
-      // route of its own; /admin/calendars just redirects to ?tab=calendars).
-      // Label mirrors the page's own reframing, same rule as the sidebar item.
+      // settings drawer. School calendar is now its OWN Programs peer tab
+      // (/admin/calendars, a real route) rather than an inner tab of Locations,
+      // so a lean op can find it without digging three levels deep.
       out.push({
         ...item,
         tabs: [
           ...item.tabs.filter((t) => t.to !== "/admin/curricula" && t.to !== "/admin/class-reports"),
+          // School calendar promoted to a Programs peer (was buried as an inner
+          // tab of Locations, 3 levels deep). It's a scheduling INPUT, so it
+          // belongs beside the programs it shapes. navItemActive lights Programs
+          // on /admin/calendars via this tab.
+          { to: "/admin/calendars", label: "School calendar" },
           { to: "/admin/schools", label: org?.venue_model === "own_venue" ? "Locations" : "Partners" },
         ],
       });
