@@ -101,6 +101,13 @@ export default function Finances() {
 
   // Editable form state (mirrors columns; only used when canManage)
   const [feePassThrough, setFeePassThrough] = useState(false);
+  // Failure of the pass-through toggle specifically, rendered beside the toggle
+  // rather than in the page-level banner 280px above it.
+  const [feeError, setFeeError] = useState(null);
+  // Count of families mid-payment-plan. computePlatformFee reads live org config
+  // with no snapshot, so flipping fee_pass_through changes who pays the fee on
+  // installments that have not been charged yet. 0 = no warning shown.
+  const [pendingPlans, setPendingPlans] = useState(0);
   const [descriptorSuffix, setDescriptorSuffix] = useState("");
   const [withdrawalAdminFeeDollars, setWithdrawalAdminFeeDollars] = useState("");
   // Inline tabs (only meaningful when active). Default to Activity.
@@ -184,6 +191,33 @@ export default function Finances() {
         ? ((data.withdrawal_admin_fee_cents || 0) / 100).toFixed(2)
         : ""
     );
+
+    // How many FAMILIES are mid-payment-plan, for the pass-through warning.
+    //
+    // Counted as DISTINCT registration_id, not as installment rows: one family on
+    // a 3-payment plan is one family, and counting rows would tell J2S that 38
+    // families were affected when the real number is 30.
+    //
+    // The filter is a deny-list of the three TERMINAL statuses plus an explicit
+    // is.null, not an allow-list of ('pending'). installments_status_check permits
+    // six values (pending, paid, failed, refunded, paused_card_failed,
+    // paused_program_cancelled); an allow-list would silently stop counting a
+    // family whose card failed — exactly the family whose remaining payments still
+    // get charged. status is nullable and PostgREST's not.in never matches NULL,
+    // so the is.null arm is required, not defensive decoration.
+    const { data: instRows, error: instErr } = await supabase
+      .from("installments")
+      .select("registration_id")
+      .eq("organization_id", org.id)
+      .or("status.is.null,status.not.in.(paid,refunded,paused_program_cancelled)");
+    if (instErr) {
+      // A failed count must not claim zero — zero suppresses the warning, which
+      // would be a silent false "nothing is affected". Leave the previous value.
+      console.warn("[finances] could not count in-flight payment plans:", instErr.message);
+    } else {
+      setPendingPlans(new Set((instRows || []).map((r) => r.registration_id).filter(Boolean)).size);
+    }
+
     setLoading(false);
   }
 
@@ -635,11 +669,17 @@ export default function Finances() {
 
   async function togglePassThrough(nextValue) {
     if (!canManage) return;
+    setFeeError(null);
     // Confirm when flipping to pass-through (parents will see a fee)
     if (nextValue === true) {
       const ok = window.confirm(
         "Pass-through mode: families will see the service fee as a separate line " +
-        "at checkout, so you keep your full price. Switch to pass-through?"
+        "at checkout, so you keep your full price. Switch to pass-through?" +
+        // Only appended when unpaid installments actually exist for this org.
+        (pendingPlans > 0
+          ? `\n\n${pendingPlans === 1 ? "1 family is" : `${pendingPlans} families are`} ` +
+            "partway through a payment plan. Their remaining payments will use the new setting too."
+          : "")
       );
       if (!ok) return;
     }
@@ -651,7 +691,18 @@ export default function Finances() {
       .eq("id", org.id);
     if (err) {
       setFeePassThrough(prev);
-      setError(err.message || "Could not save fee mode.");
+      // 42501 is the platform-admin guard on organizations. Postgres hands back a
+      // list of raw column names (stripe_account_id, instructor_pay_model, ...),
+      // which is developer text an operator cannot act on — and after 20260806a
+      // this column is no longer in that list, so hitting it here means a
+      // DIFFERENT column was rejected, not this toggle. Say only what is true:
+      // it did not save, and it is not something they can fix.
+      // TODO(copy): Arielle owns operator-facing wording — draft only.
+      setFeeError(
+        err.code === "42501"
+          ? "That didn't save — this setting is restricted on your account. Contact enrops and we'll switch it for you."
+          : "That didn't save, so nothing changed. Check your connection and try again."
+      );
       return;
     }
     setSavedToast("Fee mode saved");
@@ -970,6 +1021,8 @@ export default function Finances() {
                     feePassThrough={feePassThrough}
                     canManage={canManage}
                     onToggle={togglePassThrough}
+                    error={feeError}
+                    pendingPlans={pendingPlans}
                   />
                 </div>
               )}
@@ -1130,6 +1183,8 @@ export default function Finances() {
                   feePassThrough={feePassThrough}
                   canManage={canManage}
                   onToggle={togglePassThrough}
+                  error={feeError}
+                  pendingPlans={pendingPlans}
                 />
               </Section>
             </Card>
@@ -1324,30 +1379,61 @@ function SetupBanner({ accountId, chargesEnabled, payoutsEnabled, open, onToggle
 // on the Payments page for registration operators — for whom "do families pay
 // the fee, or do I?" is a pricing decision they need to SEE, not an advanced
 // setting hidden behind a collapsed panel.
-function FeePayerRow({ feePassThrough, canManage, onToggle }) {
+// `error` and `pendingPlans` are rendered HERE, beside the toggle, not through the
+// page-level error banner. The banner sits ~280px above this card, so a failed
+// toggle looked like it silently reverted: the control snapped back with the only
+// explanation off-screen. Feedback belongs where the user is looking.
+function FeePayerRow({ feePassThrough, canManage, onToggle, error, pendingPlans = 0 }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-      <div>
-        <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
-          Who pays the enrops service fee?
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontWeight: 600, color: INK, fontSize: 15 }}>
+            Who pays the enrops service fee?
+          </div>
+          <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
+            {feePassThrough
+              ? "Families cover the enrops service fee as a separate line at checkout. (Stripe's processing fee still comes out before the money reaches your bank.)"
+              : "Your organization absorbs the enrops service fee — families pay your base price. (Stripe's processing fee still applies.)"}
+          </div>
         </div>
-        <div style={{ color: MUTED, fontSize: 13, marginTop: 4, maxWidth: 480 }}>
-          {feePassThrough
-            ? "Families cover the enrops service fee as a separate line at checkout. (Stripe's processing fee still comes out before the money reaches your bank.)"
-            : "Your organization absorbs the enrops service fee — families pay your base price. (Stripe's processing fee still applies.)"}
-        </div>
+        {canManage ? (
+          <Toggle
+            checked={feePassThrough}
+            onChange={(v) => onToggle(v)}
+            labelOn="Pass-through"
+            labelOff="Absorbed"
+          />
+        ) : (
+          <span style={{ color: MUTED, fontSize: 12 }}>
+            Owner/admin only
+          </span>
+        )}
       </div>
-      {canManage ? (
-        <Toggle
-          checked={feePassThrough}
-          onChange={(v) => onToggle(v)}
-          labelOn="Pass-through"
-          labelOff="Absorbed"
-        />
-      ) : (
-        <span style={{ color: MUTED, fontSize: 12 }}>
-          Owner/admin only
-        </span>
+
+      {/* Only shown when there really ARE unpaid installments for this org, so it
+          cannot indict an operator who has no payment plans running. The count is
+          the condition, not a stand-in for it. */}
+      {canManage && pendingPlans > 0 && (
+        <div style={{
+          marginTop: 12, padding: "10px 12px", borderRadius: 8,
+          background: "rgba(180, 120, 0, 0.08)", border: "1px solid rgba(180, 120, 0, 0.25)",
+          color: INK, fontSize: 12.5, lineHeight: 1.5,
+        }}>
+          {pendingPlans === 1
+            ? "1 family is partway through a payment plan. Changing this now also changes who pays the fee on their remaining payments."
+            : `${pendingPlans} families are partway through a payment plan. Changing this now also changes who pays the fee on their remaining payments.`}
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" style={{
+          marginTop: 12, padding: "10px 12px", borderRadius: 8,
+          background: "rgba(190, 30, 45, 0.07)", border: "1px solid rgba(190, 30, 45, 0.28)",
+          color: INK, fontSize: 12.5, lineHeight: 1.5,
+        }}>
+          {error}
+        </div>
       )}
     </div>
   );
