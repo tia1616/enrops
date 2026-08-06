@@ -43,11 +43,25 @@ create policy public_read_districts
     organization_id in (select public_org_directory.id from public.public_org_directory)
   );
 
--- anon needs the table-level SELECT grant as well as the policy. Granted
--- explicitly rather than relied on from Supabase's default privileges, so this is
--- readable as intent and survives a future blanket revoke.
-grant select on public.districts to anon;
-grant select on public.districts to authenticated;
+-- COLUMN-level, not table-level.
+--
+-- The first version of this migration did `grant select on public.districts` and
+-- that was wrong: verified as anon on staging, it let an anonymous visitor read
+-- calendar_key, flyer_distribution and flyer_notes - all operator-facing columns on
+-- the same row. flyer_notes is exactly where an operator writes something like
+-- "leave flyers with the front office, ask for Marcy". Empty on prod today
+-- (checked: 0 of 23 districts have notes; calendar_key is set on all 19 J2S ones),
+-- so nothing leaked, but the shape was wrong and the comment claiming "the FRONTEND
+-- must keep selecting only name" was not a control at all - anon crafts its own
+-- request.
+--
+-- program_locations right next to this uses a deliberate column allowlist for the
+-- same reason. This matches it instead of contradicting it.
+--
+-- organization_id is included because the policy predicate reads it and it is not
+-- sensitive; id because PostgREST needs the key to resolve the embed.
+grant select (id, organization_id, name) on public.districts to anon;
+grant select (id, organization_id, name) on public.districts to authenticated;
 
 -- ── the second half, and the one that actually broke the page ────────────────
 --

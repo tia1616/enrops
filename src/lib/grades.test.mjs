@@ -52,8 +52,16 @@ eq('range uses an en dash', audienceLabel({ grade_min: 1, grade_max: 4 }).includ
 // --- audienceMode ---------------------------------------------------------
 eq('grades set, ages not -> grades', audienceMode({ grade_min: 0, grade_max: 5 }), 'grades');
 eq('ages set -> ages', audienceMode({ age_min: 6, age_max: 12 }), 'ages');
-eq('both set -> ages (mirrors curriculum rule)',
-  audienceMode({ grade_min: 0, grade_max: 5, age_min: 6, age_max: 12 }), 'ages');
+// Must agree with audienceLabel on the same row, or the card says one thing and the
+// editor opens on the other and the first save wipes what was on screen.
+eq('both set -> grades, AGREEING with audienceLabel',
+  audienceMode({ grade_min: 0, grade_max: 5, age_min: 6, age_max: 12 }), 'grades');
+{
+  const both = { grade_min: 0, grade_max: 5, age_min: 6, age_max: 12 };
+  const labelSaysGrades = audienceLabel(both).startsWith('Grade');
+  const modeSaysGrades = audienceMode(both) === 'grades';
+  eq('label and mode agree on a both-set row', labelSaysGrades === modeSaysGrades, true);
+}
 eq('empty row defaults to grades (afterschool)', audienceMode({}), 'grades');
 eq('empty row honours an explicit default',
   audienceMode({}, { defaultMode: 'ages' }), 'ages');

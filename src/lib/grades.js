@@ -74,13 +74,21 @@ export function audienceLabel(row) {
 }
 
 // Which mode an existing row is in, for opening an editor on the right tab.
-// Mirrors CurriculumReview's rule (grades only when grades are set and ages are
-// not), with one addition: a brand-new row with neither gets the default for its
-// program shape, because afterschool is always grades.
+//
+// MUST agree with audienceLabel on a row that carries both. It did not in the first
+// version of this file: audienceLabel showed grades, audienceMode opened on ages, so
+// an operator would see "Grades K–5" on the card, open the editor on Ages, and the
+// first save would clear the grades they were looking at. Nothing imports this yet,
+// so it was caught before it could do that.
+//
+// Grades win in both, deliberately diverging from CurriculumReview's rule
+// (`hasGrade && !hasAge ? 'grades' : 'ages'`). Afterschool is always grades and is
+// the common case, so on an ambiguous row the afterschool reading is the safer one
+// to both show and edit. A brand-new row with neither gets the caller's default.
 export function audienceMode(row, { defaultMode = 'grades' } = {}) {
   const hasAge = row?.age_min != null || row?.age_max != null;
   const hasGrade = row?.grade_min != null || row?.grade_max != null;
-  if (hasGrade && !hasAge) return 'grades';
+  if (hasGrade) return 'grades';
   if (hasAge) return 'ages';
   return defaultMode;
 }
