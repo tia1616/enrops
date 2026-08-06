@@ -87,7 +87,11 @@ export default function SchoolsList() {
         .select("id, partner_name, partner_type, location_area, locations_managed, marketing_notes, invoicing_notes, planning_notes, implementation_notes, other_notes, inactive")
         .eq("organization_id", org.id).order("partner_name"),
       supabase.from("program_locations")
-        .select("id, name, address, area, district_id, partner_id")
+        // `district` (legacy free-text) comes back alongside district_id because a
+        // location can carry EITHER. J2S staging has 50 locations with free-text
+        // districts and matching free-text calendars, so their dates DO skip
+        // no-school days — telling them otherwise would be a false alarm.
+        .select("id, name, address, area, district_id, district, partner_id")
         .eq("organization_id", org.id).order("name"),
     ]);
     if (pErr || lErr) {
@@ -173,6 +177,13 @@ export default function SchoolsList() {
       // WS1 is validated on the clean Tenant 2 org; fix in WS2 when J2S's
       // partners/venues/districts are reconciled to district_id.
       const hasCalendar = !!distId && calendarDistrictIds.has(distId);
+      // "No district AT ALL" — neither the structured link nor the legacy
+      // free-text name. Only these are safe to tell an operator their dates
+      // won't skip no-school days: a free-text district still resolves closures
+      // through the legacy calendar match, so it is NOT broken. Deliberately
+      // separate from `distId`, which is a grouping key, not a truth claim.
+      const hasNoDistrictAtAll =
+        !distId && !venues.some((v) => v.district && String(v.district).trim());
       let programs = 0, camps = 0;
       for (const v of venues) {
         const a = activityByLoc.get(v.id);
@@ -181,7 +192,7 @@ export default function SchoolsList() {
       return {
         partner: p, venues, distId,
         districtName: distId ? districtName.get(distId) : null,
-        hasAddress, hasContact, hasCalendar, programs, camps,
+        hasAddress, hasContact, hasCalendar, hasNoDistrictAtAll, programs, camps,
         isUmbrella: venues.length > 1,
         isContactOnly: venues.length === 0,
       };
@@ -337,13 +348,23 @@ export default function SchoolsList() {
               </div>
               {/* A location with no district has no school calendar, so its class
                   dates never skip no-school days — and nothing else on this page
-                  says so. Name the consequence and the fix right on the bucket
-                  that has the problem. */}
-              {g.key === NO_DISTRICT && (
-                <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4, lineHeight: 1.5, textTransform: "none", letterSpacing: 0, fontWeight: 400 }}>
-                  Class dates here won&rsquo;t skip no-school days. Open a location below and set its district to fix that.
-                </div>
-              )}
+                  says so. Counted, not asserted over the whole bucket: this
+                  bucket is keyed on district_id, so it also holds locations that
+                  DO have a legacy free-text district (50 of J2S's on staging),
+                  whose dates resolve closures fine. Claiming those are broken
+                  would be the false alarm this warning exists to prevent. */}
+              {(() => {
+                if (g.key !== NO_DISTRICT) return null;
+                const n = g.items.filter((s) => s.hasNoDistrictAtAll).length;
+                if (n === 0) return null;
+                return (
+                  <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4, lineHeight: 1.5, textTransform: "none", letterSpacing: 0, fontWeight: 400 }}>
+                    {n === 1
+                      ? "1 of these has no district set, so its class dates won’t skip no-school days. Open it and set a district to fix that."
+                      : `${n} of these have no district set, so their class dates won’t skip no-school days. Open one and set a district to fix that.`}
+                  </div>
+                );
+              })()}
             </div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
