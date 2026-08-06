@@ -33,6 +33,7 @@ import { supabase } from "../../lib/supabase";
 import { pixelStripeConnected } from "../../lib/metaPixel.js";
 import EnnieTip from "../../components/EnnieTip.jsx";
 import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../lib/stripeConnectEstimate.js";
+import { describeOrgSaveFailure } from "../../lib/orgSaveErrors.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -68,7 +69,11 @@ function suggestStatementSuffix(orgName) {
 }
 
 export default function Finances() {
-  const { org, orgMember } = useOutletContext();
+  // setOrg is taken deliberately: this page CHANGES fee_pass_through, and
+  // AdminLayout fetches `org` once per mount. Without correcting the context after
+  // a save, ActivityTab below keeps rendering the old fee sentence and the screen
+  // states both directions at once.
+  const { org, orgMember, setOrg } = useOutletContext();
   // Registration-only operators: no school invoicing, no instructor payroll.
   const isLean = org?.instructor_pay_model === "enrops_platform";
   const [searchParams] = useSearchParams();
@@ -104,10 +109,18 @@ export default function Finances() {
   // Failure of the pass-through toggle specifically, rendered beside the toggle
   // rather than in the page-level banner 280px above it.
   const [feeError, setFeeError] = useState(null);
-  // Count of families mid-payment-plan. computePlatformFee reads live org config
-  // with no snapshot, so flipping fee_pass_through changes who pays the fee on
-  // installments that have not been charged yet. 0 = no warning shown.
-  const [pendingPlans, setPendingPlans] = useState(0);
+  // True while a fee-mode save is in flight, so the toggle can be disabled. Two
+  // fast clicks used to put two PATCHes in flight with no ordering guarantee, and
+  // the DB could settle opposite to what the UI showed.
+  const [feeSaving, setFeeSaving] = useState(false);
+  // Families mid-payment-plan, from org_pending_plan_families.
+  //
+  // THREE states, and the difference matters: a number, 0, or null meaning WE
+  // COULD NOT CHECK. This was a plain useState(0), so a failed count was
+  // indistinguishable from "no families affected" — it suppressed the warning and
+  // stripped the sentence from the confirm, which is the silent false reassurance
+  // the warning exists to prevent. null now says so out loud.
+  const [pendingPlans, setPendingPlans] = useState(null);
   const [descriptorSuffix, setDescriptorSuffix] = useState("");
   const [withdrawalAdminFeeDollars, setWithdrawalAdminFeeDollars] = useState("");
   // Inline tabs (only meaningful when active). Default to Activity.
@@ -191,35 +204,44 @@ export default function Finances() {
         ? ((data.withdrawal_admin_fee_cents || 0) / 100).toFixed(2)
         : ""
     );
-
-    // How many FAMILIES are mid-payment-plan, for the pass-through warning.
-    //
-    // Counted as DISTINCT registration_id, not as installment rows: one family on
-    // a 3-payment plan is one family, and counting rows would tell J2S that 38
-    // families were affected when the real number is 30.
-    //
-    // The filter is a deny-list of the three TERMINAL statuses plus an explicit
-    // is.null, not an allow-list of ('pending'). installments_status_check permits
-    // six values (pending, paid, failed, refunded, paused_card_failed,
-    // paused_program_cancelled); an allow-list would silently stop counting a
-    // family whose card failed — exactly the family whose remaining payments still
-    // get charged. status is nullable and PostgREST's not.in never matches NULL,
-    // so the is.null arm is required, not defensive decoration.
-    const { data: instRows, error: instErr } = await supabase
-      .from("installments")
-      .select("registration_id")
-      .eq("organization_id", org.id)
-      .or("status.is.null,status.not.in.(paid,refunded,paused_program_cancelled)");
-    if (instErr) {
-      // A failed count must not claim zero — zero suppresses the warning, which
-      // would be a silent false "nothing is affected". Leave the previous value.
-      console.warn("[finances] could not count in-flight payment plans:", instErr.message);
-    } else {
-      setPendingPlans(new Set((instRows || []).map((r) => r.registration_id).filter(Boolean)).size);
-    }
-
     setLoading(false);
   }
+
+  // Families mid-payment-plan, for the pass-through warning.
+  //
+  // Its OWN effect, not part of reload(): as a second await inside reload() it
+  // gated first paint of the whole money page on an installments scan, for every
+  // visitor including the roles and Stripe states that can never see the warning
+  // it feeds. Gated on canManage for the same reason.
+  //
+  // The count lives in SQL (org_pending_plan_families) rather than being derived
+  // from fetched rows. The previous client-side version was wrong three ways:
+  // DISTINCT registration_id counted registrations rather than families (measured
+  // on prod: 30 registrations but only 18 parents); a deny-list of terminal
+  // statuses counted paused_card_failed rows that process-installments never
+  // charges again; and counting returned rows hits PostgREST's 1000-row cap, the
+  // bug stripe-oauth-disconnect documents as proven on staging 2026-07-30.
+  useEffect(() => {
+    if (!org?.id || !canManage) { setPendingPlans(null); return; }
+    let alive = true;
+    (async () => {
+      const { data, error: err } = await supabase
+        .rpc("org_pending_plan_families", { p_org: org.id });
+      if (!alive) return;
+      if (err) {
+        // null, never 0. Zero would read as "no families affected" and silently
+        // suppress the warning; null renders an explicit "couldn't check".
+        console.warn("[finances] could not count in-flight payment plans:", err.message);
+        setPendingPlans(null);
+        return;
+      }
+      setPendingPlans(Number(data) || 0);
+    })();
+    return () => { alive = false; };
+  }, [org?.id, canManage]);
+
+  // A failure message about org A must not survive onto org B.
+  useEffect(() => { setFeeError(null); }, [org?.id]);
 
   // Actively poll Stripe and write the operator's status, then reload. This is
   // the deterministic fallback for the account-activation gap: the webhook
@@ -668,43 +690,84 @@ export default function Finances() {
   }
 
   async function togglePassThrough(nextValue) {
-    if (!canManage) return;
+    if (!canManage || feeSaving) return;
     setFeeError(null);
-    // Confirm when flipping to pass-through (parents will see a fee)
-    if (nextValue === true) {
-      const ok = window.confirm(
-        "Pass-through mode: families will see the service fee as a separate line " +
-        "at checkout, so you keep your full price. Switch to pass-through?" +
-        // Only appended when unpaid installments actually exist for this org.
-        (pendingPlans > 0
-          ? `\n\n${pendingPlans === 1 ? "1 family is" : `${pendingPlans} families are`} ` +
-            "partway through a payment plan. Their remaining payments will use the new setting too."
-          : "")
-      );
-      if (!ok) return;
-    }
-    const prev = feePassThrough;
-    setFeePassThrough(nextValue);
-    const { error: err } = await supabase
-      .from("organizations")
-      .update({ fee_pass_through: nextValue })
-      .eq("id", org.id);
-    if (err) {
-      setFeePassThrough(prev);
-      // 42501 is the platform-admin guard on organizations. Postgres hands back a
-      // list of raw column names (stripe_account_id, instructor_pay_model, ...),
-      // which is developer text an operator cannot act on — and after 20260806a
-      // this column is no longer in that list, so hitting it here means a
-      // DIFFERENT column was rejected, not this toggle. Say only what is true:
-      // it did not save, and it is not something they can fix.
-      // TODO(copy): Arielle owns operator-facing wording — draft only.
+
+    // ── the in-flight-plan consequence ────────────────────────────────────────
+    // process-installments recomputes the pass-through fee from LIVE org config on
+    // every off-session charge, and nothing snapshots what the family agreed to
+    // (checkout_schedules and installments.amount_cents hold base amounts only).
+    // So with a plan running, turning this ON charges a saved card MORE than the
+    // family authorized, with no fee line and no fresh consent, while their
+    // confirmation email still quotes the old figure.
+    //
+    // NOT a hard block, deliberately. A block cannot tell "newly imposing a fee"
+    // apart from "restoring one those families already authorized" - that is
+    // precisely the snapshot we do not have - so it would make a mis-click to
+    // Absorbed irreversible until every plan finished. Trapping an operator is its
+    // own defect. The real fix is to snapshot the fee decision onto the plan at
+    // checkout; this states the consequence in the terms that matter until then.
+    //
+    // Can't check IS fail-closed, because that resolves as soon as the count works
+    // and so traps nobody.
+    if (nextValue === true && pendingPlans === null) {
       setFeeError(
-        err.code === "42501"
-          ? "That didn't save — this setting is restricted on your account. Contact enrops and we'll switch it for you."
-          : "That didn't save, so nothing changed. Check your connection and try again."
+        "We couldn't check whether any families are partway through a payment plan, " +
+        "so this hasn't been changed. Try again in a moment."
       );
       return;
     }
+
+    // Confirm BOTH directions when plans are in flight. Turning it off reprices
+    // those plans too - onto the operator - and that direction previously saved
+    // with no dialog at all.
+    const familiesPhrase = pendingPlans === 1 ? "1 family is" : `${pendingPlans} families are`;
+    const planNote = pendingPlans > 0
+      ? nextValue === true
+        // The direction that costs a FAMILY money. Name the amount changing, not
+        // just the fact of change.
+        ? `\n\nWARNING: ${familiesPhrase} partway through a payment plan. Their remaining ` +
+          "payments will be charged the service fee ON TOP of the amount they agreed to, " +
+          "without being asked again. Only do this if you have their agreement."
+        // The direction that costs the OPERATOR money.
+        : `\n\n${familiesPhrase} partway through a payment plan. You will absorb the fee on ` +
+          "their remaining payments instead of them."
+      : "";
+    const prompt = nextValue === true
+      ? "Pass-through mode: families will see the service fee as a separate line " +
+        "at checkout, so you keep your full price. Switch to pass-through?"
+      : "Absorb mode: families pay only your class price and the enrops service fee " +
+        "comes out of your payout instead. Switch to absorbing the fee?";
+    if (!window.confirm(prompt + planNote)) return;
+
+    const prev = feePassThrough;
+    setFeeSaving(true);
+    setFeePassThrough(nextValue);
+    // .select() is load-bearing. members_update_own_org is FOR UPDATE USING with no
+    // WITH CHECK, and a USING-filtered UPDATE returns 204 with error === null — so
+    // without reading rows back, a write RLS silently discarded reported "saved".
+    // Before 20260806a the trigger raised 42501 on that path; now RLS is the only
+    // gate and it fails quietly.
+    const { data: updated, error: err } = await supabase
+      .from("organizations")
+      .update({ fee_pass_through: nextValue })
+      .eq("id", org.id)
+      .select("id, fee_pass_through");
+    setFeeSaving(false);
+
+    if (err || !updated || updated.length === 0) {
+      setFeePassThrough(prev);
+      // Log the raw error: the mapped copy below is all the operator sees, and
+      // without this the code and message are lost for diagnosis.
+      console.warn("[finances] fee mode save failed:", err || "0 rows updated");
+      // TODO(copy): Arielle owns operator-facing wording — draft only.
+      setFeeError(describeOrgSaveFailure(err));
+      return;
+    }
+
+    // Correct AdminLayout's one-shot org so ActivityTab's fee sentence agrees with
+    // the toggle. Without this the same screen states both directions at once.
+    setOrg?.((o) => (o ? { ...o, fee_pass_through: updated[0].fee_pass_through } : o));
     setSavedToast("Fee mode saved");
     setTimeout(() => setSavedToast(null), 2200);
   }
@@ -728,7 +791,10 @@ export default function Finances() {
       .update({ statement_descriptor_suffix: value })
       .eq("id", org.id);
     if (err) {
-      setError(err.message || "Could not save statement suffix.");
+      // Same table, same guard, so the same mapper: err.message here is the raw
+      // platform-admin column list, which is developer text.
+      console.warn("[finances] statement suffix save failed:", err);
+      setError(describeOrgSaveFailure(err));
       return;
     }
     setDescriptorSuffix(value || "");
@@ -750,7 +816,8 @@ export default function Finances() {
       .update({ withdrawal_admin_fee_cents: cents })
       .eq("id", org.id);
     if (err) {
-      setError(err.message || "Could not save admin fee.");
+      console.warn("[finances] admin fee save failed:", err);
+      setError(describeOrgSaveFailure(err));
       return;
     }
     setWithdrawalAdminFeeDollars((cents / 100).toFixed(2));
@@ -762,6 +829,23 @@ export default function Finances() {
   if (loading) {
     return <PageShell><Card><div style={{ color: MUTED }}>Loading…</div></Card></PageShell>;
   }
+
+  // Built ONCE and rendered in whichever of the two mutually-exclusive nav
+  // surfaces applies: the legacy full-nav panel (!isLean, J2S) and the hoisted
+  // lean card. They previously carried duplicate prop lists, and the first pass of
+  // this change updated only the lean one — which would have shipped the fix to
+  // every tenant except J2S, the org with the most families mid-plan. One element
+  // makes that drift impossible rather than something to remember.
+  const feePayerRow = (
+    <FeePayerRow
+      feePassThrough={feePassThrough}
+      canManage={canManage}
+      onToggle={togglePassThrough}
+      error={feeError}
+      pendingPlans={pendingPlans}
+      saving={feeSaving}
+    />
+  );
 
   return (
     <PageShell>
@@ -1017,13 +1101,7 @@ export default function Finances() {
                   it isn't duplicated here. J2S keeps it in place. */}
               {!isLean && (
                 <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${RULE}` }}>
-                  <FeePayerRow
-                    feePassThrough={feePassThrough}
-                    canManage={canManage}
-                    onToggle={togglePassThrough}
-                    error={feeError}
-                    pendingPlans={pendingPlans}
-                  />
+                  {feePayerRow}
                 </div>
               )}
             </Section>
@@ -1179,13 +1257,7 @@ export default function Finances() {
           {isLean && (
             <Card>
               <Section>
-                <FeePayerRow
-                  feePassThrough={feePassThrough}
-                  canManage={canManage}
-                  onToggle={togglePassThrough}
-                  error={feeError}
-                  pendingPlans={pendingPlans}
-                />
+                {feePayerRow}
               </Section>
             </Card>
           )}
@@ -1379,11 +1451,16 @@ function SetupBanner({ accountId, chargesEnabled, payoutsEnabled, open, onToggle
 // on the Payments page for registration operators — for whom "do families pay
 // the fee, or do I?" is a pricing decision they need to SEE, not an advanced
 // setting hidden behind a collapsed panel.
-// `error` and `pendingPlans` are rendered HERE, beside the toggle, not through the
-// page-level error banner. The banner sits ~280px above this card, so a failed
+// `error` and `pendingPlans` render HERE, beside the toggle, not through the
+// page-level error banner. That banner sits ~280px above this card, so a failed
 // toggle looked like it silently reverted: the control snapped back with the only
 // explanation off-screen. Feedback belongs where the user is looking.
-function FeePayerRow({ feePassThrough, canManage, onToggle, error, pendingPlans = 0 }) {
+//
+// pendingPlans has THREE meanings: a count, 0, or null = we could not check. The
+// unknown state gets its own sentence rather than being folded into "none", because
+// silence here reads as "nothing is affected" and that is the false reassurance
+// this warning exists to prevent.
+function FeePayerRow({ feePassThrough, canManage, onToggle, error, pendingPlans = null, saving = false }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
@@ -1403,6 +1480,7 @@ function FeePayerRow({ feePassThrough, canManage, onToggle, error, pendingPlans 
             onChange={(v) => onToggle(v)}
             labelOn="Pass-through"
             labelOff="Absorbed"
+            disabled={saving}
           />
         ) : (
           <span style={{ color: MUTED, fontSize: 12 }}>
@@ -1411,28 +1489,30 @@ function FeePayerRow({ feePassThrough, canManage, onToggle, error, pendingPlans 
         )}
       </div>
 
-      {/* Only shown when there really ARE unpaid installments for this org, so it
-          cannot indict an operator who has no payment plans running. The count is
-          the condition, not a stand-in for it. */}
+      {/* Counted by org_pending_plan_families, which mirrors process-installments'
+          own predicate (status='pending') and counts distinct PARENTS. So this can
+          only name families whose remaining payments genuinely would be repriced. */}
       {canManage && pendingPlans > 0 && (
-        <div style={{
-          marginTop: 12, padding: "10px 12px", borderRadius: 8,
-          background: "rgba(180, 120, 0, 0.08)", border: "1px solid rgba(180, 120, 0, 0.25)",
-          color: INK, fontSize: 12.5, lineHeight: 1.5,
-        }}>
-          {pendingPlans === 1
-            ? "1 family is partway through a payment plan. Changing this now also changes who pays the fee on their remaining payments."
-            : `${pendingPlans} families are partway through a payment plan. Changing this now also changes who pays the fee on their remaining payments.`}
+        <div style={{ marginTop: 12, maxWidth: 520 }}>
+          <Banner tone="warn">
+            {pendingPlans === 1
+              ? "1 family is partway through a payment plan. Changing this also changes who pays the fee on their remaining payments."
+              : `${pendingPlans} families are partway through a payment plan. Changing this also changes who pays the fee on their remaining payments.`}
+          </Banner>
+        </div>
+      )}
+
+      {canManage && pendingPlans === null && (
+        <div style={{ marginTop: 12, maxWidth: 520 }}>
+          <Banner tone="warn">
+            We couldn&rsquo;t check whether any families are partway through a payment plan.
+          </Banner>
         </div>
       )}
 
       {error && (
-        <div role="alert" style={{
-          marginTop: 12, padding: "10px 12px", borderRadius: 8,
-          background: "rgba(190, 30, 45, 0.07)", border: "1px solid rgba(190, 30, 45, 0.28)",
-          color: INK, fontSize: 12.5, lineHeight: 1.5,
-        }}>
-          {error}
+        <div style={{ marginTop: 12, maxWidth: 520 }}>
+          <Banner tone="err" role="alert">{error}</Banner>
         </div>
       )}
     </div>
@@ -2040,7 +2120,10 @@ function Heading({ children }) {
   );
 }
 
-function Banner({ tone, children }) {
+// `role` is optional and defaults to unset, so every existing caller renders
+// byte-identically. Passing role="alert" lets a failure announce itself to a
+// screen reader without forking these styles.
+function Banner({ tone, children, role }) {
   const colors = {
     ok:   { bg: "rgba(58, 124, 58, 0.10)", fg: OK,    bd: "rgba(58, 124, 58, 0.35)" },
     info: { bg: `${BRIGHT}1F`,             fg: BRIGHT, bd: `${BRIGHT}66` },
@@ -2057,7 +2140,7 @@ function Banner({ tone, children }) {
       padding: "10px 14px",
       marginBottom: 14,
       fontSize: 14,
-    }}>
+    }} role={role}>
       {children}
     </div>
   );
@@ -2666,11 +2749,16 @@ function Pill({ on, children }) {
   );
 }
 
-function Toggle({ checked, onChange, labelOn, labelOff }) {
+// `disabled` defaults to false so existing callers are unchanged. It exists so a
+// caller with an in-flight save can stop a second click: this control fires
+// onChange(!checked) off the CURRENTLY RENDERED value, so two fast clicks send two
+// opposing writes with no ordering guarantee.
+function Toggle({ checked, onChange, labelOn, labelOff, disabled = false }) {
   return (
     <button
       type="button"
-      onClick={() => onChange(!checked)}
+      disabled={disabled}
+      onClick={() => { if (!disabled) onChange(!checked); }}
       style={{
         position: "relative",
         width: 64,
@@ -2678,7 +2766,8 @@ function Toggle({ checked, onChange, labelOn, labelOff }) {
         borderRadius: 999,
         border: "none",
         background: checked ? BRIGHT : "#cccccc",
-        cursor: "pointer",
+        cursor: disabled ? "wait" : "pointer",
+        opacity: disabled ? 0.6 : 1,
         fontFamily: "inherit",
         display: "flex",
         alignItems: "center",
@@ -2686,6 +2775,7 @@ function Toggle({ checked, onChange, labelOn, labelOff }) {
         transition: "background 0.15s",
       }}
       aria-label={checked ? labelOn : labelOff}
+      aria-busy={disabled || undefined}
     >
       <span style={{
         display: "block",
