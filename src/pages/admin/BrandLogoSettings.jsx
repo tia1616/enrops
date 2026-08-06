@@ -208,11 +208,6 @@ export default function BrandLogoSettings() {
   const bannerDirty = bannerUrl !== savedBanner;
   const heroDirty = heroHeadline !== savedHeroHeadline || heroSubtext !== savedHeroSubtext;
   const dirty = logoDirty || colorsDirty || bannerDirty || heroDirty;
-  // MIRRORS portal/Home.jsx, which picks its layout with
-  // `instructor_pay_model !== 'legacy_own_platform'`. The two layouts put this
-  // copy in different places, so the help text has to know which one this org
-  // gets. If that condition ever changes, change it here in the same pass.
-  const isLegacyLayout = org?.instructor_pay_model === "legacy_own_platform";
   // Built from the CURRENT origin so the link is right on staging and on prod,
   // and from the org's own slug — never a hardcoded tenant.
   const publicUrl = org?.slug
@@ -404,19 +399,15 @@ export default function BrandLogoSettings() {
           together at the top of the registration page. */}
       <div style={{ marginTop: 16, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 4 }}>Registration page wording</div>
-        {/* Two layouts, two different truths - do not merge these sentences.
-            portal/Home.jsx branches on instructor_pay_model: a lean org's page
-            uses this copy as the page's OWN top headline, while the legacy
-            layout (J2S) opens with its designed brand hero and uses this copy
-            for the pick-your-class heading further down. Saying "the top of your
-            registration page" to a legacy tenant sent the person who built the
-            product looking for it in the wrong place. */}
+        {/* ONE sentence, true for BOTH layouts. This briefly branched on
+            instructor_pay_model, because the legacy layout used these fields for
+            its class-picker heading while its real hero was hardcoded. That is no
+            longer so: both layouts now take their opening headline from these two
+            columns, and the picker carries its own platform label. A branch kept
+            here would describe a product that no longer exists. */}
         <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>
-          {isLegacyLayout ? (
-            <>The heading above the class picker on your class list page, where families choose a class. Your page&rsquo;s big opening headline is part of your designed page and isn&rsquo;t edited here. Leave either blank to use the default wording.</>
-          ) : (
-            <>The headline and the line under it, at the top of the page families land on from your registration link. Leave either blank to use the default wording.</>
-          )}
+          The headline and the line under it, at the top of the page families land on from your
+          registration link. Leave either blank to use the default wording.
           {publicUrl && (
             <>
               {" "}
