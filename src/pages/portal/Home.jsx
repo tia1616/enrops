@@ -458,6 +458,13 @@ export default function Home() {
                             {photo}
                             <div style={{ minWidth: 0 }}>
                               <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
+                              {/* The operator's own description. The legacy layout
+                                  has always shown this; the lean cards never did,
+                                  so the builder's Description field saved copy
+                                  that reached no family. */}
+                              {p.short_description && (
+                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45 }}>{p.short_description}</div>
+                              )}
                               <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
                               {scheduleStr && (
                                 <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{scheduleStr}</div>
@@ -474,6 +481,12 @@ export default function Home() {
                           {photo}
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
+                            {/* Same as the external-registration card above: the
+                                operator's description belongs in front of the
+                                family, right under the class name. */}
+                            {p.short_description && (
+                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45 }}>{p.short_description}</div>
+                            )}
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
                             </div>
@@ -522,14 +535,24 @@ export default function Home() {
             <span className="inline-block rounded-full bg-white/15 px-4 py-1.5 text-xs font-bold uppercase tracking-widest text-white">
               {termLabel ? `${termLabel} registration is open` : 'Registration is open'}
             </span>
+            {/* Operator-editable, same as every other tenant's page (Jessica
+                2026-08-05: J2S runs the same features as everyone, only its
+                colors, hero image and WORDING differ). These two lines used to
+                be hardcoded here, which is why the branding editor looked broken
+                for this layout. The literals below are now only a FALLBACK, so
+                the page reads identically until someone edits the wording. */}
             <h1 className="mt-6 font-titan text-5xl leading-[1.05] tracking-tight sm:text-7xl">
-              Future-Ready Skills.
-              <br />
-              Right After School.
+              {branding?.hero_headline || (
+                <>
+                  Future-Ready Skills.
+                  <br />
+                  Right After School.
+                </>
+              )}
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-relaxed text-white/90 sm:text-xl">
-              Hands-on coding, LEGO, game design, and robotics at 30+ Portland-area schools.
-              Small groups, expert instructors, and a kid who can't wait for next week.
+              {branding?.hero_subtext
+                || "Hands-on coding, LEGO, game design, and robotics at 30+ Portland-area schools. Small groups, expert instructors, and a kid who can't wait for next week."}
             </p>
             {isLegacyActive() && (
               <div className="mt-8 inline-flex items-center gap-3 rounded-xl border-2 border-j2s-orange bg-white/95 px-5 py-3 text-j2s-ink shadow-pop">
@@ -586,11 +609,17 @@ export default function Home() {
       <section className={`relative pb-16 ${weeklyByDay.length > 0 ? 'pt-4' : '-mt-16'}`}>
         <div className="mx-auto max-w-4xl px-4 sm:px-6">
           <div className="rounded-3xl border border-j2s-purple/10 bg-white p-6 shadow-card sm:p-10">
+            {/* PLATFORM labels for the picker, not operator brand copy. These
+                used to read the branding hero fields, so ONE pair of fields was
+                driving two unrelated jobs: an operator editing their page
+                headline silently retitled the class finder instead. The hero
+                fields now belong to the hero above; this is just the control's
+                own heading. */}
             <h2 className="font-titan text-2xl text-j2s-ink sm:text-3xl">
-              {branding?.hero_headline || "Find your child's program"}
+              Find your child&rsquo;s program
             </h2>
             <p className="mt-2 text-sm text-j2s-ink/70">
-              {branding?.hero_subtext || 'Pick your district, then your school, then the class.'}
+              Pick your district, then your school, then the class.
             </p>
 
             {/* Banner image — pulled from org_branding, templated for all providers */}

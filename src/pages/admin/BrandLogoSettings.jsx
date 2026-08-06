@@ -93,6 +93,13 @@ export default function BrandLogoSettings() {
   const [suggested, setSuggested] = useState(null); // palette found in the logo, offered (not auto-applied)
   const [bannerUrl, setBannerUrl] = useState("");
   const [savedBanner, setSavedBanner] = useState("");
+  // Registration-page hero copy. Both columns already existed on org_branding and
+  // the public page already renders them with fallbacks — nothing in the admin
+  // ever let an operator EDIT them, so every provider got the default wording.
+  const [heroHeadline, setHeroHeadline] = useState("");
+  const [savedHeroHeadline, setSavedHeroHeadline] = useState("");
+  const [heroSubtext, setHeroSubtext] = useState("");
+  const [savedHeroSubtext, setSavedHeroSubtext] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -112,7 +119,7 @@ export default function BrandLogoSettings() {
       const { data: o } = await supabase
         .from("organizations").select("logo_url, logo_email_url").eq("id", org.id).maybeSingle();
       const { data: b } = await supabase
-        .from("org_branding").select("primary_color, secondary_color, accent_color, page_bg_color, banner_image_url")
+        .from("org_branding").select("primary_color, secondary_color, accent_color, page_bg_color, banner_image_url, hero_headline, hero_subtext")
         .eq("organization_id", org.id).maybeSingle();
       if (!cancelled) {
         const url = o?.logo_url || o?.logo_email_url || "";
@@ -126,6 +133,13 @@ export default function BrandLogoSettings() {
         setLogoUrl(url); setSavedLogo(url);
         setColors(c); setSavedColors(c);
         setBannerUrl(banner); setSavedBanner(banner);
+        // Empty string means "not set, using the default" — mirrored into the
+        // saved-* copy so an untouched field is never written back (same reason
+        // the colors are dirty-tracked: writing a blank would pin it).
+        const hh = b?.hero_headline ?? "";
+        const hs = b?.hero_subtext ?? "";
+        setHeroHeadline(hh); setSavedHeroHeadline(hh);
+        setHeroSubtext(hs); setSavedHeroSubtext(hs);
         setLoading(false);
       }
     })();
@@ -192,7 +206,13 @@ export default function BrandLogoSettings() {
   const logoDirty = logoUrl !== savedLogo;
   const colorsDirty = COLOR_FIELDS.some((f) => colors[f.key] !== savedColors[f.key]);
   const bannerDirty = bannerUrl !== savedBanner;
-  const dirty = logoDirty || colorsDirty || bannerDirty;
+  const heroDirty = heroHeadline !== savedHeroHeadline || heroSubtext !== savedHeroSubtext;
+  const dirty = logoDirty || colorsDirty || bannerDirty || heroDirty;
+  // Built from the CURRENT origin so the link is right on staging and on prod,
+  // and from the org's own slug — never a hardcoded tenant.
+  const publicUrl = org?.slug
+    ? `${typeof window !== "undefined" ? window.location.origin : "https://enrops.com"}/${org.slug}`
+    : "";
 
   // Apply the logo-suggested colors into the pickers (operator's explicit click).
   function applySuggested() {
@@ -237,18 +257,25 @@ export default function BrandLogoSettings() {
       }
       // Colors + banner go straight to org_branding. Build the payload from only
       // what changed so untouched fields (e.g. default colors) are never written.
-      if (colorsDirty || bannerDirty) {
+      if (colorsDirty || bannerDirty || heroDirty) {
         const payload = { organization_id: org.id, updated_at: new Date().toISOString() };
         // Only write colors the operator ACTUALLY changed. Writing all four would
         // pin untouched fields (still showing the platform default in the picker)
         // to that default value in the DB, detaching them from the fallback.
         COLOR_FIELDS.forEach((f) => { if (colors[f.key] !== savedColors[f.key]) payload[f.col] = colors[f.key]; });
         if (bannerDirty) payload.banner_image_url = bannerUrl.trim() || null;
+        // NULL when cleared, not "" — the public page falls back on a falsy value,
+        // and an empty string would read as "the operator chose blank wording".
+        if (heroHeadline !== savedHeroHeadline) payload.hero_headline = heroHeadline.trim() || null;
+        if (heroSubtext !== savedHeroSubtext) payload.hero_subtext = heroSubtext.trim() || null;
         const { error: e } = await supabase.from("org_branding").upsert(payload, { onConflict: "organization_id" });
         if (e) throw e;
       }
       flash("Branding saved.");
       setSavedLogo(logoUrl); setSavedColors(colors); setSavedBanner(bannerUrl);
+      // Re-baseline the hero copy too, or the form stays permanently "dirty" and
+      // the next save rewrites fields the operator never touched again.
+      setSavedHeroHeadline(heroHeadline); setSavedHeroSubtext(heroSubtext);
     } catch (e) {
       const raw = e?.message ?? "";
       const jargon = /non-2xx|edge function|failed to fetch|network|fetcherror/i.test(raw);
@@ -363,6 +390,59 @@ export default function BrandLogoSettings() {
           )}
         </div>
         <div style={{ fontSize: 12.5, color: MUTED, marginTop: 12, lineHeight: 1.5 }}>PNG, JPG, or WebP, under 3 MB. A wide image (about 3:1) works best.</div>
+      </div>
+
+      {/* Registration page wording. hero_headline + hero_subtext already existed
+          on org_branding and the public page already renders them, but no admin
+          screen edited them — so every provider shipped with the default copy and
+          no way to change it. Placed under Banner because these three things sit
+          together at the top of the registration page. */}
+      <div style={{ marginTop: 16, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 4 }}>Registration page wording</div>
+        {/* ONE sentence, true for BOTH layouts. This briefly branched on
+            instructor_pay_model, because the legacy layout used these fields for
+            its class-picker heading while its real hero was hardcoded. That is no
+            longer so: both layouts now take their opening headline from these two
+            columns, and the picker carries its own platform label. A branch kept
+            here would describe a product that no longer exists. */}
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>
+          The headline and the line under it, at the top of the page families land on from your
+          registration link. Leave either blank to use the default wording.
+          {publicUrl && (
+            <>
+              {" "}
+              <a href={publicUrl} target="_blank" rel="noreferrer" style={{ color: BRIGHT, fontWeight: 600 }}>
+                Open that page →
+              </a>
+            </>
+          )}
+        </div>
+
+        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: INK }}>
+          Headline
+          <input
+            type="text"
+            value={heroHeadline}
+            onChange={(e) => setHeroHeadline(e.target.value)}
+            /* An EXAMPLE of what to write, not the default wording: the public
+               page's fallback differs by catalog layout, so naming one here
+               would be wrong on the other. */
+            placeholder="e.g. After-school ukulele classes in Portland"
+            maxLength={120}
+            style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400 }}
+          />
+        </label>
+
+        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: INK, marginTop: 12 }}>
+          Line underneath
+          <textarea
+            value={heroSubtext}
+            onChange={(e) => setHeroSubtext(e.target.value)}
+            placeholder="e.g. After-school ukulele classes across Portland. Pick a school and sign up in a couple of minutes."
+            maxLength={300}
+            style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400, minHeight: 66, resize: "vertical" }}
+          />
+        </label>
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
