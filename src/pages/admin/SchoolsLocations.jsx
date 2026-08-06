@@ -3,11 +3,11 @@
 //
 //   'partner_venues' (default, e.g. J2S) — the tenant runs programs INSIDE other
 //       people's places. Partner-first: SchoolsList renders each partner + its
-//       venue(s); a venue with no partner is an orphan to link. Title "Partners".
+//       venue(s); a venue with no partner is an orphan to link.
 //
 //   'own_venue' (e.g. Shoreview Chess, Mrs. Richelle) — the tenant runs at its
 //       OWN location(s). No external partner; a partner-less venue is NORMAL.
-//       LocationsList renders the venues directly. Title "Locations".
+//       LocationsList renders the venues directly.
 //
 // The Calendars tab (closure / no-class days that flow into session dates) stays
 // in BOTH shapes. Only the first tab's help copy and the rendered list swap.

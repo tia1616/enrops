@@ -22,7 +22,7 @@
 // save we hand the new school to its detail drawer so the operator can add them
 // then — or later. Add stays frictionless; nothing is required but the name.
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "../../../lib/supabase";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
 
@@ -66,6 +66,18 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
   const [newUmbrellaName, setNewUmbrellaName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // The error banner sits at the TOP of a max-height/scrollable dialog while Save
+  // is at the BOTTOM, so a refusal could render off-screen and read as a dead
+  // button. That matters more now that "you haven't chosen a district" is a
+  // reachable refusal (it fires on the untouched default), so pull the message
+  // into view whenever one appears.
+  const errorRef = useRef(null);
+  useEffect(() => {
+    if (error && errorRef.current) {
+      errorRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [error]);
 
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   // Whether the Google lookup actually started. Without this the field degrades
@@ -197,7 +209,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
         </p>
 
         {error && (
-          <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 12 }}>
+          <div ref={errorRef} style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 12 }}>
             {error}
           </div>
         )}
