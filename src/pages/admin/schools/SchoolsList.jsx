@@ -182,8 +182,18 @@ export default function SchoolsList() {
       // won't skip no-school days: a free-text district still resolves closures
       // through the legacy calendar match, so it is NOT broken. Deliberately
       // separate from `distId`, which is a grouping key, not a truth claim.
+      //
+      // `venues.length > 0` is load-bearing, not defensive: a CONTACT-ONLY row
+      // (a district office you talk to but run nothing at) has no venues, so it
+      // trivially has no district — but it also has no class dates, so claiming
+      // its dates won't skip no-school days is false. On staging J2S that is 60
+      // of 102 rows against 8 genuinely districtless ones, so counting them
+      // would have inflated the warning ~8x. `needsSetupCount` below already
+      // excludes contact-only for the same reason.
       const hasNoDistrictAtAll =
-        !distId && !venues.some((v) => v.district && String(v.district).trim());
+        venues.length > 0
+        && !distId
+        && !venues.some((v) => v.district && String(v.district).trim());
       let programs = 0, camps = 0;
       for (const v of venues) {
         const a = activityByLoc.get(v.id);
