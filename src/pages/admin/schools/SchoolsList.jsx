@@ -87,13 +87,17 @@ export default function SchoolsList() {
         .select("id, partner_name, partner_type, location_area, locations_managed, marketing_notes, invoicing_notes, planning_notes, implementation_notes, other_notes, inactive")
         .eq("organization_id", org.id).order("partner_name"),
       supabase.from("program_locations")
-        .select("id, name, address, area, district_id, partner_id")
+        // `district` (legacy free-text) comes back alongside district_id because a
+        // location can carry EITHER. J2S staging has 50 locations with free-text
+        // districts and matching free-text calendars, so their dates DO skip
+        // no-school days — telling them otherwise would be a false alarm.
+        .select("id, name, address, area, district_id, district, partner_id")
         .eq("organization_id", org.id).order("name"),
     ]);
     if (pErr || lErr) {
       // Surface the failure instead of spinning "Loading…" forever (rule E).
       console.error("[SchoolsList] load failed:", pErr ?? lErr);
-      setLoadError(`Couldn't load partners: ${(pErr ?? lErr).message}. Refresh to try again.`);
+      setLoadError(`Couldn't load locations: ${(pErr ?? lErr).message}. Refresh to try again.`);
       setPartners([]);
       return;
     }
@@ -173,6 +177,23 @@ export default function SchoolsList() {
       // WS1 is validated on the clean Tenant 2 org; fix in WS2 when J2S's
       // partners/venues/districts are reconciled to district_id.
       const hasCalendar = !!distId && calendarDistrictIds.has(distId);
+      // "No district AT ALL" — neither the structured link nor the legacy
+      // free-text name. Only these are safe to tell an operator their dates
+      // won't skip no-school days: a free-text district still resolves closures
+      // through the legacy calendar match, so it is NOT broken. Deliberately
+      // separate from `distId`, which is a grouping key, not a truth claim.
+      //
+      // `venues.length > 0` is load-bearing, not defensive: a CONTACT-ONLY row
+      // (a district office you talk to but run nothing at) has no venues, so it
+      // trivially has no district — but it also has no class dates, so claiming
+      // its dates won't skip no-school days is false. On staging J2S that is 60
+      // of 102 rows against 8 genuinely districtless ones, so counting them
+      // would have inflated the warning ~8x. `needsSetupCount` below already
+      // excludes contact-only for the same reason.
+      const hasNoDistrictAtAll =
+        venues.length > 0
+        && !distId
+        && !venues.some((v) => v.district && String(v.district).trim());
       let programs = 0, camps = 0;
       for (const v of venues) {
         const a = activityByLoc.get(v.id);
@@ -181,7 +202,7 @@ export default function SchoolsList() {
       return {
         partner: p, venues, distId,
         districtName: distId ? districtName.get(distId) : null,
-        hasAddress, hasContact, hasCalendar, programs, camps,
+        hasAddress, hasContact, hasCalendar, hasNoDistrictAtAll, programs, camps,
         isUmbrella: venues.length > 1,
         isContactOnly: venues.length === 0,
       };
@@ -251,11 +272,19 @@ export default function SchoolsList() {
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: MUTED }}>
-          {partners === null ? "Loading…" : `${schools.length} partner${schools.length === 1 ? "" : "s"} · ${totalVenues} venue${totalVenues === 1 ? "" : "s"} · ${districts.length} district${districts.length === 1 ? "" : "s"}`}
+          {/* "Locations" is the operator-facing name for a row here. The venue
+              count is only shown when it DIFFERS (contact-only rows, or an
+              umbrella with several venues) — for the common 1:1 case "22
+              locations · 22 venues" read as two different things. */}
+          {partners === null ? "Loading…" : [
+            `${schools.length} location${schools.length === 1 ? "" : "s"}`,
+            ...(totalVenues !== schools.length ? [`${totalVenues} venue${totalVenues === 1 ? "" : "s"}`] : []),
+            `${districts.length} district${districts.length === 1 ? "" : "s"}`,
+          ].join(" · ")}
         </div>
         {partners !== null && schools.length > 0 && (
           <span
-            title={`Setting up a partner by hand — entering details, looking up the address, and linking contacts + calendar across your tools — runs about ${MINUTES_SAVED_PER_PARTNER} min each. Enrops does it in a couple of clicks.`}
+            title={`Setting up a location by hand — entering details, looking up the address, and linking contacts + calendar across your tools — runs about ${MINUTES_SAVED_PER_PARTNER} min each. Enrops does it in a couple of clicks.`}
             style={{ fontSize: 12, fontWeight: 600, color: OK, background: `${OK}14`, padding: "4px 10px", borderRadius: 99 }}
           >
             {savedLabel} saved vs. by hand
@@ -270,18 +299,18 @@ export default function SchoolsList() {
           </button>
         )}
         <button type="button" onClick={() => setImporting(true)}
-          title="Bulk-upload a list of partners (schools, Parks & Rec, etc.) + contacts from a spreadsheet"
+          title="Bulk-upload a list of locations (schools, Parks & Rec, etc.) + contacts from a spreadsheet"
           style={{ padding: "9px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-          Import partners
+          Import locations
         </button>
         <button type="button" onClick={() => setAdding(true)}
           style={{ padding: "9px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-          + Add a partner
+          + Add a location
         </button>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
-        <input type="text" placeholder="Search partners, districts, areas…" value={query} onChange={(e) => setQuery(e.target.value)}
+        <input type="text" placeholder="Search locations, districts, areas…" value={query} onChange={(e) => setQuery(e.target.value)}
           style={{ flex: "1 1 260px", maxWidth: 360, padding: "8px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", boxSizing: "border-box" }} />
         <button type="button" onClick={() => setGroupByDistrict((v) => !v)}
           style={chip(groupByDistrict)}>
@@ -314,8 +343,8 @@ export default function SchoolsList() {
 
       {partners !== null && filtered.length === 0 && (
         <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 12, padding: 36, textAlign: "center", color: MUTED, fontSize: 14 }}>
-          {query ? "No partners match that search." : (
-            <>No partners yet. Click <strong>+ Add a partner</strong> to set up your first one.</>
+          {query ? "No locations match that search." : (
+            <>No locations yet. Click <strong>+ Add a location</strong> to set up your first one.</>
           )}
         </div>
       )}
@@ -323,8 +352,29 @@ export default function SchoolsList() {
       {groups.map((g) => (
         <div key={g.key} style={{ marginBottom: 18 }}>
           {g.label && (
-            <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, margin: "4px 2px 8px" }}>
-              {g.label}
+            <div style={{ margin: "4px 2px 8px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6 }}>
+                {g.label}
+              </div>
+              {/* A location with no district has no school calendar, so its class
+                  dates never skip no-school days — and nothing else on this page
+                  says so. Counted, not asserted over the whole bucket: this
+                  bucket is keyed on district_id, so it also holds locations that
+                  DO have a legacy free-text district (50 of J2S's on staging),
+                  whose dates resolve closures fine. Claiming those are broken
+                  would be the false alarm this warning exists to prevent. */}
+              {(() => {
+                if (g.key !== NO_DISTRICT) return null;
+                const n = g.items.filter((s) => s.hasNoDistrictAtAll).length;
+                if (n === 0) return null;
+                return (
+                  <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4, lineHeight: 1.5, textTransform: "none", letterSpacing: 0, fontWeight: 400 }}>
+                    {n === 1
+                      ? "1 of these has no district set, so its class dates won’t skip no-school days. Open it and set a district to fix that."
+                      : `${n} of these have no district set, so their class dates won’t skip no-school days. Open one and set a district to fix that.`}
+                  </div>
+                );
+              })()}
             </div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

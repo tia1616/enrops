@@ -25,6 +25,12 @@ const RULE = "#e2dfd5";
 const CORAL = "#D9694F";
 
 const NEW_DISTRICT = "__new__";
+// Explicit "follows no district". Distinct from "" so an untouched picker on a
+// NEW venue can't silently mean "no district" — that default is what left a
+// provider with 17 of 22 locations whose dates never skipped no-school days.
+// This is the THIRD form that adds a location (AddSchoolModal, LocationsList's
+// side card, and this drawer editor): a change to one belongs in all three.
+const NO_DISTRICT = "__none__";
 
 function parseCity(address) {
   if (!address) return "";
@@ -69,7 +75,10 @@ function draftFrom(loc) {
   return {
     name: loc.name ?? "",
     district: loc.district ?? "",
-    district_id: loc.district_id ?? "",
+    // Existing venue with no district shows the explicit "No district" option,
+    // not the placeholder — "" is reserved for an untouched NEW form, which save
+    // refuses. Both still persist as null. Mirrors AddSchoolModal + LocationsList.
+    district_id: loc.district_id ?? NO_DISTRICT,
     newDistrictName: "",
     area: loc.area ?? "",
     address: loc.address ?? "",
@@ -130,11 +139,21 @@ export default function VenueEditor({
       setError("Contact email doesn't look valid. Leave blank if you don't have one.");
       return;
     }
+    // A NEW venue must make the district call deliberately; "" means the picker
+    // was never touched. Editing an existing venue stays permissive — this form
+    // is also where a districtless venue gets FIXED, so the district must not
+    // block saving arrival notes or a contact.
+    if (isNew && draft.district_id === "") {
+      setError("Choose this venue's district — or pick “No district” if it doesn't follow one.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
       // Resolve the district picker (create inline if needed, dedupe by name).
-      let resolvedDistrictId = draft.district_id || null;
+      // NO_DISTRICT is a deliberate "none" and resolves to null, same as "" did.
+      let resolvedDistrictId =
+        (draft.district_id === NO_DISTRICT ? null : draft.district_id) || null;
       if (draft.district_id === NEW_DISTRICT) {
         const newName = (draft.newDistrictName || "").trim();
         if (!newName) { setError("Enter a name for the new district, or pick an existing one."); setSaving(false); return; }
@@ -233,16 +252,28 @@ export default function VenueEditor({
       </Field>
 
       <Field
-        label="District"
+        label={isNew ? "District *" : "District"}
         hint="Group this school under a district (e.g. Portland Public Schools) so its academic calendar applies automatically. Set one up once, then attach every school in it. Not shown to instructors."
       >
         <select {...bind("district_id")} style={inputStyle}>
-          <option value="">— no district —</option>
+          {/* Only on a NEW venue: "" is the untouched state save refuses, so it
+              must never be a resting value on an existing row. */}
+          {isNew && <option value="">Choose a district…</option>}
           {(districts ?? []).map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
           <option value={NEW_DISTRICT}>+ Create a new district…</option>
+          <option value={NO_DISTRICT}>No district (library, church, private site)</option>
         </select>
+        {/* Three states, three sentences. The positive one is conditional on
+            purpose: a district created just now has no calendar on file yet. */}
+        <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5, color: draft.district_id === NO_DISTRICT ? "#8a6d1f" : MUTED }}>
+          {draft.district_id === NO_DISTRICT
+            ? "No district means no school calendar here, so this venue's class dates won't skip no-school days."
+            : draft.district_id === ""
+              ? "The district's calendar is what makes class dates skip no-school days. Pick the one this venue follows."
+              : "Class dates here will skip this district's no-school days once its school calendar is on file."}
+        </div>
         {draft.district_id === NEW_DISTRICT && (
           <input
             type="text"

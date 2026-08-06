@@ -198,7 +198,7 @@ export default function AdminSettings() {
           no top-level venue nav. It is now a tab under Programs -- next to the
           classes it serves, rather than in a drawer you configure once -- so
           keeping a duplicate entry point here would be two doors to one room.
-          J2S is unaffected: it keeps its own top-level Partners item. */}
+          J2S is unaffected: it keeps its own top-level Locations item. */}
 
       {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>
@@ -246,8 +246,12 @@ export default function AdminSettings() {
           without it a family's reply goes to us instead of to them. The copy is
           narrowed for registration operators so it doesn't advertise the
           signature and sender-name controls that branding covers. */}
+      {/* Heading matches the destination page's own h1 ("Email sender") on
+          purpose: NO_TENANT_INBOX_MESSAGE tells an operator to find this page
+          from Settings, and it can only do that if the words match what is on
+          screen. "Email replies" also no longer covered what the page owns. */}
       <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Email replies</h2>
+        <h2 style={sectionTitle}>Email sender</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>
@@ -255,8 +259,8 @@ export default function AdminSettings() {
             </div>
             <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
               {org?.instructor_pay_model === "enrops_platform"
-                ? <>When a family replies to a confirmation or reminder, it goes to <strong>{org?.email || "your email"}</strong>. Change it here if replies should go somewhere else.</>
-                : "Set the sender name, reply-to address, email signature, and mailing address that show on your invites, waivers, and reminders. We handle the sending domain — no DNS setup."}
+                ? <>When a family replies to a confirmation or reminder, it goes to <strong>{org?.email || "your email"}</strong>. Change it here if replies should go somewhere else, and set where your own alerts land.</>
+                : "Set the sender name, reply-to address, email signature, and mailing address that show on your invites, waivers, and reminders — and where the alerts meant for you land. We handle the sending domain — no DNS setup."}
             </div>
           </div>
           <Link to="/admin/email-sender" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>

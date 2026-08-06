@@ -77,9 +77,9 @@ export default function CalendarsList() {
   const { org } = useOutletContext() ?? {};
   const isLean = org?.instructor_pay_model === "enrops_platform";
   // Districts are discovered from each school's District field, which lives on
-  // the venue surface - labelled "Locations" for own-venue orgs, "Partners"
-  // otherwise (mirror of AdminLayout's nav label).
-  const venueLabel = org?.venue_model === "own_venue" ? "Locations" : "Partners";
+  // the venue surface - named "Locations" for every venue_model as of 2026-08-05
+  // (mirror of AdminLayout's nav label; was Locations/Partners by venue_model).
+  const venueLabel = "Locations";
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
   const [districts, setDistricts] = useState([]); // merged rows: [{ key, label, districtId, calendarKey, location_count }]
   const [calendars, setCalendars] = useState([]); // district_calendars rows for current school year
@@ -837,8 +837,14 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
                 <div style={{ fontSize: 14, fontWeight: 600, color: PURPLE }}>
                   Reading the calendar…
                 </div>
+                {/* Honest per-source estimates. The old flat "10–20 seconds"
+                    was measured on pasted text; a real multi-page district PDF
+                    fetched from a URL took 1m30s, so the banner was promising
+                    something it could miss by 5x. Pasted text really is quick. */}
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-                  Usually takes 10–20 seconds.
+                  {extractMode === "text"
+                    ? "Usually takes 10–20 seconds."
+                    : "Usually takes 30–90 seconds. A long or multi-page PDF can take up to about 2 minutes."}
                 </div>
               </div>
               <div style={{ marginLeft: "auto", fontSize: 18, fontWeight: 700, color: PURPLE, fontVariantNumeric: "tabular-nums" }}>

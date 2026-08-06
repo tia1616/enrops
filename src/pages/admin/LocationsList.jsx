@@ -51,6 +51,12 @@ function parseCity(address) {
 
 // Sentinel value for the District picker's "create a new district" option.
 const NEW_DISTRICT = "__new__";
+// Explicit "this place follows no district" (a studio, library, private site).
+// Kept distinct from "" so an untouched picker on a NEW location can't silently
+// mean "no district" — that default is what left a provider with 17 of 22
+// locations whose class dates never skipped no-school days. Mirrors
+// AddSchoolModal, which is the same choice in the partner-venue shape.
+const NO_DISTRICT = "__none__";
 
 const EMPTY_DRAFT = {
   name: "",
@@ -214,7 +220,11 @@ export default function LocationsList({ embedded = false }) {
     setDraft({
       name: loc.name ?? "",
       district: loc.district ?? "",
-      district_id: loc.district_id ?? "",
+      // An existing location with no district shows the explicit "No district"
+      // option rather than the "Choose a district…" placeholder — it HAS been
+      // decided (or predates the choice), so "" is reserved for a new form the
+      // operator hasn't touched. Both still save as null.
+      district_id: loc.district_id ?? NO_DISTRICT,
       newDistrictName: "",
       area: loc.area ?? "",
       address: loc.address ?? "",
@@ -273,6 +283,14 @@ export default function LocationsList({ embedded = false }) {
       setError("Contact email doesn't look valid. Leave blank if you don't have one.");
       return;
     }
+    // A NEW location must make the district call deliberately — "" here means the
+    // picker was never touched. Editing an EXISTING location stays permissive on
+    // purpose: this is also the form you fix a districtless location in, and
+    // blocking every other field behind the district would be an obstruction.
+    if (editingId === "new" && draft.district_id === "") {
+      setError("Choose this location's district — or pick “No district” if it doesn't follow one.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -280,7 +298,9 @@ export default function LocationsList({ embedded = false }) {
       // entity first; otherwise use the selected id (or null to unlink). The
       // legacy free-text `district` column is left untouched — it stays the
       // fallback for calendar matching, and district_id is purely additive.
-      let resolvedDistrictId = draft.district_id || null;
+      // NO_DISTRICT is a deliberate "none" and resolves to null, same as "" did.
+      let resolvedDistrictId =
+        (draft.district_id === NO_DISTRICT ? null : draft.district_id) || null;
       if (draft.district_id === NEW_DISTRICT) {
         const newName = (draft.newDistrictName || "").trim();
         if (!newName) {
@@ -521,9 +541,20 @@ function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>{loc.name}</div>
-          {(districtName || loc.district) && (
+          {(districtName || loc.district) ? (
             <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
               {districtName || loc.district}
+            </div>
+          ) : (
+            // No district of EITHER kind (structured id or legacy free-text), so
+            // no school calendar applies and this location's class dates never
+            // skip no-school days. Own-venue orgs never see the grouped
+            // "No district" warning on the partner list, so say it on the row.
+            <div
+              title="Open this location and set its district so its class dates skip that district's no-school days"
+              style={{ fontSize: 11, color: "#8a6d1f", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}
+            >
+              No district — dates won&rsquo;t skip no-school days
             </div>
           )}
           {campCount > 0 && (
@@ -634,18 +665,31 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
       </Field>
 
       <Field
-        label="District"
+        label={isNew ? "District *" : "District"}
         hint={isLean
-          ? "Optional. If you run inside a school district, attaching it here means their no-school days are skipped when your class dates are worked out."
+          ? "If you run inside a school district, attaching it here means their no-school days are skipped when your class dates are worked out."
           : "Group this school under a district (e.g. Portland Public Schools) so its academic calendar applies automatically. Set one up once, then attach every school in it. Not shown to instructors."}
       >
         <select {...bind("district_id")} style={inputStyle}>
-          <option value="">— no district —</option>
+          {/* Only offered on a NEW location: "" is the untouched state we refuse,
+              so it must never be a resting value on an existing row. */}
+          {isNew && <option value="">Choose a district…</option>}
           {(districts ?? []).map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
           <option value={NEW_DISTRICT}>+ Create a new district…</option>
+          <option value={NO_DISTRICT}>No district (studio, library, private site)</option>
         </select>
+        {/* Three states, three sentences. The positive one is deliberately
+            conditional: a district you just created has no calendar on file yet,
+            so promising dates "will skip" outright would be false right then. */}
+        <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5, color: draft.district_id === NO_DISTRICT ? "#8a6d1f" : "#6b6b6b" }}>
+          {draft.district_id === NO_DISTRICT
+            ? "No district means no school calendar here, so this location's class dates won't skip no-school days."
+            : draft.district_id === ""
+              ? "The district's calendar is what makes class dates skip no-school days. Pick the one this location follows."
+              : "Class dates here will skip this district's no-school days once its school calendar is on file."}
+        </div>
         {draft.district_id === NEW_DISTRICT && (
           <input
             type="text"

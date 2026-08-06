@@ -243,6 +243,35 @@ export default function ProgramsCalendar() {
       p_target_term: targetTerm,
     });
     if (dupErr) throw dupErr;
+    // The copy can land in a term the picker has never listed (Jeff copied to
+    // Winter but the term picker still showed only Fall, so the draft was
+    // unreachable). Refresh the term list so the new term is selectable. The
+    // duplicate_program RPC has already committed the row, so org_terms sees it;
+    // still, guarantee the target is present in case the read is momentarily
+    // behind, so the picker can never omit a term we just wrote into.
+    // Add the target to the picker. Prefer a full refresh from org_terms, but
+    // NEVER clobber the existing list when the refetch comes back empty:
+    // fetchOrgTerms resolves to { terms: [] } on an RLS/transient error (it
+    // does not throw), and rebuilding from [] would wipe FA26/etc. and leave
+    // only the new term. So replace only when the refetch actually returned
+    // terms; otherwise just merge the target into whatever we already have.
+    const mergeTarget = (list) =>
+      (list ?? []).some((o) => o.value === targetTerm)
+        ? (list ?? [])
+        : [...(list ?? []), { value: targetTerm, label: formatTermLabel(targetTerm) }];
+    let refreshed = [];
+    try {
+      const { terms } = await fetchOrgTerms(org.id);
+      refreshed = Array.isArray(terms) ? terms : [];
+    } catch {
+      refreshed = [];
+    }
+    if (refreshed.length > 0) {
+      const opts = refreshed.map((t) => ({ value: t.term, label: formatTermLabel(t.term) }));
+      setTermOptions(mergeTarget(opts));
+    } else {
+      setTermOptions((prev) => mergeTarget(prev));
+    }
     return newId;
   }
 
@@ -761,11 +790,11 @@ export default function ProgramsCalendar() {
         </div>
       )}
 
-      {loading && <div style={{ color: MUTED, padding: 12 }}>Loading {term ? `${term} ` : ""}programs…</div>}
+      {loading && <div style={{ color: MUTED, padding: 12 }}>Loading {term ? `${formatTermLabel(term)} ` : ""}programs…</div>}
       {error && <div style={errorBox}>Could not load programs: {error}</div>}
       {!loading && !error && programs.length === 0 && (
         <div style={emptyState}>
-          No programs scheduled{term ? ` for ${term}` : ""} yet.
+          No programs scheduled{term ? ` for ${formatTermLabel(term)}` : ""} yet.
           {/* Uploading a weekly class schedule is a later tier, and the empty
               state is the worst place to offer it: a brand-new operator with
               zero programs sees it before anything else and follows it into a
@@ -1386,11 +1415,24 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   const [saveError, setSaveError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
 
-  // Copy-to-term: pick any other term this org has (or type a new one), create
-  // a draft copy there. copyResult holds the outcome message shown inline.
-  const [copyTerm, setCopyTerm] = useState("");
+  // Copy-to-term: pick a season + year to copy this program into as a draft.
+  // Operators think "Winter 2027", not "WI27" - so we present a Season and a
+  // Year dropdown and compose the term code ourselves. copyResult holds the
+  // outcome message shown inline.
+  const [copySeason, setCopySeason] = useState(""); // "FA" | "WI" | "SP" | "SU"
+  const [copyYear, setCopyYear] = useState("");     // 4-digit year string, e.g. "2027"
   const [copying, setCopying] = useState(false);
   const [copyResult, setCopyResult] = useState(null); // { ok: bool, message }
+  // FA{yy}/WI{yy}/... code the DB expects, composed from the two dropdowns.
+  const copyTargetTerm = copySeason && copyYear
+    ? `${copySeason}${String(Number(copyYear)).slice(-2)}`
+    : "";
+  // Year choices: this year through +3, enough to copy forward a season or two
+  // without offering a scroll of irrelevant years. Labels are the full year.
+  const copyYearChoices = (() => {
+    const y = new Date().getFullYear();
+    return [y, y + 1, y + 2, y + 3];
+  })();
 
   // Range mode live preview: as the operator types start/end, ask the DB to derive
   // the count + skipped no-school days for THIS location's calendar. Params-based
@@ -1426,13 +1468,17 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   }
 
   async function handleDuplicate() {
-    // programs.term has a DB CHECK requiring this exact shape (season code +
-    // 2-digit year); validate here so a typo gets a plain-English message
-    // instead of a raw Postgres constraint-violation string.
-    const target = copyTerm.trim().toUpperCase();
+    const target = copyTargetTerm; // composed from the Season + Year dropdowns
     if (!target) return;
+    // Composition can't produce a bad code, but the DB CHECK is the real gate;
+    // keep a defensive guard so any future caller gets plain English, not a raw
+    // Postgres constraint-violation string.
     if (!/^(FA|WI|SP|SU)\d{2}$/.test(target)) {
-      setCopyResult({ ok: false, message: `"${copyTerm.trim()}" isn't a term code — use a season + 2-digit year, like WI27 or SP27.` });
+      setCopyResult({ ok: false, message: "Pick a season and a year to copy into." });
+      return;
+    }
+    if (target === program.term) {
+      setCopyResult({ ok: false, message: `This program is already in ${formatTermLabel(target)}. Pick a different term to copy into.` });
       return;
     }
     setCopying(true);
@@ -1998,38 +2044,46 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       </div>
 
       {/* Copy to term — same location/day/time/curriculum/price, into another
-          term, as a draft. Pick an existing term or type a new one (e.g. a
-          term this org has never scheduled before). */}
+          term, as a draft. Season + Year dropdowns compose the term code so the
+          operator never sees or types a raw code like "WI27". */}
       <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${RULE}` }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
           Copy to another term
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            list="copy-term-options"
-            type="text"
-            value={copyTerm}
-            onChange={(e) => { setCopyTerm(e.target.value); setCopyResult(null); }}
-            placeholder="e.g. WI27"
-            style={{ ...expandInputStyle, width: 140 }}
-          />
-          <datalist id="copy-term-options">
-            {(termOptions ?? [])
-              .filter((opt) => opt.value !== program.term)
-              .map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-          </datalist>
+          <select
+            value={copySeason}
+            onChange={(e) => { setCopySeason(e.target.value); setCopyResult(null); }}
+            style={{ ...expandInputStyle, width: 130 }}
+            aria-label="Season to copy into"
+          >
+            <option value="">Season…</option>
+            <option value="FA">Fall</option>
+            <option value="WI">Winter</option>
+            <option value="SP">Spring</option>
+            <option value="SU">Summer</option>
+          </select>
+          <select
+            value={copyYear}
+            onChange={(e) => { setCopyYear(e.target.value); setCopyResult(null); }}
+            style={{ ...expandInputStyle, width: 110 }}
+            aria-label="Year to copy into"
+          >
+            <option value="">Year…</option>
+            {copyYearChoices.map((y) => <option key={y} value={String(y)}>{y}</option>)}
+          </select>
           <button
             type="button"
             onClick={handleDuplicate}
-            disabled={copying || !copyTerm.trim()}
+            disabled={copying || !copyTargetTerm}
             style={{
               background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, padding: "7px 14px",
               borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
-              cursor: copying || !copyTerm.trim() ? "default" : "pointer",
-              opacity: copying || !copyTerm.trim() ? 0.6 : 1,
+              cursor: copying || !copyTargetTerm ? "default" : "pointer",
+              opacity: copying || !copyTargetTerm ? 0.6 : 1,
             }}
             title="Create a draft copy of this program in the chosen term"
-          >{copying ? "Copying…" : "Copy →"}</button>
+          >{copying ? "Copying…" : (copyTargetTerm ? `Copy to ${formatTermLabel(copyTargetTerm)} →` : "Copy →")}</button>
         </div>
         {copyResult && (
           <div style={{

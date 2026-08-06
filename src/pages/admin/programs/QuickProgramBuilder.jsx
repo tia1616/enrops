@@ -244,7 +244,13 @@ export default function QuickProgramBuilder() {
           // address comes back so the picker can SHOW where the class actually
           // is. Selecting only id+name is why an operator who had just looked
           // an address up could not see it again anywhere on this screen.
-          .select("id, name, address")
+          // district_id comes back so we can warn when the chosen location has
+          // no district — its class dates then never skip no-school days, and
+          // three of the four ways to create a location leave it unset. The
+          // legacy free-text `district` comes back too: it still resolves
+          // closures through the legacy calendar match, so a location carrying
+          // one is NOT broken and must not be warned about.
+          .select("id, name, address, district_id, district")
           .eq("organization_id", org.id)
           .order("name");
         if (cancelled) return;
@@ -324,11 +330,14 @@ export default function QuickProgramBuilder() {
         .from("program_locations")
         .insert({ organization_id: org.id, name: nm, address: newLocAddress.trim() || null, slug })
         // Read the address back too, so the just-added location shows its
-        // address immediately instead of only after a page reload.
-        .select("id, name, address")
+        // address immediately instead of only after a page reload. district_id
+        // comes back for the same reason the list read selects it — the
+        // no-district warning must be right for a just-added location too (this
+        // path doesn't set one, so it is always null here).
+        .select("id, name, address, district_id, district")
         .single();
       if (error) throw error;
-      setLocations((ls) => [...ls, { id: data.id, name: data.name, address: data.address }].sort((a, b) => a.name.localeCompare(b.name)));
+      setLocations((ls) => [...ls, { id: data.id, name: data.name, address: data.address, district_id: data.district_id ?? null, district: data.district ?? null }].sort((a, b) => a.name.localeCompare(b.name)));
       setLocationId(data.id);
       setAddingLocation(false);
       setNewLocName("");
@@ -1433,6 +1442,19 @@ export default function QuickProgramBuilder() {
                     No address saved for this location yet — families won't see one. Add it under Programs → Locations.
                   </div>
                 )
+              )}
+              {/* A location with no district has no school calendar, so this
+                  class's dates will NOT skip no-school days. Three of the four
+                  ways to create a location (this inline add, bulk import, the
+                  program builder) leave the district unset, so say it here —
+                  where the class is being built — not only on the Locations
+                  page. Silent is the failure mode we're removing. */}
+              {!locationsFailed && selectedLocation && !selectedLocation.district_id
+                && !(selectedLocation.district && String(selectedLocation.district).trim()) && (
+                <div style={{ ...helpStyle, color: "#8a6d1f" }}>
+                  This location has no district yet, so these class dates won&rsquo;t skip no-school days.
+                  Set its district on the Locations page.
+                </div>
               )}
             </>
           )}
