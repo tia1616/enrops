@@ -113,6 +113,15 @@ export default function QuickProgramBuilder() {
   // null until there is something to say, so an empty field is not nagged at.
   const descCount = describeDescriptionLength(description);
   const [room, setRoom] = useState(""); // -> programs.room; optional, often unknown yet
+  // A room number belongs to ONE building, so switching venue must not keep it.
+  // Without this: pick Ainsworth, type "Room 12", realise it is the wrong school,
+  // switch to Downtown Studio — the field stays filled and the class saves with a
+  // room number from a different site, which then prints on the instructor's roster
+  // email and sends them to the wrong door. Keyed on the effect rather than added to
+  // the select's onChange because there are THREE places locationId is written
+  // (the select, the inline add-a-site, and the reset after a create) and a guard
+  // that only covers one of them is the bug this codebase keeps re-learning.
+  useEffect(() => { setRoom(""); }, [locationId]);
   const [price, setPrice] = useState("");
   const [spots, setSpots] = useState("18");
   const [day, setDay] = useState("");
@@ -748,6 +757,12 @@ export default function QuickProgramBuilder() {
     // Room is per-CLASS, so it must clear. Ages carry over because the next class is
     // usually for the same children; a room number never is, and a stale one would
     // send an instructor to the wrong door.
+    //
+    // NOT redundant with the `useEffect(..., [locationId])` that also clears it. For a
+    // single-location org this reset sets locationId to the value it ALREADY holds, so
+    // React bails out, the effect never fires, and "add another class" would carry the
+    // previous class's room number. The effect covers switching venue; this covers
+    // building the next class at the same venue. Deleting either one reopens a case.
     setRoom("");
     if (cadence !== "both") setMode(cadence === "one_off" ? "one_off" : "weekly");
   }
