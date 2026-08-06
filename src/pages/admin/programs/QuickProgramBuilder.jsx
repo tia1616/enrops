@@ -105,6 +105,7 @@ export default function QuickProgramBuilder() {
   const navigate = useNavigate();
 
   const [name, setName] = useState("");
+  const [description, setDescription] = useState(""); // -> programs.short_description
   const [price, setPrice] = useState("");
   const [spots, setSpots] = useState("18");
   const [day, setDay] = useState("");
@@ -605,6 +606,9 @@ export default function QuickProgramBuilder() {
         term: org.active_registration_term,
         curriculum: name.trim(), // NOT NULL display name; no curriculum record
         curriculum_id: null,
+        // Optional; NULL (not "") so the catalog card's `short_description &&`
+        // guard treats "not written" as absent rather than rendering an empty line.
+        short_description: description.trim() || null,
         program_location_id: locationId || null,
         day_of_week: effectiveDay,
         start_time: startTime ? toDbTime12h(startTime) : null,
@@ -707,6 +711,9 @@ export default function QuickProgramBuilder() {
     startedAtRef.current = new Date().toISOString();
     startedMsRef.current = nowMs();
     setName("");
+    // Must clear with the name: "add another class" that kept the previous
+    // description would silently publish the wrong copy on the next class.
+    setDescription("");
     setPrice("");
     setSpots("18");
     setDay("");
@@ -1234,6 +1241,28 @@ export default function QuickProgramBuilder() {
             placeholder="e.g. Beginner Ballet, Tuesdays"
             maxLength={120}
           />
+        </div>
+
+        {/* Description. programs.short_description already existed and already
+            renders on the registration page, but only the FULL-NAV builder
+            (ProgramWizardNew) ever collected it - so a lean operator had no way
+            to describe a class at all, and their catalog cards showed a bare
+            name. 91 of 95 prod programs have one; the lean org that asked for
+            this had 0 of 4. Optional on purpose: it must never block creating a
+            class. */}
+        <div>
+          <label style={labelStyle} htmlFor="qpb-description">Description (optional)</label>
+          <textarea
+            id="qpb-description"
+            style={{ ...inputStyle, minHeight: 74, resize: "vertical", fontFamily: "inherit" }}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="What families should know - what they'll learn, what to bring, who it's for."
+            maxLength={600}
+          />
+          <div style={helpStyle}>
+            Shown to families on your registration page, under the class name.
+          </div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>

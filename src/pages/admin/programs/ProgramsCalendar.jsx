@@ -474,6 +474,7 @@ export default function ProgramsCalendar() {
           .select(`
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             max_capacity, status, term, instructor_name, price_cents,
+            short_description,
             runs_own_registration, external_registration_url, list_in_public_catalog,
             first_session_date, session_count, schedule_mode, end_date, organization_id,
             facility_requested_at, facility_approved_at, facility_notes,
@@ -1404,6 +1405,10 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     schedule_mode: program.schedule_mode === "range" ? "range" : "count",
     end_date: program.end_date ?? "",
     max_capacity: program.max_capacity ?? "",
+    // Families-facing blurb on the registration page. Editable here so a program
+    // that already exists can get one - the lean builder only just started
+    // collecting it, so every program created before now has none.
+    short_description: program.short_description ?? "",
     price_cents: program.price_cents ?? "",
     program_location_id: program.program_location_id ?? "",
     room: program.room ?? "",
@@ -1569,6 +1574,12 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           ? derivedCount
           : (draft.session_count === "" || draft.session_count === null ? null : Number(draft.session_count)),
         max_capacity: draft.max_capacity === "" || draft.max_capacity === null ? null : Number(draft.max_capacity),
+        // NULL rather than "" when cleared, so the catalog's `short_description &&`
+        // guard reads it as absent instead of rendering an empty paragraph. Safe to
+        // write because short_description is now SELECTED above -- without that the
+        // draft would start undefined and every save here would blank a description
+        // the operator never touched (91 of 95 prod programs have one).
+        short_description: draft.short_description?.trim() ? draft.short_description.trim() : null,
         price_cents: draft.price_cents === "" || draft.price_cents === null ? null : Number(draft.price_cents),
         program_location_id: draft.program_location_id || null,
         room: draft.room || null,
@@ -1891,6 +1902,26 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         <ExpandField label="Room">
           <input type="text" value={draft.room ?? ""} onChange={(e) => set("room", e.target.value)} placeholder="e.g. Room 12" style={expandInputStyle} />
         </ExpandField>
+      </div>
+
+      {/* Description sits OUTSIDE the field grid because it needs the full width
+          to be writable. Editable here (not only in the builder) so the programs
+          that already exist can get one -- until now only the full-nav builder
+          collected it, so a lean operator's whole catalog had none. */}
+      <div style={{ marginTop: 12 }}>
+        <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.3 }}>
+          Description
+          <textarea
+            value={draft.short_description ?? ""}
+            onChange={(e) => set("short_description", e.target.value)}
+            placeholder="What families should know - what they'll learn, what to bring, who it's for."
+            maxLength={600}
+            style={{ ...expandInputStyle, marginTop: 4, minHeight: 68, resize: "vertical", fontFamily: "inherit", textTransform: "none", letterSpacing: 0, fontWeight: 400 }}
+          />
+        </label>
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+          Shown to families on the registration page, under the class name.
+        </div>
       </div>
 
       {(() => {
