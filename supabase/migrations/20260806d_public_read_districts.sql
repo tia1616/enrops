@@ -60,6 +60,17 @@ create policy public_read_districts
 --
 -- organization_id is included because the policy predicate reads it and it is not
 -- sensitive; id because PostgREST needs the key to resolve the embed.
+--
+-- THE REVOKE IS LOAD-BEARING AND WAS MISSING. A column grant does NOT restrict an
+-- existing table-level one: Supabase's ALTER DEFAULT PRIVILEGES already granted
+-- table-wide SELECT on this table to anon and authenticated, so adding a narrow
+-- column grant on top changed nothing. Proven on PROD by applying the grant-only
+-- version and then reading has_column_privilege back: flyer_notes and calendar_key
+-- were still readable by anon. Same lesson as the organization_money_audit grants
+-- earlier today - verify privileges from the live catalog, never from the migration
+-- text. Revoke first, then re-grant the narrow set.
+revoke select on public.districts from anon;
+revoke select on public.districts from authenticated;
 grant select (id, organization_id, name) on public.districts to anon;
 grant select (id, organization_id, name) on public.districts to authenticated;
 
