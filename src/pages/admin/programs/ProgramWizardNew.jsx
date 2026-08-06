@@ -19,6 +19,7 @@ import AddSchoolModal from "../schools/AddSchoolModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import CancellationPolicyInline from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
+import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -1086,14 +1087,34 @@ function Step2WhenAndHowMany({
         <label htmlFor="short_description" style={labelStyle}>
           Short description <span style={{ color: MUTED, fontWeight: 400 }}>(optional)</span>
         </label>
+        {/* THE THIRD input for this one field. The other two (QuickProgramBuilder and
+            the Scheduled Programs panel) each hardcoded maxLength={600}; this one had
+            no cap at all, so the same field had three different behaviours. Capping it
+            silently would have reintroduced exactly the bug being fixed - Jeff typed
+            past an invisible ceiling and lost the rest - so it gets the shared limit
+            AND the counter. J2S writes its descriptions here and its longest is 381
+            characters, so nothing existing is affected. */}
         <textarea
           id="short_description"
           value={formData.short_description}
           onChange={(e) => onField("short_description", e.target.value)}
-          rows={2}
-          style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
+          rows={4}
+          maxLength={PROGRAM_DESCRIPTION_MAX}
+          style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
           placeholder="A sentence or two for families. Auto-filled from the offering if you left it blank."
         />
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+          Line breaks are kept, so you can write more than one paragraph.
+          {(() => {
+            const c = describeDescriptionLength(formData.short_description);
+            return c ? (
+              <>
+                {' '}
+                <span style={{ color: c.atLimit ? "#b53737" : MUTED, fontWeight: c.atLimit ? 600 : 400 }}>{c.text}</span>
+              </>
+            ) : null;
+          })()}
+        </div>
       </div>
 
       {/* Live preview */}

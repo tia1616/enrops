@@ -577,7 +577,7 @@ export default function Home() {
                                   so the builder's Description field saved copy
                                   that reached no family. */}
                               {p.short_description && (
-                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45 }}>{p.short_description}</div>
+                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
                               )}
                               <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
                               {scheduleStr && (
@@ -599,7 +599,7 @@ export default function Home() {
                                 operator's description belongs in front of the
                                 family, right under the class name. */}
                             {p.short_description && (
-                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45 }}>{p.short_description}</div>
+                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
                             )}
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
@@ -831,7 +831,7 @@ export default function Home() {
                           <div className="border-b border-j2s-purple/10 bg-j2s-purple-soft/40 px-5 py-4">
                             <p className="font-titan text-lg text-j2s-ink">{p.curriculum}</p>
                             {p.short_description && (
-                              <p className="mt-1 text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
+                              <p className="mt-1 whitespace-pre-line text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
                             )}
                             {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                             {scheduleStr && (
@@ -880,7 +880,7 @@ export default function Home() {
                         <div className="border-b border-j2s-purple/10 bg-j2s-purple-soft/40 px-5 py-4">
                           <p className="font-titan text-lg text-j2s-ink">{p.curriculum}</p>
                           {p.short_description && (
-                            <p className="mt-1 text-sm text-j2s-ink/65 leading-snug">
+                            <p className="mt-1 whitespace-pre-line text-sm text-j2s-ink/65 leading-snug">
                               {p.short_description}
                             </p>
                           )}

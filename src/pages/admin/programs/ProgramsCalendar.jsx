@@ -20,6 +20,7 @@ import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
+import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -32,6 +33,9 @@ const CREAM = "#FBFBFB";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
+// Matches the RED on Payments, so "you've hit the limit" is the same colour the
+// admin already uses for that meaning.
+const RED = "#b53737";
 const PANEL = "#fff";
 
 const AMBER = "#a16207";
@@ -1915,12 +1919,24 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             value={draft.short_description ?? ""}
             onChange={(e) => set("short_description", e.target.value)}
             placeholder="What families should know - what they'll learn, what to bring, who it's for."
-            maxLength={600}
-            style={{ ...expandInputStyle, marginTop: 4, minHeight: 68, resize: "vertical", fontFamily: "inherit", textTransform: "none", letterSpacing: 0, fontWeight: 400 }}
+            maxLength={PROGRAM_DESCRIPTION_MAX}
+            style={{ ...expandInputStyle, marginTop: 4, minHeight: 120, resize: "vertical", fontFamily: "inherit", textTransform: "none", letterSpacing: 0, fontWeight: 400, lineHeight: 1.5 }}
           />
         </label>
+        {/* Same cap and same counter as the builder, from one constant. The number
+            was hardcoded 600 in both files, so raising it meant finding both. */}
         <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
           Shown to families on the registration page, under the class name.
+          Line breaks are kept, so you can write more than one paragraph.
+          {(() => {
+            const c = describeDescriptionLength(draft.short_description);
+            return c ? (
+              <>
+                {' '}
+                <span style={{ color: c.atLimit ? RED : MUTED, fontWeight: c.atLimit ? 600 : 400 }}>{c.text}</span>
+              </>
+            ) : null;
+          })()}
         </div>
       </div>
 

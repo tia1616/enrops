@@ -34,6 +34,7 @@ import {
   CANCELLATION_POLICY_LABEL,
 } from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
+import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 // Monotonic where available. performance.now() is immune to the system clock
@@ -49,6 +50,9 @@ const BRIGHT = "#5847C9";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
+// Matches the RED used on the Payments screen, so "you've hit the limit" reads the
+// same everywhere in the admin rather than being a new colour nobody has learned.
+const RED = "#b53737";
 
 // Title-Case — written straight to programs.day_of_week and compared with `=`
 // on the public catalog. Lowercase silently breaks the match (see the note in
@@ -106,6 +110,9 @@ export default function QuickProgramBuilder() {
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState(""); // -> programs.short_description
+  // null until there is something to say, so an empty field is not nagged at.
+  const descCount = describeDescriptionLength(description);
+  const [room, setRoom] = useState(""); // -> programs.room; optional, often unknown yet
   const [price, setPrice] = useState("");
   const [spots, setSpots] = useState("18");
   const [day, setDay] = useState("");
@@ -213,6 +220,22 @@ export default function QuickProgramBuilder() {
   // and we say the first one out loud to the operator.
   const [locationsFailed, setLocationsFailed] = useState(false);
   const [locationId, setLocationId] = useState("");
+  // A room number belongs to ONE building, so switching venue must not keep it.
+  // Without this: pick Ainsworth, type "Room 12", realise it is the wrong school,
+  // switch to Downtown Studio — the field stays filled and the class saves with a
+  // room number from a different site, which then prints on the instructor's roster
+  // email and sends them to the wrong door. An effect rather than a handler on the
+  // select, because locationId is written in THREE places (the select, the inline
+  // add-a-site, and the reset after a create) and a guard covering one of them is
+  // the bug this codebase keeps re-learning.
+  //
+  // MUST live below the useState for locationId. It was first written up beside the
+  // `room` state ~100 lines earlier, where `locationId` is still in the temporal
+  // dead zone: the dependency array is evaluated during render, so the component
+  // threw "Cannot access 'P' before initialization" and the whole builder rendered
+  // as a BLANK PAGE. npm run build and the unit tests both passed - it is a runtime
+  // error only, caught by loading the real page.
+  useEffect(() => { setRoom(""); }, [locationId]);
   // Does this org already have programs? Decides whether the first-class
   // questions are appropriate. null = not counted yet (never assume either way).
   const [programCount, setProgramCount] = useState(null);
@@ -610,6 +633,14 @@ export default function QuickProgramBuilder() {
         // guard treats "not written" as absent rather than rendering an empty line.
         short_description: description.trim() || null,
         program_location_id: locationId || null,
+        // Optional on purpose, and NULL when blank. Jessica's constraint: "we set up
+        // programs and open for registration before actually knowing the classroom #
+        // often" - she is still waiting on several schools and Facilitron - so this
+        // must never gate creating a class. It is here for the operator who DOES
+        // already know, so they are not made to come back for one field.
+        // Per-program, distinct from the venue-level default on the location; the
+        // roster email prefers this and falls back to that.
+        room: room.trim() || null,
         day_of_week: effectiveDay,
         start_time: startTime ? toDbTime12h(startTime) : null,
         end_time: endTime ? toDbTime12h(endTime) : null,
@@ -730,6 +761,16 @@ export default function QuickProgramBuilder() {
     // almost always for the same children.
     setAgeMin(profile.default_age_min != null ? String(profile.default_age_min) : "");
     setAgeMax(profile.default_age_max != null ? String(profile.default_age_max) : "");
+    // Room is per-CLASS, so it must clear. Ages carry over because the next class is
+    // usually for the same children; a room number never is, and a stale one would
+    // send an instructor to the wrong door.
+    //
+    // NOT redundant with the `useEffect(..., [locationId])` that also clears it. For a
+    // single-location org this reset sets locationId to the value it ALREADY holds, so
+    // React bails out, the effect never fires, and "add another class" would carry the
+    // previous class's room number. The effect covers switching venue; this covers
+    // building the next class at the same venue. Deleting either one reopens a case.
+    setRoom("");
     if (cadence !== "both") setMode(cadence === "one_off" ? "one_off" : "weekly");
   }
 
@@ -1254,14 +1295,28 @@ export default function QuickProgramBuilder() {
           <label style={labelStyle} htmlFor="qpb-description">Description (optional)</label>
           <textarea
             id="qpb-description"
-            style={{ ...inputStyle, minHeight: 74, resize: "vertical", fontFamily: "inherit" }}
+            style={{ ...inputStyle, minHeight: 120, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="What families should know - what they'll learn, what to bring, who it's for."
-            maxLength={600}
+            maxLength={PROGRAM_DESCRIPTION_MAX}
           />
+          {/* The cap USED to be a bare maxLength={600} with nothing on screen about
+              it, so an operator typed past the end and the browser silently dropped
+              the rest - Jeff wrote five descriptions and every one stopped dead at
+              599 characters. A limit the writer cannot see is the actual defect, so
+              the counter is not decoration. */}
           <div style={helpStyle}>
             Shown to families on your registration page, under the class name.
+            Line breaks are kept, so you can write more than one paragraph.
+            {descCount && (
+              <>
+                {' '}
+                <span style={{ color: descCount.atLimit ? RED : MUTED, fontWeight: descCount.atLimit ? 600 : 400 }}>
+                  {descCount.text}
+                </span>
+              </>
+            )}
           </div>
         </div>
 
@@ -1471,6 +1526,33 @@ export default function QuickProgramBuilder() {
                     No address saved for this location yet — families won't see one. Add it under Programs → Locations.
                   </div>
                 )
+              )}
+              {/* Classroom, optional, and only once a location is chosen — "Room 12"
+                  means nothing without knowing which building. Sits AFTER the venue's
+                  own address/add-a-site controls rather than between them, so the
+                  location block stays one thing and this reads as the next question.
+                  Deliberately NOT required. Jessica: "we set up programs and open for
+                  registration before actually knowing the classroom # often" — she is
+                  still waiting on several schools and Facilitron. So this is for the
+                  operator who already knows, and it stays editable afterwards on the
+                  Scheduled Programs panel for everyone else. */}
+              {locationId && (
+                <div style={{ marginTop: 12 }}>
+                  <label style={labelStyle} htmlFor="qpb-room">Classroom or room number (optional)</label>
+                  <input
+                    id="qpb-room"
+                    type="text"
+                    style={inputStyle}
+                    value={room}
+                    onChange={(e) => setRoom(e.target.value)}
+                    placeholder="e.g. Room 12, Gym B, Music Room"
+                    maxLength={60}
+                  />
+                  <div style={helpStyle}>
+                    Appears on instructor rosters. Leave it blank if you don&rsquo;t know yet
+                    &mdash; you can add it later from Scheduled programs.
+                  </div>
+                </div>
               )}
               {/* A location with no district has no school calendar, so this
                   class's dates will NOT skip no-school days. Three of the four
