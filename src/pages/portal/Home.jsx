@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
-import { districtFullName } from '../../lib/tenants.js';
 import { useCart } from '../../context/CartContext.jsx';
 import { isEmbedContext } from '../../layouts/PublicLayout.jsx';
 import {
@@ -56,6 +55,7 @@ export default function Home() {
   const [weeklyClasses, setWeeklyClasses] = useState([]); // recurring class_schedule (outside-registration tenants), safe public view
   const [loading, setLoading] = useState(true);
   const [locationFilter, setLocationFilter] = useState('all'); // lean multi-location filter
+  const [districtFilter, setDistrictFilter] = useState('all'); // lean district tier, above locations
   // Fee config, so the class card can show what a family will actually pay.
   // The doc's rule is "never a surprise at the end" - until now the service fee
   // first appeared at the Pay step, after they had entered a child's details.
@@ -150,14 +150,23 @@ export default function Home() {
         .select('hero_headline, hero_subtext, banner_image_url')
         .eq('organization_id', org.id)
         .maybeSingle(),
+      // districts(name) is the district a provider actually PICKED. The
+      // `district` text column beside it is the legacy free-text code - the
+      // admin UI labels it "Legacy district code (internal), kept only to match
+      // calendars you uploaded before districts existed". This page read that
+      // legacy field, so a provider who used the picker (Jeff: all 22 locations
+      // via district_id, all 22 with district = NULL) had every location fall
+      // into "Other schools & sites" and the picker was useless to them. It is
+      // still selected here because other surfaces match calendars on it; it is
+      // no longer what this page groups by.
       supabase
         .from('program_locations')
-        .select('id, name, district, address, organization_id')
+        .select('id, name, district, district_id, address, organization_id, districts(name)')
         .eq('organization_id', org.id)
         .order('name'),
       supabase
         .from('programs')
-        .select('*, program_locations(name)')
+        .select('*, program_locations(name, district_id, districts(name))')
         .eq('organization_id', org.id)
         .eq('term', catalogTerm)
         .eq('status', 'open')
@@ -228,6 +237,17 @@ export default function Home() {
     return groups;
   }, [weeklyClasses]);
 
+  // The district name a provider CHOSE, rendered verbatim.
+  //
+  // Jessica, 2026-08-06: "let him name his districts. parents know the acronym
+  // their kid is in." So "PPS" stays "PPS" - we do not translate it. This
+  // deliberately replaces districtFullName(), which mapped ten Portland-area
+  // codes to full names and would have silently overridden a provider's own
+  // wording (Jeff's "PPS" would have rendered as "Portland Public Schools").
+  // Uniformity is already guaranteed upstream: a location's district is PICKED
+  // from the provider's own districts list, not typed per school.
+  const districtOf = (school) => school?.districts?.name || null;
+
   // Only districts that have at least one school with an open program. Schools
   // with no district collect under a single "Other schools & sites" bucket
   // (sorted last) instead of vanishing or each becoming its own district.
@@ -237,12 +257,11 @@ export default function Home() {
     let hasOther = false;
     schools.forEach((s) => {
       if (!schoolsWithPrograms.has(s.id)) return;
-      if (s.district) districts.add(s.district);
+      const d = districtOf(s);
+      if (d) districts.add(d);
       else hasOther = true;
     });
-    const sorted = [...districts].sort((a, b) =>
-      districtFullName(a).localeCompare(districtFullName(b)),
-    );
+    const sorted = [...districts].sort((a, b) => a.localeCompare(b));
     if (hasOther) sorted.push(OTHER_DISTRICT);
     return sorted;
   }, [schools, programs]);
@@ -252,7 +271,7 @@ export default function Home() {
     const withPrograms = new Set(programs.map((p) => p.program_location_id));
     return schools
       .filter((s) => withPrograms.has(s.id)
-        && (selectedDistrict === OTHER_DISTRICT ? !s.district : s.district === selectedDistrict))
+        && (selectedDistrict === OTHER_DISTRICT ? !districtOf(s) : districtOf(s) === selectedDistrict))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [selectedDistrict, schools, programs]);
 
@@ -275,7 +294,7 @@ export default function Home() {
     if (!prog) return; // not in the current catalog (e.g. a non-FA26 program) — show normal catalog
     const school = schools.find((s) => s.id === prog.program_location_id);
     if (!school) return;
-    setSelectedDistrict(school.district || OTHER_DISTRICT);
+    setSelectedDistrict(districtOf(school) || OTHER_DISTRICT);
     setSelectedSchool(school.id);
     setHighlightProgram(programId);
   }, [programs, schools, searchParams, selectedSchool]);
@@ -313,6 +332,7 @@ export default function Home() {
   const paymentsReady = org?.stripe_charges_enabled !== false;
   if (isLeanReg) {
     const allOpen = programs || [];
+
     // Distinct locations among the open programs — drives the multi-location filter.
     const seenLoc = new Set();
     const locOptions = [];
@@ -321,9 +341,47 @@ export default function Home() {
       if (nm && !seenLoc.has(nm)) { seenLoc.add(nm); locOptions.push(nm); }
     }
     const hasMultiLoc = locOptions.length >= 2;
-    const openPrograms = hasMultiLoc && locationFilter !== 'all'
-      ? allOpen.filter((p) => p.program_locations?.name === locationFilter)
-      : allOpen;
+
+    // District grouping, from the district the provider PICKED (never the legacy
+    // free-text code). Two reasons this is a separate tier above the location
+    // pills rather than more pills: a provider with 13 schools in one district
+    // and 5 in another gets an unreadable row of 18 pills, and a parent thinks
+    // "which district is my kid in" before "which school".
+    //
+    // Shown ONLY when the districts prove themselves: at least two distinct
+    // districts among locations that actually have an open program. One district
+    // (Jeff today: 2 open programs, both PPS) adds a control that filters
+    // nothing, and providers with no districts at all (shoreview-chess: 2
+    // locations, zero districts) must never see a district step.
+    const districtOptions = [];
+    const seenDist = new Set();
+    let leanHasUndistricted = false;
+    for (const p of allOpen) {
+      const d = p.program_locations?.districts?.name || null;
+      if (d) { if (!seenDist.has(d)) { seenDist.add(d); districtOptions.push(d); } }
+      else leanHasUndistricted = true;
+    }
+    districtOptions.sort((a, b) => a.localeCompare(b));
+    if (leanHasUndistricted && districtOptions.length) districtOptions.push(OTHER_DISTRICT);
+    const hasMultiDistrict = seenDist.size >= 2;
+
+    const inDistrict = (p) => {
+      if (!hasMultiDistrict || districtFilter === 'all') return true;
+      const d = p.program_locations?.districts?.name || null;
+      return districtFilter === OTHER_DISTRICT ? !d : d === districtFilter;
+    };
+
+    // Locations offered narrow to the chosen district, so the second control
+    // never lists a school the first one just filtered out.
+    const locOptionsShown = hasMultiDistrict && districtFilter !== 'all'
+      ? locOptions.filter((nm) => allOpen.some((p) => p.program_locations?.name === nm && inDistrict(p)))
+      : locOptions;
+
+    const openPrograms = allOpen.filter((p) => {
+      if (!inDistrict(p)) return false;
+      if (!hasMultiLoc || locationFilter === 'all') return true;
+      return p.program_locations?.name === locationFilter;
+    });
     const leanCard = (hl) => ({
       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
       padding: '16px 18px', border: `1px solid ${hl ? '#5847C9' : '#e2dfd5'}`,
@@ -400,20 +458,69 @@ export default function Home() {
                 <h2 style={{ fontSize: 19, fontWeight: 700, margin: '2px 0 16px' }}>
                   {openPrograms.length === 1 ? '1 open program' : `${openPrograms.length} open programs`}
                 </h2>
-                {hasMultiLoc && (
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '0 0 16px' }}>
-                    {['all', ...locOptions].map((loc) => {
-                      const active = locationFilter === loc;
-                      return (
-                        <button key={loc} onClick={() => setLocationFilter(loc)} style={{
-                          padding: '6px 14px', borderRadius: 100, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                          border: `1px solid ${active ? '#5847C9' : '#e2dfd5'}`,
-                          background: active ? '#5847C9' : '#fff', color: active ? '#fff' : '#1a1a1a',
-                        }}>
-                          {loc === 'all' ? 'All locations' : loc}
-                        </button>
-                      );
-                    })}
+                {/* District first, school second — the order a parent thinks in.
+                    Each tier appears only when it would actually narrow anything. */}
+                {hasMultiDistrict && (
+                  <div style={{ margin: '0 0 10px' }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#6b6b6b', margin: '0 0 6px' }}>District</div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {['all', ...districtOptions].map((d) => {
+                        const active = districtFilter === d;
+                        return (
+                          <button
+                            key={d}
+                            onClick={() => { setDistrictFilter(d); setLocationFilter('all'); }}
+                            aria-pressed={active}
+                            style={{
+                              padding: '6px 14px', borderRadius: 100, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                              border: `1px solid ${active ? '#5847C9' : '#e2dfd5'}`,
+                              background: active ? '#5847C9' : '#fff', color: active ? '#fff' : '#1a1a1a',
+                              fontFamily: 'inherit',
+                            }}
+                          >
+                            {d === 'all' ? 'All districts' : d}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {hasMultiLoc && locOptionsShown.length >= 2 && (
+                  <div style={{ margin: '0 0 16px' }}>
+                    {hasMultiDistrict && (
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#6b6b6b', margin: '0 0 6px' }}>School or site</div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {['all', ...locOptionsShown].map((loc) => {
+                        const active = locationFilter === loc;
+                        return (
+                          <button key={loc} onClick={() => setLocationFilter(loc)} aria-pressed={active} style={{
+                            padding: '6px 14px', borderRadius: 100, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                            border: `1px solid ${active ? '#5847C9' : '#e2dfd5'}`,
+                            background: active ? '#5847C9' : '#fff', color: active ? '#fff' : '#1a1a1a',
+                            fontFamily: 'inherit',
+                          }}>
+                            {loc === 'all' ? 'All locations' : loc}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {/* A filter that hides everything must say so, or the page looks
+                    broken rather than filtered. */}
+                {openPrograms.length === 0 && (
+                  <div style={{ color: '#6b6b6b', padding: '18px 0', textAlign: 'center', fontSize: 14 }}>
+                    No classes match that filter.{' '}
+                    <button
+                      onClick={() => { setDistrictFilter('all'); setLocationFilter('all'); }}
+                      style={{
+                        background: 'none', border: 'none', padding: 0, font: 'inherit',
+                        color: '#5847C9', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline',
+                      }}
+                    >
+                      Show all classes
+                    </button>
                   </div>
                 )}
                 <div style={{ display: 'grid', gap: 12 }}>
@@ -651,7 +758,7 @@ export default function Home() {
                     <option value="">Select a district&hellip;</option>
                     {activeDistricts.map((d) => (
                       <option key={d} value={d}>
-                        {districtFullName(d)}
+                        {d}
                       </option>
                     ))}
                   </select>
