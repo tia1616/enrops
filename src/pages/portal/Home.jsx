@@ -320,9 +320,13 @@ export default function Home() {
   }
 
   // Lean, enrops-branded registration for self-serve operators (everyone except
-  // legacy J2S). No hardcoded J2S hero and no district->school picker: the org's
-  // open programs render as a simple list straight to checkout, so a location-less
-  // program is reachable. J2S (legacy_own_platform) keeps its existing page below.
+  // legacy J2S). No hardcoded J2S hero, and the open programs render as a list
+  // straight to checkout so a location-less program is still reachable. J2S
+  // (legacy_own_platform) keeps its existing page below.
+  //
+  // This comment used to say "no district->school picker". That stopped being true
+  // when the school select landed: locations ARE grouped by district here now, it
+  // just filters the list rather than gating it behind a district choice.
   const isLeanReg = org?.instructor_pay_model !== 'legacy_own_platform';
   // Can this provider actually be paid? Only gates the LEAN catalog — J2S is
   // connected and its page below is untouched. `!== false` so an older cached
@@ -332,12 +336,24 @@ export default function Home() {
   if (isLeanReg) {
     const allOpen = programs || [];
 
-    // Distinct locations among the open programs — drives the multi-location filter.
+    // Distinct locations among the open programs — drives the school select.
+    //
+    // Keyed on location ID, not name. Two real locations can share a name: staging
+    // riverbend has two rows both called "Ainsworth Elementary School", one in PPS
+    // and one with no district. Keying on the name collapsed them into a single
+    // option that filtered by name and so showed BOTH locations' classes, and under
+    // grouping the same label could appear beneath two different district headings
+    // with no way to tell them apart. Verified none exist on prod TODAY, so this is
+    // a latent bug being closed rather than a live one - and J2S has 63 locations,
+    // so it was going to happen.
     const seenLoc = new Set();
-    const locOptions = [];
+    const locOptions = []; // { id, name, district }
     for (const p of allOpen) {
+      const id = p.program_location_id;
       const nm = p.program_locations?.name;
-      if (nm && !seenLoc.has(nm)) { seenLoc.add(nm); locOptions.push(nm); }
+      if (!id || !nm || seenLoc.has(id)) continue;
+      seenLoc.add(id);
+      locOptions.push({ id, name: nm, district: p.program_locations?.districts?.name || OTHER_DISTRICT });
     }
     const hasMultiLoc = locOptions.length >= 2;
 
@@ -359,30 +375,30 @@ export default function Home() {
     // for free. A modal would hide the one thing the family came for behind an
     // extra tap, and it earns its keep only for multi-dimensional filtering. Here
     // there is one dimension.
-    const groups = new Map(); // district name (or OTHER_DISTRICT) -> Set of location names
-    for (const p of allOpen) {
-      const nm = p.program_locations?.name;
-      if (!nm) continue;
-      const d = p.program_locations?.districts?.name || OTHER_DISTRICT;
-      if (!groups.has(d)) groups.set(d, new Set());
-      groups.get(d).add(nm);
+    const groups = new Map(); // district name (or OTHER_DISTRICT) -> [{ id, name }]
+    for (const loc of locOptions) {
+      if (!groups.has(loc.district)) groups.set(loc.district, []);
+      groups.get(loc.district).push(loc);
     }
+    for (const list of groups.values()) list.sort((a, b) => a.name.localeCompare(b.name));
+
     // Named districts alphabetically; the undistricted bucket always last, so it
-    // reads as a remainder rather than competing with real district names.
-    const groupNames = [...groups.keys()]
+    // reads as a remainder rather than competing with real district names. Jessica
+    // named what lives there: parks and rec, libraries, charters.
+    const namedGroups = [...groups.keys()]
       .filter((d) => d !== OTHER_DISTRICT)
       .sort((a, b) => a.localeCompare(b));
-    if (groups.has(OTHER_DISTRICT)) groupNames.push(OTHER_DISTRICT);
+    const groupNames = groups.has(OTHER_DISTRICT) ? [...namedGroups, OTHER_DISTRICT] : namedGroups;
 
     // Group headings only when they group something: with one district (Jeff
     // today: 2 open programs, both PPS) or none at all (shoreview-chess: 2
     // locations, zero districts) a heading adds a line of chrome and no meaning,
     // so the select degrades to a flat list of schools.
-    const useGroups = groupNames.filter((d) => d !== OTHER_DISTRICT).length >= 2;
+    const useGroups = namedGroups.length >= 2;
 
     const openPrograms = !hasMultiLoc || locationFilter === 'all'
       ? allOpen
-      : allOpen.filter((p) => p.program_locations?.name === locationFilter);
+      : allOpen.filter((p) => p.program_location_id === locationFilter);
     const leanCard = (hl) => ({
       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
       padding: '16px 18px', border: `1px solid ${hl ? '#5847C9' : '#e2dfd5'}`,
@@ -483,14 +499,17 @@ export default function Home() {
                       {useGroups
                         ? groupNames.map((d) => (
                             <optgroup key={d} label={d}>
-                              {[...groups.get(d)].sort((a, b) => a.localeCompare(b)).map((nm) => (
-                                <option key={nm} value={nm}>{nm}</option>
+                              {groups.get(d).map((loc) => (
+                                <option key={loc.id} value={loc.id}>{loc.name}</option>
                               ))}
                             </optgroup>
                           ))
-                        : locOptions.slice().sort((a, b) => a.localeCompare(b)).map((nm) => (
-                            <option key={nm} value={nm}>{nm}</option>
-                          ))}
+                        : locOptions
+                            .slice()
+                            .sort((a, b) => a.name.localeCompare(b.name))
+                            .map((loc) => (
+                              <option key={loc.id} value={loc.id}>{loc.name}</option>
+                            ))}
                     </select>
                   </div>
                 )}
