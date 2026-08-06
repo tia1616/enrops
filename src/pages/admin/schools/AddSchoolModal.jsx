@@ -321,7 +321,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
           </button>
           <button type="button" onClick={save} disabled={busy}
             style={{ padding: "9px 18px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1 }}>
-            {busy ? "Adding…" : "Add partner"}
+            {busy ? "Adding…" : "Add location"}
           </button>
         </div>
       </div>

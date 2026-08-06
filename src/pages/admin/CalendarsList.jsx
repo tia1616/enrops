@@ -837,8 +837,14 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
                 <div style={{ fontSize: 14, fontWeight: 600, color: PURPLE }}>
                   Reading the calendar…
                 </div>
+                {/* Honest per-source estimates. The old flat "10–20 seconds"
+                    was measured on pasted text; a real multi-page district PDF
+                    fetched from a URL took 1m30s, so the banner was promising
+                    something it could miss by 5x. Pasted text really is quick. */}
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-                  Usually takes 10–20 seconds.
+                  {extractMode === "text"
+                    ? "Usually takes 10–20 seconds."
+                    : "Usually takes 30–90 seconds. A long or multi-page PDF can take up to about 2 minutes."}
                 </div>
               </div>
               <div style={{ marginLeft: "auto", fontSize: 18, fontWeight: 700, color: PURPLE, fontVariantNumeric: "tabular-nums" }}>
