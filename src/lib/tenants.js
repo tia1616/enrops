@@ -24,24 +24,21 @@ export const TENANTS = {
   },
 };
 
-// District code → full name mapping (per Brand & Copy Rules §10)
-export const DISTRICT_NAMES = {
-  PPS: 'Portland Public Schools',
-  BSD: 'Beaverton School District',
-  HSD: 'Hillsboro School District',
-  LOSD: 'Lake Oswego School District',
-  NCSD: 'North Clackamas School District',
-  TTSD: 'Tigard-Tualatin School District',
-  Newberg: 'Newberg School District',
-  'Happy Valley': 'Happy Valley Parks and Recreation',
-  Private: 'Private & Independent Schools',
-  Charter: 'Charter Schools',
-};
-
-export function districtFullName(code) {
-  return DISTRICT_NAMES[code] || code;
-}
-
+// REMOVED 2026-08-06: DISTRICT_NAMES + districtFullName().
+//
+// It mapped ten Portland-area district codes to full names, and the public
+// registration page was its only consumer. Two things made it wrong to keep:
+//
+//   1. District names now live in the org-scoped `districts` table, entered by
+//      each provider and PICKED per location - so the correct name is already in
+//      the database for every tenant, not just the ten codes J2S happened to use.
+//   2. Jessica, 2026-08-06: "let him name his districts. parents know the acronym
+//      their kid is in." A translation table silently OVERRIDES a provider's own
+//      wording - it would have turned Jeff's chosen "PPS" into "Portland Public
+//      Schools" without asking him.
+//
+// The registration page now renders `districts.name` verbatim. If a per-tenant
+// display override is ever wanted, it belongs on the districts row, not in code.
 export function getTenant(slug) {
   return TENANTS[slug] || null;
 }
