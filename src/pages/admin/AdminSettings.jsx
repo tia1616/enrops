@@ -198,7 +198,7 @@ export default function AdminSettings() {
           no top-level venue nav. It is now a tab under Programs -- next to the
           classes it serves, rather than in a drawer you configure once -- so
           keeping a duplicate entry point here would be two doors to one room.
-          J2S is unaffected: it keeps its own top-level Partners item. */}
+          J2S is unaffected: it keeps its own top-level Locations item. */}
 
       {org?.instructor_pay_model !== "enrops_platform" && (
       <section style={{ marginTop: 24 }}>

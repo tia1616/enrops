@@ -65,7 +65,10 @@ const NAV = [
     ],
   },
   {
-    to: "/admin/schools", label: "Partners",
+    // "Locations" for every venue_model (Jessica, 2026-08-05) — one name for the
+    // one surface. Was "Partners" for partner_venues orgs, which sent a provider
+    // hunting for the district field under a word he didn't associate with places.
+    to: "/admin/schools", label: "Locations",
     match: ["/admin/schools", "/admin/calendars"],
   },
   {
@@ -119,7 +122,7 @@ const NAV = [
 // Lean registration operators (instructor_pay_model === 'enrops_platform') run a
 // registration-only surface — no instructors, curriculum library, or comms yet.
 // Trim the sidebar to Home . Programs . Finances . Discounts . Settings and hide
-// the paid / curriculum surfaces. Locations (the Partners surface) is a TAB
+// the paid / curriculum surfaces. Locations (the /admin/schools surface) is a TAB
 // under Programs for lean ops — they pick a venue every time they build a class,
 // so it belongs beside the programs it serves and not in Settings, where it
 // briefly lived. Any legacy_own_platform tenant (J2S) keeps the
@@ -142,7 +145,7 @@ function shapeNavForOrg(nav, org) {
                                      // ROUTE still works, so any org that
                                      // already has a second admin keeps it.
     "/admin/schedule",               // Instructors (paid upgrade)
-    "/admin/schools",                // Locations/Partners -> now a tab under
+    "/admin/schools",                // Locations -> now a tab under
                                      // Programs (see the tabs block below), so
                                      // it stays off the top-level sidebar.
     "/admin/family-comms/contacts",  // Comms (paid upgrade)
@@ -169,7 +172,7 @@ function shapeNavForOrg(nav, org) {
           // belongs beside the programs it shapes. navItemActive lights Programs
           // on /admin/calendars via this tab.
           { to: "/admin/calendars", label: "School calendar" },
-          { to: "/admin/schools", label: org?.venue_model === "own_venue" ? "Locations" : "Partners" },
+          { to: "/admin/schools", label: "Locations" },
         ],
       });
       continue;
@@ -671,14 +674,12 @@ export default function AdminLayout() {
           <nav style={{ padding: "12px 8px", flex: 1 }}>
             {visibleNav.map((item) => {
               const active = navItemActive(item, location.pathname);
-              // Own-venue tenants (a center/studio, no external partner schools)
-              // see the /admin/schools surface as plain "Locations" — mirror the
-              // page's own reframing so the sidebar matches. Partner tenants (J2S)
-              // are unaffected and keep "Partners".
-              const label =
-                item.to === "/admin/schools" && org?.venue_model === "own_venue"
-                  ? "Locations"
-                  : item.label;
+              // The /admin/schools label used to be swapped to "Locations" for
+              // own_venue orgs only; the base label is now "Locations" for every
+              // venue_model, so no per-org override is needed. Any future
+              // venue_model-specific naming belongs in the nav definition above,
+              // not here.
+              const label = item.label;
               return (
                 <Link
                   key={item.to}

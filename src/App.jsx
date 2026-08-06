@@ -248,12 +248,14 @@ export default function App() {
         <Route path="programs/:programId/roster" element={<ProgramRoster />} />
         <Route path="schools" element={<SchoolsLocations />} />
         {/* The classic Partners/Locations tabs were retired 2026-06-23; the
-            unified Partners surface (/admin/schools) is the single home. Redirect
-            every legacy URL there so bookmarks/email links still resolve. */}
+            unified venue surface (/admin/schools, titled "Locations" for every
+            venue_model as of 2026-08-05) is the single home. Redirect every
+            legacy URL there so bookmarks/email links still resolve. */}
         <Route path="locations" element={<Navigate to="/admin/schools" replace />} />
-        {/* School calendar is its own page now (was a redirect into the Partners
-            tab). Lean nav surfaces it as a peer tab under Programs; full nav keeps
-            reaching it under Partners (AdminLayout Partners `match` includes it). */}
+        {/* School calendar is its own page now (was a redirect into the venue
+            surface's tab). Lean nav surfaces it as a peer tab under Programs;
+            full nav keeps reaching it under Locations (that nav item's `match`
+            includes it). */}
         <Route path="calendars" element={<CalendarsList />} />
         <Route path="contacts" element={<Navigate to="/admin/schools" replace />} />
         <Route path="instructors" element={<InstructorsPage />} />

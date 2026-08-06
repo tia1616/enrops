@@ -1,9 +1,18 @@
-// AddSchoolModal — the unified, fast "Add a school" flow.
+// AddSchoolModal — the unified, fast "Add a location" flow.
 //
 // One step: type the name (Places autocomplete fills the address), pick a type,
-// optionally a district, and save. Behind the scenes it writes BOTH a partners
-// row and an auto-linked program_locations row (1:1), so every school created
+// choose the district, and save. Behind the scenes it writes BOTH a partners
+// row and an auto-linked program_locations row (1:1), so every location created
 // here is clean from day one — the operator never sees the two-table plumbing.
+//
+// DISTRICT IS AN EXPLICIT CHOICE (2026-08-05). The district select used to
+// default to "" = "no public district", so an operator who never touched it got
+// a location with no district — and therefore programs whose dates never skip
+// no-school days, with nothing on screen saying so. On prod, 17 of one
+// provider's 22 locations were in that state. Now "" means UNCHOSEN and save
+// refuses it; "no district" is still available but must be picked deliberately,
+// and states its consequence. Nothing here auto-detects a district (Places fills
+// only name + address) — the operator always chooses.
 //
 // For umbrellas (Parks & Rec, a district that runs many sites), an "advanced"
 // toggle attaches the new venue to an EXISTING partner instead of creating a
@@ -24,6 +33,9 @@ const RULE = "#e2dfd5";
 const RED = "#b53737";
 
 const NEW_DISTRICT = "__new__";
+// Explicit "this place has no district" (a library, church, private site). Kept
+// distinct from "" so an untouched select can't silently mean "no district".
+const NO_DISTRICT = "__none__";
 const NEW_UMBRELLA = "__new_umbrella__";
 
 const PARTNER_TYPES = [
@@ -66,6 +78,12 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
   }
 
   async function resolveDistrictId() {
+    // "" = the operator hasn't chosen yet. Refuse rather than silently saving a
+    // districtless location (see the DISTRICT IS AN EXPLICIT CHOICE note above).
+    if (districtId === "") {
+      throw new Error("Choose this location's district — or pick “No district” if it doesn't follow one.");
+    }
+    if (districtId === NO_DISTRICT) return null; // deliberate: no district
     if (districtId !== NEW_DISTRICT) return districtId || null;
     const nm = newDistrictName.trim();
     if (!nm) throw new Error("Enter a name for the new district, or pick an existing one.");
@@ -81,7 +99,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
   async function save() {
     setError("");
     const trimmed = name.trim();
-    if (!trimmed) { setError("Partner name is required."); return; }
+    if (!trimmed) { setError("Location name is required."); return; }
     if (umbrellaMode && !umbrellaPartnerId) { setError("Pick the umbrella org this venue belongs to, or create one."); return; }
     if (umbrellaMode && umbrellaPartnerId === NEW_UMBRELLA && !newUmbrellaName.trim()) {
       setError("Enter a name for the new umbrella org."); return;
@@ -169,7 +187,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
-          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: INK }}>Add a partner</h2>
+          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: INK }}>Add a location</h2>
           <button type="button" onClick={onClose} disabled={busy} aria-label="Close"
             style={{ background: "transparent", border: "none", color: MUTED, fontSize: 18, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
@@ -186,7 +204,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <label>
-            <Lbl>Partner name *</Lbl>
+            <Lbl>Location name *</Lbl>
             {placesEnabled ? (
               <PlacesAutocomplete
                 value={name}
@@ -214,13 +232,30 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
               </select>
             </label>
             <label>
-              <Lbl>District (optional)</Lbl>
+              <Lbl>District *</Lbl>
               <select value={districtId} onChange={(e) => setDistrictId(e.target.value)} style={inputStyle} disabled={busy}>
-                <option value="">Other schools &amp; sites (no public district)</option>
+                <option value="">Choose a district…</option>
                 {districts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 <option value={NEW_DISTRICT}>+ Create a new district…</option>
+                <option value={NO_DISTRICT}>No district (library, church, private site)</option>
               </select>
             </label>
+          </div>
+
+          {/* Say what the district DOES, and what skipping it costs, right where
+              the choice is made. Three states, three sentences (no shared
+              fallback that would overstate the unchosen case). */}
+          <div style={{ fontSize: 12, color: districtId === NO_DISTRICT ? "#8a6d1f" : MUTED, marginTop: -6, lineHeight: 1.5 }}>
+            {districtId === NO_DISTRICT
+              ? "No district means no school calendar here, so this location's class dates won't skip no-school days. You can set a district later."
+              : districtId === ""
+                ? "The district's calendar is what makes class dates skip no-school days. Pick the one this location follows."
+                /* Deliberately conditional: a just-created district (and an
+                   existing one nobody has uploaded a calendar for yet) has no
+                   no-school dates on file, so promising dates "will skip
+                   automatically" would be false in exactly the state a new
+                   operator is in. */
+                : "Class dates here will skip this district's no-school days once its school calendar is on file."}
           </div>
 
           {districtId === NEW_DISTRICT && (

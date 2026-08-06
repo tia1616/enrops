@@ -93,7 +93,7 @@ export default function SchoolsList() {
     if (pErr || lErr) {
       // Surface the failure instead of spinning "Loading…" forever (rule E).
       console.error("[SchoolsList] load failed:", pErr ?? lErr);
-      setLoadError(`Couldn't load partners: ${(pErr ?? lErr).message}. Refresh to try again.`);
+      setLoadError(`Couldn't load locations: ${(pErr ?? lErr).message}. Refresh to try again.`);
       setPartners([]);
       return;
     }
@@ -251,11 +251,19 @@ export default function SchoolsList() {
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: MUTED }}>
-          {partners === null ? "Loading…" : `${schools.length} partner${schools.length === 1 ? "" : "s"} · ${totalVenues} venue${totalVenues === 1 ? "" : "s"} · ${districts.length} district${districts.length === 1 ? "" : "s"}`}
+          {/* "Locations" is the operator-facing name for a row here. The venue
+              count is only shown when it DIFFERS (contact-only rows, or an
+              umbrella with several venues) — for the common 1:1 case "22
+              locations · 22 venues" read as two different things. */}
+          {partners === null ? "Loading…" : [
+            `${schools.length} location${schools.length === 1 ? "" : "s"}`,
+            ...(totalVenues !== schools.length ? [`${totalVenues} venue${totalVenues === 1 ? "" : "s"}`] : []),
+            `${districts.length} district${districts.length === 1 ? "" : "s"}`,
+          ].join(" · ")}
         </div>
         {partners !== null && schools.length > 0 && (
           <span
-            title={`Setting up a partner by hand — entering details, looking up the address, and linking contacts + calendar across your tools — runs about ${MINUTES_SAVED_PER_PARTNER} min each. Enrops does it in a couple of clicks.`}
+            title={`Setting up a location by hand — entering details, looking up the address, and linking contacts + calendar across your tools — runs about ${MINUTES_SAVED_PER_PARTNER} min each. Enrops does it in a couple of clicks.`}
             style={{ fontSize: 12, fontWeight: 600, color: OK, background: `${OK}14`, padding: "4px 10px", borderRadius: 99 }}
           >
             {savedLabel} saved vs. by hand
@@ -270,18 +278,18 @@ export default function SchoolsList() {
           </button>
         )}
         <button type="button" onClick={() => setImporting(true)}
-          title="Bulk-upload a list of partners (schools, Parks & Rec, etc.) + contacts from a spreadsheet"
+          title="Bulk-upload a list of locations (schools, Parks & Rec, etc.) + contacts from a spreadsheet"
           style={{ padding: "9px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-          Import partners
+          Import locations
         </button>
         <button type="button" onClick={() => setAdding(true)}
           style={{ padding: "9px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-          + Add a partner
+          + Add a location
         </button>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
-        <input type="text" placeholder="Search partners, districts, areas…" value={query} onChange={(e) => setQuery(e.target.value)}
+        <input type="text" placeholder="Search locations, districts, areas…" value={query} onChange={(e) => setQuery(e.target.value)}
           style={{ flex: "1 1 260px", maxWidth: 360, padding: "8px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", boxSizing: "border-box" }} />
         <button type="button" onClick={() => setGroupByDistrict((v) => !v)}
           style={chip(groupByDistrict)}>
@@ -314,8 +322,8 @@ export default function SchoolsList() {
 
       {partners !== null && filtered.length === 0 && (
         <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 12, padding: 36, textAlign: "center", color: MUTED, fontSize: 14 }}>
-          {query ? "No partners match that search." : (
-            <>No partners yet. Click <strong>+ Add a partner</strong> to set up your first one.</>
+          {query ? "No locations match that search." : (
+            <>No locations yet. Click <strong>+ Add a location</strong> to set up your first one.</>
           )}
         </div>
       )}
@@ -323,8 +331,19 @@ export default function SchoolsList() {
       {groups.map((g) => (
         <div key={g.key} style={{ marginBottom: 18 }}>
           {g.label && (
-            <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, margin: "4px 2px 8px" }}>
-              {g.label}
+            <div style={{ margin: "4px 2px 8px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6 }}>
+                {g.label}
+              </div>
+              {/* A location with no district has no school calendar, so its class
+                  dates never skip no-school days — and nothing else on this page
+                  says so. Name the consequence and the fix right on the bucket
+                  that has the problem. */}
+              {g.key === NO_DISTRICT && (
+                <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4, lineHeight: 1.5, textTransform: "none", letterSpacing: 0, fontWeight: 400 }}>
+                  Class dates here won&rsquo;t skip no-school days. Open a location below and set its district to fix that.
+                </div>
+              )}
             </div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
