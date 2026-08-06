@@ -774,6 +774,43 @@ export default function QuickProgramBuilder() {
     if (cadence !== "both") setMode(cadence === "one_off" ? "one_off" : "weekly");
   }
 
+  // Leaving the form without creating anything.
+  //
+  // "Dirty" is measured against what the form SEEDS ITSELF WITH, not against
+  // blank. Ages pre-fill from the org's usual range, spots and sessions have
+  // defaults, and a single-location org gets its one location auto-selected - so
+  // comparing to "" would make an untouched form report itself dirty and confirm
+  // on every cancel, which trains the operator to click through the one prompt
+  // that is supposed to protect them.
+  const seededAgeMin = profile.default_age_min != null ? String(profile.default_age_min) : "";
+  const seededAgeMax = profile.default_age_max != null ? String(profile.default_age_max) : "";
+  const seededLocationId = locations.length === 1 ? locations[0].id : "";
+  const formIsDirty =
+    name.trim() !== "" ||
+    description.trim() !== "" ||
+    room.trim() !== "" ||
+    price.trim() !== "" ||
+    day !== "" ||
+    startDate !== "" ||
+    startTime !== "" ||
+    endTime !== "" ||
+    photoUrl !== "" ||
+    locationId !== seededLocationId ||
+    ageMin !== seededAgeMin ||
+    ageMax !== seededAgeMax ||
+    spots !== "18" ||
+    sessions !== "8";
+
+  function handleCancel() {
+    if (formIsDirty) {
+      const ok = window.confirm(
+        "Leave without creating this class? Nothing has been created yet, and what you've typed will be lost.",
+      );
+      if (!ok) return;
+    }
+    navigate("/admin/programs");
+  }
+
   // Guard: outlet not ready yet.
   if (!org) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
@@ -981,13 +1018,26 @@ export default function QuickProgramBuilder() {
             </div>
           )}
 
-          <button
-            onClick={saveProfile}
-            disabled={!profileValid || savingProfile}
-            style={{ ...primaryBtn, width: "100%", opacity: !profileValid || savingProfile ? 0.55 : 1, cursor: !profileValid || savingProfile ? "not-allowed" : "pointer" }}
-          >
-            {savingProfile ? "Saving…" : "Next: build my first class →"}
-          </button>
+          {/* Same trap as the form below it: one button, and it was the only way
+              off the screen. Nothing here is saved until "Next", so leaving costs
+              nothing and the questions come back next time. */}
+          <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+            <button
+              type="button"
+              onClick={() => navigate("/admin/programs")}
+              disabled={savingProfile}
+              style={{ ...secondaryBtn, flex: "0 0 auto", opacity: savingProfile ? 0.55 : 1, cursor: savingProfile ? "not-allowed" : "pointer" }}
+            >
+              Not now
+            </button>
+            <button
+              onClick={saveProfile}
+              disabled={!profileValid || savingProfile}
+              style={{ ...primaryBtn, flex: 1, opacity: !profileValid || savingProfile ? 0.55 : 1, cursor: !profileValid || savingProfile ? "not-allowed" : "pointer" }}
+            >
+              {savingProfile ? "Saving…" : "Next: build my first class →"}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -1309,15 +1359,15 @@ export default function QuickProgramBuilder() {
           <div style={helpStyle}>
             Shown to families on your registration page, under the class name.
             Line breaks are kept, so you can write more than one paragraph.
-            {descCount && (
-              <>
-                {' '}
-                <span style={{ color: descCount.atLimit ? RED : MUTED, fontWeight: descCount.atLimit ? 600 : 400 }}>
-                  {descCount.text}
-                </span>
-              </>
-            )}
           </div>
+          {/* Its OWN line, not the tail of the help sentence. Inline, it read as
+              "...more than one paragraph. 4 characters." - an unfinished sentence
+              rather than a count. Jessica found that on prod. */}
+          {descCount && (
+            <div style={{ ...helpStyle, marginTop: 2, color: descCount.atLimit ? RED : MUTED, fontWeight: descCount.atLimit ? 600 : 400 }}>
+              {descCount.text}
+            </div>
+          )}
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -1728,13 +1778,36 @@ export default function QuickProgramBuilder() {
           </div>
         )}
 
-        <button
-          onClick={handleCreate}
-          disabled={!valid || submitting}
-          style={{ ...primaryBtn, width: "100%", opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
-        >
-          {submitting ? "Creating…" : "Create program & get link"}
-        </button>
+        {/* Cancel BESIDE Create, not instead of it. Until now the only button on
+            this form was the irreversible one: there was no cancel, no back, no
+            discard, and the only navigate("/admin/programs") was on the SUCCESS
+            screen - i.e. reachable only after the class was already live. The
+            escape was the sidebar, which on a phone is behind a menu. Jessica hit
+            this trying the builder on prod, where publishing is not a rehearsal. */}
+        <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+          <button
+            type="button"
+            onClick={handleCancel}
+            disabled={submitting}
+            style={{ ...secondaryBtn, flex: "0 0 auto", opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={!valid || submitting}
+            style={{ ...primaryBtn, flex: 1, opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
+          >
+            {submitting ? "Creating…" : "Create program & get link"}
+          </button>
+        </div>
+        {/* Says what the button does. This builder writes status "open", so the
+            class is on the public registration page the moment it saves - there is
+            no draft and no preview here. Jeff wants exactly that immediacy; the
+            problem was only that nothing on screen said so. */}
+        <div style={{ ...helpStyle, marginTop: -4, textAlign: "center" }}>
+          This publishes the class to your registration page straight away.
+        </div>
       </div>
     </div>
   );
@@ -1852,6 +1925,21 @@ const primaryBtn = {
   background: BRIGHT,
   color: "#fff",
   border: "none",
+  borderRadius: 8,
+  fontSize: 15,
+  fontWeight: 600,
+  fontFamily: "inherit",
+  cursor: "pointer",
+};
+
+// The way OUT. Quiet on purpose - it sits next to the irreversible button and
+// must not compete with it - but a real button, not a text link, because it is
+// the only exit from this form that is not the sidebar.
+const secondaryBtn = {
+  padding: "12px 20px",
+  background: "#fff",
+  color: INK,
+  border: `1px solid ${RULE}`,
   borderRadius: 8,
   fontSize: 15,
   fontWeight: 600,

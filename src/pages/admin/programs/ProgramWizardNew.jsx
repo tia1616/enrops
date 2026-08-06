@@ -142,6 +142,41 @@ const TERM_OPTIONS = [
 
 const STEP_LABELS = ["What & where", "When & how many", "Price & open"];
 
+// The wizard's starting state, lifted OUT of useState so Cancel can tell whether
+// anything was actually typed. Every value is a primitive, so a key-by-key compare
+// against this object is a complete dirty check - no deep equality needed.
+const INITIAL_FORM_DATA = {
+  term: "FA26",
+  curriculum_id: null,
+  curriculum: "", // denormalized name (NOT NULL column)
+  program_location_id: null,
+  // Optional classroom for THIS program, distinct from the venue-level default on
+  // program_locations.room_number (the roster email prefers this and falls back to
+  // that). Added to the lean builder first and NOT here, which left J2S and every
+  // legacy org unable to set a room at creation - the two builders are separate
+  // components and a field added to one lands nowhere for the other.
+  room: "",
+  day_of_week: "",
+  start_time: "",
+  end_time: "",
+  first_session_date: "",
+  session_count: 8,
+  max_capacity: 18,
+  age_format: "grade",
+  grade_min: 0,
+  grade_max: 5,
+  age_min: null,
+  age_max: null,
+  price_cents: null,
+  short_description: "",
+  // false = we run checkout (public catalog). true = the partner/venue runs
+  // their own registration; program is live + scheduled but never shown in the
+  // public catalog with a checkout. Mirrors camp_sessions.runs_own_registration.
+  runs_own_registration: false,
+  external_registration_url: "",
+  list_in_public_catalog: false,
+};
+
 const inputStyle = {
   width: "100%", padding: "10px 12px",
   border: `1.5px solid ${RULE}`, borderRadius: 8,
@@ -173,31 +208,7 @@ export default function ProgramWizardNew() {
   // Wizard state. Written only on final submit. Pre-fills from curriculum
   // happen in the curriculum-change handler.
   const [currentStep, setCurrentStep] = useState(1);
-  const [formData, setFormData] = useState({
-    term: "FA26",
-    curriculum_id: null,
-    curriculum: "", // denormalized name (NOT NULL column)
-    program_location_id: null,
-    day_of_week: "",
-    start_time: "",
-    end_time: "",
-    first_session_date: "",
-    session_count: 8,
-    max_capacity: 18,
-    age_format: "grade",
-    grade_min: 0,
-    grade_max: 5,
-    age_min: null,
-    age_max: null,
-    price_cents: null,
-    short_description: "",
-    // false = we run checkout (public catalog). true = the partner/venue runs
-    // their own registration; program is live + scheduled but never shown in the
-    // public catalog with a checkout. Mirrors camp_sessions.runs_own_registration.
-    runs_own_registration: false,
-    external_registration_url: "",
-    list_in_public_catalog: false,
-  });
+  const [formData, setFormData] = useState(() => ({ ...INITIAL_FORM_DATA }));
   const [prefilledFromCurriculum, setPrefilledFromCurriculum] = useState(false);
 
   // Step 2 derived state — live preview of session dates, district-calendar
@@ -455,7 +466,9 @@ export default function ProgramWizardNew() {
   }
 
   function handleLocationChange(locationId) {
-    setFormData((f) => ({ ...f, program_location_id: locationId || null }));
+    // Clearing the room is not optional: "Room 12" at Alameda means nothing at
+    // Capitol Hill, and a stale value would follow the venue change onto the roster.
+    setFormData((f) => ({ ...f, program_location_id: locationId || null, room: "" }));
   }
 
   // Refetch the location dropdown after the inline "Add a school" modal creates a
@@ -480,7 +493,8 @@ export default function ProgramWizardNew() {
     setAddingSchool(false);
     await reloadLocations();
     if (locationId) {
-      setFormData((f) => ({ ...f, program_location_id: locationId }));
+      // Same reason as handleLocationChange: this is a venue switch too.
+      setFormData((f) => ({ ...f, program_location_id: locationId, room: "" }));
     }
   }
 
@@ -492,6 +506,25 @@ export default function ProgramWizardNew() {
   // optional numeric fields.
   function handleField(field, value) {
     setFormData((f) => ({ ...f, [field]: value }));
+  }
+
+  // This wizard already HAD a way out - "Cancel" on step 1 and "← Back to
+  // programs" in the header - so unlike the lean builder it never trapped anyone.
+  // What both exits lacked was a prompt: three steps of typing vanished on a
+  // single click with no confirmation. Both now route through here.
+  const formIsDirty = Object.keys(INITIAL_FORM_DATA)
+    .some((k) => formData[k] !== INITIAL_FORM_DATA[k]);
+
+  function leaveWizard() {
+    // Already saved: there is nothing left to lose, and the success screen's own
+    // "Back to programs" must not start arguing with the operator.
+    if (!savedProgramId && formIsDirty) {
+      const ok = window.confirm(
+        "Leave without saving this program? Nothing has been saved yet, and what you've entered will be lost.",
+      );
+      if (!ok) return;
+    }
+    navigate("/admin/programs");
   }
 
   // Step 1 is complete when curriculum + location + term are all set.
@@ -556,6 +589,9 @@ export default function ProgramWizardNew() {
         curriculum_id: formData.curriculum_id,
         curriculum: formData.curriculum, // NOT NULL denormalized name
         program_location_id: formData.program_location_id,
+        // NULL, never "", so the roster's fallback to the venue's default room
+        // sees "not set" rather than an empty string that looks set.
+        room: formData.room.trim() || null,
         day_of_week: formData.day_of_week,
         // Store 12-hour text ("3:30 PM") to match existing data + the matcher.
         start_time: toDbTime12h(formData.start_time),
@@ -638,7 +674,7 @@ export default function ProgramWizardNew() {
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
         <button
-          onClick={() => navigate("/admin/programs")}
+          onClick={leaveWizard}
           style={{
             background: "none", border: "none", color: MUTED,
             fontSize: 14, cursor: "pointer", padding: 0,
@@ -668,6 +704,7 @@ export default function ProgramWizardNew() {
             curricula={curricula}
             locations={locations}
             prefilledFromCurriculum={prefilledFromCurriculum}
+            onField={handleField}
             onCurriculumChange={handleCurriculumChange}
             onLocationChange={handleLocationChange}
             onTermChange={handleTermChange}
@@ -715,7 +752,7 @@ export default function ProgramWizardNew() {
         }}>
           <button
             onClick={() => {
-              if (currentStep === 1) navigate("/admin/programs");
+              if (currentStep === 1) leaveWizard();
               else setCurrentStep((s) => s - 1);
             }}
             disabled={submitting}
@@ -829,6 +866,7 @@ function Step1WhatAndWhere({
   curricula,
   locations,
   prefilledFromCurriculum,
+  onField,
   onCurriculumChange,
   onLocationChange,
   onTermChange,
@@ -905,6 +943,30 @@ function Step1WhatAndWhere({
           <span style={{ color: MUTED, marginLeft: 8 }}>add the venue (and its umbrella org) without leaving</span>
         </div>
       </div>
+
+      {/* Classroom. Only once a venue is chosen - a room number with no building is
+          meaningless, and an empty box above an empty location picker is just noise.
+          Never gates saving: Jessica's constraint is that programs open for
+          registration before the school has confirmed a room. */}
+      {formData.program_location_id && (
+        <div style={fieldGroup}>
+          <label htmlFor="room" style={labelStyle}>
+            Classroom <span style={{ color: MUTED, fontWeight: 400 }}>(optional)</span>
+          </label>
+          <input
+            id="room"
+            type="text"
+            value={formData.room}
+            onChange={(e) => onField("room", e.target.value)}
+            maxLength={40}
+            style={inputStyle}
+            placeholder="e.g. Room 12, Cafeteria, Music Room"
+          />
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+            Leave it blank if you don&rsquo;t know yet. You can add it later from Scheduled Programs.
+          </div>
+        </div>
+      )}
 
       {prefilledFromCurriculum && (
         <div style={{
@@ -1105,16 +1167,16 @@ function Step2WhenAndHowMany({
         />
         <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
           Line breaks are kept, so you can write more than one paragraph.
-          {(() => {
-            const c = describeDescriptionLength(formData.short_description);
-            return c ? (
-              <>
-                {' '}
-                <span style={{ color: c.atLimit ? "#b53737" : MUTED, fontWeight: c.atLimit ? 600 : 400 }}>{c.text}</span>
-              </>
-            ) : null;
-          })()}
         </div>
+        {/* Own line, same as the other two inputs. */}
+        {(() => {
+          const c = describeDescriptionLength(formData.short_description);
+          return c ? (
+            <div style={{ fontSize: 12, marginTop: 2, color: c.atLimit ? "#b53737" : MUTED, fontWeight: c.atLimit ? 600 : 400 }}>
+              {c.text}
+            </div>
+          ) : null;
+        })()}
       </div>
 
       {/* Live preview */}

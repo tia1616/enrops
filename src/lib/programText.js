@@ -17,12 +17,22 @@ export const PROGRAM_DESCRIPTION_MAX = 2000;
 
 // Counter text under the field. Deliberately silent until it matters: a "0 / 2000"
 // on an empty field reads as a demand for 2000 characters, and most descriptions are
-// two sentences. Starts speaking at 75% and gets specific at the ceiling.
+// two sentences. Starts naming the ceiling at 75% and says so plainly at the limit.
+//
+// EVERY state has to open with "Character count:". The first version returned a bare
+// "4 characters.", and the three call sites rendered it INLINE at the end of the help
+// paragraph, so on prod Jessica read "…so you can write more than one paragraph. 4
+// characters." — an unfinished sentence, not a count. Her fix, 2026-08-06: say
+// "character count", and give it its own line. The line break is the caller's job;
+// the unmistakable phrasing is this function's.
 export function describeDescriptionLength(value, max = PROGRAM_DESCRIPTION_MAX) {
   const len = (value || '').length;
   if (len === 0) return null;
-  if (len >= max) return { text: `You've reached the ${max.toLocaleString()} character limit.`, atLimit: true };
-  const left = max - len;
-  if (len >= max * 0.75) return { text: `${left.toLocaleString()} characters left.`, atLimit: false };
-  return { text: `${len.toLocaleString()} characters.`, atLimit: false };
+  const n = len.toLocaleString();
+  const ceiling = max.toLocaleString();
+  if (len >= max) return { text: `Character count: ${n} of ${ceiling}. That's the limit.`, atLimit: true };
+  // Only mention the ceiling once it is close enough to matter. Below 75% the ceiling
+  // is noise; above it, "of 2,000" is the warning, without needing a scary colour.
+  if (len >= max * 0.75) return { text: `Character count: ${n} of ${ceiling}.`, atLimit: false };
+  return { text: `Character count: ${n}.`, atLimit: false };
 }
