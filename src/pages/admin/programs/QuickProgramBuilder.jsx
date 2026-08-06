@@ -113,15 +113,6 @@ export default function QuickProgramBuilder() {
   // null until there is something to say, so an empty field is not nagged at.
   const descCount = describeDescriptionLength(description);
   const [room, setRoom] = useState(""); // -> programs.room; optional, often unknown yet
-  // A room number belongs to ONE building, so switching venue must not keep it.
-  // Without this: pick Ainsworth, type "Room 12", realise it is the wrong school,
-  // switch to Downtown Studio — the field stays filled and the class saves with a
-  // room number from a different site, which then prints on the instructor's roster
-  // email and sends them to the wrong door. Keyed on the effect rather than added to
-  // the select's onChange because there are THREE places locationId is written
-  // (the select, the inline add-a-site, and the reset after a create) and a guard
-  // that only covers one of them is the bug this codebase keeps re-learning.
-  useEffect(() => { setRoom(""); }, [locationId]);
   const [price, setPrice] = useState("");
   const [spots, setSpots] = useState("18");
   const [day, setDay] = useState("");
@@ -229,6 +220,22 @@ export default function QuickProgramBuilder() {
   // and we say the first one out loud to the operator.
   const [locationsFailed, setLocationsFailed] = useState(false);
   const [locationId, setLocationId] = useState("");
+  // A room number belongs to ONE building, so switching venue must not keep it.
+  // Without this: pick Ainsworth, type "Room 12", realise it is the wrong school,
+  // switch to Downtown Studio — the field stays filled and the class saves with a
+  // room number from a different site, which then prints on the instructor's roster
+  // email and sends them to the wrong door. An effect rather than a handler on the
+  // select, because locationId is written in THREE places (the select, the inline
+  // add-a-site, and the reset after a create) and a guard covering one of them is
+  // the bug this codebase keeps re-learning.
+  //
+  // MUST live below the useState for locationId. It was first written up beside the
+  // `room` state ~100 lines earlier, where `locationId` is still in the temporal
+  // dead zone: the dependency array is evaluated during render, so the component
+  // threw "Cannot access 'P' before initialization" and the whole builder rendered
+  // as a BLANK PAGE. npm run build and the unit tests both passed - it is a runtime
+  // error only, caught by loading the real page.
+  useEffect(() => { setRoom(""); }, [locationId]);
   // Does this org already have programs? Decides whether the first-class
   // questions are appropriate. null = not counted yet (never assume either way).
   const [programCount, setProgramCount] = useState(null);
