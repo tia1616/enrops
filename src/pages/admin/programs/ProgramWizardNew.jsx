@@ -591,7 +591,7 @@ export default function ProgramWizardNew() {
         program_location_id: formData.program_location_id,
         // NULL, never "", so the roster's fallback to the venue's default room
         // sees "not set" rather than an empty string that looks set.
-        room: formData.room.trim() || null,
+        room: (formData.room || "").trim() || null,
         day_of_week: formData.day_of_week,
         // Store 12-hour text ("3:30 PM") to match existing data + the matcher.
         start_time: toDbTime12h(formData.start_time),
@@ -944,26 +944,26 @@ function Step1WhatAndWhere({
         </div>
       </div>
 
-      {/* Classroom. Only once a venue is chosen - a room number with no building is
-          meaningless, and an empty box above an empty location picker is just noise.
-          Never gates saving: Jessica's constraint is that programs open for
-          registration before the school has confirmed a room. */}
+      {/* Classroom. Same field, same words, same 60-character cap as the lean
+          builder's - two components asking one question must not ask it two ways.
+          Only once a venue is chosen: "Room 12" means nothing without knowing
+          which building. Deliberately NOT required - Jessica: "we set up programs
+          and open for registration before actually knowing the classroom # often". */}
       {formData.program_location_id && (
         <div style={fieldGroup}>
-          <label htmlFor="room" style={labelStyle}>
-            Classroom <span style={{ color: MUTED, fontWeight: 400 }}>(optional)</span>
-          </label>
+          <label htmlFor="room" style={labelStyle}>Classroom or room number (optional)</label>
           <input
             id="room"
             type="text"
             value={formData.room}
             onChange={(e) => onField("room", e.target.value)}
-            maxLength={40}
+            maxLength={60}
             style={inputStyle}
-            placeholder="e.g. Room 12, Cafeteria, Music Room"
+            placeholder="e.g. Room 12, Gym B, Music Room"
           />
           <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
-            Leave it blank if you don&rsquo;t know yet. You can add it later from Scheduled Programs.
+            Appears on instructor rosters. Leave it blank if you don&rsquo;t know yet
+            &mdash; you can add it later from Scheduled programs.
           </div>
         </div>
       )}
