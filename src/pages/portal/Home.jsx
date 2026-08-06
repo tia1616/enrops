@@ -458,6 +458,13 @@ export default function Home() {
                             {photo}
                             <div style={{ minWidth: 0 }}>
                               <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
+                              {/* The operator's own description. The legacy layout
+                                  has always shown this; the lean cards never did,
+                                  so the builder's Description field saved copy
+                                  that reached no family. */}
+                              {p.short_description && (
+                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45 }}>{p.short_description}</div>
+                              )}
                               <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
                               {scheduleStr && (
                                 <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{scheduleStr}</div>
@@ -474,6 +481,12 @@ export default function Home() {
                           {photo}
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
+                            {/* Same as the external-registration card above: the
+                                operator's description belongs in front of the
+                                family, right under the class name. */}
+                            {p.short_description && (
+                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45 }}>{p.short_description}</div>
+                            )}
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
                             </div>
