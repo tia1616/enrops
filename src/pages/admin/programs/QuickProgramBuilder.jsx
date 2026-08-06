@@ -1449,31 +1449,6 @@ export default function QuickProgramBuilder() {
                 </option>
                 {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
-              {/* Classroom, optional, and only once a location is chosen — "Room 12"
-                  means nothing without knowing which building.
-                  Deliberately NOT required. Jessica: "we set up programs and open for
-                  registration before actually knowing the classroom # often" — she is
-                  still waiting on several schools and Facilitron. So this is for the
-                  operator who already knows, and it stays editable afterwards on the
-                  Scheduled Programs panel for everyone else. */}
-              {locationId && (
-                <div style={{ marginTop: 10 }}>
-                  <label style={labelStyle} htmlFor="qpb-room">Classroom or room number (optional)</label>
-                  <input
-                    id="qpb-room"
-                    type="text"
-                    style={inputStyle}
-                    value={room}
-                    onChange={(e) => setRoom(e.target.value)}
-                    placeholder="e.g. Room 12, Gym B, Music Room"
-                    maxLength={60}
-                  />
-                  <div style={helpStyle}>
-                    Appears on instructor rosters. Leave it blank if you don&rsquo;t know yet
-                    &mdash; you can add it later from Scheduled programs.
-                  </div>
-                </div>
-              )}
               {/* Was a 13px <span onClick> — no button semantics, no tap target,
                   invisible as an action on a phone. A real button at 44px, the
                   minimum touch size the mobile audit holds every control to. */}
@@ -1529,6 +1504,33 @@ export default function QuickProgramBuilder() {
                     No address saved for this location yet — families won't see one. Add it under Programs → Locations.
                   </div>
                 )
+              )}
+              {/* Classroom, optional, and only once a location is chosen — "Room 12"
+                  means nothing without knowing which building. Sits AFTER the venue's
+                  own address/add-a-site controls rather than between them, so the
+                  location block stays one thing and this reads as the next question.
+                  Deliberately NOT required. Jessica: "we set up programs and open for
+                  registration before actually knowing the classroom # often" — she is
+                  still waiting on several schools and Facilitron. So this is for the
+                  operator who already knows, and it stays editable afterwards on the
+                  Scheduled Programs panel for everyone else. */}
+              {locationId && (
+                <div style={{ marginTop: 12 }}>
+                  <label style={labelStyle} htmlFor="qpb-room">Classroom or room number (optional)</label>
+                  <input
+                    id="qpb-room"
+                    type="text"
+                    style={inputStyle}
+                    value={room}
+                    onChange={(e) => setRoom(e.target.value)}
+                    placeholder="e.g. Room 12, Gym B, Music Room"
+                    maxLength={60}
+                  />
+                  <div style={helpStyle}>
+                    Appears on instructor rosters. Leave it blank if you don&rsquo;t know yet
+                    &mdash; you can add it later from Scheduled programs.
+                  </div>
+                </div>
               )}
               {/* A location with no district has no school calendar, so this
                   class's dates will NOT skip no-school days. Three of the four
