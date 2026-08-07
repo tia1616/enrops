@@ -1936,11 +1936,21 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
               ? `A calendar change means no class days fall in this window anymore. Its saved schedule still has ${program.session_count} session${Number(program.session_count) === 1 ? "" : "s"} — extend the end date below, then Save.`
               : `A school-calendar change means this program's dates now yield ${driftDerived} session${driftDerived === 1 ? "" : "s"}, but its saved schedule still has ${program.session_count}. Update to move families onto the corrected dates.`}
           </div>
-          {driftDerived > 0 && (
+          {driftDerived > 0 && (() => {
+            // THIS BUTTON IS `handleSave` UNDER ANOTHER NAME, so it needs every guard
+            // Save has. It was missing the backwards-range one, which made it the
+            // escape hatch around it: type "Grades 8 to 2", watch Save grey out, then
+            // click Update to N sessions instead and the same patch goes to a database
+            // that now REFUSES the range (programs_grade_range_valid, 20260807a) - so
+            // the operator gets a raw Postgres constraint string in the notice. Not
+            // reachable on prod today only because the audience fields ship with this
+            // branch; it would arrive reachable.
+            const driftDisabled = saving || rangeLoading || !rangePreview || audienceBackwardsInPanel;
+            return (
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving || rangeLoading || !rangePreview}
+              disabled={driftDisabled}
               style={{
                 flexShrink: 0,
                 padding: "7px 14px",
@@ -1951,14 +1961,17 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
                 fontSize: 12.5,
                 fontWeight: 700,
                 fontFamily: "inherit",
-                cursor: saving || rangeLoading || !rangePreview ? "default" : "pointer",
-                opacity: saving || rangeLoading || !rangePreview ? 0.6 : 1,
+                cursor: driftDisabled ? "default" : "pointer",
+                opacity: driftDisabled ? 0.6 : 1,
               }}
-              title="Re-derive the sessions from the current calendars and save. If families are enrolled, you'll be asked to confirm first."
+              title={audienceBackwardsInPanel
+                ? rangeBackwardsMessage(panelMode)
+                : "Re-derive the sessions from the current calendars and save. If families are enrolled, you'll be asked to confirm first."}
             >
               {saving ? "Updating…" : `Update to ${driftDerived} session${driftDerived === 1 ? "" : "s"}`}
             </button>
-          )}
+            );
+          })()}
           {/* Surface a failed Update right here at the notice -- otherwise the only
               error message renders down by the form's Save button, off-screen from
               the button the operator just clicked, and the notice looks inert. */}
