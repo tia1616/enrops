@@ -170,5 +170,22 @@ for (const k of ['released_to_adult', 'guardian', DISMISSAL_KIND_AFTERCARE, 'wal
     releaseConfirmationLine(k, 'X') === 'X', isSelfRelease(k));
 }
 
+// --- the one copy that cannot import this module ---------------------------
+// create-registration runs on Deno and is deployed from supabase/functions, so
+// it cannot import src/lib. Rather than keep a second copy of the vocabulary in
+// _shared (which would make three places), the literal stays inline and this
+// test asserts it still matches. It decides whether the provider name is stored
+// at all, so if it drifts the answer is silently dropped at checkout.
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const edgeFn = readFileSync(
+  fileURLToPath(new URL('../../supabase/functions/create-registration/index.ts', import.meta.url)),
+  'utf8',
+);
+const guard = edgeFn.match(/student\.dismissal_method === '([^']+)'/);
+eq('the edge function still tests a dismissal_method value', Boolean(guard), true);
+eq('and the value it tests is the one this module defines', guard?.[1], AFTERCARE);
+
 console.log(`\n${fail ? 'FAILURES' : 'ALL PASS'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);

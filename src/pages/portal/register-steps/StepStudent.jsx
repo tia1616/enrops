@@ -1,6 +1,7 @@
 import React from 'react';
 import { PickupDismissalSection, CustomQuestionsSection, hasPickupSection } from './RegExtraFields.jsx';
 import { GRADE_OPTIONS_LONG } from '../../../lib/grades.js';
+import { needsAftercareProvider } from '../../../lib/dismissal.js';
 
 // Tenant-neutral referral options shared by every operator's registration flow.
 // (Replaced J2S-specific entries — "STEAM Night", "PDX Parent", "NW Kids",
@@ -173,7 +174,7 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             // name typed and then reconsidered cannot ride along to the roster
             // attached to an answer it no longer describes.
             onDismissalChange={(v) => onUpdate(
-              v === 'aftercare'
+              needsAftercareProvider(v)
                 ? { dismissal_method: v }
                 : { dismissal_method: v, aftercare_provider: '' },
             )}

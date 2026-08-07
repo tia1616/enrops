@@ -14,7 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase.js";
-import { needsAuthorizedPickup, dismissalAnswerIncomplete } from "../../lib/dismissal.js";
+import { needsAuthorizedPickup, needsAftercareProvider, dismissalAnswerIncomplete } from "../../lib/dismissal.js";
 import {
   PickupDismissalSection,
   GuardianSecondarySection,
@@ -164,7 +164,7 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
                 // shows a destination for a child who now walks home.
                 onDismissalChange={(v) => update(
                   s.student_id,
-                  v === "aftercare"
+                  needsAftercareProvider(v)
                     ? { dismissal_method: v }
                     : { dismissal_method: v, aftercare_provider: "" },
                 )}

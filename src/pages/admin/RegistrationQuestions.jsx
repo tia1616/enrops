@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
-import { allChoices, offeredChoices, DEFAULT_OFFERED } from "../../lib/dismissal.js";
+import { allChoices, offeredChoices, DEFAULT_OFFERED, needsAftercareProvider } from "../../lib/dismissal.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -803,7 +803,7 @@ function PreviewInput({ item }) {
       return (
         <div style={box}>
           {chosen.map((c) => `○ ${c.parent}`).join("   ")}
-          {chosen.some((c) => c.value === "aftercare") && (
+          {chosen.some((c) => needsAftercareProvider(c.value)) && (
             <div style={{ marginTop: 4 }}>&nbsp;&nbsp;&nbsp;&crarr; Which aftercare program?</div>
           )}
         </div>
