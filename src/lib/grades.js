@@ -39,6 +39,25 @@ export function isUnset(v) {
   return v === null || v === undefined || v === '' || Number.isNaN(Number(v));
 }
 
+// The SAME RANGE, in the words a parent reads. The registration form used to carry
+// its own list that stopped at 6th grade while operators could set a class to any
+// grade - so a provider who set "Grades 7-9" had families who could not pick their
+// child's grade and therefore could not register at all. Jessica, 2026-08-07:
+// "grades that can be entered should be the range shown in registration. obviously."
+//
+// One place defines WHICH grades exist; the two label styles differ only because an
+// admin dropdown wants "5" and a parent wants "5th grade". Derived from
+// GRADE_OPTIONS so the two lists cannot drift apart again.
+const ORDINAL = (n) => {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+};
+export const GRADE_OPTIONS_LONG = GRADE_OPTIONS.map(({ value }) => ({
+  value,
+  label: value === '0' ? 'Kindergarten' : `${ORDINAL(Number(value))} grade`,
+}));
+
 // gradeLabel(0) -> "K"; gradeLabel(5) -> "5"; gradeLabel(-1) -> "Pre-K".
 // Returns null (not "?") for a missing value, so callers decide whether to render
 // anything at all rather than printing a question mark at a family.

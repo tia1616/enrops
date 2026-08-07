@@ -4,7 +4,7 @@
 // These exist because the vocabulary was written FOUR times with four different
 // answers (K-12 vs K-6, Pre-K handled vs not). One definition is only worth
 // anything if it stays the definition.
-import { GRADE_OPTIONS, gradeLabel, audienceLabel, audienceMode, audiencePatch, rangeBackwards, isUnset, KINDERGARTEN } from './grades.js';
+import { GRADE_OPTIONS, GRADE_OPTIONS_LONG, gradeLabel, audienceLabel, audienceMode, audiencePatch, rangeBackwards, isUnset, KINDERGARTEN } from './grades.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -22,6 +22,28 @@ eq('K is zero', KINDERGARTEN, 0);
 // above it cannot be matched by any parent. If this list ever shrinks to match,
 // that is a decision, not a drift.
 eq('12th grade is offered', GRADE_OPTIONS.some((o) => o.value === '12'), true);
+
+// --- the parent-facing list is the SAME RANGE ------------------------------
+// The bug this closes: the registration form carried its own list stopping at 6th
+// while an operator could set a class to any grade, so a family with a 7th grader
+// could not pick a grade and could not register at all. If these two ever diverge
+// again, that is the failure - so the invariant is the pairing, not the wording.
+eq('same number of grades in both lists', GRADE_OPTIONS_LONG.length, GRADE_OPTIONS.length);
+eq('same values, in the same order',
+  GRADE_OPTIONS_LONG.map((o) => o.value), GRADE_OPTIONS.map((o) => o.value));
+eq('parent wording for K', GRADE_OPTIONS_LONG[0], { value: '0', label: 'Kindergarten' });
+eq('parent wording for 1st', GRADE_OPTIONS_LONG[1].label, '1st grade');
+eq('parent wording for 2nd', GRADE_OPTIONS_LONG[2].label, '2nd grade');
+eq('parent wording for 3rd', GRADE_OPTIONS_LONG[3].label, '3rd grade');
+eq('parent wording for 4th', GRADE_OPTIONS_LONG[4].label, '4th grade');
+// The ordinals that trip naive suffix logic: 11th and 12th, not 11st and 12nd.
+eq('parent wording for 11th', GRADE_OPTIONS_LONG[11].label, '11th grade');
+eq('parent wording for 12th', GRADE_OPTIONS_LONG[12].label, '12th grade');
+// A grade an operator can set must be one a family can choose.
+for (const o of GRADE_OPTIONS) {
+  eq(`grade ${o.label} is selectable at registration`,
+    GRADE_OPTIONS_LONG.some((p) => p.value === o.value), true);
+}
 
 // --- gradeLabel ------------------------------------------------------------
 eq('0 renders K', gradeLabel(0), 'K');

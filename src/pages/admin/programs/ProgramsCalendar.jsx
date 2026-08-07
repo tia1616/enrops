@@ -1447,12 +1447,46 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // a future `.update(draft)` or key-diff ends up trying to write a column that
   // does not exist. Seeded from the row through the shared rule.
   const [panelMode, setPanelMode] = useState(() => audienceMode(program));
+
+  // RE-READ THE ROW WHEN IT CHANGES UNDERNEATH US.
+  //
+  // `draft` is seeded once at mount, and this panel has no key, so anything that
+  // edits the same row while the panel is open is invisible to it - and handleSave
+  // writes every field from the draft. The live case: expand a class, then use
+  // "Change class" in the same row header to swap the curriculum. The modal saves
+  // and the row header updates, but the panel still holds the OLD name, so its next
+  // save (even one aimed only at the room) writes that name back while curriculum_id
+  // points at the new class. Publish/unpublish and the post-save merge take the same
+  // path. Fields the operator has already edited are left alone - only the ones they
+  // have not touched follow the row.
   // Nothing is written to the four audience columns until the operator actually
   // aims at them - see the save. Set by the pills AND by the range fields, because
-  // "they picked grades" and "they typed a grade" are both intent.
+  // "they picked grades" and "they typed a grade" are both intent. A ref rides
+  // alongside the state so the resync effect below can read it without listing it as
+  // a dependency and re-running every time it flips.
   const [audienceTouched, setAudienceTouched] = useState(false);
+  const audienceTouchedRef = useRef(false);
+  const seededFromRef = useRef(program);
+  useEffect(() => {
+    const prev = seededFromRef.current;
+    if (prev === program) return;
+    seededFromRef.current = program;
+    setDraft((d) => {
+      const next = { ...d };
+      // Only adopt a field when it actually changed on the row AND the operator's
+      // draft still matches what the row used to say (i.e. they have not edited it).
+      for (const k of ["curriculum", "room", "short_description", "price_cents", "max_capacity", "program_location_id", "grade_min", "grade_max", "age_min", "age_max"]) {
+        const was = prev?.[k] ?? "";
+        const now = program?.[k] ?? "";
+        if (was !== now && (d[k] ?? "") === was) next[k] = now;
+      }
+      return next;
+    });
+    if (!audienceTouchedRef.current) setPanelMode(audienceMode(program));
+  }, [program]);
   function setAudience(key, value) {
     setAudienceTouched(true);
+    audienceTouchedRef.current = true;
     if (key === "mode") setPanelMode(value);
     else set(key, value);
   }

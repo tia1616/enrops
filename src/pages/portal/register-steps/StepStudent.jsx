@@ -1,5 +1,6 @@
 import React from 'react';
 import { PickupDismissalSection, CustomQuestionsSection, hasPickupSection } from './RegExtraFields.jsx';
+import { GRADE_OPTIONS_LONG } from '../../../lib/grades.js';
 
 // Tenant-neutral referral options shared by every operator's registration flow.
 // (Replaced J2S-specific entries — "STEAM Night", "PDX Parent", "NW Kids",
@@ -16,15 +17,11 @@ const REFERRAL_OPTIONS = [
   'Other',
 ];
 
-const GRADE_OPTIONS = [
-  { value: '0', label: 'Kindergarten' },
-  { value: '1', label: '1st grade' },
-  { value: '2', label: '2nd grade' },
-  { value: '3', label: '3rd grade' },
-  { value: '4', label: '4th grade' },
-  { value: '5', label: '5th grade' },
-  { value: '6', label: '6th grade' },
-];
+// Was a local list that stopped at 6th grade while operators could set a class to
+// any grade, so a family whose child was in 7th could not pick a grade and could not
+// register. Now the shared range, in parent wording. ADDITIVE - 7th through 12th are
+// gained, nothing a family could already choose is taken away.
+const GRADE_OPTIONS = GRADE_OPTIONS_LONG;
 
 export default function StepStudent({ student, onUpdate, childIndex, regFields = { std: {}, custom: [] }, child = {}, onUpdateChild = () => {}, lean = false }) {
   const { std = {}, custom = [] } = regFields;
