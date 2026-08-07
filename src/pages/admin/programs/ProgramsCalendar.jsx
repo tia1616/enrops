@@ -8,7 +8,12 @@
 //   - calendar: programs grouped by day-of-week, sorted by start_time (default)
 //   - by_school: programs grouped by program_location, sorted by day/time within school
 
-import { useEffect, useMemo, useState } from "react";
+// useRef is load-bearing, not decorative: the panel's row-resync effect compares
+// against the row it was last seeded from. Adding the hook without adding the
+// import white-screened /admin/programs while npm run build and 76 unit tests all
+// passed - JSX is never type-checked, so a missing binding is a RUNTIME
+// ReferenceError, invisible to every static gate.
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
