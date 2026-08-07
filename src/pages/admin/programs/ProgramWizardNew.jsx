@@ -519,8 +519,11 @@ export default function ProgramWizardNew() {
     // Already saved: there is nothing left to lose, and the success screen's own
     // "Back to programs" must not start arguing with the operator.
     if (!savedProgramId && formIsDirty) {
+      // Claims only the PROGRAM. "Nothing has been saved yet" is false as soon as
+      // the operator uses the inline "+ Add a school / venue", which writes a real
+      // program_locations row - and that row rightly survives this cancel.
       const ok = window.confirm(
-        "Leave without saving this program? Nothing has been saved yet, and what you've entered will be lost.",
+        "Leave without saving this program? The details you've entered will be lost.",
       );
       if (!ok) return;
     }

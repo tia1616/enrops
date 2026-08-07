@@ -817,8 +817,13 @@ export default function QuickProgramBuilder() {
 
   function handleCancel() {
     if (formIsDirty) {
+      // Claims only the CLASS. The first draft said "nothing has been created yet",
+      // which is false the moment an operator uses "+ Add a site" inline: that
+      // inserts a real program_locations row before this form is ever submitted, and
+      // it correctly survives the cancel. A message must not assert more than it
+      // knows.
       const ok = window.confirm(
-        "Leave without creating this class? Nothing has been created yet, and what you've typed will be lost.",
+        "Leave without creating this class? The details you've typed will be lost.",
       );
       if (!ok) return;
     }
@@ -1819,12 +1824,23 @@ export default function QuickProgramBuilder() {
             Cancel
           </button>
         </div>
-        {/* Says what the button does. This builder writes status "open", so the
-            class is on the public registration page the moment it saves - there is
-            no draft and no preview here. Jeff wants exactly that immediacy; the
-            problem was only that nothing on screen said so. */}
+        {/* Says what the button does. This builder writes status "open" with the
+            org's active term, which is exactly what the public catalog gates on, so
+            the class is live the moment it saves - there is no draft and no preview
+            here. Jeff wants that immediacy; the problem was only that nothing on
+            screen said so.
+
+            TWO SENTENCES, because "your registration page" is not a place every
+            tenant has. Two prod orgs (Mrs. Richelle, Shoreview Chess) run
+            uses_enrops_registration = false - their families register elsewhere and
+            never see an enrops page - which is the same trap `cancellationCopy` was
+            written to escape. `=== true` and not `!== false`, matching that helper:
+            the fallback has to be the sentence that is true in BOTH states, and
+            "there is no draft" is the part Jessica actually needed to know. */}
         <div style={{ ...helpStyle, marginTop: -4, textAlign: "center" }}>
-          This publishes the class to your registration page straight away.
+          {org?.uses_enrops_registration === true
+            ? "This publishes the class to your registration page straight away."
+            : "This creates the class straight away — there is no draft to review first."}
         </div>
       </div>
     </div>
