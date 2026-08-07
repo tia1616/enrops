@@ -11,6 +11,7 @@ import {
   WALKS_OR_BIKES,
   AFTERCARE,
   DISMISSAL_KIND_AFTERCARE,
+  releaseConfirmationLine,
 } from "../../lib/dismissal.js";
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
@@ -3945,7 +3946,7 @@ function AttendanceControls({ pickups = [], guardians = [], doNotRelease = [], d
         <span style={{ fontSize: 12, fontWeight: 600, color: INK, minWidth: 78 }}>Dismissal</span>
         {released ? (
           <span style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600 }}>
-            ✓ Released to {attRecord.released_to_name}{releasedTime ? ` at ${releasedTime}` : ""}
+            ✓ {releaseConfirmationLine(attRecord.dismissal_kind, attRecord.released_to_name)}{releasedTime ? ` at ${releasedTime}` : ""}
           </span>
         ) : present === false ? (
           // Marked absent — a dismissal record would contradict the attendance.

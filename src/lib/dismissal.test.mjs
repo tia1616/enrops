@@ -12,6 +12,7 @@ import {
   needsAftercareProvider, needsAuthorizedPickup,
   dismissalSummary,
   dismissalAnswerIncomplete, aftercareReleaseLabel, DISMISSAL_KIND_AFTERCARE,
+  releaseConfirmationLine, isSelfRelease,
 } from './dismissal.js';
 
 let pass = 0, fail = 0;
@@ -134,6 +135,40 @@ eq('label never ends in a separator', /[—-]\s*$/.test(aftercareReleaseLabel(''
 // aftercare handoff as "released to someone not on the authorized list".
 eq('the recorded kind is its own value', DISMISSAL_KIND_AFTERCARE, 'aftercare');
 eq('the recorded kind is NOT released_to_adult', DISMISSAL_KIND_AFTERCARE === 'released_to_adult', false);
+
+// --- confirming a recorded dismissal ---------------------------------------
+// released_to_name is a person's NAME for some kinds and a whole PHRASE for
+// others; one hardcoded "Released to" prefix served both and produced
+// "Released to Walked to aftercare — Champions".
+eq('a person gets the prefix',
+  releaseConfirmationLine('released_to_adult', 'Grandma Pat'), 'Released to Grandma Pat');
+eq('a guardian gets the prefix',
+  releaseConfirmationLine('guardian', 'Dana Vorster'), 'Released to Dana Vorster');
+eq('aftercare stands alone',
+  releaseConfirmationLine(DISMISSAL_KIND_AFTERCARE, 'Walked to aftercare — Champions'),
+  'Walked to aftercare — Champions');
+eq('walking home stands alone',
+  releaseConfirmationLine('walked_or_biked', 'Walked / biked home'), 'Walked / biked home');
+// The prefix is what names WHO took the child, so an unrecognised kind must keep
+// it rather than silently dropping the only attribution on the line.
+eq('an unknown kind is treated as a person',
+  releaseConfirmationLine('something_new', 'Grandma Pat'), 'Released to Grandma Pat');
+eq('a null kind is treated as a person',
+  releaseConfirmationLine(null, 'Grandma Pat'), 'Released to Grandma Pat');
+eq('no name -> no dangling prefix', releaseConfirmationLine('released_to_adult', ''), 'Released');
+eq('null name -> no dangling prefix', releaseConfirmationLine('released_to_adult', null), 'Released');
+eq('whitespace name -> no dangling prefix', releaseConfirmationLine('released_to_adult', '  '), 'Released');
+eq('name is trimmed', releaseConfirmationLine('released_to_adult', ' Pat '), 'Released to Pat');
+// The field-label predicate must agree with the sentence builder, or the two
+// surfaces disagree about whether anyone collected the child.
+eq('aftercare is a self-release', isSelfRelease(DISMISSAL_KIND_AFTERCARE), true);
+eq('walked/biked is a self-release', isSelfRelease('walked_or_biked'), true);
+eq('released_to_adult is not', isSelfRelease('released_to_adult'), false);
+eq('null kind is not', isSelfRelease(null), false);
+for (const k of ['released_to_adult', 'guardian', DISMISSAL_KIND_AFTERCARE, 'walked_or_biked', null]) {
+  eq(`predicate matches the sentence for ${k}`,
+    releaseConfirmationLine(k, 'X') === 'X', isSelfRelease(k));
+}
 
 console.log(`\n${fail ? 'FAILURES' : 'ALL PASS'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);

@@ -160,6 +160,32 @@ export function aftercareReleaseLabel(aftercareProvider) {
   return who ? `Walked to aftercare — ${who}` : 'Walked to aftercare';
 }
 
+// CONFIRMING A RECORDED DISMISSAL, in English.
+//
+// released_to_name holds two different kinds of thing. For a person it is a name
+// ("Grandma Pat") and needs "Released to" in front of it. For the two answers
+// where nobody collects the child it is already a whole phrase describing what
+// staff did ("Walked / biked home", "Walked to aftercare — Champions"), and
+// prefixing those produces "Released to Walked to aftercare — Champions".
+//
+// The walked/biked case has read that way since before aftercare existed; adding
+// a second one is what made it worth a helper instead of a second hardcoded
+// prefix. Anything not in this set is treated as a person, so an unrecognised
+// kind still errs toward naming who took the child.
+const SELF_RELEASE_KINDS = new Set(['walked_or_biked', DISMISSAL_KIND_AFTERCARE]);
+
+// Exported for surfaces that label a field rather than write a sentence: a
+// "Released to" caption is wrong above "Walked to aftercare — Champions".
+export function isSelfRelease(dismissalKind) {
+  return SELF_RELEASE_KINDS.has(dismissalKind);
+}
+
+export function releaseConfirmationLine(dismissalKind, releasedToName) {
+  const who = (releasedToName || '').trim();
+  if (!who) return 'Released';
+  return SELF_RELEASE_KINDS.has(dismissalKind) ? who : `Released to ${who}`;
+}
+
 // ONE LINE FOR A ROSTER, provider name included.
 //
 // The name is the entire point of the aftercare answer: "Aftercare" alone tells
