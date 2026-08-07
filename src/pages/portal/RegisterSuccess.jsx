@@ -14,6 +14,18 @@ export default function RegisterSuccess() {
   const { clearCart, cart } = useCart();
 
   const [email, setEmail] = useState(cart?.parent?.email || '');
+  // Did we LEARN the address, or are we guessing? The cart is cleared 500ms after
+  // this page mounts and does not survive a reload, so on any refresh, back-button
+  // or reopened link `email` is "" - and the Resend button was gated on `!email`.
+  // The page then said "have us send another" above a permanently disabled button,
+  // to a family who has just paid and cannot get into their account. Captured once
+  // at mount rather than derived from `email`, so typing an address does not make
+  // the page start claiming it already sent one there.
+  const [emailKnownFromCart] = useState(() => !!cart?.parent?.email);
+  // Deliberately loose: this only decides whether the button is clickable, and the
+  // real validation is Supabase rejecting the address. A strict regex here would
+  // reject valid addresses and reintroduce the dead button it exists to prevent.
+  const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -59,16 +71,19 @@ export default function RegisterSuccess() {
   }
 
   async function handleMagicLink() {
-    if (!email) return;
+    // Trimmed: a typed address arrives with whatever the keyboard or a paste left
+    // on it, and a trailing space is an invisible reason for a link never to come.
+    const addr = email.trim();
+    if (!addr) return;
     setLoading(true);
     setError('');
     const { error: err } = await signInWithMagicLink(
-      email,
+      addr,
       `${window.location.origin}/${ORG_SLUG}/dashboard`,
     );
     setLoading(false);
     if (err) setError(err.message);
-    else setMsg(`Check ${email} for a sign-in link.`);
+    else setMsg(`Check ${addr} for a sign-in link.`);
   }
 
   async function handleGoogle() {
@@ -157,19 +172,57 @@ export default function RegisterSuccess() {
           <h2 className="font-titan text-2xl text-j2s-ink">
             Check your email
           </h2>
+          {/* Only name the address when we actually know it. On a reload we do
+              not, and "We sent a sign-in link to your inbox" reads like a fact we
+              are sure of while the button underneath refuses to act on it. */}
           <p className="mt-2 text-j2s-ink/70">
-            We sent a sign-in link to <span className="font-semibold text-j2s-ink">{email || 'your inbox'}</span>.
-            Click the link to access your dashboard, view your child's schedule,
-            and get session recaps.
+            {emailKnownFromCart ? (
+              <>
+                We sent a sign-in link to <span className="font-semibold text-j2s-ink">{email}</span>.
+                Click the link to access your dashboard, view your child's schedule,
+                and get session recaps.
+              </>
+            ) : (
+              <>
+                A sign-in link is on its way to the email address you registered with.
+                Click it to access your dashboard, view your child's schedule, and get
+                session recaps.
+              </>
+            )}
           </p>
 
           <div className="mt-6 space-y-4">
             <p className="text-sm text-j2s-ink/60">
               Didn't get the email? Check your spam folder, or have us send another.
             </p>
+            {/* THE FIELD IS THE FIX. Without it "have us send another" was an offer
+                the page could not honour once the cart was gone - which is every
+                refresh, every back-button, every time the link is opened later or on
+                another device. Asking for the address costs one line of typing and
+                works in all of those cases; the alternative was returning the email
+                from checkout-session-status, and that endpoint documents twice that
+                it deliberately exposes no extra PII, since anyone holding the
+                session-id URL can call it. */}
+            {!emailKnownFromCart && (
+              <div>
+                <label htmlFor="resend-email" className="block text-sm font-semibold text-j2s-ink">
+                  Your email address
+                </label>
+                <input
+                  id="resend-email"
+                  type="email"
+                  autoComplete="email"
+                  inputMode="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="mt-1 w-full rounded-xl border-2 border-j2s-ink/15 px-4 py-3 text-j2s-ink focus:border-j2s-purple focus:outline-none"
+                />
+              </div>
+            )}
             <button
               onClick={handleMagicLink}
-              disabled={loading || !email}
+              disabled={loading || !emailLooksValid}
               className="btn-j2s-primary w-full"
             >
               {loading ? 'Sending…' : 'Resend sign-in link'}
