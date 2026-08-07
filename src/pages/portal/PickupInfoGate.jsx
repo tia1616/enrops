@@ -40,7 +40,11 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
         const [{ data: fields }, { data: contacts }, { data: studs }] = await Promise.all([
           supabase.rpc("get_active_registration_fields", { p_org_id: orgId }),
           supabase.from("student_contacts").select("student_id, role, first_name, last_name, phone, email").in("student_id", ids),
-          supabase.from("students").select("id, dismissal_method").in("id", ids),
+          // aftercare_provider selected alongside the method. Without it the
+          // "Which aftercare program?" box renders EMPTY for a child who already
+          // has one on file, and re-saving would blank a name the family had
+          // already given - the select/read mismatch turning into data loss.
+          supabase.from("students").select("id, dismissal_method, aftercare_provider").in("id", ids),
         ]);
         if (cancelled) return;
         const parsed = parseRegFields(fields || []);
@@ -50,9 +54,11 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
         const init = {};
         for (const s of students) {
           const cs = (contacts || []).filter((c) => c.student_id === s.student_id);
-          const dm = (studs || []).find((x) => x.id === s.student_id)?.dismissal_method || "";
+          const stu = (studs || []).find((x) => x.id === s.student_id);
+          const dm = stu?.dismissal_method || "";
           init[s.student_id] = {
             dismissal_method: dm,
+            aftercare_provider: stu?.aftercare_provider || "",
             pickup: cs.filter((c) => c.role === "authorized_pickup"),
             doNotRelease: cs.filter((c) => c.role === "do_not_release"),
             guardian2: cs.find((c) => c.role === "guardian") || {},
@@ -111,6 +117,11 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
           p_do_not_release: nonEmpty(d.doNotRelease),
           p_guardian: (g2.first_name || "").trim() ? [g2] : [],
           p_dismissal_method: d.dismissal_method || null,
+          // 7th argument, added by migration 20260807b. The parameter has NO
+          // default there on purpose, so the old 6-arg signature and this one
+          // coexist unambiguously while both environments roll forward - which
+          // means this call must always pass it, even as null.
+          p_aftercare_provider: d.aftercare_provider || null,
         });
         if (saveErr) throw saveErr;
       }
@@ -142,7 +153,17 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
               <PickupDismissalSection
                 std={std}
                 dismissalMethod={d.dismissal_method}
-                onDismissalChange={(v) => update(s.student_id, { dismissal_method: v })}
+                // Same clear-on-change rule as the registration form: a provider
+                // name must never outlive the answer it describes, or a roster
+                // shows a destination for a child who now walks home.
+                onDismissalChange={(v) => update(
+                  s.student_id,
+                  v === "aftercare"
+                    ? { dismissal_method: v }
+                    : { dismissal_method: v, aftercare_provider: "" },
+                )}
+                aftercareProvider={d.aftercare_provider}
+                onAftercareProviderChange={(v) => update(s.student_id, { aftercare_provider: v })}
                 pickup={d.pickup}
                 onPickupChange={(v) => update(s.student_id, { pickup: v })}
                 doNotRelease={d.doNotRelease}
