@@ -20,7 +20,13 @@ import ShareProgram from "../../../components/ShareProgram.jsx";
 import CancellationPolicyInline from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
-import { rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+import { isUnset, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+
+// "" / null / undefined -> NULL, anything else -> a number. isUnset is the shared
+// definition of "not stated" and is the only one in the codebase that knows grade K
+// is the integer 0, so a truthiness shortcut here would delete Kindergarten.
+// Named intOrNull, not num: a local `num` already exists further down this file.
+const intOrNull = (v) => (isUnset(v) ? null : Number(v));
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -619,10 +625,13 @@ export default function ProgramWizardNew() {
         max_capacity: formData.max_capacity,
         age_format: formData.age_format,
         // Only write the active range; null the other so we don't lie.
-        grade_min: formData.age_format === "grade" ? formData.grade_min : null,
-        grade_max: formData.age_format === "grade" ? formData.grade_max : null,
-        age_min: formData.age_format === "age" ? formData.age_min : null,
-        age_max: formData.age_format === "age" ? formData.age_max : null,
+        // `num` because a CLEARED box is now "" rather than a coerced 0 (see the
+        // grade inputs) and "" is not an integer - PostgREST would reject it. NOT a
+        // truthiness check: grade K is 0, so `x || null` would delete Kindergarten.
+        grade_min: formData.age_format === "grade" ? intOrNull(formData.grade_min) : null,
+        grade_max: formData.age_format === "grade" ? intOrNull(formData.grade_max) : null,
+        age_min: formData.age_format === "age" ? intOrNull(formData.age_min) : null,
+        age_max: formData.age_format === "age" ? intOrNull(formData.age_max) : null,
         // Partner-run programs don't take payment through us; default price to 0
         // so the NOT-null-friendly column stays clean and no $ ever shows.
         price_cents: formData.runs_own_registration
@@ -1132,10 +1141,23 @@ function Step2WhenAndHowMany({
         </div>
         {formData.age_format === "grade" ? (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {/* EMPTY STAYS EMPTY. These were `Number(e.target.value) || 0`, and both
+                halves of that are wrong for a grade: `Number("")` is 0 and `0 || 0`
+                is 0, so CLEARING the box wrote Kindergarten. Two ways it bit:
+                clearing the top of "Grades 2 to 5" left 2 to 0, which the range
+                guard then reported as "Put the lower grade first." on a value the
+                operator never typed; and clearing the bottom silently rewrote the
+                class to "Grades K-5" with nothing on screen saying so.
+
+                There was also no way to state a grade at all and then take it back,
+                which is exactly the "nobody said" that migration 20260807a stopped
+                the database from inventing. "" now means not stated, all the way
+                through: rangeBackwards treats it as unset via isUnset, and the
+                insert coerces it to NULL. Same rule as the other two builders. */}
             <input
               type="number" min={0} max={12}
               value={formData.grade_min ?? ""}
-              onChange={(e) => onField("grade_min", Number(e.target.value) || 0)}
+              onChange={(e) => onField("grade_min", e.target.value === "" ? "" : Number(e.target.value))}
               style={{ ...inputStyle, width: 80 }}
               aria-label="Grade min"
             />
@@ -1143,7 +1165,7 @@ function Step2WhenAndHowMany({
             <input
               type="number" min={0} max={12}
               value={formData.grade_max ?? ""}
-              onChange={(e) => onField("grade_max", Number(e.target.value) || 0)}
+              onChange={(e) => onField("grade_max", e.target.value === "" ? "" : Number(e.target.value))}
               style={{ ...inputStyle, width: 80 }}
               aria-label="Grade max"
             />
