@@ -117,6 +117,18 @@ export function needsAftercareProvider(value) {
   return value === AFTERCARE;
 }
 
+// Is this audience answer INCOMPLETE - chosen, but missing the one detail it
+// exists to supply? Saying "aftercare" without saying which program answers the
+// category and not the question, and the whole point of the answer is telling an
+// instructor where to walk the child.
+//
+// Lives here so the form, the wizard's advance guard and the pickup gate's
+// blocker all agree; each of those previously had its own idea of "complete".
+export function dismissalAnswerIncomplete(dismissalMethod, aftercareProvider) {
+  if (!needsAftercareProvider(dismissalMethod)) return false;
+  return !(aftercareProvider || '').trim();
+}
+
 // Does this answer mean an adult collects the child, and therefore that the
 // authorized-pickup list applies? Only the released-to-adult answer does.
 // Written here so the form, the wizard's advance guard (Register.jsx) and the
@@ -124,6 +136,28 @@ export function needsAftercareProvider(value) {
 // they each hardcoded the comparison before.
 export function needsAuthorizedPickup(value) {
   return value === RELEASED_TO_ADULT;
+}
+
+// WHAT THE INSTRUCTOR RECORDS when they hand an aftercare child over.
+//
+// Jessica, 2026-08-07, on how dismissal actually runs: "instructors usually walk
+// kids to aftercare then take the rest outside to their parents or bikes." It is
+// something staff DO, not a release to a person who turned up - so the label says
+// "Walked to aftercare", not "Released to".
+//
+// attendance_records.dismissal_kind gained its own 'aftercare' value (migration
+// 20260807d) rather than reusing released_to_adult, because Class Reports flags
+// released_to_adult with no contact row as "Released to someone not on the
+// authorized list" in red - every correct aftercare handoff would have raised a
+// safety violation against the instructor who did the right thing.
+export const DISMISSAL_KIND_AFTERCARE = 'aftercare';
+
+// The label and the stored name both carry the provider, so the attendance record
+// says WHERE the child went and not merely that they went somewhere. Falls back
+// without the name rather than printing a dangling separator.
+export function aftercareReleaseLabel(aftercareProvider) {
+  const who = (aftercareProvider || '').trim();
+  return who ? `Walked to aftercare — ${who}` : 'Walked to aftercare';
 }
 
 // ONE LINE FOR A ROSTER, provider name included.

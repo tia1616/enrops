@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase, API_BASE } from '../../lib/supabase.js';
-import { needsAuthorizedPickup } from '../../lib/dismissal.js';
+import { needsAuthorizedPickup, dismissalAnswerIncomplete } from '../../lib/dismissal.js';
 import { VIP_PRICE_PER_TERM_CENTS } from '../../lib/pricing.js';
 import { schoolYearTermsForFall } from '../../lib/terms.js';
 import { useCart } from '../../context/CartContext.jsx';
@@ -349,6 +349,9 @@ export default function Register() {
         const std = regFields.std;
         // dismissal method (if enabled + required)
         if (std.dismissal_method?.required && !s.dismissal_method) return false;
+        // "Aftercare" with no program named is an incomplete answer, not a
+        // complete one - it says the category and withholds the destination.
+        if (dismissalAnswerIncomplete(s.dismissal_method, s.aftercare_provider)) return false;
         // pickup list required when released to an adult — or always, if the org
         // enabled pickup without the dismissal question (matches the form's render)
         if (std.authorized_pickup?.required && (needsAuthorizedPickup(s.dismissal_method) || !std.dismissal_method)) {

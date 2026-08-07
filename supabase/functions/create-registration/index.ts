@@ -274,8 +274,14 @@ serve(async (req) => {
           // every staff surface reads the two together. The client clears it on
           // change too - this is the server refusing to take its word for it,
           // since the browser's payload is not trustworthy.
+          // String(...) before trim, NOT `?.trim()`. The body is client-supplied
+          // JSON: a number, boolean, object or array here passes the optional-chain
+          // null check, resolves `.trim` to undefined, and throws "is not a
+          // function" - a 500 in the middle of checkout from a malformed payload.
+          // Every sibling field in this insert uses the safe `x || null` shape;
+          // this was the only one calling a string method on untrusted input.
           aftercare_provider: student.dismissal_method === 'aftercare'
-            ? (student.aftercare_provider?.trim() || null)
+            ? (String(student.aftercare_provider ?? '').trim().slice(0, 120) || null)
             : null,
         })
         .select('id')

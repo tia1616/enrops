@@ -149,13 +149,20 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
               when it is missing, rather than letting silence read as "we know". */}
           {showAftercareProvider && (
             <div className="mt-3">
+              {/* REQUIRED, matching the question it belongs to. dismissal_method is
+                  always-required, so leaving its follow-up optional meant a family
+                  could answer "aftercare" and leave the destination blank - the
+                  roster would then read "Aftercare (provider not stated)" forever
+                  for a family who did answer. Enforced in Register.jsx's canAdvance
+                  and the pickup gate's blocker through the same shared helper. */}
               <label className="label-field" htmlFor="aftercare-provider">
-                Which aftercare program?
+                Which aftercare program?<span className="text-j2s-orange-dark"> *</span>
               </label>
               <input
                 id="aftercare-provider"
                 className="input-field"
                 type="text"
+                required
                 maxLength={120}
                 value={aftercareProvider || ''}
                 onChange={(e) => onAftercareProviderChange?.(e.target.value)}

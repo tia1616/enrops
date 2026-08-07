@@ -11,6 +11,7 @@ import {
   dismissalLabel, dismissalParentLabel,
   needsAftercareProvider, needsAuthorizedPickup,
   dismissalSummary,
+  dismissalAnswerIncomplete, aftercareReleaseLabel, DISMISSAL_KIND_AFTERCARE,
 } from './dismissal.js';
 
 let pass = 0, fail = 0;
@@ -104,6 +105,35 @@ eq('provider is ignored when the answer is not aftercare',
   dismissalSummary({ dismissal_method: WALKS_OR_BIKES, aftercare_provider: 'Champions' }), 'Walks or bikes home');
 eq('nothing stated -> null so the caller omits the field', dismissalSummary({}), null);
 eq('undefined student -> null', dismissalSummary(undefined), null);
+
+// --- is the answer complete? ----------------------------------------------
+// "Aftercare" without a program names the category and withholds the destination,
+// which is the one thing the answer exists to supply.
+eq('aftercare with no program is incomplete', dismissalAnswerIncomplete(AFTERCARE, ''), true);
+eq('aftercare with whitespace only is incomplete', dismissalAnswerIncomplete(AFTERCARE, '   '), true);
+eq('aftercare with undefined provider is incomplete', dismissalAnswerIncomplete(AFTERCARE, undefined), true);
+eq('aftercare with a program is complete', dismissalAnswerIncomplete(AFTERCARE, 'Champions'), false);
+// Every other answer needs nothing extra - this must never block a family who
+// picked walking home just because a stale provider field is empty.
+for (const v of DISMISSAL_VALUES.filter((x) => x !== AFTERCARE)) {
+  eq(`${v} is never incomplete`, dismissalAnswerIncomplete(v, ''), false);
+}
+eq('an unanswered question is not "incomplete" here', dismissalAnswerIncomplete('', ''), false);
+
+// --- what the instructor records -------------------------------------------
+// Jessica: instructors WALK kids to aftercare, so the label is an action taken,
+// not a release to someone who arrived.
+eq('release label names the program', aftercareReleaseLabel('Champions'), 'Walked to aftercare — Champions');
+eq('release label trims', aftercareReleaseLabel('  Right At School  '), 'Walked to aftercare — Right At School');
+// No dangling separator when the name is missing.
+eq('no provider -> no dangling dash', aftercareReleaseLabel(''), 'Walked to aftercare');
+eq('null provider -> no dangling dash', aftercareReleaseLabel(null), 'Walked to aftercare');
+eq('label never ends in a separator', /[—-]\s*$/.test(aftercareReleaseLabel('')), false);
+// Must match a value attendance_records_dismissal_kind_chk accepts (20260807d).
+// Reusing 'released_to_adult' would make Class Reports flag every correct
+// aftercare handoff as "released to someone not on the authorized list".
+eq('the recorded kind is its own value', DISMISSAL_KIND_AFTERCARE, 'aftercare');
+eq('the recorded kind is NOT released_to_adult', DISMISSAL_KIND_AFTERCARE === 'released_to_adult', false);
 
 console.log(`\n${fail ? 'FAILURES' : 'ALL PASS'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);

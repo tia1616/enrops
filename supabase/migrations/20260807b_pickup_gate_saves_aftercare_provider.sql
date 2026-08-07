@@ -148,26 +148,15 @@ $function$;
 -- and broken whatever backend path relies on it - a grant nobody notices missing
 -- until something server-side fails.
 --
--- REVOKE FROM PUBLIC **AND FROM ANON**, both explicitly.
---
--- Caught on staging by reading proacl back instead of assuming the revoke worked:
--- the new signature came out with `anon=X/postgres` while the 6-arg function it
--- replaces has no anon grant. Supabase's default privileges grant EXECUTE to anon
--- on newly created public functions, and `revoke ... from public` does NOT remove
--- an explicit role grant - so revoking PUBLIC alone silently left it wider than
--- what it replaced.
---
--- It matters because this is SECURITY DEFINER taking an organization id. The
--- authorization checks do reject an anonymous caller, but the two failure messages
--- differ ('student % not in organization %' vs 'not authorized to edit contacts
--- for student %'), so anon could distinguish whether a given student belongs to a
--- given org. That is the probe-oracle shape.
+-- NOTE: this leaves the function reachable by `anon`, which 20260807c then
+-- revokes. The two are separate files ON PURPOSE - that is exactly the order they
+-- were applied to staging, and splitting them keeps the repo, staging's
+-- schema_migrations and prod's telling the same story. Squashing them into one
+-- file would have made the audit trail disagree with reality on the one table
+-- someone reads when diagnosing an environment difference.
 revoke all on function public.replace_student_pickup_dnr_guardian(
   uuid, uuid, jsonb, jsonb, jsonb, text, text
 ) from public;
-revoke all on function public.replace_student_pickup_dnr_guardian(
-  uuid, uuid, jsonb, jsonb, jsonb, text, text
-) from anon;
 grant execute on function public.replace_student_pickup_dnr_guardian(
   uuid, uuid, jsonb, jsonb, jsonb, text, text
 ) to authenticated;

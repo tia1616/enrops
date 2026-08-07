@@ -14,7 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase.js";
-import { needsAuthorizedPickup } from "../../lib/dismissal.js";
+import { needsAuthorizedPickup, dismissalAnswerIncomplete } from "../../lib/dismissal.js";
 import {
   PickupDismissalSection,
   GuardianSecondarySection,
@@ -83,6 +83,12 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     const d = byStudent[s.student_id];
     if (!d) return "loading";
     if (std?.dismissal_method && !d.dismissal_method) return "Choose how this child leaves.";
+    // Same completeness rule as the registration form, through the same helper -
+    // this gate exists to finish missing pickup info, so it must not let a family
+    // "finish" with the aftercare destination blank.
+    if (dismissalAnswerIncomplete(d.dismissal_method, d.aftercare_provider)) {
+      return "Add which aftercare program they go to.";
+    }
     if (needsAuthorizedPickup(d.dismissal_method) && nonEmpty(d.pickup).length === 0) {
       return "Add at least one person who can pick them up.";
     }
