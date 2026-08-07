@@ -1469,7 +1469,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // "they picked grades" and "they typed a grade" are both intent. A ref rides
   // alongside the state so the resync effect below can read it without listing it as
   // a dependency and re-running every time it flips.
-  const [audienceTouched, setAudienceTouched] = useState(false);
+  const [audienceTouched, setAudienceTouched] = useState(null);
   const audienceTouchedRef = useRef(false);
   const seededFromRef = useRef(program);
   useEffect(() => {
@@ -1489,11 +1489,28 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     });
     if (!audienceTouchedRef.current) setPanelMode(audienceMode(program));
   }, [program]);
+  // SWITCHING THE TAB IS NOT AN EDIT. Only entering a VALUE is.
+  //
+  // The first attempt at this counted the pills as intent, which failed the exact
+  // case it was written for: the operator clicks "Ages" purely to see what is
+  // there, the (empty) age boxes appear, they save the room edit they came for -
+  // and because "they touched it" was true, the empty pair was written and the
+  // grade range was destroyed. Verified against the live row: it really did null
+  // grades 0-5 on a J2S class.
+  //
+  // A save must write what the operator ENTERED, not which tab they were looking
+  // at. Clearing a range on purpose is still possible and still explicit: set the
+  // dropdowns back to the blank option, which IS a value edit.
+  // Records WHICH pair the operator actually typed into, not just that they typed.
+  // Writing `panelMode` instead would lose a grade edit made before an idle switch
+  // to the Ages tab: the save would take the tab on screen and null what they had
+  // just entered. null = they entered nothing, so the save leaves all five columns
+  // alone.
   function setAudience(key, value) {
-    setAudienceTouched(true);
+    if (key === "mode") { setPanelMode(value); return; }
+    setAudienceTouched(panelMode);
     audienceTouchedRef.current = true;
-    if (key === "mode") setPanelMode(value);
-    else set(key, value);
+    set(key, value);
   }
   const usingGradesInPanel = panelMode === "grades";
   // Only the pair on screen can be wrong; a stale backwards range in the hidden
@@ -1680,7 +1697,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         // rule cannot drift from the builder's copy - they used to be four hand-copied
         // ternaries in two files.
         ...(audienceTouched
-          ? audiencePatch(panelMode, {
+          ? audiencePatch(audienceTouched, {
             gradeMin: draft.grade_min, gradeMax: draft.grade_max,
             ageMin: draft.age_min, ageMax: draft.age_max,
           })
