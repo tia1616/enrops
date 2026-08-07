@@ -37,8 +37,18 @@ eq('grades range', audienceLabel({ grade_min: 0, grade_max: 5 }), 'Grades K–5'
 eq('ages range', audienceLabel({ age_min: 6, age_max: 12 }), 'Ages 6–12');
 eq('single grade collapses', audienceLabel({ grade_min: 3, grade_max: 3 }), 'Grade 3');
 eq('single age collapses', audienceLabel({ age_min: 7, age_max: 7 }), 'Age 7');
-eq('grade_min only', audienceLabel({ grade_min: 2, grade_max: null }), 'Grade 2');
-eq('age_max only', audienceLabel({ age_min: null, age_max: 9 }), 'Age 9');
+// OPEN-ENDED, NOT EXACT. These two assertions previously pinned 'Grade 2' and
+// 'Age 9' — the implementation's answer, not the parent's. A class open to age 5
+// and up was being advertised as "Age 5", which reads as a hard cut-off to the
+// parent of a six-year-old. The live catalog card already said "Ages 5+"; the
+// module had to match it before anything was repointed at the module.
+eq('grade_min only is open-ended', audienceLabel({ grade_min: 2, grade_max: null }), 'Grades 2 and up');
+eq('grade_max only is a ceiling', audienceLabel({ grade_min: null, grade_max: 5 }), 'Up to grade 5');
+eq('age_min only is open-ended', audienceLabel({ age_min: 5, age_max: null }), 'Ages 5+');
+eq('age_max only is a ceiling', audienceLabel({ age_min: null, age_max: 9 }), 'Up to age 9');
+// K is 0, which is falsy — an `if (min)` anywhere in here would drop it.
+eq('grade_min K only', audienceLabel({ grade_min: 0, grade_max: null }), 'Grades K and up');
+eq('age_min 0 only', audienceLabel({ age_min: 0, age_max: null }), 'Ages 0+');
 eq('neither set renders nothing', audienceLabel({}), null);
 eq('null row renders nothing', audienceLabel(null), null);
 // If a row somehow carries both, show ONE. Grades win because afterschool is the

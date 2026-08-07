@@ -21,6 +21,7 @@ import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
+import { GRADE_OPTIONS, audienceMode } from "../../../lib/grades.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -479,6 +480,7 @@ export default function ProgramsCalendar() {
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             max_capacity, status, term, instructor_name, price_cents,
             short_description,
+            grade_min, grade_max, age_min, age_max, age_format,
             runs_own_registration, external_registration_url, list_in_public_catalog,
             first_session_date, session_count, schedule_mode, end_date, organization_id,
             facility_requested_at, facility_approved_at, facility_notes,
@@ -1413,6 +1415,22 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     // that already exists can get one - the lean builder only just started
     // collecting it, so every program created before now has none.
     short_description: program.short_description ?? "",
+    // The class NAME. For a lean provider this is free text typed once in the
+    // builder and, until now, unchangeable afterwards - full-nav orgs got "Change
+    // class", which swaps the curriculum behind it, not the name. `curriculum` is
+    // NOT NULL, so the save below refuses to blank it.
+    curriculum: program.curriculum ?? "",
+    // Who the class is for. Neither pair was editable here at all, so a range set
+    // at creation was permanent and one left blank could never be filled in.
+    // Every one of these must be SELECTED above before it is written, or a save
+    // would read undefined and null out J2S's 90 grade ranges.
+    grade_min: program.grade_min ?? "",
+    grade_max: program.grade_max ?? "",
+    age_min: program.age_min ?? "",
+    age_max: program.age_max ?? "",
+    // Which question this row answers, from the shared rule rather than a guess,
+    // so the editor opens on the pair the card is actually showing.
+    audience_mode: audienceMode(program),
     price_cents: program.price_cents ?? "",
     program_location_id: program.program_location_id ?? "",
     room: program.room ?? "",
@@ -1423,6 +1441,17 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
+
+  // Which pair the panel is currently editing, and the one coercion that has to be
+  // right: "" means NOT STATED, but grade K is 0, which is falsy. `Number("") || null`
+  // gives null for both, so K and blank become the same thing.
+  const usingGradesInPanel = draft.audience_mode === "grades";
+  const num = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
+  // Only the pair on screen can be wrong; a stale backwards range in the hidden
+  // pair is never written, so it must not block the save.
+  const audienceBackwardsInPanel = usingGradesInPanel
+    ? (num(draft.grade_min) != null && num(draft.grade_max) != null && num(draft.grade_min) > num(draft.grade_max))
+    : (num(draft.age_min) != null && num(draft.age_max) != null && num(draft.age_min) > num(draft.age_max));
 
   // Copy-to-term: pick a season + year to copy this program into as a draft.
   // Operators think "Winter 2027", not "WI27" - so we present a Season and a
@@ -1584,6 +1613,21 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         // draft would start undefined and every save here would blank a description
         // the operator never touched (91 of 95 prod programs have one).
         short_description: draft.short_description?.trim() ? draft.short_description.trim() : null,
+        // NOT NULL in the database and the name families read on the card, so a
+        // blank box keeps the existing name rather than failing the save or
+        // publishing an untitled class. Guarded again below with a visible message.
+        curriculum: draft.curriculum?.trim() ? draft.curriculum.trim() : program.curriculum,
+        // Grades OR ages, all four written EXPLICITLY. `num()` keeps grade K, which
+        // is 0: `Number(x) || null` would turn Kindergarten into "not stated".
+        grade_min: usingGradesInPanel ? num(draft.grade_min) : null,
+        grade_max: usingGradesInPanel ? num(draft.grade_max) : null,
+        age_min: usingGradesInPanel ? null : num(draft.age_min),
+        age_max: usingGradesInPanel ? null : num(draft.age_max),
+        // Only claim a format when a range is actually set - same rule as the
+        // builder, so a row round-trips through either surface unchanged.
+        age_format: usingGradesInPanel
+          ? (num(draft.grade_min) != null || num(draft.grade_max) != null ? "grade" : null)
+          : (num(draft.age_min) != null || num(draft.age_max) != null ? "age" : null),
         price_cents: draft.price_cents === "" || draft.price_cents === null ? null : Number(draft.price_cents),
         program_location_id: draft.program_location_id || null,
         room: draft.room || null,
@@ -1906,6 +1950,78 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         <ExpandField label="Room">
           <input type="text" value={draft.room ?? ""} onChange={(e) => set("room", e.target.value)} placeholder="e.g. Room 12" style={expandInputStyle} />
         </ExpandField>
+        {/* WHO IT'S FOR. Grades or ages, the same one question the builder asks,
+            switched by the same rule. Neither pair was editable here before, so a
+            provider who left it blank at creation - all 13 of Jeff's classes - had
+            no way to add it, and one set wrongly could never be corrected. */}
+        <ExpandField label="Who it's for">
+          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+            {[["grades", "Grades"], ["ages", "Ages"]].map(([val, lbl]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => set("audience_mode", val)}
+                aria-pressed={draft.audience_mode === val}
+                style={{
+                  padding: "3px 10px", borderRadius: 999, fontSize: 11.5, fontWeight: 600,
+                  fontFamily: "inherit", cursor: "pointer",
+                  border: `1px solid ${draft.audience_mode === val ? BRIGHT : RULE}`,
+                  background: draft.audience_mode === val ? BRIGHT : "#fff",
+                  color: draft.audience_mode === val ? "#fff" : INK,
+                }}
+              >
+                {lbl}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {usingGradesInPanel ? (
+              <>
+                <select value={draft.grade_min ?? ""} onChange={(e) => set("grade_min", e.target.value)} style={{ ...expandInputStyle, width: 74 }} aria-label="Lowest grade">
+                  <option value="">—</option>
+                  {GRADE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                <span style={{ fontSize: 12, color: MUTED }}>to</span>
+                <select value={draft.grade_max ?? ""} onChange={(e) => set("grade_max", e.target.value)} style={{ ...expandInputStyle, width: 74 }} aria-label="Highest grade">
+                  <option value="">—</option>
+                  {GRADE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </>
+            ) : (
+              <>
+                <input type="text" inputMode="numeric" value={draft.age_min ?? ""} onChange={(e) => set("age_min", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))} placeholder="5" style={{ ...expandInputStyle, width: 74 }} aria-label="Youngest age" />
+                <span style={{ fontSize: 12, color: MUTED }}>to</span>
+                <input type="text" inputMode="numeric" value={draft.age_max ?? ""} onChange={(e) => set("age_max", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))} placeholder="12" style={{ ...expandInputStyle, width: 74 }} aria-label="Oldest age" />
+              </>
+            )}
+          </div>
+          {audienceBackwardsInPanel && (
+            <div style={{ color: RED, fontSize: 11.5, marginTop: 4 }}>
+              Put the {usingGradesInPanel ? "lower grade" : "younger age"} first.
+            </div>
+          )}
+        </ExpandField>
+      </div>
+
+      {/* The class NAME. Free text at creation for a lean provider and, until now,
+          not editable anywhere afterwards. Full width because a class name is a
+          sentence ("Beginner Ukulele, Tuesdays"), not a field-grid value. */}
+      <div style={{ marginTop: 12 }}>
+        <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.3 }}>
+          Class name
+          <input
+            type="text"
+            value={draft.curriculum ?? ""}
+            onChange={(e) => set("curriculum", e.target.value)}
+            maxLength={120}
+            style={{ ...expandInputStyle, marginTop: 4, textTransform: "none", letterSpacing: 0, fontWeight: 400 }}
+          />
+        </label>
+        {!draft.curriculum?.trim() && (
+          <div style={{ fontSize: 12, color: RED, marginTop: 4 }}>
+            A class needs a name — saving now keeps the current one, &ldquo;{program.curriculum}&rdquo;.
+          </div>
+        )}
       </div>
 
       {/* Description sits OUTSIDE the field grid because it needs the full width
@@ -2008,13 +2124,20 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           // not enforce, and the DB (program_location_id NOT NULL) would reject
           // the write with a constraint error nobody can read.
           const noLocation = !draft.program_location_id;
-          const disabled = saving || rangeBusy || noLocation;
+          // Same reasoning for a backwards range: the message beside the fields is
+          // advice until the button enforces it, and "Grades 5 to 2" reaches the
+          // catalog card as nonsense a parent has to decode.
+          const disabled = saving || rangeBusy || noLocation || audienceBackwardsInPanel;
           return (
             <button
               type="button"
               onClick={handleSave}
               disabled={disabled}
-              title={noLocation ? "Pick a location first — every class needs one." : undefined}
+              title={
+                noLocation ? "Pick a location first — every class needs one."
+                  : audienceBackwardsInPanel ? `Put the ${usingGradesInPanel ? "lower grade" : "younger age"} first.`
+                    : undefined
+              }
               style={{
                 background: BRIGHT, color: "#fff", border: "none", padding: "8px 16px",
                 borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit",

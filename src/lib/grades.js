@@ -48,6 +48,15 @@ export function gradeLabel(n) {
 // (legacy data, an import), the afterschool reading is the safer one to show. A
 // single-value range collapses to "Grade 3" / "Age 7" rather than "3–3".
 //
+// OPEN-ENDED RANGES ARE NOT EXACT ONES. The first version of this function
+// coalesced a missing end onto the other (`lo = aMin ?? aMax`), so age_min 5 with
+// no max rendered "Age 5" — telling a parent of a six-year-old the class was not
+// for them. The registration card this module is meant to replace already got this
+// right ("Ages 5+", "Up to age 12"), so adopting the module unchanged would have
+// been a downgrade on the one surface families actually read. Its own tests pinned
+// the wrong answer, because they were written from the implementation rather than
+// from what a parent needs to know.
+//
 // Returns null when neither is set, so the caller omits the line instead of
 // rendering "not set" at a parent.
 export function audienceLabel(row) {
@@ -56,18 +65,21 @@ export function audienceLabel(row) {
   const gMin = row.grade_min;
   const gMax = row.grade_max;
   if (gMin != null || gMax != null) {
-    const lo = gradeLabel(gMin ?? gMax);
-    const hi = gradeLabel(gMax ?? gMin);
-    if (lo == null) return null;
-    return lo === hi ? `Grade ${lo}` : `Grades ${lo}–${hi}`;
+    const lo = gradeLabel(gMin);
+    const hi = gradeLabel(gMax);
+    if (lo != null && hi != null) return lo === hi ? `Grade ${lo}` : `Grades ${lo}–${hi}`;
+    if (lo != null) return `Grades ${lo} and up`;
+    return `Up to grade ${hi}`;
   }
 
   const aMin = row.age_min;
   const aMax = row.age_max;
   if (aMin != null || aMax != null) {
-    const lo = aMin ?? aMax;
-    const hi = aMax ?? aMin;
-    return lo === hi ? `Age ${lo}` : `Ages ${lo}–${hi}`;
+    if (aMin != null && aMax != null) return aMin === aMax ? `Age ${aMin}` : `Ages ${aMin}–${aMax}`;
+    // Wording carried over verbatim from the lean catalog card, which is live and
+    // which families have been reading all term.
+    if (aMin != null) return `Ages ${aMin}+`;
+    return `Up to age ${aMax}`;
   }
 
   return null;

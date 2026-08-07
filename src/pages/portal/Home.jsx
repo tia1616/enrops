@@ -15,6 +15,7 @@ import {
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
 import { programScheduleSummary, formatDayLabel } from '../../lib/programSchedule.js';
+import { audienceLabel } from '../../lib/grades.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
@@ -536,14 +537,15 @@ export default function Home() {
                     // "Is my child old enough?" is the first thing a parent asks
                     // and the most common reason they message the provider
                     // instead of registering. Only shown when the operator has
-                    // actually said - never guessed from grades.
-                    const ageStr = p.age_min != null && p.age_max != null
-                      ? `Ages ${p.age_min}–${p.age_max}`
-                      : p.age_min != null
-                        ? `Ages ${p.age_min}+`
-                        : p.age_max != null
-                          ? `Up to age ${p.age_max}`
-                          : null;
+                    // actually said - never guessed.
+                    //
+                    // Now GRADES OR AGES, from the one shared definition. This card
+                    // rendered ages only, so a provider who thinks in grades - which
+                    // is every afterschool provider, per Jessica - had no way to tell
+                    // families who a class was for. The wording for every age case is
+                    // carried over verbatim from what this line used to produce, so
+                    // nothing a family has been reading changes.
+                    const ageStr = audienceLabel(p);
                     // "Mondays", "Monday" for a one-off, or null when no day is set
                     // (never the literal "nulls"). Shared helper so this label and
                     // the schedule line below use the same one-session coercion.
@@ -815,9 +817,14 @@ export default function Home() {
                     const timeStr = p.start_time
                       ? `${p.start_time}${p.end_time ? `–${p.end_time}` : ''}`
                       : null;
-                    const gradeStr = p.grade_min != null && p.grade_max != null
-                      ? `Grades ${p.grade_min === 0 ? 'K' : p.grade_min}–${p.grade_max}`
-                      : null;
+                    // Was a fifth hand-rolled copy of the grade vocabulary, and the
+                    // only one that handled K. Now the same definition the lean card
+                    // above uses, so the two layouts cannot drift while they stay
+                    // forked. Renders identically for every row live on prod today:
+                    // checked, and not one program in either org has a one-sided
+                    // range (J2S: 90 graded + 1 aged, all with both ends set), so the
+                    // new open-ended wording cannot appear on an existing card.
+                    const gradeStr = audienceLabel(p);
                     const metaStr = [dayLabel, timeStr, gradeStr].filter(Boolean).join(' · ');
                     // Partner-run, listed program: families register on the partner's
                     // site, so render a link-out card (no price, no VIP, no checkout).
