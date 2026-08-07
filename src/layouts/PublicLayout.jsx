@@ -272,15 +272,19 @@ function J2SBrandedShell({ org, user, signOut, location, policyTypes }) {
   return (
     <div className="brand-j2s min-h-screen flex flex-col bg-white">
       <header className="sticky top-0 z-30 border-b border-j2s-purple/10 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
-          <Link to={home} className="flex items-center gap-3">
+        {/* Same phone overflow as the enrops shell below, same fix: this row also
+            carries four controls next to a 64px-tall logo once a family is signed in,
+            and a non-wrapping flex row pushed the page ~25px wider than the screen.
+            Two shells, one defect - they are forked until the catalog merge. */}
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-y-2 px-4 py-4 sm:px-6">
+          <Link to={home} className="flex min-w-0 shrink items-center gap-3">
             <img
               src={org?.logo_url || ''}
               alt={org?.name || ''}
-              className={`h-16 w-auto transition-opacity duration-150 ${org?.logo_url ? 'opacity-100' : 'opacity-0'}`}
+              className={`h-16 w-auto max-w-full transition-opacity duration-150 ${org?.logo_url ? 'opacity-100' : 'opacity-0'}`}
             />
           </Link>
-          <nav className="flex items-center gap-2 text-sm font-semibold sm:gap-6">
+          <nav className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1.5 text-sm font-semibold sm:gap-x-6">
             <PwaInstallButton />
             {inCheckout ? null : user ? (
               <>
@@ -387,15 +391,25 @@ function EnropsBrandedShell({ org, user, signOut, location, policyTypes }) {
   return (
     <div className="brand-enrops-public" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: ENROPS_CREAM, color: '#1a1a1a', fontFamily: 'inherit' }}>
       <header style={{ position: 'sticky', top: 0, zIndex: 30, background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(6px)', borderBottom: '1px solid #e2dfd5' }}>
-        <div style={{ maxWidth: 1100, margin: '0 auto', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
-          <Link to={home} style={{ display: 'flex', alignItems: 'center', gap: 10, color: ENROPS_PURPLE, fontWeight: 700, fontSize: 18, textDecoration: 'none' }}>
+        {/* WRAPS on a phone. Signed in, this row carries "Get the phone app", the
+            portal switcher, "My account" and "Sign out" next to the provider's name,
+            which at 375px came to about 25px more than the screen -- so the whole
+            page could be dragged sideways. Nothing shrank because a flex row does not
+            wrap by default and the brand link would not narrow below its text.
+            Three parts to the fix, all needed: the outer row wraps, the brand link is
+            allowed to shrink and ellipsis its name, and the nav itself wraps and
+            stays right-aligned when it does. A family arriving anonymously only ever
+            saw "Get the phone app", which is why this hid until an operator looked at
+            their own page while signed in. */}
+        <div style={{ maxWidth: 1100, margin: '0 auto', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', rowGap: 8 }}>
+          <Link to={home} style={{ display: 'flex', alignItems: 'center', gap: 10, color: ENROPS_PURPLE, fontWeight: 700, fontSize: 18, textDecoration: 'none', minWidth: 0, flexShrink: 1 }}>
             {org.logo_url ? (
-              <img src={org.logo_url} alt={org.name} style={{ height: 40, width: 'auto' }} />
+              <img src={org.logo_url} alt={org.name} style={{ height: 40, width: 'auto', maxWidth: '100%' }} />
             ) : (
-              <span style={{ fontWeight: 700 }}>{org.name}</span>
+              <span style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{org.name}</span>
             )}
           </Link>
-          <nav style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 14, fontWeight: 600 }}>
+          <nav style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 14, rowGap: 6, flexWrap: 'wrap', fontSize: 14, fontWeight: 600, minWidth: 0 }}>
             <PwaInstallButton />
             {inCheckout ? null : user ? (
               <>

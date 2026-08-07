@@ -191,6 +191,20 @@ export default function QuickProgramBuilder() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [photoErr, setPhotoErr] = useState("");
 
+  // Phone-width layout. This file styles inline, so there is no stylesheet to put
+  // a media query in - and the one place it matters is the Cancel/Create row: side
+  // by side at 375px, "Create program & get link" wraps to two lines and both
+  // buttons grow to 69px tall to match. Measured on staging at 375x812. Operators
+  // build classes on their phones, so that is the case to get right, not the
+  // exception. 480 rather than 375 so a wrapped label never happens at all.
+  const [narrow, setNarrow] = useState(() =>
+    typeof window !== "undefined" && window.innerWidth < 480);
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < 480);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   // Is the org able to actually take money yet? The share link goes live the
   // moment a program is created, but Arielle's rule is "never a payment-less
   // live page" — so on success we nudge the operator to connect Stripe FIRST
@@ -774,6 +788,57 @@ export default function QuickProgramBuilder() {
     if (cadence !== "both") setMode(cadence === "one_off" ? "one_off" : "weekly");
   }
 
+  // Leaving the form without creating anything.
+  //
+  // "Dirty" is measured against what the form SEEDS ITSELF WITH, not against
+  // blank. Ages pre-fill from the org's usual range, spots and sessions have
+  // defaults, and a single-location org gets its one location auto-selected - so
+  // comparing to "" would make an untouched form report itself dirty and confirm
+  // on every cancel, which trains the operator to click through the one prompt
+  // that is supposed to protect them.
+  const seededAgeMin = profile.default_age_min != null ? String(profile.default_age_min) : "";
+  const seededAgeMax = profile.default_age_max != null ? String(profile.default_age_max) : "";
+  const seededLocationId = locations.length === 1 ? locations[0].id : "";
+  const seededMode = cadence === "one_off" ? "one_off" : "weekly";
+  const formIsDirty =
+    name.trim() !== "" ||
+    description.trim() !== "" ||
+    room.trim() !== "" ||
+    price.trim() !== "" ||
+    day !== "" ||
+    startDate !== "" ||
+    startTime !== "" ||
+    endTime !== "" ||
+    photoUrl !== "" ||
+    locationId !== seededLocationId ||
+    ageMin !== seededAgeMin ||
+    ageMax !== seededAgeMax ||
+    spots !== "18" ||
+    sessions !== "8" ||
+    mode !== seededMode ||
+    // The inline "+ Add a site" sub-form. Its two inputs are the ONLY typed text on
+    // this screen that lives outside the program fields, and an operator with no
+    // locations yet types a venue name and a full street address into them before
+    // anything else exists. Leaving them out meant Cancel threw that away in
+    // silence, because every program field was still untouched.
+    newLocName.trim() !== "" ||
+    newLocAddress.trim() !== "";
+
+  function handleCancel() {
+    if (formIsDirty) {
+      // Claims only the CLASS. The first draft said "nothing has been created yet",
+      // which is false the moment an operator uses "+ Add a site" inline: that
+      // inserts a real program_locations row before this form is ever submitted, and
+      // it correctly survives the cancel. A message must not assert more than it
+      // knows.
+      const ok = window.confirm(
+        "Leave without creating this class? The details you've typed will be lost.",
+      );
+      if (!ok) return;
+    }
+    navigate("/admin/programs");
+  }
+
   // Guard: outlet not ready yet.
   if (!org) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
@@ -981,13 +1046,39 @@ export default function QuickProgramBuilder() {
             </div>
           )}
 
-          <button
-            onClick={saveProfile}
-            disabled={!profileValid || savingProfile}
-            style={{ ...primaryBtn, width: "100%", opacity: !profileValid || savingProfile ? 0.55 : 1, cursor: !profileValid || savingProfile ? "not-allowed" : "pointer" }}
-          >
-            {savingProfile ? "Saving…" : "Next: build my first class →"}
-          </button>
+          {/* Same trap as the form below it: one button, and it was the only way
+              off the screen. Nothing here is saved until "Next", so leaving costs
+              nothing and the questions come back next time.
+
+              Ordered in the DOM for the same reason as the footer below: CSS
+              `order` repaints without moving keyboard focus, so the tab order
+              would disagree with what is on screen. */}
+          {(() => {
+            const nextButton = (
+              <button
+                onClick={saveProfile}
+                disabled={!profileValid || savingProfile}
+                style={{ ...primaryBtn, flex: 1, opacity: !profileValid || savingProfile ? 0.55 : 1, cursor: !profileValid || savingProfile ? "not-allowed" : "pointer" }}
+              >
+                {savingProfile ? "Saving…" : "Next: build my first class →"}
+              </button>
+            );
+            const notNowButton = (
+              <button
+                type="button"
+                onClick={() => navigate("/admin/programs")}
+                disabled={savingProfile}
+                style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", opacity: savingProfile ? 0.55 : 1, cursor: savingProfile ? "not-allowed" : "pointer" }}
+              >
+                Not now
+              </button>
+            );
+            return (
+              <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 10, alignItems: "stretch" }}>
+                {narrow ? <>{nextButton}{notNowButton}</> : <>{notNowButton}{nextButton}</>}
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
@@ -1111,6 +1202,31 @@ export default function QuickProgramBuilder() {
   }
 
   // ---- The lean form ----
+
+  // Held as elements so the two footer orders (Cancel|Create on a wide screen,
+  // Create above Cancel on a phone) can be emitted in real DOM order without
+  // writing the markup twice. See the note at the footer for why CSS `order`
+  // was the wrong tool.
+  const createButton = (
+    <button
+      onClick={handleCreate}
+      disabled={!valid || submitting}
+      style={{ ...primaryBtn, flex: 1, opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
+    >
+      {submitting ? "Creating…" : "Create program & get link"}
+    </button>
+  );
+  const cancelButton = (
+    <button
+      type="button"
+      onClick={handleCancel}
+      disabled={submitting}
+      style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
+    >
+      Cancel
+    </button>
+  );
+
   return (
     <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
       {/* The ONE tip on this screen, at the title - same placement rule as every
@@ -1309,15 +1425,15 @@ export default function QuickProgramBuilder() {
           <div style={helpStyle}>
             Shown to families on your registration page, under the class name.
             Line breaks are kept, so you can write more than one paragraph.
-            {descCount && (
-              <>
-                {' '}
-                <span style={{ color: descCount.atLimit ? RED : MUTED, fontWeight: descCount.atLimit ? 600 : 400 }}>
-                  {descCount.text}
-                </span>
-              </>
-            )}
           </div>
+          {/* Its OWN line, not the tail of the help sentence. Inline, it read as
+              "...more than one paragraph. 4 characters." - an unfinished sentence
+              rather than a count. Jessica found that on prod. */}
+          {descCount && (
+            <div style={{ ...helpStyle, marginTop: 2, color: descCount.atLimit ? RED : MUTED, fontWeight: descCount.atLimit ? 600 : 400 }}>
+              {descCount.text}
+            </div>
+          )}
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -1728,13 +1844,54 @@ export default function QuickProgramBuilder() {
           </div>
         )}
 
-        <button
-          onClick={handleCreate}
-          disabled={!valid || submitting}
-          style={{ ...primaryBtn, width: "100%", opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
-        >
-          {submitting ? "Creating…" : "Create program & get link"}
-        </button>
+        {/* Cancel BESIDE Create, not instead of it. Until now the only button on
+            this form was the irreversible one: there was no cancel, no back, no
+            discard, and the only navigate("/admin/programs") was on the SUCCESS
+            screen - i.e. reachable only after the class was already live. The
+            escape was the sidebar, which on a phone is behind a menu. Jessica hit
+            this trying the builder on prod, where publishing is not a rehearsal. */}
+        {/* On a phone they STACK, primary on top, each full width - the label does
+            not fit beside a Cancel at 375px and wrapping it made both buttons 69px
+            tall. On a wider screen they share one row, Cancel first so the
+            irreversible button keeps the position it has always had.
+
+            ORDERED IN THE DOM, not with CSS `order`. The first version used
+            order:0/1 to flip them, which moves only the PAINT: keyboard focus and
+            screen readers still follow source order, so tabbing out of the last
+            field landed on the publish button while the eye was on a Cancel to its
+            left. On the one control here that cannot be undone, "what you tab to"
+            and "what you see" have to be the same button. */}
+        <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 10, alignItems: "stretch" }}>
+          {narrow ? (
+            <>
+              {createButton}
+              {cancelButton}
+            </>
+          ) : (
+            <>
+              {cancelButton}
+              {createButton}
+            </>
+          )}
+        </div>
+        {/* Says what the button does. This builder writes status "open" with the
+            org's active term, which is exactly what the public catalog gates on, so
+            the class is live the moment it saves - there is no draft and no preview
+            here. Jeff wants that immediacy; the problem was only that nothing on
+            screen said so.
+
+            TWO SENTENCES, because "your registration page" is not a place every
+            tenant has. Two prod orgs (Mrs. Richelle, Shoreview Chess) run
+            uses_enrops_registration = false - their families register elsewhere and
+            never see an enrops page - which is the same trap `cancellationCopy` was
+            written to escape. `=== true` and not `!== false`, matching that helper:
+            the fallback has to be the sentence that is true in BOTH states, and
+            "there is no draft" is the part Jessica actually needed to know. */}
+        <div style={{ ...helpStyle, marginTop: -4, textAlign: "center" }}>
+          {org?.uses_enrops_registration === true
+            ? "This publishes the class to your registration page straight away."
+            : "This creates the class straight away — there is no draft to review first."}
+        </div>
       </div>
     </div>
   );
@@ -1852,6 +2009,21 @@ const primaryBtn = {
   background: BRIGHT,
   color: "#fff",
   border: "none",
+  borderRadius: 8,
+  fontSize: 15,
+  fontWeight: 600,
+  fontFamily: "inherit",
+  cursor: "pointer",
+};
+
+// The way OUT. Quiet on purpose - it sits next to the irreversible button and
+// must not compete with it - but a real button, not a text link, because it is
+// the only exit from this form that is not the sidebar.
+const secondaryBtn = {
+  padding: "12px 20px",
+  background: "#fff",
+  color: INK,
+  border: `1px solid ${RULE}`,
   borderRadius: 8,
   fontSize: 15,
   fontWeight: 600,

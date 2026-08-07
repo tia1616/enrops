@@ -1928,16 +1928,17 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
           Shown to families on the registration page, under the class name.
           Line breaks are kept, so you can write more than one paragraph.
-          {(() => {
-            const c = describeDescriptionLength(draft.short_description);
-            return c ? (
-              <>
-                {' '}
-                <span style={{ color: c.atLimit ? RED : MUTED, fontWeight: c.atLimit ? 600 : 400 }}>{c.text}</span>
-              </>
-            ) : null;
-          })()}
         </div>
+        {/* Own line, same as the builder: inline it read as the end of the
+            sentence above rather than as a count. */}
+        {(() => {
+          const c = describeDescriptionLength(draft.short_description);
+          return c ? (
+            <div style={{ fontSize: 12, marginTop: 2, color: c.atLimit ? RED : MUTED, fontWeight: c.atLimit ? 600 : 400 }}>
+              {c.text}
+            </div>
+          ) : null;
+        })()}
       </div>
 
       {(() => {
