@@ -18,6 +18,11 @@ import HatGuide from "../../components/HatGuide";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
+// Replaces a local gradeLabel() that has been deleted with its last caller. It
+// rendered "?" for a missing grade - printing a question mark where the answer is
+// "they didn't say" - which is the exact behaviour the shared module was written
+// to stop. Nothing else referenced it.
+import { audienceLabel } from "../../lib/grades.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -304,7 +309,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes] = await Promise.all([
         supabase
           .from("programs")
-          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max")
+          // age_min/age_max added with audienceLabel: the helper answers "grades OR
+          // ages", so selecting only the grade pair would have made it silently
+          // render nothing for an age-based class rather than "Ages 6-12".
+          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max")
           .eq("organization_id", org.id)
           .eq("term", term)
           .not("status", "in", '("cancelled","archived")'),
@@ -2513,11 +2521,6 @@ function ActivePills({
   );
 }
 
-function gradeLabel(g) {
-  if (g === 0) return "K";
-  return g == null ? "?" : String(g);
-}
-
 function Pill({ status }) {
   const c = statusColor(status);
   return (
@@ -2620,8 +2623,16 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                     <tr key={p.id} onClick={() => onRowClick(p)} style={{ cursor: "pointer" }}>
                       <td style={{ ...td, overflow: "hidden", textOverflow: "ellipsis" }}>
                         <div style={{ fontWeight: 700, color: INK }}>{p.curriculum || "Class"}</div>
-                        {(p.grade_min != null || p.grade_max != null) && (
-                          <div style={{ fontSize: 11.5, color: MUTED }}>Grades {gradeLabel(p.grade_min)}–{gradeLabel(p.grade_max)}</div>
+                        {/* The guard allowed ONE end to be set but the line printed
+                            both, so a range with no top rendered "Grades 2–" with a
+                            dangling dash (gradeLabel(null) is null, which React
+                            renders as nothing). That was unreachable until now - the
+                            only writer was the full-nav wizard, which always sends
+                            both ends - and the new builder/panel fields make it
+                            reachable. Same shared definition as the family-facing
+                            card, so the two can no longer disagree. */}
+                        {audienceLabel(p) && (
+                          <div style={{ fontSize: 11.5, color: MUTED }}>{audienceLabel(p)}</div>
                         )}
                       </td>
                       <td style={td}>{loc}{area && <span style={{ color: MUTED }}> · {area}</span>}</td>
