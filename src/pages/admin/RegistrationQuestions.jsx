@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
+import { allChoices, offeredChoices, DEFAULT_OFFERED } from "../../lib/dismissal.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -45,9 +46,15 @@ const STANDARD_FIELDS = [
   {
     key: "dismissal_method",
     label: "How does your child leave?",
-    desc: "Released to an authorized adult, or walks / bikes home on their own.",
+    desc: "You choose which ways of leaving families can pick from.",
     defaultRequired: true,
     alwaysRequired: true,
+    // The ONLY standard question whose answers a provider chooses. Declared as
+    // data rather than special-cased in the save, so a second question that
+    // needs choices later follows the same path instead of growing another
+    // branch. The list itself comes from src/lib/dismissal.js, so Settings can
+    // never offer an answer the registration form or the database would refuse.
+    answerChoices: allChoices(),
   },
   {
     key: "authorized_pickup",
@@ -162,6 +169,14 @@ export default function RegistrationQuestions() {
         enabled: row ? row.is_active !== false : !!f.alwaysRequired,
         required: f.alwaysRequired ? true : (row ? !!row.is_required : f.defaultRequired),
         label: row?.label ?? f.label,
+        // Which answers this provider offers. Seeded THROUGH offeredChoices so
+        // the builder shows exactly what the registration form will render -
+        // including its fallbacks. Reading row.options.offered raw would let
+        // Settings display a stale or unknown value the form silently drops,
+        // and the two screens would disagree about the live configuration.
+        offered: f.answerChoices
+          ? offeredChoices(row?.options).map((c) => c.value)
+          : null,
       };
     }
     setStd(seeded);
@@ -207,6 +222,17 @@ export default function RegistrationQuestions() {
             is_active: true,
             applies_to: "all",
             sort_order: i,
+            // Only for questions that HAVE answer choices. Sending options:null
+            // for the others would overwrite anything a future feature stores
+            // there; omitting the key leaves the column untouched on conflict.
+            //
+            // Falls back rather than saving an empty list: a required question
+            // with no answers is a checkout nobody can complete. The UI blocks
+            // unticking the last one, and this is the same rule enforced where
+            // it is actually written.
+            ...(f.answerChoices
+              ? { options: { offered: (s.offered?.length ? s.offered : DEFAULT_OFFERED) } }
+              : {}),
           }, { onConflict: "organization_id,field_key" });
           if (error) throw error;
         } else if (existing && existing.is_active !== false) {
@@ -464,6 +490,51 @@ function StandardRow({ field, state, canEdit, first, onChange }) {
             />
           </span>
         </div>
+        {/* WHICH ANSWERS FAMILIES CAN PICK. Only the dismissal question has these
+            today. Rendered from the shared list, so Settings cannot offer an answer
+            the registration form would not show or the database would reject.
+
+            Unticking the last one is blocked rather than allowed-then-corrected: a
+            required question with no answers is a checkout nobody can finish, and
+            finding that out from a stuck parent is the wrong way to learn it. */}
+        {field.answerChoices && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>
+              Ways a family can say their child leaves:
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+              {field.answerChoices.map((c) => {
+                const on = (state.offered || []).includes(c.value);
+                const isLast = on && (state.offered || []).length === 1;
+                return (
+                  <label
+                    key={c.value}
+                    title={isLast ? "Keep at least one way to leave" : undefined}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: isLast ? MUTED : INK }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={!canEdit || isLast}
+                      onChange={(e) => {
+                        const next = e.target.checked
+                          ? [...(state.offered || []), c.value]
+                          : (state.offered || []).filter((v) => v !== c.value);
+                        onChange({ offered: next });
+                      }}
+                    />
+                    {c.parent}
+                  </label>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 6, fontSize: 12, color: MUTED, lineHeight: 1.5, maxWidth: 460 }}>
+              Turning on <strong>Goes to aftercare</strong> also asks the family which
+              program, and that name shows on your rosters and your instructors&rsquo;
+              dismissal list.
+            </div>
+          </div>
+        )}
         {/* Safety coupling: these questions feed the instructor dismissal tool. */}
         {field.alwaysRequired && (
           <div style={{ marginTop: 8, fontSize: 12, color: MUTED, lineHeight: 1.5, maxWidth: 460, fontStyle: "italic" }}>
@@ -690,7 +761,11 @@ function FormPreview({ std, customRows }) {
   const items = [];
   for (const f of STANDARD_FIELDS) {
     const s = std[f.key];
-    if (s?.enabled) items.push({ key: f.key, label: (s.label || "").trim() || f.label, required: f.alwaysRequired || !!s.required, kind: "standard", stdKey: f.key });
+    // `offered` carried into the preview so it shows the answers this provider
+    // actually offers. The hint used to be a hardcoded string naming two options
+    // - a sixth copy of the vocabulary, and one that would start lying the moment
+    // somebody ticked a third answer.
+    if (s?.enabled) items.push({ key: f.key, label: (s.label || "").trim() || f.label, required: f.alwaysRequired || !!s.required, kind: "standard", stdKey: f.key, offered: s.offered });
   }
   for (const r of customRows) {
     if (r.is_active !== false) items.push({ key: r.id, label: r.label, required: !!r.is_required, kind: "custom", field_type: r.field_type, options: r.options });
@@ -721,9 +796,21 @@ function FormPreview({ std, customRows }) {
 function PreviewInput({ item }) {
   const box = { marginTop: 5, width: "100%", boxSizing: "border-box", border: `1px solid ${RULE}`, borderRadius: 6, padding: "7px 9px", fontSize: 12, color: MUTED, background: "#fff" };
   if (item.kind === "standard") {
+    // Built from the provider's own choices rather than a fixed string, so the
+    // preview and the real form cannot disagree about what a family will see.
+    if (item.stdKey === "dismissal_method") {
+      const chosen = offeredChoices(item.offered ? { offered: item.offered } : null);
+      return (
+        <div style={box}>
+          {chosen.map((c) => `○ ${c.parent}`).join("   ")}
+          {chosen.some((c) => c.value === "aftercare") && (
+            <div style={{ marginTop: 4 }}>&nbsp;&nbsp;&nbsp;&crarr; Which aftercare program?</div>
+          )}
+        </div>
+      );
+    }
     const hints = {
       guardian_secondary: "Name · email · phone",
-      dismissal_method: "○ Released to an adult   ○ Walks / bikes home",
       authorized_pickup: "Up to 4 people (first & last name)",
       do_not_release: "Name(s) — optional",
       emergency_contact: "Name · phone",
