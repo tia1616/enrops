@@ -2126,7 +2126,16 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
 
       {/* The class NAME. Free text at creation for a lean provider and, until now,
           not editable anywhere afterwards. Full width because a class name is a
-          sentence ("Beginner Ukulele, Tuesdays"), not a field-grid value. */}
+          sentence ("Beginner Ukulele, Tuesdays"), not a field-grid value.
+
+          ONLY WHEN NOTHING ELSE OWNS THE NAME. A program linked to an Offerings
+          record gets its name from that record, and the row header's "Change class"
+          rewrites it on every re-match - so a free-text rename there produces two
+          controls editing one field, silently diverging programs.curriculum from
+          curricula.name with nothing on screen saying which won. Gated on the link
+          rather than on the tenant, because that is the actual hazard: every lean
+          program is unlinked, and an unlinked full-nav program is equally safe. */}
+      {!program.curriculum_id && (
       <div style={{ marginTop: 12 }}>
         <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.3 }}>
           Class name
@@ -2144,6 +2153,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           </div>
         )}
       </div>
+      )}
 
       {/* Description sits OUTSIDE the field grid because it needs the full width
           to be writable. Editable here (not only in the builder) so the programs

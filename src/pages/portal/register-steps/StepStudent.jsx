@@ -59,23 +59,32 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             name="student-last-name"
           />
         </div>
-        {!lean && (
-          <div>
-            <label className="label-field">Grade *</label>
-            <select
-              className="input-field"
-              value={student.grade}
-              onChange={(e) => onUpdate({ grade: e.target.value })}
-            >
-              <option value="">Select&hellip;</option>
-              {GRADE_OPTIONS.map((g) => (
-                <option key={g.value} value={g.value}>
-                  {g.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        {/* ASKED OF EVERY FAMILY, not just the legacy tenant's. Jessica, 2026-08-07:
+            "lean org reg should ask for grades though." Providers can now state a
+            grade range on a class, so a roster with no grade on it is a gap for
+            exactly the operators who just gained the field.
+
+            Required only where it always was (full-nav orgs, enforced in
+            Register.jsx). For lean orgs it is OPTIONAL: /j2s/register is not the
+            only live checkout any more, and adding a NEW blocking field to a
+            working payment path is not something to do in the same pass that
+            introduces the question. The asterisk follows the real rule rather than
+            being decorative. */}
+        <div>
+          <label className="label-field">Grade{lean ? "" : " *"}</label>
+          <select
+            className="input-field"
+            value={student.grade}
+            onChange={(e) => onUpdate({ grade: e.target.value })}
+          >
+            <option value="">Select&hellip;</option>
+            {GRADE_OPTIONS.map((g) => (
+              <option key={g.value} value={g.value}>
+                {g.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <div>
           <label className="label-field">Birth date *</label>
           <input
