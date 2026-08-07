@@ -169,7 +169,16 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
           <PickupDismissalSection
             std={std}
             dismissalMethod={student.dismissal_method || ''}
-            onDismissalChange={(v) => onUpdate({ dismissal_method: v })}
+            // Clear the provider name when the answer moves off aftercare, so a
+            // name typed and then reconsidered cannot ride along to the roster
+            // attached to an answer it no longer describes.
+            onDismissalChange={(v) => onUpdate(
+              v === 'aftercare'
+                ? { dismissal_method: v }
+                : { dismissal_method: v, aftercare_provider: '' },
+            )}
+            aftercareProvider={student.aftercare_provider || ''}
+            onAftercareProviderChange={(v) => onUpdate({ aftercare_provider: v })}
             pickup={child.authorized_pickup || []}
             onPickupChange={(v) => onUpdateChild({ authorized_pickup: v })}
             doNotRelease={child.do_not_release || []}

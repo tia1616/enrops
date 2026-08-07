@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { dismissalSummary } from "../../../lib/dismissal.js";
 import EmailRosterModal from "../EmailRosterModal.jsx";
 import InviteFamiliesModal from "../InviteFamiliesModal.jsx";
 
@@ -72,13 +73,10 @@ function parentName(p) {
   return n || "";
 }
 
-const DISMISSAL_LABELS = {
-  released_to_authorized_adult: "Released to an authorized adult",
-  walks_or_bikes_home: "Walks or bikes home",
-  bus: "Bus",
-  aftercare: "Aftercare",
-  other: "Other",
-};
+// DISMISSAL_LABELS was the fourth copy of this map. It now comes from
+// src/lib/dismissal.js, and the roster shows dismissalSummary() rather than the
+// bare label so an aftercare answer carries the provider's name - "Aftercare"
+// on its own does not tell whoever is dismissing the child where they go.
 const contactFullName = (c) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
 
 // Click-to-call phone number.
@@ -137,7 +135,8 @@ export default function ProgramRoster() {
               allergies, dietary_restrictions, medical_notes, medical_conditions,
               epipen_required, medications_at_program,
               emergency_contact_name, emergency_contact_phone,
-              special_needs_accommodations, homeroom_teacher, dismissal_method
+              special_needs_accommodations, homeroom_teacher, dismissal_method,
+              aftercare_provider
             ),
             parent:parents ( first_name, last_name, email, phone )
           `)
@@ -224,7 +223,7 @@ export default function ProgramRoster() {
         contactsFor(sid, "guardian"),
         s.emergency_contact_name ?? "",
         s.emergency_contact_phone ?? "",
-        s.dismissal_method ? (DISMISSAL_LABELS[s.dismissal_method] || s.dismissal_method) : "",
+        dismissalSummary(s) || "",
         contactsFor(sid, "authorized_pickup") || (r.authorized_pickup_contacts ?? ""),
         contactsFor(sid, "do_not_release"),
         r.photo_release_consent ? "OK" : "No",
@@ -446,7 +445,7 @@ function StudentCard({ reg, contacts = [] }) {
             : <Muted>none on file</Muted>}
         </Field>
         {s.dismissal_method && (
-          <Field label="Dismissal">{DISMISSAL_LABELS[s.dismissal_method] || s.dismissal_method}</Field>
+          <Field label="Dismissal">{dismissalSummary(s)}</Field>
         )}
         <Field label="Authorized pickup">
           {pickups.length > 0

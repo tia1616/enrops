@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { dismissalSummary } from "../../lib/dismissal.js";
 import EmailRosterModal from "./EmailRosterModal";
 import InviteFamiliesModal from "./InviteFamiliesModal";
 import RefundDrawer from "../../components/RefundDrawer";
@@ -404,7 +405,8 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
           allergies, dietary_restrictions, medical_notes, medical_conditions,
           epipen_required, medications_at_program,
           emergency_contact_name, emergency_contact_phone,
-          special_needs_accommodations, homeroom_teacher, dismissal_method
+          special_needs_accommodations, homeroom_teacher, dismissal_method,
+          aftercare_provider
         ),
         parent:parents (
           id, first_name, last_name, email, phone
@@ -506,13 +508,8 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
   );
 }
 
-const DISMISSAL_LABELS = {
-  released_to_authorized_adult: "Released to an authorized adult",
-  walks_or_bikes_home: "Walks or bikes home",
-  bus: "Bus",
-  aftercare: "Aftercare",
-  other: "Other",
-};
+// Was the third copy of this map. Now src/lib/dismissal.js, via dismissalSummary
+// so an aftercare answer carries the provider's name.
 const cFullName = (c) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
 function TelLink({ phone }) {
   if (!phone) return null;
@@ -606,7 +603,7 @@ function CamperEditableRow({ registration, contacts = [], customLabels = {}, isE
             {(s.dismissal_method || guardians.length > 0 || pickups.length > 0 || doNotRelease.length > 0) && (
               <div style={{ fontSize: 11, color: MUTED, marginTop: 3, lineHeight: 1.55 }}>
                 {s.dismissal_method && (
-                  <div><strong style={{ color: INK }}>Dismissal:</strong> {DISMISSAL_LABELS[s.dismissal_method] || s.dismissal_method}</div>
+                  <div><strong style={{ color: INK }}>Dismissal:</strong> {dismissalSummary(s)}</div>
                 )}
                 {guardians.length > 0 && (
                   <div><strong style={{ color: INK }}>{guardians.length > 1 ? "Guardians" : "2nd guardian"}:</strong>{" "}

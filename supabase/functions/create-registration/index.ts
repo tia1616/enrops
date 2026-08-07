@@ -268,6 +268,15 @@ serve(async (req) => {
           // customizable-registration: how the child leaves (null when the org
           // hasn't enabled that question)
           dismissal_method: student.dismissal_method || null,
+          // WHO, when the answer is aftercare. Stored only for that answer:
+          // accepting it unconditionally would let a name typed and then
+          // reconsidered persist against an answer it no longer describes, and
+          // every staff surface reads the two together. The client clears it on
+          // change too - this is the server refusing to take its word for it,
+          // since the browser's payload is not trustworthy.
+          aftercare_provider: student.dismissal_method === 'aftercare'
+            ? (student.aftercare_provider?.trim() || null)
+            : null,
         })
         .select('id')
         .single();

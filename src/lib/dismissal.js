@@ -1,0 +1,146 @@
+// How a child leaves at the end of class — the one definition.
+//
+// WHY THIS FILE EXISTS. The dismissal vocabulary was written SIX times and the
+// copies disagreed:
+//   - RegExtraFields.jsx:114   the parent's radio list, "Released to a parent or
+//                              authorized adult" / "Walks or bikes home on their own"
+//   - ProgramRoster.jsx:76     DISMISSAL_LABELS, "Released to an authorized adult"
+//   - Rosters.jsx:510          the same map again
+//   - InstructorPortal:3622    the same map a third time
+//   - StepReview.jsx:6         the same map a fourth time
+//   - CartContext.jsx:29       the value list, in a comment
+// So a family chose "Released to a parent or authorized adult" and every staff
+// surface showed them something slightly different. Four of the five maps also
+// fall back to printing the RAW value, so the moment a class answers `aftercare`
+// — legal in the database since the customizable-registration work — a roster
+// prints the literal word "aftercare" on a custody document.
+//
+// This is the same fix as src/lib/grades.js, applied to the safety path.
+
+export const RELEASED_TO_ADULT = 'released_to_authorized_adult';
+export const WALKS_OR_BIKES = 'walks_or_bikes_home';
+export const BUS = 'bus';
+export const AFTERCARE = 'aftercare';
+export const OTHER = 'other';
+
+// EVERY value students.dismissal_method accepts. Mirrors
+// students_dismissal_method_check exactly — if these drift, the UI offers a
+// choice the database rejects at save time, which is a wall the parent cannot
+// get past mid-checkout.
+export const DISMISSAL_VALUES = [RELEASED_TO_ADULT, WALKS_OR_BIKES, BUS, AFTERCARE, OTHER];
+
+// Two wordings, ONE source. The parent form wants a full sentence; a roster
+// column wants something that fits. That distinction is real (it is the same
+// reason GRADE_OPTIONS and GRADE_OPTIONS_LONG both exist) — what was wrong was
+// maintaining them in six places instead of one.
+//
+// `parent` is what the family reads while choosing. `short` is what staff read
+// afterwards on rosters, dismissal lists and the instructor portal.
+const CHOICES = [
+  {
+    value: RELEASED_TO_ADULT,
+    parent: 'Released to a parent or authorized adult',
+    short: 'Released to an authorized adult',
+  },
+  {
+    value: WALKS_OR_BIKES,
+    parent: 'Walks or bikes home on their own',
+    short: 'Walks or bikes home',
+  },
+  {
+    value: BUS,
+    parent: 'Takes the bus',
+    short: 'Bus',
+  },
+  {
+    value: AFTERCARE,
+    parent: 'Goes to aftercare',
+    short: 'Aftercare',
+  },
+  {
+    value: OTHER,
+    parent: 'Something else',
+    short: 'Other',
+  },
+];
+
+// What a provider offers when they have not chosen. NOT all five: turning three
+// new options on for every existing tenant silently would change a live
+// registration form nobody asked to change. A provider opts in per choice.
+export const DEFAULT_OFFERED = [RELEASED_TO_ADULT, WALKS_OR_BIKES];
+
+// The choices to render, from custom_reg_fields.options for the dismissal_method
+// row. `options` is null for every provider today, which is exactly why the
+// default has to be the two that are already live.
+//
+// Filtered against CHOICES rather than trusted: options is operator-editable
+// data, and a stale or hand-edited value must not render a radio the database
+// will refuse. Order follows CHOICES, not the stored array, so the form reads
+// the same everywhere regardless of what order they were switched on in.
+export function offeredChoices(options) {
+  const raw = Array.isArray(options?.offered) ? options.offered : DEFAULT_OFFERED;
+  const allowed = new Set(raw);
+  const list = CHOICES.filter((c) => allowed.has(c.value));
+  // Never render an empty question. A provider who somehow switched every choice
+  // off would otherwise get a required question with no answers - a checkout
+  // that cannot be completed.
+  return list.length ? list : CHOICES.filter((c) => DEFAULT_OFFERED.includes(c.value));
+}
+
+// All five, for the Settings screen where a provider picks which to offer.
+export function allChoices() {
+  return CHOICES.slice();
+}
+
+// Staff-facing label. Returns null for an unset value so callers omit the row
+// rather than printing "None" at somebody. Falls back to the raw value ONLY for
+// something outside the vocabulary, which the CHECK constraint should make
+// impossible - but printing `aftercare` beats printing nothing on a custody
+// document if it ever happens.
+export function dismissalLabel(value) {
+  if (!value) return null;
+  const found = CHOICES.find((c) => c.value === value);
+  return found ? found.short : String(value);
+}
+
+// Parent-facing label, same rule.
+export function dismissalParentLabel(value) {
+  if (!value) return null;
+  const found = CHOICES.find((c) => c.value === value);
+  return found ? found.parent : String(value);
+}
+
+// Does this answer need the "who?" free-text box? Jessica, 2026-08-07: free text
+// rather than a preset list - Jeff has one provider per site and nobody has used
+// the field yet, so a list would be scaffolding for data that does not exist.
+export function needsAftercareProvider(value) {
+  return value === AFTERCARE;
+}
+
+// Does this answer mean an adult collects the child, and therefore that the
+// authorized-pickup list applies? Only the released-to-adult answer does.
+// Written here so the form, the wizard's advance guard (Register.jsx) and the
+// dashboard's pickup gate cannot disagree about when that list is required -
+// they each hardcoded the comparison before.
+export function needsAuthorizedPickup(value) {
+  return value === RELEASED_TO_ADULT;
+}
+
+// ONE LINE FOR A ROSTER, provider name included.
+//
+// The name is the entire point of the aftercare answer: "Aftercare" alone tells
+// an instructor nothing about where the child is supposed to go. Every staff
+// surface should call this rather than the bare label, so the name cannot be
+// dropped on one screen and shown on another.
+//
+// Returns null when nothing was stated, so callers omit the field.
+export function dismissalSummary({ dismissal_method, aftercare_provider } = {}) {
+  const label = dismissalLabel(dismissal_method);
+  if (!label) return null;
+  if (!needsAftercareProvider(dismissal_method)) return label;
+  const who = (aftercare_provider || '').trim();
+  // "Aftercare (not stated)" rather than a bare "Aftercare": on a dismissal list
+  // the difference between "we know where they go" and "we don't" is the whole
+  // safety question, and silence reads as the former.
+  return who ? `${label} — ${who}` : `${label} (provider not stated)`;
+}

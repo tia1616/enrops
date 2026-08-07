@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase.js";
+import { needsAuthorizedPickup } from "../../lib/dismissal.js";
 import {
   PickupDismissalSection,
   GuardianSecondarySection,
@@ -76,7 +77,7 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     const d = byStudent[s.student_id];
     if (!d) return "loading";
     if (std?.dismissal_method && !d.dismissal_method) return "Choose how this child leaves.";
-    if (d.dismissal_method === "released_to_authorized_adult" && nonEmpty(d.pickup).length === 0) {
+    if (needsAuthorizedPickup(d.dismissal_method) && nonEmpty(d.pickup).length === 0) {
       return "Add at least one person who can pick them up.";
     }
     // Mirror Register's canAdvance: if the org marked do-not-release required, the

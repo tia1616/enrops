@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { dismissalSummary, WALKS_OR_BIKES } from "../../lib/dismissal.js";
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
 import { avatarUrl } from "../../lib/avatars";
@@ -3472,7 +3473,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
               allergies, dietary_restrictions, medical_notes, medical_conditions,
               epipen_required, medications_at_program,
               emergency_contact_name, emergency_contact_phone,
-              special_needs_accommodations, dismissal_method
+              special_needs_accommodations, dismissal_method, aftercare_provider
             ),
             parent:parents (
               first_name, last_name, email, phone
@@ -3618,13 +3619,10 @@ function TelPhone({ phone }) {
   return <a href={`tel:${tel}`} style={{ color: PURPLE, textDecoration: "underline" }}>{phone}</a>;
 }
 
-const DISMISSAL_LABELS = {
-  released_to_authorized_adult: "Released to an authorized adult",
-  walks_or_bikes_home: "Walks or bikes home",
-  bus: "Bus",
-  aftercare: "Aftercare",
-  other: "Other",
-};
+// Was the second copy of this map. Now src/lib/dismissal.js. This surface is the
+// one an instructor reads while actually dismissing a child, so it shows
+// dismissalSummary() - "Aftercare" without the provider's name is not an answer
+// to "where does this child go".
 
 const contactName = (c) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
 
@@ -3738,7 +3736,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
 
       {s.dismissal_method && (
         <div style={{ marginTop: 6, fontSize: 12, color: INK }}>
-          <strong>Dismissal:</strong> {DISMISSAL_LABELS[s.dismissal_method] || s.dismissal_method}
+          <strong>Dismissal:</strong> {dismissalSummary(s)}
         </div>
       )}
 
@@ -3842,7 +3840,7 @@ function AttendanceControls({ pickups = [], guardians = [], doNotRelease = [], d
     releaseOptions.push({ value: c.id, label: nm, kind: "released_to_adult", contactId: c.id, name: nm });
     seenNames.add(normName(nm));
   }
-  const canWalk = dismissalMethod === "walks_or_bikes_home";
+  const canWalk = dismissalMethod === WALKS_OR_BIKES;
 
   const present = attRecord?.present ?? null;
   const released = Boolean(attRecord?.released_at);
