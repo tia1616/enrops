@@ -191,6 +191,20 @@ export default function QuickProgramBuilder() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [photoErr, setPhotoErr] = useState("");
 
+  // Phone-width layout. This file styles inline, so there is no stylesheet to put
+  // a media query in - and the one place it matters is the Cancel/Create row: side
+  // by side at 375px, "Create program & get link" wraps to two lines and both
+  // buttons grow to 69px tall to match. Measured on staging at 375x812. Operators
+  // build classes on their phones, so that is the case to get right, not the
+  // exception. 480 rather than 375 so a wrapped label never happens at all.
+  const [narrow, setNarrow] = useState(() =>
+    typeof window !== "undefined" && window.innerWidth < 480);
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < 480);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   // Is the org able to actually take money yet? The share link goes live the
   // moment a program is created, but Arielle's rule is "never a payment-less
   // live page" — so on success we nudge the operator to connect Stripe FIRST
@@ -1021,21 +1035,21 @@ export default function QuickProgramBuilder() {
           {/* Same trap as the form below it: one button, and it was the only way
               off the screen. Nothing here is saved until "Next", so leaving costs
               nothing and the questions come back next time. */}
-          <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+          <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 10, alignItems: "stretch" }}>
+            <button
+              onClick={saveProfile}
+              disabled={!profileValid || savingProfile}
+              style={{ ...primaryBtn, flex: 1, order: narrow ? 0 : 1, opacity: !profileValid || savingProfile ? 0.55 : 1, cursor: !profileValid || savingProfile ? "not-allowed" : "pointer" }}
+            >
+              {savingProfile ? "Saving…" : "Next: build my first class →"}
+            </button>
             <button
               type="button"
               onClick={() => navigate("/admin/programs")}
               disabled={savingProfile}
-              style={{ ...secondaryBtn, flex: "0 0 auto", opacity: savingProfile ? 0.55 : 1, cursor: savingProfile ? "not-allowed" : "pointer" }}
+              style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", order: narrow ? 1 : 0, opacity: savingProfile ? 0.55 : 1, cursor: savingProfile ? "not-allowed" : "pointer" }}
             >
               Not now
-            </button>
-            <button
-              onClick={saveProfile}
-              disabled={!profileValid || savingProfile}
-              style={{ ...primaryBtn, flex: 1, opacity: !profileValid || savingProfile ? 0.55 : 1, cursor: !profileValid || savingProfile ? "not-allowed" : "pointer" }}
-            >
-              {savingProfile ? "Saving…" : "Next: build my first class →"}
             </button>
           </div>
         </div>
@@ -1784,21 +1798,25 @@ export default function QuickProgramBuilder() {
             screen - i.e. reachable only after the class was already live. The
             escape was the sidebar, which on a phone is behind a menu. Jessica hit
             this trying the builder on prod, where publishing is not a rehearsal. */}
-        <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+        {/* On a phone they STACK, primary on top, each full width - the label does
+            not fit beside a Cancel at 375px and wrapping it made both buttons 69px
+            tall. On a wider screen they share one row, Cancel first so the
+            irreversible button keeps the position it has always had. */}
+        <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 10, alignItems: "stretch" }}>
+          <button
+            onClick={handleCreate}
+            disabled={!valid || submitting}
+            style={{ ...primaryBtn, flex: 1, order: narrow ? 0 : 1, opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
+          >
+            {submitting ? "Creating…" : "Create program & get link"}
+          </button>
           <button
             type="button"
             onClick={handleCancel}
             disabled={submitting}
-            style={{ ...secondaryBtn, flex: "0 0 auto", opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
+            style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", order: narrow ? 1 : 0, opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
           >
             Cancel
-          </button>
-          <button
-            onClick={handleCreate}
-            disabled={!valid || submitting}
-            style={{ ...primaryBtn, flex: 1, opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
-          >
-            {submitting ? "Creating…" : "Create program & get link"}
           </button>
         </div>
         {/* Says what the button does. This builder writes status "open", so the
