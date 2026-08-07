@@ -3,6 +3,7 @@ import { useSearchParams, Link, useOutletContext } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useCart } from '../../context/CartContext.jsx';
 import { supabase } from '../../lib/supabase.js';
+import { emailIsValid } from '../../lib/validation.js';
 
 export default function RegisterSuccess() {
   const { org } = useOutletContext();
@@ -10,11 +11,23 @@ export default function RegisterSuccess() {
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get('session_id');
   const comp = searchParams.get('comp') === '1'; // $0 scholarship — no payment
-  const { user, signInWithGoogle, signInWithMagicLink } = useAuth();
+  const { user, signInWithGoogle } = useAuth();
   const { clearCart, cart } = useCart();
 
-  const [email, setEmail] = useState(cart?.parent?.email || '');
-  const [msg, setMsg] = useState('');
+  // The address the family checked out with, read once at mount and never changed -
+  // nothing on this page writes it. Seeded from the cart, which is cleared 500ms
+  // after mount and does not survive a reload, so on any refresh, back-button or
+  // reopened link this is simply "".
+  //
+  // Its ONLY job is deciding whether the page may name an address in the copy below.
+  // Naming one we do not have is how this page previously claimed "we sent a sign-in
+  // link to your inbox" as a fact it could not back up.
+  const [email] = useState(cart?.parent?.email || '');
+  // The shared validator, not a hand-rolled regex - src/lib/validation.js already
+  // exported emailIsValid with this exact pattern. It also returns false for "",
+  // which is why no separate "did the cart have one?" flag is needed: an empty
+  // address and an unusable one both mean the same thing here, don't name it.
+  const emailLooksValid = emailIsValid(email);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   // ACH/bank transfer settles over 1-3 business days. Ask Stripe whether this
@@ -56,19 +69,6 @@ export default function RegisterSuccess() {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  async function handleMagicLink() {
-    if (!email) return;
-    setLoading(true);
-    setError('');
-    const { error: err } = await signInWithMagicLink(
-      email,
-      `${window.location.origin}/${ORG_SLUG}/dashboard`,
-    );
-    setLoading(false);
-    if (err) setError(err.message);
-    else setMsg(`Check ${email} for a sign-in link.`);
   }
 
   async function handleGoogle() {
@@ -157,23 +157,55 @@ export default function RegisterSuccess() {
           <h2 className="font-titan text-2xl text-j2s-ink">
             Check your email
           </h2>
+          {/* NAME THE ADDRESS ONLY WHEN WE HAVE A USABLE ONE. This used to read
+              "We sent a sign-in link to your inbox" whenever the cart was gone,
+              stating as fact something the page had no address for. Gated on
+              usability rather than mere presence, so a malformed address - which the
+              send would most likely have failed on anyway - does not get quoted back
+              to the family as though it worked. */}
           <p className="mt-2 text-j2s-ink/70">
-            We sent a sign-in link to <span className="font-semibold text-j2s-ink">{email || 'your inbox'}</span>.
-            Click the link to access your dashboard, view your child's schedule,
-            and get session recaps.
+            {emailLooksValid ? (
+              <>
+                We sent a sign-in link to <span className="font-semibold text-j2s-ink">{email}</span>.
+                Click the link to access your dashboard, view your child's schedule,
+                and get session recaps.
+              </>
+            ) : (
+              <>
+                {/* "was sent", not "is on its way". This branch exists BECAUSE the
+                    page was reloaded or reopened, so the send already happened,
+                    possibly a while ago - "on its way" implies imminent and would
+                    have a family waiting for something that already arrived. */}
+                A sign-in link was sent to the email address you registered with.
+                Click it to access your dashboard, view your child's schedule, and get
+                session recaps.
+              </>
+            )}
           </p>
 
           <div className="mt-6 space-y-4">
+            {/* NO RESEND BUTTON HERE, deliberately. Jessica, 2026-08-07, on being
+                shown that the resend arrived from Supabase rather than the provider:
+                "is this necessary though? we've established they already get a
+                sign-in email."
+
+                She is right, and the sign-in page is the one place that should own
+                this. It already sends through auth-send-magic-link with the tenant's
+                branding, already no-ops on unknown addresses, and already carries the
+                anti-enumeration wording. A second resend control here was a second
+                door to one action - and it was the door that could be opened by
+                anyone, since this page needs no session and no login.
+                See [[feedback_one_place_to_do_a_thing]].
+
+                What was actually broken is fixed by removing it: the offer no longer
+                outruns what the page can do, because the page no longer offers it. */}
             <p className="text-sm text-j2s-ink/60">
-              Didn't get the email? Check your spam folder, or have us send another.
+              Didn&rsquo;t get the email? Check your spam folder, or{' '}
+              <Link to={`/${ORG_SLUG}/login`} className="font-semibold text-j2s-purple underline">
+                sign in here
+              </Link>{' '}
+              and we&rsquo;ll send a fresh link.
             </p>
-            <button
-              onClick={handleMagicLink}
-              disabled={loading || !email}
-              className="btn-j2s-primary w-full"
-            >
-              {loading ? 'Sending…' : 'Resend sign-in link'}
-            </button>
 
             {/* Google OAuth re-enabled 5/8/26 after Google verification approved. */}
             <div className="relative py-2 text-center">
@@ -197,11 +229,6 @@ export default function RegisterSuccess() {
             </button>
           </div>
 
-          {msg && (
-            <p className="mt-4 rounded-lg bg-j2s-purple-soft p-3 text-sm text-j2s-purple-dark">
-              {msg}
-            </p>
-          )}
           {error && <p className="error-text mt-4">{error}</p>}
         </div>
       ) : (

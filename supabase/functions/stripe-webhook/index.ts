@@ -1440,7 +1440,7 @@ async function sendAccountReadyEmail(admin: SupabaseClient, brand: OrgBrand, ema
     ? `<img src="${brand.logo_url}" alt="${escapeHtml(brand.org_name)}" style="max-height:40px;display:block;margin:0 auto 12px;" />`
     : `<div style="color:${brand.accent_color};font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${escapeHtml(brand.org_name)}</div>`;
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Your Account</title></head><body style="margin:0;padding:0;background:${brand.page_bg_color};font-family:${brand.font_family};"><div style="max-width:600px;margin:0 auto;background:#fff;"><div style="background:linear-gradient(135deg,${brand.primary_color},${brand.secondary_color});padding:40px 30px;text-align:center;">${logoBlock}<h1 style="color:#fff;margin:12px 0 0;font-family:'Titan One',Georgia,serif;font-size:28px;">${isNew ? 'Your account is ready!' : 'View your programs'}</h1></div><div style="padding:32px 30px;"><p style="margin:0 0 16px;font-size:16px;color:#1A1530;">Hi ${escapeHtml(firstName)},</p><p style="margin:0 0 24px;font-size:16px;color:#1A1530;line-height:1.6;">${isNew ? 'We created a parent account for you automatically when you registered. Tap the button below to see your child\'s program schedule and arrival details.' : 'Tap the button below to view your children\'s program details and schedules.'}</p><div style="text-align:center;margin:32px 0;"><a href="${signInUrl}" style="display:inline-block;background:${brand.primary_color};color:#fff;text-decoration:none;padding:16px 40px;border-radius:8px;font-size:16px;font-weight:700;">View my dashboard</a></div><p style="margin:0 0 8px;font-size:14px;color:#6b6880;">This link expires in 24 hours. After that, you can always sign in at <a href="${loginUrl}" style="color:${brand.primary_color};">${loginDisplay}</a> using the magic link option.</p><p style="margin:24px 0 0;font-size:14px;color:#6b6880;">Questions? Reach us at <a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p></div><div style="background:#1A1530;padding:20px 30px 6px;text-align:center;color:#fff;opacity:0.6;font-size:12px;">${escapeHtml(brand.org_name)} &middot; ${new Date().getFullYear()}</div><div style="background:#1A1530;padding:0 30px 18px;text-align:center;">${renderPlatformFooterHtml("accountReady", { tone: "dark" })}</div></div></body></html>`;
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Your Account</title></head><body style="margin:0;padding:0;background:${brand.page_bg_color};font-family:${brand.font_family};"><div style="max-width:600px;margin:0 auto;background:#fff;"><div style="background:linear-gradient(135deg,${brand.primary_color},${brand.secondary_color});padding:40px 30px;text-align:center;">${logoBlock}<h1 style="color:#fff;margin:12px 0 0;font-family:${brand.font_family};font-size:28px;">${isNew ? 'Your account is ready!' : 'View your programs'}</h1></div><div style="padding:32px 30px;"><p style="margin:0 0 16px;font-size:16px;color:#1A1530;">Hi ${escapeHtml(firstName)},</p><p style="margin:0 0 24px;font-size:16px;color:#1A1530;line-height:1.6;">${isNew ? 'We created a parent account for you automatically when you registered. Tap the button below to see your child\'s program schedule and arrival details.' : 'Tap the button below to view your children\'s program details and schedules.'}</p><div style="text-align:center;margin:32px 0;"><a href="${signInUrl}" style="display:inline-block;background:${brand.primary_color};color:#fff;text-decoration:none;padding:16px 40px;border-radius:8px;font-size:16px;font-weight:700;">View my dashboard</a></div><p style="margin:0 0 8px;font-size:14px;color:#6b6880;">This link expires in 24 hours. After that, you can always sign in at <a href="${loginUrl}" style="color:${brand.primary_color};">${loginDisplay}</a> using the magic link option.</p><p style="margin:24px 0 0;font-size:14px;color:#6b6880;">Questions? Reach us at <a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p></div><div style="background:#1A1530;padding:20px 30px 6px;text-align:center;color:#fff;opacity:0.6;font-size:12px;">${escapeHtml(brand.org_name)} &middot; ${new Date().getFullYear()}</div><div style="background:#1A1530;padding:0 30px 18px;text-align:center;">${renderPlatformFooterHtml("accountReady", { tone: "dark" })}</div></div></body></html>`;
 
   try {
     const resp = await fetch('https://api.resend.com/emails', {
@@ -1563,16 +1563,48 @@ async function sendConfirmationEmail({
       </tr>${hasArrival ? `${arrivalRow}<tr><td colspan="2" style="border-bottom:1px solid #EDE9FE;"></td></tr>` : ''}`;
   }).join('');
 
+  // Both faces here are brand.font_family. The "Total paid" figure and the
+  // account-ready heading were hardcoded to 'Titan One',Georgia,serif - tenant 1's
+  // display face, sitting in code every tenant's families receive. Nobody actually
+  // saw Titan One: these emails link no webfont, so it never resolved and every
+  // recipient, J2S included, got the Georgia fallback - a serif that is nobody's
+  // brand. Using the tenant stack is both the correct multi-tenant answer and
+  // closer to what each provider's own emails should look like.
   const totalsBlock = useInstallments && installmentInfo
     ? `<tr><td colspan="2" style="padding:20px 16px;background:#F5F3FF;"><div style="font-family:${brand.font_family};font-size:15px;font-weight:700;color:${brand.secondary_color};margin-bottom:12px;">Your payment plan</div><table cellpadding="0" cellspacing="0" style="width:100%;font-family:${brand.font_family};font-size:14px;color:#1A1530;"><tr><td style="padding:6px 0;">Today (paid)</td><td style="padding:6px 0;text-align:right;font-weight:700;">${fmt(installmentInfo.paidToday)}</td></tr><tr><td style="padding:6px 0;">Installment 2 &middot; ${fmtDate(installmentInfo.installment2Date)}</td><td style="padding:6px 0;text-align:right;">${fmt(installmentInfo.installment2Amount)}</td></tr><tr><td style="padding:6px 0;">Installment 3 &middot; ${fmtDate(installmentInfo.installment3Date)}</td><td style="padding:6px 0;text-align:right;">${fmt(installmentInfo.installment3Amount)}</td></tr><tr><td style="padding:8px 0 0;border-top:1px solid #DDD8FA;font-weight:700;">Total</td><td style="padding:8px 0 0;border-top:1px solid #DDD8FA;text-align:right;font-weight:700;">${fmt(installmentInfo.paidToday + installmentInfo.installment2Amount + installmentInfo.installment3Amount)}</td></tr></table><div style="font-family:${brand.font_family};font-size:12px;color:#6b6880;margin-top:10px;">Your card on file will be charged automatically on each date. We'll email you before each charge.</div></td></tr>`
-    : `<tr><td style="padding:20px 16px;font-family:${brand.font_family};font-size:18px;font-weight:700;color:#1A1530;">Total paid</td><td style="padding:20px 16px;text-align:right;font-family:'Titan One',Georgia,serif;font-size:24px;color:${brand.accent_color};">${fmt(totalCents)}</td></tr>`;
+    : `<tr><td style="padding:20px 16px;font-family:${brand.font_family};font-size:18px;font-weight:700;color:#1A1530;">Total paid</td><td style="padding:20px 16px;text-align:right;font-family:${brand.font_family};font-size:24px;color:${brand.accent_color};">${fmt(totalCents)}</td></tr>`;
 
   // Build the auto-generated summary block — operators who customize the body
   // get this slotted in via the {{registration_summary_block}} token. Wraps
   // the registration table + totals/payment plan in a single <table>.
+  // CONFIRMATION NUMBER. Jeff asked directly whether families get one; they did
+  // not. sessionId existed here only as an internal Resend tag and the .ics uid
+  // seed, so the single durable record of the purchase carried nothing a family
+  // could quote or an operator could look up.
+  //
+  // Shown in FULL, not truncated the way the success page does it. The page is
+  // glanced at once; the email is where someone goes three weeks later to ask about
+  // a charge, and a shortened id cannot be searched in Stripe. (The page's truncated
+  // version is now inconsistent with this - worth aligning, but changing a second
+  // surface belongs in its own change, not smuggled into this one.)
+  //
+  // Inside summaryBlock so it stays attached to the receipt rather than to one
+  // template's wording: it then appears in the built-in body AND in any operator
+  // body that slots in {{registration_summary_block}}.
+  //
+  // NOT a guarantee, and worth knowing before operator body-editing ships: an
+  // operator who deletes that token loses the amounts, the class details and this
+  // confirmation number in one stroke, silently. The editor should make that token
+  // hard to remove by accident - putting the number here does not solve that, it
+  // just avoids adding a SECOND thing that can be lost separately.
+  const confirmationRow = sessionId
+    ? `<tr><td colspan="2" style="padding:12px 16px 0;font-family:${brand.font_family};font-size:12px;color:#6b6880;border-top:1px solid #EDE9FE;">Confirmation number<br><span style="font-family:ui-monospace,'Cascadia Mono',Consolas,monospace;font-size:12px;color:#1A1530;word-break:break-all;">${escapeHtml(sessionId)}</span></td></tr>`
+    : '';
+
   const summaryBlock = `<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:24px;font-family:${brand.font_family};">
         ${regRows}
         ${totalsBlock}
+        ${confirmationRow}
       </table>`;
 
   // White-background email shell — logo on top, no platform-color gradient.
