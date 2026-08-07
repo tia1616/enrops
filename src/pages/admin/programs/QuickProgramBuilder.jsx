@@ -799,6 +799,7 @@ export default function QuickProgramBuilder() {
   const seededAgeMin = profile.default_age_min != null ? String(profile.default_age_min) : "";
   const seededAgeMax = profile.default_age_max != null ? String(profile.default_age_max) : "";
   const seededLocationId = locations.length === 1 ? locations[0].id : "";
+  const seededMode = cadence === "one_off" ? "one_off" : "weekly";
   const formIsDirty =
     name.trim() !== "" ||
     description.trim() !== "" ||
@@ -813,7 +814,15 @@ export default function QuickProgramBuilder() {
     ageMin !== seededAgeMin ||
     ageMax !== seededAgeMax ||
     spots !== "18" ||
-    sessions !== "8";
+    sessions !== "8" ||
+    mode !== seededMode ||
+    // The inline "+ Add a site" sub-form. Its two inputs are the ONLY typed text on
+    // this screen that lives outside the program fields, and an operator with no
+    // locations yet types a venue name and a full street address into them before
+    // anything else exists. Leaving them out meant Cancel threw that away in
+    // silence, because every program field was still untouched.
+    newLocName.trim() !== "" ||
+    newLocAddress.trim() !== "";
 
   function handleCancel() {
     if (formIsDirty) {
@@ -1039,24 +1048,37 @@ export default function QuickProgramBuilder() {
 
           {/* Same trap as the form below it: one button, and it was the only way
               off the screen. Nothing here is saved until "Next", so leaving costs
-              nothing and the questions come back next time. */}
-          <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 10, alignItems: "stretch" }}>
-            <button
-              onClick={saveProfile}
-              disabled={!profileValid || savingProfile}
-              style={{ ...primaryBtn, flex: 1, order: narrow ? 0 : 1, opacity: !profileValid || savingProfile ? 0.55 : 1, cursor: !profileValid || savingProfile ? "not-allowed" : "pointer" }}
-            >
-              {savingProfile ? "Saving…" : "Next: build my first class →"}
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate("/admin/programs")}
-              disabled={savingProfile}
-              style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", order: narrow ? 1 : 0, opacity: savingProfile ? 0.55 : 1, cursor: savingProfile ? "not-allowed" : "pointer" }}
-            >
-              Not now
-            </button>
-          </div>
+              nothing and the questions come back next time.
+
+              Ordered in the DOM for the same reason as the footer below: CSS
+              `order` repaints without moving keyboard focus, so the tab order
+              would disagree with what is on screen. */}
+          {(() => {
+            const nextButton = (
+              <button
+                onClick={saveProfile}
+                disabled={!profileValid || savingProfile}
+                style={{ ...primaryBtn, flex: 1, opacity: !profileValid || savingProfile ? 0.55 : 1, cursor: !profileValid || savingProfile ? "not-allowed" : "pointer" }}
+              >
+                {savingProfile ? "Saving…" : "Next: build my first class →"}
+              </button>
+            );
+            const notNowButton = (
+              <button
+                type="button"
+                onClick={() => navigate("/admin/programs")}
+                disabled={savingProfile}
+                style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", opacity: savingProfile ? 0.55 : 1, cursor: savingProfile ? "not-allowed" : "pointer" }}
+              >
+                Not now
+              </button>
+            );
+            return (
+              <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 10, alignItems: "stretch" }}>
+                {narrow ? <>{nextButton}{notNowButton}</> : <>{notNowButton}{nextButton}</>}
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
@@ -1180,6 +1202,31 @@ export default function QuickProgramBuilder() {
   }
 
   // ---- The lean form ----
+
+  // Held as elements so the two footer orders (Cancel|Create on a wide screen,
+  // Create above Cancel on a phone) can be emitted in real DOM order without
+  // writing the markup twice. See the note at the footer for why CSS `order`
+  // was the wrong tool.
+  const createButton = (
+    <button
+      onClick={handleCreate}
+      disabled={!valid || submitting}
+      style={{ ...primaryBtn, flex: 1, opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
+    >
+      {submitting ? "Creating…" : "Create program & get link"}
+    </button>
+  );
+  const cancelButton = (
+    <button
+      type="button"
+      onClick={handleCancel}
+      disabled={submitting}
+      style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
+    >
+      Cancel
+    </button>
+  );
+
   return (
     <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
       {/* The ONE tip on this screen, at the title - same placement rule as every
@@ -1806,23 +1853,26 @@ export default function QuickProgramBuilder() {
         {/* On a phone they STACK, primary on top, each full width - the label does
             not fit beside a Cancel at 375px and wrapping it made both buttons 69px
             tall. On a wider screen they share one row, Cancel first so the
-            irreversible button keeps the position it has always had. */}
+            irreversible button keeps the position it has always had.
+
+            ORDERED IN THE DOM, not with CSS `order`. The first version used
+            order:0/1 to flip them, which moves only the PAINT: keyboard focus and
+            screen readers still follow source order, so tabbing out of the last
+            field landed on the publish button while the eye was on a Cancel to its
+            left. On the one control here that cannot be undone, "what you tab to"
+            and "what you see" have to be the same button. */}
         <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 10, alignItems: "stretch" }}>
-          <button
-            onClick={handleCreate}
-            disabled={!valid || submitting}
-            style={{ ...primaryBtn, flex: 1, order: narrow ? 0 : 1, opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
-          >
-            {submitting ? "Creating…" : "Create program & get link"}
-          </button>
-          <button
-            type="button"
-            onClick={handleCancel}
-            disabled={submitting}
-            style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", order: narrow ? 1 : 0, opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
-          >
-            Cancel
-          </button>
+          {narrow ? (
+            <>
+              {createButton}
+              {cancelButton}
+            </>
+          ) : (
+            <>
+              {cancelButton}
+              {createButton}
+            </>
+          )}
         </div>
         {/* Says what the button does. This builder writes status "open" with the
             org's active term, which is exactly what the public catalog gates on, so
