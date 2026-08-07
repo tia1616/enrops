@@ -26,6 +26,15 @@ export default function RegisterSuccess() {
   // real validation is Supabase rejecting the address. A strict regex here would
   // reject valid addresses and reintroduce the dead button it exists to prevent.
   const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  // SHOW THE FIELD WHENEVER THE BUTTON WOULD OTHERWISE BE DEAD, not just when the
+  // cart is missing. The first version of this fix gated the button on
+  // emailLooksValid but rendered the input only when the cart was empty - so a cart
+  // address this regex happens to reject (no dot in the domain, a quoted local part)
+  // produced a disabled button in the ONE branch with nothing to type into. That is
+  // the bug being fixed here, moved one branch over. Tying the field to the same
+  // condition as the button makes "we offered a resend you cannot perform"
+  // unreachable by construction.
+  const needsEmailInput = !emailKnownFromCart || !emailLooksValid;
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -184,7 +193,11 @@ export default function RegisterSuccess() {
               </>
             ) : (
               <>
-                A sign-in link is on its way to the email address you registered with.
+                {/* "was sent", not "is on its way". This branch exists BECAUSE the
+                    page was reloaded or reopened, so the send already happened,
+                    possibly a while ago - "on its way" implies imminent and would
+                    have a family waiting for something that already arrived. */}
+                A sign-in link was sent to the email address you registered with.
                 Click it to access your dashboard, view your child's schedule, and get
                 session recaps.
               </>
@@ -203,7 +216,7 @@ export default function RegisterSuccess() {
                 from checkout-session-status, and that endpoint documents twice that
                 it deliberately exposes no extra PII, since anyone holding the
                 session-id URL can call it. */}
-            {!emailKnownFromCart && (
+            {needsEmailInput && (
               <div>
                 <label htmlFor="resend-email" className="block text-sm font-semibold text-j2s-ink">
                   Your email address
