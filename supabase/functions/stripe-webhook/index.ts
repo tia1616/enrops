@@ -1588,10 +1588,15 @@ async function sendConfirmationEmail({
   // version is now inconsistent with this - worth aligning, but changing a second
   // surface belongs in its own change, not smuggled into this one.)
   //
-  // Inside summaryBlock so it travels with the receipt into operator-customised
-  // bodies too: they slot in {{registration_summary_block}}, and a confirmation
-  // number that vanishes the moment a provider edits their template is worse than
-  // never having added one.
+  // Inside summaryBlock so it stays attached to the receipt rather than to one
+  // template's wording: it then appears in the built-in body AND in any operator
+  // body that slots in {{registration_summary_block}}.
+  //
+  // NOT a guarantee, and worth knowing before operator body-editing ships: an
+  // operator who deletes that token loses the amounts, the class details and this
+  // confirmation number in one stroke, silently. The editor should make that token
+  // hard to remove by accident - putting the number here does not solve that, it
+  // just avoids adding a SECOND thing that can be lost separately.
   const confirmationRow = sessionId
     ? `<tr><td colspan="2" style="padding:12px 16px 0;font-family:${brand.font_family};font-size:12px;color:#6b6880;border-top:1px solid #EDE9FE;">Confirmation number<br><span style="font-family:ui-monospace,'Cascadia Mono',Consolas,monospace;font-size:12px;color:#1A1530;word-break:break-all;">${escapeHtml(sessionId)}</span></td></tr>`
     : '';

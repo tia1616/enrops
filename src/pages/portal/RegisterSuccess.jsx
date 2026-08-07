@@ -14,20 +14,19 @@ export default function RegisterSuccess() {
   const { user, signInWithGoogle } = useAuth();
   const { clearCart, cart } = useCart();
 
-  // Read-only now. Nothing on this page sets it any more - the resend control that
-  // did was removed in favour of the sign-in page (see the account block below).
+  // The address the family checked out with, read once at mount and never changed -
+  // nothing on this page writes it. Seeded from the cart, which is cleared 500ms
+  // after mount and does not survive a reload, so on any refresh, back-button or
+  // reopened link this is simply "".
+  //
+  // Its ONLY job is deciding whether the page may name an address in the copy below.
+  // Naming one we do not have is how this page previously claimed "we sent a sign-in
+  // link to your inbox" as a fact it could not back up.
   const [email] = useState(cart?.parent?.email || '');
-  // Did we LEARN the address, or are we guessing? The cart is cleared 500ms after
-  // this page mounts and does not survive a reload, so on any refresh, back-button
-  // or reopened link `email` is "" - and the Resend button was gated on `!email`.
-  // The page then said "have us send another" above a permanently disabled button,
-  // to a family who has just paid and cannot get into their account. Captured once
-  // at mount rather than derived from `email`, so typing an address does not make
-  // the page start claiming it already sent one there.
-  const [emailKnownFromCart] = useState(() => !!cart?.parent?.email);
-  // The shared validator, not a fourth hand-rolled regex. src/lib/validation.js
-  // already exported emailIsValid with this exact pattern; writing it out again here
-  // is the same duplication this codebase keeps paying for elsewhere.
+  // The shared validator, not a hand-rolled regex - src/lib/validation.js already
+  // exported emailIsValid with this exact pattern. It also returns false for "",
+  // which is why no separate "did the cart have one?" flag is needed: an empty
+  // address and an unusable one both mean the same thing here, don't name it.
   const emailLooksValid = emailIsValid(email);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -158,16 +157,14 @@ export default function RegisterSuccess() {
           <h2 className="font-titan text-2xl text-j2s-ink">
             Check your email
           </h2>
-          {/* Only name the address when we actually know it. On a reload we do
-              not, and "We sent a sign-in link to your inbox" reads like a fact we
-              are sure of while the button underneath refuses to act on it. */}
+          {/* NAME THE ADDRESS ONLY WHEN WE HAVE A USABLE ONE. This used to read
+              "We sent a sign-in link to your inbox" whenever the cart was gone,
+              stating as fact something the page had no address for. Gated on
+              usability rather than mere presence, so a malformed address - which the
+              send would most likely have failed on anyway - does not get quoted back
+              to the family as though it worked. */}
           <p className="mt-2 text-j2s-ink/70">
-            {/* Branch on whether the address is USABLE, not merely on where it came
-                from. Branching on provenance alone meant a cart address the validator
-                rejects produced "We sent a sign-in link to parent@localhost" directly
-                above a correction field - asserting a send that, for a malformed
-                address, almost certainly failed. */}
-            {emailKnownFromCart && emailLooksValid ? (
+            {emailLooksValid ? (
               <>
                 We sent a sign-in link to <span className="font-semibold text-j2s-ink">{email}</span>.
                 Click the link to access your dashboard, view your child's schedule,
