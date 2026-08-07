@@ -578,8 +578,15 @@ export default function Home() {
                                   has always shown this; the lean cards never did,
                                   so the builder's Description field saved copy
                                   that reached no family. */}
+                              {/* marginBottom separates the provider's PROSE from the
+                                  facts beneath it (day, time, location, who it's for,
+                                  dates, price). Those facts are a tight group 2px
+                                  apart; with no gap here a three-paragraph description
+                                  ran straight into the schedule line and the card read
+                                  as one block. Only became visible once descriptions
+                                  got room to breathe earlier today. */}
                               {p.short_description && (
-                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
+                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 4, marginBottom: 10, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
                               )}
                               <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
                               {scheduleStr && (
@@ -600,8 +607,11 @@ export default function Home() {
                             {/* Same as the external-registration card above: the
                                 operator's description belongs in front of the
                                 family, right under the class name. */}
+                            {/* Same gap as the card above: the provider's prose needs
+                                separating from the facts block, or a multi-paragraph
+                                description runs into the schedule line. */}
                             {p.short_description && (
-                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
+                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 4, marginBottom: 10, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
                             )}
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
@@ -838,7 +848,7 @@ export default function Home() {
                           <div className="border-b border-j2s-purple/10 bg-j2s-purple-soft/40 px-5 py-4">
                             <p className="font-titan text-lg text-j2s-ink">{p.curriculum}</p>
                             {p.short_description && (
-                              <p className="mt-1 whitespace-pre-line text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
+                              <p className="mt-1 mb-2.5 whitespace-pre-line text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
                             )}
                             {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                             {scheduleStr && (
