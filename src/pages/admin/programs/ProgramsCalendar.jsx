@@ -21,7 +21,7 @@ import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
-import { GRADE_OPTIONS, audienceMode } from "../../../lib/grades.js";
+import { GRADE_OPTIONS, audienceMode, audiencePatch, rangeBackwards } from "../../../lib/grades.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -1428,9 +1428,6 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     grade_max: program.grade_max ?? "",
     age_min: program.age_min ?? "",
     age_max: program.age_max ?? "",
-    // Which question this row answers, from the shared rule rather than a guess,
-    // so the editor opens on the pair the card is actually showing.
-    audience_mode: audienceMode(program),
     price_cents: program.price_cents ?? "",
     program_location_id: program.program_location_id ?? "",
     room: program.room ?? "",
@@ -1445,13 +1442,26 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // Which pair the panel is currently editing, and the one coercion that has to be
   // right: "" means NOT STATED, but grade K is 0, which is falsy. `Number("") || null`
   // gives null for both, so K and blank become the same thing.
-  const usingGradesInPanel = draft.audience_mode === "grades";
-  const num = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
+  // Which pair is on screen. Held OUTSIDE `draft` on purpose: every other key in
+  // draft is a real `programs` column, and a UI-only key sitting among them is how
+  // a future `.update(draft)` or key-diff ends up trying to write a column that
+  // does not exist. Seeded from the row through the shared rule.
+  const [panelMode, setPanelMode] = useState(() => audienceMode(program));
+  // Nothing is written to the four audience columns until the operator actually
+  // aims at them - see the save. Set by the pills AND by the range fields, because
+  // "they picked grades" and "they typed a grade" are both intent.
+  const [audienceTouched, setAudienceTouched] = useState(false);
+  function setAudience(key, value) {
+    setAudienceTouched(true);
+    if (key === "mode") setPanelMode(value);
+    else set(key, value);
+  }
+  const usingGradesInPanel = panelMode === "grades";
   // Only the pair on screen can be wrong; a stale backwards range in the hidden
   // pair is never written, so it must not block the save.
   const audienceBackwardsInPanel = usingGradesInPanel
-    ? (num(draft.grade_min) != null && num(draft.grade_max) != null && num(draft.grade_min) > num(draft.grade_max))
-    : (num(draft.age_min) != null && num(draft.age_max) != null && num(draft.age_min) > num(draft.age_max));
+    ? rangeBackwards(draft.grade_min, draft.grade_max)
+    : rangeBackwards(draft.age_min, draft.age_max);
 
   // Copy-to-term: pick a season + year to copy this program into as a draft.
   // Operators think "Winter 2027", not "WI27" - so we present a Season and a
@@ -1617,17 +1627,25 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         // blank box keeps the existing name rather than failing the save or
         // publishing an untitled class. Guarded again below with a visible message.
         curriculum: draft.curriculum?.trim() ? draft.curriculum.trim() : program.curriculum,
-        // Grades OR ages, all four written EXPLICITLY. `num()` keeps grade K, which
-        // is 0: `Number(x) || null` would turn Kindergarten into "not stated".
-        grade_min: usingGradesInPanel ? num(draft.grade_min) : null,
-        grade_max: usingGradesInPanel ? num(draft.grade_max) : null,
-        age_min: usingGradesInPanel ? null : num(draft.age_min),
-        age_max: usingGradesInPanel ? null : num(draft.age_max),
-        // Only claim a format when a range is actually set - same rule as the
-        // builder, so a row round-trips through either surface unchanged.
-        age_format: usingGradesInPanel
-          ? (num(draft.grade_min) != null || num(draft.grade_max) != null ? "grade" : null)
-          : (num(draft.age_min) != null || num(draft.age_max) != null ? "age" : null),
+        // AUDIENCE IS OMITTED UNLESS THE OPERATOR TOUCHED IT.
+        //
+        // The first version wrote all five columns on EVERY save, from whichever pill
+        // happened to be selected. That made a routine edit destructive: open a class
+        // showing "Grades K-5" to fix the room, click "Ages" once to see what is
+        // there, save - and the grade range is gone, with no confirm and nothing left
+        // on screen to restore it from. It also silently nulled the age range of any
+        // row carrying both pairs, because the panel opens on grades.
+        //
+        // A save that the operator did not aim at this field must not write it. The
+        // patch comes from ONE helper so the "never both" rule and the age_format
+        // rule cannot drift from the builder's copy - they used to be four hand-copied
+        // ternaries in two files.
+        ...(audienceTouched
+          ? audiencePatch(panelMode, {
+            gradeMin: draft.grade_min, gradeMax: draft.grade_max,
+            ageMin: draft.age_min, ageMax: draft.age_max,
+          })
+          : {}),
         price_cents: draft.price_cents === "" || draft.price_cents === null ? null : Number(draft.price_cents),
         program_location_id: draft.program_location_id || null,
         room: draft.room || null,
@@ -1954,20 +1972,29 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             switched by the same rule. Neither pair was editable here before, so a
             provider who left it blank at creation - all 13 of Jeff's classes - had
             no way to add it, and one set wrongly could never be corrected. */}
-        <ExpandField label="Who it's for">
+        {/* NOT inside ExpandField. ExpandField renders a bare <label> (no htmlFor),
+            and a label forwards clicks to its first labelable descendant - which here
+            would be the "Grades" pill. Clicking the caption, the "to" separator, or
+            the empty space beside the fields would silently flip the mode. Every
+            other ExpandField wraps a single input, so this was the first one where
+            that forwarding could destroy data. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }} role="group" aria-label="Who this class is for">
+          <span style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.3 }}>
+            Who it&rsquo;s for
+          </span>
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
             {[["grades", "Grades"], ["ages", "Ages"]].map(([val, lbl]) => (
               <button
                 key={val}
                 type="button"
-                onClick={() => set("audience_mode", val)}
-                aria-pressed={draft.audience_mode === val}
+                onClick={() => setAudience("mode", val)}
+                aria-pressed={panelMode === val}
                 style={{
                   padding: "3px 10px", borderRadius: 999, fontSize: 11.5, fontWeight: 600,
                   fontFamily: "inherit", cursor: "pointer",
-                  border: `1px solid ${draft.audience_mode === val ? BRIGHT : RULE}`,
-                  background: draft.audience_mode === val ? BRIGHT : "#fff",
-                  color: draft.audience_mode === val ? "#fff" : INK,
+                  border: `1px solid ${panelMode === val ? BRIGHT : RULE}`,
+                  background: panelMode === val ? BRIGHT : "#fff",
+                  color: panelMode === val ? "#fff" : INK,
                 }}
               >
                 {lbl}
@@ -1977,21 +2004,21 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {usingGradesInPanel ? (
               <>
-                <select value={draft.grade_min ?? ""} onChange={(e) => set("grade_min", e.target.value)} style={{ ...expandInputStyle, width: 74 }} aria-label="Lowest grade">
+                <select value={draft.grade_min ?? ""} onChange={(e) => setAudience("grade_min", e.target.value)} style={{ ...expandInputStyle, width: 74 }} aria-label="Lowest grade">
                   <option value="">—</option>
                   {GRADE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <span style={{ fontSize: 12, color: MUTED }}>to</span>
-                <select value={draft.grade_max ?? ""} onChange={(e) => set("grade_max", e.target.value)} style={{ ...expandInputStyle, width: 74 }} aria-label="Highest grade">
+                <select value={draft.grade_max ?? ""} onChange={(e) => setAudience("grade_max", e.target.value)} style={{ ...expandInputStyle, width: 74 }} aria-label="Highest grade">
                   <option value="">—</option>
                   {GRADE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </>
             ) : (
               <>
-                <input type="text" inputMode="numeric" value={draft.age_min ?? ""} onChange={(e) => set("age_min", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))} placeholder="5" style={{ ...expandInputStyle, width: 74 }} aria-label="Youngest age" />
+                <input type="text" inputMode="numeric" value={draft.age_min ?? ""} onChange={(e) => setAudience("age_min", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))} placeholder="5" style={{ ...expandInputStyle, width: 74 }} aria-label="Youngest age" />
                 <span style={{ fontSize: 12, color: MUTED }}>to</span>
-                <input type="text" inputMode="numeric" value={draft.age_max ?? ""} onChange={(e) => set("age_max", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))} placeholder="12" style={{ ...expandInputStyle, width: 74 }} aria-label="Oldest age" />
+                <input type="text" inputMode="numeric" value={draft.age_max ?? ""} onChange={(e) => setAudience("age_max", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))} placeholder="12" style={{ ...expandInputStyle, width: 74 }} aria-label="Oldest age" />
               </>
             )}
           </div>
@@ -2000,7 +2027,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
               Put the {usingGradesInPanel ? "lower grade" : "younger age"} first.
             </div>
           )}
-        </ExpandField>
+        </div>
       </div>
 
       {/* The class NAME. Free text at creation for a lean provider and, until now,

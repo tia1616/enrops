@@ -35,7 +35,7 @@ import {
 } from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
-import { GRADE_OPTIONS } from "../../../lib/grades.js";
+import { GRADE_OPTIONS, audiencePatch, rangeBackwards } from "../../../lib/grades.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 // Monotonic where available. performance.now() is immune to the system clock
@@ -159,9 +159,15 @@ export default function QuickProgramBuilder() {
   const [audienceMode, setAudienceMode] = useState(
     () => (org?.default_age_min != null || org?.default_age_max != null ? "ages" : "grades"),
   );
-  // Once the operator has picked, nothing may pick for them again. The seeding
-  // effect below runs when the org row lands, which is after mount - without this
-  // it could reach back over a deliberate choice.
+  // Once the operator has expressed an intent, nothing may pick for them again. The
+  // seeding effect below runs when the org row lands, which is AFTER mount, so
+  // without this it reaches back over a deliberate choice.
+  //
+  // "Intent" is not just the two pills. The first version only flagged the pills, so
+  // an operator who left the default on Grades and picked K-5 from the dropdowns was
+  // still unguarded: the org's default ages arriving a moment later flipped the mode
+  // to Ages, the grade selects vanished, and Create wrote grade_min/grade_max null,
+  // discarding the selection with no error. Picking a grade IS picking grades.
   const audienceTouchedRef = useRef(false);
   function chooseAudienceMode(next) {
     audienceTouchedRef.current = true;
@@ -169,6 +175,19 @@ export default function QuickProgramBuilder() {
   }
   const [gradeMin, setGradeMin] = useState("");
   const [gradeMax, setGradeMax] = useState("");
+  const setGrade = (which, v) => {
+    audienceTouchedRef.current = true;
+    (which === "min" ? setGradeMin : setGradeMax)(v);
+  };
+  const setAge = (which, v) => {
+    audienceTouchedRef.current = true;
+    (which === "min" ? setAgeMin : setAgeMax)(v);
+  };
+  // What the audience fields were LAST SEEDED WITH. Ages seed from the org default;
+  // grades have no org default and instead carry over from the previous class, so
+  // "unchanged" is only meaningful against this, not against "". Updated wherever the
+  // form is (re)seeded - mount and resetForAnother.
+  const seededRef = useRef({ gradeMin: "", gradeMax: "" });
 
   // Age range for THIS program, pre-filled from the answer above. Kept editable
   // per program: "we teach 5-12" is the usual case, "this one is teens only" is
@@ -707,23 +726,17 @@ export default function QuickProgramBuilder() {
         first_session_date: startDate || null,
         session_count: isOneOff ? 1 : (sessionsNum >= 1 ? sessionsNum : 1),
         max_capacity: spotsNum,
-        // Grades OR ages, never both, and EVERY ONE OF THESE FOUR IS WRITTEN
-        // EXPLICITLY. programs.grade_min/grade_max default to 0 and 5 in the
-        // database, so an insert that merely omits them stamps the row "Grades
-        // K-5" - a school-year assumption inherited from J2S that nobody chose and
-        // that a dance studio has no use for. Omitting the unused pair is not the
-        // same as nulling it.
+        // Grades OR ages, never both, and all five columns written EXPLICITLY from
+        // ONE helper. programs.grade_min/grade_max default to 0 and 5 in the
+        // database, so an insert that merely omits them stamps the row "Grades K-5"
+        // - a school-year assumption inherited from J2S that nobody chose. Omitting
+        // the unused pair is not the same as nulling it.
         //
-        // age_format records WHICH question was answered, but only when there is
-        // an answer: a program that states no range should not claim to be
-        // grade-shaped. That keeps it honest for the editor that reads it back.
-        age_min: usingGrades ? null : ageMinNum,
-        age_max: usingGrades ? null : ageMaxNum,
-        grade_min: usingGrades ? gradeMinNum : null,
-        grade_max: usingGrades ? gradeMaxNum : null,
-        age_format: usingGrades
-          ? (gradeMinNum != null || gradeMaxNum != null ? "grade" : null)
-          : (ageMinNum != null || ageMaxNum != null ? "age" : null),
+        // The rule used to be written out here AND again in the Scheduled Programs
+        // panel, in prose-matched but separately-maintained ternaries. Two copies of
+        // "which pair do we write, and what goes in age_format" is how a row created
+        // in one surface starts reading back differently in the other.
+        ...audiencePatch(audienceMode, { gradeMin, gradeMax, ageMin, ageMax }),
         price_cents: priceCents,
         program_type: "standard",
         photo_url: photoUrl || null, // optional; NULL renders the no-image card
@@ -830,7 +843,9 @@ export default function QuickProgramBuilder() {
     // a provider who thinks in grades thinks in grades for the next class too, and
     // being asked to re-pick it 25 times is the kind of friction Jeff hit with the
     // term picker. There is no org-level default grade range to fall back to, so
-    // the values themselves are simply kept as typed.
+    // the values themselves are simply kept as typed - and THAT is what the next
+    // form's "did you change anything" question has to measure against.
+    seededRef.current = { gradeMin, gradeMax };
 
     // Room is per-CLASS, so it must clear. Ages carry over because the next class is
     // usually for the same children; a room number never is, and a stale one would
@@ -870,9 +885,15 @@ export default function QuickProgramBuilder() {
     locationId !== seededLocationId ||
     ageMin !== seededAgeMin ||
     ageMax !== seededAgeMax ||
-    // Grades have no org-level seed, so anything at all in them is the operator's.
-    gradeMin !== "" ||
-    gradeMax !== "" ||
+    // Compared against what the form was LAST SEEDED WITH, not against "".
+    // resetForAnother deliberately carries grades over to the next class, so a bare
+    // `gradeMin !== ""` counted a carried value as fresh input: build one class with
+    // Grades K-5, hit "create another", touch nothing, hit Cancel, and the form
+    // claimed unsaved work. That is exactly the false prompt this seeded comparison
+    // exists to prevent - the one that teaches an operator to click through the
+    // dialog that is supposed to protect them.
+    gradeMin !== seededRef.current.gradeMin ||
+    gradeMax !== seededRef.current.gradeMax ||
     spots !== "18" ||
     sessions !== "8" ||
     mode !== seededMode ||
@@ -1901,7 +1922,7 @@ export default function QuickProgramBuilder() {
               <select
                 style={{ ...inputStyle, width: 96 }}
                 value={gradeMin}
-                onChange={(e) => setGradeMin(e.target.value)}
+                onChange={(e) => setGrade("min", e.target.value)}
                 aria-label="Lowest grade for this class"
               >
                 <option value="">—</option>
@@ -1913,7 +1934,7 @@ export default function QuickProgramBuilder() {
               <select
                 style={{ ...inputStyle, width: 96 }}
                 value={gradeMax}
-                onChange={(e) => setGradeMax(e.target.value)}
+                onChange={(e) => setGrade("max", e.target.value)}
                 aria-label="Highest grade for this class"
               >
                 <option value="">—</option>
@@ -1928,7 +1949,7 @@ export default function QuickProgramBuilder() {
             <input
               style={{ ...inputStyle, width: 84 }}
               value={ageMin}
-              onChange={(e) => setAgeMin(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
+              onChange={(e) => setAge("min", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
               inputMode="numeric"
               placeholder="5"
               aria-label="Youngest age for this class"
@@ -1937,7 +1958,7 @@ export default function QuickProgramBuilder() {
             <input
               style={{ ...inputStyle, width: 84 }}
               value={ageMax}
-              onChange={(e) => setAgeMax(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
+              onChange={(e) => setAge("max", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
               inputMode="numeric"
               placeholder="12"
               aria-label="Oldest age for this class"
