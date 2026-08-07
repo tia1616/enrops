@@ -37,32 +37,36 @@ for (const [label, len] of [['1 char', 1], ['mid', 800], ['near limit', 1900], [
   eq(`${label} opens with "Character count:"`, r.text.startsWith('Character count:'), true);
 }
 
-// --- the three states ------------------------------------------------------
-eq('short count', describeDescriptionLength(str(4)).text, 'Character count: 4.');
-eq('short count is not at limit', describeDescriptionLength(str(4)).atLimit, false);
-// Thousands separator, because 1540 in a sentence reads as a year.
-eq('counts are grouped', describeDescriptionLength(str(1200)).text, 'Character count: 1,200.');
+// --- ONE format, at every length ------------------------------------------
+// Jessica's call, 2026-08-06: "character count: 8/2,000 without the period".
+eq('short count', describeDescriptionLength(str(8)).text, 'Character count: 8/2,000');
+eq('short count is not at limit', describeDescriptionLength(str(8)).atLimit, false);
+// Thousands separator on BOTH sides, because 1200/2000 reads as a fraction of years.
+eq('counts are grouped', describeDescriptionLength(str(1200)).text, 'Character count: 1,200/2,000');
 
-// Below 75% the ceiling is noise; at or above it, "of 2,000" IS the warning.
-eq('just below 75% hides the ceiling',
-  describeDescriptionLength(str(1499)).text, 'Character count: 1,499.');
-eq('exactly 75% names the ceiling',
-  describeDescriptionLength(str(1500)).text, 'Character count: 1,500 of 2,000.');
-eq('near the limit is still not atLimit',
-  describeDescriptionLength(str(1999)).atLimit, false);
+// The shape must not change partway up. An earlier version hid the ceiling below
+// 75% and revealed it above, which makes the operator wonder what they did.
+eq('no period, at any length',
+  [1, 800, 1499, 1500, 1999, MAX].every((n) => !describeDescriptionLength(str(n)).text.endsWith('.')),
+  true);
+eq('ceiling shown from the first character',
+  [1, 800, 1499, 1500, 1999].every((n) => describeDescriptionLength(str(n)).text.includes('/2,000')),
+  true);
+eq('below the ceiling is never atLimit',
+  [1, 800, 1499, 1500, 1999].some((n) => describeDescriptionLength(str(n)).atLimit),
+  false);
 
-eq('at the limit says so',
-  describeDescriptionLength(str(MAX)).text, "Character count: 2,000 of 2,000. That's the limit.");
+eq('at the limit', describeDescriptionLength(str(MAX)).text, 'Character count: 2,000/2,000');
 eq('at the limit sets atLimit', describeDescriptionLength(str(MAX)).atLimit, true);
 // maxLength stops the browser at MAX, but a paste handled elsewhere or a future
 // caller without the attribute must not fall through to the "under" branch.
 eq('over the limit still reports at-limit',
   describeDescriptionLength(str(MAX + 50)).atLimit, true);
 
-// --- a caller-supplied max keeps all three states --------------------------
-eq('custom max, under', describeDescriptionLength(str(10), 100).text, 'Character count: 10.');
-eq('custom max, near', describeDescriptionLength(str(80), 100).text, 'Character count: 80 of 100.');
-eq('custom max, at', describeDescriptionLength(str(100), 100).atLimit, true);
+// --- a caller-supplied max ------------------------------------------------
+eq('custom max, under', describeDescriptionLength(str(10), 100).text, 'Character count: 10/100');
+eq('custom max, at', describeDescriptionLength(str(100), 100).text, 'Character count: 100/100');
+eq('custom max, at sets atLimit', describeDescriptionLength(str(100), 100).atLimit, true);
 
 console.log(`\n${fail ? 'FAILURES' : 'ALL PASS'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);
