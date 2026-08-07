@@ -456,18 +456,17 @@ export default function QuickProgramBuilder() {
   // catalog matches on it, so it is derived rather than left empty.
   const effectiveDay = isOneOff ? firstDateWeekday : day;
   const usingGrades = audienceMode === "grades";
-  // parseInt, not Number(), and compared against "" first: grade K is 0, and every
-  // shortcut here (`Number(x) || null`, `if (!min)`) silently deletes it.
-  const ageMinNum = ageMin === "" ? null : parseInt(ageMin, 10);
-  const ageMaxNum = ageMax === "" ? null : parseInt(ageMax, 10);
-  const gradeMinNum = gradeMin === "" ? null : parseInt(gradeMin, 10);
-  const gradeMaxNum = gradeMax === "" ? null : parseInt(gradeMax, 10);
+  // rangeBackwards, NOT a fourth hand-rolled copy. This file imported the shared
+  // helper and then re-implemented it inline three times anyway - which is the exact
+  // duplication grades.js exists to remove, reintroduced inside the change that
+  // removed it. The four parsed *Num consts that fed these comparisons existed for
+  // no other reason and are gone with them; the helper takes the raw form strings
+  // and does the "" and K-is-zero handling itself.
+  //
   // Only the pair that is actually on screen can be wrong. An age range left
   // backwards in a hidden field must not block a save that never writes it.
-  const ageRangeBackwards = !usingGrades
-    && ageMinNum != null && ageMaxNum != null && ageMinNum > ageMaxNum;
-  const gradeRangeBackwards = usingGrades
-    && gradeMinNum != null && gradeMaxNum != null && gradeMinNum > gradeMaxNum;
+  const ageRangeBackwards = !usingGrades && rangeBackwards(ageMin, ageMax);
+  const gradeRangeBackwards = usingGrades && rangeBackwards(gradeMin, gradeMax);
   const audienceBackwards = ageRangeBackwards || gradeRangeBackwards;
 
   // The row behind the current pick, so the field can show its address rather
@@ -573,9 +572,12 @@ export default function QuickProgramBuilder() {
     return () => { cancelled = true; };
   }, [org?.id, isLean]);
 
+  // The setup question's own age range, same rule as the per-class one above, so it
+  // gets the same helper. These two *Num consts stay - unlike the per-class pair they
+  // are also what saveProfile WRITES to organizations.default_age_min/max.
   const ansAgeMinNum = ansAgeMin === "" ? null : parseInt(ansAgeMin, 10);
   const ansAgeMaxNum = ansAgeMax === "" ? null : parseInt(ansAgeMax, 10);
-  const ansAgeBackwards = ansAgeMinNum != null && ansAgeMaxNum != null && ansAgeMinNum > ansAgeMaxNum;
+  const ansAgeBackwards = rangeBackwards(ansAgeMin, ansAgeMax);
   const profileValid = !!ansVenue && !!ansCadence && !ansAgeBackwards;
 
   async function saveProfile() {
