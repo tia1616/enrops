@@ -35,7 +35,7 @@ import {
 } from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
-import { GRADE_OPTIONS, audiencePatch, rangeBackwards } from "../../../lib/grades.js";
+import { GRADE_OPTIONS, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 // Monotonic where available. performance.now() is immune to the system clock
@@ -465,9 +465,15 @@ export default function QuickProgramBuilder() {
   //
   // Only the pair that is actually on screen can be wrong. An age range left
   // backwards in a hidden field must not block a save that never writes it.
-  const ageRangeBackwards = !usingGrades && rangeBackwards(ageMin, ageMax);
-  const gradeRangeBackwards = usingGrades && rangeBackwards(gradeMin, gradeMax);
-  const audienceBackwards = ageRangeBackwards || gradeRangeBackwards;
+  //
+  // One value, not a pair OR'd together: the two halves were mutually exclusive by
+  // construction (each gated on the other's negation), so they could never both be
+  // true and only existed to feed two message blocks that are now one. Same shape
+  // and same name-in-spirit as audienceBackwardsInPanel in ProgramsCalendar, so the
+  // two builders read alike.
+  const audienceBackwards = usingGrades
+    ? rangeBackwards(gradeMin, gradeMax)
+    : rangeBackwards(ageMin, ageMax);
 
   // The row behind the current pick, so the field can show its address rather
   // than just the name the <option> already carries.
@@ -993,9 +999,11 @@ export default function QuickProgramBuilder() {
             <div style={helpStyle}>
               Families see this on your class page. Leave blank if it varies.
             </div>
+            {/* Same sentence this rule uses everywhere else. This setup question is
+                always about ages, so the mode is fixed. */}
             {ansAgeBackwards && (
               <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>
-                The first age should be the younger one.
+                {rangeBackwardsMessage("ages")}
               </div>
             )}
           </div>
@@ -1968,14 +1976,19 @@ export default function QuickProgramBuilder() {
           </div>
           )}
           <div style={helpStyle}>Shown to families on your class page.</div>
-          {ageRangeBackwards && (
+          {/* ONE sentence, from the shared helper, matching the Scheduled Programs
+              panel and the classic wizard. Jessica, 2026-08-07, picking between the
+              two wordings that existed: "A" - "Put the lower grade first."
+
+              This was TWO blocks with two hand-typed strings, and it mattered more
+              than it looks: a lean provider meets this rule twice in one sitting -
+              once creating a class here, once editing that same class in the panel -
+              and the two screens phrased it differently. The pair was also mutually
+              exclusive by construction (one gated on usingGrades, the other on
+              !usingGrades), so two blocks could only ever render one message. */}
+          {audienceBackwards && (
             <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>
-              The first age should be the younger one.
-            </div>
-          )}
-          {gradeRangeBackwards && (
-            <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>
-              The first grade should be the lower one.
+              {rangeBackwardsMessage(audienceMode)}
             </div>
           )}
         </div>
