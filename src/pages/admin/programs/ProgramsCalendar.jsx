@@ -1469,7 +1469,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // "they picked grades" and "they typed a grade" are both intent. A ref rides
   // alongside the state so the resync effect below can read it without listing it as
   // a dependency and re-running every time it flips.
-  const [audienceTouched, setAudienceTouched] = useState(null);
+  const [audienceTouched, setAudienceTouched] = useState(false);
   const audienceTouchedRef = useRef(false);
   const seededFromRef = useRef(program);
   useEffect(() => {
@@ -1480,10 +1480,18 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       const next = { ...d };
       // Only adopt a field when it actually changed on the row AND the operator's
       // draft still matches what the row used to say (i.e. they have not edited it).
+      //
+      // COMPARED AS STRINGS, deliberately. The row supplies numbers (grade_min 3,
+      // max_capacity 20, price_cents 1500) while every input in this panel writes
+      // strings, so a raw === made "the operator has not edited this" permanently
+      // false for any numeric field they had ever touched. The panel then refused to
+      // adopt an outside change AND wrote its stale value back on the next save -
+      // exactly the clobber this effect exists to prevent.
+      const same = (a, b) => String(a ?? "") === String(b ?? "");
       for (const k of ["curriculum", "room", "short_description", "price_cents", "max_capacity", "program_location_id", "grade_min", "grade_max", "age_min", "age_max"]) {
         const was = prev?.[k] ?? "";
         const now = program?.[k] ?? "";
-        if (was !== now && (d[k] ?? "") === was) next[k] = now;
+        if (!same(was, now) && same(d[k], was)) next[k] = now;
       }
       return next;
     });
@@ -1501,20 +1509,38 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // A save must write what the operator ENTERED, not which tab they were looking
   // at. Clearing a range on purpose is still possible and still explicit: set the
   // dropdowns back to the blank option, which IS a value edit.
-  // Records WHICH pair the operator actually typed into, not just that they typed.
-  // Writing `panelMode` instead would lose a grade edit made before an idle switch
-  // to the Ages tab: the save would take the tab on screen and null what they had
-  // just entered. null = they entered nothing, so the save leaves all five columns
-  // alone.
+  // ONE RULE: what is on screen is what gets written.
+  //
+  // This started as two variables - the tab being viewed and the pair last typed
+  // into - so that switching tabs could not destroy an edit. Every fix to that
+  // split produced a new defect: a save wrote a pair the operator could not see; the
+  // backwards-range guard checked one pair while the save wrote the other, so
+  // "Grades 5 to 2" could be waved through; and the panel and the builder ended up
+  // disagreeing about which pair a submit writes. Three attempts, three new bugs.
+  //
+  // So the model is now the simple one. `panelMode` decides BOTH what is displayed
+  // and what is saved, and `audienceTouched` is a plain "did they type a value".
+  // Switching to an empty Ages tab and saving does clear the grades - but the empty
+  // boxes are right there on screen, so it is visible rather than silent, which is
+  // the property the two-variable version kept failing to deliver.
   function setAudience(key, value) {
     if (key === "mode") { setPanelMode(value); return; }
-    setAudienceTouched(panelMode);
+    setAudienceTouched(true);
     audienceTouchedRef.current = true;
     set(key, value);
   }
   const usingGradesInPanel = panelMode === "grades";
-  // Only the pair on screen can be wrong; a stale backwards range in the hidden
-  // pair is never written, so it must not block the save.
+  // THE GUARD MUST CHECK THE PAIR THAT WILL BE WRITTEN, not the tab on screen.
+  //
+  // Splitting "which tab am I looking at" (panelMode) from "which pair did I type
+  // in" (audienceTouched) opened an escape hatch: enter Grades 5 to 2, Save greys
+  // out correctly, click the Ages pill - the guard re-evaluated against the empty
+  // age pair, found nothing wrong, and re-enabled Save while the patch still wrote
+  // the backwards grades. `programs` has no grade_min <= grade_max constraint (only
+  // `curricula` does), so "Grades 5-2" would have reached the family card.
+  //
+  // audienceTouched is null until the operator types, and nothing is written then,
+  // so there is nothing to guard.
   const audienceBackwardsInPanel = usingGradesInPanel
     ? rangeBackwards(draft.grade_min, draft.grade_max)
     : rangeBackwards(draft.age_min, draft.age_max);
@@ -1697,7 +1723,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         // rule cannot drift from the builder's copy - they used to be four hand-copied
         // ternaries in two files.
         ...(audienceTouched
-          ? audiencePatch(audienceTouched, {
+          ? audiencePatch(panelMode, {
             gradeMin: draft.grade_min, gradeMax: draft.grade_max,
             ageMin: draft.age_min, ageMax: draft.age_max,
           })
@@ -1755,8 +1781,20 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       //  - end_date: count mode stores NULL (count programs have no window), but the
       //    draft still holds the old date -- so a range->count save left the banner
       //    stuck comparing a stale draft end date against the nulled stored value.
+      // The audience edit is SPENT once it is stored. Without this the panel stayed
+      // permanently "touched": every later save - a room fix, a price change - kept
+      // resending all five audience columns from a stale draft, so anything that
+      // changed them in between (a second tab, a SQL correction, an import) was
+      // silently reverted by an edit aimed at something else entirely. It also left
+      // the row-resync deaf for the rest of the session.
+      setAudienceTouched(false);
+      audienceTouchedRef.current = false;
+      // The class name likewise: a blank box falls back to the stored name, so
+      // without this the field stayed empty under a red warning while the save had
+      // in fact succeeded - two contradictory truths on one screen.
       setDraft((d) => ({
         ...d,
+        curriculum: patch.curriculum ?? d.curriculum,
         first_session_date: patch.first_session_date ?? "",
         end_date: patch.end_date ?? "",
       }));

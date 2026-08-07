@@ -95,6 +95,14 @@ export function gradeLabel(n) {
 export function audienceLabel(row) {
   if (!row) return null;
 
+  // MUST AGREE WITH audienceMode. Once audienceMode started reading age_format
+  // first, this still preferred grades unconditionally - so a row saying
+  // age_format 'age' while also carrying a grade pair showed "Grades K-5" on the
+  // family card and opened the editor on Ages. The operator corrects the age,
+  // saves, and the range the card was showing is gone. Same rule, one place: the
+  // operator's explicit answer outranks whichever columns happen to be filled.
+  if (audienceMode(row, { defaultMode: null }) === 'ages') return ageLabel(row);
+
   const gLo = gradeLabel(row.grade_min);
   const gHi = gradeLabel(row.grade_max);
   if (gLo != null || gHi != null) {
@@ -106,19 +114,20 @@ export function audienceLabel(row) {
     return `Up to grade ${gHi}`;
   }
 
-  // Ages: the wording is carried over verbatim from the lean catalog card, which is
-  // live and which families have been reading all term - EXCEPT the equal-endpoints
-  // case, which the old card rendered "Ages 7–7" and which collapses here to
-  // "Age 7". No live row has equal endpoints (checked on both databases).
+  return ageLabel(row);
+}
+
+// Ages: the wording is carried over verbatim from the lean catalog card, which is
+// live and which families have been reading all term - EXCEPT the equal-endpoints
+// case, which the old card rendered "Ages 7–7" and which collapses here to "Age 7".
+// No live row has equal endpoints (checked on both databases).
+function ageLabel(row) {
   const aLo = isUnset(row.age_min) ? null : Number(row.age_min);
   const aHi = isUnset(row.age_max) ? null : Number(row.age_max);
-  if (aLo != null || aHi != null) {
-    if (aLo != null && aHi != null) return aLo === aHi ? `Age ${aLo}` : `Ages ${aLo}–${aHi}`;
-    if (aLo != null) return `Ages ${aLo}+`;
-    return `Up to age ${aHi}`;
-  }
-
-  return null;
+  if (aLo == null && aHi == null) return null;
+  if (aLo != null && aHi != null) return aLo === aHi ? `Age ${aLo}` : `Ages ${aLo}–${aHi}`;
+  if (aLo != null) return `Ages ${aLo}+`;
+  return `Up to age ${aHi}`;
 }
 
 // Which mode an existing row is in, for opening an editor on the right tab.

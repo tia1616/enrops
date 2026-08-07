@@ -83,6 +83,21 @@ eq('unparseable grade renders nothing, never "Up to grade null"',
 // age_format is the operator's explicit answer and outranks mere presence.
 eq('age_format wins over presence',
   audienceMode({ age_format: 'age', grade_min: 0, grade_max: 5, age_min: 6, age_max: 12 }), 'ages');
+// THE AGREEMENT INVARIANT, now covering age_format - the branch that broke it.
+// audienceMode started reading age_format first while audienceLabel still always
+// preferred grades, so the card said "Grades K-5" and the editor opened on Ages;
+// correcting the age there deleted the range the card was showing.
+for (const row of [
+  { age_format: 'age', grade_min: 0, grade_max: 5, age_min: 6, age_max: 12 },
+  { age_format: 'grade', grade_min: 0, grade_max: 5, age_min: 6, age_max: 12 },
+  { grade_min: 0, grade_max: 5, age_min: 6, age_max: 12 },
+  { age_format: 'age', age_min: 6, age_max: 12 },
+  { age_format: 'grade', grade_min: 1, grade_max: 3 },
+]) {
+  const saysAges = audienceMode(row) === 'ages';
+  const labelIsAges = /^(Age|Ages|Up to age)/.test(audienceLabel(row) ?? '');
+  eq(`label and editor agree on ${JSON.stringify(row)}`, labelIsAges, saysAges);
+}
 eq('age_min 0 only', audienceLabel({ age_min: 0, age_max: null }), 'Ages 0+');
 eq('neither set renders nothing', audienceLabel({}), null);
 eq('null row renders nothing', audienceLabel(null), null);
