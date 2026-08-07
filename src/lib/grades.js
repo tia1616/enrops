@@ -173,6 +173,18 @@ export function rangeBackwards(min, max) {
   return Number(min) > Number(max);
 }
 
+// What an operator is told when rangeBackwards is true. Lives beside the rule it
+// explains, for the same reason GRADE_OPTIONS_LONG lives beside GRADE_OPTIONS: the
+// Scheduled Programs panel and the classic wizard both meet this rule, and the
+// moment the sentence is typed twice the two surfaces start drifting - which is the
+// duplication this whole module exists to remove.
+//
+// No pointer at a control ("below", "the grey button"): each caller renders it in a
+// different place, so any direction would be false on one of them.
+export function rangeBackwardsMessage(mode) {
+  return `Put the ${mode === 'ages' ? 'younger age' : 'lower grade'} first.`;
+}
+
 // THE ONLY PLACE THAT DECIDES WHICH COLUMNS AN AUDIENCE EDIT WRITES.
 //
 // Returns the complete five-column patch, so a caller cannot express "both" even by

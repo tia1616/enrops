@@ -20,7 +20,7 @@ import ShareProgram from "../../../components/ShareProgram.jsx";
 import CancellationPolicyInline from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
-import { rangeBackwards } from "../../../lib/grades.js";
+import { rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -733,6 +733,7 @@ export default function ProgramWizardNew() {
           <Step2WhenAndHowMany
             formData={formData}
             onField={handleField}
+            audienceBackwards={wizardRangeBackwards}
             previewDates={previewDates}
             previewLoading={previewLoading}
             previewError={previewError}
@@ -1006,6 +1007,13 @@ function Step1WhatAndWhere({
 function Step2WhenAndHowMany({
   formData,
   onField,
+  // The SAME value that disables Next, passed down rather than recomputed here.
+  // The parent already owns the rule (wizardRangeBackwards); a second copy of the
+  // expression in this component is exactly how the guard and the thing it guards
+  // drifted apart three times on this branch - a check that read one pair while the
+  // save wrote the other. One value, so the greyed button and the reason for it
+  // cannot disagree.
+  audienceBackwards,
   previewDates,
   previewLoading,
   previewError,
@@ -1159,6 +1167,17 @@ function Step2WhenAndHowMany({
               aria-label="Age max"
             />
             <span style={{ color: MUTED, fontSize: 13, marginLeft: 8 }}>years old</span>
+          </div>
+        )}
+        {/* SAY WHY NEXT IS GREY. The backwards-range guard blocked the step but
+            printed nothing, and Step 2 has six other reasons Next can be disabled -
+            so the operator saw a dead button and no way to learn which field was
+            wrong. A wall with no sign on it is the silent-degradation defect, not a
+            guard. Same sentence as the Scheduled Programs panel, deliberately: one
+            wording for one rule, in both places an operator meets it. */}
+        {audienceBackwards && (
+          <div style={{ marginTop: 8, color: "#b53737", fontSize: 13 }}>
+            {rangeBackwardsMessage(formData.age_format === "grade" ? "grades" : "ages")}
           </div>
         )}
       </div>

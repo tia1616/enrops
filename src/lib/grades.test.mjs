@@ -4,7 +4,7 @@
 // These exist because the vocabulary was written FOUR times with four different
 // answers (K-12 vs K-6, Pre-K handled vs not). One definition is only worth
 // anything if it stays the definition.
-import { GRADE_OPTIONS, GRADE_OPTIONS_LONG, gradeLabel, audienceLabel, audienceMode, audiencePatch, rangeBackwards, isUnset, KINDERGARTEN } from './grades.js';
+import { GRADE_OPTIONS, GRADE_OPTIONS_LONG, gradeLabel, audienceLabel, audienceMode, audiencePatch, rangeBackwards, rangeBackwardsMessage, isUnset, KINDERGARTEN } from './grades.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -186,6 +186,21 @@ eq('open-ended is never backwards', rangeBackwards(5, ''), false);
 eq('empty string is unset, NOT zero', isUnset(''), true);
 eq('zero is set', isUnset(0), false);
 eq('"0" is set', isUnset('0'), false);
+
+// --- rangeBackwardsMessage ----------------------------------------------------
+// The wizard and the Scheduled Programs panel both show this. It was typed out
+// twice, so pin the exact wording rather than "contains 'grade'": the point of the
+// helper is that the two surfaces say the SAME sentence.
+eq('grades wording', rangeBackwardsMessage('grades'), 'Put the lower grade first.');
+eq('ages wording', rangeBackwardsMessage('ages'), 'Put the younger age first.');
+// Unknown mode reads as grades, matching audienceMode's defaultMode: afterschool is
+// always grades and is the common case. Both callers pass an explicit mode today, so
+// this pins the fallback rather than describing a path anything currently takes.
+eq('unknown mode falls back to grades, not ages', rangeBackwardsMessage(undefined), 'Put the lower grade first.');
+// No pointer at a control - each caller puts it somewhere different.
+for (const m of ['grades', 'ages']) {
+  eq(`${m}: names no control`, /below|above|button|right|left/i.test(rangeBackwardsMessage(m)), false);
+}
 
 console.log(`\n${fail ? 'FAILURES' : 'ALL PASS'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);

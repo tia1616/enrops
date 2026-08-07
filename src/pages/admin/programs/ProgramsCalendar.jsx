@@ -26,7 +26,7 @@ import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
-import { GRADE_OPTIONS, audienceMode, audiencePatch, rangeBackwards } from "../../../lib/grades.js";
+import { GRADE_OPTIONS, audienceMode, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -2183,7 +2183,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           </div>
           {audienceBackwardsInPanel && (
             <div style={{ color: RED, fontSize: 11.5, marginTop: 4 }}>
-              Put the {usingGradesInPanel ? "lower grade" : "younger age"} first.
+              {rangeBackwardsMessage(panelMode)}
             </div>
           )}
         </div>
@@ -2331,7 +2331,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
               disabled={disabled}
               title={
                 noLocation ? "Pick a location first — every class needs one."
-                  : audienceBackwardsInPanel ? `Put the ${usingGradesInPanel ? "lower grade" : "younger age"} first.`
+                  : audienceBackwardsInPanel ? rangeBackwardsMessage(panelMode)
                     : undefined
               }
               style={{
